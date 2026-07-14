@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,29 +18,41 @@
 #define DATASYSTEM_MIGRATE_DATA_H
 
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <map>
 #include <memory>
 #include <unordered_map>
 #include <utility>
 
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
+namespace cluster {
+class CancellationToken;
+}
+
 namespace object_cache {
 class DataMigrator {
 public:
-    DataMigrator(MigrateType type, ClusterManager *clusterManager, HostPort &localAddress,
+    /** @brief Sentinel used by legacy callers whose retry count is not bounded. */
+    static constexpr int UNLIMITED_RETRY_COUNT = -1;
+
+    DataMigrator(MigrateType type, worker::WorkerTopologyReferences *topologyEngine, HostPort &localAddress,
                  std::shared_ptr<AkSkManager> manager, std::shared_ptr<ObjectTable> objectTable,
-                 const std::string &taskId = "", int maxRetryCount = -1)
+                 const std::string &taskId = "", int maxRetryCount = UNLIMITED_RETRY_COUNT,
+                 std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max(),
+                 const cluster::CancellationToken *cancellation = nullptr)
         : type_(type),
-          clusterManager_(clusterManager),
+          topologyEngine_(topologyEngine),
           localAddress_(localAddress),
           akSkManager_(std::move(manager)),
           objectTable_(std::move(objectTable)),
           taskId_(taskId),
-          maxRetryCount_(maxRetryCount)
+          maxRetryCount_(maxRetryCount),
+          deadline_(deadline),
+          cancellation_(cancellation)
     {
     }
 
@@ -104,11 +113,11 @@ public:
     }
 
         /**
-     * @brief Checks the connection to the target Worker node and creates a remote Worker API if connected.
-     * @param[in,out] remoteWorkerStub Pointer to the remote Worker API.
-     * @param[in] workerAddr Address of the target Worker node.
-     * @return Status The status of the connection and API creation.
-     */
+         * @brief Checks the connection to the target Worker node and creates a remote Worker API if connected.
+         * @param[in,out] remoteWorkerStub Pointer to the remote Worker API.
+         * @param[in] workerAddr Address of the target Worker node.
+         * @return Status The status of the connection and API creation.
+         */
     Status ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
                                      const HostPort &workerAddr);
 
@@ -132,6 +141,13 @@ private:
      * @brief Create progress reporter for migration.
      */
     static std::shared_ptr<MigrateProgress> CreateMigrateProgress(uint64_t objectCount);
+
+    /**
+     * @brief Select a standby destination, excluding every leaving member for a topology ScaleIn task.
+     * @param[out] standbyWorker Selected standby address.
+     * @return K_OK when a standby exists; an availability status otherwise.
+     */
+    Status GetStandbyWorker(std::string &standbyWorker) const;
 
     /**
      * @brief Initialize migration state.
@@ -202,6 +218,12 @@ private:
      * @return Status of the call.
      */
     Status HandleFailedResult();
+
+    /**
+     * @brief Wait before a topology retry while observing its deadline and cancellation signal.
+     * @return K_OK for an allowed retry; a deadline or cancellation status otherwise.
+     */
+    Status WaitBeforeRetry() const;
 
     /**
      * @brief Handle migrate data future results.
@@ -286,16 +308,18 @@ private:
      * @param[in] maxSameNodeRetryCount Max retry count on same node.
      * @param[in,out] sameNodeRetryCounts Same-node retry counters by slot.
      */
-    void ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &futures, int maxSameNodeRetryCount,
-                                   std::unordered_map<uint32_t, int> &sameNodeRetryCounts);
+    Status ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &futures, int maxSameNodeRetryCount,
+                                     std::unordered_map<uint32_t, int> &sameNodeRetryCounts);
 
     MigrateType type_;
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     HostPort &localAddress_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<ObjectTable> objectTable_;
     std::string taskId_;
     int maxRetryCount_ = -1;
+    std::chrono::steady_clock::time_point deadline_;
+    const cluster::CancellationToken *cancellation_{ nullptr };
 
     std::unique_ptr<ThreadPool> threadPool_;
 

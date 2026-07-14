@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,6 +19,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/container_util.h"
 #include "datasystem/common/util/net_util.h"
@@ -34,8 +32,7 @@
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
-#include "datasystem/worker/hash_ring/hash_ring_event.h"
-#include "datasystem/common/task_action/task_action_registry.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 DS_DECLARE_string(rocksdb_store_dir);
 DS_DECLARE_int32(sc_regular_socket_num);
@@ -57,11 +54,51 @@ bool EnableSCService()
 {
     return FLAGS_sc_regular_socket_num > 0 && FLAGS_sc_stream_socket_num > 0;
 }
+
+template <typename ExistingContainer, typename ExpectedContainer, typename Encode>
+bool CoversValues(const ExistingContainer &existing, const ExpectedContainer &expected, Encode encode)
+{
+    std::unordered_multiset<std::string> remaining;
+    remaining.reserve(existing.size());
+    for (const auto &value : existing) {
+        remaining.emplace(encode(value));
+    }
+    for (const auto &value : expected) {
+        auto found = remaining.find(encode(value));
+        if (found == remaining.end()) {
+            return false;
+        }
+        remaining.erase(found);
+    }
+    return true;
+}
+
+bool ExistingStreamCoversMigrationPayload(StreamMetadata &metadata, const MetaForSCMigrationPb &streamMeta)
+{
+    const auto &meta = streamMeta.meta();
+    StreamFields streamFields(meta.max_stream_size(), meta.page_size(), meta.auto_cleanup(), meta.retain_num_consumer(),
+                              meta.encrypt_stream(), meta.reserve_size(), meta.stream_mode());
+    const auto &existingFields = metadata.GetStreamFields();
+    std::vector<ProducerMetaPb> producers;
+    std::vector<ConsumerMetaPb> consumers;
+    std::vector<std::string> producerNodes;
+    std::vector<std::string> consumerNodes;
+    metadata.GetAllProducerConsumer(producers, consumers, producerNodes, consumerNodes);
+    const auto encodeMessage = [](const auto &value) { return value.SerializeAsString(); };
+    const auto encodeString = [](const auto &value) { return value; };
+    return existingFields == streamFields && existingFields.reserveSize_ == streamFields.reserveSize_
+           && CoversValues(producers, streamMeta.producers(), encodeMessage)
+           && CoversValues(consumers, streamMeta.consumers(), encodeMessage)
+           && CoversValues(producerNodes, streamMeta.producer_rel_nodes(), encodeString)
+           && CoversValues(consumerNodes, streamMeta.consumer_rel_nodes(), encodeString)
+           && metadata.GetConsumerLifeCount() >= meta.consumer_life_count();
+}
 }  // namespace
 
 SCMetadataManager::SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                                     std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *cm,
-                                     RocksStore *rocksStore, const std::string &workerId)
+                                     std::shared_ptr<RpcSessionManager> rpcSessionManager,
+                                     worker::WorkerTopologyReferences *cm, RocksStore *rocksStore,
+                                     const std::string &workerId)
     : MetadataRedirectHelper(cm),
       masterAddress_(masterHostPort),
       akSkManager_(std::move(akSkManager)),
@@ -92,8 +129,6 @@ void SCMetadataManager::Shutdown()
     CheckNewNodeMetaEvent::GetInstance().RemoveSubscriber(eventName_);
     StartClearWorkerMeta::GetInstance().RemoveSubscriber(eventName_);
     ClearWorkerMeta::GetInstance().RemoveSubscriber(eventName_);
-    HashRingEvent::RecoverMetaRanges::GetInstance().RemoveSubscriber(eventName_);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_);
     // Stop async reconciliation pool FIRST to prevent new brpc streaming
     // RPCs (e.g., CheckMetadataImpl -> QueryMetadata) from being created
     // while the notification manager is shutting down.  This avoids
@@ -107,7 +142,7 @@ void SCMetadataManager::Shutdown()
     }
 }
 
-void SCMetadataManager::SetClusterManagerToNullptr()
+void SCMetadataManager::SetTopologyEngineToNullptr()
 {
     MetadataRedirectHelper::Shutdown();
 }
@@ -123,7 +158,7 @@ Status SCMetadataManager::Init()
                                    std::make_unique<ThreadPool>(0, THREAD_POOL_SIZE, "MScAsyncReconcilation", false));
 
     notifyWorkerManager_ = std::make_unique<SCNotifyWorkerManager>(streamMetaStore_, akSkManager_, rpcSessionManager_,
-                                                                   clusterManager_, this);
+                                                                   topologyEngine_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
     RETURN_IF_NOT_OK(LoadMeta());
     CheckNewNodeMetaEvent::GetInstance().AddSubscriber(eventName_, [this](const HostPort &eventNodeKey) {
@@ -136,12 +171,6 @@ Status SCMetadataManager::Init()
     });
     ClearWorkerMeta::GetInstance().AddSubscriber(
         eventName_, [this](const HostPort &eventNodeKey) { return ClearWorkerMetadata(eventNodeKey); });
-    HashRingEvent::RecoverMetaRanges::GetInstance().AddSubscriber(
-        eventName_,
-        [this](const worker::HashRange &extraRanges) { return RecoverMetadataOfFaultyWorker(extraRanges); });
-    TaskActionRegistry::GetInstance().AddSubscriber(
-        TransferTaskType::RECOVER_PASSIVE_METADATA, eventName_,
-        [this](const TransferTask &task) { return RecoverMetadataOfFaultyWorker(task.placementScope.ranges); });
     LOG(INFO) << FormatString("[%s] Initialize success", LogPrefix());
     return Status::OK();
 }
@@ -186,8 +215,6 @@ void SCMetadataManager::GetMetasMatch(std::function<bool(const std::string &)> &
 
 Status SCMetadataManager::SaveMigrationMetadata(const MigrateSCMetadataReqPb &req, MigrateSCMetadataRspPb &rsp)
 {
-    CHECK_FAIL_RETURN_STATUS(clusterManager_->CheckReceiveMigrateInfo(), K_NOT_READY,
-                             "wait and retry, worker don't receive addnode info");
     LOG(INFO) << "Recv migrate metadata msg. source:" << req.source_addr()
               << ", stream count:" << req.stream_metas().size();
 
@@ -223,10 +250,20 @@ Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMe
                               meta.encrypt_stream(), meta.reserve_size(), meta.stream_mode());
     bool needRevert = true;
     // clang-format off
-    CHECK_FAIL_RETURN_STATUS(streamMetaManagerDict_.emplace(
+    if (!streamMetaManagerDict_.emplace(
         streamName, std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
-        akSkManager_, rpcSessionManager_, clusterManager_, notifyWorkerManager_.get())),
-        StatusCode::K_RUNTIME_ERROR, "Load meta reconstruction insertion failed");
+        akSkManager_, rpcSessionManager_, topologyEngine_, notifyWorkerManager_.get()))) {
+        TbbMetaHashmap::const_accessor existingAccessor;
+        RETURN_IF_NOT_OK(GetStreamMetadataNoLock(streamName, existingAccessor));
+        StreamMetadata *existingMetadata = existingAccessor->second.get();
+        CHECK_FAIL_RETURN_STATUS(existingMetadata != nullptr, K_RUNTIME_ERROR, "metadata is null");
+        CHECK_FAIL_RETURN_STATUS(
+            ExistingStreamCoversMigrationPayload(*existingMetadata, streamMeta), StatusCode::K_RUNTIME_ERROR,
+            FormatString("Duplicated stream <%s> does not match migration payload", streamName));
+        LOG(INFO) << FormatString(
+            "[S:%s] Migration metadata already exists on destination, treat as idempotent success", streamName);
+        return Status::OK();
+    }
     // clang-format on
     TbbMetaHashmap::accessor accessor;
     RETURN_IF_NOT_OK(GetStreamMetadata(streamName, accessor));
@@ -690,7 +727,7 @@ Status SCMetadataManager::CreateOrGetStreamMetadata(const std::string &streamNam
         }
         accessor->second =
             std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(), akSkManager_,
-                                             rpcSessionManager_, clusterManager_, notifyWorkerManager_.get());
+                                             rpcSessionManager_, topologyEngine_, notifyWorkerManager_.get());
         if (FLAGS_log_monitor) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 accessor->second->InitStreamMetrics(),
@@ -733,7 +770,7 @@ Status SCMetadataManager::LoadMeta()
         // clang-format off
         CHECK_FAIL_RETURN_STATUS(streamMetaManagerDict_.emplace(
             streamName, std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
-            akSkManager_, rpcSessionManager_, clusterManager_, notifyWorkerManager_.get())),
+            akSkManager_, rpcSessionManager_, topologyEngine_, notifyWorkerManager_.get())),
             StatusCode::K_RUNTIME_ERROR, "Load meta reconstruction insertion failed");
         // clang-format on
         TbbMetaHashmap::accessor accessor;
@@ -828,13 +865,13 @@ Status SCMetadataManager::ClearWorkerMetadata(const HostPort &workerAddr, const 
     return status;
 }
 
-Status SCMetadataManager::CheckMetadata(const std::vector<HostPort> &workerAddrs, const worker::HashRange &hashRanges)
+Status SCMetadataManager::CheckMetadata(const std::vector<HostPort> &workerAddrs)
 {
     RETURN_OK_IF_TRUE(!EnableSCService());
     Status lastRc;
     std::unordered_set<std::string> streamsMayNeedAutoDelete;
     for (const auto &workerAddr : workerAddrs) {
-        auto rc = CheckMetadataImpl(workerAddr, hashRanges, streamsMayNeedAutoDelete);
+        auto rc = CheckMetadataImpl(workerAddr, streamsMayNeedAutoDelete);
         if (rc.IsError()) {
             LOG(ERROR) << "CheckMetadata for " << workerAddr << " failed, detail: " << rc.ToString();
             lastRc = std::move(rc);
@@ -846,7 +883,7 @@ Status SCMetadataManager::CheckMetadata(const std::vector<HostPort> &workerAddrs
     return lastRc;
 }
 
-Status SCMetadataManager::CheckMetadataImpl(const HostPort &workerAddr, const worker::HashRange &hashRanges,
+Status SCMetadataManager::CheckMetadataImpl(const HostPort &workerAddr,
                                             std::unordered_set<std::string> &streamsMayNeedAutoDelete)
 {
     LOG(INFO) << "Started CheckMetadata with worker: " << workerAddr;
@@ -855,16 +892,7 @@ Status SCMetadataManager::CheckMetadataImpl(const HostPort &workerAddr, const wo
     auto *localApi = dynamic_cast<MasterLocalWorkerSCApi *>(masterWorkerApi.get());
     GetMetadataAllStreamReqPb req;
     std::vector<GetStreamMetadataRspPb> metaRsp;
-    bool isPassiveScaleDown = !hashRanges.empty();
-    if (!isPassiveScaleDown) {
-        req.set_master_address(masterAddress_.ToString());
-    }
-    for (const auto &range : hashRanges) {
-        GetMetadataAllStreamReqPb::RangePb rangePb;
-        rangePb.set_from(range.first);
-        rangePb.set_end(range.second);
-        req.mutable_hash_ranges()->Add(std::move(rangePb));
-    }
+    req.set_master_address(masterAddress_.ToString());
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     if (localApi) {
         GetMetadataAllStreamRspPb rsp;
@@ -887,20 +915,87 @@ Status SCMetadataManager::CheckMetadataImpl(const HostPort &workerAddr, const wo
         CHECK_FAIL_RETURN_STATUS(rc.GetCode() == K_RPC_STREAM_END, rc.GetCode(), rc.GetMsg());
         LOG_IF_ERROR(stream->Finish(), "Closing of stream rpc failed in master");
     }
-    RETURN_IF_NOT_OK_APPEND_MSG(UpdateMetadata(metaRsp, workerAddr, streamsMayNeedAutoDelete, hashRanges),
+    RETURN_IF_NOT_OK_APPEND_MSG(UpdateMetadata(metaRsp, workerAddr, streamsMayNeedAutoDelete),
                                 "UpdateMetadata failed");
     LOG(INFO) << "Finish CheckMetadata with " << workerAddr;
     return Status::OK();
 }
 
+Status SCMetadataManager::QueryTopologyMetadata(const HostPort &workerAddr,
+                                                std::vector<GetStreamMetadataRspPb> &metaRsp)
+{
+    std::shared_ptr<MasterWorkerSCApi> api;
+    RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, api, akSkManager_));
+    GetMetadataAllStreamReqPb req;
+    req.set_master_address(masterAddress_.ToString());
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    if (auto *localApi = dynamic_cast<MasterLocalWorkerSCApi *>(api.get()); localApi != nullptr) {
+        GetMetadataAllStreamRspPb rsp;
+        RETURN_IF_NOT_OK_APPEND_MSG(localApi->QueryMetadata(req, rsp), "QueryMetadata send to worker failed");
+        metaRsp.assign(rsp.stream_meta().begin(), rsp.stream_meta().end());
+        return Status::OK();
+    }
+    std::unique_ptr<ClientWriterReader<GetMetadataAllStreamReqPb, GetStreamMetadataRspPb>> stream;
+    RETURN_IF_NOT_OK_APPEND_MSG(api->QueryMetadata(stream), "QueryMetadata send to worker failed");
+    RETURN_IF_NOT_OK(stream->Write(req));
+    Status rc;
+    do {
+        GetStreamMetadataRspPb rsp;
+        rc = stream->Read(rsp);
+        if (rc.IsOk()) {
+            metaRsp.emplace_back(std::move(rsp));
+        }
+    } while (rc.IsOk());
+    CHECK_FAIL_RETURN_STATUS(rc.GetCode() == K_RPC_STREAM_END, rc.GetCode(), rc.GetMsg());
+    LOG_IF_ERROR(stream->Finish(), "Closing topology stream recovery RPC failed");
+    return Status::OK();
+}
+
+Status SCMetadataManager::RecoverTopologyFailure(
+    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+    const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+    const cluster::CancellationToken &cancellation)
+{
+    CHECK_FAIL_RETURN_STATUS(action.failed.has_value(), K_INVALID, "stream recovery lacks failed member");
+    CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology stream recovery cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology stream recovery deadline exceeded");
+    HostPort executor;
+    RETURN_IF_NOT_OK(executor.ParseString(action.executor.address));
+    std::vector<GetStreamMetadataRspPb> metaRsp;
+    RETURN_IF_NOT_OK(QueryTopologyMetadata(executor, metaRsp));
+    std::unordered_set<std::string> autoDelete;
+    RETURN_IF_NOT_OK(UpdateMetadata(metaRsp, executor, autoDelete, &filter));
+    PostCheckMetadata(autoDelete);
+    return Status::OK();
+}
+
+Status SCMetadataManager::CleanupTopologyFailedMember(
+    const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
+    std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
+{
+    CHECK_FAIL_RETURN_STATUS(action.failed.has_value(), K_INVALID, "stream cleanup lacks failed member");
+    CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology stream cleanup cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology stream cleanup deadline exceeded");
+    HostPort failed;
+    RETURN_IF_NOT_OK(failed.ParseString(action.failed->address));
+    return ClearWorkerMetadata(failed, true);
+}
+
 Status SCMetadataManager::UpdateMetadata(std::vector<GetStreamMetadataRspPb> &metaRsp, const HostPort &workerAddr,
                                          std::unordered_set<std::string> &streamsMayNeedAutoDelete,
-                                         const worker::HashRange &hashRanges)
+                                         const cluster::IKeyFilter *filter)
 {
     Status status;
     std::vector<std::string> receivedStreams;
     for (const auto &meta : metaRsp) {
         const auto &streamName = meta.stream_name();
+        if (filter != nullptr && !filter->Contains(streamName)) {
+            continue;
+        }
         receivedStreams.push_back(streamName);
         StatusCode code = static_cast<StatusCode>(meta.error().error_code());
         if (code != StatusCode::K_OK) {
@@ -925,7 +1020,7 @@ Status SCMetadataManager::UpdateMetadata(std::vector<GetStreamMetadataRspPb> &me
     WriteLockHelper wlocker(LOCK_ARGS(metaDictMutex_));
     for (const auto &streamMetadata : streamMetaManagerDict_) {
         const auto &streamName = streamMetadata.first;
-        if ((hashRanges.empty() || clusterManager_->IsInRange(hashRanges, streamName))
+        if ((filter == nullptr || filter->Contains(streamName))
             && std::find(receivedStreams.begin(), receivedStreams.end(), streamName) == receivedStreams.end()) {
             auto rc = streamMetadata.second->ClearWorkerMetadata(workerAddr, false, false);
             LOG_IF_ERROR_EXCEPT(rc,
@@ -961,10 +1056,11 @@ void SCMetadataManager::CheckMetadataWithAsyncRetry(const HostPort &workerAddr, 
             if (exitFlag->load()) {
                 return;
             }
-            asyncReconciliationPool_->Execute([this, workerAddr, retryTimes, traceID, timer = std::move(timer)] {
-                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-                CheckMetadataWithAsyncRetry(workerAddr, std::move(timer), retryTimes + 1);
-            });
+            asyncReconciliationPool_->Execute(
+                [this, workerAddr, retryTimes, traceID, timer = std::move(timer)] {
+                    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+                    CheckMetadataWithAsyncRetry(workerAddr, std::move(timer), retryTimes + 1);
+                });
         };
         TimerQueue::TimerImpl timerImpl;
         TimerQueue::GetInstance()->AddTimer(delayMs, delayTask, timerImpl);
@@ -1013,29 +1109,12 @@ void SCMetadataManager::StartClearWorkerMetadata(const HostPort &workerAddr)
     });
 }
 
-Status SCMetadataManager::RecoverMetadataOfFaultyWorker(const worker::HashRange &extraRanges)
-{
-    if (extraRanges.empty()) {
-        return Status::OK();
-    }
-    LOG(INFO) << "Start RecoverMetadataOfFaultyWorker by ranges";
-    auto func = [this](const worker::HashRange &extraRanges) {
-        std::vector<HostPort> nodeAddrs;
-        RETURN_IF_NOT_OK(clusterManager_->GetNodeAddrListFromEtcd(nodeAddrs));
-        RETURN_IF_NOT_OK(CheckMetadata(nodeAddrs, extraRanges));
-        return Status::OK();
-    };
-    LOG_IF_ERROR(func(extraRanges), "RecoverMetadataOfFaultyWorker failed");
-    LOG(INFO) << "Finish RecoverMetadataOfFaultyWorker";
-    return Status::OK();
-}
-
 Status SCMetadataManager::CheckWorkerStatus(const HostPort &workerHostPort)
 {
-    if (clusterManager_ == nullptr) {
+    if (topologyEngine_ == nullptr) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
     }
-    auto rc = clusterManager_->CheckConnection(workerHostPort);
+    auto rc = worker::CheckTopologyMemberConnection(topologyEngine_, workerHostPort);
     if (rc.IsError()) {
         RETURN_STATUS_LOG_ERROR(K_WORKER_ABNORMAL,
                                 FormatString("The Worker %s is abnormal.", workerHostPort.ToString()));

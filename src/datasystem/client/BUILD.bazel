@@ -301,6 +301,7 @@ ds_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//include/datasystem:headers",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log:common_log",
@@ -308,7 +309,7 @@ ds_cc_library(
         "//src/datasystem/common/util:random_data",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:validator",
-        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
     ],
     alwayslink = True,
 )
@@ -348,6 +349,7 @@ ds_cc_library(
     deps = [
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/kvstore:kv_store",
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log:common_log",
@@ -356,9 +358,8 @@ ds_cc_library(
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:validator",
         "//src/datasystem/protos:coordinator_cc_proto",
-        "//src/datasystem/protos:hash_ring_cc_proto",
-        "//src/datasystem/topology:worker_node_info",
-        "//src/datasystem/worker/cluster_manager:cluster_constants",
+        "//src/datasystem/cluster:cluster_membership_codec",
+        "//src/datasystem/cluster:cluster_topology_keyspace",
     ],
     alwayslink = True,
 )

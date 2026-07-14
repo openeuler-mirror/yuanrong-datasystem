@@ -16,9 +16,10 @@ set(MASTER_SC_DEPEND_LIBS
         common_rpc_zmq
         common_event_loop
         master_stream_cache_store
+        master_metadata_redirect
         master_stream_protos
-        cluster_manager
-        common_task_action
+        cluster_topology_scope
+        cluster_topology
         )
 
 add_library(master_stream_cache STATIC ${MASTER_SC_SRCS})

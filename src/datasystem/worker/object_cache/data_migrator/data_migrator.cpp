@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,13 +16,24 @@
  */
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 
+#include <algorithm>
+#include <chrono>
+#include <thread>
+
+#include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
+#include "datasystem/worker/object_cache/object_meta_route_helper.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
+namespace {
+constexpr auto TOPOLOGY_MIGRATION_RETRY_INTERVAL = std::chrono::milliseconds(100);
+constexpr int MIGRATION_RETRY_LOG_EVERY_N = 10;
+}
 
 void DataMigrator::Init()
 {
@@ -37,11 +45,19 @@ std::shared_ptr<SelectionStrategy> DataMigrator::GetStrategyByType()
 {
     switch (type_) {
         case MigrateType::SPILL:
-            return std::make_shared<SpillNodeSelector>(clusterManager_, localAddress_);
+            return std::make_shared<SpillNodeSelector>(topologyEngine_, localAddress_);
         case MigrateType::SCALE_DOWN:
         default:
-            return std::make_shared<ScaleDownNodeSelector>(clusterManager_, localAddress_);
+            return std::make_shared<ScaleDownNodeSelector>(topologyEngine_, localAddress_);
     }
+}
+
+Status DataMigrator::GetStandbyWorker(std::string &standbyWorker) const
+{
+    if (type_ == MigrateType::SCALE_DOWN && !taskId_.empty()) {
+        return worker::GetActiveStandbyTopologyMember(topologyEngine_, localAddress_.ToString(), standbyWorker);
+    }
+    return worker::GetStandbyTopologyMember(topologyEngine_, localAddress_.ToString(), standbyWorker);
 }
 
 uint64_t DataMigrator::CalculateTotalSize(const std::unordered_set<ImmutableString> &objectKeys,
@@ -101,17 +117,16 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
 
     PerfPoint point(PerfKey::WORKER_MIGRATE_TASK_SUBMIT);
     std::vector<std::future<MigrateDataHandler::MigrateResult>> futures;
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyEngine_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     INJECT_POINT("DataMigrator.GetMasterAddr", [&objKeysGrpByMaster, &objectKeys]() {
         objKeysGrpByMaster.clear();
-        HostPort emptyMaster;
-        (void)objKeysGrpByMaster.emplace(emptyMaster, objectKeys);
+        (void)objKeysGrpByMaster.emplace(HostPort(), objectKeys);
         return Status::OK();
     });
     std::string standbyWorker;
-    (void)clusterManager_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker);
+    LOG_IF_ERROR(GetStandbyWorker(standbyWorker), "[Migrate Data] Failed to select standby worker");
     for (const auto &[addr, objectKeys] : objKeysGrpByMaster) {
         auto workerAddr = addr;
         if (workerAddr == localAddress_ && !standbyWorker.empty()) {
@@ -207,12 +222,12 @@ Status DataMigrator::MigrateL2CacheBySlot(const std::vector<std::string> &object
     LOG(INFO) << FormatString("[MigrateL2Cache] Grouped into %zu slots", objectsBySlot.size());
 
     std::string standbyWorker;
-    (void)clusterManager_->GetStandbyWorkerByAddr(localAddress_.ToString(), standbyWorker);
+    LOG_IF_ERROR(GetStandbyWorker(standbyWorker), "[MigrateL2Cache] Failed to select standby worker");
 
     std::vector<SlotMigrateFuture> futures;
     std::unordered_map<uint32_t, int> sameNodeRetryCounts;
     SubmitL2CacheTasksBySlot(objectsBySlot, standbyWorker, futures, sameNodeRetryCounts);
-    ProcessL2CacheSlotFutures(futures, maxSameNodeRetryCount, sameNodeRetryCounts);
+    RETURN_IF_NOT_OK(ProcessL2CacheSlotFutures(futures, maxSameNodeRetryCount, sameNodeRetryCounts));
 
     LOG(INFO) << FormatString("[MigrateL2Cache] Finished");
 
@@ -242,7 +257,7 @@ void DataMigrator::SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector
 {
     for (const auto &[slot, objs] : objectsBySlot) {
         HostPort currentTarget;
-        auto status = clusterManager_->GetMasterAddr(objs[0], currentTarget);
+        auto status = worker::ResolveTopologyOwner(topologyEngine_, objs[0], currentTarget);
         if (status.IsError() || currentTarget == localAddress_) {
             status = currentTarget.ParseString(standbyWorker);
             if (status.IsError()) {
@@ -251,7 +266,7 @@ void DataMigrator::SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector
             }
         }
 
-        auto strategy = std::make_shared<ScaleDownNodeSelector>(clusterManager_, localAddress_);
+        auto strategy = std::make_shared<ScaleDownNodeSelector>(topologyEngine_, localAddress_);
         LOG(INFO) << FormatString("[MigrateL2Cache] Slot %u (%zu objects) -> %s", slot, objs.size(),
                                   currentTarget.ToString());
         futures.emplace_back(slot, MigrateToTargetNode(objs, currentTarget, strategy, false, slot));
@@ -271,10 +286,9 @@ bool DataMigrator::TrySubmitSameNodeRetryForL2Slot(uint32_t slot, const MigrateD
 
     int retryCount = ++sameNodeRetryCounts[slot];
     if (retryCount > maxSameNodeRetryCount) {
-        LOG(WARNING) << FormatString(
-            "[MigrateL2Cache] Slot %u same-node failedIds retry exceeded max(%d), stop "
-            "retry on node %s",
-            slot, maxSameNodeRetryCount, result.address);
+        LOG(WARNING) << FormatString("[MigrateL2Cache] Slot %u same-node failedIds retry exceeded max(%d), stop "
+                                     "retry on node %s",
+                                     slot, maxSameNodeRetryCount, result.address);
         return true;
     }
 
@@ -286,7 +300,7 @@ bool DataMigrator::TrySubmitSameNodeRetryForL2Slot(uint32_t slot, const MigrateD
         return true;
     }
 
-    LOG(WARNING) << FormatString(
+    VLOG(1) << FormatString(
         "[MigrateL2Cache] Slot %u retry failed ids on same node %s (%d/%d), success count: %zu, failed count: %zu",
         slot, result.address, retryCount, maxSameNodeRetryCount, result.successIds.size(), result.failedIds.size());
     newFutures.emplace_back(
@@ -323,27 +337,33 @@ void DataMigrator::TrySubmitRedirectRetryForL2Slot(uint32_t slot, MigrateDataHan
                                   hostPort, result.strategy, false, slot));
 }
 
-void DataMigrator::ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &futures, int maxSameNodeRetryCount,
-                                             std::unordered_map<uint32_t, int> &sameNodeRetryCounts)
+Status DataMigrator::ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &futures, int maxSameNodeRetryCount,
+                                               std::unordered_map<uint32_t, int> &sameNodeRetryCounts)
 {
     while (!futures.empty()) {
         std::vector<SlotMigrateFuture> newFutures;
+        bool retryWaitCompleted = false;
         for (auto &fut : futures) {
             Status rc = HandleFailedResult();
             if (rc.IsError()) {
                 LOG(ERROR) << "[Migrate Data]. Detail: " << rc.ToString();
-                return;
+                return rc;
             }
             uint32_t slot = fut.first;
             auto result = fut.second.get();
-            LOG(INFO) << MigrateDataHandler::ResultToString(result);
             if (result.failedIds.empty()) {
+                LOG(INFO) << MigrateDataHandler::ResultToString(result);
                 continue;
             }
 
-            LOG(WARNING) << FormatString(
+            LOG_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N) << MigrateDataHandler::ResultToString(result);
+            VLOG(1) << FormatString(
                 "[MigrateL2Cache] Slot %u migration to %s failed, status: %s, failed count: %zu", slot, result.address,
                 result.status.ToString(), result.failedIds.size());
+            if (!retryWaitCompleted) {
+                RETURN_IF_NOT_OK(WaitBeforeRetry());
+                retryWaitCompleted = true;
+            }
             if (TrySubmitSameNodeRetryForL2Slot(slot, result, maxSameNodeRetryCount, sameNodeRetryCounts, newFutures)) {
                 continue;
             }
@@ -351,6 +371,7 @@ void DataMigrator::ProcessL2CacheSlotFutures(std::vector<SlotMigrateFuture> &fut
         }
         futures.swap(newFutures);
     }
+    return Status::OK();
 }
 
 std::future<MigrateDataHandler::MigrateResult> DataMigrator::ConstructFailedFuture(
@@ -394,16 +415,24 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateDataByNode(
 Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
                                                const HostPort &workerAddr)
 {
+    if (type_ == MigrateType::SCALE_DOWN && !taskId_.empty()) {
+        CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr && topologyEngine_->membership != nullptr, K_NOT_READY,
+                                 "Topology membership view is unavailable for ScaleIn migration");
+        cluster::MemberEndpoint endpoint;
+        RETURN_IF_NOT_OK(topologyEngine_->membership->ResolveByAddress(workerAddr.ToString(), endpoint));
+        CHECK_FAIL_RETURN_STATUS(endpoint.topologyState == cluster::MemberState::ACTIVE, K_NOT_READY,
+                                 "Topology ScaleIn migration target is not ACTIVE: " + workerAddr.ToString());
+    }
     if (workerAddr == localAddress_) {
         return Status(StatusCode::K_NOT_FOUND, __LINE__, __FILE__,
                       FormatString("[Migrate Data] The node [%s] to be migrated is the current node [%s]",
                                    workerAddr.ToString(), localAddress_.ToString()));
     }
 
-    RETURN_IF_NOT_OK(clusterManager_->CheckConnection(workerAddr));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_, remoteWorkerStub),
-        "[Migrate Data] Create remote worker api failed.");
+    RETURN_IF_NOT_OK(worker::CheckTopologyMemberConnection(topologyEngine_, workerAddr));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_,
+                                                           remoteWorkerStub),
+                                     "[Migrate Data] Create remote worker api failed.");
     return Status::OK();
 }
 
@@ -411,22 +440,8 @@ Status DataMigrator::HandleFailedResult()
 {
     if (type_ == MigrateType::SCALE_DOWN) {
         RETURN_OK_IF_TRUE(taskId_.empty());
-        if (clusterManager_->CheckVoluntaryTaskExpired(taskId_)) {
-            RETURN_STATUS(
-                K_RUNTIME_ERROR,
-                FormatString(
-                    "task id has expired, no need to excute voluntary scale down migrate data task, task id: %s",
-                    taskId_));
-        }
-        if (clusterManager_->CheckVoluntaryScaleDown()) {
-            RETURN_STATUS(
-                K_RUNTIME_ERROR,
-                FormatString("this node maybe failed or only one node left, no need to excute voluntary scale down "
-                             "migrate data task, task id: %s",
-                             taskId_));
-        }
     } else if (type_ == MigrateType::SPILL) {
-        if (clusterManager_->CheckLocalNodeIsExiting()) {
+        if (worker::IsLocalTopologyMemberExiting(topologyEngine_)) {
             RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Local node is exiting, no need to execute migrate task"));
         }
     }
@@ -437,21 +452,56 @@ Status DataMigrator::HandleMigrateDataResult(const std::unordered_map<std::strin
                                              std::vector<std::future<MigrateDataHandler::MigrateResult>> &futures,
                                              std::vector<std::future<MigrateDataHandler::MigrateResult>> &newFutures)
 {
+    bool retryWaitCompleted = false;
     for (auto &fut : futures) {
         auto result = fut.get();
-        LOG(INFO) << MigrateDataHandler::ResultToString(result);
-        if (!result.failedIds.empty()) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(HandleFailedResult(), "[Migrate Data]");
-            skippedKeys_.merge(std::move(result.skipIds));
-            result.retryCount++;
-            if (maxRetryCount_ >= 0 && result.retryCount > maxRetryCount_) {
-                LOG(ERROR) << "[Migrate Data] Migration failed after " << maxRetryCount_ << " retries";
-                failedKeys_.merge(std::move(result.failedIds));
-                continue;
-            }
-            newFutures.emplace_back(RedirectMigrateData(result, CalculateTotalSize(result.failedIds, objectSizes)));
+        if (result.failedIds.empty()) {
+            LOG(INFO) << MigrateDataHandler::ResultToString(result);
+            continue;
         }
+        LOG_EVERY_N(WARNING, MIGRATION_RETRY_LOG_EVERY_N) << MigrateDataHandler::ResultToString(result);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(HandleFailedResult(), "[Migrate Data]");
+        skippedKeys_.merge(std::move(result.skipIds));
+        result.retryCount++;
+        if (maxRetryCount_ >= 0 && result.retryCount > maxRetryCount_) {
+            LOG(ERROR) << "[Migrate Data] Migration failed after " << maxRetryCount_ << " retries";
+            failedKeys_.merge(std::move(result.failedIds));
+            continue;
+        }
+        if (!retryWaitCompleted) {
+            auto retryStatus = WaitBeforeRetry();
+            if (retryStatus.IsError()) {
+                failedKeys_.merge(std::move(result.failedIds));
+                return retryStatus;
+            }
+            retryWaitCompleted = true;
+        }
+        newFutures.emplace_back(RedirectMigrateData(result, CalculateTotalSize(result.failedIds, objectSizes)));
     }
+    return Status::OK();
+}
+
+Status DataMigrator::WaitBeforeRetry() const
+{
+    const bool bounded = deadline_ != std::chrono::steady_clock::time_point::max() || cancellation_ != nullptr;
+    if (!bounded) {
+        return Status::OK();
+    }
+    if (cancellation_ != nullptr && cancellation_->IsCancelled()) {
+        RETURN_STATUS(K_NOT_READY, "topology data migration cancelled");
+    }
+    const auto now = std::chrono::steady_clock::now();
+    CHECK_FAIL_RETURN_STATUS(now < deadline_, K_RPC_DEADLINE_EXCEEDED, "topology data migration deadline exceeded");
+    const auto wake = std::min(deadline_, now + TOPOLOGY_MIGRATION_RETRY_INTERVAL);
+    if (cancellation_ != nullptr) {
+        (void)cancellation_->WaitUntil(wake);
+    } else {
+        std::this_thread::sleep_until(wake);
+    }
+    CHECK_FAIL_RETURN_STATUS(cancellation_ == nullptr || !cancellation_->IsCancelled(), K_NOT_READY,
+                             "topology data migration cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline_, K_RPC_DEADLINE_EXCEEDED,
+                             "topology data migration deadline exceeded");
     return Status::OK();
 }
 

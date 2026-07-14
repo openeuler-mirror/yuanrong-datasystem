@@ -144,7 +144,7 @@ ds_cc_test(
     srcs = ["protobuf_util_test.cpp"],
     deps = [
         "//src/datasystem/common/util:protobuf_util",
-        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
         "//src/datasystem/protos:object_posix_cc_proto",
         "//tests/ut:ut_common",
     ],

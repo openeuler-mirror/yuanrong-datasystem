@@ -40,7 +40,7 @@ WorkerRouter::WorkerRouter(std::string myHostId, std::vector<std::shared_ptr<IWo
                     std::make_move_iterator(additionalFilters.end()));
 
     auto view = std::make_shared<RingView>();
-    view->ring = std::make_shared<HashRingPb>();
+    view->ring = std::make_shared<::datasystem::ClusterTopologyPb>();
     view->sameNodeWorkers = std::make_shared<std::vector<HostPort>>();
     view->tokenIndex = std::make_shared<RingView::TokenIndex>();
     std::atomic_store(&ringView_, std::shared_ptr<const RingView>(std::move(view)));
@@ -51,22 +51,23 @@ void WorkerRouter::SetHostId(std::string hostId)
     myHostId_ = std::move(hostId);
 }
 
-std::shared_ptr<const WorkerRouter::RingView::TokenIndex> WorkerRouter::BuildTokenIndex(const HashRingPb &ring)
+std::shared_ptr<const WorkerRouter::RingView::TokenIndex> WorkerRouter::BuildTokenIndex(
+    const ::datasystem::ClusterTopologyPb &ring)
 {
     auto idx = std::make_shared<RingView::TokenIndex>();
-    for (const auto &entry : ring.workers()) {
-        if (entry.second.state() != WorkerPb_StatePb_ACTIVE
-            && entry.second.state() != WorkerPb_StatePb_LEAVING) {
+    for (const auto &entry : ring.members()) {
+        if (entry.second.state() != ::datasystem::MembershipPb::ACTIVE
+            && entry.second.state() != ::datasystem::MembershipPb::LEAVING) {
             continue;
         }
-        if (entry.second.hash_tokens().empty()) {
+        if (entry.second.tokens().empty()) {
             continue;
         }
         HostPort hp;
         if (!hp.ParseString(entry.first).IsOk()) {
             continue;
         }
-        for (uint32_t token : entry.second.hash_tokens()) {
+        for (uint32_t token : entry.second.tokens()) {
             idx->tokenToWorker.emplace_back(token, static_cast<int>(idx->workers.size()));
         }
         idx->workers.push_back(std::move(hp));
@@ -110,7 +111,9 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, SelectStrategy
         const size_t start = sameNodeCount == 0 ? 0 : keyHash % sameNodeCount;
         for (size_t i = 0; i < sameNodeCount; ++i) {
             const auto &w = sameNodeWorkers[(start + i) % sameNodeCount];
-            if (IsExcluded(w, exclude)) continue;
+            if (IsExcluded(w, exclude)) {
+                continue;
+            }
             if (IsWorkerAvailable(w)) {
                 worker = w;
                 return Status::OK();
@@ -133,7 +136,9 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, SelectStrategy
         int slot = (start + i) % total;
         int workerIdx = idx->tokenToWorker[slot].second;
         const HostPort &candidate = idx->workers[workerIdx];
-        if (IsExcluded(candidate, exclude)) continue;
+        if (IsExcluded(candidate, exclude)) {
+            continue;
+        }
         if (IsWorkerAvailable(candidate)) {
             worker = candidate;
             return Status::OK();
@@ -180,7 +185,7 @@ std::vector<HostPort> WorkerRouter::GetAvailableWorkers() const
     return result;
 }
 
-void WorkerRouter::UpdateHashRing(std::shared_ptr<const HashRingPb> ring,
+void WorkerRouter::UpdateHashRing(std::shared_ptr<const ::datasystem::ClusterTopologyPb> ring,
     std::shared_ptr<const std::unordered_map<std::string, std::string>> hostIdMap)
 {
     if (ring == nullptr || hostIdMap == nullptr) {
@@ -189,8 +194,8 @@ void WorkerRouter::UpdateHashRing(std::shared_ptr<const HashRingPb> ring,
 
     // Build same-node workers list
     auto sameNode = std::make_shared<std::vector<HostPort>>();
-    for (const auto &entry : ring->workers()) {
-        if (entry.second.state() != WorkerPb_StatePb_ACTIVE) {
+    for (const auto &entry : ring->members()) {
+        if (entry.second.state() != ::datasystem::MembershipPb::ACTIVE) {
             continue;
         }
         auto it = hostIdMap->find(entry.first);
@@ -228,16 +233,25 @@ WorkerRingState WorkerRouter::GetRingState(const HostPort &addr) const
 {
     auto view = std::atomic_load(&ringView_);
     std::string addrStr = addr.ToString();
-    auto it = view->ring->workers().find(addrStr);
-    if (it == view->ring->workers().end()) {
+    auto it = view->ring->members().find(addrStr);
+    if (it == view->ring->members().end()) {
         return WorkerRingState::UNKNOWN;
     }
     switch (it->second.state()) {
-        case WorkerPb_StatePb_INITIAL: return WorkerRingState::INITIAL;
-        case WorkerPb_StatePb_JOINING: return WorkerRingState::JOINING;
-        case WorkerPb_StatePb_ACTIVE: return WorkerRingState::ACTIVE;
-        case WorkerPb_StatePb_LEAVING: return WorkerRingState::LEAVING;
-        default: return WorkerRingState::UNKNOWN;
+        case ::datasystem::MembershipPb::INITIAL:
+            return WorkerRingState::INITIAL;
+        case ::datasystem::MembershipPb::JOINING:
+            return WorkerRingState::JOINING;
+        case ::datasystem::MembershipPb::ACTIVE:
+            return WorkerRingState::ACTIVE;
+        case ::datasystem::MembershipPb::PRE_LEAVING:
+            return WorkerRingState::PRE_LEAVING;
+        case ::datasystem::MembershipPb::LEAVING:
+            return WorkerRingState::LEAVING;
+        case ::datasystem::MembershipPb::FAILED:
+            return WorkerRingState::FAILED;
+        default:
+            return WorkerRingState::UNKNOWN;
     }
 }
 

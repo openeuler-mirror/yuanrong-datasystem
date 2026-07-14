@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -26,24 +23,25 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
-#include "../../../common/binmock/binmock.h"
-
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #define private public
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #undef private
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
-#include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
+#include "tests/ut/worker/object_cache/test_placement_facade.h"
 
 using namespace ::testing;
 using namespace datasystem::object_cache;
 
 namespace datasystem {
 namespace ut {
+using MetadataTestPlacementFacade = TestPlacementFacade;
+
 class TestWorkerMasterApiManager : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
 public:
     explicit TestWorkerMasterApiManager(HostPort &workerAddr)
@@ -72,12 +70,47 @@ private:
     std::unordered_map<std::string, std::shared_ptr<worker::WorkerMasterOCApi>> apiByAddr_;
 };
 
-class TestWorkerMasterOCApi : public worker::WorkerRemoteMasterOCApi {
+#define RETURN_UNSUPPORTED_MASTER_API(method, ...)                                      \
+    Status method(__VA_ARGS__) override                                                \
+    {                                                                                  \
+        return Status(K_RUNTIME_ERROR, "unsupported test master API: " #method);        \
+    }
+
+class TestWorkerMasterOCApi : public worker::WorkerMasterOCApi {
 public:
     TestWorkerMasterOCApi(const HostPort &masterAddr, const HostPort &localAddr)
-        : WorkerRemoteMasterOCApi(masterAddr, localAddr, nullptr)
+        : WorkerMasterOCApi(localAddr, nullptr), masterAddr_(masterAddr)
     {
     }
+
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
+    RETURN_UNSUPPORTED_MASTER_API(CreateMeta, master::CreateMetaReqPb &, master::CreateMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(ReportResource, master::ResourceReportReqPb &, master::ResourceReportRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(ReportRebalanceResult, master::ReportRebalanceResultReqPb &,
+                                  master::ReportRebalanceResultRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(CreateMultiMeta, master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &, bool)
+    RETURN_UNSUPPORTED_MASTER_API(CreateCopyMeta, master::CreateCopyMetaReqPb &, master::CreateCopyMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(CreateMultiCopyMeta, master::CreateMultiCopyMetaReqPb &,
+                                  master::CreateMultiCopyMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(QueryMeta, master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
+                                  std::vector<RpcMessage> &)
+    RETURN_UNSUPPORTED_MASTER_API(RemoveMeta, master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GIncNestedRef, master::GIncNestedRefReqPb &, master::GIncNestedRefRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GDecNestedRef, master::GDecNestedRefReqPb &, master::GDecNestedRefRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(UpdateMeta, master::UpdateMetaReqPb &, master::UpdateMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(DeleteAllCopyMeta, master::DeleteAllCopyMetaReqPb &,
+                                  master::DeleteAllCopyMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GDecreaseMasterRef, const std::vector<std::string> &,
+                                  std::unordered_set<std::string> &, std::vector<std::string> &,
+                                  const std::string &)
+    RETURN_UNSUPPORTED_MASTER_API(ReleaseGRefs, master::ReleaseGRefsReqPb &, master::ReleaseGRefsRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GIncreaseMasterRef, master::GIncreaseReqPb &, master::GIncreaseRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GDecreaseMasterRef, master::GDecreaseReqPb &, master::GDecreaseRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(QueryGlobalRefNum, QueryGlobalRefNumReqPb &, QueryGlobalRefNumRspCollectionPb &)
 
     Status PushMetadataToMaster(master::PushMetaToMasterReqPb &req, master::PushMetaToMasterRspPb &rsp) override
     {
@@ -88,6 +121,46 @@ public:
         batchSizes_.emplace_back(req.metas_size());
         return returnStatus_;
     }
+
+    RETURN_UNSUPPORTED_MASTER_API(RollbackSeal, const std::string &, uint32_t)
+    RETURN_UNSUPPORTED_MASTER_API(Expire, master::ExpireReqPb &, master::ExpireRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(ReconcileMembershipChange, master::ReconciliationQueryPb &,
+                                  master::ReconciliationRspPb &)
+
+    std::string GetHostPort() override
+    {
+        return masterAddr_.ToString();
+    }
+
+    RETURN_UNSUPPORTED_MASTER_API(PutP2PMeta, PutP2PMetaReqPb &, PutP2PMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(SubscribeReceiveEvent, SubscribeReceiveEventReqPb &,
+                                  std::shared_ptr<ServerUnaryWriterReader<SubscribeReceiveEventRspPb,
+                                                                           SubscribeReceiveEventReqPb>>,
+                                  std::shared_ptr<AsyncRpcRequestManager> &)
+    RETURN_UNSUPPORTED_MASTER_API(GetP2PMeta, GetP2PMetaReqPb &,
+                                  std::shared_ptr<ServerUnaryWriterReader<GetP2PMetaRspPb, GetP2PMetaReqPb>>,
+                                  std::shared_ptr<AsyncRpcRequestManager> &)
+    RETURN_UNSUPPORTED_MASTER_API(SendRootInfo, SendRootInfoReqPb &, SendRootInfoRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(RecvRootInfo, RecvRootInfoReqPb &,
+                                  std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>>,
+                                  std::shared_ptr<AsyncRpcRequestManager> &)
+    RETURN_UNSUPPORTED_MASTER_API(GetDataInfo, GetDataInfoReqPb &,
+                                  std::shared_ptr<ServerUnaryWriterReader<GetDataInfoRspPb, GetDataInfoReqPb>> &,
+                                  const int64_t, std::shared_ptr<AsyncRpcRequestManager> &)
+    RETURN_UNSUPPORTED_MASTER_API(AckRecvFinish, AckRecvFinishReqPb &, AckRecvFinishRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(RemoveP2PLocation, RemoveP2PLocationReqPb &, RemoveP2PLocationRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GetObjectLocations, master::GetObjectLocationsReqPb &,
+                                  master::GetObjectLocationsRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GetObjectLocations, master::GetObjectLocationsReqPb &,
+                                  master::GetObjectLocationsRspPb &, int64_t)
+    RETURN_UNSUPPORTED_MASTER_API(ReleaseMetaData, ReleaseMetaDataReqPb &, ReleaseMetaDataRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(ReplacePrimary, master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(PureQueryMeta, master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(CheckObjectDataLocation, master::CheckObjectDataLocationReqPb &,
+                                  master::CheckObjectDataLocationRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(RollbackMultiMeta, master::RollbackMultiMetaReqPb &,
+                                  master::RollbackMultiMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GetMetaInfo, GetMetaInfoReqPb &, GetMetaInfoRspPb &)
 
     const std::vector<int> &GetBatchSizes() const
     {
@@ -100,6 +173,7 @@ public:
     }
 
 private:
+    HostPort masterAddr_;
     Status returnStatus_{ Status::OK() };
     std::vector<int> batchSizes_;
     std::vector<bool> isRecoveredFlags_;
@@ -125,28 +199,51 @@ TEST_F(WorkerRemoteMasterRpcDiagnosticTest, SealCreateMetaTimeoutReportsRpcDiagn
         << rc.ToString();
 }
 
+#undef RETURN_UNSUPPORTED_MASTER_API
+
 class MetaDataRecoveryManagerTest : public CommonTest {
 public:
+    static void SetUpTestSuite()
+    {
+        DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(64UL * 1024UL * 1024UL));
+    }
+
+    static void TearDownTestSuite()
+    {
+        datasystem::memory::Allocator::Instance()->Shutdown();
+    }
+
     void SetUp() override
     {
         CommonTest::SetUp();
 
         localAddress_ = HostPort("127.0.0.1", 18500);
-        DS_ASSERT_OK(datasystem::memory::Allocator::Instance()->Init(64UL * 1024UL * 1024UL));
         objectTable_ = std::make_shared<ObjectTable>();
-        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddress_, localAddress_);
         memCpyThreadPool_ = std::make_shared<ThreadPool>(1);
         workerMasterApiManager_ = std::make_shared<TestWorkerMasterApiManager>(localAddress_);
-        manager_ = std::make_unique<MetaDataRecoveryManager>(
-            localAddress_, objectTable_, nullptr, workerMasterApiManager_, 128, evictionManager_, memCpyThreadPool_);
+        clusterAccess_.checkConnection = [](const HostPort &) { return Status::OK(); };
+        recoveredContentSaver_ = [this](const ObjectMetaPb &meta,
+                                         const std::shared_ptr<std::stringstream> &contentStream,
+                                         const std::shared_ptr<SafeObjType> &entry) {
+            const auto content = contentStream->str();
+            std::vector<RpcMessage> payloads;
+            RETURN_IF_NOT_OK(CopyAndSplitBuffer("", content.data(), content.size(), payloads));
+            ObjectKV objectKV(meta.object_key(), *entry);
+            RETURN_IF_NOT_OK(SaveBinaryObjectToMemory(objectKV, payloads, nullptr, memCpyThreadPool_, false));
+            (*entry)->stateInfo.SetCacheInvalid(false);
+            (*entry)->stateInfo.SetIncompleted(false);
+            return Status::OK();
+        };
+        manager_ = std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, clusterAccess_,
+                                                             workerMasterApiManager_, 128, nullptr,
+                                                             memCpyThreadPool_, nullptr, worker::MetadataRouteOptions{},
+                                                             recoveredContentSaver_);
     }
 
     void TearDown() override
     {
         manager_.reset();
         memCpyThreadPool_.reset();
-        evictionManager_.reset();
-        datasystem::memory::Allocator::Instance()->Shutdown();
         CommonTest::TearDown();
     }
 
@@ -165,11 +262,30 @@ public:
 protected:
     HostPort localAddress_;
     std::shared_ptr<ObjectTable> objectTable_;
-    std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<ThreadPool> memCpyThreadPool_;
     std::shared_ptr<TestWorkerMasterApiManager> workerMasterApiManager_;
+    MetaDataRecoveryManager::ClusterAccess clusterAccess_;
+    MetaDataRecoveryManager::RecoveredContentSaver recoveredContentSaver_;
     std::unique_ptr<MetaDataRecoveryManager> manager_;
 };
+
+TEST_F(MetaDataRecoveryManagerTest, BuildGroupedByMasterUsesTopologyPlacement)
+{
+    MetadataTestPlacementFacade placement;
+    HostPort masterAddr;
+    masterAddr.ParseString("127.0.0.1:18501");
+    placement.SetOwner("key-ok", masterAddr);
+
+    MetaDataRecoveryManager manager(localAddress_, objectTable_, clusterAccess_, workerMasterApiManager_, 128,
+                                    nullptr, memCpyThreadPool_, &placement, worker::MetadataRouteOptions{},
+                                    recoveredContentSaver_);
+    auto grouped = manager.BuildGroupedByMaster({ "key-ok", "key-missing" }, "");
+
+    ASSERT_NE(grouped.find(masterAddr), grouped.end());
+    EXPECT_THAT(grouped[masterAddr], ElementsAre("key-ok"));
+    ASSERT_NE(grouped.find(HostPort()), grouped.end());
+    EXPECT_THAT(grouped[HostPort()], ElementsAre("key-missing"));
+}
 
 ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
                               const std::string &primaryAddress = "127.0.0.1:18500")
@@ -190,9 +306,6 @@ ObjectMetaPb BuildRecoverMeta(const std::string &objectKey, WriteMode writeMode,
 
 TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
 {
-    BINEXPECT_CALL((Status (ClusterManager::*)(const HostPort &, bool))&ClusterManager::CheckConnection, (_, _))
-        .WillRepeatedly(Return(Status::OK()));
-
     constexpr size_t totalObjects = 1201;
     std::vector<std::string> objectKeys;
     objectKeys.reserve(totalObjects);
@@ -265,8 +378,9 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesLoadsPayloadIntoMemory)
     auto content = std::make_shared<std::stringstream>();
     const std::string expected = "payload_for_restart_recovery";
     (*content) << expected;
-    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{ { "tenant/payload_obj",
-                                                                                             content } };
+    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{
+        { "tenant/payload_obj", content }
+    };
 
     std::vector<std::string> recoveredObjectKeys;
     DS_ASSERT_OK(manager_->RecoverLocalEntries(recoverMetas, recoveredContents, recoveredObjectKeys));
@@ -295,7 +409,9 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesSkipsOlderMetaWhenLocalEn
     oldMeta.set_data_size(2048);
     auto oldContent = std::make_shared<std::stringstream>();
     (*oldContent) << "old_payload";
-    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{ { objectKey, oldContent } };
+    std::unordered_map<std::string, std::shared_ptr<std::stringstream>> recoveredContents{
+        { objectKey, oldContent }
+    };
 
     std::vector<std::string> recoveredObjectKeys;
     DS_ASSERT_OK(manager_->RecoverLocalEntries({ oldMeta }, recoveredContents, recoveredObjectKeys));
@@ -316,7 +432,7 @@ public:
     {
         CommonTest::SetUp();
         objectTable_ = std::make_shared<ObjectTable>();
-        selector_ = std::make_unique<MetadataRecoverySelector>(objectTable_, nullptr);
+        selector_ = std::make_unique<MetadataRecoverySelector>(objectTable_);
     }
 
     void AddObject(const std::string &objectKey, WriteMode writeMode)
@@ -349,7 +465,7 @@ TEST_F(MetadataRecoverySelectorTest, SelectShouldRespectIncludeL2Flag)
     ASSERT_THAT(objectKeys, ElementsAre("l2_obj", "mem_only"));
 }
 
-TEST_F(MetadataRecoverySelectorTest, SelectionRequestShouldPreserveInputAndValidateEtcd)
+TEST_F(MetadataRecoverySelectorTest, SelectionRequestShouldPreserveInputAndValidateRanges)
 {
     ClearDataReqPb req;
     auto *range = req.add_ranges();
@@ -364,8 +480,13 @@ TEST_F(MetadataRecoverySelectorTest, SelectionRequestShouldPreserveInputAndValid
 
     std::vector<std::string> objectKeys;
     auto status = selector_->Select(selectReq, objectKeys);
+    DS_ASSERT_OK(status);
+    EXPECT_TRUE(objectKeys.empty());
+
+    MetadataRecoverySelector::SelectionRequest emptyReq;
+    status = selector_->Select(emptyReq, objectKeys);
     DS_ASSERT_NOT_OK(status);
-    EXPECT_EQ(status.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_EQ(status.GetCode(), K_INVALID);
 }
 
 }  // namespace ut

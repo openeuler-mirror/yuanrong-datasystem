@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +17,8 @@
 #include "datasystem/master/stream_cache/stream_metadata.h"
 
 #include <utility>
+
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
@@ -28,6 +27,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/master/stream_cache/sc_notify_worker_manager.h"
@@ -38,7 +38,8 @@ namespace datasystem {
 namespace master {
 StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &streamFields,
                                RocksStreamMetaStore *streamMetaStore, std::shared_ptr<AkSkManager> akSkManager,
-                               std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *clusterManager,
+                               std::shared_ptr<RpcSessionManager> rpcSessionManager,
+                               worker::WorkerTopologyReferences *topologyEngine,
                                SCNotifyWorkerManager *notifyWorkerManager)
     : streamName_(std::move(streamName)),
       streamFields_(streamFields),
@@ -47,7 +48,7 @@ StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &strea
       alive_(true),
       akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       notifyWorkerManager_(notifyWorkerManager)
 {
 }
@@ -827,10 +828,10 @@ Status StreamMetadata::AutoCleanupIfNeededNotLocked(const HostPort &srcHost)
 
 Status StreamMetadata::CheckWorkerStatus(const HostPort &workerHostPort)
 {
-    if (clusterManager_ == nullptr) {
+    if (topologyEngine_ == nullptr) {
         RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
     }
-    auto rc = clusterManager_->CheckConnection(workerHostPort);
+    auto rc = worker::CheckTopologyMemberConnection(topologyEngine_, workerHostPort);
     if (rc.IsError()) {
         RETURN_STATUS_LOG_ERROR(K_WORKER_ABNORMAL, FormatString("The worker %s is abnormal, detail: %s",
                                                                 workerHostPort.ToString(), rc.GetMsg()));

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,8 +21,8 @@
 #include <gtest/gtest.h>
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
 
 DS_DECLARE_string(etcd_address);
 
@@ -79,9 +76,8 @@ public:
         LOG(INFO) << "The etcd address is:" << FLAGS_etcd_address << std::endl;
         db_ = std::make_unique<EtcdStore>(etcdAddress);
         if ((db_ != nullptr) && (db_->Init().IsOk())) {
-            db_->DropTable(ETCD_RING_PREFIX);
             // We don't check rc here. If table to drop does not exist, it's fine.
-            (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
+            (void)RegisterTopologyTables(*db_);
         }
     }
     void TearDown() override

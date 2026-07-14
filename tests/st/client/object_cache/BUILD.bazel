@@ -15,7 +15,7 @@ ds_cc_test_library(
         "//src/datasystem/common/util:random_data",
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/common/util:uuid_generator",
-        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
         "//src/datasystem/protos:master_object_cc_proto",
         "//tests/st:st_common",
     ],
@@ -132,21 +132,6 @@ ds_cc_test(
     deps = OC_CLIENT_COMMON_DEPS + [
         "//src/datasystem/client/object_cache:object_client_impl",
         "//src/datasystem/common/util:uuid_generator",
-    ],
-)
-
-
-
-ds_cc_test(
-    name = "object_client_scale_test",
-    srcs = ["object_client_scale_test.cpp"],
-    tags = ["manual"],
-    deps = OC_CLIENT_COMMON_DEPS + [
-        "//src/datasystem/common/kvstore/etcd:etcd_constants",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/common/util:hash_algorithm",
-        "//src/datasystem/common/util:net_util",
-        "//tests/st/cluster:st_cluster",
     ],
 )
 

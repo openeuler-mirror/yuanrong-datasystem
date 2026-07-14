@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,6 +22,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/stream_cache/stream_fields.h"
@@ -34,7 +32,7 @@
 #include "datasystem/master/stream_cache/rpc_session_manager.h"
 #include "datasystem/master/stream_cache/store/rocks_stream_meta_store.h"
 #include "datasystem/protos/worker_stream.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
@@ -86,6 +84,7 @@ using RocksStreamMetaStore = stream_cache::RocksStreamMetaStore;
 class SCMetadataManager;
 class SCNotifyWorkerManager {
 public:
+
     /**
      * @brief Construct a new SCNotifyWorkerManager instance.
      * @param[in] streamMetaStore The stream rocksdb store object.
@@ -96,7 +95,7 @@ public:
      */
     SCNotifyWorkerManager(std::shared_ptr<RocksStreamMetaStore> streamMetaStore,
                           std::shared_ptr<AkSkManager> akSkManager,
-                          std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *cm,
+                          std::shared_ptr<RpcSessionManager> rpcSessionManager, worker::WorkerTopologyReferences *cm,
                           SCMetadataManager *scMetadataManager);
 
     ~SCNotifyWorkerManager();
@@ -226,6 +225,7 @@ public:
     Status RemovePendingNotificationByStreamName(const std::string &streamName);
 
 private:
+
     /**
      * @brief Notification sending process.
      */
@@ -280,6 +280,7 @@ private:
     std::shared_ptr<PendingNotification> GetOrCreatePendingNotification(const std::string &workerAddr,
                                                                         const std::string &streamName,
                                                                         TbbNotifyWorkerMap::accessor &accessor);
+
     /**
      * @brief Get the pending notification task.
      * @param[in] workerAddr The worker address.
@@ -386,7 +387,7 @@ private:
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     SCMetadataManager *scMetadataManager_;
 };
 }  // namespace master

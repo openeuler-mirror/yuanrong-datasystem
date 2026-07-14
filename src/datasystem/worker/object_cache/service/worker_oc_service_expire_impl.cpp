@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +18,8 @@
 
 #include <cstdint>
 #include <utility>
+
+#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
@@ -42,9 +41,9 @@ namespace datasystem {
 namespace object_cache {
 
 WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam,
-                                                     ClusterManager *clusterManager,
+                                                     worker::WorkerTopologyReferences *topologyEngine,
                                                      std::shared_ptr<AkSkManager> akSkManager)
-    : WorkerOcServiceCrudCommonApi(initParam), clusterManager_(clusterManager), akSkManager_(std::move(akSkManager))
+    : WorkerOcServiceCrudCommonApi(initParam), topologyEngine_(topologyEngine), akSkManager_(std::move(akSkManager))
 {
 }
 
@@ -60,7 +59,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_EXPIRE);
     access.ObjectKeysRef(objectKeys).TtlSecond(req.ttl_second());
 
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyEngine_);
     auto &objKeysGrpByMaster = grouped.groups;
 
     std::unordered_set<std::string> objKeysExpireFailed;

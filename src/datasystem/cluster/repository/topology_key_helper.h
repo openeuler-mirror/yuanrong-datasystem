@@ -25,15 +25,15 @@
 namespace datasystem::cluster {
 
 /**
- * @brief The only builder for `/datasystem/{cluster_name}/...` topology tables.
+ * @brief The only builder for `/datasystem[/cluster_name]/...` topology tables.
  */
 class TopologyKeyHelper final {
 public:
     /**
-     * @brief Validate one cluster namespace and construct its only key helper.
-     * @param[in] clusterName Cluster namespace to validate and consume.
+     * @brief Validate an optional cluster namespace and construct its only key helper.
+     * @param[in] clusterName Optional cluster namespace to validate and consume.
      * @param[out] helper Constructed helper; unchanged on failure.
-     * @return K_OK on success; K_INVALID when clusterName violates the keyspace contract.
+     * @return K_OK on success; K_INVALID when a non-empty clusterName violates the keyspace contract.
      */
     static Status Create(std::string clusterName, std::unique_ptr<TopologyKeyHelper> &helper);
 
@@ -111,7 +111,7 @@ public:
 private:
     /**
      * @brief Construct prevalidated logical table names.
-     * @param[in] clusterName Validated cluster namespace to consume.
+     * @param[in] clusterName Validated optional cluster namespace to consume.
      */
     explicit TopologyKeyHelper(std::string clusterName);
 

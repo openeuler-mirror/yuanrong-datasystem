@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,10 +19,15 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
-#include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/format.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/common/util/timer.h"
+#include "datasystem/cluster/routing/placement_facade.h"
+#include "datasystem/worker/metadata_route_options.h"
 
 namespace datasystem {
 namespace worker {
@@ -38,20 +40,25 @@ public:
     /**
      * @brief Get or Create a worker to Master api object according to an identifier.
      * @param[in] id An identifier, can be an object key in OC scenario, or a stream name in SC scenario.
-     * @param[in] clusterManager The cluster manager pointer to assign.
+     * @param[in] topologyPlacement Placement facade used to locate the metadata owner.
+     * @param[in] routeOptions Route options for the placement facade.
      * @param[out] api The WorkerMasterApi instance.
      * @return The status of this call.
      */
-    virtual Status GetWorkerMasterApi(const std::string &id, ClusterManager *clusterManager,
-                                      std::shared_ptr<ApiType> &api)
+    virtual Status GetWorkerMasterApi(const std::string &id, const cluster::PlacementFacade *topologyPlacement,
+                                      const MetadataRouteOptions &routeOptions, std::shared_ptr<ApiType> &api)
     {
-        CHECK_FAIL_RETURN_STATUS(clusterManager != nullptr, K_RUNTIME_ERROR,
-                                 "ClusterManager is empty, get WorkerMasterApi failed");
+        if (routeOptions.centralizedMode) {
+            return GetWorkerMasterApi(routeOptions.masterAddress, api);
+        }
+        CHECK_FAIL_RETURN_STATUS(topologyPlacement != nullptr, K_RUNTIME_ERROR,
+                                 "Topology placement facade is empty, get WorkerMasterApi failed");
         Timer timer;
-        HostPort masterHostAddress;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager->LocateMetaOwner(id, true, masterHostAddress),
-                                         "LocateMetaOwner failed");
+        cluster::PlacementDecision route;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(topologyPlacement->Locate(id, route), "Locate metadata owner failed");
         GetWorkerTimeCost().Append("Get master address", timer.ElapsedMilliSecond());
+        HostPort masterHostAddress;
+        RETURN_IF_NOT_OK(masterHostAddress.ParseString(route.committedOwnerAddress));
 
         VLOG(1) << FormatString("Get masterHostAddress:[%s] for identifier:[%s]", masterHostAddress.ToString(), id);
         return GetWorkerMasterApi(masterHostAddress, api);
@@ -60,13 +67,16 @@ public:
     /**
      * @brief Get or Create a worker to Master api object according to an identifier.
      * @param[in] id An identifier, can be an object key in OC scenario, or a stream name in SC scenario.
-     * @param[in] clusterManager The cluster manager pointer to assign.
+     * @param[in] topologyPlacement Placement facade used to locate the metadata owner.
+     * @param[in] routeOptions Route options for the placement facade.
      * @return The WorkerMasterApi
      */
-    virtual std::shared_ptr<ApiType> GetWorkerMasterApi(const std::string &id, ClusterManager *clusterManager)
+    virtual std::shared_ptr<ApiType> GetWorkerMasterApi(const std::string &id,
+                                                        const cluster::PlacementFacade *topologyPlacement,
+                                                        const MetadataRouteOptions &routeOptions)
     {
         std::shared_ptr<ApiType> api;
-        LOG_IF_ERROR(GetWorkerMasterApi(id, clusterManager, api), "GetWorkerMasterApi failed");
+        LOG_IF_ERROR(GetWorkerMasterApi(id, topologyPlacement, routeOptions, api), "GetWorkerMasterApi failed");
         return api;
     }
 
@@ -112,18 +122,16 @@ public:
     /**
      * @brief Get or Create a worker to Master api object for masterAddress.
      * @param[in] masterAddress The remote master ip address.
-     * @param[in] clusterManager The cluster manager pointer to assign.
+     * @param[in] topologyPlacement Placement facade used to locate the metadata owner.
+     * @param[in] routeOptions Route options for the placement facade.
      * @param[out] api The WorkerMasterApi instance.
      * @return The status of this call.
      */
-    virtual Status GetWorkerMasterApiByAddr(const std::string &masterAddress, ClusterManager *clusterManager,
-                                            std::shared_ptr<ApiType> &api)
+    virtual Status GetWorkerMasterApiByAddr(const std::string &masterAddress,
+                                            const cluster::PlacementFacade *topologyPlacement,
+                                            const MetadataRouteOptions &routeOptions, std::shared_ptr<ApiType> &api)
     {
-        CHECK_FAIL_RETURN_STATUS(clusterManager != nullptr, K_RUNTIME_ERROR,
-                                 "ClusterManager is empty, get WorkerMasterApi failed");
-        HostPort destAddr;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(destAddr.ParseString(masterAddress), "Parse masterAddress failed");
-        return GetWorkerMasterApi(destAddr, api);
+        return GetWorkerMasterApi(masterAddress, topologyPlacement, routeOptions, api);
     }
 
     /**

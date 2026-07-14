@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -41,6 +38,7 @@
 
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_bool(enable_etcd_auth);
+DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 namespace st {
@@ -102,9 +100,7 @@ Status BaseCluster::ExecuteCmd(const std::string &cmd, std::string &result, int 
 
 ExternalCluster::ExternalCluster(const ExternalClusterOptions &opt) : opts_(opt)
 {
-    time_t seed =
-        std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now()).time_since_epoch().count();
-    randomData_ = RandomData(seed);
+    randomData_ = RandomData(RandomData::GetRandomSeed());
     if (opts_.rootDir.empty()) {
         opts_.rootDir = "./ds";
     }
@@ -116,6 +112,7 @@ ExternalCluster::ExternalCluster(const ExternalClusterOptions &opt) : opts_(opt)
     // Add random prefixes to tables in etcd to prevent conflicts when multiple cases are running at the same time.
     const int etcdPrefixLen = 6;
     opts_.etcdPrefix = randomData_.GetRandomString(etcdPrefixLen);
+    FLAGS_cluster_name = opts_.etcdPrefix;
     if (opts_.numWorkers > 0) {
         for (uint32_t i = 0; i < opts_.numWorkers; ++i) {
             workerProcesses_.emplace_back(nullptr);
@@ -329,6 +326,12 @@ Status ExternalCluster::StartNode(ClusterNodeType nodeType, uint32_t idx, const 
     Subprocess *process = nullptr;
     RETURN_IF_NOT_OK(GetProcess(nodeType, idx, process));
     CHECK_FAIL_RETURN_STATUS(process != nullptr, K_NOT_FOUND, "Process is nullptr");
+    if (nodeType == ClusterNodeType::WORKER) {
+        (void)DeleteFile(FormatString("%s/worker%u/health", opts_.rootDir, idx));
+    } else if (nodeType == ClusterNodeType::MASTER) {
+        CHECK_FAIL_RETURN_STATUS(!opts_.isObjectCache, K_INVALID, "No master in object cache.");
+        (void)DeleteFile(FormatString("%s/master%u/health", opts_.rootDir, idx));
+    }
     if (!params.empty()) {
         process->AppendCmdParams(params);
     }
@@ -1049,6 +1052,14 @@ Status ExternalCluster::StartForkWorkerProcess()
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, "Unable to create pipe: " + StrErr(err));
     }
 
+    HostPort masterAddress;
+    if (opts_.isObjectCache && opts_.enableDistributedMaster == "false") {
+        CHECK_FAIL_RETURN_STATUS(opts_.masterIdx >= 0
+                                     && opts_.masterIdx < static_cast<int32_t>(opts_.workerConfigs.size()),
+                                 StatusCode::K_INVALID, "The index for master is out of range.");
+        masterAddress = opts_.workerConfigs[opts_.masterIdx];
+    }
+
     workerForkPid_ = fork();
     if (workerForkPid_ == -1) {
         int err = errno;
@@ -1062,7 +1073,7 @@ Status ExternalCluster::StartForkWorkerProcess()
                 LOG_IF_ERROR(ShutdownWorkers(), "Shutdown workers failed");
                 break;
             }
-            rc = StartWorker(message_, HostPort());
+            rc = StartWorker(message_, masterAddress);
             if (rc.IsError()) {
                 break;
             }
@@ -1115,13 +1126,35 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
 {
     std::string cmd = WORKER_BIN_PATH;
     std::string rootDir = opts_.rootDir + "/worker" + std::to_string(index);
+    (void)DeleteFile(rootDir + "/health");
+    AppendWorkerRuntimeFlags(index, rootDir, gFlag, cmd);
+    RETURN_IF_NOT_OK(AppendWorkerBackendFlags(index, address, cmd));
+    LOG(INFO) << "Launch worker [" << index << "] command: " << cmd;
+    auto workerProcess = std::make_unique<WorkerProcess>(cmd, opts_.workerConfigs[index]);
+    std::string workerName = "worker_" + std::to_string(index);
+    workerProcess->SetEnv({ std::make_pair("POD_NAME", workerName) });
+    RETURN_IF_NOT_OK(workerProcess->Start());
+    TestPortAllocator::Instance().RegisterChildPid(opts_.workerConfigs[index].Port(), workerProcess->Pid());
+    if (static_cast<size_t>(index) < opts_.workerOcDirectPorts.size()) {
+        TestPortAllocator::Instance().RegisterChildPid(opts_.workerOcDirectPorts[index], workerProcess->Pid());
+    }
+    workerProcesses_[index].reset(workerProcess.release());
+    if (opts_.waitWorkerReady) {
+        RETURN_IF_NOT_OK(WaitNodeReady(WORKER, index, WAIT_TIMEOUT_SECS));
+    }
+    LOG(INFO) << "Launch worker [" << index << "] success";
+    return Status::OK();
+}
+
+void ExternalCluster::AppendWorkerRuntimeFlags(int index, const std::string &rootDir, const std::string &gFlag,
+                                               std::string &cmd)
+{
     std::string logDir = rootDir + "/log";
     std::string healthFile = rootDir + "/health";
     std::string spillDir;
     if (opts_.enableSpill) {
         spillDir = rootDir + "/spill";
     }
-    (void)DeleteFile(healthFile);
     if (opts_.isStreamCacheCase) {
         opts_.numRpcThreads = 1;
         opts_.numOcThreadNum = 1;
@@ -1161,7 +1194,10 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
     if (opts_.enableLivenessProbe) {
         cmd += " -liveness_check_path=" + rootDir + "/liveness ";
     }
+}
 
+Status ExternalCluster::AppendWorkerBackendFlags(int index, const HostPort &address, std::string &cmd)
+{
     if (opts_.numCoordinators > 0) {
         CHECK_FAIL_RETURN_STATUS(!opts_.coordinatorConfigs.empty(), K_RUNTIME_ERROR, "Coordinator address is empty.");
         cmd += " -coordinator_address=" + opts_.coordinatorConfigs[0].ToString();
@@ -1178,6 +1214,10 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
         cmd += " -etcd_address=" + etcdUrl;
     }
 
+    // Cluster topology is constructed for every Worker, including an embedded metastore Worker with no external
+    // ETCD or Coordinator process, so every launch must carry the isolated test cluster name.
+    cmd += " -cluster_name=" + opts_.etcdPrefix;
+
     cmd += GetProperMasterAddrParam(index, address);
     if (opts_.numOBS > 0) {
         cmd += FormatString(
@@ -1187,20 +1227,6 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
             " -obs_bucket=test ",
             opts_.OBSIpAddrs[0].ToString());
     }
-    LOG(INFO) << "Launch worker [" << index << "] command: " << cmd;
-    auto workerProcess = std::make_unique<WorkerProcess>(cmd, opts_.workerConfigs[index]);
-    std::string workerName = "worker_" + std::to_string(index);
-    workerProcess->SetEnv({ std::make_pair("POD_NAME", workerName) });
-    RETURN_IF_NOT_OK(workerProcess->Start());
-    TestPortAllocator::Instance().RegisterChildPid(opts_.workerConfigs[index].Port(), workerProcess->Pid());
-    if (static_cast<size_t>(index) < opts_.workerOcDirectPorts.size()) {
-        TestPortAllocator::Instance().RegisterChildPid(opts_.workerOcDirectPorts[index], workerProcess->Pid());
-    }
-    workerProcesses_[index].reset(workerProcess.release());
-    if (opts_.waitWorkerReady) {
-        RETURN_IF_NOT_OK(WaitNodeReady(WORKER, index, WAIT_TIMEOUT_SECS));
-    }
-    LOG(INFO) << "Launch worker [" << index << "] success";
     return Status::OK();
 }
 

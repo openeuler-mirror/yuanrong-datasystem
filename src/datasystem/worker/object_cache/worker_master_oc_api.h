@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,6 +20,7 @@
 #include <list>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -40,12 +38,14 @@ namespace master {
 class MasterOCServiceImpl;
 }
 namespace worker {
+
 /**
  * @brief The WorkerMasterOCApi is an abstract class that defines the interface for interactions with the object cache
  * master service.
  */
 class WorkerMasterOCApi {
 public:
+
     /**
      * @brief Destructor
      */
@@ -154,7 +154,7 @@ public:
 
     /**
      * @brief Send request to master to delete meta and get response.
-     *        Master will notify other workers to delete these objects asynchronously.
+     * Master will notify other workers to delete these objects asynchronously.
      * @param[in] request The rpc request protobuf.
      * @param[out] response The rpc response protobuf.
      * @return Status of the call.
@@ -251,7 +251,7 @@ public:
      * @param[out] rsp The rpc response protobuf.
      * @return K_OK on success; the error code otherwise.
      */
-    virtual Status IfNeedTriggerReconciliation(master::ReconciliationQueryPb &req,
+    virtual Status ReconcileMembershipChange(master::ReconciliationQueryPb &req,
                                                master::ReconciliationRspPb &rsp) = 0;
 
     /**
@@ -386,13 +386,17 @@ public:
     virtual Status GetMetaInfo(GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp) = 0;
 
 protected:
+
     /**
      * @brief Construct WorkerMasterOCApi object. Protected constructor enforces class instantiation through the factory
      * method CreateWorkerMasterOCApi.
      * @param[in] localHostPort The local worker service host port.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      */
-    WorkerMasterOCApi(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager);
+    WorkerMasterOCApi(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager)
+        : localHostPort_(localHostPort), akSkManager_(std::move(akSkManager))
+    {
+    }
 
     HostPort localHostPort_;  // The HostPort of the local node
     std::shared_ptr<AkSkManager> akSkManager_;
@@ -407,6 +411,7 @@ protected:
  */
 class WorkerRemoteMasterOCApi : public WorkerMasterOCApi {
 public:
+
     /**
      * @brief Constructor for the remote version of the api
      * @param[in] hostPort The host port of the target master
@@ -442,7 +447,7 @@ public:
     Status QueryGlobalRefNum(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspCollectionPb &rsp) override;
     Status PushMetadataToMaster(master::PushMetaToMasterReqPb &req, master::PushMetaToMasterRspPb &rsp) override;
     Status RollbackSeal(const std::string &objectKey, uint32_t oldLifeState) override;
-    Status IfNeedTriggerReconciliation(master::ReconciliationQueryPb &req, master::ReconciliationRspPb &rsp) override;
+    Status ReconcileMembershipChange(master::ReconciliationQueryPb &req, master::ReconciliationRspPb &rsp) override;
     std::string GetHostPort() override;
 
     Status PutP2PMeta(PutP2PMetaReqPb &req, PutP2PMetaRspPb &resp) override;
@@ -490,6 +495,7 @@ private:
  */
 class WorkerLocalMasterOCApi : public WorkerMasterOCApi {
 public:
+
     /**
      * @brief Constructor for the local version of the api
      * @param[in] service The pointer to the master OC service implementation
@@ -525,7 +531,7 @@ public:
     Status QueryGlobalRefNum(QueryGlobalRefNumReqPb &req, QueryGlobalRefNumRspCollectionPb &rsp) override;
     Status PushMetadataToMaster(master::PushMetaToMasterReqPb &req, master::PushMetaToMasterRspPb &rsp) override;
     Status RollbackSeal(const std::string &objectKey, uint32_t oldLifeState) override;
-    Status IfNeedTriggerReconciliation(master::ReconciliationQueryPb &req, master::ReconciliationRspPb &rsp) override;
+    Status ReconcileMembershipChange(master::ReconciliationQueryPb &req, master::ReconciliationRspPb &rsp) override;
     std::string GetHostPort() override;
     Status Expire(master::ExpireReqPb &req, master::ExpireRspPb &rsp) override;
     Status GetMetaInfo(GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp) override;

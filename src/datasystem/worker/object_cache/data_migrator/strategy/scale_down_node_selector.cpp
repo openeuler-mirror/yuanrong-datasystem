@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,6 +21,10 @@
 
 namespace datasystem {
 namespace object_cache {
+namespace {
+constexpr int MIGRATION_SELECTION_LOG_EVERY_N = 10;
+}
+
 void ScaleDownNodeSelector::UpdateForRedirect(const std::string &currentWorker)
 {
     if (visitedAddresses_.find(currentWorker) != visitedAddresses_.end()) {
@@ -108,9 +109,10 @@ Status ScaleDownNodeSelector::SelectNode(const std::string &originAddr, const st
         outNode = preferNode;
         return Status::OK();
     }
-    Status status = clusterManager_->GetStandbyWorkerByAddr(originAddr, outNode);
+    Status status = worker::GetActiveStandbyTopologyMember(topologyEngine_, originAddr, outNode);
     if (status.IsError()) {
-        LOG(ERROR) << FormatString("[Migrate Data] Failed to get [%s]'s next addr: %s", originAddr, status.ToString());
+        LOG_EVERY_N(WARNING, MIGRATION_SELECTION_LOG_EVERY_N)
+            << FormatString("[Migrate Data] Failed to get [%s]'s next addr: %s", originAddr, status.ToString());
         outNode = originAddr;
         return status;
     }

@@ -8,8 +8,9 @@ set(MASTER_OC_STORE_DEPEND_LIBS
         common_log
         common_util
         common_rocksdb
+        cluster_topology_scope
         master_object_protos
-        cluster_manager)
+        cluster_topology)
 
 add_library(master_object_cache_store STATIC ${MASTER_OC_STORE_SRCS})
 target_link_libraries(master_object_cache_store PRIVATE ${MASTER_OC_STORE_DEPEND_LIBS})

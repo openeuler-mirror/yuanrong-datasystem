@@ -23,6 +23,6 @@ ds_cc_library(
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/util:common_util_impl",
         "//src/datasystem/common/util:net_util",
-        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
     ],
 )

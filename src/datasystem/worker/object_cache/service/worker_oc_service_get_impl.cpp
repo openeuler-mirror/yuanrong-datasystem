@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,10 +24,14 @@
 #include <tuple>
 #include <utility>
 
+#include "datasystem/worker/worker_topology_references.h"
+
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/kvstore/etcd/etcd_constants.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase.h"
@@ -41,7 +42,6 @@
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
-#include "datasystem/master/object_cache/master_worker_oc_api.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/protos/meta_transport.pb.h"
@@ -60,8 +60,6 @@
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
-#include "datasystem/master/object_cache/master_worker_oc_api.h"
-#include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/utils.pb.h"
@@ -92,13 +90,54 @@ static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
 
 static constexpr double US_PER_MS = 1000.0;
 
-WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
-                                               EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
+namespace {
+bool IsEndpointViewLagStatus(const Status &status)
+{
+    return status.GetCode() == K_NOT_READY || status.GetCode() == K_NOT_FOUND;
+}
+
+Status CheckTopologyEndpointConnection(const cluster::MembershipEndpointView *membership, const HostPort &nodeAddr,
+                                       bool allowDirectoryLag)
+{
+    CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership endpoint view is not provided.");
+    cluster::MemberEndpoint endpoint;
+    Status rc = membership->ResolveByAddress(nodeAddr.ToString(), endpoint);
+    if (rc.IsError()) {
+        if (allowDirectoryLag && IsEndpointViewLagStatus(rc)) {
+            return Status::OK();
+        }
+        RETURN_STATUS(rc.GetCode(), "The node " + nodeAddr.ToString() + " could not be found in topology membership.");
+    }
+    if (allowDirectoryLag && endpoint.localAvailability == cluster::EndpointAvailability::UNKNOWN) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE, K_MASTER_TIMEOUT,
+                             "Disconnected from remote node " + nodeAddr.ToString());
+    return Status::OK();
+}
+
+std::string GetTopologyMemberDiagnosticId(const cluster::MembershipEndpointView *membership,
+                                          const std::string &address)
+{
+    if (membership == nullptr) {
+        return "";
+    }
+    cluster::MemberEndpoint endpoint;
+    if (membership->ResolveByAddress(address, endpoint).IsError()) {
+        return "";
+    }
+    return endpoint.identity.id.size() == UUID_SIZE ? BytesUuidToString(endpoint.identity.id) : endpoint.identity.id;
+}
+}  // namespace
+
+WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam,
+                                               worker::WorkerTopologyReferences *topologyEngine, EtcdStore *etcdStore,
+                                               std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
                                                std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                                                std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       etcdStore_(etcdStore),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
@@ -142,8 +181,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
         remainingUs = changedRemainingUs;
         return Status::OK();
     });
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
@@ -175,8 +213,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             } else {
                 int64_t currentRemainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
                 VLOG(1) << FormatString("[Get] Receive, clientId: %s, objects: %s, threadPool: %s, remainingUs: %ld",
-                                        clientId, VectorToString(request->GetRawObjectKeys()),
-                                        threadPool_->GetStatistics(), currentRemainingUs);
+                    clientId, VectorToString(request->GetRawObjectKeys()), threadPool_->GetStatistics(),
+                    currentRemainingUs);
                 // subTimeout is the client's subscribe budget; the actual wait is capped by
                 // std::min(subTimeout, remainingTimeMs) in ProcessGetObjectRequest.
                 auto newSubTimeout = subTimeout > 0 ? subTimeout : 0;
@@ -836,6 +874,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
             // objectTable.
             failedIds.insert(needRemoteGetObjects.begin(), needRemoteGetObjects.end());
         }
+        LOG_IF_ERROR(MarkReferencedAbsentObjectsFailed(absentObjectKeys, request),
+                     "[Get] Mark referenced absent objects failed");
         BatchUnlockForGet(absentObjectKeys, lockedEntries);
     }
     point.RecordAndReset(PerfKey::WORKER_PROCESS_NOT_EXISTS_FROM_ANY_WHERE);
@@ -864,6 +904,102 @@ Status WorkerOcServiceGetImpl::ProcessObjectsNotExistInLocal(const std::set<Read
 
     VLOG(1) << "Get object data from remote node finish, lastRc:" << lastRc.ToString();
     return lastRc;
+}
+
+Status WorkerOcServiceGetImpl::MarkReferencedAbsentObjectsFailed(
+    const std::map<std::string, uint64_t> &absentObjectKeys, const std::shared_ptr<GetRequest> &request)
+{
+    RETURN_OK_IF_TRUE(request == nullptr || absentObjectKeys.empty());
+    std::vector<std::string> objectKeys;
+    objectKeys.reserve(absentObjectKeys.size());
+    std::unordered_map<std::string, std::string> responseKeyToRequestKey;
+    responseKeyToRequestKey.reserve(absentObjectKeys.size());
+    for (const auto &item : absentObjectKeys) {
+        objectKeys.emplace_back(item.first);
+        std::string objectKey;
+        TenantAuthManager::Instance()->NamespaceUriToObjectKey(item.first, objectKey);
+        responseKeyToRequestKey.emplace(objectKey, item.first);
+        responseKeyToRequestKey.emplace(item.first, item.first);
+    }
+
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
+    if (!grouped.failures.empty()) {
+        LOG(WARNING) << "[Get] Skip global ref check for route failures, count: " << grouped.failures.size();
+    }
+
+    std::unordered_set<std::string> referencedRequestKeys;
+    for (const auto &item : grouped.groups) {
+        RETURN_IF_NOT_OK(QueryReferencedRequestKeys(item.first, item.second, responseKeyToRequestKey,
+                                                    referencedRequestKeys));
+    }
+    if (referencedRequestKeys.empty()) {
+        return Status::OK();
+    }
+    Status rc(K_RUNTIME_ERROR, "Object metadata is unavailable while global reference still exists.");
+    for (const auto &objectKey : referencedRequestKeys) {
+        LOG_IF_ERROR(request->MarkFailed(objectKey, rc), "MarkFailed failed");
+    }
+    LOG(WARNING) << "[Get] Object metadata absent but global refs remain, count: " << referencedRequestKeys.size();
+    return Status::OK();
+}
+
+void WorkerOcServiceGetImpl::CollectReferencedRequestKeys(
+    const QueryGlobalRefNumRspCollectionPb &rsp,
+    const std::unordered_map<std::string, std::string> &responseKeyToRequestKey,
+    std::unordered_set<std::string> &referencedRequestKeys)
+{
+    for (const auto &workerRsp : rsp.objs_glb_refs()) {
+        for (const auto &dist : workerRsp.objs_glb_ref()) {
+            if (dist.referred_addr_size() == 0) {
+                continue;
+            }
+            auto iter = responseKeyToRequestKey.find(dist.object_key());
+            if (iter != responseKeyToRequestKey.end()) {
+                referencedRequestKeys.emplace(iter->second);
+            }
+        }
+    }
+}
+
+Status WorkerOcServiceGetImpl::QueryReferencedRequestKeys(
+    const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+    const std::unordered_map<std::string, std::string> &responseKeyToRequestKey,
+    std::unordered_set<std::string> &referencedRequestKeys)
+{
+    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
+    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
+                             "hash master get failed, QueryGlobalRefNum failed");
+    QueryGlobalRefNumReqPb req;
+    req.set_redirect(true);
+    *req.mutable_object_keys() = { objectKeys.begin(), objectKeys.end() };
+    constexpr int64_t kRefMovingRetrySleepMs = 200;
+    while (true) {
+        CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        QueryGlobalRefNumRspCollectionPb rsp;
+        RETURN_IF_NOT_OK(workerMasterApi->QueryGlobalRefNum(req, rsp));
+        if (!rsp.ref_is_moving()) {
+            CollectReferencedRequestKeys(rsp, responseKeyToRequestKey, referencedRequestKeys);
+            for (const auto &info : rsp.infos()) {
+                HostPort redirectMasterAddr;
+                RETURN_IF_NOT_OK(redirectMasterAddr.ParseString(info.redirect_meta_address()));
+                auto redirectApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
+                CHECK_FAIL_RETURN_STATUS(redirectApi != nullptr, K_RUNTIME_ERROR,
+                                         "hash master get failed, QueryGlobalRefNum redirect failed");
+                QueryGlobalRefNumReqPb redirectReq;
+                redirectReq.set_redirect(false);
+                *redirectReq.mutable_object_keys() = { info.change_meta_ids().begin(), info.change_meta_ids().end() };
+                QueryGlobalRefNumRspCollectionPb redirectRsp;
+                RETURN_IF_NOT_OK(redirectApi->QueryGlobalRefNum(redirectReq, redirectRsp));
+                CollectReferencedRequestKeys(redirectRsp, responseKeyToRequestKey, referencedRequestKeys);
+            }
+            return Status::OK();
+        }
+        auto remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+        CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(std::min<int64_t>(kRefMovingRetrySleepMs, remainingTimeMs)));
+    }
 }
 
 Status WorkerOcServiceGetImpl::GetObjectsWithoutMeta(const std::map<std::string, uint64_t> &objectKeys,
@@ -1087,11 +1223,9 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     }
 
     std::string remoteWorkerId = "UNKNOWN";
-    if (clusterManager_ != nullptr) {
-        auto workerId = clusterManager_->GetWorkerIdByWorkerAddr(endPoint);
-        if (!workerId.empty()) {
-            remoteWorkerId = workerId;
-        }
+    auto workerId = GetTopologyMemberDiagnosticId(topologyMembership_, endPoint);
+    if (!workerId.empty()) {
+        remoteWorkerId = workerId;
     }
     LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
         << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker triggered, remoteAddress=" << endPoint
@@ -1505,95 +1639,33 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     PerfPoint point(PerfKey::WORKER_QUERY_META_PRE);
     auto config = GetServerLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
-    Status lastRc;
     std::vector<master::QueryMetaInfoPb> &queryMetas = result.queryMetas;
-    std::vector<RpcMessage> &payloads = result.payloads;
     std::map<std::string, uint64_t> &absentObjectKeysWithVersion = result.absentObjectKeysWithVersion;
     INJECT_POINT("worker.before_query_meta");
     // 1. Get map of objectKeys grouped by master
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_ROUTER);
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
     auto &objKeysGrpByMaster = grouped.groups;
     std::unordered_set<std::string> routeFailedObjectKeys;
     routeFailedObjectKeys.reserve(grouped.failures.size());
     for (const auto &failure : grouped.failures) {
         routeFailedObjectKeys.emplace(failure.first);
     }
-    // 2. Send requests for each master
-    std::vector<std::future<Status>> futures;
-    futures.reserve(objKeysGrpByMaster.size());
-    std::string traceID = Trace::Instance().GetTraceID();
-    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     std::vector<BatchQueryMetaResult> batchQueryResults;
     batchQueryResults.resize(objKeysGrpByMaster.size());
-    size_t idx = 0;
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_BATCH_BY_ADDR);
     queryMetas.reserve(queryMetas.size() + objectKeys.size());
-    auto dispatchTime = std::chrono::steady_clock::now();
-    for (auto &item : objKeysGrpByMaster) {
-        BatchQueryMetaResult &res = batchQueryResults[idx++];
-        auto *itemPtr = &item;
-        auto func = [&res, remainingUs, subTimeout, itemPtr, &traceID, dispatchTime, this]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID, true);
-            RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
-            HostPort masterAddr = itemPtr->first;
-            const std::vector<std::string> &currentIds = itemPtr->second;
-            datasystem::master::QueryMetaRspPb &rsp = res.rsp;
-            Timer queryMetaTimer;
-            auto rc = QueryMetaDataFromMasterImpl(masterAddr, subTimeout, currentIds, rsp, res.payloads);
-            if (rc.IsError()) {
-                LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms", masterAddr.ToString(),
-                                           rc.ToString(), queryMetaTimer.ElapsedMilliSecond());
-                res.failedKeys.insert(currentIds.begin(), currentIds.end());
-                return rc;
-            }
-            return Status::OK();
-        };
-        if (idx == objKeysGrpByMaster.size()) {
-            // using current thread handle the last task.
-            auto rc = func();
-            lastRc = rc.IsError() ? rc : lastRc;
-        } else {
-            futures.emplace_back(workerBatchQueryMetaThreadPool_->Submit(std::move(func)));
-        }
-    }
-    for (auto &f : futures) {
-        auto rc = f.get();
-        lastRc = rc.IsError() ? rc : lastRc;
-    }
+    Status lastRc = DispatchQueryMetadataGroups(objKeysGrpByMaster, subTimeout, batchQueryResults);
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_RESULT);
     // 3. Statistics the metadata results just queried.
     ObjectKeysQueryMetaFailed objectKeysQueryMetaFailed;
-    auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
-    auto &objectKeysPuzzled = std::get<OBJECTS_PUZZLED_IDX>(objectKeysQueryMetaFailed);
-    std::vector<std::string> absentObjectKeys;
-    absentObjectKeys.reserve(objectKeys.size());
     std::map<std::string, uint64_t> deletingObjectsWithVersion;
-    for (auto &res : batchQueryResults) {
-        if (!res.failedKeys.empty()) {
-            objectKeysPuzzled.insert(res.failedKeys.begin(), res.failedKeys.end());
-            continue;
-        }
-        auto &rsp = res.rsp;
-        if (traceEnabled && rsp.latency_phase_us_size() > 0) {
-            std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
-            MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
-        }
-        RETURN_IF_NOT_OK(CorrectQueryMetaResponse(res.payloads, rsp, payloads));
-        queryMetas.insert(queryMetas.end(), rsp.mutable_query_metas()->begin(), rsp.mutable_query_metas()->end());
-        objectKeysNotExist.insert(rsp.not_exist_ids().begin(), rsp.not_exist_ids().end());
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            rsp.not_exist_ids_size() == rsp.deleting_versions_size(), K_RUNTIME_ERROR,
-            FormatString("The size of not_exist_ids %d and deleting_versions %d not match.", rsp.not_exist_ids_size(),
-                         rsp.deleting_versions_size()));
-        for (int index = 0; index < rsp.not_exist_ids_size(); index++) {
-            deletingObjectsWithVersion.emplace(rsp.not_exist_ids(index), rsp.deleting_versions(index));
-        }
-    }
+    RETURN_IF_NOT_OK(MergeQueryMetadataResults(batchQueryResults, traceEnabled, result, objectKeysQueryMetaFailed,
+                                               deletingObjectsWithVersion));
 
-    INJECT_POINT("worker.get_no_metadata", [&queryMetas, &payloads, &objectKeys, &absentObjectKeysWithVersion]() {
+    INJECT_POINT("worker.get_no_metadata", [&queryMetas, &result, &objectKeys, &absentObjectKeysWithVersion]() {
         queryMetas.clear();
-        payloads.clear();
+        result.payloads.clear();
         for (const auto &id : objectKeys) {
             (void)absentObjectKeysWithVersion.emplace(id, 0);
         }
@@ -1601,11 +1673,25 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     });
 
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_HANDLE_NOT_FOUND);
-    // 4. If etcd is used as L2cache for metadata, try to get miss meta from etcd.
+    FinalizeAbsentQueryMetadata(routeFailedObjectKeys, objectKeysQueryMetaFailed, queryEtcdMeta, queryMetas,
+                                absentObjectKeysWithVersion, deletingObjectsWithVersion);
+    point.RecordAndReset(PerfKey::WORKER_QUERY_META_OTHER);
+    return lastRc;
+}
+
+void WorkerOcServiceGetImpl::FinalizeAbsentQueryMetadata(
+    const std::unordered_set<std::string> &routeFailedObjectKeys,
+    ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, bool queryEtcdMeta,
+    std::vector<master::QueryMetaInfoPb> &queryMetas, std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
+    const std::map<std::string, uint64_t> &deletingObjectsWithVersion)
+{
+    auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
+    auto &objectKeysPuzzled = std::get<OBJECTS_PUZZLED_IDX>(objectKeysQueryMetaFailed);
+    std::vector<std::string> absentObjectKeys;
+    absentObjectKeys.reserve(objectKeysNotExist.size() + objectKeysPuzzled.size() + routeFailedObjectKeys.size());
     bool metaStoredInEtcd = FLAGS_oc_io_from_l2cache_need_metadata;
-    // If l2cache is disabled, there is no need to query meta in etcd.
-    bool isL2CacheDisable = FLAGS_l2_cache_type == "none" || FLAGS_l2_cache_type == "distributed_disk";
-    if (metaStoredInEtcd && queryEtcdMeta && !isL2CacheDisable) {
+    bool isL2CacheDisabled = FLAGS_l2_cache_type == "none" || FLAGS_l2_cache_type == "distributed_disk";
+    if (metaStoredInEtcd && queryEtcdMeta && !isL2CacheDisabled) {
         ProcessQueryMetaFailedObjsWhenMetaStoredInEtcd(routeFailedObjectKeys, std::move(objectKeysNotExist),
                                                        objectKeysPuzzled, queryMetas, absentObjectKeys);
     } else {
@@ -1613,13 +1699,85 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
         absentObjectKeys.insert(absentObjectKeys.end(), objectKeysPuzzled.begin(), objectKeysPuzzled.end());
         absentObjectKeys.insert(absentObjectKeys.end(), routeFailedObjectKeys.begin(), routeFailedObjectKeys.end());
     }
-    for (const auto &id : absentObjectKeys) {
-        auto it = deletingObjectsWithVersion.find(id);
-        uint64_t deletingVersion = it != deletingObjectsWithVersion.end() ? it->second : 0;
-        absentObjectKeysWithVersion.emplace(id, deletingVersion);
+    for (const auto &objectKey : absentObjectKeys) {
+        auto iter = deletingObjectsWithVersion.find(objectKey);
+        uint64_t deletingVersion = iter == deletingObjectsWithVersion.end() ? 0 : iter->second;
+        absentObjectKeysWithVersion.emplace(objectKey, deletingVersion);
     }
-    point.RecordAndReset(PerfKey::WORKER_QUERY_META_OTHER);
+}
+
+Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
+    std::unordered_map<HostPort, std::vector<std::string>> &objectKeysByMaster, uint64_t subTimeout,
+    std::vector<BatchQueryMetaResult> &batchQueryResults)
+{
+    std::vector<std::future<Status>> futures;
+    futures.reserve(objectKeysByMaster.size());
+    std::string traceId = Trace::Instance().GetTraceID();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+    auto dispatchTime = std::chrono::steady_clock::now();
+    Status lastRc;
+    size_t idx = 0;
+    for (auto &item : objectKeysByMaster) {
+        BatchQueryMetaResult &result = batchQueryResults[idx++];
+        auto *itemPtr = &item;
+        auto query = [&result, remainingUs, subTimeout, itemPtr, &traceId, dispatchTime, this]() {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
+            RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
+            Timer queryMetaTimer;
+            auto rc = QueryMetaDataFromMasterImpl(itemPtr->first, subTimeout, itemPtr->second, result.rsp,
+                                                  result.payloads);
+            if (rc.IsError()) {
+                LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms",
+                                           itemPtr->first.ToString(), rc.ToString(),
+                                           queryMetaTimer.ElapsedMilliSecond());
+                result.failedKeys.insert(itemPtr->second.begin(), itemPtr->second.end());
+            }
+            return rc;
+        };
+        if (idx == objectKeysByMaster.size()) {
+            auto rc = query();
+            lastRc = rc.IsError() ? rc : lastRc;
+        } else {
+            futures.emplace_back(workerBatchQueryMetaThreadPool_->Submit(std::move(query)));
+        }
+    }
+    for (auto &future : futures) {
+        auto rc = future.get();
+        lastRc = rc.IsError() ? rc : lastRc;
+    }
     return lastRc;
+}
+
+Status WorkerOcServiceGetImpl::MergeQueryMetadataResults(
+    std::vector<BatchQueryMetaResult> &batchQueryResults, bool traceEnabled, QueryMetadataFromMasterResult &result,
+    ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
+    std::map<std::string, uint64_t> &deletingObjectsWithVersion)
+{
+    auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
+    auto &objectKeysPuzzled = std::get<OBJECTS_PUZZLED_IDX>(objectKeysQueryMetaFailed);
+    for (auto &batchResult : batchQueryResults) {
+        if (!batchResult.failedKeys.empty()) {
+            objectKeysPuzzled.insert(batchResult.failedKeys.begin(), batchResult.failedKeys.end());
+            continue;
+        }
+        auto &rsp = batchResult.rsp;
+        if (traceEnabled && rsp.latency_phase_us_size() > 0) {
+            std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
+            MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
+        }
+        RETURN_IF_NOT_OK(CorrectQueryMetaResponse(batchResult.payloads, rsp, result.payloads));
+        result.queryMetas.insert(result.queryMetas.end(), rsp.mutable_query_metas()->begin(),
+                                 rsp.mutable_query_metas()->end());
+        objectKeysNotExist.insert(rsp.not_exist_ids().begin(), rsp.not_exist_ids().end());
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            rsp.not_exist_ids_size() == rsp.deleting_versions_size(), K_RUNTIME_ERROR,
+            FormatString("The size of not_exist_ids %d and deleting_versions %d not match.", rsp.not_exist_ids_size(),
+                         rsp.deleting_versions_size()));
+        for (int index = 0; index < rsp.not_exist_ids_size(); ++index) {
+            deletingObjectsWithVersion.emplace(rsp.not_exist_ids(index), rsp.deleting_versions(index));
+        }
+    }
+    return Status::OK();
 }
 
 Status WorkerOcServiceGetImpl::QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout,
@@ -1663,7 +1821,7 @@ Status WorkerOcServiceGetImpl::QueryMetaDataFromEtcd(const std::unordered_set<st
     INJECT_POINT("worker.QueryMetaDataFromEtcd_failure");
     for (const std::string &objKey : objectKeys) {
         std::string etcdTableName = std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX;
-        std::string hashValue = Hash2Str(MurmurHash3_32(objKey));
+        std::string hashValue = FormatString("%010u", MurmurHash3_32(objKey));
         std::string tablePrefix;
         if (!FLAGS_cluster_name.empty()) {
             tablePrefix = FormatString("/%s", FLAGS_cluster_name);
@@ -2012,8 +2170,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddr.ParseString(address),
                                          FormatString("Parse object %s address %s failed", objKey, address));
         // Step1: Try to get data from local AZ's worker
-        checkConnectStatus =
-            clusterManager_->CheckConnection(hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
+        checkConnectStatus = CheckTopologyEndpointConnection(
+            topologyMembership_, hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
         if (checkConnectStatus.IsOk()) {
             ifWorkerConnected = true;
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
@@ -2042,6 +2200,10 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                   << ", ifWorkerConnected: " << ifWorkerConnected;
         CheckAndReturnPullNotFoundForRetry(meta, address, entry, checkConnectStatus, status);
         isFromL2 = true;
+    }
+    if (ifWorkerConnected && status.GetCode() == K_NOT_FOUND && entry->GetShmUnit() == nullptr) {
+        RETURN_STATUS(K_RUNTIME_ERROR,
+                      FormatString("Object %s is not available on metadata location %s.", objKey, address));
     }
     RETURN_IF_NOT_OK(status);
 
@@ -2210,7 +2372,8 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
     VLOG(1) << FormatString("Send copy metadata to master req: %s", LogHelper::IgnoreSensitive(req));
     master::CreateCopyMetaRspPb rsp;
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(task.GetParams().front().objectKey, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(task.GetParams().front().objectKey, topologyPlacement_,
+                                                    topologyRouteOptions_);
     if (workerMasterApi == nullptr) {
         LOG(ERROR) << "GetWorkerMasterApi failed, objectKey: " << task.GetParams().front().objectKey;
         DeleteObjectsMetaUnacked({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
@@ -2247,7 +2410,7 @@ void WorkerOcServiceGetImpl::AsyncBatchUpdateLocationFunc(UpdateLocationTask &&t
         objectKeys.emplace_back(param.objectKey);
     }
     // grouped by master address
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     std::unordered_map<HostPort, std::vector<UpdateLocationParam>> paramsGroupByAddress;
@@ -2292,7 +2455,7 @@ void WorkerOcServiceGetImpl::GroupSendCreateMultiCopyMeta(
     std::unordered_map<std::string, uint64_t> &clearMetaKeys,
     std::unordered_map<std::string, uint64_t> &clearObjectKeys)
 {
-    // Group by metadata owner HostPort. The current topology has one worker per HostPort.
+    // grouped send batch request
     for (const auto &group : paramsGroupByAddress) {
         if (group.second.empty()) {
             continue;
@@ -2408,10 +2571,9 @@ void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<s
 Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint64_t version)
 {
     INJECT_POINT("worker.remove_location");
-    if (clusterManager_ == nullptr) {
-        RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
-    }
-    auto api = workerMasterApiManager_->GetWorkerMasterApi(objectKey, clusterManager_);
+    CHECK_FAIL_RETURN_STATUS(topologyPlacement_ != nullptr, StatusCode::K_NOT_READY,
+                             "Topology placement facade is not provided.");
+    auto api = workerMasterApiManager_->GetWorkerMasterApi(objectKey, topologyPlacement_, topologyRouteOptions_);
     CHECK_FAIL_RETURN_STATUS(api != nullptr, StatusCode::K_INVALID,
                              "Getting master api failed. object key: " + objectKey);
     RemoveMetaReqPb req;
@@ -2427,9 +2589,9 @@ Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint
 
 Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPort &masterAddr) const
 {
-    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
-                             "ETCD cluster manager is not provided.");
-    return clusterManager_->LocateMetaOwner(objKey, true, masterAddr);
+    CHECK_FAIL_RETURN_STATUS(topologyPlacement_ != nullptr, StatusCode::K_NOT_READY,
+                             "Topology placement facade is not provided.");
+    return ResolveMetaOwner(objKey, topologyPlacement_, topologyRouteOptions_, masterAddr);
 }
 
 bool WorkerOcServiceGetImpl::IsNearDeathObject(const std::string &location, const ObjectMetaPb &meta)
@@ -2520,8 +2682,8 @@ void WorkerOcServiceGetImpl::FillGetObjMetaInfoRspPb(
             continue;
         }
         meta->set_obj_size(it->second.object_size());
-        for (auto &loc : it->second.object_locations()) {
-            meta->add_location_ids(clusterManager_->GetWorkerIdByWorkerAddr(loc));
+        for (const auto &loc : it->second.object_locations()) {
+            meta->add_location_ids(loc);
         }
     }
 }
@@ -2587,7 +2749,7 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
                                                   std::unordered_map<std::string, ObjectLocationInfoPb> &result,
                                                   Status &lastRc)
 {
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
     auto &objKeysGrpByMaster = grouped.groups;
     for (auto &[master, objs] : objKeysGrpByMaster) {
         HostPort workerAddr = master;
@@ -2828,7 +2990,7 @@ Status WorkerOcServiceGetImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaI
         return Status::OK();
     }
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_, topologyRouteOptions_);
     auto reqCopy = req;
     return workerMasterApi->GetMetaInfo(reqCopy, rsp);
 }

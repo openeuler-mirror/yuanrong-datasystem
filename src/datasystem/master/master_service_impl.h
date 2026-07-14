@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,14 +28,17 @@
 #include "datasystem/protos/master_heartbeat.service.rpc.pb.h"
 #include "datasystem/protos/master_heartbeat.brpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
-class ClusterManager;
 namespace master {
 class MasterServiceImpl final : public MasterService, public IMasterService {
 public:
+
     /**
      * @brief Construct MasterServiceImpl.
+     * @param[in] serverAddress Local Master service address.
+     * @param[in] akSkManager Authentication manager shared with the service.
      */
     explicit MasterServiceImpl(HostPort serverAddress, std::shared_ptr<AkSkManager> akSkManager);
 
@@ -56,15 +56,15 @@ public:
 
     /**
      * @brief Setter method for assigning cluster manager
-     * @param[in] cm The pointer to cluster manager
+     * @param[in] cm Borrowed Worker topology dependencies.
      */
-    void SetClusterManager(ClusterManager *cm)
+    void SetTopologyEngine(worker::WorkerTopologyReferences *cm)
     {
-        clusterManager_ = cm;
+        topologyEngine_ = cm;
     }
 
 private:
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 }  // namespace master

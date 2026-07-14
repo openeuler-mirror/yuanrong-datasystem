@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +18,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MULTI_PUBLISH_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MULTI_PUBLISH_IMPL_H
 
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/util/net_util.h"
@@ -37,15 +35,18 @@ namespace object_cache {
 
 class WorkerOcServiceMultiPublishImpl : public WorkerOcServiceCrudCommonApi {
 public:
+
     /**
      * @brief Construct WorkerOcServiceMultiPublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
-     * @param[in] clusterManager The cluster manager pointer to assign.
+     * @param[in] topologyEngine Borrowed Worker topology dependencies.
      * @param[in] memCpyThreadPool Used to copy data to memory.
+     * @param[in] threadPool Worker pool used by publish operations.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] localAddress The local worker address.
      */
-    WorkerOcServiceMultiPublishImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
+    WorkerOcServiceMultiPublishImpl(WorkerOcServiceCrudParam &initParam,
+                                    worker::WorkerTopologyReferences *topologyEngine,
                                     std::shared_ptr<ThreadPool> memCpyThreadPool,
                                     std::shared_ptr<ThreadPool> threadPool, std::shared_ptr<AkSkManager> akSkManager,
                                     HostPort &localAddress);
@@ -123,7 +124,7 @@ private:
 
     /**
      * @brief Create multimeta with Worker->Master RPC retry on transient errors,
-     *  and loop while meta is moving.
+     * and loop while meta is moving.
      * @param[in] api The worker master api.
      * @param[in] req The CreateMultiMeta request.
      * @param[out] rsp The response info of CreateMultiMeta.
@@ -162,6 +163,7 @@ private:
     void ConstructCreateReq(const std::vector<std::string> &objectKeys,
                             const std::vector<std::shared_ptr<SafeObjType>> &entries, const MultiPublishReqPb &pubReq,
                             master::CreateMultiMetaReqPb &req);
+
     /**
      * @brief Create or update metadata to master, object will be unlocked during requesting master.
      * @param[in] objectKeys Object key list.
@@ -267,6 +269,8 @@ private:
      * @param[in] existence object enable existence or not.
      * @param[out] isInserts If the entry is newly inserted.
      * @param[out] entries Locked entry list
+     * @param[out] localExistKeys Object keys that already exist locally.
+     * @return Status of the batch lock operation.
      */
     Status BatchLockForSetNtx(const std::vector<std::string> &objectKeys, const ExistenceOptPb &existence,
                               std::vector<bool> &isInserts, std::vector<std::shared_ptr<SafeObjType>> &entries,
@@ -278,6 +282,7 @@ private:
      * @param[in] objectKeys Object key list.
      * @param[in] entries The object entries.
      * @param[out] failedKeys The failed object keys.
+     * @param[in] localExistKeys Object keys already present locally.
      */
     void VerifyObjectsNtx(const MultiPublishReqPb &req, const std::vector<std::string> &objectKeys,
                           std::vector<std::shared_ptr<SafeObjType>> &entries,
@@ -291,7 +296,7 @@ private:
      */
     Status VerifyDuplicateKeys(const std::vector<std::string> &objectKeys);
 
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
 

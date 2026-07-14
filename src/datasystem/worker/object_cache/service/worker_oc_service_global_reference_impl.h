@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +18,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -30,7 +28,8 @@ namespace object_cache {
 
 class WorkerOcServiceGlobalReferenceImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceGlobalReferenceImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
+    WorkerOcServiceGlobalReferenceImpl(WorkerOcServiceCrudParam &initParam,
+                                       worker::WorkerTopologyReferences *topologyEngine,
                                        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
                                        std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
 
@@ -86,6 +85,16 @@ public:
                                       std::vector<std::string> &increaseFailedIds);
 
     /**
+     * @brief Increase master refs on a specified master with object gref locks held.
+     * @param[in] masterAddr Target master address.
+     * @param[in] objectKeys Candidate object keys that should be restored on target master.
+     * @param[out] increaseFailedIds Object keys failed to restore.
+     * @return Status
+     */
+    Status GIncreaseMasterRefWithLock(const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+                                      std::vector<std::string> &increaseFailedIds);
+
+    /**
      * @brief Forward nested object reference increase calls to multiple masters based on objectKeys
      * @param[in] nestedObjectKeys Vector of objectkeys
      * @return Status of network
@@ -95,11 +104,13 @@ public:
     /**
      * @brief Forward nested object reference decrease calls to multiple masters based on objectKeys
      * @param[in] nestedObjectKeys Vector of objectkeys
+     * @param[out] unaliveIds Object keys whose target master is unavailable.
      * @return Status of network
      */
     Status DecNestedRef(const std::vector<std::string> &nestedObjectKeys, std::vector<std::string> &unaliveIds);
 
 private:
+
     /**
      * @brief Decrease the reference count of client with the remote client id.
      * @param[in] req The rpc request protobuf.
@@ -266,7 +277,7 @@ private:
         }
     }
 
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
 

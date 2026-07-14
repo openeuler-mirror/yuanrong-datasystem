@@ -194,6 +194,10 @@ message MetaForSCMigrationPb {
 message MigrateSCMetadataReqPb {
   string source_addr = 1;
   repeated MetaForSCMigrationPb stream_metas = 2;
+  uint64 topology_version = 3;
+  uint64 batch_epoch = 4;
+  bytes source_member_id = 5;
+  bytes target_member_id = 6;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -35,11 +32,11 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/slot_recovery.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -91,6 +88,7 @@ public:
      */
     static Status BuildInitialTasks(const std::string &failedWorker, uint32_t totalSlots,
                                     const std::vector<std::string> &activeWorkers, SlotRecoveryInfoPb &info);
+
     /**
      * @brief Collect unfinished raw tasks owned by a newly failed worker.
      * @param[in] failedWorker The newly failed task owner.
@@ -100,6 +98,7 @@ public:
      */
     static Status CollectInheritedTasks(const std::string &failedWorker, const SlotRecoveryInfoPb &sourceInfo,
                                         std::vector<RecoveryTaskPb> &tasks);
+
     /**
      * @brief Reassign raw inherited tasks to active workers with global round-robin at task granularity.
      * @param[in] rawTasks Raw inherited tasks.
@@ -110,6 +109,7 @@ public:
     static Status ReassignInheritedTasks(const std::vector<RecoveryTaskPb> &rawTasks,
                                          const std::vector<std::string> &activeWorkers,
                                          std::vector<RecoveryTaskPb> &tasks);
+
     /**
      * @brief Append recovery tasks into an incident.
      * @param[in] tasks Tasks to be appended.
@@ -140,13 +140,14 @@ public:
     /**
      * @brief Initialize the manager and subscribe to failed-worker notifications.
      * @param[in] localAddress Local worker address.
-     * @param[in] clusterManager Cluster manager used to query stable active/failed workers.
+     * @param[in] topologyEngine Cluster manager used to query stable active/failed workers.
      * @param[in] persistApi Persistence API reserved for later recovery execution.
      * @param[in] apiManager Worker-master API manager reserved for later recovery execution.
      * @param[in] etcdStore EtcdStore pointer used to construct default slot-recovery store.
+     * @param[in] metadataRecoveryManager Metadata recovery implementation used by recovered slots.
      * @return Status of the call.
      */
-    Status Init(const HostPort &localAddress, ClusterManager *clusterManager,
+    Status Init(const HostPort &localAddress, worker::WorkerTopologyReferences *topologyEngine,
                 std::shared_ptr<PersistenceApi> persistApi,
                 std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
                 datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager = nullptr);
@@ -176,9 +177,10 @@ public:
     Status ScheduleLocalPendingTasksFromStore();
 
 protected:
+
     /**
      * @brief Plan the incident of one failed worker with its own tasks and inherited tasks in one CAS.
-     *        If the incident already exists, the current worker reuses that published plan directly.
+     * If the incident already exists, the current worker reuses that published plan directly.
      * @param[in] failedWorker The worker key of the incident.
      * @param[in] activeWorkers Stable active workers computed once for the current failed-worker batch.
      * @param[in,out] incidents Reusable ETCD snapshot for the current batch.
@@ -210,7 +212,7 @@ protected:
 
     /**
      * @brief Inspect the incident snapshot and schedule local tasks asynchronously.
-     *        The local snapshot may be stale, so each task still needs a CAS claim before execution.
+     * The local snapshot may be stale, so each task still needs a CAS claim before execution.
      * @param[in] incidentKey The ETCD key suffix of the incident.
      * @param[in] info The current incident snapshot.
      * @return Status of the call.
@@ -281,7 +283,7 @@ protected:
      * @param[in] sourceIncidentKey Source incident key.
      * @param[in] localWorker The local restarted worker.
      * @param[out] takenSlotsBySource Slots successfully taken over from the source incident, grouped by preload
-     *                                source worker.
+     * source worker.
      * @param[out] blockedSlots Slots that still belong to foreign IN_PROGRESS tasks after the CAS finishes.
      * @param[out] shouldDeleteSource True if the source incident becomes terminal after takeover.
      * @return Status of the call.
@@ -292,11 +294,9 @@ protected:
 
     /**
      * @brief Compute the canonical local slot set after restart planning.
-     *
      * When the local incident exists, restart only resumes/takes over slots that already belong to the local
      * recovery chain. When it does not exist, restart rebuilds a fresh local task covering all slots except slots
      * already protected by foreign IN_PROGRESS/COMPLETED work.
-     *
      * @param[in] restartPlan Consolidated local/source restart state.
      * @param[in] takenSlotsBySource Slots taken over from source incidents during this restart.
      * @param[in] blockedSlots Slots blocked by foreign IN_PROGRESS/COMPLETED work after source takeover CAS finishes.
@@ -310,14 +310,11 @@ protected:
 
     /**
      * @brief Rewrite the local incident into the post-restart canonical shape.
-     *
      * The rebuilt incident keeps:
      * 1. terminal tasks for failed_worker=localWorker, so finished history/counters are preserved;
      * 2. foreign IN_PROGRESS tasks for failed_worker=localWorker, because restart must not rewrite them;
      * 3. all tasks for other failed workers that happen to share the same incident key.
-     *
      * All other tasks for failed_worker=localWorker are replaced by local PENDING tasks grouped by preload source.
-     *
      * @param[in] localWorker The local restarted worker.
      * @param[in] plannedLocalTasks Canonical local tasks after restart planning.
      * @return Status of the call.
@@ -334,12 +331,10 @@ protected:
 
     /**
      * @brief On local restart, resume stale cross-incident local tasks that were left IN_PROGRESS by the previous
-     *        process instance.
-     *
+     * process instance.
      * These tasks belong to incidents keyed by other failed workers and may never be rescheduled if no new
      * failed-worker event arrives after restart. We downgrade such stale local IN_PROGRESS tasks back to PENDING and
      * immediately re-run local scheduling.
-     *
      * @param[in] localWorker The local restarted worker.
      * @return Status of the call.
      */
@@ -393,6 +388,7 @@ protected:
     virtual std::shared_ptr<SlotRecoveryStore> CreateStore(datasystem::EtcdStore *etcdStore) const;
 
 private:
+
     /**
      * @brief Check whether slot recovery coordination is enabled.
      * @return True if enabled.
@@ -401,10 +397,8 @@ private:
 
     /**
      * @brief Build the slot preload callback used during recovery execution.
-     *
      * The callback validates memory, rebuilds object metadata from preload records, writes local entries through
      * MetaDataRecoveryManager, and appends recovered metadata for a later master push.
-     *
      * @param[in,out] recoveredMetas Output list; successful preloads append one ObjectMetaPb per object.
      * @return Callback suitable for PersistenceApi::PreloadSlot.
      */
@@ -412,9 +406,7 @@ private:
 
     /**
      * @brief Preload every slot listed in the recovery task from the given source worker.
-     *
      * Slot order is shuffled to spread load. Transient I/O errors are retried with a bounded timeout in the worker.
-     *
      * @param[in] sourceWorker Worker address to read slot data from.
      * @param[in] task Recovery task whose slots are preloaded.
      * @param[in] callback Preload callback invoked for each loaded object.
@@ -426,10 +418,8 @@ private:
 
     /**
      * @brief Push recovered metadata to master after preloads complete.
-     *
      * On partial or retryable master failures, enqueues deferred metadata retry when eligible; otherwise fails fast
      * with the recovery status.
-     *
      * @param[in] task Recovery task context (incident key and identity fields).
      * @param[in] recoveredMetas Metadata collected during preload; passed to RecoverMetadata / deferred retry.
      * @return Status of the call.
@@ -437,7 +427,7 @@ private:
     Status FinalizeRecoveryMetadataPush(const RecoveryTaskPb &task, std::vector<ObjectMetaPb> &recoveredMetas);
 
     HostPort localAddress_;
-    ClusterManager *clusterManager_;
+    worker::WorkerTopologyReferences *topologyEngine_;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_;
     MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };

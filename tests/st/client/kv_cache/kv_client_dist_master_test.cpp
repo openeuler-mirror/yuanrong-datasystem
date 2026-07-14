@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -34,14 +31,15 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
 #include "client/object_cache/oc_client_common.h"
 
 DS_DECLARE_string(etcd_address);
@@ -118,9 +116,8 @@ void STCClientDistMasterTest::InitTestEtcdInstance()
     LOG(INFO) << "The etcd address is:" << FLAGS_etcd_address << std::endl;
     db_ = std::make_unique<EtcdStore>(etcdAddress);
     if ((db_ != nullptr) && (db_->Init().IsOk())) {
-        db_->DropTable(ETCD_RING_PREFIX);
         // We don't check rc here. If table to drop does not exist, it's fine.
-        (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
+        (void)RegisterTopologyTables(*db_);
     }
 }
 
@@ -166,13 +163,13 @@ void STCClientDistMasterTest::InitClients(int32_t timeoutMs)
 void STCClientDistMasterTest::GetWorkerUuids()
 {
     std::string value;
-    DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
-    HashRingPb ring;
+    DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
+    ClusterTopologyPb ring;
     ring.ParseFromString(value);
-    for (auto worker : ring.workers()) {
+    for (auto worker : ring.members()) {
         HostPort workerAddr;
         DS_ASSERT_OK(workerAddr.ParseString(worker.first));
-        uuidMap_.emplace(std::move(workerAddr), worker.second.worker_uuid());
+        uuidMap_.emplace(std::move(workerAddr), BytesUuidToString(worker.second.id()));
     }
 }
 

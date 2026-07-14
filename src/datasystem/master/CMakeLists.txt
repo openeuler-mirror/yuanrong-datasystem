@@ -1,3 +1,17 @@
+set(MASTER_METADATA_REDIRECT_SRCS
+        metadata_redirect_helper.cpp)
+
+set(MASTER_METADATA_REDIRECT_DEPEND_LIBS
+        ${TBB_LIBRARY}
+        common_immutable_string
+        common_log
+        common_util
+        cluster_topology
+        )
+
+add_library(master_metadata_redirect STATIC ${MASTER_METADATA_REDIRECT_SRCS})
+target_link_libraries(master_metadata_redirect PRIVATE ${MASTER_METADATA_REDIRECT_DEPEND_LIBS})
+
 add_subdirectory(object_cache)
 add_subdirectory(stream_cache)
 
@@ -8,8 +22,7 @@ set(MASTER_SRCS
         worker_manager.cpp
         metadata_manager_holder.cpp
         memory_rebalance_scheduler.cpp
-        resource_manager.cpp
-        metadata_redirect_helper.cpp)
+        resource_manager.cpp)
 
 set(MASTER_DEPEND_LIBS
         common_ak_sk
@@ -24,9 +37,10 @@ set(MASTER_DEPEND_LIBS
         master_heartbeat_protos
         master_object_cache
         master_stream_cache
+        master_metadata_redirect
         rpc_stub_cache_mgr
         worker_client_manager
-        cluster_manager
+        cluster_topology
         )
 
 # add master lib

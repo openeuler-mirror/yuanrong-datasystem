@@ -86,7 +86,6 @@ ds_cc_test(
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/master/object_cache:oc_metadata_manager",
         "//src/datasystem/master/object_cache/store:object_meta_store",
-        "//src/datasystem/worker/hash_ring",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/ut:ut_common",
     ],

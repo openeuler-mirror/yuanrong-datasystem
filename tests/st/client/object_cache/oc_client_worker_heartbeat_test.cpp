@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -218,7 +215,8 @@ public:
     {
         opts.numWorkers = 1;
         opts.numEtcd = 1;
-        opts.workerGflagParams = "-node_timeout_s=1 -heartbeat_interval_ms=500 -rocksdb_write_mode=none";
+        opts.workerGflagParams =
+            "-node_timeout_s=1 -heartbeat_interval_ms=500 -rocksdb_write_mode=none -enable_reconciliation=false";
         opts.disableRocksDB = true;
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.interval", "call(500)");
         datasystem::inject::Set("ListenWorker.CheckHeartbeat.heartbeat_interval_ms", "call(500)");
@@ -289,6 +287,7 @@ TEST_F(OCClientWorkerRediscoverTest, TestRediscoverLocalWorkerAfterIPChange)
     std::string etcdAddress = cluster_->GetEtcdAddrs();
     ServiceDiscoveryOptions sdOpts;
     sdOpts.etcdAddress = etcdAddress;
+    sdOpts.clusterName = GetTestClusterName();
     sdOpts.hostIdEnvName = "rediscover_host_id_env0";
     sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
     auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,19 +14,25 @@
 #include <gtest/gtest.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
+#include <limits>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "common.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
@@ -486,7 +489,8 @@ TEST_F(WorkerDfxTest, TestAutoUnRLatch)
 TEST_F(WorkerDfxTest, TestPublishFailNotVisiable)
 {
     LOG(INFO) << "Test shm buffer publish fail and not visible";
-    InitTestClients();
+    constexpr int32_t kRequestTimeoutMs = 3'000;
+    InitTestClients(kRequestTimeoutMs);
     std::string objKey = "Warriors";
     CreateParam param;
     param.consistencyType = ConsistencyType::CAUSAL;
@@ -892,6 +896,10 @@ TEST_F(MasterDfxTest, LEVEL1_TestMasterCrashAndGet)
 {
     LOG(INFO) << "Test master crash and get";
     InitTestClients();
+    constexpr int32_t kConnectTimeoutMs = 60'000;
+    constexpr int32_t kFailureRequestTimeoutMs = 3'000;
+    std::shared_ptr<ObjectClient> failureClient;
+    InitTestClient(0, failureClient, kConnectTimeoutMs, kFailureRequestTimeoutMs);
     std::string objKey = "Stuart";
     CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
     size_t objSize = 600 * 1024ul;
@@ -912,7 +920,7 @@ TEST_F(MasterDfxTest, LEVEL1_TestMasterCrashAndGet)
     cluster_->SetInjectAction(WORKER, 0, "worker.query_meta", "1*return(K_RPC_UNAVAILABLE)");
 
     std::vector<Optional<Buffer>> getBuffers0;
-    DS_ASSERT_NOT_OK(objClient0_->Get({ objKey }, 1'000, getBuffers0));
+    DS_ASSERT_NOT_OK(failureClient->Get({ objKey }, 1'000, getBuffers0));
 
     // Restart master and wait for worker reconnect.
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
@@ -1064,6 +1072,8 @@ TEST_F(WorkerDfxTest, TestRemoteGetRpcUnavailableRetry)
 
 class WorkerReconciliationDfxTest : public OCClientCommon {
 public:
+    enum class GRefTableKind { WORKER, MASTER };
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numWorkers = WORKER_NUM;
@@ -1097,8 +1107,7 @@ public:
         for (size_t i = 0; i < WORKER_NUM; ++i) {
             DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
         }
-        GetHashOnWorker();
-        SetWorkerHashInjection();
+        BuildHashOwnerIndex();
         InitializeTest();
     }
 
@@ -1109,54 +1118,62 @@ public:
         etcdAddress_ = addrs.first;
         db_ = std::make_shared<EtcdStore>(etcdAddress_.ToString());
         if ((db_ != nullptr) && (db_->Init().IsOk())) {
-            db_->DropTable(ETCD_RING_PREFIX);
-            (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
+            (void)RegisterTopologyTables(*db_);
         }
     }
 
-    void GetHashOnWorker()
+    void BuildHashOwnerIndex()
     {
         std::string value;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
+        DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
+        ClusterTopologyPb ring;
         ASSERT_TRUE(ring.ParseFromString(value));
-        workerHashValues_.clear();
-        workerHashValues_.resize(WORKER_NUM);
-        const size_t hashNumPerWorker = CLIENT_NUM / WORKER_NUM;
+        workerAddresses_.clear();
+        workerAddresses_.resize(WORKER_NUM);
         for (size_t i = 0; i < WORKER_NUM; ++i) {
             HostPort workerAddress;
             DS_ASSERT_OK(cluster_->GetWorkerAddr(i, workerAddress));
-            auto worker = ring.workers().find(workerAddress.ToString());
-            ASSERT_NE(worker, ring.workers().end());
-            ASSERT_GE(static_cast<size_t>(worker->second.hash_tokens_size()), hashNumPerWorker);
-            for (size_t j = 0; j < hashNumPerWorker; ++j) {
-                workerHashValues_[i].emplace_back(worker->second.hash_tokens(j) - 1);
+            workerAddresses_[i] = workerAddress.ToString();
+            auto worker = ring.members().find(workerAddresses_[i]);
+            ASSERT_NE(worker, ring.members().end());
+        }
+        tokenOwners_.clear();
+        for (const auto &worker : ring.members()) {
+            for (const auto token : worker.second.tokens()) {
+                tokenOwners_.emplace_back(token, worker.first);
             }
         }
-    }
-
-    void SetWorkerHashInjection()
-    {
-        for (size_t i = 0; i < WORKER_NUM; ++i) {
-            DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "MurmurHash3", "return()"));
-        }
+        std::sort(tokenOwners_.begin(), tokenOwners_.end(),
+                  [](const auto &left, const auto &right) { return left.first < right.first; });
+        ASSERT_FALSE(tokenOwners_.empty());
     }
 
     std::string ObjectKeyHashTo(size_t workerIndex, size_t hashIndex) const
     {
-        return "a_key_hash_to_" + std::to_string(workerHashValues_[workerIndex][hashIndex]);
+        const std::string prefix =
+            "worker_reconciliation_" + std::to_string(workerIndex) + "_" + std::to_string(hashIndex) + "_";
+        constexpr size_t kMaxKeySearch = 100'000;
+        for (size_t i = 0; i < kMaxKeySearch; ++i) {
+            auto key = prefix + std::to_string(i);
+            if (HashBelongsToWorker(workerIndex, MurmurHash3_32(key))) {
+                return key;
+            }
+        }
+        ADD_FAILURE() << "Failed to find object key for worker index " << workerIndex;
+        return prefix + "fallback";
     }
 
-    static std::string AddHashInjectAction(const std::string &workerParams)
+    bool HashBelongsToWorker(size_t workerIndex, uint32_t hash) const
     {
-        const std::string hashInjectAction = "MurmurHash3:return()";
-        if (workerParams.empty()) {
-            return " -inject_actions=" + hashInjectAction;
+        if (workerIndex >= workerAddresses_.size() || tokenOwners_.empty()) {
+            return false;
         }
-        if (workerParams.find("-inject_actions=") != std::string::npos) {
-            return workerParams + ";" + hashInjectAction;
+        auto iter = std::lower_bound(tokenOwners_.begin(), tokenOwners_.end(), hash,
+                                     [](const auto &entry, uint32_t value) { return entry.first < value; });
+        if (iter == tokenOwners_.end()) {
+            iter = tokenOwners_.begin();
         }
-        return workerParams + " -inject_actions=" + hashInjectAction;
+        return iter->second == workerAddresses_[workerIndex];
     }
 
     void InitializeTest()
@@ -1232,6 +1249,35 @@ public:
         ASSERT_EQ(rsp.single_client_gref().size(), 2);
     }
 
+    void AssertGRefTableSizeEventually(UtOCService_Stub &stub, GRefTableKind tableKind, size_t expected,
+                                       const std::string &tableName)
+    {
+        Status lastRc = Status::OK();
+        size_t actual = std::numeric_limits<size_t>::max();
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(kEventuallyWaitTimeoutMs);
+        do {
+            GRefTableReqPb req;
+            GRefTableRspPb rsp;
+            DS_ASSERT_OK(aksk_->GenerateSignature(req));
+            if (tableKind == GRefTableKind::WORKER) {
+                lastRc = stub.GetWorkerGRefTable(req, rsp);
+            } else {
+                lastRc = stub.GetMasterGRefTable(req, rsp);
+            }
+            if (lastRc.IsOk()) {
+                actual = rsp.single_client_gref().size();
+                if (actual == expected) {
+                    return;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+        } while (std::chrono::steady_clock::now() < deadline);
+
+        ASSERT_TRUE(lastRc.IsOk()) << tableName << " query failed: " << lastRc.ToString();
+        ASSERT_EQ(actual, expected) << tableName << " did not converge within " << kEventuallyWaitTimeoutMs << " ms";
+    }
+
 protected:
     std::vector<std::shared_ptr<ObjectClient>> clients_;
     std::unique_ptr<UtOCService_Stub> utSvcStub0_;
@@ -1241,7 +1287,8 @@ protected:
     HostPort workerAddr0_;
     HostPort workerAddr1_;
     HostPort etcdAddress_;
-    std::vector<std::vector<uint32_t>> workerHashValues_;
+    std::vector<std::string> workerAddresses_;
+    std::vector<std::pair<uint32_t, std::string>> tokenOwners_;
     std::string ak_ = "QTWAOYTTINDUT2QVKYUC";
     std::string sk_ = "MFyfvK41ba2giqM7**********KGpownRZlmVmHc";
     const size_t CLIENT_NUM = 4;
@@ -1265,13 +1312,13 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL2_ClientExitDuringWorkerRestart1)
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // master0's table should have two workers and two objects
+    // Phase2 excludes the stopped worker from routable membership, so master0 keeps only the healthy worker's ref.
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
+    ASSERT_EQ(rsp.single_client_gref().size(), 1);
 
     // restart node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     // worker1 should reconcile with master0 and master1
@@ -1309,13 +1356,13 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // master0's table should have two workers and two objects
+    // Phase2 excludes the stopped worker from routable membership, so master0 keeps only the healthy worker's ref.
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
+    ASSERT_EQ(rsp.single_client_gref().size(), 1);
 
     // restart node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     // worker1 should reconcile with master0 and master1
@@ -1331,10 +1378,11 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub1_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 1);
-    // master1's table should have two workers and two objects
+    // Failure final removed worker1 before this process started. The new INITIAL member must not restore the removed
+    // identity's remote worker reference during fresh admission.
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub1_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
+    ASSERT_EQ(rsp.single_client_gref().size(), 1);
 }
 
 TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart3)
@@ -1354,13 +1402,13 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart3)
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // master0's table should have two workers and two objects
+    // Phase2 excludes the stopped worker from routable membership, so master0 keeps only the healthy worker's ref.
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
+    ASSERT_EQ(rsp.single_client_gref().size(), 1);
 
     // restart node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     // worker1 should reconcile with master0 and master1
@@ -1373,13 +1421,9 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart3)
     DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 1);
     // worker1's table should have no client and no object
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub1_->GetWorkerGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 0);
+    AssertGRefTableSizeEventually(*utSvcStub1_, GRefTableKind::WORKER, 0, "worker1 worker gref table");
     // master1's table should have one worker and one object
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub1_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
+    AssertGRefTableSizeEventually(*utSvcStub1_, GRefTableKind::MASTER, 1, "worker1 master gref table");
 }
 
 TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart4)
@@ -1396,8 +1440,8 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart4)
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
 
     // restart node0 first and then node1
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, AddHashInjectAction("")));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
@@ -1434,8 +1478,8 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart5)
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
 
     // restart node1 first and then node0
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, AddHashInjectAction("")));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, AddHashInjectAction("")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
 
@@ -1473,18 +1517,14 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // master0's table should have two workers and two objects
+    // Phase2 excludes the stopped worker from routable membership, so master0 keeps only the healthy worker's ref.
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 2);
-
-    cluster_->SetInjectAction(WORKER, 0, "ClusterManager.IfNeedTriggerReconciliation.noreconciliation",
-                              "return(K_OK)");
+    ASSERT_EQ(rsp.single_client_gref().size(), 1);
 
     // restart node1
     DS_ASSERT_OK(cluster_->StartNode(
-        WORKER, 1,
-        AddHashInjectAction(" -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call(1000)")));
+        WORKER, 1, " -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call(1000)"));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
 
     // worker1 should reconcile with master0 and master1
@@ -1558,7 +1598,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL2_ClientExitDuringWorkerNetworkIssueAnd
     std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
 
     // restart worker0
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, AddHashInjectAction("")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     // wait for reconciliation between restarted master and all workers
     waitTimeSec = 10;
@@ -1598,11 +1638,9 @@ TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconcili
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0,
-                                     AddHashInjectAction(
-                                         " -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call("
-                                         "5000);worker.PreShutDown.skip:return(K_OK)")));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1,
-                                     AddHashInjectAction("-inject_actions=worker.PreShutDown.skip:return(K_OK)")));
+                                     " -inject_actions=WorkerOCServiceImpl.GiveUpReconciliation.setHealthFile:call("
+                                     "5000);worker.PreShutDown.skip:return(K_OK)"));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, "-inject_actions=worker.PreShutDown.skip:return(K_OK)"));
 
     // cluster node table should not contain "restart" tag
     auto waitSwitch = [](uint64_t num) {
@@ -1656,8 +1694,7 @@ TEST_F(WorkerReconciliationDfxTest, DISABLED_LEVEL1_RestartAgainNoExtraReconcili
     inject::Set("ObjectClientImpl.ProcessWorkerLost", "call()");
     // restart node 1
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1,
-                                     AddHashInjectAction("-inject_actions=worker.PreShutDown.skip:return(K_OK)")));
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, "-inject_actions=worker.PreShutDown.skip:return(K_OK)"));
     auto waitCallNum2 = 2;
     waitSwitch(waitCallNum2);
     DS_ASSERT_OK(isAllNodeReady(utSvcStub0_));

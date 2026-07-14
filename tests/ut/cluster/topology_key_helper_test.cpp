@@ -53,6 +53,27 @@ TEST(TopologyKeyHelperTest, BuildsFiveClusterScopedKeyspaces)
     EXPECT_EQ(ExactPath(keys->MembershipTable(), key), "/datasystem/cluster_a-1.0/cluster/" + address);
 }
 
+TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
+{
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("", keys));
+    ASSERT_NE(keys, nullptr);
+    EXPECT_TRUE(keys->ClusterName().empty());
+    EXPECT_EQ(ExactPath(keys->TopologyTable(), TopologyKeyHelper::TopologyKey()), "/datasystem/topology");
+
+    std::string key;
+    const std::string taskId = "m-e42-0123456789abcdef0123456789abcdef";
+    DS_ASSERT_OK(TopologyKeyHelper::TaskKey(taskId, key));
+    EXPECT_EQ(ExactPath(keys->MigrateTaskTable(), key), "/datasystem/tasks/migrate/" + taskId);
+    EXPECT_EQ(ExactPath(keys->DeleteTaskTable(), key), "/datasystem/tasks/delete/" + taskId);
+
+    const std::string address = "127.0.0.1:7001";
+    DS_ASSERT_OK(TopologyKeyHelper::NotifyKey(address, key));
+    EXPECT_EQ(ExactPath(keys->NotifyTable(), key), "/datasystem/notify/" + address);
+    DS_ASSERT_OK(TopologyKeyHelper::MembershipKey(address, key));
+    EXPECT_EQ(ExactPath(keys->MembershipTable(), key), "/datasystem/cluster/" + address);
+}
+
 TEST(TopologyKeyHelperTest, EnforcesClusterNameContractWithoutNormalization)
 {
     std::unique_ptr<TopologyKeyHelper> keys;
@@ -61,7 +82,7 @@ TEST(TopologyKeyHelperTest, EnforcesClusterNameContractWithoutNormalization)
     EXPECT_EQ(keys->ClusterName(), longestName);
 
     auto *original = keys.get();
-    const std::vector<std::string> invalidNames = { "", "-cluster", "a/b", "a%2Fb", "a" + std::string(128, 'z') };
+    const std::vector<std::string> invalidNames = { "-cluster", "a/b", "a%2Fb", "a" + std::string(128, 'z') };
     for (const auto &name : invalidNames) {
         EXPECT_EQ(TopologyKeyHelper::Create(name, keys).GetCode(), K_INVALID) << name;
         EXPECT_EQ(keys.get(), original);

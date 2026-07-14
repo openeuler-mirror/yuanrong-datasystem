@@ -43,7 +43,7 @@ void ExpectEnumValue(const EnumDescriptor *descriptor, const std::string &name, 
 
 TEST(ClusterTopologySchemaTest, FreezesMembershipAndRangeSchema)
 {
-    const auto *membership = v3::MembershipPb::descriptor();
+    const auto *membership = MembershipPb::descriptor();
     ASSERT_EQ(membership->field_count(), 3);
     ExpectField(membership, "tokens", 1);
     ExpectField(membership, "id", 2);
@@ -59,7 +59,7 @@ TEST(ClusterTopologySchemaTest, FreezesMembershipAndRangeSchema)
     ExpectEnumValue(state, "LEAVING", 4);
     ExpectEnumValue(state, "FAILED", 5);
 
-    const auto *range = v3::TokenRangePb::descriptor();
+    const auto *range = TokenRangePb::descriptor();
     ASSERT_EQ(range->field_count(), 4);
     ExpectField(range, "owner_address", 1);
     ExpectField(range, "from", 2);
@@ -69,17 +69,17 @@ TEST(ClusterTopologySchemaTest, FreezesMembershipAndRangeSchema)
 
 TEST(ClusterTopologySchemaTest, FreezesTaskAndBatchSchema)
 {
-    const auto *migrate = v3::MigrateTaskPb::descriptor();
+    const auto *migrate = MigrateTaskPb::descriptor();
     ASSERT_EQ(migrate->field_count(), 2);
     ExpectField(migrate, "target_address", 1);
     ExpectField(migrate, "source_ranges", 2);
 
-    const auto *remove = v3::DeleteNodeTaskPb::descriptor();
+    const auto *remove = DeleteNodeTaskPb::descriptor();
     ASSERT_EQ(remove->field_count(), 2);
     ExpectField(remove, "failed_address", 1);
     ExpectField(remove, "recovery_ranges", 2);
 
-    const auto *batch = v3::ChangeBatchPb::descriptor();
+    const auto *batch = ChangeBatchPb::descriptor();
     ASSERT_EQ(batch->field_count(), 2);
     ExpectField(batch, "type", 1);
     ExpectField(batch, "epoch", 2);
@@ -91,7 +91,7 @@ TEST(ClusterTopologySchemaTest, FreezesTaskAndBatchSchema)
     ExpectEnumValue(type, "SCALE_IN", 1);
     ExpectEnumValue(type, "FAILURE", 2);
 
-    const auto *notify = v3::TaskNotifyPb::descriptor();
+    const auto *notify = TaskNotifyPb::descriptor();
     ASSERT_EQ(notify->field_count(), 2);
     ExpectField(notify, "type", 1);
     ExpectField(notify, "task_ids", 2);
@@ -99,9 +99,9 @@ TEST(ClusterTopologySchemaTest, FreezesTaskAndBatchSchema)
 
 TEST(ClusterTopologySchemaTest, FreezesRootAndActiveBatchPresence)
 {
-    const auto *topology = v3::ClusterTopologyPb::descriptor();
+    const auto *topology = ClusterTopologyPb::descriptor();
     EXPECT_EQ(topology->file()->name(), "datasystem/protos/cluster_topology.proto");
-    EXPECT_EQ(topology->file()->package(), "datasystem.v3");
+    EXPECT_EQ(topology->file()->package(), "datasystem");
     ASSERT_EQ(topology->field_count(), 5);
     ExpectField(topology, "cluster_has_init", 1);
     ExpectField(topology, "members", 2);
@@ -109,7 +109,7 @@ TEST(ClusterTopologySchemaTest, FreezesRootAndActiveBatchPresence)
     ExpectField(topology, "schema_version", 4);
     ExpectField(topology, "active_batch", 5);
 
-    v3::ClusterTopologyPb value;
+    ClusterTopologyPb value;
     EXPECT_FALSE(value.has_active_batch());
     value.mutable_active_batch()->set_epoch(1);
     EXPECT_TRUE(value.has_active_batch());

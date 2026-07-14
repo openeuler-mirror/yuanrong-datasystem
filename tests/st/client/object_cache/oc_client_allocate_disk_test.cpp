@@ -1,18 +1,16 @@
  /**
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+  * Licensed under the Apache License, Version 2.0 (the "License");
+  * you may not use this file except in compliance with the License.
+  * You may obtain a copy of the License at
+  * http://www.apache.org/licenses/LICENSE-2.0
+  * Unless required by applicable law or agreed to in writing, software
+  * distributed under the License is distributed on an "AS IS" BASIS,
+  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
+
 /**
  * Description: ObjInterface test.
  */
@@ -33,6 +31,7 @@ namespace st {
 namespace {
 constexpr int64_t SHM_SIZE = 1024 * 1024;
 constexpr int64_t K_SIZE = 1024;
+constexpr int DISK_DETECT_WAIT_TIMEOUT_SEC = 10;
 constexpr size_t TOTAL_WORKER_NUM = 4;
 }  // namespace
 class OCClientAllocateDiskTest : public OCClientCommon {
@@ -83,9 +82,17 @@ TEST_F(OCClientAllocateDiskTest, TestDiskFull)
     std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
 
-    int sleepSecs = 5;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "disk_detecter.free_bytes", "1*call()"));
-    sleep(sleepSecs);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "disk_detecter.free_bytes", "call()"));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "disk_detecter.free_bytes",
+                                                                   executeCount));
+            RETURN_OK_IF_TRUE(executeCount > 0);
+            RETURN_STATUS(K_NOT_READY, "Wait disk detect injection.");
+        },
+        DISK_DETECT_WAIT_TIMEOUT_SEC, K_OK));
+
     std::string objKey = NewObjectKey();
     std::string data(SHM_SIZE, 'x');
     std::shared_ptr<Buffer> buffer;
@@ -94,8 +101,9 @@ TEST_F(OCClientAllocateDiskTest, TestDiskFull)
     auto status = client->Create(objKey, data.size(), param, buffer);
     ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR);
 
-    sleep(sleepSecs);
-    DS_ASSERT_OK(client->Create(objKey, data.size(), param, buffer));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "disk_detecter.free_bytes"));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&] { return client->Create(objKey, data.size(), param, buffer); }, DISK_DETECT_WAIT_TIMEOUT_SEC, K_OK));
 }
 
 TEST_F(OCClientAllocateDiskTest, PublishThroughShm)

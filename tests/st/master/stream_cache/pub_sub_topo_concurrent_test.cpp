@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,7 +27,8 @@
 
 namespace datasystem {
 namespace st {
-constexpr int K_TWO = 2;
+constexpr int DELETE_RETRY_INTERVAL_SEC = 2;
+constexpr int DELETE_RETRY_ATTEMPTS = 5;
 using namespace datasystem::client::stream_cache;
 class PubSubTopoConcurrentTest : public ExternalClusterTest {
 public:
@@ -78,14 +76,19 @@ protected:
 
     Status TryAndDeleteStream(std::unique_ptr<StreamClient> &spClient, std::string streamName)
     {
-        // if pending notifications retry delete
         Status rc = Status::OK();
-        do {
+        for (int attempt = 0; attempt < DELETE_RETRY_ATTEMPTS; ++attempt) {
             rc = spClient->DeleteStream(streamName);
-            if (rc.IsError()) {
-                sleep(K_TWO);
+            if (rc.IsOk()) {
+                return rc;
             }
-        } while (rc.GetCode() == StatusCode::K_SC_STREAM_NOTIFICATION_PENDING);
+            // Producer/consumer Close is asynchronous. During convergence the master can first report pending
+            // notifications and then report that a remote consumer is still closing.
+            if (rc.GetCode() != StatusCode::K_SC_STREAM_NOTIFICATION_PENDING && rc.GetCode() != K_RUNTIME_ERROR) {
+                return rc;
+            }
+            sleep(DELETE_RETRY_INTERVAL_SEC);
+        }
         return rc;
     }
 

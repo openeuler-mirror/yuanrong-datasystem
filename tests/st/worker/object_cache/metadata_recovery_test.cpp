@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,7 +30,7 @@
 namespace datasystem {
 namespace st {
 namespace {
-constexpr int WAIT_GET_TIMEOUT_MS = 15000;
+constexpr int WAIT_GET_TIMEOUT_MS = 20'000;
 constexpr int WAIT_GET_INTERVAL_MS = 200;
 constexpr uint64_t NODE_TIMEOUT_S = 1;
 constexpr uint64_t NODE_DEAD_TIMEOUT_S = 3;
@@ -51,7 +48,7 @@ public:
         opts.addNodeTime = 0;
         std::stringstream ss;
         ss << "-enable_metadata_recovery=true "
-           << "-enable_reconciliation=false "
+           << "-enable_reconciliation=true "
            << "-heartbeat_interval_ms=" << HEARTBEAT_INTERVAL_MS << " "
            << "-node_timeout_s=" << NODE_TIMEOUT_S << " "
            << "-node_dead_timeout_s=" << NODE_DEAD_TIMEOUT_S << " "
@@ -94,7 +91,7 @@ TEST_F(MetadataRecoveryTest, MetadataOwnerRestart)
 
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-    WaitAllNodesJoinIntoHashRing(2, 20);
+    WaitAllMembersJoinClusterTopology(2, 20);
 
     InitTestKVClient(1, client1, timeoutMs_);
     ASSERT_TRUE(WaitUntilGetSucceeds(client1, objKey, value)) << objKey;
@@ -115,7 +112,7 @@ TEST_F(MetadataRecoveryTest, FailoverRestoreObjectWithTtl)
     std::this_thread::sleep_for(std::chrono::milliseconds((500)));
 
     DS_ASSERT_OK(cluster_->KillWorker(1));
-    WaitAllNodesJoinIntoHashRing(1, 20);
+    WaitAllMembersJoinClusterTopology(1, 20);
 
     std::this_thread::sleep_for(std::chrono::milliseconds((ttl + 1) * S2MS));
     std::string val;
@@ -139,7 +136,7 @@ TEST_F(MetadataRecoveryTest, RestartRestoreObjectWithTtl)
     DS_ASSERT_OK(cluster_->KillWorker(1));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-    WaitAllNodesJoinIntoHashRing(2, 20);
+    WaitAllMembersJoinClusterTopology(2, 20);
 
     InitTestKVClient(1, client1, timeoutMs_);
     std::this_thread::sleep_for(std::chrono::milliseconds((ttl + 1) * S2MS));

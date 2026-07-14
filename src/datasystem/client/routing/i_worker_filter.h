@@ -24,7 +24,7 @@
 #include <string>
 
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -49,7 +49,7 @@ public:
     /**
      * @brief Called when hash ring is updated (optional, default no-op).
      */
-    virtual void OnHashRingUpdated(const HashRingPb & /* ring */) {}
+    virtual void OnHashRingUpdated(const ::datasystem::ClusterTopologyPb & /* ring */) {}
 };
 
 }  // namespace client

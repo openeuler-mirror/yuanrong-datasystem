@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,6 +16,7 @@
  */
 #include "datasystem/worker/object_cache/service/worker_oc_service_create_impl.h"
 
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -46,10 +44,10 @@ namespace object_cache {
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam,
-                                                     ClusterManager *clusterManager,
+                                                     worker::WorkerTopologyReferences *topologyEngine,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress)
 {
@@ -82,7 +80,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
         access.Result(rc).Record();
         return rc;
     }
-    if (clusterManager_ == nullptr) {
+    if (topologyEngine_ == nullptr) {
         Status rc(StatusCode::K_NOT_READY, __LINE__, __FILE__, "ETCD cluster manager is not provided.");
         access.Result(rc).Record();
         return rc;
@@ -295,7 +293,7 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
 {
     PerfPoint pointAll(PerfKey::WORKER_MULTI_CREATE_TOTAL);
     PerfPoint point(PerfKey::WORKER_MULTI_CREATE_INPUT_CHECK);
-    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
+    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");

@@ -31,9 +31,7 @@ set(DS_UT_DEPEND_LIBS
         httpclient
         master_object_cache
         worker_object_cache
-        worker_hash_ring
-        topology
-        common_task_action
+        cluster_topology
         worker_client_manager
         datasystem_worker_static
         )
@@ -75,7 +73,31 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/operation_logger_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/dynamic_config_updater_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_monitor_gate_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_config_monitor_test\\.cpp$)
-list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/.*\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/cluster_topology_schema_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_key_helper_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/coordination_backend_contract_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/membership_contract_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_snapshot_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_repository_codec_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_repository_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_reader_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_observer_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/coordination_event_dispatcher_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/hash_algorithm_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/placement_facade_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_plan_builder_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_failure_classifier_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_task_materializer_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_controller_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/hash_key_filter_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/storage_scan_plan_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_task_executor_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_engine_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_runtime_composition_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_task_janitor_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_dfx_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_shutdown_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/testing/fake_coordination_backend\\.cpp$)
 
 # These targets need a real URMA device. Build them separately below instead of adding them to the default ds_ut
 # binary.
@@ -138,29 +160,29 @@ add_executable(coordinator_store_perf_test
 add_executable(cluster_topology_contract_ut
         cluster/cluster_topology_schema_test.cpp
         cluster/coordination_backend_contract_test.cpp
-        cluster/coordination_event_dispatcher_test.cpp
-        cluster/hash_algorithm_test.cpp
-        cluster/hash_key_filter_test.cpp
         cluster/membership_contract_test.cpp
-        cluster/placement_facade_test.cpp
-        cluster/storage_scan_plan_test.cpp
-        cluster/testing/fake_coordination_backend.cpp
-        cluster/topology_controller_test.cpp
-        cluster/topology_dfx_test.cpp
-        cluster/topology_engine_test.cpp
-        cluster/topology_failure_classifier_test.cpp
-        cluster/topology_key_helper_test.cpp
-        cluster/topology_observer_test.cpp
-        cluster/topology_plan_builder_test.cpp
-        cluster/topology_reader_test.cpp
         cluster/topology_repository_codec_test.cpp
         cluster/topology_repository_test.cpp
-        cluster/topology_runtime_composition_test.cpp
-        cluster/topology_shutdown_test.cpp
         cluster/topology_snapshot_test.cpp
-        cluster/topology_task_executor_test.cpp
-        cluster/topology_task_janitor_test.cpp
+        cluster/topology_reader_test.cpp
+        cluster/topology_observer_test.cpp
+        cluster/coordination_event_dispatcher_test.cpp
+        cluster/hash_algorithm_test.cpp
+        cluster/placement_facade_test.cpp
+        cluster/topology_plan_builder_test.cpp
+        cluster/topology_failure_classifier_test.cpp
         cluster/topology_task_materializer_test.cpp
+        cluster/topology_controller_test.cpp
+        cluster/hash_key_filter_test.cpp
+        cluster/storage_scan_plan_test.cpp
+        cluster/topology_task_executor_test.cpp
+        cluster/topology_engine_test.cpp
+        cluster/topology_runtime_composition_test.cpp
+        cluster/topology_task_janitor_test.cpp
+        cluster/topology_dfx_test.cpp
+        cluster/topology_shutdown_test.cpp
+        cluster/testing/fake_coordination_backend.cpp
+        cluster/topology_key_helper_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
 
 

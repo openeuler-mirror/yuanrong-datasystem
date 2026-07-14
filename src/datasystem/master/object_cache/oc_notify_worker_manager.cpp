@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -354,13 +351,13 @@ void OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta2EtcdKeyMap(
     }
 }
 
-Status OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb, const worker::HashRange &extraRanges)
+Status OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb)
 {
     std::vector<std::pair<std::string, std::string>> cacheInvalids;
     if (!objectStore_->IsRocksdbRunning()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX,
-                                                                   ASYNC_WORKER_OP_TABLE, extraRanges, cacheInvalids),
-                                         "Load meta from etcd into memory failed.");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, cacheInvalids),
+            "Load meta from etcd into memory failed.");
         for (const auto &iter : cacheInvalids) {
             RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(ASYNC_WORKER_OP_TABLE, iter.first, iter.second));
         }
@@ -370,8 +367,7 @@ Status OCNotifyWorkerManager::RecoverCacheInvalidAndRemoveMeta(bool isFromRocksd
                                              "Load meta from rocksdb into memory failed.");
         } else {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, extraRanges,
-                                          cacheInvalids),
+                objectStore_->GetFromEtcd(ETCD_ASYNC_WORKER_OP_TABLE_PREFIX, ASYNC_WORKER_OP_TABLE, cacheInvalids),
                 "Load meta from etcd into memory failed.");
         }
     }
@@ -559,24 +555,6 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDelete(
         replicas2Obj.erase(address);
     }
     return lastErr;
-}
-
-Status OCNotifyWorkerManager::ClearDataWithoutMeta(const worker::HashRange &ranges, const std::string &workerAddr,
-                                                   const std::vector<std::string> &objsMigrateFinished)
-{
-    RETURN_IF_NOT_OK(CheckWorkerIsHealthy(workerAddr));
-    std::shared_ptr<MasterWorkerOCApi> masterWorkerApi;
-    RETURN_IF_NOT_OK(GetMasterWorkerApi(workerAddr, masterWorkerApi));
-    ClearDataReqPb req;
-    ClearDataRspPb rsp;
-    req.set_standby_worker(masterAddr_.ToString());
-    for (const auto &range : ranges) {
-        auto *tempRange = req.add_ranges();
-        tempRange->set_from(range.first);
-        tempRange->set_end(range.second);
-    }
-    *req.mutable_objkeys_migrate_finished() = { objsMigrateFinished.begin(), objsMigrateFinished.end() };
-    return masterWorkerApi->ClearData(req, rsp);
 }
 
 void OCNotifyWorkerManager::SetDeleteObjectReq(
@@ -874,7 +852,7 @@ Status OCNotifyWorkerManager::ClearAddressCacheInvalid(const std::string &worker
 
 Status OCNotifyWorkerManager::FillUpdateObjectInfoPb(const std::string &objectKey, UpdateObjectInfoPb *objectInfoPb)
 {
-    auto &shard = ocMetadataManager_->GetShardFor(objectKey);
+    auto& shard = ocMetadataManager_->GetShardFor(objectKey);
     std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
     TbbMetaTable ::const_accessor accessor;
     if (!shard.table.find(accessor, objectKey)) {
@@ -978,7 +956,7 @@ void OCNotifyWorkerManager::ProcessChangePrimaryCopy(
         toBeChanged.clear();
         for (auto &it : needReselectPrimary) {
             std::string newPrimaryCopy;
-            auto &shard = ocMetadataManager_->GetShardFor(it.first);
+            auto& shard = ocMetadataManager_->GetShardFor(it.first);
             std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
             TbbMetaTable::accessor accessor;
             if (ocMetadataManager_->ReselectPrimaryCopy(it.first, it.second, accessor, newPrimaryCopy).IsOk()) {

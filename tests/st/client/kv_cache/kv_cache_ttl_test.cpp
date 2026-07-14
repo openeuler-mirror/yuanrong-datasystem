@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,6 +22,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "client/object_cache/oc_client_common.h"
 
 namespace datasystem {
@@ -356,7 +354,8 @@ public:
         opts.numOBS = 1;
         opts.numWorkers = 3;
         opts.numEtcd = 1;
-        opts.workerGflagParams = "-node_timeout_s=5 -shared_memory_size_mb=2048 -v=2";
+        opts.workerGflagParams =
+            "-node_timeout_s=5 -node_dead_timeout_s=6 -shared_memory_size_mb=2048 -v=2";
         opts.enableDistributedMaster = "false";
     }
  
@@ -371,12 +370,36 @@ TEST_F(CentralizedKVCacheTtlTest, WorkerDead)
     EXPECT_EQ(client1->Get(key, outValue), Status::OK());
     EXPECT_EQ(value, outValue);
  
+    auto topologyDb = InitTestEtcdInstance();
+    HostPort failedWorkerAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, failedWorkerAddress));
+
     // Shutdown worker.
     // Master notify worker delete, worker1 may rpc unavailable, make the real delete time > 5s
     cluster_->ShutdownNode(ClusterNodeType::WORKER, 1);
-    std::this_thread::sleep_for(std::chrono::seconds(10));
-    EXPECT_NE(client1->Get(key, value), Status::OK());
-    EXPECT_NE(client3->Get(key, value), Status::OK());
+    constexpr int failureFinalizationWaitSec = 15;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&topologyDb, &failedWorkerAddress]() {
+            std::string topologyBytes;
+            RETURN_IF_NOT_OK(topologyDb->Get(GetTopologyTableName(), "", topologyBytes));
+            ::datasystem::ClusterTopologyPb topology;
+            CHECK_FAIL_RETURN_STATUS(topology.ParseFromString(topologyBytes), K_RUNTIME_ERROR,
+                                     "Failed to parse cluster topology");
+            const bool finalized = topology.members().count(failedWorkerAddress.ToString()) == 0
+                                   && !topology.has_active_batch();
+            CHECK_FAIL_RETURN_STATUS(finalized, K_NOT_READY, "Failure topology batch has not finalized");
+            return Status::OK();
+        },
+        failureFinalizationWaitSec, K_OK));
+    constexpr int expirationWaitSec = 20;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this, &key, &value]() {
+            if (client1->Get(key, value).IsOk() || client3->Get(key, value).IsOk()) {
+                return Status(K_NOT_READY, "Expired object is still readable");
+            }
+            return Status::OK();
+        },
+        expirationWaitSec, K_OK));
 }
 
 class KVClientL2CacheTest : public KVCacheTtlTest {

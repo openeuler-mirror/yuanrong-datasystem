@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -53,11 +50,12 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/kv/read_only_buffer.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/object/object_enum.h"
-#include "datasystem/topology/membership/worker_node_info.h"
+#include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/flags/flags.h"
@@ -143,9 +141,10 @@ std::set<std::string> DifferenceMappings(const std::set<std::string> &lhs, const
 bool HasAnyMapping(const std::set<std::string> &expectedMappings)
 {
     auto currentMappings = GetDatasystemMemfdMappingRanges();
-    return std::any_of(expectedMappings.begin(), expectedMappings.end(), [&currentMappings](const std::string &mapping) {
-        return currentMappings.find(mapping) != currentMappings.end();
-    });
+    return std::any_of(expectedMappings.begin(), expectedMappings.end(),
+                       [&currentMappings](const std::string &mapping) {
+                           return currentMappings.find(mapping) != currentMappings.end();
+                       });
 }
 
 template <typename Predicate>
@@ -312,6 +311,7 @@ public:
     {
         ServiceDiscoveryOptions sdOpts;
         sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
+        sdOpts.clusterName = GetTestClusterName();
         sdOpts.hostIdEnvName = std::string(MMAP_SWITCH_HOST_ID_ENV_PREFIX) + "0";
         sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
         auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
@@ -2500,6 +2500,7 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeNoneL2Cache)
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     InitTestKVClient(0, client1);
     std::string val;
+    // L2 data may survive a process restart, but object metadata is intentionally not persisted in the target model.
     ASSERT_EQ(client1->Get(key1, val).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
@@ -2527,8 +2528,7 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeL2Cache)
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     InitTestKVClient(0, client1);
     std::string val;
-    DS_ASSERT_OK(client1->Get(key1, val));
-    ASSERT_EQ(val, data);
+    ASSERT_EQ(client1->Get(key1, val).GetCode(), StatusCode::K_NOT_FOUND);
     ASSERT_EQ(client1->Get(key2, val).GetCode(), StatusCode::K_NOT_FOUND);
 }
 
@@ -2801,6 +2801,7 @@ public:
         }
         ServiceDiscoveryOptions opts;
         opts.etcdAddress = etcdAddress;
+        opts.clusterName = GetTestClusterName();
         opts.hostIdEnvName = hostIdEnvName;
         opts.affinityPolicy = policy;
         auto serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
@@ -2831,6 +2832,7 @@ public:
 
         ServiceDiscoveryOptions opts;
         opts.etcdAddress = etcdAddress;
+        opts.clusterName = GetTestClusterName();
         opts.hostIdEnvName = hostIdEnvName;
         opts.affinityPolicy = policy;
         serviceDiscovery = std::make_shared<ServiceDiscovery>(opts);
@@ -2857,14 +2859,14 @@ Status GetWorkerHostIdFromEtcd(BaseCluster *cluster, int workerIndex, std::strin
     std::string etcdAddress = cluster->GetEtcdAddrs();
     EtcdStore etcdStore(etcdAddress);
     RETURN_IF_NOT_OK(etcdStore.Init());
-    (void)etcdStore.CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE));
+    RETURN_IF_NOT_OK(RegisterTopologyTables(etcdStore));
 
     HostPort workerAddress;
     RETURN_IF_NOT_OK(cluster->GetWorkerAddr(workerIndex, workerAddress));
     std::string valueStr;
-    RETURN_IF_NOT_OK(etcdStore.Get(ETCD_CLUSTER_TABLE, workerAddress.ToString(), valueStr));
-    topology::WorkerServiceInfo value;
-    RETURN_IF_NOT_OK(topology::WorkerServiceInfo::FromString(valueStr, value));
+    RETURN_IF_NOT_OK(etcdStore.Get(GetMembershipTableName(), workerAddress.ToString(), valueStr));
+    cluster::MembershipValue value;
+    RETURN_IF_NOT_OK(cluster::MembershipValueCodec::Decode(valueStr, value));
     hostId = value.hostId;
     return Status::OK();
 }
@@ -3079,6 +3081,8 @@ public:
         ExternalClusterTest::SetUp();
         FLAGS_log_monitor = true;
         FLAGS_v = 1;
+        topologyDb_ = InitTestEtcdInstance();
+        ASSERT_NE(topologyDb_, nullptr);
     }
 
     void TearDown() override
@@ -3094,6 +3098,7 @@ public:
         // Use service discovery rather than an explicit worker address, matching the customer scenario.
         ServiceDiscoveryOptions sdOpts;
         sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
+        sdOpts.clusterName = GetTestClusterName();
         sdOpts.hostIdEnvName = hostIdEnvName;
         sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
         auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
@@ -3128,6 +3133,7 @@ public:
         // Before worker 0 is restarted, preferred-same-node discovery must fall back to a remote worker.
         ServiceDiscoveryOptions sdOpts;
         sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
+        sdOpts.clusterName = GetTestClusterName();
         sdOpts.hostIdEnvName = hostIdEnvName;
         sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
         auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
@@ -3204,10 +3210,24 @@ public:
         return Status::OK();
     }
 
+    Status CheckFailureFinalized(uint32_t failedWorkerIndex)
+    {
+        std::string topologyBytes;
+        RETURN_IF_NOT_OK(topologyDb_->Get(GetTopologyTableName(), "", topologyBytes));
+        ::datasystem::ClusterTopologyPb topology;
+        CHECK_FAIL_RETURN_STATUS(topology.ParseFromString(topologyBytes), K_RUNTIME_ERROR,
+                                 "Failed to parse cluster topology");
+        const auto &failedAddress = workerAddress_.at(failedWorkerIndex).ToString();
+        CHECK_FAIL_RETURN_STATUS(topology.members().count(failedAddress) == 0 && !topology.has_active_batch(),
+                                 K_NOT_READY, "Failure topology batch has not finalized");
+        return Status::OK();
+    }
+
 protected:
     std::vector<HostPort> workerAddress_;
     std::shared_ptr<KVClient> client_;
     std::vector<std::shared_ptr<KVClient>> clients_;
+    std::unique_ptr<EtcdStore> topologyDb_;
 };
 
 TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestRecoverLocalWorker)
@@ -3241,6 +3261,7 @@ TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestFailoverClientsSpreadAcr
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
         [this, clientNum]() { return CheckClientsSwitchedToBothRemoteWorkers(clientNum); }, 10, K_OK));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this]() { return CheckFailureFinalized(0); }, 10, K_OK));
     DS_ASSERT_OK(CheckClientsSetGet(clients_));
 }
 

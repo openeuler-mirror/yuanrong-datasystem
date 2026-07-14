@@ -12,4 +12,5 @@ target_link_libraries(cluster
     datasystem_static
     generic_service_protos_client
     common_etcd
+    cluster_topology_keyspace
 )

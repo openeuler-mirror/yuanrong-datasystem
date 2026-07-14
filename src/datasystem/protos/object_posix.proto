@@ -24,7 +24,7 @@ import "datasystem/protos/rpc_option.proto";
 import "datasystem/protos/utils.proto";
 import "datasystem/protos/p2p_subscribe.proto";
 import "datasystem/protos/meta_transport.proto";
-import "datasystem/protos/hash_ring.proto";
+import "datasystem/protos/cluster_topology.proto";
 
 option cc_enable_arenas = true;
 
@@ -599,7 +599,7 @@ message ExpireRspPb {
   ErrorInfoPb last_rc = 2;
 }
 
-// SDK periodically fetches the hash ring from a worker for client-side routing.
+// SDK periodically fetches the cluster topology from a worker for client-side routing.
 message GetHashRingReqPb {
   uint64 version = 1;  // Client's current version, 0 for full fetch.
 
@@ -610,7 +610,7 @@ message GetHashRingReqPb {
 }
 
 message GetHashRingRspPb {
-  HashRingPb hash_ring = 1;       // Populated only when version differs.
+  .datasystem.ClusterTopologyPb hash_ring = 1;  // Populated only when version differs.
   string master_address = 2;
   uint64 version = 3;             // Current version.
   bool hash_ring_changed = 4;     // True if hash_ring field is populated.

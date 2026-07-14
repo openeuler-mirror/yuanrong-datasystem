@@ -213,6 +213,7 @@ Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key,
 
         return ObjectBufferInternal::Create(info, buffer);
 #else
+        static_cast<void>(buffer);
         return Status(K_NOT_SUPPORTED, "UB Create: USE_URMA not compiled");
 #endif
     }

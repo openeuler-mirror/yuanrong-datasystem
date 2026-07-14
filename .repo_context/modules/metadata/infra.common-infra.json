@@ -27,7 +27,7 @@
       "infra.logging",
       "infra.metrics",
       "infra.observability",
-      "runtime.hash-ring"
+      "runtime.topology"
     ],
     "split_signals": [
       "cross_module_plumbing"

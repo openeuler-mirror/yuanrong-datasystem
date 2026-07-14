@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,7 +30,6 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/master_object.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -41,6 +37,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace worker {
@@ -48,7 +45,7 @@ namespace worker {
 struct RebalanceExecutorConfig {
     HostPort localAddress;
     // Non-owning. The owner must keep the cluster manager alive until RebalanceExecutor is destroyed.
-    ClusterManager *clusterManager;
+    worker::WorkerTopologyReferences *topologyEngine;
     std::shared_ptr<AkSkManager> akSkManager;
     std::shared_ptr<object_cache::ObjectTable> objectTable;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager;
@@ -135,7 +132,7 @@ private:
     void MarkTaskDone();
 
     HostPort localAddress_;
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<object_cache::ObjectTable> objectTable_{ nullptr };
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager_{ nullptr };

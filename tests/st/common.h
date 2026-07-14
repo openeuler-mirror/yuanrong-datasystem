@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,6 +28,7 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 
 using datasystem::Status;
 using datasystem::StatusCode;
@@ -90,7 +88,12 @@ using datasystem::StatusCode;
     } while (false)
 
 namespace datasystem {
+class EtcdStore;
+
 namespace st {
+using ClusterTopologyPb = datasystem::ClusterTopologyPb;
+using MembershipPb = datasystem::MembershipPb;
+
 class KillTimer;
 
 class CommonTest : public testing::Test {
@@ -155,8 +158,8 @@ protected:
 
     /**
      * @brief Choose a free port in the range [1025, 20000]. Generally, RPC clients use 30000+
-     *        as the port number for communication with the server. Therefore, we can use a
-     *        port number smaller than 20000 to minimize conflicts.
+     * as the port number for communication with the server. Therefore, we can use a
+     * port number smaller than 20000 to minimize conflicts.
      * @param[out] port A free port.
      * @param[in] maxPort Maximum port limit.
      */
@@ -164,8 +167,8 @@ protected:
 
     /**
      * @brief Choose a free port in the range [1025, 20000]. Generally, RPC clients use 30000+
-     *        as the port number for communication with the server. Therefore, we can use a
-     *        port number smaller than 20000 to minimize conflicts.
+     * as the port number for communication with the server. Therefore, we can use a
+     * port number smaller than 20000 to minimize conflicts.
      * @param[in] maxPort Maximum port limit.
      * @return A free port.
      */
@@ -179,6 +182,53 @@ void GetCurTestName(std::string &caseName, std::string &name);
 bool GetTestResult();
 
 std::string GetTestCaseDataDir();
+
+/**
+ * @brief Return the process cluster namespace configured by ExternalCluster.
+ * @return Process cluster name used to isolate test keyspaces.
+ */
+std::string GetTestClusterName();
+
+/**
+ * @brief Build the topology table for the process cluster name.
+ * @return The exact topology table, or an empty string when the cluster name is invalid.
+ */
+std::string GetTopologyTableName();
+
+/**
+ * @brief Build the topology table for a test cluster namespace.
+ * @param[in] clusterName Cluster namespace used by the Worker under test.
+ * @return The exact topology table, or an empty string when the cluster name is invalid.
+ */
+std::string GetTopologyTableName(const std::string &clusterName);
+
+/**
+ * @brief Build the membership table for the process cluster name.
+ * @return The exact membership table, or an empty string when the cluster name is invalid.
+ */
+std::string GetMembershipTableName();
+
+/**
+ * @brief Build the membership table for a test cluster namespace.
+ * @param[in] clusterName Cluster namespace used by the Worker under test.
+ * @return The exact membership table, or an empty string when the cluster name is invalid.
+ */
+std::string GetMembershipTableName(const std::string &clusterName);
+
+/**
+ * @brief Idempotently register the process cluster topology tables on a test ETCD store.
+ * @param[in,out] store Initialized ETCD store.
+ * @return K_OK on success; otherwise the key validation or table registration error.
+ */
+Status RegisterTopologyTables(EtcdStore &store);
+
+/**
+ * @brief Idempotently register named test cluster topology tables on a test ETCD store.
+ * @param[in,out] store Initialized ETCD store.
+ * @param[in] clusterName Cluster namespace used by the Worker under test.
+ * @return K_OK on success; otherwise the key validation or table registration error.
+ */
+Status RegisterTopologyTables(EtcdStore &store, const std::string &clusterName);
 
 Status ExecuteCmd(const std::string &cmd, std::string &result, int *exitCode = nullptr);
 

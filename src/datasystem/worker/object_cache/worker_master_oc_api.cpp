@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -143,11 +140,6 @@ Status RunAsyncWrite(RemoteRpc &remoteRpc, int64_t remainingTime, const ReqT &re
 }
 
 // Base class methods
-
-WorkerMasterOCApi::WorkerMasterOCApi(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager)
-    : localHostPort_(localHostPort), akSkManager_(akSkManager)
-{
-}
 
 std::shared_ptr<WorkerMasterOCApi> WorkerMasterOCApi::CreateWorkerMasterOCApi(
     const HostPort &hostPort, const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
@@ -532,6 +524,7 @@ Status WorkerRemoteMasterOCApi::GIncreaseMasterRef(master::GIncreaseReqPb &incRe
     auto rc = RetryOnErrorRepent(
         GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(),
         [this, &opts, &incReq, &incRsp](int32_t) {
+            INJECT_POINT("WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc");
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(incReq));
             return (brpcSession_ ? brpcSession_->GIncreaseRef(opts, incReq, incRsp)
                                    : rpcSession_->GIncreaseRef(opts, incReq, incRsp));
@@ -672,8 +665,8 @@ Status WorkerRemoteMasterOCApi::RollbackSeal(const std::string &objectKey, uint3
     return WithRpcDiag(status, "RollbackSeal", localHostPort_, hostPort_);
 }
 
-Status WorkerRemoteMasterOCApi::IfNeedTriggerReconciliation(master::ReconciliationQueryPb &req,
-                                                            master::ReconciliationRspPb &rsp)
+Status WorkerRemoteMasterOCApi::ReconcileMembershipChange(master::ReconciliationQueryPb &req,
+                                                          master::ReconciliationRspPb &rsp)
 {
     LOG(INFO) << "worker on " << localHostPort_.ToString() << " sends a reconciliation request to the remote master on "
               << hostPort_.ToString();
@@ -681,7 +674,7 @@ Status WorkerRemoteMasterOCApi::IfNeedTriggerReconciliation(master::Reconciliati
     RpcCredential cred;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
     int retryTimeout = 60 * 1000;  // 1 minutes
-    INJECT_POINT("WorkerRemoteMasterOCApi.IfNeedTriggerReconciliation.retryTimeout", [&retryTimeout](int timeout) {
+    INJECT_POINT("WorkerRemoteMasterOCApi.ReconcileMembershipChange.retryTimeout", [&retryTimeout](int timeout) {
         retryTimeout = timeout;
         return Status::OK();
     });
@@ -691,9 +684,9 @@ Status WorkerRemoteMasterOCApi::IfNeedTriggerReconciliation(master::Reconciliati
     auto retryFun = [this, &req, &rsp](int32_t) {
         RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
         Timer timer;
-        Status rc = (brpcSession_ ? brpcSession_->IfNeedTriggerReconciliation(req, rsp)
-                                    : rpcSession_->IfNeedTriggerReconciliation(req, rsp));
-        GetWorkerTimeCost().Append("Worker to master rpc IfNeedTriggerReconciliation", timer.ElapsedMilliSecond());
+        Status rc = (brpcSession_ ? brpcSession_->ReconcileMembershipChange(req, rsp)
+                                    : rpcSession_->ReconcileMembershipChange(req, rsp));
+        GetWorkerTimeCost().Append("Worker to master rpc ReconcileMembershipChange", timer.ElapsedMilliSecond());
         return rc;
     };
     RETURN_IF_NOT_OK(RetryOnError(
@@ -1329,8 +1322,8 @@ Status WorkerLocalMasterOCApi::RollbackSeal(const std::string &objectKey, uint32
     return masterOC_->RollbackSeal(req, rsp);
 }
 
-Status WorkerLocalMasterOCApi::IfNeedTriggerReconciliation(master::ReconciliationQueryPb &req,
-                                                           master::ReconciliationRspPb &rsp)
+Status WorkerLocalMasterOCApi::ReconcileMembershipChange(master::ReconciliationQueryPb &req,
+                                                         master::ReconciliationRspPb &rsp)
 {
     LOG(INFO) << "worker(" << localHostPort_.ToString() << ") performs reconciliation with local master.";
     req.set_hostport(localHostPort_.ToString());

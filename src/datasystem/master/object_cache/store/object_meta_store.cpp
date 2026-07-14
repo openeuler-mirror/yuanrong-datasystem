@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,6 +27,7 @@
 #include <vector>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/cluster/executor/storage_scan_plan_access.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
@@ -727,12 +725,10 @@ Status ObjectMetaStore::GetRangeFromEtcd(const std::string &tablePrefix, const s
 }
 
 Status ObjectMetaStore::GetFromEtcd(const std::string &tablePrefix, const std::string &rocksTable,
-                                    const worker::HashRange &extraRanges,
                                     std::vector<std::pair<std::string, std::string>> &outMetas)
 {
     RETURN_OK_IF_TRUE(!isPersistenceEnabled_);
     RETURN_OK_IF_TRUE(!EtcdEnable());
-    bool isGetAll = extraRanges.empty();
     auto getFunc = [this, &tablePrefix, &rocksTable](const std::string &suffix,
                                                      const std::pair<uint32_t, uint32_t> &range,
                                                      std::vector<std::pair<std::string, std::string>> &metas) {
@@ -740,23 +736,68 @@ Status ObjectMetaStore::GetFromEtcd(const std::string &tablePrefix, const std::s
     };
 
     std::vector<std::pair<std::string, std::string>> metas;
-    if (isGetAll) {
-        worker::HashRange hashRange;
-        GetHashRangeNonBlockEvent::GetInstance().NotifyAll(hashRange);
-        for (const auto &range : hashRange) {
-            RETURN_IF_NOT_OK(getFunc(ETCD_HASH_SUFFIX, range, metas));
-            (void)outMetas.insert(outMetas.end(), metas.begin(), metas.end());
-            metas.clear();
-        }
-    } else {
-        for (const auto &range : extraRanges) {
-            RETURN_IF_NOT_OK(getFunc(ETCD_HASH_SUFFIX, range, metas));
-            (void)outMetas.insert(outMetas.end(), metas.begin(), metas.end());
-            metas.clear();
-        }
+    std::vector<std::pair<uint32_t, uint32_t>> hashRanges;
+    GetHashRangeNonBlockEvent::GetInstance().NotifyAll(hashRanges);
+    for (const auto &range : hashRanges) {
+        RETURN_IF_NOT_OK(getFunc(ETCD_HASH_SUFFIX, range, metas));
+        (void)outMetas.insert(outMetas.end(), metas.begin(), metas.end());
+        metas.clear();
     }
     (void)outMetas.insert(outMetas.end(), metas.begin(), metas.end());
     VLOG(1) << FormatString("Succeed to get all pairs, table %s, size: %ld", tablePrefix, outMetas.size());
+    return Status::OK();
+}
+
+Status ObjectMetaStore::ScanTopologyScope(
+    const cluster::StorageScanPlan &plan, const cluster::IKeyFilter &filter,
+    const std::function<Status(const std::string &, const std::string &)> &visitor)
+{
+    return ScanTopologyScope(plan, filter, TopologyScanTable::OBJECT_META, visitor);
+}
+
+Status ObjectMetaStore::ScanTopologyScope(
+    const cluster::StorageScanPlan &plan, const cluster::IKeyFilter &filter, TopologyScanTable table,
+    const std::function<Status(const std::string &, const std::string &)> &visitor)
+{
+    CHECK_FAIL_RETURN_STATUS(isPersistenceEnabled_ && EtcdEnable(), K_NOT_SUPPORTED,
+                             "topology metadata scan requires ETCD persistence");
+    CHECK_FAIL_RETURN_STATUS(visitor != nullptr, K_INVALID, "topology metadata scan visitor is empty");
+    CHECK_FAIL_RETURN_STATUS(table <= TopologyScanTable::ASYNC_WORKER_OP, K_INVALID,
+                             "unsupported topology metadata scan table");
+    std::vector<cluster::StorageScanSegment> segments;
+    RETURN_IF_NOT_OK(cluster::StorageScanPlanAccess::GetSegments(plan, segments));
+    const char *tablePrefix = ETCD_META_TABLE_PREFIX;
+    const std::string *rocksTable = &META_TABLE;
+    if (table == TopologyScanTable::GLOBAL_CACHE_DELETE) {
+        tablePrefix = ETCD_GLOBAL_CACHE_TABLE_PREFIX;
+        rocksTable = &GLOBAL_CACHE_TABLE;
+    } else if (table == TopologyScanTable::ASYNC_WORKER_OP) {
+        tablePrefix = ETCD_ASYNC_WORKER_OP_TABLE_PREFIX;
+        rocksTable = &ASYNC_WORKER_OP_TABLE;
+    }
+    for (const auto &segment : segments) {
+        std::vector<std::pair<std::string, std::string>> candidates;
+        RETURN_IF_NOT_OK(GetRangeFromEtcd(tablePrefix, *rocksTable, ETCD_HASH_SUFFIX,
+                                          { segment.from, segment.end }, candidates));
+        for (const auto &candidate : candidates) {
+            std::string_view logicalKey(candidate.first);
+            const auto separator = table == TopologyScanTable::GLOBAL_CACHE_DELETE
+                                       ? candidate.first.find_last_of('/')
+                                       : candidate.first.find_first_of('_');
+            if (table != TopologyScanTable::OBJECT_META && separator == std::string::npos) {
+                LOG(WARNING) << "Skip invalid topology metadata composite key";
+                continue;
+            }
+            if (table == TopologyScanTable::GLOBAL_CACHE_DELETE && separator != std::string::npos) {
+                logicalKey = logicalKey.substr(0, separator);
+            } else if (table == TopologyScanTable::ASYNC_WORKER_OP && separator != std::string::npos) {
+                logicalKey = logicalKey.substr(separator + 1);
+            }
+            if (filter.Contains(logicalKey)) {
+                RETURN_IF_NOT_OK(visitor(candidate.first, candidate.second));
+            }
+        }
+    }
     return Status::OK();
 }
 

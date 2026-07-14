@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,6 +24,7 @@
 #include <vector>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/lock_map.h"
@@ -38,12 +36,14 @@
 #include "datasystem/protos/stream_posix.service.rpc.pb.h"
 #include "datasystem/protos/stream_posix.brpc.pb.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/worker/stream_cache/remote_worker_manager.h"
 #include "datasystem/worker/stream_cache/stream_producer.h"
 #include "datasystem/worker/stream_cache/worker_master_sc_api.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace worker {
@@ -185,6 +185,7 @@ private:
 class ClientWorkerSCServiceImpl : public ClientWorkerSCService, public IClientWorkerSCService,
                                   public std::enable_shared_from_this<ClientWorkerSCServiceImpl> {
 public:
+
     /**
      * @brief Construct the rpc service of ClientWorkerSCServiceImpl.
      * @param[in] serverAddr The address of worker.
@@ -433,12 +434,16 @@ public:
 
     /**
      * @brief Allocate shared memory for big element insert
+     * @param[in] serverApi Server stream used to read requests and write responses.
+     * @return K_OK on success; the allocation status otherwise.
      */
     Status AllocBigShmMemory(
         std::shared_ptr<ServerUnaryWriterReader<CreateLobPageRspPb, CreateLobPageReqPb>> serverApi) override;
 
     /**
      * @brief Release big element
+     * @param[in] serverApi Server stream used to read requests and write responses.
+     * @return K_OK on success; the release status otherwise.
      */
     Status ReleaseBigShmMemory(
         std::shared_ptr<ServerUnaryWriterReader<ReleaseLobPageRspPb, ReleaseLobPageReqPb>> serverApi) override;
@@ -454,11 +459,18 @@ public:
 
     /**
      * @brief Setter method for assigning cluster manager
-     * @param[in] cm The pointer to cluster manager
+     * @param[in] cm Borrowed Worker topology dependencies.
      */
-    void SetClusterManager(ClusterManager *cm)
+    void SetTopologyEngine(worker::WorkerTopologyReferences *cm)
     {
-        clusterManager_ = cm;
+        topologyEngine_ = cm;
+    }
+
+    void SetTopologyPlacement(const cluster::PlacementFacade *topologyPlacement,
+                              worker::MetadataRouteOptions routeOptions)
+    {
+        topologyPlacement_ = topologyPlacement;
+        topologyRouteOptions_ = std::move(routeOptions);
     }
 
     /**
@@ -533,6 +545,7 @@ public:
     void RemoveStreamNo(uint64_t streamNo);
 
 private:
+
     /**
      * @brief Get the stream name list.
      * @return The stream name list.
@@ -724,6 +737,14 @@ private:
         size_t streamsSize, size_t doneListSize, size_t errListSize);
 
     /**
+     * @brief Get the primary replica addr
+     * @param[in] srcAddr The source address.
+     * @param[out] destAddr The dest address.
+     * @return Status of this call.
+     */
+    Status GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr);
+
+    /**
      * @brief Retry and redirect
      * @tparam Req Request to master
      * @tparam Rsp Response of master
@@ -738,20 +759,24 @@ private:
                                        std::function<Status(Req &, Rsp &)> fun)
     {
         CHECK_FAIL_RETURN_STATUS(fun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
+        static constexpr int metaMovingRetrySleepMs = 200;
         while (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0) {
             RETURN_IF_NOT_OK(fun(req, rsp));
+            if (rsp.meta_is_moving()) {
+                rsp.Clear();
+                std::this_thread::sleep_for(std::chrono::milliseconds(metaMovingRetrySleepMs));
+                continue;
+            }
             if (rsp.info().redirect_meta_address().empty()) {
                 return Status::OK();
-            } else if (!rsp.meta_is_moving()) {
-                HostPort newMetaAddr;
-                RETURN_IF_NOT_OK(newMetaAddr.ParseString(rsp.info().redirect_meta_address()));
-                LOG(INFO) << "meta has been migrated to the new master[%s]" << newMetaAddr.ToString();
-                RETURN_IF_NOT_OK_APPEND_MSG(workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr, workerMasterApi),
-                                            "hash master get failed, RedirectRetryWhenMetaMoving failed");
             }
-            static const int sleepTimeMs = 200;
+            HostPort newMetaAddr;
+            RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(rsp.info().redirect_meta_address(), newMetaAddr));
+            LOG(INFO) << "meta has been migrated to the new master[%s]" << newMetaAddr.ToString();
+            RETURN_IF_NOT_OK_APPEND_MSG(workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr, workerMasterApi),
+                                        "hash master get failed, RedirectRetryWhenMetaMoving failed");
             rsp.Clear();
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            std::this_thread::sleep_for(std::chrono::milliseconds(metaMovingRetrySleepMs));
         }
         return Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
     }
@@ -769,21 +794,25 @@ private:
                                         std::function<Status(Req &, Rsp &)> fun)
     {
         CHECK_FAIL_RETURN_STATUS(fun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
+        static constexpr int metaMovingRetrySleepMs = 200;
         while (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0) {
             RETURN_IF_NOT_OK(fun(req, rsp));
+            if (rsp.meta_is_moving()) {
+                rsp.Clear();
+                std::this_thread::sleep_for(std::chrono::milliseconds(metaMovingRetrySleepMs));
+                continue;
+            }
             if (rsp.info().empty()) {
                 return Status::OK();
-            } else if (!rsp.meta_is_moving()) {
-                HostPort newMetaAddr;
-                RETURN_IF_NOT_OK(newMetaAddr.ParseString(rsp.info(0).redirect_meta_address()));
-                LOG(INFO) << "meta has been migrated to the new master[%s]" << newMetaAddr.ToString();
-                workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr);
-                CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                                         "hash master get failed, RedirectRetryWhenMetaMoving failed");
             }
-            static const int sleepTimeMs = 200;
+            HostPort newMetaAddr;
+            RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(rsp.info(0).redirect_meta_address(), newMetaAddr));
+            LOG(INFO) << "meta has been migrated to the new master[%s]" << newMetaAddr.ToString();
+            workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(newMetaAddr);
+            CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
+                                     "hash master get failed, RedirectRetryWhenMetaMoving failed");
             rsp.Clear();
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            std::this_thread::sleep_for(std::chrono::milliseconds(metaMovingRetrySleepMs));
         }
         return Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
     }
@@ -853,8 +882,7 @@ private:
      * @param[in] hashRanges The given hash ranges for the testing stream.
      * @return True if the master address for the stream is found and matches with the given address, False otherwise.
      */
-    bool CheckConditionsForStream(const std::string &streamName, const std::string &masterAddr,
-                                  const worker::HashRange &hashRanges);
+    bool CheckConditionsForStream(const std::string &streamName, const std::string &masterAddr);
 
     /**
      * @brief Get all the producers and consumers for a client created on the given stream.
@@ -996,7 +1024,9 @@ private:
     std::unordered_map<std::string, std::shared_ptr<ClientWorkerSCService_Stub>> remotePubStubs_;
     std::atomic<bool> interrupt_;
     std::future<void> autoAck_;
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
+    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
+    worker::MetadataRouteOptions topologyRouteOptions_;
 };
 
 template <>

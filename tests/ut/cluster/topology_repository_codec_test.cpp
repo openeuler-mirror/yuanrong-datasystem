@@ -138,12 +138,12 @@ TEST(TopologyRepositoryCodecTest, EnforcesTaskRangeAndPayloadLimits)
 
 TEST(TopologyRepositoryCodecTest, RejectsTopologyAboveMemberLimit)
 {
-    v3::ClusterTopologyPb topology;
+    ::datasystem::ClusterTopologyPb topology;
     topology.set_schema_version("1");
     for (size_t index = 0; index <= MAX_TOPOLOGY_MEMBERS; ++index) {
         auto &member = (*topology.mutable_members())["127.0.0.1:" + std::to_string(index)];
         member.set_id(std::string(16, 'a'));
-        member.set_state(v3::MembershipPb::INITIAL);
+        member.set_state(::datasystem::MembershipPb::INITIAL);
     }
     std::string encoded;
     ASSERT_TRUE(topology.SerializeToString(&encoded));

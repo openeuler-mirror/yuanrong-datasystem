@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -47,7 +44,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/cluster_event_type.h"
-#include "datasystem/worker/cluster_manager/worker_health_check.h"
+#include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 #include "datasystem/worker/stream_cache/stream_manager.h"
@@ -192,6 +189,11 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
     return Status::OK();
 }
 
+Status ClientWorkerSCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
+{
+    return destAddr.ParseString(srcAddr);
+}
+
 void ClientWorkerSCServiceImpl::ConstructCreateProducerPb(const std::string &streamName,
                                                           const Optional<StreamFields> &streamFields,
                                                           master::CreateProducerReqPb &out) const noexcept
@@ -296,7 +298,7 @@ Status ClientWorkerSCServiceImpl::CreateProducerImpl(const std::string &namespac
     if (firstProducer) {
         LOG(INFO) << FormatString("[%s, S:%s, P:%s] First CreateProducer request sending to master.", LogPrefix(),
                                   namespaceUri, producerId);
-        auto api = workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, clusterManager_);
+        auto api = workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, topologyPlacement_, topologyRouteOptions_);
         CHECK_FAIL_RETURN_STATUS(api != nullptr, K_RUNTIME_ERROR, "Get WorkerMasterApi failed of " + namespaceUri);
         // Only first producer sends CreateProducer request, so use local address as producer id
         Status rc = CreateProducerHandleSend(api, namespaceUri, streamFields);
@@ -478,7 +480,7 @@ Status ClientWorkerSCServiceImpl::CloseProducerImpl(const std::string &producerI
     bool lastProducer = (streamMgr->GetLocalProducerCount() == 1);
     // We only need to inform master of producer close on last local producer
     if (notifyMaster && lastProducer) {
-        auto api = workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_);
+        auto api = workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_);
         if (api != nullptr) {
             std::list<std::string> streamList;
             streamList.emplace_back(streamName);
@@ -589,7 +591,8 @@ Status ClientWorkerSCServiceImpl::SendBatchedCloseProducerReq(std::set<std::stri
             // We only send a CloseProducer Request on last producer close
             VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[S:%s] Sending close producer to master. Attempt: %d",
                                                       streamName, numRetries);
-            auto api = workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_);
+            auto api =
+                workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_);
             if (api != nullptr) {
                 // force close is true
                 std::list<std::string> streamList;
@@ -711,8 +714,9 @@ Status ClientWorkerSCServiceImpl::SubscribeHandleSend(std::shared_ptr<StreamMana
 {
     auto subscribeFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_, api),
-                                         "Getting master api failed. stream name = " + streamName);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_, api),
+            "Getting master api failed. stream name = " + streamName);
         masterAddress = api->Address();
         master::SubscribeReqPb masterReq;
         auto &consumerMetaPb = *masterReq.mutable_consumer_meta();
@@ -920,7 +924,7 @@ Status ClientWorkerSCServiceImpl::CloseConsumerImpl(const std::string &consumerI
             // We don't care about lastAckCursor change when close consumer, so we set it as 0.
             std::shared_ptr<WorkerMasterSCApi> api;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_, api),
+                workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_, api),
                 "Getting master api failed. stream name = " + streamName);
             masterAddr = api->Address();
             master::CloseConsumerReqPb req;
@@ -1194,8 +1198,9 @@ Status ClientWorkerSCServiceImpl::DeleteStreamHandleSend(const std::string &stre
 {
     auto deleteFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(streamName, clusterManager_, api),
-                                         "Getting master api failed. stream name = " + streamName);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_, api),
+            "Getting master api failed. stream name = " + streamName);
         master::DeleteStreamReqPb masterReq;
         masterReq.set_stream_name(streamName);
         masterReq.mutable_src_node_addr()->set_host(localWorkerAddress_.Host());
@@ -1234,7 +1239,7 @@ Status ClientWorkerSCServiceImpl::QueryGlobalProducersNumImpl(const QueryGlobalN
     auto queryFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, clusterManager_, api),
+            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, topologyPlacement_, topologyRouteOptions_, api),
             "Getting master api failed. stream name = " + namespaceUri);
         master::QueryGlobalNumReqPb masterReq;
         masterReq.set_stream_name(namespaceUri);
@@ -1275,7 +1280,7 @@ Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNumImpl(const QueryGlobalN
     auto queryFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, clusterManager_, api),
+            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, topologyPlacement_, topologyRouteOptions_, api),
             "Getting master api failed. stream name = " + namespaceUri);
         master::QueryGlobalNumReqPb masterReq;
         masterReq.set_stream_name(namespaceUri);
@@ -1589,15 +1594,9 @@ Status ClientWorkerSCServiceImpl::SendAllStreamMetadata(
 {
     Status status;
     const std::string &masterAddr = req.master_address();
-    worker::HashRange hashRanges;
-    hashRanges.reserve(req.hash_ranges_size());
-    for (const auto &range : req.hash_ranges()) {
-        hashRanges.emplace_back(range.from(), range.end());
-    }
-
     auto streamNames = GetStreamNameList();
     for (const auto &streamName : streamNames) {
-        if (CheckConditionsForStream(streamName, masterAddr, hashRanges)) {
+        if (CheckConditionsForStream(streamName, masterAddr)) {
             // This stream goes to the requesting master.
             GetStreamMetadataRspPb rsp;
             Status rc = GetStreamMetadata(streamName, &rsp);
@@ -1615,15 +1614,9 @@ Status ClientWorkerSCServiceImpl::GetAllStreamMetadata(const GetMetadataAllStrea
                                                        GetMetadataAllStreamRspPb &rsp)
 {
     const std::string &masterAddr = req.master_address();
-    worker::HashRange hashRanges;
-    hashRanges.reserve(req.hash_ranges_size());
-    for (const auto &range : req.hash_ranges()) {
-        hashRanges.emplace_back(range.from(), range.end());
-    }
-
     auto streamNames = GetStreamNameList();
     for (const auto &streamName : streamNames) {
-        if (CheckConditionsForStream(streamName, masterAddr, hashRanges)) {
+        if (CheckConditionsForStream(streamName, masterAddr)) {
             // This stream goes to the requesting master.
             auto streamMetaPb = rsp.add_stream_meta();
             streamMetaPb->set_stream_name(streamName);
@@ -1635,25 +1628,30 @@ Status ClientWorkerSCServiceImpl::GetAllStreamMetadata(const GetMetadataAllStrea
     return Status::OK();
 }
 
-bool ClientWorkerSCServiceImpl::CheckConditionsForStream(const std::string &streamName, const std::string &masterAddr,
-                                                         const worker::HashRange &hashRanges)
+bool ClientWorkerSCServiceImpl::CheckConditionsForStream(const std::string &streamName,
+                                                         const std::string &masterAddr)
 {
     if (!masterAddr.empty()) {
         HostPort masterAddress;
-        auto rc = clusterManager_->GetMetaAddress(streamName, masterAddress);
+        auto rc = worker::ResolveTopologyOwner(topologyEngine_, streamName, masterAddress);
         if (rc.IsError()) {
             LOG(ERROR) << rc.ToString();
             return false;
         }
         return masterAddress.ToString() == masterAddr;
     }
-    return clusterManager_->IsInRange(hashRanges, streamName);
+    LOG(ERROR) << "Missing master address while querying stream metadata for " << streamName;
+    return false;
 }
 
 Status ClientWorkerSCServiceImpl::CheckConnection(const std::string &streamName)
 {
     auto func = [&] {
-        Status status = clusterManager_->CheckConnection(streamName);
+        HostPort owner;
+        Status status = worker::ResolveTopologyOwner(topologyEngine_, streamName, owner);
+        if (status.IsOk()) {
+            status = worker::CheckTopologyMemberConnection(topologyEngine_, owner);
+        }
         if (status.IsError()) {
             std::stringstream ss;
             ss << "Worker disconnected from master, error msg: " << status.ToString();

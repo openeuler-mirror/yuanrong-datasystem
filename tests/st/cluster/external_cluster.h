@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -382,6 +379,26 @@ public:
     Status StartWorkerAndWaitReady(const std::initializer_list<uint32_t> indexes,
                                    const std::unordered_map<uint32_t, std::string> &workerFlags,
                                    int maxWaitTimeSec = 20, const std::string &defaultWorkerFlags = "");
+
+private:
+
+    /**
+     * @brief Append cache, RPC, credential and per-worker flags to a Worker launch command.
+     * @param[in] index Worker index.
+     * @param[in] rootDir Worker runtime root directory.
+     * @param[in] gFlag Additional caller-provided flags.
+     * @param[in,out] cmd Worker launch command.
+     */
+    void AppendWorkerRuntimeFlags(int index, const std::string &rootDir, const std::string &gFlag, std::string &cmd);
+
+    /**
+     * @brief Append coordinator, ETCD, master and OBS flags to a Worker launch command.
+     * @param[in] index Worker index.
+     * @param[in] address Default master address.
+     * @param[in,out] cmd Worker launch command.
+     * @return Status of the call.
+     */
+    Status AppendWorkerBackendFlags(int index, const HostPort &address, std::string &cmd);
 
 protected:
     Status StartEtcdNode(int index);

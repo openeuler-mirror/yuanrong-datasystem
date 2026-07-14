@@ -23,19 +23,18 @@
   - `2026-05-08`
 - Related context docs:
   - `.repo_context/modules/runtime/etcd-metadata/README.md`
-  - `.repo_context/modules/runtime/hash-ring/README.md`
-  - `.repo_context/modules/runtime/cluster-management.md`
+  - `.repo_context/modules/runtime/topology/README.md`
 - Related playbooks:
   - `.repo_context/playbooks/features/runtime/etcd-metadata/implementation.md`
 
 ## Purpose
 
 - Why this design document exists:
-  - capture the ETCD-compatible storage layer that cluster-manager and hash-ring depend on for membership, routing state, watch events, and failure detection.
+  - capture the ETCD-compatible storage layer that runtime topology depends on for membership, routing state, watch events, and failure detection.
 - What problem this module solves:
   - stable project-local access to ETCD v3 APIs plus an optional in-process compatible backend.
 - Who or what depends on this module:
-  - `ClusterManager`, `HashRing`, object-cache metadata managers, stream-cache metadata managers, replica/slot recovery paths, CLI tools, and ETCD failure tests.
+  - `TopologyEngine`, object-cache metadata managers, stream-cache metadata managers, replica/slot recovery paths, CLI tools, and ETCD failure tests.
 
 ## Goals
 
@@ -48,7 +47,7 @@
 
 ## Non-Goals
 
-- It does not define the hash-ring state machine or worker lifecycle policy.
+- It does not define the topology state machine or worker lifecycle policy.
 - It does not shard or redesign higher-level cluster metadata.
 - It does not make Metastore a full persistent ETCD replacement in this layer.
 - It does not expose every vendored ETCD service through local wrappers; for example, no local lock wrapper was verified.
@@ -144,7 +143,7 @@ Failure-sensitive steps:
 3. Put the cluster-table worker row with the lease.
 4. Start stream keepalive; renewal interval is derived from node timeout and capped.
 5. On failure, retry lease recreation and consult backend writability.
-6. If backend appears writable while local keepalive failed, synthesize DELETE and rely on cluster-manager/hash-ring deletion path.
+6. If backend appears writable while local keepalive failed, synthesize DELETE and rely on topology deletion handling.
 7. Kill local process if failure duration exceeds policy and `auto_del_dead_node=true`.
 
 Failure-sensitive steps:
@@ -246,7 +245,7 @@ Failure-sensitive steps:
   - ring/state-machine mutations often CAS full serialized values.
 - Known expensive operations:
   - prefix scans during watch compensation;
-  - large `HashRingPb` CAS read/serialize/write loops;
+  - large `ClusterTopologyPb` CAS read/serialize/write loops;
   - many concurrent lease keepalive streams;
   - repeated transaction conflicts under scale-out/scale-in.
 - Scaling assumptions:
@@ -256,10 +255,10 @@ Failure-sensitive steps:
 ## Compatibility And Invariants
 
 - ETCD proto files are a third-party wire-contract surface; changes require compatibility review.
-- `ETCD_CLUSTER_TABLE` key format and lease binding are cluster-manager contracts.
-- `ETCD_RING_PREFIX` is the hash-ring contract.
+- `ETCD_CLUSTER_TABLE` key format and lease binding are topology membership contracts.
+- `TopologyKeyHelper::TopologyKey` is the canonical topology key contract.
 - Watch event handlers should tolerate duplicate or synthesized events.
-- `KeepAliveValue` parse/string format is a compatibility surface for cluster-manager.
+- `WorkerServiceInfo` parse/string/proto format is a compatibility surface for topology membership.
 - Metastore behavior should stay close enough to ETCD for APIs used by the runtime, especially version, revision, lease, watch, and transaction semantics.
 
 ## Build, Test, And Verification
@@ -276,7 +275,7 @@ Failure-sensitive steps:
   - `tests/st/common/kvstore/grpc_session_test.cpp`
   - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
-  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
+  - `tests/ut/cluster/coordination_backend_contract_test.cpp`
 - Manual verification:
   - inspect key prefixes after `CreateTable`;
   - confirm cluster-table Put carries a nonzero lease;

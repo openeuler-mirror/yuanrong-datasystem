@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -88,9 +85,8 @@ public:
         LOG(INFO) << "The etcd address is:" << FLAGS_etcd_address << std::endl;
         db_ = std::make_unique<EtcdStore>(etcdAddress);
         if ((db_ != nullptr) && (db_->Init().IsOk())) {
-            db_->DropTable(ETCD_RING_PREFIX);
             // We don't check rc here. If table to drop does not exist, it's fine.
-            (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
+            (void)RegisterTopologyTables(*db_);
             (void)db_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX,
                                    std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_HASH_SUFFIX);
             (void)db_->CreateTable(std::string(ETCD_GLOBAL_CACHE_TABLE_PREFIX) + ETCD_WORKER_SUFFIX,
@@ -116,12 +112,12 @@ public:
     void SaveHashToken()
     {
         std::string value;
-        db_->Get(ETCD_RING_PREFIX, "", value);
-        HashRingPb ring;
+        db_->Get(GetTopologyTableName(), "", value);
+        ClusterTopologyPb ring;
         ring.ParseFromString(value);
-        for (const auto &kv : ring.workers()) {
+        for (const auto &kv : ring.members()) {
             const auto &workerId = kv.first;
-            for (auto token : kv.second.hash_tokens()) {
+            for (auto token : kv.second.tokens()) {
                 tokenMap_.insert({ token, workerId });
             }
         }
@@ -130,11 +126,11 @@ public:
     void GetHashOnWorker(size_t workerNum)
     {
         std::string value;
-        db_->Get(ETCD_RING_PREFIX, "", value);
-        HashRingPb ring;
+        db_->Get(GetTopologyTableName(), "", value);
+        ClusterTopologyPb ring;
         ring.ParseFromString(value);
         for (size_t i = 0; i < workerNum; ++i) {
-            auto tokens = ring.workers().at(workerAddress_[i]).hash_tokens();
+            auto tokens = ring.members().at(workerAddress_[i]).tokens();
             workerHashValue_.emplace_back(*tokens.begin() - 1);
         }
         ASSERT_EQ(workerHashValue_.size(), workerNum);
@@ -143,23 +139,23 @@ public:
     bool CheckScaleDownFinished(size_t workerNum)
     {
         std::string value;
-        db_->Get(ETCD_RING_PREFIX, "", value);
-        HashRingPb ring;
+        db_->Get(GetTopologyTableName(), "", value);
+        ClusterTopologyPb ring;
         ring.ParseFromString(value);
-        return ring.workers().size() == workerNum;
+        return ring.members().size() == workerNum;
     }
 
     bool CheckWorkerFinished(size_t workerNum)
     {
         std::string value;
-        db_->Get(ETCD_RING_PREFIX, "", value);
-        HashRingPb ring;
+        db_->Get(GetTopologyTableName(), "", value);
+        ClusterTopologyPb ring;
         ring.ParseFromString(value);
-        if (ring.workers().size() != workerNum) {  // worker num is 3;
+        if (ring.members().size() != workerNum) {  // worker num is 3;
             return false;
         }
-        for (const auto &worker : ring.workers()) {
-            if (worker.second.state() != WorkerPb::ACTIVE) {
+        for (const auto &worker : ring.members()) {
+            if (worker.second.state() != MembershipPb::ACTIVE) {
                 return false;
             }
         }

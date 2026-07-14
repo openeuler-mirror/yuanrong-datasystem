@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -17,9 +14,10 @@
 /**
  * Description:
  */
-#include <string>
+#include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 #include <gtest/gtest.h>
 #include <tbb/concurrent_hash_map.h>
@@ -33,7 +31,7 @@
 #include "datasystem/context/context.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "oc_client_common.h"
 
 namespace datasystem {
@@ -261,6 +259,20 @@ protected:
 
     std::unique_ptr<EtcdStore> db_;
     std::unordered_map<HostPort, std::string> uuidMap_;
+
+    std::string GetWorkerLocationId(int workerIndex)
+    {
+        HostPort workerAddress;
+        cluster_->GetWorkerAddr(workerIndex, workerAddress);
+        return workerAddress.ToString();
+    }
+
+    void AssertLocations(std::vector<std::string> actual, std::vector<std::string> expected)
+    {
+        std::sort(actual.begin(), actual.end());
+        std::sort(expected.begin(), expected.end());
+        ASSERT_EQ(actual, expected);
+    }
 };
 
 TEST_F(ObjectClientGetMetaTest, GetLocations)
@@ -294,10 +306,9 @@ TEST_F(ObjectClientGetMetaTest, GetLocations)
     for (auto i = 0; i < testCount; i++) {
         ASSERT_EQ(objMetas[i].objSize, minObjSize + i);
         if (i % factor) {
-            std::vector<std::string> result{ GetWorkerUuid(1, uuidMap_), GetWorkerUuid(0, uuidMap_) };
-            ASSERT_EQ(objMetas[i].locations, result);
+            AssertLocations(objMetas[i].locations, { GetWorkerLocationId(1), GetWorkerLocationId(0) });
         } else {
-            ASSERT_EQ(objMetas[i].locations, std::vector<std::string>{ GetWorkerUuid(0, uuidMap_) });
+            AssertLocations(objMetas[i].locations, { GetWorkerLocationId(0) });
         }
     }
 }
@@ -332,13 +343,13 @@ TEST_F(ObjectClientGetMetaTest, GetFromDifferentTenant)
     DS_ASSERT_OK(client0->GetObjMetaInfo("user1", { objectKey1 }, objMetas));
     ASSERT_EQ(objMetas.size(), 1);
     ASSERT_EQ(objMetas[0].objSize, size1);
-    ASSERT_EQ(objMetas[0].locations, std::vector<std::string>{ GetWorkerUuid(0, uuidMap_) });
+    AssertLocations(objMetas[0].locations, { GetWorkerLocationId(0) });
     // get object of user2
     objMetas.clear();
     DS_ASSERT_OK(client0->GetObjMetaInfo("user2", { objectKey2 }, objMetas));
     ASSERT_EQ(objMetas.size(), 1);
     ASSERT_EQ(objMetas[0].objSize, size2);
-    ASSERT_EQ(objMetas[0].locations, std::vector<std::string>{ GetWorkerUuid(0, uuidMap_) });
+    AssertLocations(objMetas[0].locations, { GetWorkerLocationId(0) });
     // get object with wrong tenant
     objMetas.clear();
     DS_ASSERT_OK(client0->GetObjMetaInfo("user1", { objectKey2 }, objMetas));
@@ -362,7 +373,8 @@ protected:
     {
         opts.numEtcd = 1;
         opts.numWorkers = 2;
-        opts.workerGflagParams = " -shared_memory_size_mb=100 -authorization_enable=false ";
+        opts.workerGflagParams = " -shared_memory_size_mb=100 -authorization_enable=false -node_timeout_s=1 "
+                                  "-node_dead_timeout_s=2 ";
         opts.systemAccessKey = "";
         opts.systemSecretKey = "";
     }
@@ -370,41 +382,27 @@ protected:
     void SetUp() override
     {
         ObjectClientGetMetaTest::SetUp();
-        GetHashOnWorker();
-        SetWorkerHashInjection();
+        SetWorkerHashInjection({ 0, 1 });
     }
 
-    void GetHashOnWorker()
+    std::string ObjectKeyHashTo(uint32_t workerIndex)
     {
-        std::string value;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
-        ASSERT_TRUE(ring.ParseFromString(value));
-        workerHashValues_.clear();
-        workerHashValues_.resize(2);
-        for (size_t i = 0; i < 2; ++i) {
-            HostPort workerAddress;
-            DS_ASSERT_OK(cluster_->GetWorkerAddr(i, workerAddress));
-            auto worker = ring.workers().find(workerAddress.ToString());
-            ASSERT_NE(worker, ring.workers().end());
-            ASSERT_GE(static_cast<size_t>(worker->second.hash_tokens_size()), 1);
-            workerHashValues_[i] = worker->second.hash_tokens(0) - 1;
-        }
+        return GetObjectKeyHashToWorker(db_.get(), workerIndex);
     }
 
-    void SetWorkerHashInjection()
+    Status CheckWorkerRemoved(uint32_t workerIndex)
     {
-        for (size_t i = 0; i < 2; ++i) {
-            DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i, "MurmurHash3", "return()"));
-        }
+        std::string topologyBytes;
+        RETURN_IF_NOT_OK(db_->Get(GetTopologyTableName(), "", topologyBytes));
+        ::datasystem::ClusterTopologyPb topology;
+        CHECK_FAIL_RETURN_STATUS(topology.ParseFromString(topologyBytes), K_RUNTIME_ERROR,
+                                 "Failed to parse cluster topology");
+        HostPort workerAddress;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+        const bool finalized = topology.members().count(workerAddress.ToString()) == 0 && !topology.has_active_batch();
+        CHECK_FAIL_RETURN_STATUS(finalized, K_NOT_READY, "Scale-in topology batch has not finalized");
+        return Status::OK();
     }
-
-    std::string ObjectKeyHashTo(size_t workerIndex) const
-    {
-        return "a_key_hash_to_" + std::to_string(workerHashValues_[workerIndex]);
-    }
-
-    std::vector<uint32_t> workerHashValues_;
 };
 
 TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetLocations)
@@ -438,7 +436,10 @@ TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetFailed)
     std::string data0(size0, 'A');
     std::string data1(size1, 'B');
     std::vector<std::string> failedObjectKeys;
-    DS_ASSERT_OK(client0->GIncreaseRef({ objectKey0, objectKey1 }, failedObjectKeys));
+    DS_ASSERT_OK(client0->GIncreaseRef({ objectKey0 }, failedObjectKeys));
+    ASSERT_TRUE(failedObjectKeys.empty()) << VectorToString(failedObjectKeys);
+    DS_ASSERT_OK(client1->GIncreaseRef({ objectKey1 }, failedObjectKeys));
+    ASSERT_TRUE(failedObjectKeys.empty()) << VectorToString(failedObjectKeys);
     DS_ASSERT_OK(
         client0->Put(objectKey0, reinterpret_cast<const uint8_t *>(data0.data()), data0.size(), CreateParam{}));
     DS_ASSERT_OK(
@@ -453,6 +454,7 @@ TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetFailed)
     DS_ASSERT_OK(client1->GetObjMetaInfo("", { objectKey0, objectKey1 }, objMetas));
     ASSERT_EQ(objMetas.at(0).objSize, size0);
     ASSERT_EQ(objMetas.at(1).objSize, size1);
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, "WorkerRemoteMasterOCApi.GetObjectLocations"));
     // the only one master (worker 0) failed via remote call from worker 1.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerRemoteMasterOCApi.GetObjectLocations",
                                            "1*return(K_RUNTIME_ERROR)"));
@@ -462,6 +464,7 @@ TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetFailed)
     ASSERT_EQ(objMetas.size(), 0);
     // one master (worker 0) down, another (worker 1 local) success
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this]() { return CheckWorkerRemoved(0); }, 10, K_OK));
     objMetas.clear();
     DS_ASSERT_OK(client1->GetObjMetaInfo("", { objectKey1, objectKey0 }, objMetas));
     ASSERT_EQ(objMetas.at(0).objSize, size1);

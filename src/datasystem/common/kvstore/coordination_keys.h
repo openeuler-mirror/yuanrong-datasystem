@@ -20,11 +20,26 @@
 #ifndef DATASYSTEM_COMMON_KVSTORE_COORDINATION_KEYS_H
 #define DATASYSTEM_COMMON_KVSTORE_COORDINATION_KEYS_H
 
+#include <string>
+
 namespace datasystem {
-static constexpr char COORDINATION_HASHRING_TABLE[] = "/datasystem/ring";
 static constexpr char COORDINATION_CLUSTER_TABLE[] = "datasystem/cluster";  // Keep without leading '/'.
 static constexpr char COORDINATION_MASTER_ADDRESS_TABLE[] = "/datasystem";
 static constexpr char COORDINATION_MASTER_ADDRESS_KEY[] = "master_address";
+
+inline bool IsCoordinationKeyUnderPrefix(const std::string &key, const std::string &prefix)
+{
+    return key == prefix || key.rfind(prefix + "/", 0) == 0;
+}
+
+inline std::string RemoveCoordinationTablePrefix(const std::string &key, const std::string &prefix)
+{
+    const std::string prefixWithSlash = prefix + "/";
+    if (key.rfind(prefixWithSlash, 0) == 0) {
+        return key.substr(prefixWithSlash.size());
+    }
+    return key == prefix ? "" : key;
+}
 }  // namespace datasystem
 
 #endif  // DATASYSTEM_COMMON_KVSTORE_COORDINATION_KEYS_H

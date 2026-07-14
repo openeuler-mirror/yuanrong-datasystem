@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -37,8 +34,8 @@
 #include "datasystem/master/stream_cache/store/rocks_stream_meta_store.h"
 #include "datasystem/master/stream_cache/topology_manager.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
@@ -47,7 +44,7 @@ class StreamMetadata : public std::enable_shared_from_this<StreamMetadata> {
 public:
     StreamMetadata(std::string streamName, const StreamFields &streamFields, RocksStreamMetaStore *streamMetaStore,
                    std::shared_ptr<AkSkManager> akSkManager, std::shared_ptr<RpcSessionManager> rpcSessionManager,
-                   ClusterManager *clusterManager, SCNotifyWorkerManager *notifyWorkerManager);
+                   worker::WorkerTopologyReferences *topologyEngine, SCNotifyWorkerManager *notifyWorkerManager);
 
     ~StreamMetadata();
 
@@ -158,6 +155,7 @@ public:
     Status SubIncreaseNodeImpl(const ConsumerMetaPb &consumerMeta, const HostPort &subWorkerAddress,
                                bool &saveToRocksdb, bool &sendToSrcNode, std::vector<HostPort> &notifyNodeSet,
                                bool isRecon);
+
     /**
      * @brief Decrease a sub node for a stream.
      * @param[in] consumerMeta The consumer meta info which will be transformed into a sub node.
@@ -400,6 +398,7 @@ public:
     Status AutoCleanupIfNeeded(const HostPort &srcHost);
 
 private:
+
     /**
      * @brief Updates the stream fields.
      * @param[in] streamFields New stream fields to update on.
@@ -508,7 +507,7 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
     RetainDataState retainData_;
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     SCNotifyWorkerManager *notifyWorkerManager_{ nullptr };
     std::shared_ptr<SCStreamMetrics> scStreamMetrics_{ nullptr };
 };

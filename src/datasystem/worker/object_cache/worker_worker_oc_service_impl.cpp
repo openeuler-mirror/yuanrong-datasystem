@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,6 +20,8 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+
+#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
@@ -53,6 +52,8 @@
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+#include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 
 DS_DECLARE_string(worker_address);
 DS_DECLARE_int32(oc_worker_worker_direct_port);
@@ -74,6 +75,18 @@ bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
     return req.has_urma_info() && req.object_key().rfind(URMA_WARMUP_KEY_PREFIX, 0) == 0 && !req.try_lock()
            && req.version() == 0 && req.read_offset() == 0 && req.read_size() == URMA_WARMUP_OBJECT_SIZE
            && req.data_size() == URMA_WARMUP_OBJECT_SIZE && req.comm_id().empty();
+}
+
+bool IsCoordinationBackendAvailable(EtcdStore *etcdStore, cluster::ICoordinationBackend *coordinationBackend)
+{
+    if (coordinationBackend != nullptr) {
+        return !coordinationBackend->IsKeepAliveTimeout();
+    }
+    if (etcdStore != nullptr) {
+        return !etcdStore->IsKeepAliveTimeout();
+    }
+    LOG(WARNING) << "Coordination backend is unavailable: both EtcdStore and CoordinationBackend are not initialized.";
+    return false;
 }
 }  // namespace
 
@@ -152,12 +165,14 @@ void LogBatchGetObjectRemoteFinish(const LatencyTraceConfig &config, const Batch
 
 WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, std::shared_ptr<AkSkManager> akSkManager,
-    EtcdStore *etcdStore, topology::ICoordinationBackend *coordinationBackend, ClusterManager *clusterManager)
+    EtcdStore *etcdStore, cluster::ICoordinationBackend *coordinationBackend,
+    worker::WorkerTopologyReferences *topologyEngine, BackendObservationProvider backendObservationProvider)
     : ocClientWorkerSvc_(std::move(clientSvc)),
       akSkManager_(std::move(akSkManager)),
       etcdStore_(etcdStore),
       coordinationBackend_(coordinationBackend),
-      clusterManager_(clusterManager)
+      topologyEngine_(topologyEngine),
+      backendObservationProvider_(std::move(backendObservationProvider))
 {
 }
 
@@ -797,15 +812,7 @@ Status WorkerWorkerOCServiceImpl::CheckCoordinatorState(const CheckCoordinatorSt
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    bool isCoordinationAvailable = false;
-    if (etcdStore_ != nullptr) {
-        isCoordinationAvailable = etcdStore_->Writable().IsOk();
-    } else if (coordinationBackend_ != nullptr) {
-        isCoordinationAvailable = !coordinationBackend_->IsKeepAliveTimeout();
-    } else {
-        LOG(WARNING)
-            << "Coordination backend is unavailable: both EtcdStore and CoordinationBackend are not initialized.";
-    }
+    bool isCoordinationAvailable = IsCoordinationBackendAvailable(etcdStore_, coordinationBackend_);
     rsp.set_available(isCoordinationAvailable);
     LOG_IF(INFO, isCoordinationAvailable) << "Coordination backend is available";
     return Status::OK();
@@ -815,18 +822,12 @@ Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &re
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    bool isCoordinationAvailable = false;
-    if (etcdStore_ != nullptr) {
-        isCoordinationAvailable = etcdStore_->Writable().IsOk();
-    } else if (coordinationBackend_ != nullptr) {
-        isCoordinationAvailable = !coordinationBackend_->IsKeepAliveTimeout();
-    } else {
-        LOG(WARNING)
-            << "Coordination backend is unavailable: both EtcdStore and CoordinationBackend are not initialized.";
-    }
+    bool isCoordinationAvailable = IsCoordinationBackendAvailable(etcdStore_, coordinationBackend_);
     rsp.set_coordinator_available(isCoordinationAvailable);
-    RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
-    *rsp.mutable_hash_ring() = clusterManager_->GetHashRing()->GetHashRingPb();
+    RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(backendObservationProvider_), K_NOT_READY,
+                             "Control-backend observation provider is not initialized.");
+    RETURN_IF_NOT_OK(FillGetClusterStateRspPbFromControlBackendObservation(backendObservationProvider_(), rsp));
     LOG_IF(INFO, isCoordinationAvailable) << "Coordination backend is available";
     return Status::OK();
 }
@@ -870,11 +871,11 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
     auto rc = CheckTransportConnectionStable(remoteConnectionId, req.urma_instance_id());
     if (rc.IsError() && rc.GetCode() == K_URMA_NEED_CONNECT) {
         std::string remoteWorkerId = "UNKNOWN";
-        if (!isClientUrmaRequest && clusterManager_ != nullptr) {
-            auto workerId = clusterManager_->GetWorkerIdByWorkerAddr(requestAddressStr);
-            if (!workerId.empty()) {
-                remoteWorkerId = workerId;
-            }
+        cluster::MemberEndpoint remoteEndpoint;
+        if (!isClientUrmaRequest && topologyEngine_ != nullptr && topologyEngine_->membership != nullptr
+            && topologyEngine_->membership->ResolveByAddress(requestAddressStr, remoteEndpoint).IsOk()
+            && !remoteEndpoint.identity.id.empty()) {
+            remoteWorkerId = remoteEndpoint.identity.id;
         }
         LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
             << "[URMA_NEED_CONNECT] CheckConnectionStable failed, remoteAddress=" << requestAddressStr

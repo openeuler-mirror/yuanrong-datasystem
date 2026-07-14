@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,23 +25,24 @@
 #include <unordered_set>
 #include <vector>
 
+#include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/hash_ring/hash_ring_allocator.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_delete_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_global_reference_impl.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
 class WorkerOcServiceClearDataFlow {
 public:
+
     /**
      * @brief Failed object ids grouped by clear-data workflow stage.
      */
@@ -72,7 +70,7 @@ public:
      * @param[in] gRefProc Global-ref processor used to rebuild master refs.
      * @param[in] deleteProc Delete processor used to clear local object data.
      * @param[in] metadataRecoveryManager Metadata recovery manager used before local cleanup.
-     * @param[in] clusterManager Cluster manager used for metadata routing and connectivity checks.
+     * @param[in] topologyEngine Cluster manager used for metadata routing and connectivity checks.
      * @param[in] localAddress Current worker address string.
      */
     WorkerOcServiceClearDataFlow(
@@ -81,7 +79,7 @@ public:
         std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager,
         std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc,
         std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc, MetaDataRecoveryManager *metadataRecoveryManager,
-        ClusterManager *clusterManager, std::string localAddress);
+        worker::WorkerTopologyReferences *topologyEngine, std::string localAddress);
 
     /**
      * @brief Stop clear-data workflow and unsubscribe local clear-data event handlers.
@@ -94,8 +92,7 @@ public:
      * @param[in] clearRanges Range markers that remain in-progress until the workflow fully finishes.
      * @param[in] retryTimes Current retry round number.
      */
-    void SubmitClearDataAsync(const ClearDataReqPb &req, const worker::HashRange &clearRanges,
-                              uint64_t retryTimes = 0);
+    void SubmitClearDataAsync(const ClearDataReqPb &req, uint64_t retryTimes = 0);
 
     /**
      * @brief Execute the full clear-data workflow synchronously.
@@ -110,7 +107,33 @@ public:
      */
     void ClearObject(const std::vector<std::string> &objectKeys);
 
+    /**
+     * @brief Materialize one failure scope and submit owned asynchronous cleanup work.
+     * @param[in] action Validated Failure participants and task identity.
+     * @param[in] filter Final object-key predicate for the task scope.
+     * @param[in] businessOperationId Stable idempotency identity for this phase.
+     * @param[in] deadline Absolute monotonic deadline for synchronous materialization.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK after owned work is accepted; an error otherwise.
+     */
+    Status SubmitTopologyFailureCleanup(
+        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+        const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+        const cluster::CancellationToken &cancellation);
+
 private:
+    struct OwnedTopologyClearRequest {
+        cluster::TopologyPhaseAction action;
+        std::string businessOperationId;
+        std::vector<std::string> objectIds;
+    };
+
+    /**
+     * @brief Submit callback-independent topology cleanup input to the existing retry workflow.
+     * @param[in] request Owned cleanup facts that remain valid after the topology callback returns.
+     */
+    void SubmitOwnedTopologyCleanup(OwnedTopologyClearRequest request);
+
     /**
      * @brief Submit retry execution for failed workflow stages.
      * @param[in] req Original clear-data request.
@@ -118,8 +141,8 @@ private:
      * @param[in] retryTimes Current retry round number.
      * @param[in] retryIds Failed object ids grouped by workflow stage.
      */
-    void SubmitRetryClearDataAsync(const ClearDataReqPb &req, const worker::HashRange &clearRanges,
-                                   uint64_t retryTimes, const ClearDataRetryIds &retryIds);
+    void SubmitRetryClearDataAsync(const ClearDataReqPb &req, uint64_t retryTimes,
+                                   const ClearDataRetryIds &retryIds);
 
     /**
      * @brief Schedule the next retry round for failed workflow stages.
@@ -128,8 +151,8 @@ private:
      * @param[in] retryIds Failed object ids grouped by workflow stage.
      * @param[in] retryTimes Next retry round number.
      */
-    void RetryClearDataAsync(const ClearDataReqPb &req, const worker::HashRange &clearRanges,
-                             const ClearDataRetryIds &retryIds, uint64_t retryTimes);
+    void RetryClearDataAsync(const ClearDataReqPb &req, const ClearDataRetryIds &retryIds,
+                             uint64_t retryTimes);
 
     /**
      * @brief Select local objects matched by ranges or worker ids in the request.
@@ -238,7 +261,7 @@ private:
     std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc_{ nullptr };
     std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc_{ nullptr };
     MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     std::string localAddress_;
     std::shared_ptr<ThreadPool> clearDataThreadPool_{ nullptr };
     std::shared_ptr<std::atomic_bool> exitFlag_{ nullptr };

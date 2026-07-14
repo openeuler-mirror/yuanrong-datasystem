@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -536,8 +533,8 @@ client::HashRingRefresher::FetchRpc ObjectClientImpl::BuildRoutingFetchRpc(
 {
     auto hostIdResolutionAttempted = std::make_shared<bool>(false);
     return [this, router, initialWorker, initialWorkerIsLocal, hostIdResolutionAttempted](
-               const HostPort &workerAddr, uint64_t currentVersion, HashRingPb &ring, std::string &masterAddress,
-               uint64_t &newVersion, bool &changed,
+               const HostPort &workerAddr, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
+               std::string &masterAddress, uint64_t &newVersion, bool &changed,
                std::unordered_map<std::string, std::string> &hostIdMap) -> Status {
         GetHashRingRspPb response;
         RETURN_IF_NOT_OK(FetchRoutingHashRing(workerAddr, currentVersion, response));
@@ -1237,24 +1234,32 @@ bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, 
                                            const std::shared_ptr<IClientWorkerApi> &candidateWorkerApi,
                                            const std::shared_ptr<client::ListenWorker> &candidateListenWorker)
 {
-    std::lock_guard<std::mutex> lock(switchNodeMutex_);
-    if (!switchInProgress_ || switchGeneration_ != switchGeneration || currentNode_ != current
-        || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
-        return false;
+    std::shared_ptr<client::ListenWorker> retiredLocalListenWorker;
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (!switchInProgress_ || switchGeneration_ != switchGeneration || currentNode_ != current
+            || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
+            return false;
+        }
+        workerApi_[next] = candidateWorkerApi;
+        listenWorker_[next] = candidateListenWorker;
+        currentNode_ = next;
+        if (mmapManager_ != nullptr) {
+            mmapManager_->CleanInvalidMmapTable();
+        }
+        // Stop the LOCAL_WORKER listener only when standby-side rediscovery can take over;
+        // otherwise it is still the only recovery path.
+        if (serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()
+            && listenWorker_[LOCAL_WORKER] != nullptr) {
+            retiredLocalListenWorker = listenWorker_[LOCAL_WORKER];
+        }
+        MarkWorkerAvailableLocked();
     }
-    workerApi_[next] = candidateWorkerApi;
-    listenWorker_[next] = candidateListenWorker;
-    currentNode_ = next;
-    if (mmapManager_ != nullptr) {
-        mmapManager_->CleanInvalidMmapTable();
+    if (retiredLocalListenWorker != nullptr) {
+        retiredLocalListenWorker->StopListenWorker(false);
+        retiredLocalListenWorker->JoinListenWorker();
+        LOG_IF_ERROR(retiredLocalListenWorker->NotifyClientRemovable(), "[Switch] Notify old local client removable");
     }
-    // Stop the LOCAL_WORKER listener only when standby-side rediscovery can take over;
-    // otherwise it is still the only recovery path.
-    if (serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()
-        && listenWorker_[LOCAL_WORKER] != nullptr) {
-        listenWorker_[LOCAL_WORKER]->StopListenWorker(false);
-    }
-    MarkWorkerAvailableLocked();
     return true;
 }
 
@@ -4085,6 +4090,15 @@ Status ObjectClientImpl::GIncreaseRef(const std::vector<std::string> &objectKeys
                                  "The remoteClientId contains illegal char(s).");
         auto rc = workerApi_[LOCAL_WORKER]->GIncreaseWorkerRef(objectKeys, failedObjectKeys, remoteClientId);
         VLOG(1) << "[Ref] Global ref count GIncreaseRef end" << VectorToString(objectKeys);
+        if (!failedObjectKeys.empty()) {
+            std::unordered_set<std::string> requestedObjectKeys;
+            requestedObjectKeys.reserve(objectKeys.size());
+            (void)requestedObjectKeys.insert(objectKeys.begin(), objectKeys.end());
+            std::unordered_set<std::string> failedObjectKeySet;
+            failedObjectKeySet.reserve(failedObjectKeys.size());
+            (void)failedObjectKeySet.insert(failedObjectKeys.begin(), failedObjectKeys.end());
+            return requestedObjectKeys.size() > failedObjectKeySet.size() ? Status::OK() : rc;
+        }
         return rc;
     }
 

@@ -30,7 +30,6 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -38,7 +37,6 @@
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/kv_client.h"
-#include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 DS_DECLARE_bool(use_brpc);
@@ -186,17 +184,17 @@ protected:
     {
         RETURN_RUNTIME_ERROR_IF_NULL(etcd_);
         std::string value;
-        RETURN_IF_NOT_OK(etcd_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
+        RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
+        ClusterTopologyPb ring;
         CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
         HostPort targetWorker;
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
-        CHECK_FAIL_RETURN_STATUS(ring.workers().find(targetWorker.ToString()) != ring.workers().end(), K_NOT_FOUND,
+        CHECK_FAIL_RETURN_STATUS(ring.members().find(targetWorker.ToString()) != ring.members().end(), K_NOT_FOUND,
                                  "Target worker is absent from hash ring");
 
         std::map<uint32_t, std::string> tokenWorkers;
-        for (const auto &worker : ring.workers()) {
-            for (const auto token : worker.second.hash_tokens()) {
+        for (const auto &worker : ring.members()) {
+            for (const auto token : worker.second.tokens()) {
                 tokenWorkers.emplace(token, worker.first);
             }
         }

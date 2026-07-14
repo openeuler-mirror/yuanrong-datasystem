@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -307,7 +304,8 @@ void ObjectClientTest::PutGetDeleteTest(int64_t size)
 
     std::vector<std::string> failedObjectKeys;
     DS_ASSERT_OK(client->GIncreaseRef({ objectKey }, failedObjectKeys));
-    DS_ASSERT_OK(client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), size, CreateParam{}));
+    DS_ASSERT_OK(client->Put(objectKey, reinterpret_cast<uint8_t *>(const_cast<char *>(data.data())), size,
+                             CreateParam{}));
     std::vector<Optional<Buffer>> buffers;
     DS_ASSERT_OK(client->Get({ objectKey }, 0, buffers));
     ASSERT_TRUE(NotExistsNone(buffers));
@@ -1833,6 +1831,7 @@ TEST_F(ObjectClientTest, TestInitRetryWithServiceDiscoveryRegisterFailure)
     std::string etcdAddress = cluster_->GetEtcdAddrs();
     ServiceDiscoveryOptions sdOpts;
     sdOpts.etcdAddress = etcdAddress;
+    sdOpts.clusterName = GetTestClusterName();
     sdOpts.hostIdEnvName = "object_client_sd_host_id_env_0";
     sdOpts.affinityPolicy = ServiceAffinityPolicy::REQUIRED_SAME_NODE;
     auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
@@ -1859,6 +1858,7 @@ TEST_F(ObjectClientTest, TestInitNoRetryOnNonRetryableServiceDiscoveryRegisterFa
     std::string etcdAddress = cluster_->GetEtcdAddrs();
     ServiceDiscoveryOptions sdOpts;
     sdOpts.etcdAddress = etcdAddress;
+    sdOpts.clusterName = GetTestClusterName();
     sdOpts.hostIdEnvName = "object_client_sd_host_id_env_0";
     sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
     auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
@@ -1882,6 +1882,7 @@ TEST_F(ObjectClientTest, TestInitServiceDiscoveryInvalidConnectTimeout)
     std::string etcdAddress = cluster_->GetEtcdAddrs();
     ServiceDiscoveryOptions sdOpts;
     sdOpts.etcdAddress = etcdAddress;
+    sdOpts.clusterName = GetTestClusterName();
     sdOpts.hostIdEnvName = "object_client_sd_host_id_env_0";
     sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
     auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);

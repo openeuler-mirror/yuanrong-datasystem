@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,12 +30,13 @@
 #include "datasystem/protos/share_memory.brpc.pb.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace worker {
 class WorkerServiceImpl : public WorkerService, public IWorkerService, public Callable {
 public:
+
     /**
      * @brief Create a new WorkerServiceImpl object.
      * @param[in] serverAddr The address of worker.
@@ -114,6 +112,7 @@ public:
 
     /**
      * @brief Set uuid of this node.
+     * @param[in] uuid Existing Worker-facing identity value.
      */
     void SetWorkerUuid(const std::string &uuid)
     {
@@ -121,20 +120,30 @@ public:
     }
 
     /**
-     * @brief Setter method for assigning cluster manager
-     * @param[in] cm The pointer to cluster manager
+     * @brief Assign borrowed Worker topology dependencies.
+     * @param[in] cm Borrowed Worker topology dependencies.
      */
-    void SetClusterManager(ClusterManager *cm)
+    void SetTopologyEngine(worker::WorkerTopologyReferences *cm)
     {
-        clusterManager_ = cm;
+        topologyEngine_ = cm;
     }
 
 private:
+    Status ValidateRegisterClientRequest(const RegisterClientReqPb &req, std::string &tenantId) const;
+    Status ConsumeRegisterClientFd(const RegisterClientReqPb &req);
+    Status AddRegisteringClient(const RegisterClientReqPb &req, const ClientKey &clientId,
+                                const std::string &tenantId, const CompatibilityVersion &compatibilityVersion,
+                                uint32_t &lockId, uint32_t &pipelineQueueId, bool &supportMultiShmRefCount);
+    void PopulateRegisterClientResponse(RegisterClientRspPb &rsp, const ClientKey &clientId,
+                                        const std::string &tenantId, uint32_t lockId, uint32_t pipelineQueueId,
+                                        bool supportMultiShmRefCount, int fd, uint64_t mmapSize, ptrdiff_t offset,
+                                        const ShmKey &id);
+
     /**
      * @brief Get the standby worker address.
      * @return The address pf standby worker, return "" if standby worker not found.
      */
-    const std::string GetStandbyWorker();
+    const std::string GetLocalStandbyWorker();
 
     /**
      * @brief Close expired UnixSockFd in cache.
@@ -148,14 +157,14 @@ private:
     template <typename Protobuf>
     void SetAvailableWorkers(Protobuf &rsp)
     {
-        if (clusterManager_ == nullptr) {
-            LOG_FIRST_N(ERROR, 1) << "[Heartbeat] etcd manager is null, cannot get available workers";
+        if (topologyEngine_ == nullptr) {
+            LOG_FIRST_N(ERROR, 1) << "[Heartbeat] Cluster topology dependencies are unavailable";
             return;
         }
 
         constexpr uint32_t num = 3;
         std::vector<std::string> activeWorkers;
-        Status status = clusterManager_->GetActiveWorkers(num, activeWorkers);
+        Status status = worker::GetActiveTopologyPeers(topologyEngine_, num, activeWorkers);
         if (status.IsError()) {
             const int logDuration = 30;
             LOG_EVERY_T(ERROR, logDuration) << "Get available workers failed: " << status.ToString();
@@ -175,7 +184,7 @@ private:
     uint32_t shmWorkerPort_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::string workerUuid_;
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_timed_mutex mutex_;                           // for unboundedUnixSockFds_
     std::unordered_map<int, uint64_t> unboundedUnixSockFds_;  // This is the fd that is not bound to the client.

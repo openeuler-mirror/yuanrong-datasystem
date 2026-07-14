@@ -35,6 +35,7 @@ message HostPortPb {
 message RedirectMetaInfo {
   string redirect_meta_address = 1;
   repeated string change_meta_ids = 2;
+  uint64 topology_version = 3;
 }
 
 message RemoteHostSegmentPb {

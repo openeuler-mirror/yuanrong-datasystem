@@ -29,7 +29,7 @@
 #include "datasystem/client/routing/state_filter.h"
 #include "datasystem/client/routing/worker_router.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "ut/common.h"
 
 namespace datasystem {
@@ -47,17 +47,17 @@ public:
 
 class RoutingTest : public CommonTest {
 protected:
-    std::shared_ptr<HashRingPb> BuildRing()
+    std::shared_ptr<::datasystem::ClusterTopologyPb> BuildRing()
     {
-        auto ring = std::make_shared<HashRingPb>();
-        auto &wA = (*ring->mutable_workers())["127.0.0.1:1000"];
-        wA.set_state(WorkerPb_StatePb_ACTIVE);
-        wA.add_hash_tokens(100u);
-        wA.add_hash_tokens(200u);
-        auto &wB = (*ring->mutable_workers())["127.0.0.1:2000"];
-        wB.set_state(WorkerPb_StatePb_ACTIVE);
-        wB.add_hash_tokens(300u);
-        wB.add_hash_tokens(400u);
+        auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+        auto &wA = (*ring->mutable_members())["127.0.0.1:1000"];
+        wA.set_state(::datasystem::MembershipPb::ACTIVE);
+        wA.add_tokens(100u);
+        wA.add_tokens(200u);
+        auto &wB = (*ring->mutable_members())["127.0.0.1:2000"];
+        wB.set_state(::datasystem::MembershipPb::ACTIVE);
+        wB.add_tokens(300u);
+        wB.add_tokens(400u);
         return ring;
     }
 
@@ -71,7 +71,8 @@ protected:
 
     std::shared_ptr<client::WorkerRouter> CreateRouter(const std::string &hostId = "host-a")
     {
-        auto router = std::make_shared<client::WorkerRouter>(hostId, std::vector<std::shared_ptr<client::IWorkerFilter>>{});
+        auto router = std::make_shared<client::WorkerRouter>(
+            hostId, std::vector<std::shared_ptr<client::IWorkerFilter>>{});
         return router;
     }
 
@@ -227,7 +228,7 @@ TEST_F(RoutingTest, TestStateFilterRejectsLeavingWorker)
     DS_ASSERT_OK(router->SelectWorker(key, client::SelectStrategy::HASH_RING_AFFINITY, original));
 
     auto updatedRing = BuildRing();
-    (*updatedRing->mutable_workers())[original.ToString()].set_state(WorkerPb_StatePb_LEAVING);
+    (*updatedRing->mutable_members())[original.ToString()].set_state(::datasystem::MembershipPb::LEAVING);
     router->UpdateHashRing(updatedRing, BuildHostIdMap());
 
     HostPort selected;

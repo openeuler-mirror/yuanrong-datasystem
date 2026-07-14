@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,6 +28,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -45,7 +43,7 @@ struct MetadataManagerHolderParam {
     EtcdStore *etcdStore;
     std::shared_ptr<PersistenceApi> persistenceApi;
     HostPort masterAddress;
-    ClusterManager *clusterManager;
+    worker::WorkerTopologyReferences *topologyEngine;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerService;
     object_cache::WorkerWorkerOCServiceImpl *workerWorkerService;
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager;
@@ -85,7 +83,7 @@ public:
 
     Status GetDeviceOcManager(std::shared_ptr<master::MasterDevOcManager> &devOcManager);
 
-    Status InitLocalMetadataForStart(bool isRestart, const ClusterInfo &clusterInfo);
+    Status InitLocalMetadataForStart(bool isRestart);
 
     template <typename Func>
     Status ApplyForAllMetaManager(Func &&func)
@@ -110,7 +108,7 @@ protected:
     EtcdStore *etcdStore_ = nullptr;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     HostPort masterAddress_;
-    ClusterManager *clusterManager_ = nullptr;
+    worker::WorkerTopologyReferences *topologyEngine_ = nullptr;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerService_ = nullptr;
     object_cache::WorkerWorkerOCServiceImpl *workerWorkerService_ = nullptr;
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_;

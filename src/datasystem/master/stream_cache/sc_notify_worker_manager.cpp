@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +17,7 @@
 
 #include "datasystem/master/stream_cache/sc_notify_worker_manager.h"
 
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/trace.h"
@@ -33,7 +31,6 @@
 #include "datasystem/protos/master_stream.pb.h"
 #include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/stream/stream_config.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 
 namespace datasystem {
 namespace master {
@@ -42,11 +39,11 @@ const size_t DELETE_STREAM_THREAD_NUM = 8;
 SCNotifyWorkerManager::SCNotifyWorkerManager(std::shared_ptr<RocksStreamMetaStore> streamMetaStore,
                                              std::shared_ptr<AkSkManager> akSkManager,
                                              std::shared_ptr<RpcSessionManager> rpcSessionManager,
-                                             ClusterManager *cm, SCMetadataManager *scMetadataManager)
+                                             worker::WorkerTopologyReferences *cm, SCMetadataManager *scMetadataManager)
     : streamMetaStore_(std::move(streamMetaStore)),
       akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
-      clusterManager_(cm),
+      topologyEngine_(cm),
       scMetadataManager_(scMetadataManager)
 {
 }
@@ -597,10 +594,10 @@ Status SCNotifyWorkerManager::CheckWorkerStatus(const std::string &workerAddr)
     // If any error is given, change the rc to be K_WORKER_ABNORMAL
     HostPort workerHostPort;
     workerHostPort.ParseString(workerAddr);
-    if (clusterManager_ == nullptr) {
+    if (topologyEngine_ == nullptr) {
         RETURN_STATUS(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
     }
-    return clusterManager_->CheckConnection(workerHostPort);
+    return worker::CheckTopologyMemberConnection(topologyEngine_, workerHostPort);
 }
 
 Status SCNotifyWorkerManager::RecoverNotification()

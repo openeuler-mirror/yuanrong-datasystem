@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -36,12 +33,13 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/cluster/executor/storage_scan_plan.h"
+#include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/master/object_cache/device/master_dev_oc_manager.h"
 #include "datasystem/object/object_enum.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
@@ -61,7 +59,7 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -72,7 +70,10 @@ namespace master {
 enum MULTI_SET_STATE { IDLE = 0, PENDING = 1 };
 struct SubscribeMeta {
     SubscribeMeta(std::string reqId, std::list<std::string> objects, std::string address)
-        : reqId_(std::move(reqId)), objects_(std::move(objects)), address_(std::move(address)), timer_(nullptr)
+        : reqId_(std::move(reqId)),
+          objects_(std::move(objects)),
+          address_(std::move(address)),
+          timer_(nullptr)
     {
     }
     // request id
@@ -222,6 +223,7 @@ using TbbRemoteClientIdRefTable = tbb::concurrent_hash_map<ImmutableString, std:
 
 class OCMetadataManager : public MetadataRedirectHelper, public std::enable_shared_from_this<OCMetadataManager> {
 public:
+
     /**
      * @brief Construct a new OCMetadataManager object
      * @param[in] akSkManager Used to do AK/SK authenticate.
@@ -229,12 +231,14 @@ public:
      * @param[in] etcdStore pointer to EtcdStore owned by WorkerOcServer
      * @param[in] persistApi Provides calls to a persistence service through a cloud client.
      * @param[in] masterAddress The address of master.
-     * @param[in] cm ETCD cluster manager for persistence.
+     * @param[in] cm Borrowed Worker topology dependencies.
      * @param[in] workerId The worker id.
+     * @param[in] newNode Whether the local Worker is joining for the first time.
      */
     OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore, EtcdStore *etcdStore,
                       std::shared_ptr<PersistenceApi> persistApi = nullptr, const std::string &masterAddress = "",
-                      ClusterManager *cm = nullptr, const std::string &workerId = "", bool newNode = false);
+                      worker::WorkerTopologyReferences *cm = nullptr, const std::string &workerId = "",
+                      bool newNode = false);
 
     ~OCMetadataManager();
 
@@ -249,11 +253,6 @@ public:
      * @return Status of the call.
      */
     void InitSubscribeEvent();
-
-    /**
-     * @brief Register task action subscribers with the shared TaskActionRegistry.
-     */
-    void RegisterTaskActions();
 
     struct BinaryFormatParamsStruct {
         uint32_t writeMode;
@@ -411,6 +410,7 @@ public:
      * @param[in] objectKeys The object keys.
      * @param[in] address Request address.
      * @param[in] type write type.
+     * @param[in] version Metadata version.
      * @param[out] rsp The rpc response protobuf.
      * @return Status of the call
      */
@@ -421,8 +421,17 @@ public:
      * @brief Create multi meta.
      * @param[in] req The rpc request protobuf.
      * @param[out] rsp The rpc response protobuf.
+     * @return Status of the call.
      */
     Status CreateMultiMeta(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp);
+
+    /**
+     * @brief Get the Primary Replica Addr object
+     * @param[in] masterAddr masterAddr
+     * @param[out] primaryAddr primary replica addr
+     * @return Status of the call;
+     */
+    Status GetPrimaryReplicaAddr(const std::string &masterAddr, HostPort &primaryAddr);
 
     /**
      * @brief Remove object meta info of server in cache and rocksdb.
@@ -553,13 +562,16 @@ public:
         const std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> &serverApi);
 
     /**
-     * @brief Check whether the remoteClientId requires redirection.
+     * @brief Evaluate whether remoteClientId requires redirection or must wait for ScaleOut.
      * @param[in] remoteClientId The remote client id.
-     * @param[out] needRedirect Whether redirect or not.
-     * @param[out] newAddr The new redirection address.
-     * @return result of the redirection.
+     * @param[in] checkRedirect Whether the caller requested topology redirection.
+     * @param[out] needRedirect Whether the request belongs to another committed owner.
+     * @param[out] isMoving Whether ScaleOut migration must finish before the request proceeds.
+     * @param[out] newAddr The committed owner address.
+     * @return Status of the topology decision.
      */
-    bool RedirectClientIdRef(const std::string &remoteClientId, bool needRedirect, std::string &newAddr);
+    Status EvaluateClientIdRefRedirect(const std::string &remoteClientId, bool checkRedirect, bool &needRedirect,
+                                       bool &isMoving, std::string &newAddr);
 
     /**
      * @brief Check whether the objectKey requires redirection.
@@ -822,6 +834,7 @@ public:
     void GDecreaseRefImpl(const GDecreaseReqPb &req, GDecreaseRspPb &resp,
                           const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi,
                           bool needReleaseRpc);
+
     /**
      * @brief Send request to master to decrease the global reference count.
      * @param[in] req The rpc request protobuf.
@@ -1015,24 +1028,53 @@ public:
     bool MetaIsFound(const std::string &objectKey) override;
 
     /**
-     * @brief clear data without meta.
-     * @param[in] range The hash range of objectKey to clear data.
-     * @param[in] workerAddr The worker Addr.
-     * @param[in] halfCompletedRanges Objects in this range need to be reconciliated before cleanup.
-     * @return Status of the call.
-     */
-    Status ClearDataWithoutMeta(const worker::HashRange &range, const std::string &workerAddr,
-                                const worker::HashRange &halfCompletedRanges);
-
-    /**
      * @brief Clear device metadata for scaled-in worker nodes if current node is the metadata master
      * @details Retrieves the metadata master address from etcd and compares with current worker address.
-     *          If this node is the metadata master, it triggers cleanup of client metadata associated
-     *          with the removed worker nodes.
+     * If this node is the metadata master, it triggers cleanup of client metadata associated
+     * with the removed worker nodes.
      * @param[in] removeNodes List of worker node addresses that have been scaled in and need cleanup
      * @return Status of the call.
      */
     Status ClearDevClientMetaForScaledInWorker(const std::vector<std::string> &removeNodes);
+
+    /**
+     * @brief Run one scoped best-effort recovery attempt for a confirmed failed member.
+     * @param[in] action Validated failure participants and topology fence facts.
+     * @param[in] filter Final object-key predicate for this failure task.
+     * @param[in] plan Opaque candidate scan plan for the same task scope.
+     * @param[in] businessOperationId Stable idempotency identity for this business step.
+     * @param[in] deadline Absolute monotonic callback deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK on success; the first recovery error otherwise.
+     */
+    Status RecoverTopologyFailure(
+        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+        const cluster::StorageScanPlan &plan, const std::string &businessOperationId,
+        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
+
+    /**
+     * @brief Remove residual object metadata for one confirmed failed member.
+     * @param[in] action Validated failure participants and topology fence facts.
+     * @param[in] businessOperationId Stable idempotency identity for this business step.
+     * @param[in] deadline Absolute monotonic callback deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK on success; the cleanup error otherwise.
+     */
+    Status CleanupTopologyFailedMember(
+        const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
+        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
+
+    /**
+     * @brief Release device-client metadata for one confirmed failed member.
+     * @param[in] action Validated failure participants and topology fence facts.
+     * @param[in] businessOperationId Stable idempotency identity for this business step.
+     * @param[in] deadline Absolute monotonic callback deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK on success; the cleanup error otherwise.
+     */
+    Status CleanupTopologyDeviceClientMeta(
+        const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
+        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Shutdown the oc metadata manager module.
@@ -1060,12 +1102,11 @@ public:
      * @param[in] extraRanges The hash range of faulty worker.
      * @return Status of the result.
      */
-    Status RecoverDataOfFaultyWorker(const worker::HashRange &extraRanges);
 
     /**
      * @brief Get the usage of the queue for asynchronously writing ETCD data.
      * @note currentSize: the number of tasks in the current queue.
-     *       totalLimit:  the maximum queue capacity
+     * totalLimit:  the maximum queue capacity
      * @return The Usage: "currentSize/totalLimit/workerL2CacheQueueUsag"
      */
     std::string GetETCDAsyncQueueUsage();
@@ -1075,7 +1116,6 @@ public:
      * @param[in] extraRanges The hash range of faulty worker.
      * @return Status of the result.
      */
-    Status RecoverAsyncTask(const worker::HashRange &extraRanges);
 
     /**
      * @brief Check meta table is empty;
@@ -1093,13 +1133,13 @@ public:
 
     std::array<MetaTableShard, kMetaTableShardCount> metaShards_;
 
-    size_t GetShardIndex(const std::string &key) const
+    size_t GetShardIndex(const std::string& key) const
     {
         return std::hash<std::string>{}(key) % kMetaTableShardCount;
     }
 
     template <typename Func>
-    void WithAllShardsLocked(Func &&func)
+    void WithAllShardsLocked(Func&& func)
     {
         size_t lockedCount = 0;
         try {
@@ -1128,14 +1168,14 @@ public:
     size_t GetMetaTableSize() const
     {
         size_t total = 0;
-        for (const auto &shard : metaShards_) {
+        for (const auto& shard : metaShards_) {
             total += shard.table.size();
         }
         return total;
     }
 
     // Public helper for friend classes to access sharded meta table.
-    MetaTableShard &GetShardFor(const std::string &key)
+    MetaTableShard& GetShardFor(const std::string& key)
     {
         return metaShards_[GetShardIndex(key)];
     }
@@ -1186,8 +1226,8 @@ public:
     Status CreateDeviceMeta(const ObjectMetaPb &newMeta, const std::string &address);
 
     /**
-     * @brief Get worker id.
-     * @return std::string the worker id.
+     * @brief Get rocksworker id.
+     * @return std::string the rocksworker id.
      */
     std::string GetWorkerId()
     {
@@ -1229,9 +1269,8 @@ public:
      * @param[in] accessor A tbb accessor lock for id2location table.
      * @param[out] primaryCopy Reselected primary copy.
      * @return Status of the call.
-     *
      * @note Caller must already hold `metaShards_[GetShardIndex(objectKey)].mutex` (shared lock).
-     *       This function does not acquire the shard mutex internally.
+     * This function does not acquire the shard mutex internally.
      */
     Status ReselectPrimaryCopy(const std::string &objectKey, const std::unordered_set<std::string> &excludedAddr,
                                TbbMetaTable::accessor &accessor, std::string &primaryCopy);
@@ -1259,6 +1298,7 @@ public:
     Status LivenessCheck();
 
 protected:
+
     /**
      * @brief Recovery object locations
      * @param[in] objLocMap The map record object and locations.
@@ -1277,6 +1317,8 @@ protected:
         bool isFromRocksdb, std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
 
 private:
+    using PrimaryChangeMap = std::unordered_map<std::string, std::unordered_set<std::string>>;
+
     friend class MasterOCServiceImpl;
     friend class OCNotifyWorkerManager;
     friend class OCGlobalCacheDeleteManager;
@@ -1324,6 +1366,7 @@ private:
      */
     Status DoBinaryCacheInvalidationUnlocked(const std::string &objectKey, ObjectMeta &prevMeta,
                                              const ChangedMeta &changedMeta);
+
     /**
      * @brief Create meta entry for the first-time create meta rpc.
      * @param[in] newMeta Metadata of object.
@@ -1338,7 +1381,6 @@ private:
 
     /**
      * @brief Persist first-time meta to the in-memory table and rocksdb.
-     *
      * Builds the meta cache from newMeta, writes it to the accessor, serializes and persists to rocksdb, and releases
      * the accessor on success. On failure the accessor entry is erased and the error is returned.
      * @param[in] newMeta Metadata of object.
@@ -1353,7 +1395,6 @@ private:
 
     /**
      * @brief Maintain nested reference dependencies for a freshly created object.
-     *
      * Increases the nested ref count for the created object, then for each nested key either increases the local ref
      * count (when it belongs to this master) or notifies the owning master via the source worker.
      * @param[in] objectKey The created object key.
@@ -1421,8 +1462,7 @@ private:
     Status HandleLoadMeta(
         std::vector<std::pair<std::string, std::string>> &metas,
         std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
-        const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap,
-        bool &isFromRocksdb, const worker::HashRange &extraRanges);
+        bool &isFromRocksdb);
 
     /**
      * @brief Load meta into the cache from the object meta table.
@@ -1432,7 +1472,27 @@ private:
      * @param[in] extraRanges Load the data of specified hash ranges if not empty.
      * @return Status of the call.
      */
-    Status LoadMeta(bool isFromRocksdb, const worker::HashRange &extraRanges = {});
+    Status LoadMeta(bool isFromRocksdb);
+
+    /**
+     * @brief Recover task-scoped object metadata records and replace a failed primary.
+     * @param[in] action Failure callback facts, including the failed member and destination members.
+     * @param[in] filter Opaque task-scoped key filter.
+     * @param[in] plan Opaque storage scan plan valid for this callback invocation.
+     * @return Status of the best-effort recovery pass.
+     */
+    Status RecoverTopologyObjectMetadata(const cluster::TopologyPhaseAction &action,
+                                         const cluster::IKeyFilter &filter,
+                                         const cluster::StorageScanPlan &plan);
+
+    /**
+     * @brief Recover task-scoped global-delete and async-worker operation records.
+     * @param[in] filter Opaque task-scoped key filter.
+     * @param[in] plan Opaque storage scan plan valid for this callback invocation.
+     * @return Status of the best-effort auxiliary recovery pass.
+     */
+    Status RecoverTopologyAuxiliaryMetadata(const cluster::IKeyFilter &filter,
+                                            const cluster::StorageScanPlan &plan);
 
     /**
      * @brief SendChangePrimaryCopy
@@ -1557,6 +1617,18 @@ private:
     void GiveUpPrimaryLocation(const RemoveMetaReqPb &request, const std::string &address, RemoveMetaRspPb &response);
 
     /**
+     * @brief Process one object while its current primary gives up ownership.
+     * @param[in] objectKey Object key being processed.
+     * @param[in] address Current primary address.
+     * @param[out] response Remove-meta response being accumulated.
+     * @param[out] workerForChangePrimaryIds Replacement primary candidates grouped by worker.
+     * @param[in] topologyOperation Whether a fenced topology callback initiated the transition.
+     */
+    void ProcessGiveUpPrimaryObject(const std::string &objectKey, const std::string &address,
+                                    RemoveMetaRspPb &response, PrimaryChangeMap &workerForChangePrimaryIds,
+                                    bool topologyOperation);
+
+    /**
      * @brief ChangePrimaryCopy
      * @param[in] primaryAddr Need to change primary addr.
      * @param[in] objectKey object key.
@@ -1600,13 +1672,13 @@ private:
     /**
      * @brief An recursive function for BFS to search dead objects.
      * Using the example in oc_nested_manager.h:
-     *  1.parentId : ObjA end of life, childId ObjB,ObjC,ObjD refCount decrease 1 and get zero count ids {ObjB}.
-     *  2.check if zero count ids ({ObjB}) from previous step are end of life, if true then next step.
-     *  3.set all dead id as parentId. parentId : ObjB, childId ObjC refCount decrease 1 and get zero count ids {ObjC}.
-     *  4.check if zero count ids ({ObjC}) from previous step are end of life, if true then next step.
-     *  5.set all dead id as parentId. parentId : ObjC, childId ObjD refCount decrease 1 and get zero count ids {ObjD}.
-     *  6.check if zero count ids ({ObjD}) from previous step are end of life, if true then next step.
-     *  7.set all dead id as parentId. parentId : ObjC, childId empty, end of BFS and get final vector {ObjB,ObjC,ObjD}.
+     * 1.parentId : ObjA end of life, childId ObjB,ObjC,ObjD refCount decrease 1 and get zero count ids {ObjB}.
+     * 2.check if zero count ids ({ObjB}) from previous step are end of life, if true then next step.
+     * 3.set all dead id as parentId. parentId : ObjB, childId ObjC refCount decrease 1 and get zero count ids {ObjC}.
+     * 4.check if zero count ids ({ObjC}) from previous step are end of life, if true then next step.
+     * 5.set all dead id as parentId. parentId : ObjC, childId ObjD refCount decrease 1 and get zero count ids {ObjD}.
+     * 6.check if zero count ids ({ObjD}) from previous step are end of life, if true then next step.
+     * 7.set all dead id as parentId. parentId : ObjC, childId empty, end of BFS and get final vector {ObjB,ObjC,ObjD}.
      * @param[in] beginDeadObject The parent obj in nested relationship which can be evicted.
      * @param[out] finalDeadObjects All objects that can be evicted in dataSystem.
      * @param[out] toBeNotifiedNestedRefs All nested refs of the objects that belong to other masters
@@ -1796,12 +1868,11 @@ private:
      * @param[in] tablePrefix ETCD table prefix.
      * @param[in] rocksTable Need write rocksdb table.
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
-     * @param[in] extraRanges Load the data of specified hash ranges if not empty.
      * @param[out] outMetas The output metas in table.
      * @return Status of the call.
      */
     Status CheckRocksdbStatusAndLoadL2Table(const std::string &tablePrefix, const std::string &rocksTable,
-                                            bool isFromRocksdb, const worker::HashRange &extraRanges,
+                                            bool isFromRocksdb,
                                             std::vector<std::pair<std::string, std::string>> &outMetas);
 
     /**
@@ -1811,7 +1882,7 @@ private:
 
     bool IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std::string &address);
 
-    std::set<std::string> GetValidWorkersInHashRing();
+    std::set<std::string> GetValidTopologyWorkers();
 
     /**
      * @brief Check if the object is binary.

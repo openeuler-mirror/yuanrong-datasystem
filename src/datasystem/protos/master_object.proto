@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -60,7 +57,8 @@ message CreateMetaRspPb {
   RedirectMetaInfo info = 2;
   bool meta_is_moving = 4;
   repeated uint32 latency_phase_us = 20;
-  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
+  // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
+  uint32 latency_tick_dropped_count = 21;
 }
 
 message CreateMultiMetaReqPb {
@@ -181,7 +179,8 @@ message QueryMetaRspPb {
   repeated uint64 deleting_versions = 6;
   repeated string not_exist_ids_is_deleting = 7;
   repeated uint32 latency_phase_us = 20;
-  uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
+  // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
+  uint32 latency_tick_dropped_count = 21;
 }
 
 message RemoveMetaReqPb {
@@ -205,6 +204,9 @@ message RemoveMetaReqPb {
   // It is more reasonable to use "map" here. However, since the order after "map" serialization is uncertain,
   // it is not applicable in scenarios where ak/sk authentication is used, so currently only "repeated" can be used.
   repeated ObjKeyWithVersionPb id_with_version = 7;
+  // Non-empty only for a fenced topology callback. It permits the callback's own metadata transition while ordinary
+  // mutations remain rejected during ScaleIn drain.
+  string topology_operation_id = 8;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -312,7 +314,8 @@ message UpdateMetaRspPb {
     RedirectMetaInfo info = 2;
     bool meta_is_moving = 3;
     repeated uint32 latency_phase_us = 20;
-    uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
+    // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
+    uint32 latency_tick_dropped_count = 21;
 }
 
 message GIncreaseReqPb  {
@@ -537,6 +540,11 @@ message MigrateMetadataReqPb {
   repeated NpuEventsForMigrationPb npu_events_metas = 8;
   // for hccl relation graph
   repeated HcclRelationshipPb hccl_relationship = 9;
+
+  uint64 topology_version = 10;
+  uint64 batch_epoch = 11;
+  bytes source_member_id = 12;
+  bytes target_member_id = 13;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -790,7 +798,7 @@ service MasterOCService {
   rpc RollbackSeal(RollbackSealReqPb) returns (RollbackSealRspPb) {}
   rpc GIncNestedRef(GIncNestedRefReqPb) returns (GIncNestedRefRspPb) {}
   rpc GDecNestedRef(GDecNestedRefReqPb) returns (GDecNestedRefRspPb) {}
-  rpc IfNeedTriggerReconciliation(ReconciliationQueryPb) returns (ReconciliationRspPb) {
+  rpc ReconcileMembershipChange(ReconciliationQueryPb) returns (ReconciliationRspPb) {
     option (datasystem.unary_socket_option) = true;
   }
   rpc MigrateMetadata(MigrateMetadataReqPb) returns (MigrateMetadataRspPb) {}

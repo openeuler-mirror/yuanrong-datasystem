@@ -14,8 +14,7 @@
   - `src/datasystem/common/kvstore/metastore`
 - Related module docs:
   - `.repo_context/modules/runtime/etcd-metadata/README.md`
-  - `.repo_context/modules/runtime/hash-ring/README.md`
-  - `.repo_context/modules/runtime/cluster-management.md`
+  - `.repo_context/modules/runtime/topology/README.md`
 - Related design docs:
   - `.repo_context/modules/runtime/etcd-metadata/design.md`
 - Related tests or validation entrypoints:
@@ -23,14 +22,14 @@
   - `tests/st/common/kvstore/grpc_session_test.cpp`
   - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
-  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
+  - `tests/ut/cluster/coordination_backend_contract_test.cpp`
 - Last verified against source:
   - `2026-05-08`
 
 ## Purpose
 
 - Why this playbook exists:
-  - ETCD metadata changes can affect worker liveness, cluster membership, hash-ring routing, metadata durability, and scale behavior.
+  - ETCD metadata changes can affect worker liveness, cluster membership, topology routing, metadata durability, and scale behavior.
 - What change class it standardizes:
   - changes to ETCD proto usage, `EtcdStore`, `GrpcSession`, CAS/transaction behavior, watch handling, keepalive, auth/TLS, or Metastore.
 - What risks it is meant to reduce:
@@ -43,9 +42,9 @@
   - modifying `src/datasystem/common/kvstore/metastore/*`;
   - changing ETCD proto build targets or generated API usage;
   - changing `ETCD_*` constants;
-  - changing cluster-manager or hash-ring behavior that relies on watch, keepalive, or CAS semantics.
+  - changing topology behavior that relies on watch, keepalive, or CAS semantics.
 - Do not use when:
-  - changing only hash-ring token allocation without ETCD access changes; use the hash-ring playbook.
+  - changing only topology routing or planning without ETCD access changes; use the topology playbook.
 - Escalate to design-first review when:
   - changing key prefixes or persisted table layout;
   - changing lease, keepalive, or local worker kill policy;
@@ -58,7 +57,7 @@
 - Required context to read first:
   - `.repo_context/modules/runtime/etcd-metadata/README.md`
   - `.repo_context/modules/runtime/etcd-metadata/design.md`
-  - `.repo_context/modules/runtime/hash-ring/README.md`
+  - `.repo_context/modules/runtime/topology/README.md`
 - Required source files to inspect first:
   - `etcd_store.cpp`
   - `etcd_watch.cpp`
@@ -99,7 +98,7 @@
 ## Implementation Plan
 
 1. Classify the change as proto/build, KV operation, CAS, watch, keepalive, auth/TLS, health, election, or Metastore.
-2. Identify direct runtime consumers, especially cluster-manager and hash-ring.
+2. Identify direct runtime consumers, especially topology.
 3. Preserve existing table prefix and lease invariants unless the change is an explicit migration.
 4. If changing CAS or watch behavior, reason about concurrent scale-up, scale-down, worker restart, and ETCD restart.
 5. If changing Metastore, verify both external ETCD and Metastore tests or document the intentional difference.
@@ -133,7 +132,7 @@
   - `tests/st/common/kvstore/grpc_session_test.cpp`
   - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
-  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
+  - `tests/ut/cluster/coordination_backend_contract_test.cpp`
 - Scenario checks:
   - CAS conflict on same key;
   - watch stream failure and compensation;
@@ -147,7 +146,7 @@
 - [ ] persisted key layout is unchanged or migration is explicit
 - [ ] CAS conflict behavior is acceptable under scale/failure fanout
 - [ ] watch handlers remain safe for fake or duplicate events
-- [ ] keepalive state transitions preserve cluster-manager expectations
+- [ ] keepalive state transitions preserve topology membership expectations
 - [ ] Metastore and external ETCD behavior were compared for affected APIs
 - [ ] context docs were updated if behavior changed
 

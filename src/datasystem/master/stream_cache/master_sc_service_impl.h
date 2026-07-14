@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,7 +30,7 @@
 #include "datasystem/protos/master_stream.service.rpc.pb.h"
 #include "datasystem/protos/master_stream.brpc.pb.h"
 #include "datasystem/stream/stream_config.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 class MetadataManagerHolder;
@@ -174,11 +171,11 @@ public:
 
     /**
      * @brief Setter function to assign the cluster manager back pointer.
-     * @param[in] clusterManager The cluster manager pointer to assign
+     * @param[in] topologyEngine Borrowed Worker topology dependencies.
      */
-    void SetClusterManager(ClusterManager *clusterManager)
+    void SetTopologyEngine(worker::WorkerTopologyReferences *topologyEngine)
     {
-        clusterManager_ = clusterManager;
+        topologyEngine_ = topologyEngine;
     }
 
     /**
@@ -190,6 +187,7 @@ public:
     Status MigrateSCMetadata(const MigrateSCMetadataReqPb &req, MigrateSCMetadataRspPb &rsp) override;
 
 protected:
+
     /**
      * @brief Get the current worker id.
      * @return std::string The worker id.
@@ -197,7 +195,7 @@ protected:
     std::string GetWorkerId();
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
     MetadataManagerHolder *metadataManagerHolder_;
 };

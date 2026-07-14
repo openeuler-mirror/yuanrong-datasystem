@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,10 +12,109 @@
  */
 
 #include <gmock/gmock.h>
+
+#include <cerrno>
+#include <cstdint>
+#include <cstring>
+#include <memory>
+#include <sys/mman.h>
+#include <unistd.h>
+
 #include "binmock.h"
+#include "function_stub.h"
 #include "gmock/gmock.h"
 
 namespace testing {
+namespace {
+constexpr size_t AARCH64_BRANCH_RANGE = 128ul * 1024ul * 1024ul;
+
+#ifndef MAP_FIXED_NOREPLACE
+constexpr int MAP_FIXED_NOREPLACE = 0x100000;
+#endif
+
+class ExecutableMapping {
+public:
+    explicit ExecutableMapping(size_t size, void *hint = nullptr, bool fixed = false)
+    {
+        int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+        if (fixed) {
+            flags |= MAP_FIXED_NOREPLACE;
+        }
+        addr_ = mmap(hint, size, PROT_READ | PROT_WRITE | PROT_EXEC, flags, -1, 0);
+        if (addr_ != MAP_FAILED) {
+            size_ = size;
+        } else {
+            addr_ = nullptr;
+        }
+    }
+
+    ~ExecutableMapping()
+    {
+        if (addr_ != nullptr) {
+            munmap(addr_, size_);
+        }
+    }
+
+    ExecutableMapping(const ExecutableMapping &) = delete;
+    ExecutableMapping &operator=(const ExecutableMapping &) = delete;
+
+    void *Get() const
+    {
+        return addr_;
+    }
+
+    bool Valid() const
+    {
+        return addr_ != nullptr;
+    }
+
+private:
+    void *addr_{ nullptr };
+    size_t size_{ 0 };
+};
+
+uintptr_t Distance(void *left, void *right)
+{
+    auto lhs = reinterpret_cast<uintptr_t>(left);
+    auto rhs = reinterpret_cast<uintptr_t>(right);
+    return lhs > rhs ? lhs - rhs : rhs - lhs;
+}
+
+std::unique_ptr<ExecutableMapping> AllocateFarMapping(void *reference, size_t mappingSize)
+{
+    auto base = reinterpret_cast<uintptr_t>(reference);
+    for (size_t multiplier = 2; multiplier <= 16; ++multiplier) {
+        uintptr_t offset = AARCH64_BRANCH_RANGE * multiplier;
+        uintptr_t hints[] = { base + offset, base - offset };
+        for (uintptr_t hint : hints) {
+            auto mapping = std::make_unique<ExecutableMapping>(mappingSize, reinterpret_cast<void *>(hint), true);
+            if (mapping->Valid() && Distance(reference, mapping->Get()) > AARCH64_BRANCH_RANGE) {
+                return mapping;
+            }
+        }
+    }
+    return nullptr;
+}
+
+void WriteReturnFunction(void *addr, int value)
+{
+#if defined(__aarch64__)
+    uint32_t code[] = {
+        static_cast<uint32_t>(0x52800000u | ((value & 0xffff) << 5)),  // mov w0, #value
+        0xd65f03c0u,                                                   // ret
+    };
+    std::memcpy(addr, code, sizeof(code));
+    __builtin___clear_cache(static_cast<char *>(addr), static_cast<char *>(addr) + sizeof(code));
+#elif defined(__x86_64__)
+    unsigned char code[] = { 0xb8, static_cast<unsigned char>(value), 0x00, 0x00, 0x00, 0xc3 };
+    std::memcpy(addr, code, sizeof(code));
+    __builtin___clear_cache(static_cast<char *>(addr), static_cast<char *>(addr) + sizeof(code));
+#endif
+}
+
+using IntFunc = int (*)();
+}  // namespace
+
 int CFunc(int i)
 {
     return i;
@@ -258,5 +354,33 @@ TEST_F(BinMockSpec, TestChangeFuncParameter)
     Param realParam;
     SetParam(realValue, realParam);
     ASSERT_EQ(realParam.value, "test7");
+}
+
+TEST_F(BinMockSpec, TestFunctionStubSupportsFarTarget)
+{
+#if !defined(__aarch64__) && !defined(__x86_64__)
+    GTEST_SKIP() << "ExecutableMapping helper only supports aarch64 and x86_64";
+#else
+    const long pageSize = sysconf(_SC_PAGE_SIZE);
+    ASSERT_GT(pageSize, 0);
+    const auto mappingSize = static_cast<size_t>(pageSize) * 2;
+    ExecutableMapping original(mappingSize);
+    ASSERT_TRUE(original.Valid()) << "mmap failed, errno=" << errno;
+    auto replacement = AllocateFarMapping(original.Get(), mappingSize);
+    if (replacement == nullptr) {
+        GTEST_SKIP() << "could not allocate a far executable mapping";
+    }
+
+    WriteReturnFunction(original.Get(), 1);
+    WriteReturnFunction(replacement->Get(), 7);
+    auto originalFunc = reinterpret_cast<IntFunc>(original.Get());
+    auto replacementFunc = reinterpret_cast<IntFunc>(replacement->Get());
+    ASSERT_EQ(originalFunc(), 1);
+    {
+        FunctionStub stub(AddrOf(originalFunc), AddrOf(replacementFunc));
+        ASSERT_EQ(originalFunc(), 7);
+    }
+    ASSERT_EQ(originalFunc(), 1);
+#endif
 }
 }  // namespace testing

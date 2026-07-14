@@ -23,6 +23,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <cerrno>
 #include <cstring>
 #include <sys/prctl.h>
@@ -253,9 +254,11 @@ DataWorker *DataWorker::GetInstance()
 Status DataWorker::ShutDown()
 {
     worker::WorkerServiceAccessor::Instance().Unregister();
-    if (worker_) {
-        RETURN_IF_NOT_OK(worker_->Shutdown());
-        worker_.reset();
+    // Release the owner before returning even when explicit shutdown reports an error. WorkerOCServer destructors
+    // provide the final safe join fallback and must run before function-local runtime singletons are destroyed.
+    auto worker = std::move(worker_);
+    if (worker != nullptr) {
+        return worker->Shutdown();
     }
     return Status::OK();
 }

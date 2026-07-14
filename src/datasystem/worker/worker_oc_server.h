@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -43,20 +40,25 @@
 
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
+#include "datasystem/cluster/control/topology_controller.h"
+#include "datasystem/cluster/control/topology_task_janitor.h"
+#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
+#include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
+#include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
+#include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
-#include "datasystem/topology/coordination_backend/coordination_backend.h"
-#include "datasystem/topology/coordination_backend/etcd_coordination_backend.h"
-#include "datasystem/worker/coordinator/coordinator_watch_service_impl.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_service_impl.h"
+#include "datasystem/worker/coordinator/coordinator_watch_service_impl.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
 #include "datasystem/worker/worker_liveness_check.h"
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/protos/object_posix.brpc.pb.h"
 #include "datasystem/protos/master_heartbeat.brpc.pb.h"
 #include "datasystem/protos/share_memory.brpc.pb.h"
@@ -80,18 +82,18 @@
 #include "datasystem/worker/perf_service/perf_service_impl.h"
 #endif
 
-namespace datasystem {
-namespace worker {
+namespace datasystem::worker {
 
 class WorkerOCServer : public CommonServer {
 public:
+
     /**
      * @brief Create a new WorkerServer object.
+     * @param[in] workerAddr Worker service address.
+     * @param[in] bindAddr Local bind address.
+     * @param[in] masterAddr Local master service address.
      */
-    WorkerOCServer(HostPort workerAddr, HostPort bindAddr, HostPort masterAddr)
-        : CommonServer(std::move(workerAddr), std::move(bindAddr)), masterAddr_(std::move(masterAddr))
-    {
-    }
+    WorkerOCServer(HostPort workerAddr, HostPort bindAddr, HostPort masterAddr);
 
     ~WorkerOCServer() override;
 
@@ -192,6 +194,44 @@ public:
 
 private:
     /**
+     * @brief Initialize RPC credentials, transport selection, shared memory, and the CommonServer base.
+     * @return Status of the initialization.
+     */
+    Status InitRpcAndMemoryRuntime();
+
+    /**
+     * @brief Construct and start coordination, topology, metadata, and Worker service components.
+     * @return Status of the initialization.
+     */
+    Status InitClusterRuntimeAndServices();
+
+    /**
+     * @brief Start the BRPC server after all adapter services have been registered when BRPC is enabled.
+     * @return Status of the start operation.
+     */
+    Status StartBrpcIfEnabled();
+
+    /**
+     * @brief Start asynchronous pre-shutdown checks and publish voluntary scale-in intent when requested.
+     * @param[in] scaleIn Whether this shutdown is a voluntary scale-in.
+     * @param[in] traceId Trace identifier propagated to helper threads.
+     * @return Status of the start operation.
+     */
+    Status StartPreShutdownWorkers(bool scaleIn, const std::string &traceId);
+
+    /**
+     * @brief Wait for asynchronous work and, during scale-in, clients and topology exit intent to finish.
+     * @param[in] scaleIn Whether this shutdown is a voluntary scale-in.
+     */
+    void WaitForPreShutdownTasks(bool scaleIn);
+
+    /**
+     * @brief Migrate unfinished asynchronous data when voluntary scale-in cannot drain it normally.
+     * @param[in] scaleIn Whether this shutdown is a voluntary scale-in.
+     */
+    void MigrateUnfinishedAsyncDataIfNeeded(bool scaleIn);
+
+    /**
      * @brief Init the access key and secret key for AK/SK authentication.
      * @return Status of the call.
      */
@@ -228,12 +268,6 @@ private:
     Status InitWorkerWorkerTransportService();
 
     /**
-     * @brief Init coordinator watch service for coordinator event callbacks.
-     * @return Status of the call.
-     */
-    Status InitCoordinatorWatchService();
-
-    /**
      * @brief Init object service for master request.
      * @return Status of the call.
      */
@@ -264,6 +298,12 @@ private:
     Status InitWorkerService();
 
     /**
+     * @brief Register the Worker-side RPC endpoint used by Coordinator watches.
+     * @return Status of the call.
+     */
+    Status InitCoordinatorWatchService();
+
+    /**
      * @brief Init common service for worker request.
      * @return Status of the call.
      */
@@ -282,6 +322,7 @@ private:
     Status InitMasterSCService();
 
 #ifdef WITH_TESTS
+
     /**
      * @brief Init service for requests from ut.
      * @return Status of the call.
@@ -290,6 +331,7 @@ private:
 #endif
 
 #ifdef ENABLE_PERF
+
     /**
      * @brief Init Perf Service.
      */
@@ -313,6 +355,8 @@ private:
 
     /**
      * @brief Create object cache worker services.
+     * @param[in] objectTable Worker object table shared by the services.
+     * @param[in] evictionManager Worker eviction manager shared by the services.
      */
     void CreateObjectCacheWorkerServices(
         const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
@@ -320,6 +364,8 @@ private:
 
     /**
      * @brief Create rebalance executor and register rebalance task handler.
+     * @param[in] objectTable Worker object table used by rebalance tasks.
+     * @param[in] evictionManager Worker eviction manager used by rebalance tasks.
      */
     void CreateRebalanceExecutor(const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
                                  const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager);
@@ -328,13 +374,13 @@ private:
      * @brief Initialize all services above.
      * @return Status of the call.
      */
-    Status InitializeAllServices(const ClusterInfo &clusterInfo);
+    Status InitializeAllServices();
 
     /**
      * @brief Initialize master services only.
      * @return Status of the call.
      */
-    Status InitializeMasterServices(const ClusterInfo &clusterInfo);
+    Status InitializeMasterServices();
 
     /**
      * @brief Initialize worker services only.
@@ -350,8 +396,8 @@ private:
     /**
      * @brief The Rule of checking async tasks.
      * @note This thread checks the async tasks status every seconds.
-     *       If an async task is running, the thread set status to "prestop_status:wait".
-     *       If checking no async tasks for five consecutive times, the thread set status to "prestop_status:ready".
+     * If an async task is running, the thread set status to "prestop_status:wait".
+     * If checking no async tasks for five consecutive times, the thread set status to "prestop_status:ready".
      * @param[in] isAsyncTasksRunning Check whether an asynchronous task is running.
      * @param[in|out] checkNum Number of consecutive times for checking no async tasks.
      */
@@ -491,23 +537,12 @@ private:
     /**
      * @brief Notify shutdown message to etcd.
      */
-    void NotifyShutdownToEtcd();
 
     /**
      * @brief Init metadata manager holder instance.
      * @return Status of this call.
      */
     Status InitMetadataManagerHolder();
-
-    /**
-     * @brief Register task actions owned by WorkerOCServer for future task executors.
-     */
-    void RegisterTaskActions();
-
-    /**
-     * @brief Remove task actions owned by WorkerOCServer.
-     */
-    void UnregisterTaskActions();
 
     /**
      * @brief Check sc_encrypt_secret_key.
@@ -534,18 +569,63 @@ private:
     Status ConstructCoordinationBackend();
 
     /**
-     * @brief Construct cluster info.
-     * @param[out] clusterInfo The necessary cluster information at startup.
+     * @brief Construct worker-owned topology runtime components.
      * @return Status of this call.
      */
-    Status ConstructClusterInfo(ClusterInfo &clusterInfo);
+    Status ConstructTopologyRuntime();
 
     /**
-     * @brief Construct cluster info during ETCD crash.
-     * @param[out] clusterInfo The necessary cluster information at startup.
+     * @brief Construct the controller-side ETCD backend and determine whether this member is restarting.
+     * @param[out] isRestart True when the authoritative topology already contains the local address.
      * @return Status of this call.
      */
-    Status ConstructClusterInfoDuringEtcdCrash(ClusterInfo &clusterInfo);
+    Status ConstructTopologyControllerBackend(bool &isRestart);
+
+    /**
+     * @brief Construct the Worker engine, borrowed business views, controller, and task janitor.
+     * @param[in] isRestart Whether the local member is restarting.
+     * @return Status of this call.
+     */
+    Status ConstructTopologyComponents(bool isRestart);
+
+    /**
+     * @brief Deliver one deduplicated membership generation restart to local business owners.
+     * @param[in] address Canonical address of the restarted member.
+     * @param[in] timestamp Monotonic membership generation timestamp used by reconciliation.
+     * @return K_OK after Stream cleanup and asynchronous object recovery are accepted.
+     */
+    Status HandleMembershipRestart(const std::string &address, int64_t timestamp);
+
+    /**
+     * @brief Resolve the metadata endpoint used by worker-local master services before service construction.
+     * @return Status of this call.
+     */
+    Status ResolveLocalMetadataAddress();
+
+    /**
+     * @brief Start the worker-owned topology runtime.
+     * @return Status of this call.
+     */
+    Status StartTopologyRuntime();
+
+    /**
+     * @brief Publish READY only after the membership lease exists, retrying transient lease races within one TTL.
+     * @return Status of this call.
+     */
+    Status PublishReadyMembership();
+
+    /**
+     * @brief Keep the external readiness gate closed until this member has a legal serving topology.
+     * @return K_OK after normal or legal last-good admission; K_NOT_READY when process termination interrupts wait.
+     */
+    Status WaitForTopologyReady();
+
+    /**
+     * @brief Stop topology ingress and runtime components without destroying dependencies after a drain timeout.
+     * @param[in] deadline Absolute bounded-drain deadline.
+     * @return The first stop error after attempting every safe component stop.
+     */
+    Status StopTopologyRuntime(std::chrono::steady_clock::time_point deadline);
 
     /**
      * @brief Start metastore service on master worker.
@@ -560,32 +640,6 @@ private:
     Status StopMetaStoreService();
 
     /**
-     * @brief Reconcile cluster information with other nodes in the cluster.
-     * @param[in] localHashRingPb The information required for reconciliation.
-     * @param[in] api2Tag The way to contact other nodes in the cluster.
-     * @return Status of this call.
-     */
-    Status ReconcileClusterInfo(
-        const HashRingPb &localHashRingPb,
-        const std::unordered_map<std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi>, int64_t> &api2Tag);
-
-    /**
-     * @brief Load hashring from rocksdb.
-     * @param[out] clusterInfo The necessary cluster information at startup.
-     * @param[out] localHashRingPb The information required for reconciliation.
-     * @return Status of this call.
-     */
-    Status LoadHashRingFromRocksDb(ClusterInfo &clusterInfo, HashRingPb &localHashRingPb);
-
-    /**
-     * @brief Load workers from rocksdb.
-     * @param[out] clusterInfo The necessary cluster information at startup.
-     * @param[out] activeNodesInLocalCluster The active nodes in local cluster.
-     * @return Status of this call.
-     */
-    Status LoadWorkersFromRocksDb(ClusterInfo &clusterInfo, std::vector<std::string> &activeNodesInLocalCluster);
-
-    /**
      * @brief Check if need scale in.
      * @return True if needed.
      */
@@ -598,9 +652,21 @@ private:
     bool IsClientsExist();
 
     /**
-     * @brief Wait all clients on this node exited.
+     * @brief Wait for existing clients to leave after local admission has closed.
      */
     void WaitClientsExit();
+
+    /**
+     * @brief Publish EXITING after the local client and asynchronous-task drain completes.
+     * @return K_OK after the membership session reaches EXITING.
+     */
+    Status PublishExitingMembership();
+
+    /**
+     * @brief Keep the Worker alive until the authoritative topology removes the local member.
+     * @return K_OK after a current snapshot no longer contains the local address.
+     */
+    Status WaitForTopologyRemoval();
 
     /**
      * @brief Is async tasks running.
@@ -612,6 +678,7 @@ private:
 #ifdef WITH_TESTS
 public:
 #endif
+
     /**
      * @brief Initialize the worker-scoped slot namespace for aggregated SFS.
      */
@@ -631,15 +698,27 @@ private:
     std::string backendAddress_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorServiceProxy_;
-    std::unique_ptr<topology::ICoordinationBackend> coordinationBackend_;
+    std::unique_ptr<cluster::ICoordinationBackend> coordinationBackend_;
+    std::unique_ptr<cluster::HashAlgorithm> topologyAlgorithm_{ nullptr };
+    std::unique_ptr<cluster::ITopologyPhaseCallbacks> topologyTaskCallbacks_{ nullptr };
+    std::unique_ptr<cluster::TopologyEngine> topologyEngine_{ nullptr };
+    std::unique_ptr<EtcdStore> controllerEtcdStore_{ nullptr };
+    std::unique_ptr<cluster::ICoordinationBackend> controllerBackend_{ nullptr };
+    std::unique_ptr<cluster::TopologyKeyHelper> controllerKeys_{ nullptr };
+    std::unique_ptr<cluster::TopologyRepository> controllerRepository_{ nullptr };
+    std::unique_ptr<cluster::CoordinationEventDispatcher> controllerDispatcher_{ nullptr };
+    std::unique_ptr<cluster::TopologyController> topologyController_{ nullptr };
+    cluster::TopologyTaskMaterializer topologyTaskMaterializer_;
+    std::unique_ptr<cluster::TopologyTaskJanitor> topologyTaskJanitor_{ nullptr };
+    std::unique_ptr<WorkerTopologyReferences> topologyReferences_{ nullptr };
+    std::unique_ptr<coordinator::CoordinatorWatchServiceImpl> coordinatorWatchSvc_{ nullptr };
+    std::atomic<bool> topologyExitRequested_{ false };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };
     std::unique_ptr<datasystem::master::ResourceManager> resourceManager_{ nullptr };
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_{ nullptr };
-    std::unique_ptr<datasystem::ClusterManager> clusterManager_{ nullptr };
     std::unique_ptr<WorkerServiceImpl> workerSvc_{ nullptr };  // Worker common service.
-    std::unique_ptr<coordinator::CoordinatorWatchServiceImpl> coordinatorWatchSvc_{ nullptr };
     WaitPost waitCond_;
     // Object cache rpc service for client request.
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> objCacheClientWorkerSvc_{ nullptr };
@@ -648,6 +727,7 @@ private:
     std::unique_ptr<WorkerOCServiceBrpcAdapter> brpcOcAdapter_{ nullptr };
     std::unique_ptr<master::MasterServiceBrpcAdapter> brpcMasterAdapter_{ nullptr };
     std::unique_ptr<WorkerServiceBrpcAdapter> brpcWorkerAdapter_{ nullptr };
+    std::unique_ptr<coordinator::CoordinatorWatchServiceBrpcAdapter> brpcCoordinatorWatchAdapter_{ nullptr };
     std::unique_ptr<WorkerWorkerOCServiceBrpcAdapter> brpcWorkerWorkerOcAdapter_{ nullptr };
     std::unique_ptr<WorkerWorkerTransportServiceBrpcAdapter> brpcWorkerWorkerTransAdapter_{ nullptr };
     std::unique_ptr<MasterWorkerOCServiceBrpcAdapter> brpcMasterWorkerOcAdapter_{ nullptr };
@@ -656,7 +736,6 @@ private:
     std::unique_ptr<ClientWorkerSCServiceBrpcAdapter> brpcClientWorkerScAdapter_{ nullptr };
     std::unique_ptr<WorkerWorkerSCServiceBrpcAdapter> brpcWorkerWorkerScAdapter_{ nullptr };
     std::unique_ptr<MasterWorkerSCServiceBrpcAdapter> brpcMasterWorkerScAdapter_{ nullptr };
-    std::unique_ptr<coordinator::CoordinatorWatchServiceBrpcAdapter> brpcCoordinatorWatchAdapter_{ nullptr };
     std::future<Status> clientWorkerCommonSvcStatus_;
     // Object cache rpc service for worker request.
     std::shared_ptr<datasystem::object_cache::WorkerWorkerOCServiceImpl> objCacheWorkerWkSvc_{ nullptr };
@@ -711,9 +790,10 @@ private:
     std::unique_ptr<PerfServiceImpl> perfService_{ nullptr };
 #endif
 
-    /** Non-owning pointer to caller DynamicFlagConfig; valid only between Init and Shutdown. */
+    /**
+     * Non-owning pointer to caller DynamicFlagConfig; valid only between Init and Shutdown.
+     */
     DynamicFlagConfig *runtimeFlags_{ nullptr };
 };
-}  // namespace worker
-}  // namespace datasystem
+}  // namespace datasystem::worker
 #endif  // DATASYSTEM_WORKER_WORKER_OC_SERVER_H

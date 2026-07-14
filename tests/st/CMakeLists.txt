@@ -17,9 +17,7 @@ set(DS_ST_DEPEND_LIBS
         common_ak_sk
         common_immutable_string
         string_ref
-        worker_hash_ring
         worker_client_manager
-        cluster_manager
         ds_master
         datasystem_worker_static
         master_object_cache_store
@@ -28,6 +26,7 @@ set(DS_ST_DEPEND_LIBS
         master_stream_cache
         worker_stream_cache
         ds_router_client_static
+        cluster_topology_protos
         master_stream_cache_store
         master_stream_protos
         httpclient
@@ -122,8 +121,8 @@ target_link_libraries(ds_st PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-ove
 target_link_libraries(ds_st_stream_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
-target_link_libraries(ds_st_embedded_client  GTest::gtest GTest::gmock common_etcd  nlohmann_json::nlohmann_json generic_service_protos datasystem cluster)
-target_compile_definitions(ds_st_embedded_client PRIVATE HASH_PHRASE_PATH="${CMAKE_CURRENT_BINARY_DIR}/hashring_parser")
+target_link_libraries(ds_st_embedded_client GTest::gtest GTest::gmock common_etcd nlohmann_json::nlohmann_json
+        generic_service_protos datasystem cluster cluster_topology_protos_client)
 
 find_package(absl PATHS absl_PKG_PATH)
 
@@ -138,9 +137,6 @@ target_link_libraries(curve_keygen PRIVATE common_util common_rpc_zmq)
 
 add_dependencies(ds_st curve_keygen)
 
-add_executable(hashring_parser ./hashring_parser.cpp)
-target_link_libraries(hashring_parser PRIVATE hash_ring_protos_client)
-install(TARGETS hashring_parser DESTINATION tools)
 
 if (BUILD_OBSERVABILITY)
     set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:${gflags_LIB_PATH}:${brpc_LIB_PATH}:${LOGS_ROOT}/lib:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}")
@@ -331,6 +327,6 @@ else()
             binmock)
 endif()
 
-target_link_libraries(ds_device_llt PRIVATE ${DS_DEVICE_LLT_DEPEND_LIB})
+target_link_libraries(ds_device_llt PRIVATE ${DS_DEVICE_LLT_DEPEND_LIB} cluster_topology_protos)
 target_compile_definitions(ds_device_llt PRIVATE ${BIN_PATH_LIST})
 add_datasystem_test(ds_device_llt TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})

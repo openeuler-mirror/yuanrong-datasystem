@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -26,11 +23,14 @@
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "client/object_cache/oc_client_common.h"
 #include "datasystem/common/eventloop/timer_queue.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/object_client.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/router_client.h"
  
 DS_DECLARE_string(cluster_name);
@@ -44,9 +44,9 @@ DS_DECLARE_string(etcd_address);
  
 namespace datasystem {
 namespace st {
- 
 constexpr size_t TOTAL_WORKER_NUM = 6;
 constexpr size_t ETCD_NUM = 2;
+constexpr uint32_t TOKENS_PER_MEMBER = 4;
 const std::string AZ1 = "AZ1";
 const uint32_t ETCD_TIME_OUT_SECOND = 5;
 const uint32_t EXTRA_WAIT_SECOND = 3;
@@ -62,9 +62,6 @@ public:
             "-v=1 add_node_wait_time_s=5 -node_timeout_s=" + std::to_string(ETCD_TIME_OUT_SECOND);
         opts.workerGflagParams = workerGflags;
  
-        for (size_t i = 0; i < TOTAL_WORKER_NUM; i++) {
-            opts.workerSpecifyGflagParams[i] = "-cluster_name=" + AZ1;
-        }
     }
  
     void SetUp() override
@@ -128,12 +125,14 @@ public:
     {
         RouterClient routerClient(azName, etcdAddress_, "", "", "", "");
         DS_ASSERT_OK(routerClient.Init());
-        std::string oneAzWorkerAddr;
-        if (specifyNode) {
-            DS_ASSERT_OK(routerClient.SelectWorker(localNodeAddress_, oneAzWorkerAddr));
-        } else {
-            DS_ASSERT_OK(routerClient.SelectWorker("", oneAzWorkerAddr));
-        }
+        std::vector<std::string> candidates;
+        DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+            [&routerClient, &candidates, this, specifyNode]() {
+                return routerClient.GetWorkerCandidates(specifyNode ? localNodeAddress_ : "", candidates);
+            },
+            EXTRA_WAIT_SECOND, K_OK));
+        ASSERT_FALSE(candidates.empty());
+        const std::string oneAzWorkerAddr = candidates.front();
 
         if (outAddr != nullptr) {
             *outAddr = oneAzWorkerAddr;
@@ -151,22 +150,20 @@ protected:
 TEST_F(RouterClientTest, TestInitInvalidAz)
 {
     std::string azName = "AZ3";
-    std::string getWorkerAddr;
     RouterClient client(azName, GetEtcdAddress(), "", "", "", "");
-    DS_ASSERT_OK(client.Init());
-    DS_ASSERT_NOT_OK(client.SelectWorker(GetLocalNodeAddress(), getWorkerAddr));
+    EXPECT_EQ(client.Init().GetCode(), K_NOT_FOUND);
 }
  
 TEST_F(RouterClientTest, TestSelectOneLocalNodeWorker)
 {
     bool specifyNode = true;
-    SelectWorkerAndConnect(AZ1, specifyNode);
+    SelectWorkerAndConnect(GetTestClusterName(), specifyNode);
 }
  
 TEST_F(RouterClientTest, TestRandomSelectWorker)
 {
     bool specifyNode = false;
-    SelectWorkerAndConnect(AZ1, specifyNode);
+    SelectWorkerAndConnect(GetTestClusterName(), specifyNode);
 }
  
 TEST_F(RouterClientTest, DISABLED_LEVEL1_TestWorkerShutDownInitRouteAndRecovery)
@@ -178,9 +175,10 @@ TEST_F(RouterClientTest, DISABLED_LEVEL1_TestWorkerShutDownInitRouteAndRecovery)
     sleep(ETCD_TIME_OUT_SECOND + EXTRA_WAIT_SECOND);
  
     std::string selectedWorkerAddr;
-    RouterClient client(AZ1, GetEtcdAddress(), "", "", "", "");
+    RouterClient client(GetTestClusterName(), GetEtcdAddress(), "", "", "", "");
     DS_ASSERT_OK(client.Init());
-    DS_ASSERT_NOT_OK(client.SelectWorker(GetLocalNodeAddress(), selectedWorkerAddr));
+    std::vector<std::string> candidates;
+    DS_ASSERT_NOT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
  
     // restart az1
     for (auto &pos : az1Pos) {
@@ -188,7 +186,8 @@ TEST_F(RouterClientTest, DISABLED_LEVEL1_TestWorkerShutDownInitRouteAndRecovery)
     }
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
  
-    DS_ASSERT_OK(client.SelectWorker(GetLocalNodeAddress(), selectedWorkerAddr));
+    DS_ASSERT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
+    selectedWorkerAddr = candidates.front();
     std::shared_ptr<ObjectClient> objectClient;
     InitTestClient(selectedWorkerAddr, objectClient);
 }
@@ -196,9 +195,11 @@ TEST_F(RouterClientTest, DISABLED_LEVEL1_TestWorkerShutDownInitRouteAndRecovery)
 TEST_F(RouterClientTest, DISABLED_LEVEL1_TestInitRouteAndWorkerShutDownAndRecovery)
 {
     std::string selectedWorkerAddr;
-    RouterClient client(AZ1, GetEtcdAddress(), "", "", "", "");
+    RouterClient client(GetTestClusterName(), GetEtcdAddress(), "", "", "", "");
     DS_ASSERT_OK(client.Init());
-    DS_ASSERT_OK(client.SelectWorker(GetLocalNodeAddress(), selectedWorkerAddr));
+    std::vector<std::string> candidates;
+    DS_ASSERT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
+    selectedWorkerAddr = candidates.front();
     std::shared_ptr<ObjectClient> objectClient1;
     InitTestClient(selectedWorkerAddr, objectClient1);
     objectClient1.reset();
@@ -206,7 +207,9 @@ TEST_F(RouterClientTest, DISABLED_LEVEL1_TestInitRouteAndWorkerShutDownAndRecove
     auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
     DS_ASSERT_OK(externalCluster->RestartWorkerAndWaitReadyOneByOne({ 0, 2, 4 }));
  
-    DS_ASSERT_OK(client.SelectWorker(GetLocalNodeAddress(), selectedWorkerAddr));
+    candidates.clear();
+    DS_ASSERT_OK(client.GetWorkerCandidates(GetLocalNodeAddress(), candidates));
+    selectedWorkerAddr = candidates.front();
     std::shared_ptr<ObjectClient> objectClient2;
     InitTestClient(selectedWorkerAddr, objectClient2);
 }
@@ -233,9 +236,6 @@ public:
             opts.workerConfigs.push_back(ipv6HostPort);
         }
 
-        for (size_t i = 0; i < TOTAL_WORKER_NUM; i++) {
-            opts.workerSpecifyGflagParams[i] = "-cluster_name=" + AZ1;
-        }
     }
 };
 
@@ -248,7 +248,7 @@ TEST_F(RouterClientIpv6Test, DISABLED_TestSelectSpeccifyLocalNodeWorker)
     std::string expectedAz1Ip = az1WorkerHostPort.Host();
 
     std::string selectedAz1Addr;
-    SelectWorkerAndConnect(AZ1, specifyNode, &selectedAz1Addr);
+    SelectWorkerAndConnect(GetTestClusterName(), specifyNode, &selectedAz1Addr);
     std::string expectedAz1Prefix = "[" + expectedAz1Ip + "]:";
     ASSERT_TRUE(selectedAz1Addr.find(expectedAz1Prefix) == 0)
         << "AZ1: Selected worker addr [" << selectedAz1Addr
@@ -280,25 +280,62 @@ TEST_F(SimpleRouterClientTest, DestrutClientWhenTimerExists)
     auto etcdStore = std::make_shared<EtcdStore>(etcdAddress_);
     DS_ASSERT_OK(etcdStore->Init());
  
-    std::string etcdTablePrefix = "/" + AZ1;
-    DS_ASSERT_OK(etcdStore->CreateTable(ETCD_CLUSTER_TABLE, etcdTablePrefix + "/" + std::string(ETCD_CLUSTER_TABLE)));
-    // data already exists in etcd.
-    std::atomic<int64_t> leaseId;
-    int ttlInSec = 60;
-    DS_ASSERT_OK(etcdStore->GetLeaseID(ttlInSec, leaseId));
-    DS_ASSERT_OK(etcdStore->PutWithLeaseId(ETCD_CLUSTER_TABLE, "127.0.0.1:3000", "fake1", leaseId));
+    DS_ASSERT_OK(RegisterTopologyTables(*etcdStore, AZ1));
+    ClusterTopologyPb topology;
+    topology.set_schema_version("1");
+    topology.set_cluster_has_init(true);
+    topology.set_version(1);
+    auto &member = (*topology.mutable_members())["127.0.0.1:3000"];
+    member.set_id(std::string(16, 'a'));
+    member.set_state(MembershipPb::ACTIVE);
+    member.add_tokens(1);
+    DS_ASSERT_OK(etcdStore->Put(GetTopologyTableName(AZ1), "", topology.SerializeAsString()));
     DS_ASSERT_OK(inject::Set("worker.GenerateFakePutEventIfNeeded.timeout", "call(2000)"));
     DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly", "call(100)"));
     {
         RouterClient client(AZ1, GetEtcdAddress(), "", "", "", "");
         DS_ASSERT_OK(client.Init());
         // generate event
-        DS_ASSERT_OK(etcdStore->PutWithLeaseId(ETCD_CLUSTER_TABLE, "127.0.0.1:3000", "fake2", leaseId));
+        topology.set_version(2);
+        DS_ASSERT_OK(etcdStore->Put(GetTopologyTableName(AZ1), "", topology.SerializeAsString()));
         int waitShutdown = 1000;
         std::this_thread::sleep_for(std::chrono::milliseconds(waitShutdown));
     }
     int waitTimerExecute = 2000;
     std::this_thread::sleep_for(std::chrono::milliseconds(waitTimerExecute));
+}
+
+TEST_F(SimpleRouterClientTest, ReturnsOrderedTopologyCandidatesAndBinaryIdResolution)
+{
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    DS_ASSERT_OK(cluster::TopologyKeyHelper::Create(AZ1, keys));
+    auto store = std::make_shared<EtcdStore>(etcdAddress_);
+    DS_ASSERT_OK(store->Init());
+    DS_ASSERT_OK(store->CreateTableWithExactPrefix(keys->TopologyTable(), keys->TopologyTable()));
+    cluster::TopologyState topology;
+    topology.version = 1;
+    topology.clusterHasInit = true;
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), "127.0.0.1:3001" }, cluster::MemberState::ACTIVE, { 1 } },
+        cluster::Member{ { std::string(16, 'b'), "127.0.0.2:3002" }, cluster::MemberState::ACTIVE, { 2 } },
+        cluster::Member{ { std::string(16, 'c'), "127.0.0.3:3003" }, cluster::MemberState::INITIAL, {} },
+    };
+    std::string bytes;
+    DS_ASSERT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(topology, bytes));
+    DS_ASSERT_OK(store->Put(keys->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey(), bytes));
+    RouterClient client(AZ1, GetEtcdAddress(), "", "", "", "");
+    DS_ASSERT_OK(client.Init());
+    std::vector<std::string> candidates;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&client, &candidates]() { return client.GetWorkerCandidates("127.0.0.2", candidates); },
+        EXTRA_WAIT_SECOND, K_OK));
+    ASSERT_EQ(candidates.size(), 2);
+    EXPECT_EQ(candidates.front(), "127.0.0.2:3002");
+    std::vector<std::string> addresses;
+    DS_ASSERT_OK(client.GetWorkerAddrByWorkerId({ std::string(16, 'a'), std::string(16, 'x') }, addresses));
+    ASSERT_EQ(addresses.size(), 2);
+    EXPECT_EQ(addresses.front(), "127.0.0.1:3001");
+    EXPECT_TRUE(addresses.back().empty());
 }
  
 class RouterClientGetWorkerIdTest : public RouterClientTest {
@@ -326,34 +363,43 @@ class RouterClientGetWorkerIdTest : public RouterClientTest {
         FLAGS_etcd_address = etcdAddress_;
         db_ = std::make_unique<EtcdStore>(etcdAddress_);
         DS_ASSERT_OK(db_->Init());
-        (void)db_->CreateTable(ETCD_RING_PREFIX, "/" + AZ1 + ETCD_RING_PREFIX);
-        (void)db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + AZ1 + "/" + std::string(ETCD_CLUSTER_TABLE));
-        DS_ASSERT_OK(db_->Put(ETCD_RING_PREFIX, "", ""));
+        (void)RegisterTopologyTables(*db_, AZ1);
+        ClusterTopologyPb ring;
+        ring.set_schema_version("1");
+        ring.set_version(1);
+        DS_ASSERT_OK(db_->Put(GetTopologyTableName(AZ1), "", ring.SerializeAsString()));
     }
  
 protected:
     void InsertWorkerToDb(std::pair<std::string, std::string> p)
     {
         std::string hashRingStr;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", hashRingStr));
-        HashRingPb ring;
+        DS_ASSERT_OK(db_->Get(GetTopologyTableName(AZ1), "", hashRingStr));
+        ClusterTopologyPb ring;
         ASSERT_TRUE(ring.ParseFromString(hashRingStr));
-        WorkerPb wpb;
-        wpb.set_worker_uuid(p.second);
-        ring.mutable_workers()->insert({ p.first, wpb });
-        DS_ASSERT_OK(db_->Put(ETCD_RING_PREFIX, "", ring.SerializeAsString()));
+        MembershipPb wpb;
+        wpb.set_id(p.second);
+        wpb.set_state(MembershipPb::ACTIVE);
+        const auto tokenBase = static_cast<uint32_t>(ring.members_size()) * TOKENS_PER_MEMBER;
+        for (uint32_t offset = 0; offset < TOKENS_PER_MEMBER; ++offset) {
+            wpb.add_tokens(tokenBase + offset);
+        }
+        ring.mutable_members()->insert({ p.first, wpb });
+        ring.set_version(ring.version() + 1);
+        DS_ASSERT_OK(db_->Put(GetTopologyTableName(AZ1), "", ring.SerializeAsString()));
     };
  
     void DelWorkerFromDb(std::string workerAddr)
     {
         std::string hashRingStr;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", hashRingStr));
-        HashRingPb ring;
+        DS_ASSERT_OK(db_->Get(GetTopologyTableName(AZ1), "", hashRingStr));
+        ClusterTopologyPb ring;
         ASSERT_TRUE(ring.ParseFromString(hashRingStr));
-        auto it = ring.mutable_workers()->find(workerAddr);
-        ring.mutable_workers()->erase(it);
+        auto it = ring.mutable_members()->find(workerAddr);
+        ring.mutable_members()->erase(it);
+        ring.set_version(ring.version() + 1);
         int64_t version{};
-        DS_ASSERT_OK(db_->Put(ETCD_RING_PREFIX, "", ring.SerializeAsString(), &version));
+        DS_ASSERT_OK(db_->Put(GetTopologyTableName(AZ1), "", ring.SerializeAsString(), &version));
     };
  
     std::unique_ptr<EtcdStore> db_;
@@ -361,7 +407,8 @@ protected:
  
 TEST_F(RouterClientGetWorkerIdTest, NormalGetWorker)
 {
-    auto alreadyExist = std::make_pair("127.0.0.1:1", "workerid1");
+    auto alreadyExist = std::make_pair("127.0.0.1:1", std::string(16, 'a'));
+    const std::string unknownId(16, 'x');
     InsertWorkerToDb(alreadyExist);
  
     RouterClient routerClient(AZ1, etcdAddress_, "", "", "", "");
@@ -369,21 +416,28 @@ TEST_F(RouterClientGetWorkerIdTest, NormalGetWorker)
  
     // not exist
     std::vector<std::string> result;
-    DS_ASSERT_NOT_OK(routerClient.GetWorkerAddrByWorkerId({ "not-exist-workerid" }, result));
+    DS_ASSERT_NOT_OK(routerClient.GetWorkerAddrByWorkerId({ unknownId }, result));
     ASSERT_TRUE(result.empty());
  
     // already exist
-    DS_ASSERT_OK(routerClient.GetWorkerAddrByWorkerId({ alreadyExist.second }, result));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&routerClient, &alreadyExist, &result]() {
+            result.clear();
+            return routerClient.GetWorkerAddrByWorkerId({ alreadyExist.second }, result);
+        },
+        EXTRA_WAIT_SECOND, K_OK));
     ASSERT_TRUE(result.size() == 1);
     ASSERT_TRUE(result[0] == alreadyExist.first);
  
     // newly-added
-    auto newlyAdd = std::make_pair("127.0.0.1:2", "workerid2");
+    auto newlyAdd = std::make_pair("127.0.0.1:2", std::string(16, 'b'));
     InsertWorkerToDb(newlyAdd);
-    const int receiveEventDelay = 1;
-    std::this_thread::sleep_for(std::chrono::seconds(receiveEventDelay));  // wait for the reach of event
     result.clear();
-    DS_ASSERT_OK(routerClient.GetWorkerAddrByWorkerId({ newlyAdd.second }, result));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&routerClient, &newlyAdd, &result]() {
+            return routerClient.GetWorkerAddrByWorkerId({ newlyAdd.second }, result);
+        },
+        EXTRA_WAIT_SECOND, K_OK));
     ASSERT_TRUE(result.size() == 1);
     ASSERT_TRUE(result[0] == newlyAdd.first);
  
@@ -397,7 +451,7 @@ TEST_F(RouterClientGetWorkerIdTest, NormalGetWorker)
  
     // multiple get and partly success
     result.clear();
-    input = { alreadyExist.second, "not-exist-workerid", newlyAdd.second };
+    input = { alreadyExist.second, unknownId, newlyAdd.second };
     DS_ASSERT_OK(routerClient.GetWorkerAddrByWorkerId(input, result));
     ASSERT_TRUE(result.size() == input.size());
     auto i = 0;
@@ -407,14 +461,18 @@ TEST_F(RouterClientGetWorkerIdTest, NormalGetWorker)
  
     // cannot be found after delete
     DelWorkerFromDb(alreadyExist.first);
-    std::this_thread::sleep_for(std::chrono::milliseconds(receiveEventDelay));  // wait for the reach of event
     result.clear();
-    DS_ASSERT_NOT_OK(routerClient.GetWorkerAddrByWorkerId({ alreadyExist.second }, result));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&routerClient, &alreadyExist, &result]() {
+            result.clear();
+            return routerClient.GetWorkerAddrByWorkerId({ alreadyExist.second }, result);
+        },
+        EXTRA_WAIT_SECOND, K_NOT_FOUND));
     ASSERT_TRUE(result.size() == 0);
  
     // multiple get and all fail
     result.clear();
-    DS_ASSERT_NOT_OK(routerClient.GetWorkerAddrByWorkerId({ alreadyExist.second, "not-exist-workerid" }, result));
+    DS_ASSERT_NOT_OK(routerClient.GetWorkerAddrByWorkerId({ alreadyExist.second, unknownId }, result));
     ASSERT_TRUE(result.size() == 0);
 }
 }  // namespace st

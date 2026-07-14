@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +17,8 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_delete_impl.h"
 
 #include <chrono>
+
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/util/container_util.h"
@@ -43,11 +42,11 @@ constexpr char PERSISTENCE_DELETE_POOL_NAME[] = "PersistDelete";
 }  // namespace
 
 WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam,
-                                                     ClusterManager *clusterManager,
+                                                     worker::WorkerTopologyReferences *topologyEngine,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
                                                      std::shared_ptr<WorkerOcServiceGetImpl> getProc)
     : WorkerOcServiceCrudCommonApi(initParam),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress),
       getProc_(std::move(getProc))
@@ -268,7 +267,7 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
 {
     Status lastRc;
     // Group ObjectKeys by masterId
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(needDeleteObjectKey);
+    auto grouped = BuildMetaOwnerRouteGroups(needDeleteObjectKey, topologyEngine_);
     auto &objKeysGrpByMasterId = grouped.groups;
 
     for (const auto &kv : grouped.failures) {

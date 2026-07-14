@@ -14,7 +14,9 @@ ds_cc_test_library(
         "//src/datasystem/common/object_cache:lock",
         "//src/datasystem/common/object_cache:object_ref_info",
         "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
         "//tests/ut:ut_common",
     ],
 )
@@ -31,24 +33,13 @@ ds_cc_test(
     ],
 )
 
-# Hash Ring 分配器测试
-ds_cc_test(
-    name = "hash_ring_allocator_test",
-    srcs = ["object_cache/hash_ring_allocator_test.cpp"],
-    deps = [
-        "//src/datasystem/worker:add_miss_libs_fixme",
-        "//src/datasystem/worker/hash_ring",
-        "//tests/ut:ut_common",
-    ],
-)
-
 # 节点选择器测试
 ds_cc_test(
     name = "node_selector_test",
     srcs = ["object_cache/node_selector_test.cpp"],
     deps = [
         "//src/datasystem/common/shared_memory:common_shared_memory",
-        "//src/datasystem/topology:topology",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
@@ -95,9 +86,25 @@ ds_cc_test(
     name = "worker_oc_service_impl_test",
     srcs = ["object_cache/worker_oc_service_impl_test.cpp"],
     deps = [
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/common/binmock:binmock",
+        "//tests/ut:ut_common",
+    ],
+)
+
+# 元数据恢复管理器测试
+ds_cc_test(
+    name = "metadata_recovery_manager_test",
+    srcs = ["object_cache/metadata_recovery_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker/object_cache:metadata_recovery_manager",
+        "//src/datasystem/worker/object_cache:metadata_recovery_selector",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api_header",
         "//tests/ut:ut_common",
     ],
 )
@@ -151,21 +158,6 @@ ds_cc_test(
     ],
 )
 
-# Hash Ring 健康检查测试
-ds_cc_test(
-    name = "hash_ring_health_check_test",
-    srcs = ["object_cache/hash_ring_health_check_test.cpp"],
-    deps = [
-        "//src/datasystem/common/inject:common_inject",
-        "//src/datasystem/protos:worker_object_cc_proto",
-        "//src/datasystem/worker:add_miss_libs_fixme",
-        "//src/datasystem/worker/hash_ring",
-        "//tests/ut:ut_common",
-        "@com_google_protobuf//:protobuf",
-        "@nlohmann_json//:json",
-    ],
-)
-
 # 迁移数据直传测试
 ds_cc_test(
     name = "migrate_data_direct_test",
@@ -173,6 +165,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/protos:worker_object_cc_proto",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_request_manager",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_migrate_impl",
@@ -191,7 +184,6 @@ ds_cc_test(
         "//src/datasystem/common/rpc:mem_view",
         "//src/datasystem/common/util:memory",
         "//src/datasystem/common/util:net_util",
-        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache/data_migrator/basic:migrate_progress",
         "//src/datasystem/worker/object_cache/data_migrator/handler:migrate_data_handler",
@@ -210,18 +202,22 @@ ds_cc_test(
     srcs = ["object_cache/migrate_data_service_test.cpp"],
     deps = [
         "//src/datasystem/common/object_cache:shm_guard",
-        "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/protos:worker_object_cc_proto",
-        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:object_meta_route_helper",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_get_impl",
+        "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl_header",
+        "//src/datasystem/worker/object_cache:worker_worker_transport_api_header",
         "//src/datasystem/worker/object_cache:worker_request_manager",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_migrate_impl",
         "//tests/common/binmock",
         "//tests/ut:ut_common",
-        "//tests/ut/worker:eviction_manager_common",
     ],
 )
 
@@ -267,6 +263,15 @@ ds_cc_test(
     deps = [
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_worker_oc_api",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_worker_peer_state_codec_test",
+    srcs = ["object_cache/worker_worker_peer_state_codec_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/object_cache:worker_worker_peer_state_codec",
         "//tests/ut:ut_common",
     ],
 )
@@ -406,9 +411,8 @@ test_suite(
         "authenticate_test",
         "client_manager_test",
         "coordinator_watch_service_test",
-        "hash_ring_allocator_test",
-        "hash_ring_health_check_test",
         "lock_map_test",
+        "metadata_recovery_manager_test",
         "migrate_data_direct_test",
         "migrate_data_handler_test",
         "migrate_data_service_test",
@@ -425,6 +429,7 @@ test_suite(
         "worker_oc_service_impl_test",
         "worker_oc_spill_eviction_test",
         "worker_oc_spill_test",
+        "worker_worker_peer_state_codec_test",
         "worker_worker_oc_api_test",
     ],
 )

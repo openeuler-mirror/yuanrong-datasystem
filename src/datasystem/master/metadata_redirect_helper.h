@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,9 +17,11 @@
 #ifndef DATASYSTEM_MASTER_METADATA_REDIRECT_HELPER_H
 #define DATASYSTEM_MASTER_METADATA_REDIRECT_HELPER_H
 
+#include <algorithm>
 #include <cstdint>
 #include <iomanip>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -38,7 +37,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/utils.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 DS_DECLARE_bool(enable_redirect);
 
@@ -48,7 +47,7 @@ using TbbMigratingTable = tbb::concurrent_hash_map<ImmutableString, bool>;
 
 class MetadataRedirectHelper {
 public:
-    MetadataRedirectHelper(ClusterManager *cm) : clusterManager_(cm)
+    MetadataRedirectHelper(worker::WorkerTopologyReferences *cm) : topologyEngine_(cm)
     {
     }
 
@@ -80,26 +79,10 @@ public:
         const SendReqAndHandleRspExceptRedirctInfoFunc<Api, Req, Rsp> &sendReqAndHandleRspExceptRedirctInfoFunc,
         const ConvertRedirectInfo2NewReqFunc<Api, Req> &convertRedirectInfo2NewReqFunc)
     {
-        do {
-            rsp.Clear();
-            RETURN_IF_NOT_OK(sendReqAndHandleRspExceptRedirctInfoFunc(std::move(api), std::move(req), rsp));
-        } while (rsp.meta_is_moving());
-
-        auto descriptor = rsp.GetDescriptor();
-        auto reflection = rsp.GetReflection();
-        auto fieldPointer = descriptor->FindFieldByName(redirictInfoName);
-        if (fieldPointer == nullptr) {
-            return Status::OK();
-        }
-        auto redirectMetaInfos = reflection->template GetRepeatedFieldRef<RedirectMetaInfo>(rsp, fieldPointer);
-        for (const auto &redirectMetaInfo : redirectMetaInfos) {
-            std::shared_ptr<Api> redirctApi;
-            Req redirctReq;
-            RETURN_IF_NOT_OK(convertRedirectInfo2NewReqFunc(redirectMetaInfo, redirctReq, redirctApi));
-            return RetryForRedirict(std::move(redirctApi), std::move(redirctReq), rsp, redirictInfoName,
-                                    sendReqAndHandleRspExceptRedirctInfoFunc, convertRedirectInfo2NewReqFunc);
-        }
-        return Status::OK();
+        RedirectRetryState state;
+        return RetryForRedirectInternal(std::move(api), std::move(req), rsp, redirictInfoName,
+                                        sendReqAndHandleRspExceptRedirctInfoFunc,
+                                        convertRedirectInfo2NewReqFunc, state);
     }
 
     /**
@@ -113,7 +96,60 @@ public:
         }
     }
 
+private:
+    static constexpr size_t MAX_REDIRECT_HOPS = 16;
+
+    struct RedirectRetryState {
+        size_t hops{ 0 };
+        uint64_t latestTopologyVersion{ 0 };
+        std::unordered_set<std::string> visitedTargets;
+    };
+
+    static Status RecordRedirectStep(const RedirectMetaInfo &info, RedirectRetryState &state)
+    {
+        CHECK_FAIL_RETURN_STATUS(!info.redirect_meta_address().empty(), K_INVALID,
+                                 "metadata redirect target is empty");
+        CHECK_FAIL_RETURN_STATUS(state.hops < MAX_REDIRECT_HOPS, K_TRY_AGAIN,
+                                 "metadata redirect hop budget exhausted");
+        const uint64_t version = info.topology_version();
+        CHECK_FAIL_RETURN_STATUS(state.latestTopologyVersion == 0 || version >= state.latestTopologyVersion,
+                                 K_TRY_AGAIN, "metadata redirect topology version rolled back");
+        const std::string targetKey = std::to_string(version) + "|" + info.redirect_meta_address();
+        CHECK_FAIL_RETURN_STATUS(state.visitedTargets.emplace(targetKey).second, K_TRY_AGAIN,
+                                 "metadata redirect loop detected");
+        state.latestTopologyVersion = std::max(state.latestTopologyVersion, version);
+        ++state.hops;
+        return Status::OK();
+    }
+
+    template <typename Api, typename Req, typename Rsp>
+    static Status RetryForRedirectInternal(
+        std::shared_ptr<Api> &&api, Req &&req, Rsp &rsp, const std::string &redirectInfoName,
+        const SendReqAndHandleRspExceptRedirctInfoFunc<Api, Req, Rsp> &sendRequest,
+        const ConvertRedirectInfo2NewReqFunc<Api, Req> &convertRedirect, RedirectRetryState &state)
+    {
+        do {
+            rsp.Clear();
+            RETURN_IF_NOT_OK(sendRequest(std::move(api), std::move(req), rsp));
+        } while (rsp.meta_is_moving());
+        auto field = rsp.GetDescriptor()->FindFieldByName(redirectInfoName);
+        if (field == nullptr) {
+            return Status::OK();
+        }
+        auto infos = rsp.GetReflection()->template GetRepeatedFieldRef<RedirectMetaInfo>(rsp, field);
+        for (const auto &info : infos) {
+            RETURN_IF_NOT_OK(RecordRedirectStep(info, state));
+            std::shared_ptr<Api> redirectApi;
+            Req redirectReq;
+            RETURN_IF_NOT_OK(convertRedirect(info, redirectReq, redirectApi));
+            return RetryForRedirectInternal(std::move(redirectApi), std::move(redirectReq), rsp,
+                                            redirectInfoName, sendRequest, convertRedirect, state);
+        }
+        return Status::OK();
+    }
+
 protected:
+
     /**
      * @brief Check if the metadata is available for given id.
      * @param[in] id The item identifier.
@@ -126,8 +162,10 @@ protected:
      * @param[in] id The id of the item to check.
      * @param[out] redirect Redirect or not.
      * @param[out] newAddr If need to redirect, the new meta address of the item.
+     * @param[out] topologyVersion Topology version that authorized the redirect.
      */
-    virtual void CheckNeedToRedirectOrNot(const std::string &id, bool &redirect, std::string &newAddr);
+    virtual void CheckNeedToRedirectOrNot(const std::string &id, bool &redirect, std::string &newAddr,
+                                          uint64_t &topologyVersion);
 
     /**
      * @brief If need to redirect, group item ids by new meta address.
@@ -135,7 +173,8 @@ protected:
      * @param[out] redirectMap Redirect ids group by new meta address.
      */
     virtual void GroupRedirctObjectByNewMetaAddr(
-        std::vector<std::string> &ids, std::unordered_map<std::string, std::vector<std::string>> &redirectMap);
+        std::vector<std::string> &ids,
+        std::map<std::pair<uint64_t, std::string>, std::vector<std::string>> &redirectMap);
 
     /**
      * @brief If need redirect, fill redirect info.
@@ -152,7 +191,8 @@ protected:
             redirect = false;
             return;
         }
-        CheckNeedToRedirectOrNot(id, redirect, newMetaAddr);
+        uint64_t topologyVersion = 0;
+        CheckNeedToRedirectOrNot(id, redirect, newMetaAddr, topologyVersion);
         INJECT_POINT("redirect.create.update.copy.meta", [&newMetaAddr, &redirect](std::string addr) {
             newMetaAddr = addr;
             redirect = true;
@@ -161,6 +201,7 @@ protected:
         if (redirect) {
             RedirectMetaInfo *info = response.mutable_info();
             info->set_redirect_meta_address(newMetaAddr);
+            info->set_topology_version(topologyVersion);
             info->add_change_meta_ids(id);
             bool isMoving = ItemIsMigrating(id);
             INJECT_POINT("meta.moving", [&isMoving]() {
@@ -175,10 +216,9 @@ protected:
     /**
      * @brief If need redirect, fill redirect infos.
      * @tparam Rsp Redirect response.
-     * @param rsp[out] Response infos.
-     * @param ids[in/out] The ids of the items to process in this node.
-     * @param isMoving[out] If meta is moving.
-     * @param redirect[in] Need redirect or not.
+     * @param[out] rsp Response infos.
+     * @param[in,out] ids The ids of the items to process in this node.
+     * @param[in] redirect Need redirect or not.
      */
     template <typename Rsp>
     void FillRedirectResponseInfos(Rsp &rsp, std::vector<std::string> &ids, bool redirect)
@@ -187,14 +227,16 @@ protected:
             redirect = false;
             return;
         }
-        std::unordered_map<std::string, std::vector<std::string>> redirectQueryObjKeys;
+        std::map<std::pair<uint64_t, std::string>, std::vector<std::string>> redirectQueryObjKeys;
         GroupRedirctObjectByNewMetaAddr(ids, redirectQueryObjKeys);
         bool isMoving = false;
         for (const auto &redirectInfo : redirectQueryObjKeys) {
             RedirectMetaInfo *info = rsp.add_info();
-            info->set_redirect_meta_address(redirectInfo.first);
+            info->set_topology_version(redirectInfo.first.first);
+            info->set_redirect_meta_address(redirectInfo.first.second);
             for (auto &id : redirectInfo.second) {
-                VLOG(1) << FormatString("redirect id : %s, redirect meta address: %s", id, redirectInfo.first);
+                VLOG(1) << FormatString("redirect id : %s, redirect meta address: %s", id,
+                                        redirectInfo.first.second);
                 bool tempIsMoving = ItemIsMigrating(id);
                 INJECT_POINT("metas.moving", [&tempIsMoving]() {
                     tempIsMoving = true;
@@ -211,7 +253,7 @@ protected:
     }
 
     TbbMigratingTable migratingItems_;
-    ClusterManager *clusterManager_ = nullptr;
+    worker::WorkerTopologyReferences *topologyEngine_ = nullptr;
 };
 }  // namespace master
 }  // namespace datasystem

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -96,6 +93,7 @@ public:
 
 struct ServiceDiscoveryOptions {
     std::string etcdAddress;
+    // Required ETCD cluster namespace. Membership is read from /datasystem/{clusterName}/cluster.
     std::string clusterName = "";
 
     // TLS - optional
@@ -114,9 +112,10 @@ struct ServiceDiscoveryOptions {
 
 class __attribute((visibility("default"))) ServiceDiscovery : public IServiceDiscovery {
 public:
+
     /**
      * @brief Construct ServiceDiscovery. If certificate authentication is enabled for the etcd to be connected, must
-     *        specify etcdCa, etcdCert, etcdKey and etcdNameOverride.
+     * specify etcdCa, etcdCert, etcdKey and etcdNameOverride.
      * @param[in] opts ServiceDiscoveryOptions.
      */
     ServiceDiscovery(const ServiceDiscoveryOptions &opts);
@@ -150,9 +149,9 @@ public:
 
     /**
      * @brief Return every ready worker ("host:port") visible via etcd keepalive, split by host
-     *        affinity. Under REQUIRED_SAME_NODE only same-node workers are returned; under RANDOM
-     *        every worker is returned via otherAddrs with sameHostAddrs empty; otherwise same-node
-     *        workers go in sameHostAddrs and the rest in otherAddrs.
+     * affinity. Under REQUIRED_SAME_NODE only same-node workers are returned; under RANDOM
+     * every worker is returned via otherAddrs with sameHostAddrs empty; otherwise same-node
+     * workers go in sameHostAddrs and the rest in otherAddrs.
      * @param[out] sameHostAddrs Addresses of workers whose hostId matches the local hostId.
      * @param[out] otherAddrs    Addresses of all remaining workers.
      * @return Status of the call.
@@ -170,9 +169,9 @@ public:
 
     /**
      * @brief Whether host locality is actually active: the configured policy exercises
-     *        host affinity (PREFERRED_SAME_NODE or REQUIRED_SAME_NODE) AND hostId has
-     *        been resolved. Under RANDOM, or when hostId is missing, this is false and
-     *        same-node operations cannot be used.
+     * host affinity (PREFERRED_SAME_NODE or REQUIRED_SAME_NODE) AND hostId has
+     * been resolved. Under RANDOM, or when hostId is missing, this is false and
+     * same-node operations cannot be used.
      * @return True when the client can meaningfully select same-node workers.
      */
     bool HasHostAffinity() const override
@@ -181,9 +180,10 @@ public:
     }
 
 private:
+
     /**
      * @brief Fetch ready worker addresses from etcd and partition by host affinity. When hostId_
-     *        is empty, every worker goes into `other`.
+     * is empty, every worker goes into `other`.
      * @param[out] sameHost Addresses of workers whose hostId matches the local hostId.
      * @param[out] other    Remaining ready worker addresses.
      * @return Status of the call.
@@ -192,6 +192,7 @@ private:
 
     std::string etcdAddress_;
     std::string clusterName_;
+    std::string membershipTable_;
     SensitiveValue etcdCa_;
     SensitiveValue etcdCert_;
     SensitiveValue etcdKey_;
@@ -238,6 +239,7 @@ struct CoordinatorServiceDiscoveryOptions {
 
 class __attribute((visibility("default"))) CoordinatorServiceDiscovery : public IServiceDiscovery {
 public:
+
     /**
      * @brief Construct CoordinatorServiceDiscovery.
      * @param[in] opts Coordinator-backed service discovery options.

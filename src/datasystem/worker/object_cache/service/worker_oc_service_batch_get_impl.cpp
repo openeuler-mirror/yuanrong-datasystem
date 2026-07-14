@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -125,6 +122,31 @@ void CleanupWorkerWorkerOcRpcChannel(
     } else {
         LOG(WARNING) << PIPLN_LOG_PREFIX" Remove RPC stub success: address=" << address;
     }
+}
+
+bool IsEndpointViewLagStatus(const Status &status)
+{
+    return status.GetCode() == K_NOT_READY || status.GetCode() == K_NOT_FOUND;
+}
+
+Status CheckTopologyEndpointConnection(const cluster::MembershipEndpointView *membership, const HostPort &nodeAddr,
+                                       bool allowDirectoryLag)
+{
+    CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership endpoint view is not provided.");
+    cluster::MemberEndpoint endpoint;
+    Status rc = membership->ResolveByAddress(nodeAddr.ToString(), endpoint);
+    if (rc.IsError()) {
+        if (allowDirectoryLag && IsEndpointViewLagStatus(rc)) {
+            return Status::OK();
+        }
+        RETURN_STATUS(rc.GetCode(), "The node " + nodeAddr.ToString() + " could not be found in topology membership.");
+    }
+    if (allowDirectoryLag && endpoint.localAvailability == cluster::EndpointAvailability::UNKNOWN) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE, K_MASTER_TIMEOUT,
+                             "Disconnected from remote node " + nodeAddr.ToString());
+    return Status::OK();
 }
 }  // namespace
 
@@ -345,11 +367,15 @@ void WorkerOcServiceGetImpl::MarkNeedDeleteForDisconnectedMasters(
 {
     // If the master is disconnected before updating the location, we have to give up retaining the replica, because the
     // master will only manage the replica through the location.
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(successIds);
+    auto grouped = BuildMetaOwnerRouteGroups(successIds, topologyPlacement_, topologyRouteOptions_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     needSetDeleteObjectKeys.reserve(successIds.size());
-    clusterManager_->GetObjectKeysFromNotConnectedMaster(objKeysGrpByMaster, needSetDeleteObjectKeys);
+    for (const auto &item : objKeysGrpByMaster) {
+        if (CheckTopologyEndpointConnection(topologyMembership_, item.first, false).IsError()) {
+            needSetDeleteObjectKeys.insert(item.second.begin(), item.second.end());
+        }
+    }
     for (const auto &objectKey : needSetDeleteObjectKeys) {
         auto it = entries.find(ReadKey(objectKey));
         if (it != entries.end()) {
@@ -715,7 +741,7 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
             HostPort hostAddr;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddr.ParseString(address),
                                              FormatString("Parse object address %s failed", address));
-            checkConnectStatus = clusterManager_->CheckConnection(hostAddr);
+            checkConnectStatus = CheckTopologyEndpointConnection(topologyMembership_, hostAddr, false);
             CHECK_FAIL_RETURN_STATUS(checkConnectStatus.IsOk(), K_RUNTIME_ERROR,
                                      FormatString("Fail to get objects from remote worker, no object copy exists."));
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");

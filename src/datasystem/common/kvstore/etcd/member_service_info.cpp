@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Legacy etcd cluster-table member service information codecs.
+ * Description: ETCD membership lease value compatibility codec.
  */
 #include "datasystem/common/kvstore/etcd/member_service_info.h"
 
@@ -26,8 +26,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 
-namespace datasystem {
-namespace topology {
+namespace datasystem::cluster {
 namespace {
 using MemberServiceInfoPb = coordinator::WorkerServiceInfoPb;
 
@@ -229,5 +228,4 @@ Status MemberServiceInfo::FromProto(const std::string &str, MemberServiceInfo &v
     value.compatibilityVersion = info.compatibility_version();
     return Status::OK();
 }
-}  // namespace topology
-}  // namespace datasystem
+}  // namespace datasystem::cluster

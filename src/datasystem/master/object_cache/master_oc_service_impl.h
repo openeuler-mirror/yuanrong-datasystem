@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -35,7 +32,7 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/protos/master_object.brpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 // .brpc.pb.h above pulls in brpc headers which override LOG/VLOG/DLOG via
 // butil/logging.h. Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
@@ -45,6 +42,7 @@ namespace master {
 
 class MasterOCServiceImpl final : public MasterOCService, public IMasterOCService {
 public:
+
     /**
      * @brief Construct MasterOCServiceImpl.
      */
@@ -297,7 +295,7 @@ public:
      * @param[in] serverApi The ServerUnaryWriterReader object.
      * @return K_OK on success; the error code otherwise.
      */
-    Status IfNeedTriggerReconciliation(
+    Status ReconcileMembershipChange(
         std::shared_ptr<ServerUnaryWriterReader<ReconciliationRspPb, ReconciliationQueryPb>> serverApi) override;
 
     /**
@@ -309,11 +307,11 @@ public:
 
     /**
      * @brief Setter method for assigning cluster manager
-     * @param[in] cm The pointer to cluster manager
+     * @param[in] cm Borrowed Worker topology dependencies.
      */
-    void SetClusterManager(ClusterManager *cm)
+    void SetTopologyEngine(worker::WorkerTopologyReferences *cm)
     {
-        clusterManager_ = cm;
+        topologyEngine_ = cm;
     }
 
     /**
@@ -494,7 +492,7 @@ private:
     HostPort masterAddress_;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;

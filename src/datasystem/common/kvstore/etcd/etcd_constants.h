@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -36,8 +33,7 @@ static constexpr char WATCH_CREATE[] = "watch create";
 static constexpr char WATCH_READ[] = "watch read";
 static constexpr char WATCH_WRITE[] = "watch run";
 static constexpr char WRITES_DONE[] = "writes done";
-static constexpr char ETCD_RING_PREFIX[] = "/datasystem/ring";
-static constexpr char ETCD_CLUSTER_TABLE[] = "datasystem/cluster";  // Do not add leading '/'. prefix is customized
+static constexpr char ETCD_MEMBERSHIP_KEY_SEGMENT[] = "/cluster/";
 static constexpr char ETCD_MASTER_ADDRESS_TABLE[] = "/datasystem";
 static constexpr char ETCD_SLOT_RECOVERY_TABLE[] = "/datasystem/slot_recovery";
 // Save key without worker id metadata

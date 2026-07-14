@@ -228,13 +228,15 @@ EOF
     (
       lib_name="${cmake_file%%.*}"
       overall_start_time=$(date +%s)
+      # Install the failure marker before waiting. Otherwise an upstream failure can make this process exit without
+      # publishing its own failure, leaving transitive dependants waiting until the full dependency timeout.
+      trap on_exit EXIT
       # Wait for dependencies to complete
       if ! wait_for_dependencies "$lib_name" "$dependencies"; then
           exit 1
       fi
 
       log "Building $lib_name..."
-      trap on_exit EXIT
       cd "${tmp_compile_dir}"
       cat > "CMakeLists.txt" << EOF
 cmake_minimum_required(VERSION 3.14.1)

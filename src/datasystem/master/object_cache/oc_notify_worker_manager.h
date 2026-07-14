@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -40,7 +37,6 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/master/object_cache/master_master_oc_api.h"
-#include "datasystem/worker/hash_ring/hash_ring_event.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -58,6 +54,7 @@ struct DeleteApiInfo {
 class OCMetadataManager;
 class OCNotifyWorkerManager {
 public:
+
     /**
      * @brief Construct OCNotifyWorkerManager.
      */
@@ -110,15 +107,6 @@ public:
      */
     Status NotifySubscribeMeta(const std::string &objectKey, const ObjectMeta &objectMeta,
                                const std::string &subAddress, uint64_t &subTimeoutMs);
-
-    /**
-     * @brief clear data without meta.
-     * @param[in] range The hash range of objectKey to clear data.
-     * @param[in] objsMigrateFinished The object keys in range no need to clear.
-     * @return Status of the call.
-     */
-    Status ClearDataWithoutMeta(const worker::HashRange &range, const std::string &workerAddr,
-                                const std::vector<std::string> &objsMigrateFinished);
 
     /**
      * @brief Notify worker which has object data to delete.
@@ -275,7 +263,6 @@ public:
     /**
      * @brief Requests the worker to send meta to the master in the response.
      * @param[in] masterAddr The address of the master requesting for the metadata.
-
      * @param[in] workerAddr The address of the worker to whom the request is sent.
      * @param[out] rsp The response of the call containing meta related to the master.
      * @return Status of the call.
@@ -321,7 +308,7 @@ public:
      * @param[in] extraRanges Obtains the data of specified object-key hash ranges if not empty.
      * @return Status of the call.
      */
-    Status RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb, const worker::HashRange &extraRanges = {});
+    Status RecoverCacheInvalidAndRemoveMeta(bool isFromRocksdb);
 
     /**
      * @brief Send changes to the primary copy.
@@ -359,6 +346,7 @@ public:
     Status ProcessAsyncDeleteNotifyOpImpl();
 
 private:
+
     /**
      * @brief Process async notify operation.
      */

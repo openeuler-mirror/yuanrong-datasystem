@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -1040,7 +1037,8 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldRecoverEntriesObjectByObjectDu
             (*content3) << "v3";
             return callback(meta3, content3);
         });
-    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7101), nullptr, nullptr, nullptr);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7101), nullptr,
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
 
     std::vector<std::vector<std::string>> localRecoverKeys;
     BINEXPECT_CALL((RecoverLocalEntriesMethod)&MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
@@ -1119,7 +1117,8 @@ TEST_F(SlotRecoveryTest, RestartShouldRecoverAfterTransientIoFailure)
             (*content) << "payload_" << slotId;
             return callback(meta, content);
         });
-    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr, nullptr, nullptr);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr,
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
 
     std::mutex recoveredMutex;
     std::vector<std::string> recoveredObjectKeys;
@@ -1149,7 +1148,8 @@ TEST_F(SlotRecoveryTest, RestartShouldRecoverAfterTransientIoFailure)
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7201), store);
     manager.SetActiveWorkers({ "127.0.0.1:7201" });
     DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7201), nullptr, persistApi, nullptr, nullptr, &metadataManager));
-    DS_ASSERT_OK(datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.PreloadSlot", "1*return(K_IO_ERROR)"));
+    DS_ASSERT_OK(
+        datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.PreloadSlot", "1*return(K_IO_ERROR)"));
 
     DS_ASSERT_OK(manager.HandleLocalRestart());
 
@@ -1173,7 +1173,8 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskDeferOnRpcUnavailable)
     auto store = std::make_shared<FakeSlotRecoveryStore>();
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7201), store);
     auto persistApi = BuildSingleMetaPreloadApi("127.0.0.1:7200", 1, "tenant/object_a", 1);
-    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr, nullptr, nullptr);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr,
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
     ExpectRecoverLocalEntriesAlwaysOk();
 
     std::atomic<int> recoverMetadataCalls{ 0 };
@@ -1204,7 +1205,8 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskFailOnInvalidMeta)
     auto store = std::make_shared<FakeSlotRecoveryStore>();
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7211), store);
     auto persistApi = BuildSingleMetaPreloadApi("127.0.0.1:7210", 2, "tenant/object_b", 2);
-    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7211), nullptr, nullptr, nullptr);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7211), nullptr,
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
     ExpectRecoverLocalEntriesAlwaysOk();
 
     std::atomic<int> recoverMetadataCalls{ 0 };
@@ -1252,7 +1254,8 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldPushSucceededSlotsEvenWhenAnot
             return Status(K_RUNTIME_ERROR, __LINE__, __FILE__,
                           "Rename file from manifest.tmp.f3nQVn to manifest failed with errno: 2");
         });
-    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7301), nullptr, nullptr, nullptr);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7301), nullptr,
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
     ExpectRecoverLocalEntriesAlwaysOk();
 
     std::mutex pushedMutex;

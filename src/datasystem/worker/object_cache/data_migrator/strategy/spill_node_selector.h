@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,9 +17,9 @@
 #ifndef DATASYSTEM_MIGRATE_DATA_SPILL_NODE_SELECTOR_H
 #define DATASYSTEM_MIGRATE_DATA_SPILL_NODE_SELECTOR_H
 
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/selection_strategy.h"
 
 namespace datasystem {
@@ -30,8 +27,8 @@ namespace object_cache {
 
 class SpillNodeSelector : public SelectionStrategy {
 public:
-    SpillNodeSelector(ClusterManager *clusterManager, HostPort &localAddress)
-        : clusterManager_(clusterManager), localAddress_(localAddress)
+    SpillNodeSelector(worker::WorkerTopologyReferences *topologyEngine, HostPort &localAddress)
+        : topologyEngine_(topologyEngine), localAddress_(localAddress)
     {
         excludedNodes_.insert(localAddress_.ToString());
     }
@@ -72,7 +69,7 @@ public:
     }
 
 private:
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     HostPort &localAddress_;
     std::unordered_set<std::string> excludedNodes_;
 };

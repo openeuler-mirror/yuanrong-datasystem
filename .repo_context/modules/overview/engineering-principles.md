@@ -53,7 +53,7 @@ Before changing code, identify whether the path is:
 | Path type | Examples | Required assessment |
 | --- | --- | --- |
 | foreground request path | `KVClient::Set/Get`, `ObjectClientImpl::Put/Get/MSet`, worker CRUD/get paths, remote get, batch get | latency, allocations, copies, logs, lock hold time, RPC/IO, bounded loops |
-| metadata coordination path | ETCD/Metastore access, hash-ring updates, cluster-manager state, master metadata | write ordering, CAS/lease behavior, retries, fanout, failure mode |
+| metadata coordination path | ETCD/Metastore access, topology updates, membership state, master metadata | write ordering, CAS/lease behavior, retries, fanout, failure mode |
 | data movement path | shared memory, RDMA/UCX/P2P, spill/load, l2cache transfer, preload | data copies, buffer lifetime, alignment, backpressure, flush/wait semantics |
 | background path | eviction, async metadata queue, compaction, recovery, metrics/log flushing | foreground interference, queue bound, retry storm, shutdown safety |
 

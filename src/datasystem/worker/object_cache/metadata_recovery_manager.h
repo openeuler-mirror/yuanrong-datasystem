@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,7 +19,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -31,7 +30,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/cluster/routing/placement_types.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
@@ -49,11 +48,22 @@ public:
         std::vector<std::string> failedIds;
     };
 
+    struct ClusterAccess {
+        std::function<Status(const HostPort &)> checkConnection;
+    };
+
+    using RecoveredContentSaver =
+        std::function<Status(const ObjectMetaPb &, const std::shared_ptr<std::stringstream> &,
+                             const std::shared_ptr<SafeObjType> &)>;
+
     MetaDataRecoveryManager(
-        const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, ClusterManager *clusterManager,
+        const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, ClusterAccess clusterAccess,
         const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
         uint64_t metadataSize = 0, const std::shared_ptr<WorkerOcEvictionManager> &evictionManager = nullptr,
-        const std::shared_ptr<ThreadPool> &memCpyThreadPool = nullptr);
+        const std::shared_ptr<ThreadPool> &memCpyThreadPool = nullptr,
+        const cluster::PlacementFacade *topologyPlacement = nullptr,
+        worker::MetadataRouteOptions topologyRouteOptions = worker::MetadataRouteOptions{},
+        RecoveredContentSaver recoveredContentSaver = nullptr);
 
     ~MetaDataRecoveryManager() = default;
 
@@ -89,6 +99,7 @@ public:
      * @brief Recover metadata that is already materialized from slot preload callbacks.
      * @param[in] metas Metadata records to recover.
      * @param[out] failedIds Object keys failed because master is unreachable or the request cannot be built.
+     * @param[in] stanbyMasterAddr Optional standby master address used for recovery dispatch.
      * @return Status of the call.
      */
     Status RecoverMetadata(const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &failedIds,
@@ -104,6 +115,7 @@ private:
 
     using GroupedByMaster = std::unordered_map<HostPort, std::vector<std::string>>;
     using GroupItem = GroupedByMaster::value_type;
+    using MetasByMaster = std::unordered_map<HostPort, std::vector<ObjectMetaPb>>;
 
     GroupedByMaster BuildGroupedByMaster(const std::vector<std::string> &objectKeys,
                                          const std::string &stanbyAddr) const;
@@ -115,6 +127,14 @@ private:
         const std::vector<std::string> &objectKeys,
         const std::unordered_map<std::string, std::vector<const ObjectMetaPb *>> &metasByObjectKey) const;
     void LogRecoverySummary(const RecoverySummary &summary, const std::string &prefix) const;
+    void SelectLatestMetas(const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &failedIds,
+                           std::unordered_map<std::string, ObjectMetaPb> &latestMetaByKey,
+                           std::vector<std::string> &objectKeys) const;
+    MetasByMaster GroupRecoveryMetas(const std::vector<std::string> &objectKeys,
+                                     const std::unordered_map<std::string, ObjectMetaPb> &latestMetaByKey,
+                                     const std::string &stanbyMasterAddr) const;
+    Status DispatchRecoveryMetas(const MetasByMaster &groupedMetasByMaster,
+                                 std::vector<std::string> &failedIds) const;
 
     bool FillRecoveredMeta(const std::string &objectKey, ObjectMetaPb &metadata) const;
     bool InitRecoverApi(const HostPort &masterAddr, const std::vector<std::string> &objectKeys, HostPort &addr,
@@ -124,16 +144,20 @@ private:
                           const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                           master::PushMetaToMasterReqPb &req, std::vector<std::string> &batchObjectKeys,
                           DispatchResult &result) const;
-    DispatchResult SendRecoverRequest(const HostPort &masterAddr, const std::vector<std::string> &objectKeys) const;
+    DispatchResult SendRecoverRequest(const HostPort &masterAddr,
+                                      const std::vector<std::string> &objectKeys) const;
     DispatchResult SendRecoverRequest(const HostPort &masterAddr, const std::vector<ObjectMetaPb> &metas) const;
 
     HostPort localAddress_;
     std::shared_ptr<ObjectTable> objectTable_;
-    ClusterManager *clusterManager_{ nullptr };
+    ClusterAccess clusterAccess_;
+    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
+    worker::MetadataRouteOptions topologyRouteOptions_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
     uint64_t metadataSize_{ 0 };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_{ nullptr };
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
+    RecoveredContentSaver recoveredContentSaver_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

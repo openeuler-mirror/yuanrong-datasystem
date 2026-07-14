@@ -102,20 +102,6 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         DEPEND zmq_proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client rpc_option_protos)
 
-GENERATE_PROTO_CPP(HASHRING_PROTO_SRCS COMMON_PROTO_HDRS ${PROTO_BUILD_DIR}
-        PROTO_FILES ${PROTO_SRC_DIR}/hash_ring.proto ${PROTO_SRC_DIR}/hash_ring_v2.proto
-        PROTO_DEPEND proto_lib_depend)
-GEN_GLOBAL_PROTO_LIB_DEPEND(
-        NAME hash_ring_protos
-        SOURCE ${HASHRING_PROTO_SRCS}
-        DEPEND proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES})
-GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
-        NAME hash_ring_protos_client
-        SOURCE ${HASHRING_PROTO_SRCS}
-        DEPEND proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES})
-
 GENERATE_PROTO_CPP(CLUSTER_TOPOLOGY_PROTO_SRCS COMMON_PROTO_HDRS ${PROTO_BUILD_DIR}
         PROTO_FILES ${PROTO_SRC_DIR}/cluster_topology.proto
         PROTO_DEPEND proto_lib_depend)
@@ -188,12 +174,14 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME posix_protos
         SOURCE ${OBJECT_POSIX_SRCS} ${STREAM_POSIX_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos utils_protos p2p_subscribe_protos rpc_option_protos hash_ring_protos)
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos utils_protos p2p_subscribe_protos rpc_option_protos
+             cluster_topology_protos)
 GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         NAME posix_protos_client
         SOURCE ${OBJECT_POSIX_SRCS} ${STREAM_POSIX_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client utils_protos_client p2p_subscribe_protos_client rpc_option_protos hash_ring_protos_client)
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client utils_protos_client p2p_subscribe_protos_client
+             rpc_option_protos cluster_topology_protos_client)
 
 # Compile the proto file at the second layer, for example, posix proto.
 GENERATE_ZMQ_CPP(zmq_proto_lib_depend WORKER_OBJECT_SRCS WORKER_OBJECT_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/worker_object.proto)
@@ -203,12 +191,12 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_object_protos
         SOURCE ${WORKER_OBJECT_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos hash_ring_protos rpc_option_protos meta_transport_protos)
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos rpc_option_protos meta_transport_protos)
 GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         NAME worker_object_protos_client
         SOURCE ${WORKER_OBJECT_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client hash_ring_protos_client rpc_option_protos meta_transport_protos_client)
+        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client rpc_option_protos meta_transport_protos_client)
 
 GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME worker_stream_protos

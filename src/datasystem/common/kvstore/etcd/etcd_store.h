@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -47,10 +44,6 @@ class KV;
 };
 
 namespace datasystem {
-namespace cluster {
-enum class MemberLifecycleState;
-}
-
 static constexpr char ETCD_ADDR_PATTREN[] = ",";
 const int64_t MIN_RPC_TIMEOUT_MS = 5000;  // 5s
 
@@ -78,7 +71,7 @@ public:
 
     /**
      * @brief construct EtcdStore. If the etcd ca, cert, and key paths are configured, the content authentication is
-     *        directly transferred. Otherwise, the gflags parameter is used for authentication.
+     * directly transferred. Otherwise, the gflags parameter is used for authentication.
      * @param[in] address Etcd IP address.
      * @param[in] etcdCa Root etcd certificate, optional parameters.
      * @param[in] etcdCert Etcd certificate chain, optional parameters.
@@ -126,6 +119,14 @@ public:
      * @return Status of the call.
      */
     Status CreateTable(const std::string &tableName, const std::string &tablePrefix);
+
+    /**
+     * @brief Register a logical table with an exact physical ETCD prefix.
+     * @param[in] tableName Logical table name used by callers.
+     * @param[in] tablePrefix Exact physical prefix without cluster-name rewriting.
+     * @return Status of the call.
+     */
+    Status CreateTableWithExactPrefix(const std::string &tableName, const std::string &tablePrefix);
 
     /**
      * @brief Drop a table (aka column family in RocksDB's term).
@@ -183,6 +184,7 @@ public:
      * @return Status of the call.
      */
     Status WatchEvents(const std::vector<WatchElement> &watchKeys);
+
     /**
      * @brief Put a new key-value into a table.
      * @param[in] tableName The table name for the <key,value> to insert.
@@ -398,13 +400,6 @@ public:
      * @param[in] state worker state.
      * @return status of the call.
      */
-    Status UpdateNodeState(topology::MemberLifecycleState state);
-
-    /**
-     * @brief Update node state through the standalone Cluster Topology adapter.
-     * @param[in] state Cluster Topology membership state.
-     * @return Status of the call.
-     */
     Status UpdateNodeState(cluster::MemberLifecycleState state);
 
     /**
@@ -419,13 +414,6 @@ public:
      * @brief When all reconciliations are done, replace "restart" with "start" in ETCD.
      * @param[in] workerAddr The hostport of the local node whose reconciliations are done.
      * @return Return status.
-     */
-    Status InformEtcdReconciliationDone(const HostPort &workerAddr);
-
-    /**
-     * @brief Preserve the backend-neutral reconciliation method name used by Cluster Topology.
-     * @param[in] workerAddr Local member address.
-     * @return Status of the call.
      */
     Status InformReconciliationDone(const HostPort &workerAddr);
 
@@ -464,7 +452,7 @@ public:
 
     bool IsFirstKeepAliveSent()
     {
-        return keepAliveValue_.state == topology::MemberLifecycleState::RECOVERING;
+        return keepAliveValue_.state == cluster::MemberLifecycleState::RECOVERING;
     }
 
     /**
@@ -527,7 +515,18 @@ private:
      * timestamp and tag, and each time reconnecting the etcd use the same value.
      * @return Status of the call.
      */
-    Status RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTimer);
+    Status RunKeepAliveTask(Timer &keepAliveTimeoutTimer);
+
+    /**
+     * @brief Classify one failed keepalive attempt and publish local-isolation evidence when confirmed.
+     * @param[in] status Failed keepalive status.
+     * @param[in,out] observedLeaseId Lease generation used by the current confirmation counter.
+     * @param[in,out] confirmTimes Consecutive local-isolation confirmations.
+     * @param[in,out] needHandleFailure Whether a fake DELETE still needs to be published for this lease.
+     * @return True when the lease-expiry threshold was reached and the caller should delay before retrying.
+     */
+    bool ProcessKeepAliveFailure(const Status &status, int64_t &observedLeaseId, int &confirmTimes,
+                                 bool &needHandleFailure);
 
     /**
      * @brief Helper function to kick off the threading and loops for the keep alive
@@ -596,7 +595,7 @@ private:
     std::string address_;                         // etcd address
     std::string keepAliveTableName_;              // The table on etcd for the leased kv's
     std::string keepAliveKey_;                    // The key that is associated with the lease
-    topology::MemberServiceInfo keepAliveValue_;  // The value that is associated with the lease
+    cluster::MemberServiceInfo keepAliveValue_;  // The value that is associated with the lease
     std::atomic<int64_t> leaseId_;                // The lease id for the keep alive.
     std::unique_ptr<GrpcSession<etcdserverpb::KV>> rpcSession_;
     mutable std::shared_timed_mutex mutex_;

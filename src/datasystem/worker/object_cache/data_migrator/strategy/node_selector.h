@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,10 +28,10 @@
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/master_object.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
 #include "datasystem/utils/status.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -51,10 +48,10 @@ public:
     /**
      * @brief Init NodeSelector.
      * @param[in] localAddress The worker local address.
-     * @param[in] clusterManager The pointer to cluster manager.
+     * @param[in] topologyEngine Borrowed Worker topology dependencies.
      * @param[in] apiManager The manager of worker master api.
      */
-    void Init(const std::string &localAddress, ClusterManager *clusterManager,
+    void Init(const std::string &localAddress, worker::WorkerTopologyReferences *topologyEngine,
               std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager);
 
     /**
@@ -107,6 +104,7 @@ public:
 protected:
     NodeSelector();
     ~NodeSelector();
+
     /**
      * @brief Collect cluster info, report self memory info and get all workers info.
      * @return Status of this call.
@@ -136,7 +134,7 @@ protected:
      * @param[out] outNode The selected node.
      * @return Status of this call.
      */
-    Status GetStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode);
+    Status GetLocalStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode);
 
     /**
      * @brief Try to get available memory from the current resource snapshot.
@@ -163,7 +161,7 @@ private:
     void WorkerThread();
 
     std::string localAddress_;
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager_{ nullptr };
 
     std::atomic<bool> running_;

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -54,15 +51,19 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     etcdStore_ = param.etcdStore;
     persistenceApi_ = param.persistenceApi;
     masterAddress_ = param.masterAddress;
-    clusterManager_ = param.clusterManager;
+    topologyEngine_ = param.topologyEngine;
     masterWorkerService_ = param.masterWorkerService;
     workerWorkerService_ = param.workerWorkerService;
     rpcSessionManager_ = param.rpcSessionManager;
     isOcEnabled_ = param.isOcEnabled;
     isScEnabled_ = param.isScEnabled;
 
-    bool isNewNode = clusterManager_ == nullptr ? true : clusterManager_->IsNewNode();
-    bool isCentralized = clusterManager_ == nullptr ? false : clusterManager_->IsCentralized();
+    bool isRestart = false;
+    if (topologyEngine_ != nullptr) {
+        isRestart = topologyEngine_->restart;
+    }
+    bool isNewNode = topologyEngine_ == nullptr ? true : !isRestart;
+    bool isCentralized = topologyEngine_ == nullptr ? false : topologyEngine_->centralizedMetadata;
     if (isNewNode && !isCentralized) {
         isNewNode_ = true;
         LOG(INFO) << "Newly-added node, remove local metadata store if it exists.";
@@ -85,9 +86,9 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
     double ocElapsed = 0;
     double scElapsed = 0;
     if (isOcEnabled_) {
-        auto oc = std::make_shared<master::OCMetadataManager>(akSkManager_, objectRocksStore, etcdStore_,
-                                                              persistenceApi_, masterAddress_.ToString(),
-                                                              clusterManager_, workerId, isNewNode_);
+        auto oc = std::make_shared<master::OCMetadataManager>(
+            akSkManager_, objectRocksStore, etcdStore_, persistenceApi_, masterAddress_.ToString(), topologyEngine_,
+            workerId, isNewNode_);
         LOG(INFO) << "Start init OCMetadataManager for " << workerId;
         RETURN_IF_NOT_OK(oc->Init());
         ocElapsed = timer.ElapsedMilliSecond();
@@ -97,7 +98,7 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
 
     if (isScEnabled_) {
         auto sc = std::make_shared<master::SCMetadataManager>(masterAddress_, akSkManager_, rpcSessionManager_,
-                                                              clusterManager_, streamRocksStore, workerId);
+                                                              topologyEngine_, streamRocksStore, workerId);
         LOG(INFO) << "Start init SCMetadataManager for " << workerId;
         timer.Reset();
         RETURN_IF_NOT_OK(sc->Init());
@@ -169,10 +170,9 @@ Status MetadataManagerHolder::GetDeviceOcManager(std::shared_ptr<master::MasterD
     return Status::OK();
 }
 
-Status MetadataManagerHolder::InitLocalMetadataForStart(bool isRestart, const ClusterInfo &clusterInfo)
+Status MetadataManagerHolder::InitLocalMetadataForStart(bool isRestart)
 {
     (void)isRestart;
-    (void)clusterInfo;
     const auto &workerId = GetCurrentWorkerUuid();
     LOG(INFO) << "Create local metadata manager for worker:" << workerId
               << ", worker addr:" << masterAddress_.ToString();
