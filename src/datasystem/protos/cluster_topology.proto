@@ -1,0 +1,77 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+
+package datasystem.v3;
+
+option cc_enable_arenas = true;
+
+message MembershipPb {
+  enum StatePb {
+    INITIAL = 0;
+    JOINING = 1;
+    ACTIVE = 2;
+    PRE_LEAVING = 3;
+    LEAVING = 4;
+    FAILED = 5;
+  }
+
+  repeated uint32 tokens = 1;
+  bytes id = 2;
+  StatePb state = 3;
+}
+
+message TokenRangePb {
+  string owner_address = 1;
+  uint32 from = 2;
+  uint32 end = 3;
+  bool finished = 4;
+}
+
+message MigrateTaskPb {
+  string target_address = 1;
+  repeated TokenRangePb source_ranges = 2;
+}
+
+message DeleteNodeTaskPb {
+  string failed_address = 1;
+  repeated TokenRangePb recovery_ranges = 2;
+}
+
+enum TypePb {
+  SCALE_OUT = 0;
+  SCALE_IN = 1;
+  FAILURE = 2;
+}
+
+message ChangeBatchPb {
+  TypePb type = 1;
+  uint64 epoch = 2;
+}
+
+message TaskNotifyPb {
+  TypePb type = 1;
+  repeated string task_ids = 2;
+}
+
+message ClusterTopologyPb {
+  bool cluster_has_init = 1;
+  map<string, MembershipPb> members = 2;
+  uint64 version = 3;
+  string schema_version = 4;
+  ChangeBatchPb active_batch = 5;
+}

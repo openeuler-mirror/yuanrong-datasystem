@@ -211,6 +211,16 @@ Status EtcdStore::WatchShutdown()
 
 Status EtcdStore::Shutdown()
 {
+    Status rc = ShutdownEventSources();
+    if (tokenRefreshThread_ != nullptr && tokenRefreshThread_->joinable()) {
+        stopTokenRefresh_ = true;
+        tokenRefreshThread_->join();
+    }
+    return rc;
+}
+
+Status EtcdStore::ShutdownEventSources()
+{
     // Shutdown protocol for keep alive:
     // 1) Get a lock. This protects the leaseKeepAlive_ from being changed (the running thread drops and recreates it
     //    if it is in an error handling retry loop).
@@ -250,11 +260,6 @@ Status EtcdStore::Shutdown()
 
     watchExit_ = true;
     LOG_IF_ERROR(WatchShutdown(), "EtcdStore WatchShutdown failed");
-
-    if (tokenRefreshThread_ != nullptr && tokenRefreshThread_->joinable()) {
-        stopTokenRefresh_ = true;
-        tokenRefreshThread_->join();
-    }
 
     return Status::OK();
 }
@@ -505,6 +510,11 @@ Status EtcdStore::UpdateNodeState(topology::MemberLifecycleState state)
     return Status::OK();
 }
 
+Status EtcdStore::UpdateNodeState(cluster::MemberLifecycleState state)
+{
+    return UpdateNodeState(static_cast<topology::MemberLifecycleState>(state));
+}
+
 Status EtcdStore::HandleKeepAliveFailed()
 {
     std::string etcdKey;
@@ -622,14 +632,15 @@ Status EtcdStore::LaunchKeepAliveThreads()
 }
 
 Status EtcdStore::InitWatch(std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
-                            const std::function<Status()> &writable)
+                            std::unordered_set<std::string> exactKeys, const std::function<Status()> &writable)
 {
     // Main thread and retry thread share watchEvents_ pointer
     WriteLock lock(&watchLock_);
     if (!isRouterClientCurveConnect_) {
-        watchEvents_ = std::make_unique<EtcdWatch>(address_, std::move(prefixMap));
+        watchEvents_ = std::make_unique<EtcdWatch>(address_, std::move(prefixMap), std::move(exactKeys));
     } else {
-        watchEvents_ = std::make_unique<EtcdWatch>(address_, std::move(prefixMap), clientCurveKit_);
+        watchEvents_ =
+            std::make_unique<EtcdWatch>(address_, std::move(prefixMap), std::move(exactKeys), clientCurveKit_);
     }
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(eventHandler_ != nullptr, K_RUNTIME_ERROR,
                                          "checkEtcdStateWhenNetworkFailedHandler_ is nullptr");
@@ -708,6 +719,7 @@ Status EtcdStore::WatchEvents(const std::vector<WatchElement> &watchKeys)
 {
     RETURN_IF_NOT_OK(CreateTable(ETCD_HEALTH_CHECK_TABLE, ETCD_HEALTH_CHECK_TABLE));
     auto prefixToWatch = std::make_unique<std::unordered_map<std::string, int64_t>>();
+    std::unordered_set<std::string> exactKeys;
 
     for (const auto &watchKey : watchKeys) {
         const auto &tableName = watchKey.tableName;
@@ -718,13 +730,18 @@ Status EtcdStore::WatchEvents(const std::vector<WatchElement> &watchKeys)
             TableMap::const_iterator iter = tableMap_.find(tableName);
             CHECK_FAIL_RETURN_STATUS(iter != tableMap_.cend(), K_RUNTIME_ERROR,
                                      "The table does not exist. tableName:" + tableName);
-            prefixToWatch->emplace(iter->second + "/" + key, startRevision);
+            const auto physicalKey = iter->second + "/" + key;
+            prefixToWatch->emplace(physicalKey, startRevision);
+            if (watchKey.exact) {
+                exactKeys.emplace(physicalKey);
+            }
         }
     }
 
     // Create a watch stream
     LOG(INFO) << "All prefix need to watch: " << MapToString(*prefixToWatch);
-    RETURN_IF_NOT_OK(InitWatch(std::move(prefixToWatch), std::bind(&EtcdStore::Writable, this)));
+    RETURN_IF_NOT_OK(
+        InitWatch(std::move(prefixToWatch), std::move(exactKeys), std::bind(&EtcdStore::Writable, this)));
 
     auto traceId = Trace::Instance().GetTraceID();
     // Starts watch and waits for any errors from Etcd in background
@@ -1070,6 +1087,11 @@ Status EtcdStore::InformEtcdReconciliationDone(const HostPort &workerAddr)
         RETURN_IF_NOT_OK(PutWithLeaseId(ETCD_CLUSTER_TABLE, workerAddr.ToString(), value.ToString(), CheckLeaseId()));
     }
     return Status::OK();
+}
+
+Status EtcdStore::InformReconciliationDone(const HostPort &workerAddr)
+{
+    return InformEtcdReconciliationDone(workerAddr);
 }
 
 std::unique_ptr<GrpcSession<etcdserverpb::KV>> Transaction::rpcSession_ = nullptr;

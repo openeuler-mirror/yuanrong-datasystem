@@ -1,0 +1,122 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "cluster_membership_codec",
+    srcs = ["membership/membership_value_codec.cpp"],
+    hdrs = [
+        "membership/membership_types.h",
+        "membership/membership_value_codec.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:coordinator_cc_proto",
+    ],
+)
+
+ds_cc_library(
+    name = "cluster_topology_scope",
+    srcs = [
+        "executor/hash_key_filter.cpp",
+        "executor/storage_scan_plan.cpp",
+    ],
+    hdrs = [
+        "executor/hash_key_filter.h",
+        "executor/key_filter.h",
+        "executor/storage_scan_plan.h",
+        "executor/storage_scan_plan_access.h",
+        "executor/topology_phase_callbacks.h",
+        "model/topology_types.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:common_util",
+    ],
+)
+
+ds_cc_library(
+    name = "cluster_control_backend_state",
+    hdrs = [
+        "model/topology_types.h",
+        "runtime/control_backend_state.h",
+    ],
+)
+
+ds_cc_library(
+    name = "cluster_topology_keyspace",
+    srcs = ["repository/topology_key_helper.cpp"],
+    hdrs = ["repository/topology_key_helper.h"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:net_util",
+    ],
+)
+
+ds_cc_library(
+    name = "cluster_topology",
+    srcs = [
+        "algorithm/algorithm_catalog.cpp",
+        "algorithm/hash_algorithm.cpp",
+        "control/topology_controller.cpp",
+        "control/topology_failure_classifier.cpp",
+        "control/topology_plan_builder.cpp",
+        "control/topology_task_materializer.cpp",
+        "control/topology_task_janitor.cpp",
+        "executor/topology_task_executor.cpp",
+        "membership/membership_endpoint_view.cpp",
+        "model/topology_snapshot.cpp",
+        "repository/topology_repository.cpp",
+        "repository/topology_repository_codec.cpp",
+        "routing/placement_facade.cpp",
+        "runtime/coordination_event_dispatcher.cpp",
+        "runtime/topology_engine.cpp",
+        "runtime/topology_observer.cpp",
+        "runtime/topology_reader.cpp",
+        "runtime/topology_role_watch_plan.cpp",
+        "runtime/topology_snapshot_state.cpp",
+    ],
+    hdrs = [
+        "algorithm/algorithm_catalog.h",
+        "algorithm/hash_algorithm.h",
+        "algorithm/topology_algorithm.h",
+        "control/topology_controller.h",
+        "control/topology_failure_classifier.h",
+        "control/topology_plan_builder.h",
+        "control/topology_task_materializer.h",
+        "control/topology_task_janitor.h",
+        "executor/topology_task_executor.h",
+        "membership/membership_endpoint_view.h",
+        "model/topology_snapshot.h",
+        "model/topology_types.h",
+        "repository/topology_repository.h",
+        "repository/topology_repository_codec.h",
+        "routing/placement_facade.h",
+        "routing/placement_types.h",
+        "runtime/control_backend_state.h",
+        "runtime/coordination_event_dispatcher.h",
+        "runtime/topology_engine.h",
+        "runtime/topology_observer.h",
+        "runtime/topology_reader.h",
+        "runtime/topology_role_watch_plan.h",
+        "runtime/topology_runtime_types.h",
+        "runtime/topology_snapshot_state.h",
+    ],
+    deps = [
+        ":cluster_membership_codec",
+        ":cluster_topology_keyspace",
+        ":cluster_topology_scope",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+    ],
+)

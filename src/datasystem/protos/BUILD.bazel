@@ -207,6 +207,17 @@ cc_proto_library(
 )
 
 proto_library(
+    name = "cluster_topology_proto",
+    srcs = ["cluster_topology.proto"],
+    strip_import_prefix = PROTO_ROOT,
+)
+
+cc_proto_library(
+    name = "cluster_topology_cc_proto",
+    deps = [":cluster_topology_proto"],
+)
+
+proto_library(
     name = "coordinator_proto",
     srcs = [
         "coordinator.proto",
