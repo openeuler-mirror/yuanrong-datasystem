@@ -102,6 +102,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "fanout_collector_test",
+    srcs = ["fanout_collector_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//src/datasystem/common/rpc:fanout_collector",
+    ],
+)
+
+ds_cc_test(
     name = "scoped_bthread_local_test",
     srcs = ["scoped_bthread_local_test.cpp"],
     deps = [
