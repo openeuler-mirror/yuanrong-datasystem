@@ -64,7 +64,7 @@ public:
     /**
      * @brief Create one Producer to send element.
      * @param[in] streamName The name of stream. The name should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * @param[out] outProducer The output Producer that user can use it to send element.
      * @param[in] producerConf The producer configure.
      * @return K_OK on success; the error code otherwise.
@@ -83,7 +83,7 @@ public:
     /**
      * @brief Create the relation of subscribe and generate one Consumer to receive elements.
      * @param[in] streamName The name of stream. The name should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * @param[in] config The config of subscription.
      * @param[out] outConsumer The output Consumer that user can use it to receive data elements.
      * @param[in] autoAck Optional setting to toggle if automatic Acks should be enabled or not.
@@ -100,7 +100,7 @@ public:
     /**
      * @brief Delete one stream.
      * @param[in] streamName The name of stream. The name should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * @return K_OK on success; the error code otherwise.
      *         K_UNKNOWN_ERROR: it's up to return message.
      *         K_NOT_FOUND: the id of stream is not found.
@@ -119,7 +119,7 @@ public:
     /**
      * @brief Query the number of global producers.
      * @param[in] streamName The target stream. The name should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * @param[out] gProducerNum The number of of global producers.
      * @return Status of the call.
      */
@@ -128,7 +128,7 @@ public:
     /**
      * @brief Query the number of global consumers.
      * @param[in] streamName The target stream. The name should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
      * @param[out] gConsumerNum The number of of global consumers.
      * @return Status of the call.
      */

@@ -144,7 +144,7 @@ public:
     /// \brief Create the shared memory buffer of the data system.
     ///
     /// \param[in] key The ID of the object to create. ID should not be empty and should only contains english
-    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
     /// \param[in] size The size in bytes of object.
     /// \param[in] param The create parameters.
     /// \param[out] buffer The buffer for the object.
@@ -169,7 +169,7 @@ public:
     /// one extra memory copy.
     ///
     /// \param[in] keys The ID of the object to create. ID should not be empty and should only contains english
-    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
     /// \param[in] size The size in bytes of object.
     /// \param[in] param The create parameters.
     /// \param[out] buffer The buffer for the object.

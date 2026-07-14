@@ -71,7 +71,7 @@ public:
     /**
      * @brief Invoke worker client to get the given device object keys and copy to the destinationdevice buffer.
      * @param[in] devObjKeys The vector of the object key. Key should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. Key length should less than 256.
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. Key length should be no more than 1024.
      * Pass one object key to vector if you just want to get an device object. Don't support to pass multi object keys
      * now.
      * @param[out] dstDevBuffer The destination of device buffer.
@@ -96,7 +96,7 @@ public:
     /**
      * @brief Invoke worker client to create a device object with p2p.
      * @param[in] objectKey The Key of the device object to create. Key should not be empty and should only contains
-     * english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. Key length should less than 256.
+     * english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. Key length should be no more than 1024.
      * @param[in] devBlobList The list of blob info.
      * @param[in] param The create param of device object.
      * @param[out] deviceBuffer The device buffer for the object.
@@ -108,7 +108,7 @@ public:
     /**
      * @brief Invoke worker client to get the given device object keys and copy to the destinationdevice buffer.
      * @param[in] devObjKeys The vector of the object key. Key should not be empty and should only contains english
-     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. Key length should less than 256.
+     * alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. Key length should be no more than 1024.
      * Pass one object key to vector if you just want to get an device object. Don't support to pass multi object keys
      * now.
      * @param[in] timeoutMs Timeout(ms) of waiting for the result return if object not ready. A positive integer number

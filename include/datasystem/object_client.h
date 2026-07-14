@@ -72,7 +72,7 @@ public:
     /// \brief Increase the global reference count to objects in the data system.
     ///
     /// \param[in] objectKeys The object keys to increase, it cannot be empty. ID should not be empty and should only
-    ///  contains english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
     /// \param[out] failedObjectKeys Increase failed object keys.
     /// \param[in] remoteClientId The remote client id of the client that outside the cloud. Resolve scenarios that ELB
     ///  forwards requests to different gateways, resulting in incorrect increase or decrease in reference counts, and
@@ -87,7 +87,7 @@ public:
     /// \brief Decrease the global reference count to objects in the data system.
     ///
     /// \param[in] objectKeys The object keys to decrease, it cannot be empty. ID should not be empty and should only
-    ///  contains english alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
     /// \param[out] failedObjectKeys Decrease failed object keys.
     /// \param[in] remoteClientId The remote client id of the client that outside the cloud. Resolve scenarios that ELB
     ///  forwards requests to different gateways, resulting in incorrect increase or decrease in reference counts, and
@@ -111,7 +111,7 @@ public:
     /// \brief Query all objects global references in the cluster (out-cloud reference not included).
     ///
     /// \param[in] objectKey The specific object key that to query. ID should not be empty and should only contains
-    ///  letters, numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
     ///
     /// \return The objects' global reference num; -1 in case of failure.
     int QueryGlobalRefNum(const std::string &objectKey);
@@ -119,7 +119,7 @@ public:
     /// \brief Invoke worker client to create an object.
     ///
     /// \param[in] objectKey The ID of the object to create. ID should not be empty and should only contains english
-    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
     /// \param[in] size The size in bytes of object.
     /// \param[in] param The create parameters.
     /// \param[out] buffer The buffer for the object.
@@ -133,7 +133,7 @@ public:
     /// \brief Invoke worker client to put an object (publish semantics).
     ///
     /// \param[in] objectKey The ID of the object to create. ID should not be empty and should only contains english
-    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
     /// \param[in] data The data pointer of the user.
     /// \param[in] size The size in bytes of object.
     /// \param[in] param The create parameters.
@@ -146,7 +146,7 @@ public:
     /// \brief Invoke worker client to get all buffers of all the given object keys.
     ///
     /// \param[in] objectKeys The vector of the object key. ID should not be empty and should only contains english
-    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should less than 256.
+    ///  alphabetics (a-zA-Z), numbers and ~!@#$%^&*.-_ only. ID length should be no more than 1024.
     /// \param[in] subTimeoutMs Timeout(ms) of waiting for the result return if object not ready. A positive integer
     ///  number required. 0 means no waiting time allowed. And the range is [0, INT32_MAX].
     /// \param[out] buffers The return vector of the objects.
