@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-/** Description: Tests KVClient reads through the transport layer. */
+/** Description: Tests KVClient reads through the transport layer (enableLocalCache=false). */
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -29,12 +27,8 @@
 #include "client/object_cache/oc_client_common.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/access_recorder.h"
-#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/kv_client.h"
-#include "datasystem/protos/hash_ring.pb.h"
 
 DS_DECLARE_bool(use_brpc);
 
@@ -43,9 +37,9 @@ namespace st {
 namespace {
 constexpr uint32_t META_OWNER_INDEX = 0;
 constexpr uint32_t TRANSPORT_CLIENT_WORKER_INDEX = 1;
+constexpr int32_t CLIENT_TIMEOUT_MS = 3'000;
 constexpr size_t VALUE_SIZE = 128 * 1024;
-constexpr size_t KEY_SEARCH_LIMIT = 100'000;
-constexpr char REAL_ROUTE_KEY_PREFIX[] = "transport_real_route_";
+constexpr size_t LARGE_VALUE_SIZE = 8 * 1024 * 1024;
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 
 const char *ExpectedTransport()
@@ -64,7 +58,7 @@ public:
     {
         FLAGS_v = 1;
         opts.numEtcd = 1;
-        opts.numWorkers = 2;
+        opts.numWorkers = 3; // worker0/worker1 for routing + worker2 as an extra replica holder
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1 -use_brpc=true";
@@ -73,6 +67,11 @@ public:
 #else
         opts.workerGflagParams += " -enable_urma=false";
 #endif
+        // Inject the data-path failure hook at startup. It fires by exact key name ("key2"/"key3"/
+        // "key0") inside GetObjectRemoteImpl and is a no-op for any other key, so it is safe to keep
+        // enabled for the whole suite and lets the failure cases avoid the worker request-queue
+        // timeout seen with runtime SetInjectAction under distributed master.
+        opts.injectActions = "worker.batch_get_failure_for_keys:call()";
     }
 
     void SetUp() override
@@ -81,103 +80,76 @@ public:
         FLAGS_use_brpc = true;
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         ExternalClusterTest::SetUp();
-        etcd_ = InitTestEtcdInstance();
-        ASSERT_NE(etcd_, nullptr);
 
+        // Writer (enableLocalCache=true, gateway path) and reader through the transport layer.
+        InitTestKVClient(META_OWNER_INDEX, writer_, CLIENT_TIMEOUT_MS);
         InitTransportClient();
-        InitTestKVClient(META_OWNER_INDEX, client0_);
     }
 
     void TearDown() override
     {
-        client1_.reset();
-        client0_.reset();
-        etcd_.reset();
+        reader_.reset();
+        writer_.reset();
         (void)inject::Clear(SKIP_WARMUP_INJECT);
         ExternalClusterTest::TearDown();
         FLAGS_use_brpc = previousUseBrpc_;
     }
 
 protected:
+    // enableLocalCache=false reader: the client under test, exercising TransportLayer::Get.
     void InitTransportClient()
     {
         ConnectOptions options;
-        InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options);
+        InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options, CLIENT_TIMEOUT_MS);
         options.enableLocalCache = false;
-        client1_ = std::make_shared<KVClient>(options);
-        DS_ASSERT_OK(client1_->Init());
+        reader_ = std::make_shared<KVClient>(options);
+        DS_ASSERT_OK(reader_->Init());
     }
 
-    void GetRealHashKeysToWorker(uint32_t workerIndex, size_t keyCount, std::vector<std::string> &keys)
+    // Generate N distinct random keys; the real hash-ring routing distributes them across workers,
+    // so no manual hash-to-worker pinning is needed (client already resolves meta owners).
+    std::vector<std::string> MakeRandomKeys(size_t count)
     {
-        ASSERT_NE(etcd_, nullptr);
-        std::string value;
-        DS_ASSERT_OK(etcd_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
-        ASSERT_TRUE(ring.ParseFromString(value));
-
-        HostPort targetWorker;
-        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
-        ASSERT_NE(ring.workers().find(targetWorker.ToString()), ring.workers().end());
-        std::map<uint32_t, std::string> tokenWorkers;
-        for (const auto &worker : ring.workers()) {
-            for (const auto token : worker.second.hash_tokens()) {
-                tokenWorkers.emplace(token, worker.first);
-            }
+        std::vector<std::string> keys;
+        keys.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            keys.emplace_back("transport_get_" + std::to_string(i) + "_" + GetStringUuid());
         }
-        ASSERT_FALSE(tokenWorkers.empty());
-
-        keys.clear();
-        for (size_t candidateIndex = 0; candidateIndex < KEY_SEARCH_LIMIT && keys.size() < keyCount; ++candidateIndex) {
-            std::string candidate =
-                REAL_ROUTE_KEY_PREFIX + std::to_string(workerIndex) + "_" + std::to_string(candidateIndex);
-            auto owner = tokenWorkers.upper_bound(MurmurHash3_32(candidate));
-            if (owner == tokenWorkers.end()) {
-                owner = tokenWorkers.begin();
-            }
-            if (owner->second == targetWorker.ToString()) {
-                keys.emplace_back(std::move(candidate));
-            }
-        }
-        ASSERT_EQ(keys.size(), keyCount);
+        return keys;
     }
 
-    std::unique_ptr<EtcdStore> etcd_;
-    std::shared_ptr<KVClient> client0_;
-    std::shared_ptr<KVClient> client1_;
+    std::shared_ptr<KVClient> writer_;
+    std::shared_ptr<KVClient> reader_;
     bool previousUseBrpc_ = false;
 };
 
+// Single key over the transport layer; data phase runs on the caller thread.
 TEST_F(KVClientTransportGetTest, SingleKeyGet)
 {
-    std::vector<std::string> keys;
-    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
-    const std::string &key = keys.front();
+    const std::string key = MakeRandomKeys(1).front();
     const std::string value(VALUE_SIZE, 's');
-    DS_ASSERT_OK(client0_->Set(key, value));
+    DS_ASSERT_OK(writer_->Set(key, value));
 
     Optional<Buffer> buffer;
-    DS_ASSERT_OK(client1_->Get(key, buffer));
+    DS_ASSERT_OK(reader_->Get(key, buffer));
 
     ASSERT_TRUE(buffer);
     AssertBufferEqual(*buffer, value);
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
 }
 
-TEST_F(KVClientTransportGetTest, MultiKeyGet)
+// Multi-key batch returns every value in input order.
+TEST_F(KVClientTransportGetTest, MultiKeyGetSameOwner)
 {
-    std::vector<std::string> worker0Keys;
-    std::vector<std::string> worker1Keys;
-    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, worker0Keys);
-    GetRealHashKeysToWorker(TRANSPORT_CLIENT_WORKER_INDEX, 1, worker1Keys);
-    const std::vector<std::string> keys = { worker0Keys.front(), worker1Keys.front() };
-    const std::vector<std::string> values = { std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE * 2, 'b') };
+    const auto keys = MakeRandomKeys(3);
+    std::vector<std::string> values;
     for (size_t i = 0; i < keys.size(); ++i) {
-        DS_ASSERT_OK(client0_->Set(keys[i], values[i]));
+        values.emplace_back(VALUE_SIZE + i * 1024, 'a' + static_cast<char>(i));
+        DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
     }
 
     std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_OK(client1_->Get(keys, buffers));
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
 
     ASSERT_EQ(buffers.size(), keys.size());
     for (size_t i = 0; i < buffers.size(); ++i) {
@@ -186,5 +158,93 @@ TEST_F(KVClientTransportGetTest, MultiKeyGet)
     }
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
 }
+
+// Keys spanning multiple meta owners still return values in input order.
+TEST_F(KVClientTransportGetTest, MultiKeyGetDifferentOwners)
+{
+    const auto keys = MakeRandomKeys(8);
+    std::vector<std::string> values;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        values.emplace_back(VALUE_SIZE, 'a' + static_cast<char>(i % 26));
+        DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
+    }
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
+
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        ASSERT_TRUE(buffers[i]) << "missing buffer at position " << i;
+        AssertBufferEqual(*buffers[i], values[i]);
+    }
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
+// Absent object yields empty locations -> K_NOT_FOUND, no data fetch.
+TEST_F(KVClientTransportGetTest, ObjectNotFound)
+{
+    const std::string key = MakeRandomKeys(1).front();
+    Optional<Buffer> buffer;
+    ASSERT_EQ(reader_->Get(key, buffer).GetCode(), StatusCode::K_NOT_FOUND);
+    ASSERT_FALSE(buffer);
+}
+
+// One key's data read fails while the others succeed; overall K_OK with the failed slot empty.
+TEST_F(KVClientTransportGetTest, PartialDataFailure)
+{
+    const std::vector<std::string> keys = { "transport_get_ok0_" + GetStringUuid(), "key2",
+                                            "transport_get_ok1_" + GetStringUuid() };
+    const std::vector<std::string> values = { std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE, 'b'),
+                                              std::string(VALUE_SIZE, 'c') };
+    for (size_t i = 0; i < keys.size(); ++i) {
+        DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
+    }
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
+
+    ASSERT_EQ(buffers.size(), keys.size());
+    ASSERT_TRUE(buffers[0]);
+    AssertBufferEqual(*buffers[0], values[0]);
+    ASSERT_FALSE(buffers[1]); // "key2" failed and no replica to recover
+    ASSERT_TRUE(buffers[2]);
+    AssertBufferEqual(*buffers[2], values[2]);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
+// Every key fails; the batch returns the first error in input order. The suite timeout bounds retries.
+TEST_F(KVClientTransportGetTest, AllKeysFailReturnFirstError)
+{
+    const std::vector<std::string> keys = { "key2", "key3" };
+    const std::vector<std::string> values = { std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE, 'b') };
+    for (size_t i = 0; i < keys.size(); ++i) {
+        DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
+    }
+
+    std::vector<Optional<Buffer>> buffers;
+    ASSERT_EQ(reader_->Get(keys, buffers).GetCode(), StatusCode::K_RUNTIME_ERROR);
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (const auto &b : buffers) {
+        ASSERT_FALSE(b);
+    }
+}
+
+// Large value round-trip exercises the transport receive-buffer allocation and SDK Buffer
+// materialization for objects bigger than the typical fast-transport memory unit.
+TEST_F(KVClientTransportGetTest, LargeObjectRoundTrip)
+{
+    const std::string key = MakeRandomKeys(1).front();
+    const std::string value(LARGE_VALUE_SIZE, 'L');
+    DS_ASSERT_OK(writer_->Set(key, value));
+
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(key, buffer));
+
+    ASSERT_TRUE(buffer);
+    ASSERT_EQ(buffer->GetSize(), value.size());
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
 }  // namespace st
 }  // namespace datasystem

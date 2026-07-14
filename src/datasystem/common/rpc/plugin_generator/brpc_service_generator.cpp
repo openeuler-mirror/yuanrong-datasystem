@@ -630,7 +630,8 @@ void RpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
     }
     impl += BuildScTimeoutDurationInitSnippet();
     impl +=
-        "$indent$// Sync per-request timeout to RequestContext for backward compat.\n"
+        "$indent$// Keep both request timeout domains aligned with the brpc deadline.\n"
+        "$indent$GetRequestContext()->reqTimeoutDuration = serverApi->GetScTimeoutDuration();\n"
         "$indent$GetRequestContext()->scTimeoutDuration = serverApi->GetScTimeoutDuration();\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(serverApi);\n"
         "$indent$if (st.IsError()) {\n"

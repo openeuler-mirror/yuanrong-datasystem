@@ -1246,11 +1246,30 @@ TEST(UbTransporterTest, GetReturnsOwnerBackedExternalBuffer)
     ASSERT_TRUE(transporter.Get({ "key", 8 }, result).IsOk());
     ASSERT_EQ(rpcClient->getObjectRequests.size(), 1u);
     EXPECT_TRUE(rpcClient->getObjectRequests[0].has_urma_info());
+    EXPECT_EQ(rpcClient->getObjectRequests[0].read_offset(), 0u);
+    EXPECT_EQ(rpcClient->getObjectRequests[0].read_size(), 8u);
+    EXPECT_EQ(rpcClient->getObjectRequests[0].data_size(), 8u);
     EXPECT_TRUE(rpcClient->getObjectRequests[0].try_lock());
     EXPECT_EQ(result.kind, AccessTransportKind::UB);
     EXPECT_EQ(result.externalSize, 8u);
     EXPECT_NE(result.externalData, nullptr);
     EXPECT_NE(result.externalOwner, nullptr);
+}
+
+TEST(UbTransporterTest, GetKeepsFullReadSentinelWhenUbBufferUnavailable)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 8;
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->allocateStatus = Status(K_OUT_OF_MEMORY, "allocate failed");
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetResult result;
+
+    ASSERT_TRUE(transporter.Get({ "key", 8 }, result).IsOk());
+    ASSERT_EQ(rpcClient->getObjectRequests.size(), 1u);
+    EXPECT_FALSE(rpcClient->getObjectRequests[0].has_urma_info());
+    EXPECT_EQ(rpcClient->getObjectRequests[0].read_size(), 0u);
+    EXPECT_EQ(result.kind, AccessTransportKind::TCP);
 }
 
 TEST(UbTransporterTest, GetReallocatesOnceForChangedObjectSize)
@@ -1263,7 +1282,9 @@ TEST(UbTransporterTest, GetReallocatesOnceForChangedObjectSize)
 
     ASSERT_TRUE(transporter.Get({ "key", 4 }, result).IsOk());
     ASSERT_EQ(rpcClient->getObjectRequests.size(), 2u);
+    EXPECT_EQ(rpcClient->getObjectRequests[0].read_size(), 4u);
     EXPECT_EQ(rpcClient->getObjectRequests[0].data_size(), 4u);
+    EXPECT_EQ(rpcClient->getObjectRequests[1].read_size(), 8u);
     EXPECT_EQ(rpcClient->getObjectRequests[1].data_size(), 8u);
     EXPECT_EQ(result.externalSize, 8u);
     EXPECT_EQ(bufferProvider->allocateCount, 2);
