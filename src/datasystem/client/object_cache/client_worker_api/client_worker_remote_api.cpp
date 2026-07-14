@@ -663,7 +663,12 @@ void ClientWorkerRemoteApi::RecordPublishWriteBytes(const std::shared_ptr<Object
 {
     if (isShm) {
         METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
-    } else if (!bufferInfo->ubDataSentByMemoryCopy) {
+    } else if (bufferInfo->ubDataSentByMemoryCopy) {
+        // URMA data has already been counted in CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, no need to record it again here
+        // set to true only after UrmaWritePayload succeeds, see client_worker_base_api.cpp
+    } else if (IsShmEnable()) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_LOCAL_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
+    } else {
         METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, bufferInfo->dataSize);
     }
 }
@@ -703,9 +708,18 @@ Status ClientWorkerRemoteApi::MultiPublish(const std::vector<std::shared_ptr<Obj
         status = WithRpcDiag(status, "MultiPublish", hostPort_);
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "Send multi publish request error");
-    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, payloadBytes);
-    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, shmBytes);
+    RecordMultiPublishWriteBytes(payloadBytes, shmBytes);
     return Status::OK();
+}
+
+void ClientWorkerRemoteApi::RecordMultiPublishWriteBytes(uint64_t payloadBytes, uint64_t shmBytes)
+{
+    if (IsShmEnable()) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_LOCAL_WRITE_TOTAL_BYTES, payloadBytes);
+    } else {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, payloadBytes);
+    }
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, shmBytes);
 }
 
 Status ClientWorkerRemoteApi::BuildMultiPublishPayloads(

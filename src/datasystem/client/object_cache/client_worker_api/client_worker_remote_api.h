@@ -234,6 +234,8 @@ private:
                                     MultiPublishReqPb &req,
                                     std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets);
 
+    void RecordMultiPublishWriteBytes(uint64_t payloadBytes, uint64_t shmBytes);
+    
     // To protect the decreaseRPCQ_ and waitRespMap_ from being manipulated by different threads of the same client.
     mutable std::mutex mtx_;
     std::unordered_map<int, uint8_t *> waitRespMap_;

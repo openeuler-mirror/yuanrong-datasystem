@@ -24,6 +24,8 @@
 
 namespace datasystem::metrics {
 enum class KvMetricId : uint16_t {
+    // Confirm no external numeric ID dependency before deleting intermediate entries
+    // Confirm no external numeric ID dependency before deleting intermediate entries
     CLIENT_PUT_REQUEST_TOTAL = 0,
     CLIENT_PUT_ERROR_TOTAL,
     CLIENT_GET_REQUEST_TOTAL,
@@ -46,7 +48,6 @@ enum class KvMetricId : uint16_t {
     URMA_WAIT_LATENCY,
     WORKER_TCP_WRITE_LATENCY,
     WORKER_TO_CLIENT_TOTAL_BYTES,
-    WORKER_FROM_CLIENT_TOTAL_BYTES,
     WORKER_OBJECT_COUNT,
     WORKER_ALLOCATED_MEMORY_SIZE,
     ZMQ_SEND_FAILURE_TOTAL,
@@ -125,6 +126,10 @@ enum class KvMetricId : uint16_t {
     BRPC_SERVER_RSP_QUEUE_LATENCY,
     BRPC_RPC_E2E_LATENCY,
     BRPC_RPC_NETWORK_RESIDUAL_LATENCY,
+    WORKER_FROM_CLIENT_SHM_TOTAL_BYTES,
+    WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES,
+    WORKER_FROM_CLIENT_TCP_TOTAL_BYTES,
+    WORKER_FROM_CLIENT_URMA_TOTAL_BYTES,
     KV_METRIC_END
 };
 

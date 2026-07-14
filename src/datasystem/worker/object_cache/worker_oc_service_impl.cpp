@@ -431,7 +431,23 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
                                      "validate worker state failed");
     Status rc = publishProc_->Publish(req, resp, payloads);
     if (rc.IsOk()) {
-        METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TOTAL_BYTES, payloadBytes);
+        auto clientId = ClientKey::Intern(req.client_id());
+        const bool clientShmEnabled = WorkerOcServiceCrudCommonApi::ClientShmEnabled(clientId);
+        if (!req.shm_id().empty()) {
+            if (WorkerOcServiceCrudCommonApi::ShmEnable() && clientShmEnabled) {
+                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES,
+                           static_cast<uint64_t>(req.data_size()));
+            } else {
+                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES,
+                           static_cast<uint64_t>(req.data_size()));
+            }
+        } else if (payloadBytes > 0) {
+            if (clientShmEnabled) {
+                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES, payloadBytes);
+            } else {
+                METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES, payloadBytes);
+            }
+        }
         UpdateWorkerObjectGauge(objectTable_);
     }
     return rc;
@@ -448,7 +464,31 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
                                      "validate worker state failed");
     auto clientId = ClientKey::Intern(req.client_id());
     RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads, clientId));
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TOTAL_BYTES, payloadBytes);
+    const bool clientShmEnabled = WorkerOcServiceCrudCommonApi::ClientShmEnabled(clientId);
+    const bool shmEnabled = WorkerOcServiceCrudCommonApi::ShmEnable();
+    uint64_t shmBytes = 0;
+    uint64_t urmaBytes = 0;
+    bool hasNonShmObject = false;
+    for (const auto &info : req.object_info()) {
+        if (info.shm_id().empty()) {
+            hasNonShmObject = true;
+            continue;
+        }
+        if (shmEnabled && clientShmEnabled) {
+            shmBytes += static_cast<uint64_t>(info.data_size());
+        } else {
+            urmaBytes += static_cast<uint64_t>(info.data_size());
+        }
+    }
+    if (hasNonShmObject && payloadBytes > 0) {
+        if (clientShmEnabled) {
+            METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES, payloadBytes);
+        } else {
+            METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES, payloadBytes);
+        }
+    }
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES, shmBytes);
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, urmaBytes);
     UpdateWorkerObjectGauge(objectTable_);
     if (req.auto_release_memory_ref()) {
         std::set<std::string> failedSet{ resp.failed_object_keys().begin(), resp.failed_object_keys().end() };
