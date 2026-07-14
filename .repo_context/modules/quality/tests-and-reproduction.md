@@ -5,7 +5,7 @@
 - Status:
   - `active`
 - Last verified against source:
-  - `2026-05-02`
+  - `2026-07-10`
 - Canonical source roots:
   - `tests`
   - `tests/README.md`
@@ -54,7 +54,7 @@
 | `tests/kvconnector` | External connector patch/test material | Contains versioned patch/deploy/benchmark material, not part of the main CMake gtest tree. |
 
 - Verified current C++ source scale:
-  - `tests/ut`: 123 `.cpp` files, grouped under `client`, `common`, `master`, and `worker`.
+  - `tests/ut`: 124 `.cpp` files, grouped under `client`, `common`, `master`, and `worker`.
   - `tests/st`: 155 `.cpp` files, grouped under `client`, `cluster`, `common`, `device`, `embedded_client`,
     `master`, and `worker`.
 
@@ -192,6 +192,8 @@ python3 -m unittest
 
 - Verified from `tests/ut/CMakeLists.txt`:
   - `ds_ut`: default UT bucket after excluding device, binmock, flags, slot store, stream cache, and object cache files.
+    URMA-specific client UTs such as `tests/ut/client/urma_send_lane_test.cpp` are excluded when `BUILD_WITH_URMA` is
+    off because their headers require the URMA SDK path.
   - `ds_ut_stream`: UT files under `**/stream_cache`.
   - `ds_ut_object`: UT files under `**/object_cache`.
   - `ds_ut_slot_store`: `tests/ut/common/l2cache/slot_store_test.cpp`.
@@ -219,6 +221,55 @@ python3 -m unittest
     `transfer_engine_cross_node_smoke`.
   - `transfer_engine/scripts/run_hixl_d2d_smoke_suite.sh`: same-node HIXL D2D suite covering batch reads, reverse
     direction, concurrent requesters, unregistered-address rejection, and a 4 x 16 MiB transfer.
+- Manual URMA remote-Jetty reuse coverage:
+  - `//tests/ut/client:urma_remote_jetty_reuse_test` is a Bazel `manual` target, deliberately separate from the
+    header-only `urma_send_lane_test`.
+  - It contains separate peer-backed cases: one performs the peer handshake twice through `ExchangeJfr` and verifies
+    that both responses publish the same shared receive Jetty; the other validates multi-chunk `UrmaWriteImpl` lease
+    reuse, completion-before-seal behavior, one release, and one retirement on injected failure.
+  - Run it only on a host with the URMA SDK/runtime and a configured device, for example:
+
+```bash
+DS_URMA_DEV_NAME=<device> \
+  bazel test //tests/ut/client:urma_remote_jetty_reuse_test --config=test --config=urma \
+  --test_env=DS_URMA_DEV_NAME --test_output=streamed
+```
+
+- Manual URMA local send-Jetty lifecycle coverage:
+  - `//tests/ut/client:urma_send_jetty_lifecycle_test` is a separate Bazel `manual` target. It verifies real
+    send-Jetty pre-fill, acquire/release reuse and pool exhaustion, then triggers `ReCreateJetty` and observes a
+    replacement Jetty created by the background refill thread.
+  - It needs the same URMA SDK/runtime and configured device:
+
+```bash
+DS_URMA_DEV_NAME=<device> \
+  bazel test //tests/ut/client:urma_send_jetty_lifecycle_test --config=test --config=urma \
+  --test_env=DS_URMA_DEV_NAME --test_output=streamed
+```
+
+- Manual URMA local send-Jetty fault coverage:
+  - `//tests/ut/client:urma_send_jetty_fault_test` is a separate Bazel `manual` target. It covers manager-level
+    pool exhaustion, the recoverable CQE path, async `JETTY_ERR`, and timeout retirement, then verifies background
+    refill restores an idle send Jetty after each retirement.
+  - It needs the same URMA SDK/runtime and configured device:
+
+```bash
+DS_URMA_DEV_NAME=<device> \
+  bazel test //tests/ut/client:urma_send_jetty_fault_test --config=test --config=urma \
+  --test_env=DS_URMA_DEV_NAME --test_output=streamed
+```
+
+- Manual URMA send-Jetty pool system coverage:
+  - `//tests/st/client/object_cache:urma_send_jetty_pool_test` starts real workers and clients with URMA enabled.
+    It verifies sequential small-pool reuse, configured-capacity concurrent remote Get, and recovery after an injected
+    recoverable CQE retires a send Jetty.
+  - It needs the same URMA SDK/runtime and configured device:
+
+```bash
+DS_URMA_DEV_NAME=<device> \
+  bazel test //tests/st/client/object_cache:urma_send_jetty_pool_test --config=test --config=urma \
+  --test_env=DS_URMA_DEV_NAME --test_output=streamed
+```
 
 ## Python And Example Tests
 

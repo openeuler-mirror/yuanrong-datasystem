@@ -13,6 +13,34 @@ ds_cc_library(
     hdrs=["fast_transport_base.h"],
 )
 
+ds_cc_library(
+    name="urma_send_lane",
+    hdrs=["urma_send_lane.h"],
+)
+
+ds_cc_library(
+    name="urma_resource_header",
+    hdrs=[
+        "rdma_util.h",
+        "urma_info.h",
+        "urma_resource.h",
+        "urma_send_lane.h",
+    ],
+    deps=[
+        ":fast_transport_base_header",
+        ":urma_send_lane",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:numa_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:timer",
+        "//src/datasystem/protos:meta_transport_cc_proto",
+    ],
+)
+
 # Keep urma_dlopen_util separate due to special copts/linkopts
 ds_cc_library(
     name="urma_dlopen_util",
@@ -105,6 +133,7 @@ ds_cc_library(
     deps=[
         ":fast_transport_base_header",
         ":urma_dlopen_util",
+        ":urma_send_lane",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/perf:common_perf",

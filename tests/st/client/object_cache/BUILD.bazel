@@ -354,3 +354,13 @@ ds_cc_test(
         "@securec",
     ],
 )
+
+ds_cc_test(
+    name = "urma_send_jetty_pool_test",
+    srcs = ["urma_send_jetty_pool_test.cpp"],
+    tags = ["manual", "urma"],
+    deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/util:thread_pool",
+    ],
+)

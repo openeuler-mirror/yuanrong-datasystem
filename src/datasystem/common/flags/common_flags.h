@@ -38,6 +38,8 @@ DS_DECLARE_string(shared_memory_distribution_policy);
 DS_DECLARE_bool(urma_register_whole_arena);
 DS_DECLARE_uint32(urma_poll_size);
 DS_DECLARE_uint32(urma_connection_size);
+DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
+DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 DS_DECLARE_bool(urma_event_mode);
 // DEPRECATED: This flag is no longer used and will be removed in a future version.
 DS_DECLARE_string(urma_mode);

@@ -112,6 +112,13 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - `rdma` always builds fast-transport wrapper pieces and conditionally adds URMA and RDMA implementations.
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
+  - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
+    `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; timeout/error retirement is
+    bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap is `200 + 200`.
+    A send lane is leased once per logical transfer and shared by that transfer's chunk WR events; release or retirement
+    happens only after the shared request lease is sealed and all associated events have completed, failed, or timed out.
+  - URMA receive-side Jetty reuse is process-level: `UrmaResource::GetOrCreateSharedRecvJetty()` lazily creates the
+    single RECV Jetty/JFR published by TCP handshake responses, and `UrmaResource::Clear()` owns shutdown cleanup.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available

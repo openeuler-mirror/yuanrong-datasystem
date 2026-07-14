@@ -65,7 +65,10 @@ Status UrmaAsyncEventHandler::GetAsyncEvent(urma_async_event_t &event)
         switch (eventType) {
             case URMA_EVENT_JETTY_ERR: {
                 std::shared_ptr<UrmaJetty> jetty;
-                RETURN_IF_NOT_OK(urmaResource_->GetAnyValidJetty(jetty));
+                // The send-lane pool owns the JFS Jettys that can be retired and refilled. Do not select the
+                // shared receive Jetty from the general registry: a JETTY_ERR injection is intended to model a
+                // send-lane failure, and receive Jetty recovery has a different reconnect/publication lifecycle.
+                RETURN_IF_NOT_OK(urmaResource_->AcquireJetty(jetty));
                 event.urma_ctx = urmaResource_->GetContext();
                 event.event_type = URMA_EVENT_JETTY_ERR;
                 event.element.jetty = jetty->Raw();
@@ -181,15 +184,8 @@ Status UrmaAsyncEventHandler::HandleJettyErrAsyncEvent(urma_jetty_t *rawJetty)
         return Status::OK();
     }
 
-    auto connection = failedJetty->GetConnection().lock();
-    if (connection == nullptr) {
-        LOG(WARNING) << "[URMA_AE_JETTY_ERR] Jetty " << jettyId
-                     << " has no bound connection, cannot trigger recovery";
-        return Status::OK();
-    }
-
     LOG(WARNING) << "[URMA_AE_JETTY_ERR] Triggering ReCreateJetty for jettyId=" << jettyId;
-    auto recreateRc = connection->ReCreateJetty(*urmaResource_, failedJetty);
+    auto recreateRc = urmaResource_->ReCreateJetty(failedJetty);
     if (recreateRc.IsError()) {
         LOG(ERROR) << "[URMA_AE_JETTY_ERR] ReCreateJetty failed for jettyId=" << jettyId << ": "
                    << recreateRc.ToString();

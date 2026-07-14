@@ -239,9 +239,10 @@ public:
     uint64_t GetUasid();
 
     /**
-     * @brief Get or create the local recv Jetty used for a given connection key.
-     *        Reuses existing Jetty when reconnecting to the same target.
-     * @param[in] key Connection key (remote address or client id).
+     * @brief Get or create a local Jetty.
+     *        SEND Jettys are keyed by the remote connection key. RECV Jetty is process-level
+     *        and shared by all remote import handshakes.
+     * @param[in] key Connection key (remote address or client id) for SEND, diagnostic context for RECV.
      * @param[out] jettyId The Jetty ID to publish in the handshake.
      * @return Status of the call.
      */
@@ -563,12 +564,15 @@ private:
     Status HandleUrmaEvent(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event);
 
     /**
-     * @brief Get the valid Jetty currently owned by a connection.
-     * @param[in] connection URMA connection.
-     * @param[out] jetty Valid Jetty bound to the connection.
-     * @return Status of the call.
+     * @brief Acquire a local send Jetty from the process-level pool and get the
+     *        connection's imported remote target Jetty.
+     * @param[in] connection URMA connection (for target Jetty lookup).
+     * @param[out] jetty Acquired local send Jetty from the UrmaResource pool.
+     * @param[out] targetJetty Connection's imported remote target Jetty.
+     * @return Status of the call (K_TRY_AGAIN if pool exhausted).
      */
-    Status GetJettyFromConnection(const std::shared_ptr<UrmaConnection> &connection, std::shared_ptr<UrmaJetty> &jetty);
+    Status AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConnection> &connection,
+                                         std::shared_ptr<UrmaJetty> &jetty, urma_target_jetty_t *&targetJetty);
 
     /**
      * @brief Import a remote Jetty as a target jetty (used by both initiator and responder).
@@ -614,19 +618,25 @@ private:
      * @brief Create UrmaEvent object for the request.
      * @param[in] requestId Unique id for the Urma request.
      * @param[in] connection The connection associated with the request.
+     * @param[in] laneLease Request-level send lane lease shared by all chunks.
      * @param[in] waiter Optional event waiter.
      * @return Status of the call.
      */
     Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
-                       const std::shared_ptr<UrmaJetty> &jetty, const std::string &remoteAddress, uint64_t dataSize,
-                       UrmaEvent::OperationType operationType, std::shared_ptr<EventWaiter> waiter = nullptr);
+                       const std::shared_ptr<UrmaSendLaneLease> &laneLease, const std::string &remoteAddress,
+                       uint64_t dataSize, UrmaEvent::OperationType operationType,
+                       std::shared_ptr<EventWaiter> waiter = nullptr);
+    void ReleaseEventLane(const std::shared_ptr<UrmaEvent> &event);
+    void ReleaseAndDeleteEvent(uint64_t requestId);
+    void RetireAndDeleteEvent(uint64_t requestId);
+    Status RetireEventLane(const std::shared_ptr<UrmaEvent> &event);
+    Status SealSendLaneLease(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+    Status ApplySendLaneAction(UrmaSendLaneLease::SettleAction action, const std::shared_ptr<UrmaJetty> &jetty);
 
     struct UrmaWriteArgs {
         std::shared_ptr<UrmaConnection> connection;
-        std::shared_ptr<UrmaJetty> jetty;
         std::shared_ptr<EventWaiter> waiter;
         std::string remoteAddress;
-        urma_target_jetty_t *targetJetty = nullptr;
         urma_target_seg_t *remoteSeg = nullptr;
         urma_target_seg_t *localSeg = nullptr;
         uint64_t remoteDataAddress = 0;
@@ -646,7 +656,7 @@ private:
     void DeleteEvent(uint64_t requestId);
 
     Status InitLocalUrmaInfo(const HostPort &hostport);
-    Status RemoveRemoteResources(const std::string &connectionKey, bool removeLocalJfr);
+    Status RemoveRemoteResources(const std::string &connectionKey);
 
     // Polling thread
     std::unique_ptr<Thread> serverEventThread_{ nullptr };
@@ -657,8 +667,8 @@ private:
     urma_reg_seg_flag_t registerSegmentFlag_{};
     urma_import_seg_flag_t importSegmentFlag_{};
     UrmaJfrInfo localUrmaInfo_;
-    // Local Jettys keyed by remote connection ID. Jettys are created/reused per target node
-    // and persist across reconnections.
+    // Local send Jettys keyed by remote connection ID. The receive Jetty published for remote
+    // import is process-level and owned by UrmaResource.
     TbbJettyMap localJettyMap_;
 
     // protect for segment maps.

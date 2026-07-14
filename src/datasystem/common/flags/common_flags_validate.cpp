@@ -206,6 +206,8 @@ DS_DEFINE_validator(spill_high_watermark_ratio, &Validator::ValidateWatermarkHig
 DS_DEFINE_validator(spill_low_watermark_ratio, &Validator::ValidateWatermarkLowRatio);
 DS_DEFINE_validator(enable_urma, &ValidateEnableUrma);
 DS_DEFINE_validator(urma_max_write_size_mb, &ValidateUrmaMaxWriteSize);
+DS_DEFINE_validator(urma_send_jetty_lane_pool_size, &Validator::ValidateUint32);
+DS_DEFINE_validator(urma_send_jetty_lane_refill_extra_size, &Validator::ValidateUint32);
 DS_DEFINE_validator(urma_failover_success_rate_ratio, &ValidateUrmaFailoverSuccessRateRatio);
 DS_DEFINE_validator(urma_failover_min_sample_count, &ValidateUrmaFailoverMinSampleCount);
 DS_DEFINE_validator(shared_memory_distribution_policy, &ValidateSharedMemoryDistributionPolicy);

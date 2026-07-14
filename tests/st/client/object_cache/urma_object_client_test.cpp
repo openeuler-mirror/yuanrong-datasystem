@@ -1381,9 +1381,12 @@ TEST_F(UrmaTestWorkerDisconnect, StopWorkerForUbDisconnect)
         ASSERT_EQ(value, getValue);
     }
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "urma.ModifyJettyToError", "call()"));
-    kill(cluster_->GetWorkerPid(1), SIGTERM);
-    WaitForWorkerInjectExecuteCount(0, "urma.ModifyJettyToError", 1);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "UrmaManager.RemoveRemoteResources", "call()"));
+    DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(1));
+    // Since PR 1277 introduced the process-level send Jetty pool, a remote connection no longer owns a local
+    // send Jetty. Worker removal therefore clears only the remote connection and must not expect the legacy
+    // per-connection urma.ModifyJettyToError cleanup hook to execute. Wait for the connection cleanup itself.
+    WaitForWorkerInjectExecuteCount(0, "UrmaManager.RemoveRemoteResources", 1);
     LOG(INFO) << "Success";
 }
 
@@ -1650,7 +1653,9 @@ TEST_F(UrmaCqeErrorTest, ClientToWorkerSetRejectsWhenPendingWouldExceedTenMb)
     InitTestKVClient(0, client);
 
     constexpr size_t dataSize = 950 * 1024UL;
-    constexpr int concurrentReqNum = 12;
+    // 10 MiB can hold at most ten 950 KiB fallback tickets. Keep six extra requests so the expected rejections
+    // have scheduling margin after the ticket-acquired barrier below.
+    constexpr int concurrentReqNum = 16;
     std::vector<Status> statuses(concurrentReqNum, Status::OK());
     std::vector<std::thread> threads;
     std::promise<void> startSignal;
@@ -1671,9 +1676,22 @@ TEST_F(UrmaCqeErrorTest, ClientToWorkerSetRejectsWhenPendingWouldExceedTenMb)
         thread.join();
     }
 
+    size_t successCount = 0;
+    size_t limiterRejectCount = 0;
     for (const auto &status : statuses) {
-        ASSERT_TRUE(status.IsOk());
+        if (status.IsOk()) {
+            ++successCount;
+            continue;
+        }
+        EXPECT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR) << status.ToString();
+        EXPECT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos)
+            << status.ToString();
+        ++limiterRejectCount;
     }
+    // Sixteen independent failed lanes each need a 950 KiB TCP fallback ticket while Publish is paused. The 10 MiB
+    // process limit must accept some requests and reject the requests that would exceed it.
+    EXPECT_GT(successCount, 0u);
+    EXPECT_GT(limiterRejectCount, 0u);
 }
 
 TEST_F(UrmaCqeErrorTest, WorkerToClientGetBaseCase)
@@ -1820,14 +1838,16 @@ TEST_F(UrmaAsyncEventTest, RemoteWorkerGetJfsAsyncEvent)
     }
 
     std::string getValue;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.VerifyExclusiveJetty", "1000*call()"));
     DS_ASSERT_OK(client2->Get("key-0", getValue));
     ASSERT_EQ(value, getValue);
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.HandleJettyErrAsyncEvent", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "urma.ModifyJettyToError", "1*call()"));
+    // This injection name is used once to wake the async loop and once by GetAsyncEvent to construct JETTY_ERR.
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "UrmaManager.InjectAsyncEvent",
                                            "2*return(" + std::to_string(static_cast<int>(URMA_EVENT_JETTY_ERR)) + ")"));
     WaitForWorkerInjectExecuteCount(1, "UrmaManager.HandleJettyErrAsyncEvent", 1);
+    WaitForWorkerInjectExecuteCount(1, "urma.ModifyJettyToError", 1);
 
     for (int i = 0; i < keyCount; i++) {
         DS_ASSERT_OK(client2->Get("key-" + std::to_string(i), getValue));
@@ -2004,7 +2024,6 @@ TEST_F(UrmaFallbackTest, WorkerWorkerBatchWriteFallback)
     for (size_t i = 0; i < batchNum; ++i) {
         std::string key = "KeyWrite_" + std::to_string(i);
         std::string value = "WriteValue" + std::to_string(i);
-        DS_ASSERT_OK(client1->Set(key, value));
         keys.emplace_back(key);
         values.emplace_back(value);
     }
@@ -2034,7 +2053,6 @@ TEST_F(UrmaFallbackTest, WorkerWorkerBatchGetWaitFallback)
     for (size_t i = 0; i < batchNum; ++i) {
         std::string key = "KeyWait_" + std::to_string(i);
         std::string value = "WaitValue" + std::to_string(i);
-        DS_ASSERT_OK(client1->Set(key, value));
         keys.emplace_back(key);
         values.emplace_back(value);
     }
