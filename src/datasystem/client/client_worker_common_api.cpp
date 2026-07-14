@@ -384,6 +384,10 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
         cfg.endpoint = brpcAddr.ToString();
         cfg.timeout_ms = timeoutMs;
         cfg.connect_timeout_ms = timeoutMs;
+        // Disable brpc-level blind retry on client->worker channels.
+        // These channels carry non-idempotent RPCs (Delete, CloseProducer,
+        // CloseConsumer, etc.) that must not be re-driven silently.
+        cfg.max_retry = 0;
         brpcChannel_ = BrpcChannelFactory::Create(cfg);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             brpcChannel_ != nullptr, StatusCode::K_RPC_UNAVAILABLE,

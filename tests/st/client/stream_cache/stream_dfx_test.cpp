@@ -1752,7 +1752,6 @@ TEST_F(StreamDfxTopoTest, DISABLED_TestMasterCrashWhenCreateProducer)
     std::shared_ptr<Consumer> c1w3;
     DS_ASSERT_OK(CreateConsumer(client3_, "test-stream", "sub-w3", c1w3));
 
-    DS_ASSERT_OK(inject::Set("rpc_util.retry_on_rpc_error_by_count", "1*call(1)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 3,
                                            "master.PubIncreaseNodeImpl.afterSendNotification", "abort()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0, "worker.CreateProducer.beforeSendToMaster",

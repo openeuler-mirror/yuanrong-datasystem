@@ -78,8 +78,6 @@ protected:
         int64_t timeoutMs = transferMs + addTimeoutMs;
         return std::clamp(timeoutMs, minTimeoutMs, maxTimeoutMs);
     }
-
-    const int maxRetryCount_ = 3;
 };
 
 }  // namespace object_cache

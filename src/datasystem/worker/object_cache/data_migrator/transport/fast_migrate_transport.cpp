@@ -88,17 +88,12 @@ Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &r
     VLOG(1) << FormatString("[Migrate Data] MigrateDataToRemote total data size %lu bytes, calculated timeout %ld ms",
                             totalDataBytes, migrateDirectTimeoutMs);
 
-    // 2. Migrate data with retry.
+    // 2. Migrate data (single attempt; the outer migration loop handles retry).
     point.RecordAndReset(PerfKey::WORKER_MIGRATE_DIRECT_RPC);
     MigrateDataDirectRspPb rspPb;
-    Status rc = RetryOnRPCErrorByCount(maxRetryCount_,
-                                       [&]() {
-                                           rspPb.Clear();
-                                           GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(
-                                               migrateDirectTimeoutMs);
-                                           return req.api->MigrateDataDirect(reqPb, rspPb);
-                                       },
-                                       {});
+    rspPb.Clear();
+    GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(migrateDirectTimeoutMs);
+    Status rc = req.api->MigrateDataDirect(reqPb, rspPb);
     point.RecordAndReset(PerfKey::WORKER_MIGRATE_DIRECT_RSP_PROCESS);
     if (rc.IsOk()) {
         ProcessMigrateResponse(reqPb, rspPb, req, rsp);

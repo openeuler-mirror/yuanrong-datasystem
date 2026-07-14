@@ -249,6 +249,12 @@ Status RpcStubCacheMgr::CreateBrpcChannel(const HostPort &hostPort, std::shared_
     // amplifying the failure. Disable it on internal mesh channels; client
     // paths (client_worker_*) keep the default-on breaker.
     cfg.enable_circuit_breaker = false;
+    // Same rationale as circuit breaker: brpc-level blind retry (max_retry=3
+    // by default) re-drives non-idempotent RPCs without checking error codes,
+    // risking state corruption. The old app-level RetryOnRPCError sleep-loop
+    // has been removed (R5-1). Callers that need retry must do so explicitly
+    // with per-call Controller::set_max_retry() and error-code awareness.
+    cfg.max_retry = 0;
     auto channel = BrpcChannelFactory::Create(cfg);
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel != nullptr, K_RPC_UNAVAILABLE,
                                          FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));

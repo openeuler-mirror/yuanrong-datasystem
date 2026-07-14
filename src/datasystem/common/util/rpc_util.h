@@ -50,59 +50,6 @@ inline bool IsRpcTimeoutOrTryAgain(const Status &status)
     return status.GetCode() == StatusCode::K_TRY_AGAIN || IsRpcTimeout(status);
 }
 
-template <class Function, class... Args>
-Status RetryOnRPCError(Function &&func, Args &&...args)
-{
-    const int retryIntervalSecs = 1;
-    const int maxRetryCount = 3;
-    int retryCount = 0;
-    Status status;
-    do {
-        status = func(std::forward<Args>(args)...);
-        if (IsRpcTimeout(status)) {
-            ++retryCount;
-            std::this_thread::sleep_for(std::chrono::seconds(retryIntervalSecs));
-            LOG(ERROR) << "retry " << retryCount << " times.";
-        } else {
-            // If network is ok, we will return the value.
-            break;
-        }
-    } while (retryCount < maxRetryCount);
-
-    return status;
-}
-
-template <class Function>
-Status RetryOnRPCErrorByCount(int maxRetryCount, Function &&func, const std::unordered_set<StatusCode> &exceptionCode)
-{
-    const int retryIntervalSecs = 1;
-    int retryCount = 0;
-    INJECT_POINT("rpc_util.retry_on_rpc_error_by_count", [&maxRetryCount](int count) {
-        LOG(INFO) << "set maxRetryCount to " << count;
-        maxRetryCount = count;
-        return Status::OK();
-    });
-    Status status;
-    do {
-        status = func();
-        if (IsRpcTimeout(status)) {
-            ++retryCount;
-            std::this_thread::sleep_for(std::chrono::seconds(retryIntervalSecs));
-            LOG(INFO) << "retry " << retryCount << " times.";
-        } else {
-            // If an exception code is received during retry, the retry is considered successful.
-            if (retryCount > 0 && exceptionCode.find(status.GetCode()) != exceptionCode.end()) {
-                LOG(INFO) << "The retry succeeds and the response received is: " << status.ToString();
-                status = Status::OK();
-            }
-            // If network is ok, we will return the value.
-            break;
-        }
-    } while (retryCount < maxRetryCount);
-
-    return status;
-}
-
 inline Status ConstructErrorMsg(Status status, const std::unordered_map<StatusCode, uint32_t> errorMap,
                                 uint64_t retryCount, int32_t timeoutMs, bool logError)
 {
@@ -221,16 +168,6 @@ Status RetryOnErrorRepent(int64_t timeoutMs, Function &&func, Handler &&errorHan
 {
     return RetryOnError(timeoutMs, std::forward<Function>(func), std::forward<Handler>(errorHandler), errCode,
                         MAX_RPC_TIMEOUT_MS, {}, true, minOnceRpcTimeoutMs);
-}
-
-template <class Function>
-Status RetryOnRPCErrorByTime(int64_t timeoutMs, Function &&func, bool repent = false)
-{
-    return RetryOnError(
-        timeoutMs, func, []() { return Status::OK(); },
-        { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE,
-          StatusCode::K_URMA_WAIT_TIMEOUT },
-        MAX_RPC_TIMEOUT_MS, {}, repent);
 }
 
 template <class ReqType>
