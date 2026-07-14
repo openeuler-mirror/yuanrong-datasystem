@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -30,9 +27,10 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 #ifdef WITH_TESTS
@@ -45,6 +43,7 @@ namespace master {
 
 class MasterMasterSCApi {
 public:
+
     /**
      * @brief Constructor for the remote version of the api
      * @param[in] hostPort The host port of the target master
@@ -86,6 +85,11 @@ public:
         std::vector<std::string> failedStreamNames;
         std::string destAddr;
         std::string destWorkerId;
+        std::string operationId;
+        uint64_t topologyVersion{ 0 };
+        uint64_t batchEpoch{ 0 };
+        std::string sourceMemberId;
+        std::string targetMemberId;
     };
     SCMigrateMetadataManager(const SCMigrateMetadataManager &other) = delete;
     SCMigrateMetadataManager(SCMigrateMetadataManager &&other) = delete;
@@ -108,8 +112,8 @@ public:
      * @param[in] metadataManagerHolder The metadata manager holder.
      * @return Status of the call.
      */
-    Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager, ClusterManager *cm,
-                MetadataManagerHolder *metadataManagerHolder);
+    Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
+                worker::WorkerTopologyReferences *cm, MetadataManagerHolder *metadataManagerHolder);
 
     /**
      * @brief Shutdown the oc migrage metadata module.
@@ -117,16 +121,18 @@ public:
     void Shutdown();
 
     /**
-     * @brief Migrate data by hash range
-     * @param[in] workerId The worker id.
-     * @param[in] dest Destination address of the migration.
-     * @param[in] destWorkerId The dest worker id.
-     * @param[in] ranges The stream names to be migrated.
-     * @param[in] isNetworkRecovery True if under network recovery scenario.
-     * @return Status of the call.
+     * @brief Migrate stream metadata selected by one topology task scope.
+     * @param[in] action Validated ScaleOut/ScaleIn participant facts.
+     * @param[in] filter Final stream-name predicate for the task scope.
+     * @param[in] businessOperationId Stable idempotency identity.
+     * @param[in] deadline Absolute callback deadline.
+     * @param[in] cancellation Cooperative cancellation signal.
+     * @return Business migration status.
      */
-    Status MigrateByRanges(const std::string &workerId, const std::string &dest, const std::string &destWorkerId,
-                           const worker::HashRange &ranges, bool isNetworkRecovery);
+    Status MigrateTopologyMetadata(const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+                                   const std::string &businessOperationId,
+                                   std::chrono::steady_clock::time_point deadline,
+                                   const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Starting Data Migration
@@ -139,7 +145,7 @@ public:
 
     /**
      * @brief Obtaining the Data Migration Result
-     * @param[in] workerId The worker id.
+     * @param[in] workerId The rocksworker id.
      * @param[in] destination Destination address of the migration.
      * @param[out] failedStreams Failed stream names.
      * @return Status of the call.
@@ -149,6 +155,20 @@ public:
 
 private:
     SCMigrateMetadataManager() = default;
+
+    static constexpr std::chrono::milliseconds TOPOLOGY_CANCELLATION_POLL{ 20 };
+
+    /**
+     * @brief Submit or join one operation-keyed topology migration future by deadline.
+     * @param[in] metadata Stream-cache metadata manager used by the migration.
+     * @param[in] info Materialized destination, operation id, and selected streams.
+     * @param[in] deadline Absolute callback deadline.
+     * @param[in] cancellation Cooperative cancellation token.
+     * @return K_OK on completion; a migration, cancellation, or deadline status otherwise.
+     */
+    Status RunTopologyMigration(const std::shared_ptr<master::SCMetadataManager> &metadata, MigrateMetaInfo info,
+                                std::chrono::steady_clock::time_point deadline,
+                                const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Migrate meta with retry on error
@@ -186,9 +206,15 @@ private:
      * @return Status of the call.
      */
     Status MigrateMetadataForScaleout(const std::shared_ptr<master::SCMetadataManager> &scMetadataManager,
-                                      std::unique_ptr<MasterMasterSCApi> &api,
-                                      const std::vector<std::string> &streamNames,
+                                      std::unique_ptr<MasterMasterSCApi> &api, const MigrateMetaInfo &info,
                                       std::vector<std::string> &failedStreams);
+
+    /**
+     * @brief Initialize one stream metadata migration RPC with its optional topology fence.
+     * @param[in] info Migration participants and exact authority facts.
+     * @param[out] req Cleared or newly-created request to initialize.
+     */
+    void InitializeMigrationRequest(const MigrateMetaInfo &info, MigrateSCMetadataReqPb &req) const;
 
     /**
      * @brief Migrating Data in Batches
@@ -217,7 +243,7 @@ private:
 
     HostPort localHostPort_;
     std::shared_ptr<AkSkManager> akSkManager_;
-    ClusterManager *cm_{ nullptr };
+    worker::WorkerTopologyReferences *cm_{ nullptr };
     std::unique_ptr<ThreadPool> threadPool_;
     // tbb::concurrent_hash_map<workerAddr, std::future<std::pair<Result status, Failed stream names>>>
     TbbFutureThreadTable futureThread_;

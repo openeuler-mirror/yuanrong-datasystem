@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,16 +17,22 @@
 
 #include "datasystem/worker/object_cache/service/worker_oc_service_migrate_impl.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
+#include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <future>
 #include <list>
 #include <memory>
 #include <set>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
 #include "securec.h"
 
@@ -37,9 +40,12 @@
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/shared_memory/allocator.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/worker_object.pb.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #define private public
@@ -47,12 +53,12 @@
 #undef private
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
-#include "eviction_manager_common.h"
+#include "tests/ut/worker/object_cache/test_placement_facade.h"
 
 DS_DECLARE_string(spill_directory);
 DS_DECLARE_uint64(spill_size_limit);
-DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DECLARE_uint32(arena_per_tenant);
+DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 DS_DECLARE_uint32(max_client_num);
 
 using namespace ::testing;
@@ -62,7 +68,135 @@ using namespace datasystem::worker;
 namespace datasystem {
 namespace ut {
 
-class MigrateDataServiceTest : public CommonTest, public EvictionManagerCommon {
+using MigrateTestPlacementFacade = TestPlacementFacade;
+
+#define RETURN_UNSUPPORTED_MASTER_API(method, ...)                                      \
+    Status method(__VA_ARGS__) override                                                \
+    {                                                                                  \
+        return Status(K_RUNTIME_ERROR, "unsupported test master API: " #method);        \
+    }
+
+class MigrateTestWorkerMasterOCApi : public worker::WorkerMasterOCApi {
+public:
+    MigrateTestWorkerMasterOCApi(const HostPort &masterAddr, const HostPort &localAddr)
+        : WorkerMasterOCApi(localAddr, nullptr), masterAddr_(masterAddr)
+    {
+    }
+
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
+    RETURN_UNSUPPORTED_MASTER_API(CreateMeta, master::CreateMetaReqPb &, master::CreateMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(ReportResource, master::ResourceReportReqPb &, master::ResourceReportRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(ReportRebalanceResult, master::ReportRebalanceResultReqPb &,
+                                  master::ReportRebalanceResultRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(CreateMultiMeta, master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &, bool)
+    RETURN_UNSUPPORTED_MASTER_API(CreateCopyMeta, master::CreateCopyMetaReqPb &, master::CreateCopyMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(CreateMultiCopyMeta, master::CreateMultiCopyMetaReqPb &,
+                                  master::CreateMultiCopyMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(QueryMeta, master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
+                                  std::vector<RpcMessage> &)
+    RETURN_UNSUPPORTED_MASTER_API(RemoveMeta, master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GIncNestedRef, master::GIncNestedRefReqPb &, master::GIncNestedRefRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GDecNestedRef, master::GDecNestedRefReqPb &, master::GDecNestedRefRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(UpdateMeta, master::UpdateMetaReqPb &, master::UpdateMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(DeleteAllCopyMeta, master::DeleteAllCopyMetaReqPb &,
+                                  master::DeleteAllCopyMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GDecreaseMasterRef, const std::vector<std::string> &,
+                                  std::unordered_set<std::string> &, std::vector<std::string> &,
+                                  const std::string &)
+    RETURN_UNSUPPORTED_MASTER_API(ReleaseGRefs, master::ReleaseGRefsReqPb &, master::ReleaseGRefsRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GIncreaseMasterRef, master::GIncreaseReqPb &, master::GIncreaseRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GDecreaseMasterRef, master::GDecreaseReqPb &, master::GDecreaseRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(QueryGlobalRefNum, QueryGlobalRefNumReqPb &, QueryGlobalRefNumRspCollectionPb &)
+    RETURN_UNSUPPORTED_MASTER_API(PushMetadataToMaster, master::PushMetaToMasterReqPb &,
+                                  master::PushMetaToMasterRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(RollbackSeal, const std::string &, uint32_t)
+    RETURN_UNSUPPORTED_MASTER_API(Expire, master::ExpireReqPb &, master::ExpireRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(ReconcileMembershipChange, master::ReconciliationQueryPb &,
+                                  master::ReconciliationRspPb &)
+
+    std::string GetHostPort() override
+    {
+        return masterAddr_.ToString();
+    }
+
+    RETURN_UNSUPPORTED_MASTER_API(PutP2PMeta, PutP2PMetaReqPb &, PutP2PMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(SubscribeReceiveEvent, SubscribeReceiveEventReqPb &,
+                                  std::shared_ptr<ServerUnaryWriterReader<SubscribeReceiveEventRspPb,
+                                                                           SubscribeReceiveEventReqPb>>,
+                                  std::shared_ptr<AsyncRpcRequestManager> &)
+    RETURN_UNSUPPORTED_MASTER_API(GetP2PMeta, GetP2PMetaReqPb &,
+                                  std::shared_ptr<ServerUnaryWriterReader<GetP2PMetaRspPb, GetP2PMetaReqPb>>,
+                                  std::shared_ptr<AsyncRpcRequestManager> &)
+    RETURN_UNSUPPORTED_MASTER_API(SendRootInfo, SendRootInfoReqPb &, SendRootInfoRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(RecvRootInfo, RecvRootInfoReqPb &,
+                                  std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>>,
+                                  std::shared_ptr<AsyncRpcRequestManager> &)
+    RETURN_UNSUPPORTED_MASTER_API(GetDataInfo, GetDataInfoReqPb &,
+                                  std::shared_ptr<ServerUnaryWriterReader<GetDataInfoRspPb, GetDataInfoReqPb>> &,
+                                  const int64_t, std::shared_ptr<AsyncRpcRequestManager> &)
+    RETURN_UNSUPPORTED_MASTER_API(AckRecvFinish, AckRecvFinishReqPb &, AckRecvFinishRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(RemoveP2PLocation, RemoveP2PLocationReqPb &, RemoveP2PLocationRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GetObjectLocations, master::GetObjectLocationsReqPb &,
+                                  master::GetObjectLocationsRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GetObjectLocations, master::GetObjectLocationsReqPb &,
+                                  master::GetObjectLocationsRspPb &, int64_t)
+    RETURN_UNSUPPORTED_MASTER_API(ReleaseMetaData, ReleaseMetaDataReqPb &, ReleaseMetaDataRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(ReplacePrimary, master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(PureQueryMeta, master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(CheckObjectDataLocation, master::CheckObjectDataLocationReqPb &,
+                                  master::CheckObjectDataLocationRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(RollbackMultiMeta, master::RollbackMultiMetaReqPb &,
+                                  master::RollbackMultiMetaRspPb &)
+    RETURN_UNSUPPORTED_MASTER_API(GetMetaInfo, GetMetaInfoReqPb &, GetMetaInfoRspPb &)
+
+private:
+    HostPort masterAddr_;
+};
+
+#undef RETURN_UNSUPPORTED_MASTER_API
+
+class MigrateTestWorkerMasterApiManager : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
+public:
+    explicit MigrateTestWorkerMasterApiManager(HostPort &workerAddr)
+        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr)
+    {
+    }
+
+    std::shared_ptr<worker::WorkerMasterOCApi> CreateWorkerMasterApi(const HostPort &masterAddress) override
+    {
+        auto iter = apiByAddr_.find(masterAddress.ToString());
+        return iter == apiByAddr_.end() ? defaultApi_ : iter->second;
+    }
+
+    Status GetWorkerMasterApi(const HostPort &masterAddress, std::shared_ptr<worker::WorkerMasterOCApi> &api) override
+    {
+        api = CreateWorkerMasterApi(masterAddress);
+        CHECK_FAIL_RETURN_STATUS(api != nullptr, K_RUNTIME_ERROR, "test worker master API is not configured");
+        return Status::OK();
+    }
+
+    std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApi(const HostPort &masterAddress) override
+    {
+        std::shared_ptr<worker::WorkerMasterOCApi> api;
+        LOG_IF_ERROR(GetWorkerMasterApi(masterAddress, api), "GetWorkerMasterApi failed");
+        return api;
+    }
+
+    void SetDefaultApi(const std::shared_ptr<worker::WorkerMasterOCApi> &api)
+    {
+        defaultApi_ = api;
+    }
+
+private:
+    std::shared_ptr<worker::WorkerMasterOCApi> defaultApi_;
+    std::unordered_map<std::string, std::shared_ptr<worker::WorkerMasterOCApi>> apiByAddr_;
+};
+
+class MigrateDataServiceTest : public CommonTest {
 public:
     void SetUp() override
     {
@@ -70,18 +204,28 @@ public:
         Init();
         const uint64_t memSize = 32 * 1024ul * 1024ul;
         FLAGS_arena_per_tenant = 1;
-        allocator = datasystem::memory::Allocator::Instance();
-        allocator->Init(memSize);
+        allocator_ = datasystem::memory::Allocator::Instance();
+        allocator_->Init(memSize);
         FLAGS_spill_directory = "./spill" + GetStringUuid();
         FLAGS_spill_size_limit = memSize;
         DS_ASSERT_OK(WorkerOcSpill::Instance()->Init());
     }
 
+    void TearDown() override
+    {
+        if (allocator_ != nullptr) {
+            allocator_->Shutdown();
+            allocator_ = nullptr;
+        }
+        CommonTest::TearDown();
+    }
+
     void Init()
     {
         objectTable_ = std::make_shared<ObjectTable>();
+        workerMasterApiManager_ = std::make_shared<MigrateTestWorkerMasterApiManager>(localAddress_);
         WorkerOcServiceCrudParam param{
-            .workerMasterApiManager = nullptr,
+            .workerMasterApiManager = workerMasterApiManager_,
             .workerRequestManager = requestManager_,
             .memoryRefTable = nullptr,
             .objectTable = objectTable_,
@@ -91,14 +235,56 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .clusterManager = nullptr,
+            .topologyEngine = nullptr,
+            .topologyPlacement = &placement_,
+            .topologyMembership = nullptr,
+            .topologyRouteOptions = worker::MetadataRouteOptions{},
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, nullptr, threadPool_, nullptr, "127.0.0.1:18888",
-                                                             rateController_);
+        topologyReferences_.localExiting = &localExiting_;
+        impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, &topologyReferences_, threadPool_, nullptr,
+                                                             "127.0.0.1:18888", rateController_);
         TimerQueue::GetInstance()->Initialize();
+    }
+
+    uint64_t GetMetaSize(uint64_t dataSize)
+    {
+        constexpr uint64_t defaultMetaSize = 10;
+        return WorkerOcServiceCrudCommonApi::CanTransferByShm(dataSize) ? defaultMetaSize : 0;
+    }
+
+    Status CreateObject(const std::string &objectKey, uint64_t dataSize)
+    {
+        CHECK_FAIL_RETURN_STATUS(!objectTable_->Contains(objectKey), StatusCode::K_DUPLICATED, "object exist");
+        const uint64_t metaSize = GetMetaSize(dataSize);
+        const uint64_t needSize = dataSize + metaSize;
+
+        auto ptr = std::make_unique<object_cache::ObjCacheShmUnit>();
+        auto shmUnit = std::make_shared<ShmUnit>();
+        RETURN_IF_NOT_OK(shmUnit->AllocateMemory("", needSize, false));
+        if (metaSize > 0) {
+            auto ret = memset_s(shmUnit->GetPointer(), metaSize, 0, metaSize);
+            if (ret != EOK) {
+                RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR,
+                                        FormatString("[ObjectKey %s] Memset failed, errno: %d", objectKey, ret));
+            }
+        }
+        ptr->SetShmUnit(shmUnit);
+        ptr->SetDataSize(dataSize);
+        ptr->SetMetadataSize(metaSize);
+        ptr->SetCreateTime(1);
+        ptr->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+
+        ptr->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
+        ptr->modeInfo.SetCacheType(CacheType::MEMORY);
+        ptr->stateInfo.SetDataFormat(DataFormat::BINARY);
+        ptr->stateInfo.SetPrimaryCopy(true);
+        ptr->stateInfo.SetSpillState(false);
+
+        objectTable_->Insert(objectKey, std::move(ptr));
+        return Status::OK();
     }
 
     void SetMemoryAvailable(bool available)
@@ -150,33 +336,87 @@ public:
         return metadataSize;
     }
 
-    ClusterManager::MetaOwnerKeyGroups MockGroupObjKeysByMasterHostPort(
-        const std::unordered_set<std::string> &objectKeys)
+    void RouteObjectKeysByMasterHostPort2(const std::unordered_set<std::string> &objectKeys)
     {
-        ClusterManager::MetaOwnerKeyGroups result;
-        HostPort masterAddr("127.0.0.1:18481");
-        std::vector<std::string> vec{ objectKeys.begin(), objectKeys.end() };
-        result.groups.emplace(masterAddr, std::move(vec));
-        return result;
+        placement_.Clear();
+        size_t size = objectKeys.size();
+        size_t count = 0;
+        size_t batch = 3;
+        for (const auto &id : objectKeys) {
+            HostPort masterAddr;
+            if (count < size / batch) {
+                masterAddr.ParseString("127.0.0.1:18481");
+            } else if (count < (size / batch * 2)) {
+                masterAddr.ParseString("127.0.0.1:18482");
+            } else {
+                masterAddr.ParseString("127.0.0.1:18483");
+            }
+            placement_.SetOwner(id, masterAddr);
+            count++;
+        }
     }
 
-    ClusterManager::MetaOwnerKeyGroups MockGroupObjKeysByMasterHostPort2(
-        const std::unordered_set<std::string> &objectKeys);
+    void VerifyRequestHoldsMigrationAdmission(std::function<Status()> request)
+    {
+        constexpr std::chrono::seconds schedulingTimeout(1);
+        constexpr std::chrono::seconds closeBudget(2);
+        constexpr std::chrono::milliseconds observationWindow(50);
+        std::promise<void> requestAdmittedPromise;
+        auto requestAdmittedFuture = requestAdmittedPromise.get_future();
+        std::promise<void> releaseRequestPromise;
+        auto releaseRequestFuture = releaseRequestPromise.get_future().share();
+        impl_->SetAfterAdmissionTestHook([&requestAdmittedPromise, releaseRequestFuture] {
+            requestAdmittedPromise.set_value();
+            releaseRequestFuture.wait();
+        });
+        auto requestFuture = std::async(std::launch::async, std::move(request));
+        const bool requestAdmitted = requestAdmittedFuture.wait_for(schedulingTimeout) == std::future_status::ready;
+
+        auto closeFuture = std::async(std::launch::async, [this, closeBudget] {
+            return impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now() + closeBudget);
+        });
+        Status lateAdmission(K_RUNTIME_ERROR, "Migration admission gate did not close");
+        const auto gateDeadline = std::chrono::steady_clock::now() + schedulingTimeout;
+        do {
+            lateAdmission = impl_->AcquireIncomingMigrationAdmission();
+            if (lateAdmission.IsOk()) {
+                impl_->ReleaseIncomingMigrationAdmission();
+                std::this_thread::yield();
+            }
+        } while (lateAdmission.IsOk() && std::chrono::steady_clock::now() < gateDeadline);
+        const auto closeStateWhileRequestPaused = closeFuture.wait_for(observationWindow);
+
+        releaseRequestPromise.set_value();
+        (void)requestFuture.get();
+        const auto closeStatus = closeFuture.get();
+        impl_->SetAfterAdmissionTestHook({});
+        EXPECT_TRUE(requestAdmitted);
+        EXPECT_EQ(lateAdmission.GetCode(), StatusCode::K_NOT_READY);
+        EXPECT_EQ(closeStateWhileRequestPaused, std::future_status::timeout);
+        DS_EXPECT_OK(closeStatus);
+    }
 
     Status PureQueryMeta(const std::shared_ptr<worker::WorkerMasterOCApi> &api, master::PureQueryMetaReqPb &req,
                          master::PureQueryMetaRspPb &rsp);
 
 protected:
+    MigrateTestPlacementFacade placement_;
+    HostPort localAddress_{ "127.0.0.1", 18482 };
+    datasystem::memory::Allocator *allocator_{ nullptr };
+    std::shared_ptr<ObjectTable> objectTable_;
+    std::shared_ptr<MigrateTestWorkerMasterApiManager> workerMasterApiManager_;
     std::shared_ptr<ThreadPool> threadPool_;
     std::shared_ptr<WorkerOcServiceMigrateImpl> impl_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     WorkerRequestManager requestManager_;
     std::shared_ptr<MigrateDataRateController> rateController_;
+    std::atomic<bool> localExiting_{ false };
+    WorkerTopologyReferences topologyReferences_;
 };
 
-TEST(ClusterManagerMetaOwnerKeyGroupsTest, AppendFailuresToGroupDoesNotCreateEmptyGroupWithoutFailures)
+TEST(MetaOwnerRouteGroupsTest, AppendFailuresToGroupDoesNotCreateEmptyGroupWithoutFailures)
 {
-    ClusterManager::MetaOwnerKeyGroups grouped;
+    MetaOwnerRouteGroups grouped;
     grouped.AppendFailuresToGroup();
     EXPECT_TRUE(grouped.groups.empty());
 
@@ -187,6 +427,22 @@ TEST(ClusterManagerMetaOwnerKeyGroupsTest, AppendFailuresToGroupDoesNotCreateEmp
     auto iter = grouped.groups.find(HostPort());
     ASSERT_NE(iter, grouped.groups.end());
     EXPECT_THAT(iter->second, ElementsAre(failedKey));
+}
+
+TEST(MetaOwnerRouteGroupsTest, BuildGroupsFromTopologyPlacementAndKeepsPerKeyFailures)
+{
+    MigrateTestPlacementFacade placement;
+    HostPort masterAddr;
+    masterAddr.ParseString("127.0.0.1:18481");
+    placement.SetOwner("ok-key", masterAddr);
+
+    auto grouped = BuildMetaOwnerRouteGroups({ "ok-key", "missing-key" }, &placement, worker::MetadataRouteOptions{});
+    ASSERT_EQ(grouped.groups.size(), size_t(1));
+    auto iter = grouped.groups.find(masterAddr);
+    ASSERT_NE(iter, grouped.groups.end());
+    EXPECT_THAT(iter->second, ElementsAre("ok-key"));
+    ASSERT_EQ(grouped.failures.size(), size_t(1));
+    EXPECT_EQ(grouped.failures.at("missing-key").GetCode(), StatusCode::K_NOT_FOUND);
 }
 
 TEST_F(MigrateDataServiceTest, TestDiskIOError)
@@ -227,6 +483,61 @@ TEST_F(MigrateDataServiceTest, TestResourcesUnavailable)
     ASSERT_EQ(impl_->MigrateData(req, rsp, std::move(payloads)).GetCode(), StatusCode::K_OUT_OF_MEMORY);
     ASSERT_EQ(rsp.success_ids_size(), 0);
     ASSERT_EQ(rsp.fail_ids_size(), size);
+}
+
+TEST_F(MigrateDataServiceTest, RejectsIncomingMigrationAfterLocalScaleInStarts)
+{
+    localExiting_.store(true);
+    constexpr std::chrono::seconds closeBudget(1);
+    DS_ASSERT_OK(impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now() + closeBudget));
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SCALE_DOWN);
+    req.add_objects()->set_object_key("late-object");
+    MigrateDataRspPb rsp;
+    EXPECT_EQ(impl_->MigrateData(req, rsp, {}).GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_EQ(rsp.scale_down_state(), MigrateDataRspPb::DATA_MIGRATION_STARTED);
+    EXPECT_THAT(rsp.fail_ids(), ElementsAre("late-object"));
+
+    MigrateDataReqPb probe;
+    probe.set_type(MigrateType::SCALE_DOWN);
+    MigrateDataRspPb probeRsp;
+    EXPECT_EQ(impl_->MigrateData(probe, probeRsp, {}).GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_EQ(probeRsp.scale_down_state(), MigrateDataRspPb::DATA_MIGRATION_STARTED);
+
+    MigrateDataDirectReqPb directReq;
+    directReq.add_objects()->set_object_key("late-direct-object");
+    MigrateDataDirectRspPb directRsp;
+    EXPECT_EQ(impl_->MigrateDataDirect(directReq, directRsp).GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_THAT(directRsp.failed_object_keys(), ElementsAre("late-direct-object"));
+}
+
+TEST_F(MigrateDataServiceTest, SocketMigrationHoldsAdmissionUntilRequestReturns)
+{
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SCALE_DOWN);
+    MigrateDataRspPb rsp;
+    VerifyRequestHoldsMigrationAdmission([this, &req, &rsp] {
+        return impl_->MigrateData(req, rsp, {});
+    });
+}
+
+TEST_F(MigrateDataServiceTest, DirectMigrationHoldsAdmissionUntilRequestReturns)
+{
+    MigrateDataDirectReqPb req;
+    req.add_objects()->set_object_key("guarded-direct-object");
+    MigrateDataDirectRspPb rsp;
+    VerifyRequestHoldsMigrationAdmission([this, &req, &rsp] {
+        return impl_->MigrateDataDirect(req, rsp);
+    });
+}
+
+TEST_F(MigrateDataServiceTest, CloseMigrationAdmissionReturnsDeadlineExceeded)
+{
+    DS_ASSERT_OK(impl_->AcquireIncomingMigrationAdmission());
+    const auto rc = impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now());
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(impl_->AcquireIncomingMigrationAdmission().GetCode(), StatusCode::K_NOT_READY);
+    impl_->ReleaseIncomingMigrationAdmission();
 }
 
 TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjects)
@@ -286,8 +597,8 @@ TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)
     BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::ReplacePrimaryOnce, (_, _, _))
         .Times(retryTimes)
         .WillRepeatedly(Return(status));
-    std::shared_ptr<WorkerRemoteMasterOCApi> remoteApi =
-        std::make_shared<WorkerRemoteMasterOCApi>(HostPort("127.0.0.1:18481"), HostPort("127.0.0.1:18482"), nullptr);
+    std::shared_ptr<WorkerMasterOCApi> remoteApi =
+        std::make_shared<MigrateTestWorkerMasterOCApi>(HostPort("127.0.0.1:18481"), HostPort("127.0.0.1:18482"));
     master::ReplacePrimaryReqPb req;
     master::ReplacePrimaryRspPb rsp;
     DS_ASSERT_NOT_OK(impl_->ReplacePrimaryRetry(remoteApi, req, rsp));
@@ -296,18 +607,12 @@ TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)
 TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterMeetsRPCError)
 {
     LOG(INFO) << "Test query objects meta meets rpc error";
-    BINEXPECT_CALL((ClusterManager::MetaOwnerKeyGroups (ClusterManager::*)(
-                       const std::unordered_set<std::string> &))&ClusterManager::GroupKeysByMetaOwner,
-                   (_))
-        .Times(1)
-        .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort));
-
     Status status(StatusCode::K_RPC_UNAVAILABLE, "");
     BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::PureQueryMetaOnce, (_, _, _)).Times(4).WillRepeatedly(Return(status));
 
-    std::shared_ptr<WorkerRemoteMasterOCApi> remoteApi =
-        std::make_shared<WorkerRemoteMasterOCApi>(HostPort("127.0.0.1:18481"), HostPort("127.0.0.1:18482"), nullptr);
-    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::GetWorkerMasterApi, (_)).Times(1).WillRepeatedly(Return(remoteApi));
+    std::shared_ptr<WorkerMasterOCApi> remoteApi =
+        std::make_shared<MigrateTestWorkerMasterOCApi>(HostPort("127.0.0.1:18481"), HostPort("127.0.0.1:18482"));
+    workerMasterApiManager_->SetDefaultApi(remoteApi);
 
     MigrateDataReqPb req;
     uint64_t elderVersion = 0;
@@ -316,34 +621,16 @@ TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterMeetsRPCError)
     uint64_t nowVersion = 1;
     CreateObjects("Expire_", 1, expireCount, elderVersion, true, false, req);
     CreateObjects("New_Created_", 1, newCreateCount, nowVersion, false, false, req);
+    std::unordered_set<std::string> routeKeys;
+    for (uint64_t i = 0; i < newCreateCount; ++i) {
+        routeKeys.emplace("New_Created_" + std::to_string(i));
+    }
+    RouteObjectKeysByMasterHostPort2(routeKeys);
     MigrateDataRspPb rsp;
     std::vector<RpcMessage> payloads;
     ASSERT_EQ(impl_->MigrateData(req, rsp, std::move(payloads)).GetCode(), StatusCode::K_RPC_UNAVAILABLE);
     ASSERT_EQ(rsp.fail_ids_size(), newCreateCount);
     ASSERT_EQ(rsp.success_ids_size(), expireCount);
-}
-
-ClusterManager::MetaOwnerKeyGroups MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort2(
-    const std::unordered_set<std::string> &objectKeys)
-{
-    ClusterManager::MetaOwnerKeyGroups result;
-    size_t size = objectKeys.size();
-    size_t count = 0;
-    size_t batch = 3;
-    for (const auto &id : objectKeys) {
-        if (count < size / batch) {
-            HostPort masterAddr("127.0.0.1:18481");
-            result.groups[masterAddr].emplace_back(id);
-        } else if (count < (size / batch * 2)) {
-            HostPort masterAddr("127.0.0.1:18482");
-            result.groups[masterAddr].emplace_back(id);
-        } else {
-            HostPort masterAddr("127.0.0.1:18483");
-            result.groups[masterAddr].emplace_back(id);
-        }
-        count++;
-    }
-    return result;
 }
 
 size_t gCount = 9000;
@@ -352,15 +639,15 @@ Status MigrateDataServiceTest::PureQueryMeta(const std::shared_ptr<worker::Worke
                                              master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp)
 {
     auto fillMeta = [](const std::string &id, master::PureQueryMetaRspPb &rsp) {
-        if (id.find_first_of("Equal_Version") != std::string::npos) {
+        if (id.find("Equal_Version") != std::string::npos) {
             auto meta = rsp.add_query_metas();
             meta->mutable_meta()->set_version(1);
             meta->mutable_meta()->set_object_key(id);
-        } else if (id.find_first_of("Larger_Version") != std::string::npos) {
+        } else if (id.find("Larger_Version") != std::string::npos) {
             auto meta = rsp.add_query_metas();
             meta->mutable_meta()->set_version(2);
             meta->mutable_meta()->set_object_key(id);
-        } else if (id.find_first_of("Smaller_Version") != std::string::npos) {
+        } else if (id.find("Smaller_Version") != std::string::npos) {
             auto meta = rsp.add_query_metas();
             meta->mutable_meta()->set_version(0);
             meta->mutable_meta()->set_object_key(id);
@@ -386,32 +673,27 @@ Status MigrateDataServiceTest::PureQueryMeta(const std::shared_ptr<worker::Worke
     return Status::OK();
 }
 
-TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterBasicFunction)
+TEST_F(MigrateDataServiceTest, TestQueryMetaFromMasterBasicFunction)
 {
     LOG(INFO) << "Test query meta from master basic function";
-    BINEXPECT_CALL((ClusterManager::MetaOwnerKeyGroups (ClusterManager::*)(
-                       const std::unordered_set<std::string> &))&ClusterManager::GroupKeysByMetaOwner,
-                   (_))
-        .Times(1)
-        .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::MockGroupObjKeysByMasterHostPort2));
-
     BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::PureQueryMetaOnce, (_, _, _))
         .Times(6)
         .WillRepeatedly(Invoke(this, &MigrateDataServiceTest::PureQueryMeta));
 
-    std::shared_ptr<WorkerRemoteMasterOCApi> remoteApi =
-        std::make_shared<WorkerRemoteMasterOCApi>(HostPort("127.0.0.1:18481"), HostPort("127.0.0.1:18482"), nullptr);
-    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::GetWorkerMasterApi, (_)).Times(6).WillRepeatedly(Return(remoteApi));
+    std::shared_ptr<WorkerMasterOCApi> remoteApi =
+        std::make_shared<MigrateTestWorkerMasterOCApi>(HostPort("127.0.0.1:18481"), HostPort("127.0.0.1:18482"));
+    workerMasterApiManager_->SetDefaultApi(remoteApi);
 
     std::unordered_set<std::string> objectKeys;
     uint64_t count = 300;
     for (size_t i = 0; i < count; ++i) {
-        if (i > count / 2) {
+        if (i >= count / 2) {
             objectKeys.emplace("Absent_ID" + std::to_string(i));
         } else {
             objectKeys.emplace("Equal_Version" + std::to_string(i));
         }
     }
+    RouteObjectKeysByMasterHostPort2(objectKeys);
     QueryMetaMap queryMetas;
     std::unordered_set<std::string> failedIds;
     DS_ASSERT_OK(impl_->QueryMasterMetadata(objectKeys, queryMetas, failedIds));
@@ -541,6 +823,7 @@ class MigrateL2DataServiceTest : public MigrateDataServiceTest {};
 
 TEST_F(MigrateL2DataServiceTest, TestMigrateL2Data)
 {
+
 }
 
 TEST_F(MigrateDataServiceTest, UsesInjectedRateController)
@@ -565,7 +848,10 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .clusterManager = nullptr,
+            .topologyEngine = nullptr,
+            .topologyPlacement = nullptr,
+            .topologyMembership = nullptr,
+            .topologyRouteOptions = worker::MetadataRouteOptions{},
         };
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);

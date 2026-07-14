@@ -1,22 +1,19 @@
 /**
-* Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 /**
-* Description: Memory rebalance end-to-end system tests.
-*/
+ * Description: Memory rebalance end-to-end system tests.
+ */
 
 #include <atomic>
 #include <chrono>
@@ -32,9 +29,10 @@
 #include "client/kv_cache/kv_client_common.h"
 #include "cluster/external_cluster.h"
 #include "common.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/kv_client.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 
 namespace datasystem {
 namespace st {
@@ -146,8 +144,10 @@ public:
            usageGapPercent = "1";
        }
        std::string sourceUsagePercent = memoryLimitSourceThresholdCase ? "55" : "70";
-       std::string watermarkParams =
-           memoryLimitSourceThresholdCase ? " -eviction_high_watermark_ratio=0.8 -eviction_low_watermark_ratio=0.7" : "";
+       std::string watermarkParams = memoryLimitSourceThresholdCase
+                                         ? " -eviction_high_watermark_ratio=0.8"
+                                           " -eviction_low_watermark_ratio=0.7"
+                                         : "";
        opts.workerGflagParams =
            "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
            "-rebalance_usage_gap_percent=" + usageGapPercent + " -rebalance_source_usage_percent=" +
@@ -285,11 +285,11 @@ protected:
            InitTestEtcdInstance();
        }
        Status lastStatus;
-       HashRingPb lastRing;
+       ClusterTopologyPb lastRing;
        ASSERT_TRUE(WaitFor(
            [&] {
                std::string hashRingStr;
-               lastStatus = db_->Get(ETCD_RING_PREFIX, "", hashRingStr);
+               lastStatus = db_->Get(GetTopologyTableName(), "", hashRingStr);
                if (lastStatus.IsError()) {
                    return false;
                }
@@ -297,12 +297,11 @@ protected:
                if (!lastRing.ParseFromString(hashRingStr)) {
                    return false;
                }
-               if (lastRing.workers_size() != static_cast<int>(expectedWorkerNum)
-                   || lastRing.add_node_info_size() != 0 || lastRing.del_node_info_size() != 0) {
+               if (lastRing.members_size() != static_cast<int>(expectedWorkerNum)) {
                    return false;
                }
-               for (const auto &worker : lastRing.workers()) {
-                   if (worker.second.state() != WorkerPb::ACTIVE) {
+               for (const auto &worker : lastRing.members()) {
+                   if (worker.second.state() != MembershipPb::ACTIVE) {
                        return false;
                    }
                }
@@ -396,8 +395,9 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_UsageRateUsesMemoryLimitForS
    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
 
    // 8 * 4 MB is below 55% of memory_limit, but above 55% of 0.8 high-water capacity.
-   auto sourceBatch = WriteObjects(client0_, "rebalance_memory_limit_source_threshold", MEMORY_LIMIT_SOURCE_OBJECT_COUNT,
-                                  'm', MEMORY_LIMIT_SOURCE_VALUE_SIZE);
+   auto sourceBatch =
+       WriteObjects(client0_, "rebalance_memory_limit_source_threshold", MEMORY_LIMIT_SOURCE_OBJECT_COUNT, 'm',
+                    MEMORY_LIMIT_SOURCE_VALUE_SIZE);
 
    SleepMs(SHORT_WAIT_MS);
    ASSERT_EQ(GetTotalInjectCount(ASSIGN_TASK_POINT), assignBaseline);
@@ -528,18 +528,18 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, BusyGuardSelfHealProbesAfterBudgetEla
 {
     WaitAllNodesActiveInHashRing(3);
     constexpr char PROBE_POINT[] = "MigrateDataHandler.SelfHealBusyRate.probe";
-    SetInjectAction(WORKER0, PROBE_POINT, "100000*call()");
-    SetInjectAction(WORKER0, "migrate.limiter.is_busy_node", "100000*return()");
+    SetInjectActionForAll(PROBE_POINT, "100000*call()");
+    SetInjectActionForAll("migrate.limiter.is_busy_node", "100000*return()");
     for (auto target : { WORKER1, WORKER2 }) {
         SetInjectAction(target, "worker.migrate_service.return", "1*sleep(3100)");
     }
 
-    auto probeBaseline = GetInjectCount(WORKER0, PROBE_POINT);
+    auto probeBaseline = GetTotalInjectCount(PROBE_POINT);
     auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
     auto sourceBatch = WriteObjects(client0_, "rebalance_busy_after_budget", 9, 'b');
 
     WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
-    WaitForInjectCount(WORKER0, PROBE_POINT, probeBaseline + 1, 15000);
+    WaitForTotalInjectCount(PROBE_POINT, probeBaseline + 1, AllWorkers(), 15000);
     AssertReadable(client0_, sourceBatch);
 }
 

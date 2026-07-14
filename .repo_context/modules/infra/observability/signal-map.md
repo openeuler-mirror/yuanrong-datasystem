@@ -10,7 +10,7 @@
   - `src/datasystem/worker/*`
   - `src/datasystem/common/log/*`
   - `src/datasystem/common/metrics/*`
-  - `src/datasystem/worker/cluster_manager/*`
+  - `src/datasystem/cluster/*`
 - Last verified against source:
   - `2026-04-13`
 - Related design docs:
@@ -38,7 +38,7 @@
 | requests succeed but monitor logs disappear | ordinary logs, resource monitor files, init logs | `log_monitor`, `log_monitor_exporter`, `log_dir` | `logging.cpp`, `res_metric_collector.cpp`, `hard_disk_exporter.cpp` |
 | latency or throughput regression | ordinary logs, access logs, resource monitor files | queue-related runtime config, monitor interval, log flush settings | `worker_main.cpp`, `metrics_exporter.cpp`, `log_manager.cpp`, service thread pools |
 | blank metric columns | resource monitor file, warning logs | `log_monitor`, registration coverage | `res_metric_collector.cpp`, `worker_oc_server.cpp`, `res_metrics.def` |
-| routing or topology looks wrong after config change | ordinary logs, cluster-management evidence | `etcd_address`, `metastore_address`, cluster config | `cluster_manager/cluster_manager.cpp`, `hash_ring/hash_ring.cpp`, `worker_oc_server.cpp` |
+| routing or topology looks wrong after config change | ordinary logs, topology evidence | `etcd_address`, `metastore_address`, topology config | `src/datasystem/cluster/*`, `worker_oc_server.cpp` |
 | disk usage grows unexpectedly | ordinary logs, rotated monitor files | `max_log_size`, `max_log_file_num`, `log_retention_day`, `log_compress` | `log_manager.cpp`, `hard_disk_exporter.cpp` |
 
 ## Common Misreads

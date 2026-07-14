@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,14 +16,18 @@
  */
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 
+#include <algorithm>
+#include <exception>
+
+#include "datasystem/worker/worker_topology_references.h"
+
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
+#include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
-#include "datasystem/worker/hash_ring/hash_ring_event.h"
-#include "datasystem/common/task_action/task_action_registry.h"
 
 DS_DECLARE_uint32(node_dead_timeout_s);
 
@@ -34,7 +35,6 @@ namespace datasystem {
 namespace master {
 static constexpr int MOVE_THREAD_NUM = 4;
 static constexpr int MAX_MIGRATE_CNT_PER_STREAM = 30;
-static const std::string SC_MIGRATE_METADATA_MANAGER = "SCMigrateMetadataManager";
 MasterMasterSCApi::MasterMasterSCApi(const HostPort &hostPort, const HostPort &localHostPort,
                                      std::shared_ptr<AkSkManager> akSkManager)
     : destHostPort_(hostPort), localHostPort_(localHostPort), akSkManager_(std::move(akSkManager))
@@ -62,8 +62,9 @@ SCMigrateMetadataManager &SCMigrateMetadataManager::Instance()
     return instance;
 }
 
-Status SCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                                      ClusterManager *cm, MetadataManagerHolder *metadataManagerHolder)
+Status SCMigrateMetadataManager::Init(
+    const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
+    worker::WorkerTopologyReferences *cm, MetadataManagerHolder *metadataManagerHolder)
 {
     localHostPort_ = localHostPort;
     akSkManager_ = std::move(akSkManager);
@@ -71,19 +72,6 @@ Status SCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "ScMigrateMetadata");
     metadataManagerHolder_ = metadataManagerHolder;
 
-    HashRingEvent::MigrateRanges::GetInstance().AddSubscriber(
-        SC_MIGRATE_METADATA_MANAGER,
-        [this](const std::string &workerId, const std::string &dest, const std::string &destWorkerId,
-               const worker::HashRange &ranges, bool isNetworkRecovery) {
-            return MigrateByRanges(workerId, dest, destWorkerId, ranges, isNetworkRecovery);
-        });
-    auto migrateByTask = [this](const TransferTask &task) {
-        return MigrateByRanges(task.sourceWorkerAddr, task.targetWorkerAddr, "", task.placementScope.ranges, false);
-    };
-    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::MIGRATE_SCALE_UP_METADATA,
-                                                    SC_MIGRATE_METADATA_MANAGER, migrateByTask);
-    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_METADATA,
-                                                    SC_MIGRATE_METADATA_MANAGER, std::move(migrateByTask));
     return Status::OK();
 }
 
@@ -96,31 +84,68 @@ SCMigrateMetadataManager::~SCMigrateMetadataManager()
 void SCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
-    HashRingEvent::MigrateRanges::GetInstance().RemoveSubscriber(SC_MIGRATE_METADATA_MANAGER);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::MIGRATE_SCALE_UP_METADATA,
-                                                       SC_MIGRATE_METADATA_MANAGER);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_METADATA,
-                                                       SC_MIGRATE_METADATA_MANAGER);
     cm_ = nullptr;
 }
 
-Status SCMigrateMetadataManager::MigrateByRanges(const std::string &workerId, const std::string &dest,
-                                                 const std::string &destWorkerId, const worker::HashRange &ranges,
-                                                 bool isNetworkRecovery)
+Status SCMigrateMetadataManager::MigrateTopologyMetadata(
+    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+    const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+    const cluster::CancellationToken &cancellation)
 {
-    (void)workerId;
-    CHECK_FAIL_RETURN_STATUS(cm_ != nullptr, K_RUNTIME_ERROR, "SCMigrateMetadataManager has not inited.");
-
-    std::shared_ptr<master::SCMetadataManager> scMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
-                                     "workerId not exists");
+    CHECK_FAIL_RETURN_STATUS(action.source.has_value() && action.target.has_value(), K_INVALID,
+                             "topology stream migration lacks source or target");
+    CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology stream migration cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology stream migration deadline exceeded");
+    std::shared_ptr<master::SCMetadataManager> metadata;
+    RETURN_IF_NOT_OK(metadataManagerHolder_->GetScMetadataManager(metadata));
     MigrateMetaInfo info;
-    info.destAddr = dest;
-    info.destWorkerId = destWorkerId;
-    scMetadataManager->GetMetasMatch(
-        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, info.streamNames);
+    info.destAddr = action.target->address;
+    info.operationId = businessOperationId;
+    info.topologyVersion = action.topologyVersion;
+    info.batchEpoch = action.batchEpoch;
+    info.sourceMemberId = action.source->id;
+    info.targetMemberId = action.target->id;
+    metadata->GetMetasMatch([&filter](const std::string &name) { return filter.Contains(name); }, info.streamNames);
+    if (info.streamNames.empty()) {
+        return Status::OK();
+    }
+    auto rc = RunTopologyMigration(metadata, std::move(info), deadline, cancellation);
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology stream migration deadline exceeded");
+    return rc;
+}
 
-    return MigrateMetaDataWithRetry(scMetadataManager, info, isNetworkRecovery);
+Status SCMigrateMetadataManager::RunTopologyMigration(
+    const std::shared_ptr<master::SCMetadataManager> &metadata, MigrateMetaInfo info,
+    std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
+{
+    const auto futureKey = std::make_pair(info.destAddr, info.operationId);
+    TbbFutureThreadTable::accessor accessor;
+    if (!futureThread_.find(accessor, futureKey)) {
+        auto traceId = Trace::Instance().GetTraceID();
+        auto future = threadPool_->Submit([this, metadata, info = std::move(info), traceId]() mutable {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            return AsyncMigrateMetadata(metadata, info);
+        });
+        futureThread_.emplace(accessor, futureKey, std::move(future));
+    }
+    while (std::chrono::steady_clock::now() < deadline && !cancellation.IsCancelled()) {
+        const auto pollDeadline = std::min(deadline, std::chrono::steady_clock::now() + TOPOLOGY_CANCELLATION_POLL);
+        if (accessor->second.wait_until(pollDeadline) == std::future_status::ready) {
+            try {
+                auto result = accessor->second.get();
+                futureThread_.erase(accessor);
+                return result.first;
+            } catch (const std::exception &error) {
+                futureThread_.erase(accessor);
+                RETURN_STATUS(K_RUNTIME_ERROR, std::string("topology stream migration exception: ") + error.what());
+            }
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology stream migration cancelled");
+    RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "topology stream migration deadline exceeded");
 }
 
 void SCMigrateMetadataManager::HandleMigrationFailed(
@@ -143,7 +168,7 @@ Status SCMigrateMetadataManager::MigrateMetaDataWithRetry(
     const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, MigrateMetaInfo &info, bool isNetworkRecovery)
 {
     int timeInterval = 500;
-    INJECT_POINT("SCMigrateMetadataManager.MigrateMetaDataWithRetry.interval", [&timeInterval](int interval) {
+    INJECT_POINT("SCMigrateMetadataManager.MigrateMetaDataWithRetry.interval", [&timeInterval] (int interval) {
         timeInterval = interval;
         return Status::OK();
     });
@@ -155,7 +180,7 @@ Status SCMigrateMetadataManager::MigrateMetaDataWithRetry(
     Raii clean([&scMetadataManager, &info]() { scMetadataManager->CleanMigratingItems(info.streamNames); });
 
     while (!exitFlag_) {
-        if ((!isNetworkRecovery && cm_->CheckConnection(destAddr).IsError())
+        if ((!isNetworkRecovery && worker::CheckTopologyMemberConnection(cm_, destAddr, true).IsError())
             || (isNetworkRecovery && timer.ElapsedSecond() > FLAGS_node_timeout_s)) {
             break;
         }
@@ -180,7 +205,8 @@ Status SCMigrateMetadataManager::MigrateMetaDataWithRetry(
     return Status(K_RPC_UNAVAILABLE,
                   FormatString("LastStatus: %s. The connection to %s is %u. Unfinished stream size %u. "
                                "Time elapsed %d seconds. isNetworkRecovery %s",
-                               status.ToString(), info.destAddr, cm_->CheckConnection(destAddr).IsOk(),
+                               status.ToString(), info.destAddr,
+                               worker::CheckTopologyMemberConnection(cm_, destAddr, true).IsOk(),
                                info.streamNames.size(), timer.ElapsedSecond(), isNetworkRecovery));
 }
 
@@ -192,7 +218,7 @@ Status SCMigrateMetadataManager::MigrateMetaData(const std::shared_ptr<master::S
         LOG(ERROR) << "Submit migrate task failed: " << status.GetMsg();
         return status;
     }
-    auto workerId = scMetadataManager->GetWorkerId();
+    auto workerId = info.operationId.empty() ? scMetadataManager->GetWorkerId() : info.operationId;
     status = GetMigrateMetadataResult(workerId, info.destAddr, info.failedStreamNames);
     if (status.IsError()) {
         LOG(ERROR) << "GetMigrateMetadataResult failed. " << status.GetMsg();
@@ -204,6 +230,9 @@ Status SCMigrateMetadataManager::StartMigrateMetadataForScaleout(
     const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, MigrateMetaInfo &info)
 {
     auto futureKey = std::make_pair(info.destAddr, scMetadataManager->GetWorkerId());
+    if (!info.operationId.empty()) {
+        futureKey.second = info.operationId;
+    }
     TbbFutureThreadTable::accessor accessor;
     if (futureThread_.find(accessor, futureKey)) {
         RETURN_STATUS(
@@ -257,7 +286,7 @@ std::pair<Status, std::vector<std::string>> SCMigrateMetadataManager::AsyncMigra
     }
 
     std::vector<std::string> failedStreams;
-    s = MigrateMetadataForScaleout(scMetadataManager, api, info.streamNames, failedStreams);
+    s = MigrateMetadataForScaleout(scMetadataManager, api, info, failedStreams);
     LOG(INFO) << "Final migrate metadata. destination: " << info.destAddr
               << ", source workerId:" << scMetadataManager->GetWorkerId() << ", dest workerId:" << info.destWorkerId
               << ", stream count: " << info.streamNames.size() << ", failed stream count: " << failedStreams.size()
@@ -318,15 +347,14 @@ Status SCMigrateMetadataManager::BatchMigrateMetadata(
 
 Status SCMigrateMetadataManager::MigrateMetadataForScaleout(
     const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, std::unique_ptr<MasterMasterSCApi> &api,
-    const std::vector<std::string> &streamNames, std::vector<std::string> &failedStreams)
+    const MigrateMetaInfo &info, std::vector<std::string> &failedStreams)
 {
     MigrateSCMetadataReqPb req;
     uint32_t objBatch = 300;  // Comparison test: The performance is optimal when the batch number is 300.
     uint32_t count = 0;
-    req.set_source_addr(localHostPort_.ToString());
+    InitializeMigrationRequest(info, req);
     Status lastRc;
-    for (auto &streamName : streamNames) {
-        req.set_source_addr(localHostPort_.ToString());
+    for (const auto &streamName : info.streamNames) {
         Status s = scMetadataManager->FillMetadataForMigration(streamName, req.add_stream_metas());
         if (s.IsError()) {
             LOG(WARNING) << "Fill metadata for migration failed. s=" << s.ToString();
@@ -339,7 +367,7 @@ Status SCMigrateMetadataManager::MigrateMetadataForScaleout(
             auto rc = BatchMigrateMetadata(scMetadataManager, api, req, failedStreams);
             lastRc = rc.IsError() ? rc : lastRc;
             req.Clear();
-            req.set_source_addr(localHostPort_.ToString());
+            InitializeMigrationRequest(info, req);
             count = 0;
         }
     }
@@ -349,6 +377,19 @@ Status SCMigrateMetadataManager::MigrateMetadataForScaleout(
         lastRc = rc.IsError() ? rc : lastRc;
     }
     return lastRc;
+}
+
+void SCMigrateMetadataManager::InitializeMigrationRequest(const MigrateMetaInfo &info,
+                                                          MigrateSCMetadataReqPb &req) const
+{
+    req.set_source_addr(localHostPort_.ToString());
+    if (info.topologyVersion == 0) {
+        return;
+    }
+    req.set_topology_version(info.topologyVersion);
+    req.set_batch_epoch(info.batchEpoch);
+    req.set_source_member_id(info.sourceMemberId);
+    req.set_target_member_id(info.targetMemberId);
 }
 }  // namespace master
 }  // namespace datasystem

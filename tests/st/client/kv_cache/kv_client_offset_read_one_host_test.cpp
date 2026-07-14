@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -46,7 +43,6 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(master_address);
@@ -56,6 +52,7 @@ namespace datasystem {
 namespace st {
 namespace {
 const std::string HOST_IP = "127.0.0.1";
+constexpr int32_t FAILURE_REQUEST_TIMEOUT_MS = 3'000;
 }  // namespace
 
 class KVClientOffsetReadOneHostTest : public OCClientCommon,
@@ -877,9 +874,15 @@ TEST_P(KVClientOffsetReadRemoteTest, TestGetFailedAfterRemoteRead)
     uint64_t size1000 = 1000;
     ASSERT_EQ(buffer->GetSize(), size4000);
     ASSERT_EQ(getValue, data.substr(size1000, size4000));
+
+    ConnectOptions failureOptions;
+    InitConnectOptW(1, failureOptions);
+    failureOptions.requestTimeoutMs = FAILURE_REQUEST_TIMEOUT_MS;
+    auto failureClient = std::make_shared<KVClient>(failureOptions);
+    DS_ASSERT_OK(failureClient->Init());
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     std::string val;
-    DS_ASSERT_NOT_OK(client1_->Get(key, val));
+    DS_ASSERT_NOT_OK(failureClient->Get(key, val));
 }
 
 TEST_P(KVClientOffsetReadRemoteTest, TestRemoteGetFromMaster)

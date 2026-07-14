@@ -37,13 +37,3 @@ ds_cc_test_library(
         "//tests/st/cluster:st_cluster",
     ],
 )
-
-# hashring_parser 工具二进制
-cc_binary(
-    name = "hashring_parser",
-    srcs = ["hashring_parser.cpp"],
-    deps = [
-        "//src/datasystem/protos:hash_ring_cc_proto",
-        "@com_google_protobuf//:protobuf",
-    ],
-)

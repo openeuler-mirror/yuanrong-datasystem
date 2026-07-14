@@ -86,13 +86,14 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_parallel
         common_coordinator_store
         coordinator_protos_client
-        worker_node_info_client
+        cluster_membership_codec_client
+        cluster_topology_keyspace
         dl
         client_mmap_static
         gRPC::grpc++
         common_etcd_client
         worker_transport_api
-        hash_ring_protos_client)
+        cluster_topology_protos_client)
 
 if (BUILD_HETERO_NPU)
     list(APPEND CLIENT_DEPEND_LIBS common_acl_device)
@@ -130,17 +131,16 @@ add_custom_target(clean_datasystem_rpath
 add_dependencies(clean_datasystem_rpath dsbench_cpp)
 
 list(APPEND common_etcd_client
-        common_util
-        hash_ring_protos_client)
+        common_util)
 
 list(APPEND ROUTER_CLIENT_SRCS
         router_client.cpp)
 
 list(APPEND ROUTER_CLIENT_DEPEND_LIBS
+        cluster_topology
         common_etcd_client
         etcdapi_proto
-        common_util
-        hash_ring_protos_client)
+        common_util)
 
 # static library for ut.
 add_library(ds_router_client_static STATIC ${ROUTER_CLIENT_SRCS})

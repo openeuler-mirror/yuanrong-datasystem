@@ -10,6 +10,6 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
         "//src/datasystem/protos:coordinator_brpc",
-        "//src/datasystem/worker/cluster_manager:cluster_manager",
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
     ],
 )

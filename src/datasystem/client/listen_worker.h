@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -102,6 +99,11 @@ public:
     void StopListenWorker(bool stopActively = false);
 
     /**
+     * @brief Wait until the RPC heartbeat listener thread exits.
+     */
+    void JoinListenWorker();
+
+    /**
      * @brief Get the Worker status.
      * @return Return true if worker is OK, else return false.
      */
@@ -167,8 +169,8 @@ public:
 
     /**
      * @brief Set the local worker recovery handle. Used from non-local listeners to
-     *        re-acquire a same-node worker (including after the original local worker
-     *        came back at a different address).
+     * re-acquire a same-node worker (including after the original local worker
+     * came back at a different address).
      * @param[in] callback Returns true if the client switched back to a same-node worker.
      */
     void SetRecoverLocalWorkerHandle(std::function<bool()> callback);
@@ -192,10 +194,17 @@ public:
      */
     void ShutdownStandbyConnection();
 
+    /**
+     * @brief Notify the connected worker that this client no longer blocks worker exit.
+     * @return Status of the call.
+     */
+    Status NotifyClientRemovable();
+
 protected:
     std::atomic<bool> isInAsyncSwitchWorkerPool_{ false };
 
 private:
+
     /**
      * @brief Send heartbeat messages periodically.
      */

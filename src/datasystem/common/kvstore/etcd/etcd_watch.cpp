@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -249,7 +246,7 @@ Status EtcdWatch::EventHandler()
         }
         auto eventType = event.type();
         if (eventType == mvccpb::Event::EventType::Event_EventType_DELETE
-            && event.kv().key().find(ETCD_CLUSTER_TABLE) != std::string::npos) {
+            && event.kv().key().find(ETCD_MEMBERSHIP_KEY_SEGMENT) != std::string::npos) {
             auto rc = checkEtcdStateHandler_();
             if (rc.IsError()) {
                 LOG(INFO) << FormatString("Etcd is not writable[rc: %s], so ignore event: %s", rc.ToString(),
@@ -523,6 +520,31 @@ Status EtcdWatch::UpdateKeyVersion(const std::string &key, int64_t modRevision, 
             modRevision, it->second.modRevision));
 }
 
+Status EtcdWatch::ScheduleDelayedFakePutEvent(const RangeSearchResult &outKeyValue, const VersionInfo *processed)
+{
+    LOG(INFO) << FormatString("[Processed: %s; Retrieved: %s], wait for %llu ms insert it to etcdEventQue_.",
+                              processed == nullptr ? "null" : processed->ToString(), outKeyValue.ToString(),
+                              delayGenerateFakePutEventTimeMs_);
+    auto traceID = Trace::Instance().GetTraceID();
+    TimerQueue::TimerImpl timer;
+    auto weakThis = weak_from_this();
+    auto func = [weakThis, outKeyValue, traceID]() {
+        auto watch = weakThis.lock();
+        if (watch == nullptr) {
+            return;
+        }
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        watch->DelayGenerateFakePutEvent(outKeyValue);
+    };
+    INJECT_POINT("worker.GenerateFakePutEventIfNeeded.timeout", [this](int32_t newTimeoutMs) {
+        delayGenerateFakePutEventTimeMs_ = newTimeoutMs;
+        return Status::OK();
+    });
+    LOG_IF_ERROR(TimerQueue::GetInstance()->AddTimer(delayGenerateFakePutEventTimeMs_, func, timer),
+                 "DelayGenerateFakePutEvent failed");
+    return Status::OK();
+}
+
 Status EtcdWatch::GenerateFakePutEventIfNeeded(bool watchedFailed,
                                                std::unordered_map<std::string, VersionInfo> &copyKeyVersion,
                                                std::unordered_map<std::string, int64_t> &prefix2Revision)
@@ -551,27 +573,8 @@ Status EtcdWatch::GenerateFakePutEventIfNeeded(bool watchedFailed,
             }
             auto localVersion = iter == copyKeyVersion.end() ? 0 : iter->second.version;
             if (localVersion + 1 != outKeyValue.version && !watchedFailed) {
-                LOG(INFO) << FormatString(
-                    "[Processed: %s; Retrieved: %s], wait for %llu ms insert it to etcdEventQue_.",
-                    iter == copyKeyVersion.end() ? "null" : iter->second.ToString(), outKeyValue.ToString(),
-                    delayGenerateFakePutEventTimeMs_);
-                auto traceID = Trace::Instance().GetTraceID();
-                TimerQueue::TimerImpl timer;
-                auto weakThis = weak_from_this();
-                auto func = [weakThis, outKeyValue, traceID]() {
-                    auto watch = weakThis.lock();
-                    if (watch == nullptr) {
-                        return;
-                    }
-                    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-                    watch->DelayGenerateFakePutEvent(outKeyValue);
-                };
-                INJECT_POINT("worker.GenerateFakePutEventIfNeeded.timeout", [this](int32_t newTimeoutMs) {
-                    delayGenerateFakePutEventTimeMs_ = newTimeoutMs;
-                    return Status::OK();
-                });
-                LOG_IF_ERROR(TimerQueue::GetInstance()->AddTimer(delayGenerateFakePutEventTimeMs_, func, timer),
-                             "DelayGenerateFakePutEvent failed");
+                RETURN_IF_NOT_OK(
+                    ScheduleDelayedFakePutEvent(outKeyValue, iter == copyKeyVersion.end() ? nullptr : &iter->second));
             } else {
                 auto localModRevision = iter == copyKeyVersion.end() ? 0 : iter->second.modRevision;
                 LOG(INFO) << FormatString(

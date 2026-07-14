@@ -193,12 +193,16 @@ Status WorkerRemoteWorkerOCApi::CheckCoordinatorStateAsyncRead(int64_t tag, Chec
     return Status::OK();
 }
 
-Status WorkerRemoteWorkerOCApi::GetClusterStateAsyncWrite(GetClusterStateReqPb &req, int64_t &tag)
+Status WorkerRemoteWorkerOCApi::GetClusterStateAsyncWrite(GetClusterStateReqPb &req, int32_t timeoutMs,
+                                                          int64_t &tag)
 {
     CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
+    CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "Cluster-state RPC timeout must be positive");
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->GetClusterStateAsyncWrite(req, tag)
-                                  : rpcSession_->GetClusterStateAsyncWrite(req, tag));
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->GetClusterStateAsyncWrite(options, req, tag)
+                                  : rpcSession_->GetClusterStateAsyncWrite(options, req, tag));
     return Status::OK();
 }
 

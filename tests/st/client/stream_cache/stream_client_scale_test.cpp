@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,9 +18,11 @@
 #include <unistd.h>
 #include <chrono>
 #include <csignal>
+#include <map>
 #include <memory>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include <google/protobuf/util/json_util.h>
 #include <gtest/gtest.h>
@@ -53,7 +52,15 @@ constexpr int K_THIRTY = 30;
 constexpr int SCALE_UP_WAIT_TIME = 3;
 constexpr int SCALE_DOWN_WAIT_TIME = 3;
 constexpr int NODE_DEAD_TIMEOUT = 8;
+constexpr int AUTO_CLEANUP_WAIT_TIMEOUT_MS = 15'000;
+constexpr int CONDITION_POLL_INTERVAL_MS = 100;
+constexpr int STREAM_NAME_CANDIDATE_MULTIPLIER = 10;
+constexpr int STREAM_PREFIX_CANDIDATE_LIMIT = 1'000;
+constexpr uint64_t SECONDS_TO_MILLISECONDS = 1'000;
 const std::string HOST_IP = "127.0.0.1";
+using StreamHandleMap =
+    std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>>;
+
 class StreamClientScaleTest : public SCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -144,14 +151,13 @@ public:
         FLAGS_etcd_address = etcdAddress;
         db_ = std::make_unique<EtcdStore>(etcdAddress);
         DS_ASSERT_OK(db_->Init());
-        (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
-        (void)db_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE));
+        (void)RegisterTopologyTables(*db_);
     }
 
     bool CheckScaleDownFinished(const std::string &workerAddr)
     {
         std::string value;
-        auto status = db_->Get(ETCD_CLUSTER_TABLE, workerAddr, value);
+        auto status = db_->Get(GetMembershipTableName(), workerAddr, value);
         if (status.GetCode() == K_NOT_FOUND) {
             return true;
         }
@@ -169,80 +175,166 @@ public:
                           << " worker: " << workerAddr.ToString();
                 return;
             }
-            auto interval = 100;
-            std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+            std::this_thread::sleep_for(std::chrono::milliseconds(CONDITION_POLL_INTERVAL_MS));
         }
         ASSERT_TRUE(false) << "Voluntary scaling down is not completed: " << workerAddr.ToString();
     }
 
     /**
-     * @brief Creates streamNum producers and consumers on w1Client, placing them into streams
-     * @param[in] streams The map of stream names to pairs of prod/cons
-     * @param[in] streamNum The number of streams to create
-     * @param[in] sameWorker Whether to create consumers on w2Client instead
+     * @brief Creates one producer and consumer and records their handles.
+     * @param[in,out] streams Stream handles indexed by Stream name.
+     * @param[in] streamName Stream name.
+     * @param[in] subscriptionName Subscription name.
+     * @param[in] sameWorker Whether to create the consumer on w1Client instead of w2Client.
      */
-    void CreateNProducerAndConsumer(
-        std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> &streams, int streamNum,
-        std::string streamName, bool sameWorker = true)
+    void CreateProducerAndConsumer(StreamHandleMap &streams, const std::string &streamName,
+                                   const std::string &subscriptionName, bool sameWorker)
+    {
+        std::shared_ptr<Producer> producer;
+        DS_ASSERT_OK(w1Client_->CreateProducer(streamName, producer, defaultProducerConf_));
+        std::shared_ptr<Consumer> consumer;
+        SubscriptionConfig config(subscriptionName, SubscriptionType::STREAM);
+        const auto &consumerClient = sameWorker ? w1Client_ : w2Client_;
+        DS_ASSERT_OK(consumerClient->Subscribe(streamName, config, consumer));
+        streams.emplace(streamName, std::make_pair(producer, consumer));
+        CheckCount(w1Client_, streamName, 1, 1);
+    }
+
+    /**
+     * @brief Creates streamNum producers and consumers on w1Client, placing them into streams.
+     * @param[in,out] streams Stream handles indexed by Stream name.
+     * @param[in] streamNum Number of Streams to create.
+     * @param[in] streamName Stream name prefix.
+     * @param[in] sameWorker Whether to create consumers on w1Client instead of w2Client.
+     */
+    void CreateNProducerAndConsumer(StreamHandleMap &streams, int streamNum, const std::string &streamName,
+                                    bool sameWorker = true)
     {
         for (int i = 0; i < streamNum; ++i) {
-            std::string strmName = streamName + std::to_string(i);
-            std::shared_ptr<Producer> producer;
-            DS_ASSERT_OK(w1Client_->CreateProducer(strmName, producer, defaultProducerConf_));
-            std::shared_ptr<Consumer> consumer;
-            SubscriptionConfig config("sub" + std::to_string(i), SubscriptionType::STREAM);
-            if (sameWorker) {
-                DS_ASSERT_OK(w1Client_->Subscribe(strmName, config, consumer));
-            } else {
-                DS_ASSERT_OK(w2Client_->Subscribe(strmName, config, consumer));
-            }
-            streams.emplace(strmName, std::make_pair(producer, consumer));
-            CheckCount(w1Client_, strmName, 1, 1);
+            const std::string candidateName = streamName + std::to_string(i);
+            CreateProducerAndConsumer(streams, candidateName, "sub" + std::to_string(i), sameWorker);
         }
     }
 
-    void WaitAllNodesJoinIntoHashRing(int num, uint64_t timeoutSec = 60, std::string azName = "")
+    /**
+     * @brief Waits until an auto-cleaned Stream can be recreated with a different configuration.
+     * @param[in] client Stream client used to recreate the producer.
+     * @param[in] streamName Stream name.
+     * @param[in] config New producer configuration.
+     * @param[out] producer Recreated producer.
+     * @param[in] deadline Shared absolute deadline.
+     * @return K_OK on success, an unexpected error immediately, or K_RUNTIME_ERROR on timeout.
+     */
+    Status WaitCreateProducerAfterAutoCleanup(const std::shared_ptr<StreamClient> &client,
+                                              const std::string &streamName, const ProducerConf &config,
+                                              std::shared_ptr<Producer> &producer,
+                                              std::chrono::steady_clock::time_point deadline)
     {
-        int S2Ms = 1000;
-        WaitHashRingChange(
-            [&](const HashRingPb &hashRing) {
-                if (hashRing.workers_size() != num || hashRing.add_node_info_size() != 0
-                    || hashRing.del_node_info_size() != 0) {
+        Status lastStatus;
+        while (std::chrono::steady_clock::now() < deadline) {
+            producer.reset();
+            lastStatus = client->CreateProducer(streamName, producer, config);
+            if (lastStatus.IsOk() || lastStatus.GetCode() != K_INVALID) {
+                return lastStatus;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(CONDITION_POLL_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR, FormatString("Stream %s was not auto-deleted, last status: %s", streamName,
+                                                    lastStatus.ToString()));
+    }
+
+    /**
+     * @brief Waits for failure cleanup to remove stale Stream participants before deleting the Stream.
+     * @param[in] client Stream client used to delete the Stream.
+     * @param[in] streamName Stream name.
+     * @param[in] deadline Absolute cleanup deadline.
+     * @return K_OK on success, an unexpected error immediately, or K_RUNTIME_ERROR on timeout.
+     */
+    Status WaitDeleteStreamAfterFailureCleanup(const std::shared_ptr<StreamClient> &client,
+                                               const std::string &streamName,
+                                               std::chrono::steady_clock::time_point deadline)
+    {
+        Status lastStatus;
+        while (std::chrono::steady_clock::now() < deadline) {
+            lastStatus = client->DeleteStream(streamName);
+            if (lastStatus.IsOk()) {
+                return lastStatus;
+            }
+            const auto code = lastStatus.GetCode();
+            if (code != K_SC_STREAM_IN_USE && code != K_SC_STREAM_NOTIFICATION_PENDING) {
+                return lastStatus;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(CONDITION_POLL_INTERVAL_MS));
+        }
+        return Status(K_RUNTIME_ERROR, FormatString("Failure cleanup did not release Stream %s, last status: %s",
+                                                    streamName, lastStatus.ToString()));
+    }
+
+    /**
+     * @brief Recreates auto-cleaned Streams under one shared deadline.
+     * @param[in,out] streams Stream handles indexed by Stream name.
+     * @param[in] streamNum Number of Streams to recreate.
+     * @param[in] streamName Stream name prefix.
+     */
+    void CreateNProducerAndConsumerAfterAutoCleanup(StreamHandleMap &streams, int streamNum,
+                                                    const std::string &streamName)
+    {
+        const auto deadline = std::chrono::steady_clock::now()
+                              + std::chrono::milliseconds(AUTO_CLEANUP_WAIT_TIMEOUT_MS);
+        for (int index = 0; index < streamNum; ++index) {
+            const std::string candidateName = streamName + std::to_string(index);
+            std::shared_ptr<Producer> producer;
+            DS_ASSERT_OK(WaitCreateProducerAfterAutoCleanup(w1Client_, candidateName, defaultProducerConf_, producer,
+                                                            deadline));
+            std::shared_ptr<Consumer> consumer;
+            SubscriptionConfig config("sub" + std::to_string(index), SubscriptionType::STREAM);
+            DS_ASSERT_OK(w1Client_->Subscribe(candidateName, config, consumer));
+            streams.emplace(candidateName, std::make_pair(producer, consumer));
+            CheckCount(w1Client_, candidateName, 1, 1);
+        }
+    }
+
+    void WaitAllMembersJoinClusterTopology(int num, uint64_t timeoutSec = 60, std::string azName = "")
+    {
+        WaitClusterTopologyChange(
+            [&](const ClusterTopologyPb &topology) {
+                if (topology.members_size() != num || topology.has_active_batch()) {
                     return false;
                 }
-                for (auto &worker : hashRing.workers()) {
-                    if (worker.second.state() != WorkerPb::ACTIVE) {
+                for (const auto &member : topology.members()) {
+                    if (member.second.state() != MembershipPb::ACTIVE) {
                         return false;
                     }
                 }
                 return true;
             },
-            timeoutSec * S2Ms, azName);
+            timeoutSec * SECONDS_TO_MILLISECONDS, azName);
         sleep(WORKER_RECEIVE_DELAY);
     }
 
     template <typename F>
-    void WaitHashRingChange(F &&f, uint64_t timeoutMs = 30'000, std::string azName = "")
+    void WaitClusterTopologyChange(F &&f, uint64_t timeoutMs = 30'000, std::string azName = "")
     {
         if (!db_) {
             InitTestEtcdInstance();
         }
+        const auto topologyTable = azName.empty() ? GetTopologyTableName() : GetTopologyTableName(azName);
+        DS_ASSERT_OK(azName.empty() ? RegisterTopologyTables(*db_) : RegisterTopologyTables(*db_, azName));
         auto timeOut = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         bool flag = false;
-        HashRingPb ring;
+        ClusterTopologyPb topology;
         while (std::chrono::steady_clock::now() < timeOut) {
-            std::string hashRingStr;
-            auto trueRingTable = azName.empty() ? ETCD_RING_PREFIX : '/' + azName + ETCD_RING_PREFIX;
-            DS_ASSERT_OK(db_->Get(trueRingTable, "", hashRingStr));
-            ASSERT_TRUE(ring.ParseFromString(hashRingStr));
-            if (f(ring)) {
+            std::string topologyValue;
+            DS_ASSERT_OK(db_->Get(topologyTable, "", topologyValue));
+            ASSERT_TRUE(topology.ParseFromString(topologyValue));
+            if (f(topology)) {
                 flag = true;
                 break;
             }
-            const int interval = 100;  // 100ms;
-            std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+            std::this_thread::sleep_for(std::chrono::milliseconds(CONDITION_POLL_INTERVAL_MS));
         }
-        LOG(INFO) << "Check " << (flag ? "success" : "failed") << ", Ring info:" << worker::HashRingToJsonString(ring);
+        LOG(INFO) << "Check " << (flag ? "success" : "failed") << ", topology: "
+                  << topology.ShortDebugString();
         ASSERT_TRUE(flag);
     }
 
@@ -425,11 +517,12 @@ TEST_F(StreamClientScaleTest, TestConsumerCanRecvEleAfterScaleDown)
         DS_ASSERT_OK(consumer->Receive(1, consumerRecvTimeoutMs, eles));
         ASSERT_EQ(eles.size(), 1);
     }
-    // Scale down worker2
+    // Voluntarily scale down worker2 so the metadata is migrated before the Worker exits.
     w2Client_.reset();
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    sleep(nodeDeadTimeoutS_ + 1);
-    // Consuemr can also recv ele success.
+    VoluntaryScaleDownInject(1);
+    WaitForVoluntaryDownFinished(1);
+    WaitAllMembersJoinClusterTopology(2);
+    // Consumer can also receive elements successfully after lossless ScaleIn.
     for (int i = 0; i < streamNum; ++i) {
         auto &consumer = std::get<0>(cache[i]);
         auto &producer2 = std::get<2>(cache[i]);  // The index of producer2 is 2.
@@ -469,17 +562,20 @@ TEST_F(StreamClientScaleTest, TestAutoDeleteStreamAfterScaleDown)
         DS_ASSERT_OK(producer1->Close());
         DS_ASSERT_OK(consumer->Close());
     }
-    // Scale down worker2
+    // Losslessly scale in worker2 after its auto-delete requests have been made asynchronous.
     w2Client_.reset();
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    sleep(nodeDeadTimeoutS_ + 1);
+    VoluntaryScaleDownInject(1);
+    WaitForVoluntaryDownFinished(1);
+    WaitAllMembersJoinClusterTopology(2);
     // Modify the stream configuration to confirm that the stream has been deleted
     defaultProducerConf_.maxStreamSize += 1;
-    // Consuemr can also recv ele success.
+    const auto deadline = std::chrono::steady_clock::now()
+                          + std::chrono::milliseconds(AUTO_CLEANUP_WAIT_TIMEOUT_MS);
     for (int i = 0; i < streamNum; ++i) {
         auto &producer2 = std::get<2>(cache[i]);  // The index of producer2 is 2.
         auto streamName = "stream" + std::to_string(i);
-        DS_ASSERT_OK(w3Client->CreateProducer(streamName, producer2, defaultProducerConf_));
+        DS_ASSERT_OK(WaitCreateProducerAfterAutoCleanup(w3Client, streamName, defaultProducerConf_, producer2,
+                                                        deadline));
     }
 }
 
@@ -672,15 +768,17 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleDownAutoDeleteStream1)
 
     // Shutdown worker 1
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    sleep(K_TWO);
 
-    // Close producer to invoke auto delete
+    // Failure can temporarily leave the client routed to the departed metadata master. Wait for the new owner first.
+    WaitAllMembersJoinClusterTopology(1);
+    // Close producer to invoke auto delete on the new metadata owner.
     DS_ASSERT_OK(producer->Close());
-    sleep(K_TWO);
     // Try to create a producer with different configs to test if stream was deleted, and can be recreated
     std::shared_ptr<Producer> producer1;
     defaultProducerConf_.autoCleanup = false;
-    DS_ASSERT_OK(w1Client_->CreateProducer(streamName, producer1, defaultProducerConf_));
+    const auto deadline = std::chrono::steady_clock::now()
+                          + std::chrono::milliseconds(AUTO_CLEANUP_WAIT_TIMEOUT_MS);
+    DS_ASSERT_OK(WaitCreateProducerAfterAutoCleanup(w1Client_, streamName, defaultProducerConf_, producer1, deadline));
 }
 
 TEST_F(StreamClientScaleTest, LEVEL2_TestScaleDownWhileRetainingData)
@@ -701,12 +799,16 @@ TEST_F(StreamClientScaleTest, LEVEL2_TestScaleDownWhileRetainingData)
         cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.RunKeepAliveTask", "return(K_RPC_UNAVAILABLE)"));
 
-    WaitAllNodesJoinIntoHashRing(1);
+    WaitAllMembersJoinClusterTopology(1);
 
-    auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+    if (externalCluster->CheckWorkerProcess(0)) {
+        DS_ASSERT_OK(externalCluster->KillWorker(0));
+    }
     DS_ASSERT_OK(externalCluster->StartWorkerAndWaitReady({ 0 }));
 
-    WaitAllNodesJoinIntoHashRing(2);  // 2 workers online
+    WaitAllMembersJoinClusterTopology(2);  // 2 workers online
 
     for (int i = 0; i < streamNum; i++) {
         auto streamName = streamNameBase + std::to_string(i);
@@ -769,7 +871,7 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleUpAndDown)
     // Add new worker node to trigger scale up and metadata migration
     // Scale down and Restart worker1
     DS_ASSERT_OK(AddNode());
-    WaitAllNodesJoinIntoHashRing(3);  // 3 workers online
+    WaitAllMembersJoinClusterTopology(3);  // 3 workers online
     VoluntaryScaleDownInject(0);
     VoluntaryScaleDownInject(1);
     w1Client_.reset();
@@ -777,12 +879,12 @@ TEST_F(StreamClientScaleTest, LEVEL1_TestScaleUpAndDown)
     for (auto &stream : streams) {
         stream.second = { nullptr, nullptr };
     }
-    WaitAllNodesJoinIntoHashRing(1);  // 1 workers online
+    WaitAllMembersJoinClusterTopology(1);  // 1 workers online
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, {}));
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, {}));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 1));
-    WaitAllNodesJoinIntoHashRing(3);  // 3 workers online
+    WaitAllMembersJoinClusterTopology(3);  // 3 workers online
 
     InitStreamClient(0, w1Client_);
     InitStreamClient(1, w2Client_);
@@ -821,13 +923,13 @@ TEST_F(StreamClientScaleTest, DISABLED_LEVEL1_TestScaleDownProducerCount)
     // Add new worker node to trigger scale up and metadata migration
     // Scale down and Restart worker1
     DS_ASSERT_OK(AddNode());
-    WaitAllNodesJoinIntoHashRing(3);  // 3 workers online
+    WaitAllMembersJoinClusterTopology(3);  // 3 workers online
     VoluntaryScaleDownInject(0);
     w1Client_.reset();
     for (auto &stream : streams) {
         stream.second = { nullptr, nullptr };
     }
-    WaitAllNodesJoinIntoHashRing(2);  // 2 workers online
+    WaitAllMembersJoinClusterTopology(2);  // 2 workers online
 
     for (auto &stream : streams) {
         const auto &streamName = stream.first;
@@ -973,7 +1075,7 @@ TEST_F(StreamClientScaleTest, LEVEL1_ScaleWhenSyncConsumerNode)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "SCMetadataManager.GetMetasMatch.timeout", "call(5)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "SCMetadataManager.GetMetasMatch.timeout", "call(5)"));
     AddNode();
-    WaitAllNodesJoinIntoHashRing(3, 10);  // wait 10s for worker 3 join
+    WaitAllMembersJoinClusterTopology(3, 10);  // wait 10s for worker 3 join
     for (const auto &fut : futs) {
         fut.wait();
     }
@@ -1000,7 +1102,7 @@ TEST_F(StreamClientScaleTest, DISABLED_LEVEL1_ContinuousRedirection)
 
     auto fut2 = threadPool.Submit([this, worker3Idx]() {
         VoluntaryScaleDownInject(worker3Idx);
-        WaitAllNodesJoinIntoHashRing(2, 20);  // wait 20s for w3 scale down
+        WaitAllMembersJoinClusterTopology(2, 20);  // wait 20s for w3 scale down
     });
 
     fut1.wait();
@@ -1031,6 +1133,35 @@ public:
             " -v=2 -node_timeout_s=3 -node_dead_timeout_s=%d -auto_del_dead_node=true -shared_memory_size_mb=10240",
             NODE_DEAD_TIMEOUT);
         SCClientCommon::SetClusterSetupOptions(opts);
+    }
+
+    /**
+     * @brief Creates Streams whose metadata master is not the excluded Worker.
+     * @param[in,out] streams Stream handles indexed by Stream name.
+     * @param[in] streamNum Number of Streams to create.
+     * @param[in] streamName Stream name prefix.
+     * @param[in] excludedWorkerIndex Worker that will fail in the test.
+     */
+    void CreateNProducerAndConsumerExcludingMaster(StreamHandleMap &streams, int streamNum,
+                                                   const std::string &streamName, int excludedWorkerIndex)
+    {
+        ObtainTokens();
+        std::vector<int> workerIndexes;
+        workerIndexes.reserve(workerNum_);
+        for (int index = 0; index < workerNum_; ++index) {
+            workerIndexes.emplace_back(index);
+        }
+        const int maxCandidates = streamNum * STREAM_NAME_CANDIDATE_MULTIPLIER;
+        for (int candidate = 0;
+             candidate < maxCandidates && streams.size() < static_cast<size_t>(streamNum); ++candidate) {
+            const std::string candidateName = streamName + std::to_string(candidate);
+            WorkerEntry entry;
+            GetMetaLocationById(candidateName, workerIndexes, entry);
+            if (entry.index != excludedWorkerIndex) {
+                CreateProducerAndConsumer(streams, candidateName, "sub" + std::to_string(candidate), false);
+            }
+        }
+        ASSERT_EQ(streams.size(), static_cast<size_t>(streamNum));
     }
 };
 
@@ -1131,14 +1262,15 @@ TEST_F(StreamClientPassiveScaleTest, LEVEL1_TestRestartPassiveScaleDown)
     std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> streams;
     std::string streamName = "testRestartPassiveScaleDown";
     // Create Producer on worker1 and Consumer on worker2
-    CreateNProducerAndConsumer(streams, streamNum, streamName, false);
+    CreateNProducerAndConsumerExcludingMaster(streams, streamNum, streamName, worker3Index);
 
-    // Kill worker3, and sleep to trigger passive scale down logic
+    // Kill worker3 and wait for the Failure batch to finish.
     DS_ASSERT_OK(static_cast<ExternalCluster *>(cluster_.get())->KillWorker(worker3Index));
-    sleep(NODE_DEAD_TIMEOUT + 1);
+    StreamClientScaleTest::WaitAllMembersJoinClusterTopology(2);
     // Then restart worker3 to trigger scale up metadata migration logic
     DS_ASSERT_OK(cluster_->StartNode(WORKER, worker3Index, {}));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, worker3Index));
+    StreamClientScaleTest::WaitAllMembersJoinClusterTopology(3);
     std::shared_ptr<StreamClient> w3Client;
     InitStreamClient(worker3Index, w3Client);
 
@@ -1201,10 +1333,10 @@ public:
         HostPort workerAddr;
         DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddr));
         std::string value;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
+        DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
+        ClusterTopologyPb ring;
         ring.ParseFromString(value);
-        auto tokens = ring.workers().at(workerAddr.ToString()).hash_tokens();
+        auto tokens = ring.members().at(workerAddr.ToString()).tokens();
         ASSERT_GT(tokens.size(), 1) << "A node should have multiple tokens";
         hash = tokens[0] != 0 ? tokens[0] - 1 : tokens[1] - 1;
     }
@@ -1305,7 +1437,7 @@ TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL1_TestScaleDownAutoDeleteStream2
     // Test that with voluntary shutdown, pending auto-delete can be handled after migration.
     std::string streamName = "testScaleDownAutoDelStream2";
     // Inject so that auto delete cannot finish on worker1.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.ProcessDeleteStreams", "sleep(10000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "master.ProcessDeleteStreams", "1*sleep(10000)"));
     defaultProducerConf_.autoCleanup = true;
     const int streamNum = 10;
     std::map<std::string, std::pair<std::shared_ptr<Producer>, std::shared_ptr<Consumer>>> streams;
@@ -1317,12 +1449,16 @@ TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL1_TestScaleDownAutoDeleteStream2
         CheckCount(w1Client_, stream.first, 0, 0);
     }
     streams.clear();
+    // The leaving Worker waits for connected clients before it starts ScaleIn. Disconnect its test client explicitly.
+    DS_ASSERT_OK(w2Client_->ShutDown());
+    w2Client_.reset();
     // Voluntarily scale down worker 1, the pending auto delete should be initiated from the new meta owner master.
     VoluntaryScaleDownInject(1);
-    sleep(SCALE_DOWN_WAIT_TIME);
+    WaitForVoluntaryDownFinished(1);
+    WaitAllMembersJoinClusterTopology(2);
     // Try to create a producer with different configs to test if stream was deleted, and can be recreated.
     defaultProducerConf_.autoCleanup = false;
-    CreateNProducerAndConsumer(streams, streamNum, streamName);
+    CreateNProducerAndConsumerAfterAutoCleanup(streams, streamNum, streamName);
 }
 
 TEST_F(StreamClientVoluntaryScaleDownTest, LEVEL2_TestScaleDownNotifications1)
@@ -1483,7 +1619,7 @@ TEST_F(StreamClientPassiveScaleTest, LEVEL2_TestSyncConsumerNode)
 
 TEST_F(StreamClientPassiveScaleTest, LEVEL1_TestClearAsyncNotifyTask)
 {
-    ObtainHashTokens();
+    ObtainTokens();
     std::string streamName;
     int masterIndex = 2;
     int timeoutSec = 10;
@@ -1513,9 +1649,10 @@ TEST_F(StreamClientPassiveScaleTest, LEVEL1_TestClearAsyncNotifyTask)
     // Kill worker1,
     DS_ASSERT_OK(static_cast<ExternalCluster *>(cluster_.get())->KillWorker(0));
     DS_ASSERT_OK(consumer->Close());
-    sleep(NODE_DEAD_TIMEOUT + 1);
-    // sleep to trigger passive scale down logic
-    DS_ASSERT_OK(w2Client_->DeleteStream(streamName));
+    StreamClientScaleTest::WaitAllMembersJoinClusterTopology(2);
+    const auto deadline = std::chrono::steady_clock::now()
+                          + std::chrono::milliseconds(AUTO_CLEANUP_WAIT_TIMEOUT_MS);
+    DS_ASSERT_OK(WaitDeleteStreamAfterFailureCleanup(w2Client_, streamName, deadline));
 }
 
 class DataVerificationStreamClientScaleTest : public StreamClientScaleTest {
@@ -1727,8 +1864,14 @@ TEST_F(DataVerificationStreamClientScaleTest, TestVoluntaryScaleUp)
     LOG(INFO) << "TestVoluntaryScaleUp finish!";
 }
 
-class DataVerificationStreamClientPassiveScaleTest : public DataVerificationStreamClientScaleTest {
+class DataVerificationStreamClientPassiveScaleTest : public DataVerificationStreamClientScaleTest,
+                                                     public CommonDistributedExt {
 public:
+    BaseCluster *GetCluster() override
+    {
+        return cluster_.get();
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.numEtcd = 1;
@@ -1744,6 +1887,41 @@ public:
             NODE_DEAD_TIMEOUT);
         SCClientCommon::SetClusterSetupOptions(opts);
     }
+
+    /**
+     * @brief Finds a contiguous Stream-name prefix whose metadata does not belong to the failed Worker.
+     * @param[in] basePrefix Prefix used to generate candidates.
+     * @param[in] streamNum Number of contiguous Stream names required.
+     * @param[in] excludedWorkerIndex Worker that will fail in the test.
+     * @return A suitable prefix, or a fallback prefix after recording a test failure.
+     */
+    std::string FindStreamPrefixExcludingMaster(const std::string &basePrefix, uint streamNum,
+                                                int excludedWorkerIndex)
+    {
+        ObtainTokens();
+        std::vector<int> workerIndexes;
+        workerIndexes.reserve(workerNum_);
+        for (int index = 0; index < workerNum_; ++index) {
+            workerIndexes.emplace_back(index);
+        }
+        for (int candidate = 0; candidate < STREAM_PREFIX_CANDIDATE_LIMIT; ++candidate) {
+            const std::string prefix = basePrefix + std::to_string(candidate) + "_";
+            bool valid = true;
+            for (uint streamIndex = 0; streamIndex < streamNum; ++streamIndex) {
+                WorkerEntry entry;
+                GetMetaLocationById(prefix + std::to_string(streamIndex), workerIndexes, entry);
+                if (entry.index == excludedWorkerIndex) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (valid) {
+                return prefix;
+            }
+        }
+        ADD_FAILURE() << "Failed to find Stream names outside Worker " << excludedWorkerIndex;
+        return basePrefix + "fallback_";
+    }
 };
 
 TEST_F(DataVerificationStreamClientPassiveScaleTest, TestPassiveScaleDown)
@@ -1756,7 +1934,8 @@ TEST_F(DataVerificationStreamClientPassiveScaleTest, TestPassiveScaleDown)
     const uint consumerPerStream = 1;
     uint numOfNotReceiveElementPerConsumer = 0;
     std::vector<std::pair<std::vector<std::shared_ptr<Producer>>, std::vector<std::shared_ptr<Consumer>>>> streams;
-    std::string streamName = "PassiveScaleDown";
+    std::string streamName =
+        FindStreamPrefixExcludingMaster("PassiveScaleDown", numOfStream, static_cast<int>(worker3Index));
     // Create 10 Producer and 1 Consumer for each stream.
     CreateStreams(numOfStream, producerPerStream, consumerPerStream, streams, streamName);
 
@@ -1803,7 +1982,8 @@ TEST_F(DataVerificationStreamClientPassiveScaleTest, TestRestartPassiveScaleDown
     const uint consumerPerStream = 1;
     uint numOfNotReceiveElementPerConsumer = 0;
     std::vector<std::pair<std::vector<std::shared_ptr<Producer>>, std::vector<std::shared_ptr<Consumer>>>> streams;
-    std::string streamName = "RestartPassiveScaleDown";
+    std::string streamName =
+        FindStreamPrefixExcludingMaster("RestartPassiveScaleDown", numOfStream, static_cast<int>(worker3Index));
     // Create 10 Producer and 1 Consumer for each stream.
     CreateStreams(numOfStream, producerPerStream, consumerPerStream, streams, streamName);
 
@@ -1863,7 +2043,7 @@ TEST_F(StreamClientScaleDfxTest, LEVEL2_ScaleUpWhenMetaResidue)
     sleep(6);  // wait 6s for worker passive reduction
 
     DS_ASSERT_OK(AddNode());
-    WaitAllNodesJoinIntoHashRing(2, 10);  // wait 10s for 2 workers online
+    WaitAllMembersJoinClusterTopology(2, 10);  // wait 10s for 2 workers online
 }
 
 }  // namespace st

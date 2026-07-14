@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -79,10 +76,7 @@ public:
     void InitCluster(bool withConcurrently = false)
     {
         if (withConcurrently) {
-            std::string flag = " -inject_actions=ClusterManager.DelayMessageDeque.test:1*call(5)";
-            std::string oldFlag = externalCluster_->AddGFlagForWorkerStart(flag);
             DS_ASSERT_OK(externalCluster_->StartForkWorkerProcess());
-            externalCluster_->SetGFlagForWorkerStart(oldFlag);
 
             DS_ASSERT_OK(externalCluster_->StartWorkerByForkProcess(0));
             DS_ASSERT_OK(externalCluster_->StartWorkerByForkProcess(1));
@@ -115,8 +109,7 @@ TEST_F(KVClientCentralizedScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
 {
     InitCluster();
 
-    StartWorkerAndWaitReady(std::vector<uint32_t>{ 2 },
-                            " -inject_actions=ClusterManager.DelayMessageDeque.test:1*call(5)");
+    StartWorkerAndWaitReady(std::vector<uint32_t>{ 2 });
     InitTestKVClient(2, client2_);  // Connect client to worker 2
     std::string getValue;
     DS_ASSERT_OK(client1_->Set("key2", "value2"));
@@ -125,8 +118,7 @@ TEST_F(KVClientCentralizedScaleupTest, LEVEL1_ScaleUpWorkerSequentially)
     DS_ASSERT_OK(client0_->Del("key2"));
     DS_ASSERT_NOT_OK(client1_->Get("key2", getValue));
 
-    StartWorkerAndWaitReady(std::vector<uint32_t>{ 3 },
-                            " -inject_actions=ClusterManager.DelayMessageDeque.test:1*call(5)");
+    StartWorkerAndWaitReady(std::vector<uint32_t>{ 3 });
     InitTestKVClient(3, client3_);  // Connect client to worker 3
     DS_ASSERT_OK(client3_->Set("key3", "value3"));
     DS_ASSERT_OK(client0_->Get("key3", getValue));

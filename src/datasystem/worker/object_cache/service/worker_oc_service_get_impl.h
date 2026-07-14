@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,7 +28,6 @@
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/cache_hit_info.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
@@ -39,6 +35,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_api.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -48,8 +45,9 @@ using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
                                public std::enable_shared_from_this<WorkerOcServiceGetImpl> {
 public:
-    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager, EtcdStore *etcdStore,
-                           std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<ThreadPool> threadPool,
+    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
+                           EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
+                           std::shared_ptr<ThreadPool> threadPool,
                            std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                            std::shared_ptr<MigrateDataRateController> rateController);
 
@@ -284,7 +282,6 @@ private:
 
     /**
      * @brief Mark entries whose master is disconnected as need-to-delete.
-     *
      * If the master is disconnected before updating the location, we have to give up retaining the replica, because the
      * master will only manage the replica through the location. Keys owned by a disconnected master are collected into
      * @p needSetDeleteObjectKeys so the caller can skip them when building update-location params.
@@ -490,7 +487,8 @@ private:
 
     /**
      * @brief Attempt to get object from local before query meta.
-     * @param[in out] lockedEntries Object lock entries.
+     * @param[in] request Get request whose unresolved objects are checked locally.
+     * @param[in,out] lockedEntries Object lock entries.
      */
     void AttemptGetObjectsLocally(const std::shared_ptr<GetRequest> &request,
                                   std::map<ReadKey, LockedEntity> &lockedEntries);
@@ -505,11 +503,24 @@ private:
      */
     Status QueryMetadataFromMaster(const std::vector<std::string> &objectKeys, uint64_t subTimeout,
                                    QueryMetadataFromMasterResult &result, bool queryEtcdMeta = true);
+    Status DispatchQueryMetadataGroups(
+        std::unordered_map<HostPort, std::vector<std::string>> &objectKeysByMaster, uint64_t subTimeout,
+        std::vector<BatchQueryMetaResult> &batchQueryResults);
+    Status MergeQueryMetadataResults(std::vector<BatchQueryMetaResult> &batchQueryResults, bool traceEnabled,
+                                     QueryMetadataFromMasterResult &result,
+                                     ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
+                                     std::map<std::string, uint64_t> &deletingObjectsWithVersion);
+    void FinalizeAbsentQueryMetadata(const std::unordered_set<std::string> &routeFailedObjectKeys,
+                                     ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, bool queryEtcdMeta,
+                                     std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                     std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
+                                     const std::map<std::string, uint64_t> &deletingObjectsWithVersion);
 
     /**
      * @brief Query the metadata of the specified objects in the redirect master.
      * @param[in] rsp Response of redirect.
      * @param[in] subTimeout Request timeout for subscribe.
+     * @param[out] payloads Payload messages returned by the redirect master.
      * @return Status of the call.
      */
     Status QueryMetadataFromRedirectMaster(master::QueryMetaRspPb &rsp, uint64_t subTimeout,
@@ -520,10 +531,44 @@ private:
      * @param[in] objectKeys The object keys need to get from ETCD.
      * @param[out] queryMetas The vector stored meta info.
      * @param[out] absentObjectKeys The keys that could not be found.
+     * @return Status of the ETCD metadata query.
      */
     Status QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys,
                                  std::vector<master::QueryMetaInfoPb> &queryMetas,
                                  std::vector<std::string> &absentObjectKeys);
+
+    /**
+     * @brief Mark absent Get objects as runtime errors when they still have global references.
+     * @param[in] absentObjectKeys Object keys that remained absent after metadata subscribe.
+     * @param[in] request Get request waiting for these objects.
+     * @return Status of the call.
+     */
+    Status MarkReferencedAbsentObjectsFailed(const std::map<std::string, uint64_t> &absentObjectKeys,
+                                             const std::shared_ptr<GetRequest> &request);
+
+    /**
+     * @brief Collect request keys whose metadata still has global references.
+     * @param[in] rsp Global-reference query response.
+     * @param[in] responseKeyToRequestKey Mapping from response keys to original request keys.
+     * @param[out] referencedRequestKeys Referenced original request keys.
+     */
+    static void CollectReferencedRequestKeys(
+        const QueryGlobalRefNumRspCollectionPb &rsp,
+        const std::unordered_map<std::string, std::string> &responseKeyToRequestKey,
+        std::unordered_set<std::string> &referencedRequestKeys);
+
+    /**
+     * @brief Query one metadata owner and its redirects for global references.
+     * @param[in] masterAddr Metadata owner address.
+     * @param[in] objectKeys Object keys routed to the owner.
+     * @param[in] responseKeyToRequestKey Mapping from response keys to original request keys.
+     * @param[out] referencedRequestKeys Referenced original request keys.
+     * @return Status of the call.
+     */
+    Status QueryReferencedRequestKeys(
+        const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+        const std::unordered_map<std::string, std::string> &responseKeyToRequestKey,
+        std::unordered_set<std::string> &referencedRequestKeys);
 
     /**
      * @brief Remove object location.
@@ -973,7 +1018,7 @@ private:
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
 
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     EtcdStore *etcdStore_;  // pointer to EtcdStore in WorkerOcServer
 

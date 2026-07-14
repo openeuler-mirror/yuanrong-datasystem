@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -107,7 +104,8 @@ Status WorkerDeviceOcManager::CreateDeviceMetaToMaster(const ObjectKV &objectKV)
 
     master::CreateMetaRspPb metaResp;
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerOcImpl_->clusterManager_);
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerOcImpl_->topologyPlacement_,
+                                                                   workerOcImpl_->BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                              "hash master get failed, CreateDeviceMetaToMaster failed");
     return workerMasterApi->CreateMeta(metaReq, metaResp);
@@ -276,7 +274,8 @@ Status WorkerDeviceOcManager::ProcessGetP2PMetaRequest(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetP2PMetaRspPb, GetP2PMetaReqPb>> &serverApi)
 {
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerOcImpl_->clusterManager_);
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(
+            P2P_DEFAULT_MASTER, workerOcImpl_->topologyPlacement_, workerOcImpl_->BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, GetP2P meta failed");
     return workerMasterApi->GetP2PMeta(req, serverApi, workerOcImpl_->asyncRpcManager_);
 }
@@ -286,7 +285,8 @@ Status WorkerDeviceOcManager::ProcessSubscribeReceiveEventRequest(
     std::shared_ptr<ServerUnaryWriterReader<SubscribeReceiveEventRspPb, SubscribeReceiveEventReqPb>> &serverApi)
 {
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerOcImpl_->clusterManager_);
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(
+            P2P_DEFAULT_MASTER, workerOcImpl_->topologyPlacement_, workerOcImpl_->BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                              "hash master get failed, send RootInfo failed");
     return workerMasterApi->SubscribeReceiveEvent(req, serverApi, workerOcImpl_->asyncRpcManager_);
@@ -296,7 +296,8 @@ Status WorkerDeviceOcManager::ProcessRecvRootInfoRequest(
     RecvRootInfoReqPb &req, std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>> &serverApi)
 {
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerOcImpl_->clusterManager_);
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(
+            P2P_DEFAULT_MASTER, workerOcImpl_->topologyPlacement_, workerOcImpl_->BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                              "hash master get failed, recv RootInfo failed");
     return workerMasterApi->RecvRootInfo(req, serverApi, workerOcImpl_->asyncRpcManager_);
@@ -308,7 +309,8 @@ Status WorkerDeviceOcManager::ProcessGetDataInfoRequest(
     const int64_t subTimeout)
 {
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerOcImpl_->clusterManager_);
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(
+            P2P_DEFAULT_MASTER, workerOcImpl_->topologyPlacement_, workerOcImpl_->BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                              "hash master get failed, get dataInfo failed");
     return workerMasterApi->GetDataInfo(req, serverApi, subTimeout, workerOcImpl_->asyncRpcManager_);

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -1043,7 +1040,9 @@ TEST_F(OCClientDistMasterTest, GetObjMetaInfoRedirectToMetadataMaster)
     DS_ASSERT_OK(client1->GetObjMetaInfo("", { objectKey }, objMetas));
     ASSERT_EQ(objMetas.size(), size_t(1));
     ASSERT_EQ(objMetas[0].objSize, data.size());
-    ASSERT_EQ(objMetas[0].locations, std::vector<std::string>{ GetWorkerUuid(0, uuidMap_) });
+    HostPort workerAddr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr));
+    ASSERT_EQ(objMetas[0].locations, std::vector<std::string>{ workerAddr.ToString() });
 }
 
 class OCClientDistMasterDfxTest : public OCClientDistMasterTest {
@@ -1058,35 +1057,38 @@ public:
     }
 
     const int timeoutMs_ = 5000; // 5s timeout
+    const int requestTimeoutMs_ = 300; // 300ms request timeout
 };
 
 TEST_F(OCClientDistMasterDfxTest, LEVEL1_MasterTimeout)
 {
-    InitTestClient(0, objClient0_, timeoutMs_);
-    InitTestClient(1, objClient1_, timeoutMs_);
+    InitTestClient(0, objClient0_, timeoutMs_, requestTimeoutMs_);
 
-    SetWorkerHashInjection();
-
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "heartbeat.sleep", "1*sleep(20000)"));
-    sleep(5); // 5 > node_timeout_s
+    SetWorkerHashInjection({ 0, 1 });
+    std::vector<std::string> failedMasterKeys;
+    std::vector<std::string> healthyMasterKeys;
+    GetObjectKeysHashToWorker(db_.get(), 1, 2, failedMasterKeys);
+    GetObjectKeysHashToWorker(db_.get(), 0, 1, healthyMasterKeys);
 
     {
         // fail if no success objects
-        std::string objectKey = GetObjectKeyHashToWorker(db_.get(), 1);
         std::vector<std::string> failObjects;
-        auto status = (objClient1_->GIncreaseRef({ objectKey }, failObjects));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc",
+                                               "return(K_RPC_DEADLINE_EXCEEDED)"));
+        auto status = (objClient0_->GIncreaseRef({ failedMasterKeys[0] }, failObjects));
         DS_EXPECT_NOT_OK(status);
         EXPECT_TRUE(!failObjects.empty()) << VectorToString(failObjects);
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc"));
     }
     {
         // success if partly fail, and return the fail ids
-        std::string objectKey1 = GetObjectKeyHashToWorker(db_.get(), 1);
-        std::string objectKey0 = GetObjectKeyHashToWorker(db_.get(), 0);
-
         std::vector<std::string> failObjects;
-        DS_EXPECT_OK(objClient1_->GIncreaseRef({ objectKey0, objectKey1 }, failObjects));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc",
+                                               "return(K_RPC_DEADLINE_EXCEEDED)"));
+        DS_EXPECT_OK(objClient0_->GIncreaseRef({ failedMasterKeys[1], healthyMasterKeys[0] }, failObjects));
         EXPECT_EQ(failObjects.size(), 1) << VectorToString(failObjects);
-        EXPECT_EQ(failObjects[0], objectKey1);
+        EXPECT_EQ(failObjects[0], failedMasterKeys[1]);
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc"));
     }
 }
 

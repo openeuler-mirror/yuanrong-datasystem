@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -139,6 +136,7 @@ TEST_F(KVClientEtcdDfxTest, LEVEL1_TestEtcdRestart)
     client.reset();
 
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 2 }));
+    WaitTopologyTasksDrained({ 0, 1, 2 });
 
     int workerIndex2 = 2;
     InitTestKVClient(workerIndex2, client);
@@ -161,19 +159,16 @@ TEST_F(KVClientEtcdDfxTest, DISABLED_TestWatchEventLost)
 
     int waitTime = SCALE_UP_ADD_TIME + 2;
     int workerNum = 3;
-    WaitAllNodesJoinIntoHashRing(workerNum, waitTime);
+    WaitAllMembersJoinClusterTopology(workerNum, waitTime);
     CheckMaster({ 0, 1, 2 });
 }
 
 TEST_F(KVClientEtcdDfxTest, TestEtcdCommitFailed)
 {
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 1 }));
-    DS_ASSERT_NOT_OK(
-        externalCluster_->StartWorkerAndWaitReady({ 0 },
-                                                  " -inject_actions=etcd.txn.commit:return(K_TRY_AGAIN);HashRing."
-                                                  "InitWithCoordinator.MotifyWaitTimeMs:call(3000)"));
     DS_ASSERT_OK(
-        externalCluster_->StartWorkerAndWaitReady({ 2 }, " -inject_actions=etcd.txn.commit:30*return(K_TRY_AGAIN) "));
+        externalCluster_->StartWorkerAndWaitReady({ 0 }, " -inject_actions=etcd.txn.commit:1*return(K_TRY_AGAIN)"));
+    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 2 }));
 }
 
 TEST_F(KVClientEtcdDfxTest, DISABLED_TestErrorMsgWhenEtcdFailed)
@@ -235,19 +230,16 @@ TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestSetHealthProbe)
 {
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1, 2 }));
     DS_ASSERT_OK(externalCluster_->ShutdownNode(WORKER, 1));
-    DS_ASSERT_OK(externalCluster_->StartWorker(1, HostPort(),
-                                               " -inject_actions=worker.RunKeepAliveTask:return(K_RPC_UNAVAILABLE)"));
-    int waitReconciliationSec = 5;
-    DS_ASSERT_NOT_OK(externalCluster_->WaitNodeReady(WORKER, 1, waitReconciliationSec));
-
-    DS_ASSERT_OK(externalCluster_->SetInjectAction(WORKER, 1, "WorkerOCServiceImpl.Reconciliation.SkipWait", "call()"));
-    DS_ASSERT_OK(externalCluster_->ClearInjectAction(WORKER, 1, "worker.RunKeepAliveTask"));
-    DS_ASSERT_OK(externalCluster_->WaitNodeReady(WORKER, 1, waitReconciliationSec));
+    DS_ASSERT_OK(externalCluster_->StartWorker(
+        1, HostPort(), " -inject_actions=worker.RunKeepAliveTask:3*return(K_RPC_UNAVAILABLE)"));
+    constexpr int recoveryWindowSec = 15;
+    DS_ASSERT_OK(externalCluster_->WaitNodeReady(WORKER, 1, recoveryWindowSec));
 }
 
 TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestRestartDuringEtcdCrash)
 {
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1, 2 }));
+    WaitTopologyTasksDrained({ 0, 1, 2 });
     DS_ASSERT_OK(externalCluster_->ShutdownEtcds());
 
     auto val = "val";
@@ -265,8 +257,10 @@ TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestRestartDuringEtcdCrash)
     }
     client1.reset();
 
-    DS_ASSERT_OK(externalCluster_->RestartWorkerAndWaitReadyOneByOne({ 1 }));
-
+    constexpr int restartFailureWindowSec = 10;
+    DS_ASSERT_NOT_OK(externalCluster_->RestartWorkerAndWaitReadyOneByOne({ 1 }, SIGTERM, restartFailureWindowSec));
+    DS_ASSERT_OK(externalCluster_->StartEtcdCluster());
+    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 1 }));
     InitTestKVClient(1, client1);
 
     std::vector<std::string> keysPostRestart;
@@ -277,10 +271,7 @@ TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestRestartDuringEtcdCrash)
         DS_ASSERT_OK(client1->Set(key, val));
     }
 
-    DS_ASSERT_OK(externalCluster_->SetInjectAction(WORKER, 1, "WorkerOCServiceImpl.Reconciliation.SkipWait", "call()"));
-    DS_ASSERT_OK(externalCluster_->StartEtcdCluster());
-
-    int waitReconciliationSec = 5;
+    constexpr int waitReconciliationSec = 5;
     sleep(waitReconciliationSec);
 
     for (const auto &key : keysPerRestart) {
@@ -290,9 +281,8 @@ TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestRestartDuringEtcdCrash)
 
     for (const auto &key : keysPostRestart) {
         std::string valToGet;
-        // For the keys set after the restart, it is expected that they can be obtained, but this logic is not yet
-        // implemented
-        DS_ASSERT_NOT_OK(client0->Get(key, valToGet));
+        DS_ASSERT_OK(client0->Get(key, valToGet));
+        EXPECT_EQ(valToGet, val);
     }
 }
 

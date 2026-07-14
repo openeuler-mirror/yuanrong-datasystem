@@ -390,8 +390,6 @@ global:
     nodeDeadTimeoutS: 300
     # Control whether to enable reconciliation, default is true.
     enableReconciliation: true
-    # Whether to support self-healing when the hash ring is in an abnormal state.
-    enableHashRingSelfHealing: false
     # Timeout interval of kubernetes liveness probe, default is 150 seconds.
     livenessProbeTimeoutS: 150
     # Time to wait for the first node that wants to join a working hash ring.

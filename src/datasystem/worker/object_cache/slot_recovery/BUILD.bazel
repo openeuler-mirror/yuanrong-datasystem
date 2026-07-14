@@ -25,6 +25,7 @@ ds_cc_library(
         "slot_recovery_manager.h",
     ],
     deps = [
+        "//src/datasystem/worker:worker_topology_references",
         ":slot_recovery_store",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
@@ -37,9 +38,9 @@ ds_cc_library(
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/protos:slot_recovery_cc_proto",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker:cluster_event_type",
         "//src/datasystem/worker:worker_master_api_manager_base",
-        "//src/datasystem/worker/cluster_manager:cluster_manager_header",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
     ],

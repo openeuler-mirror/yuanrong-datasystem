@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -32,6 +29,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_table.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/object_meta_route_helper.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/worker/object_cache/device/device_obj_cache.h"
 
@@ -88,9 +86,10 @@ Status SaveRecoveredContentToMemory(const ObjectMetaPb &meta, const std::shared_
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(memCpyThreadPool != nullptr, K_RUNTIME_ERROR, "memCpyThreadPool is null");
     const auto content = contentStream->str();
     std::vector<RpcMessage> payloads;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CopyAndSplitBuffer(TenantAuthManager::ExtractTenantId(meta.object_key()),
-                                                        content.data(), content.size(), payloads),
-                                     FormatString("[ObjectKey %s] CopyAndSplitBuffer failed.", meta.object_key()));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        CopyAndSplitBuffer(TenantAuthManager::ExtractTenantId(meta.object_key()), content.data(), content.size(),
+                           payloads),
+        FormatString("[ObjectKey %s] CopyAndSplitBuffer failed.", meta.object_key()));
     ObjectKV objectKV(meta.object_key(), *entry);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         SaveBinaryObjectToMemory(objectKV, payloads, evictionManager, memCpyThreadPool, false),
@@ -102,17 +101,21 @@ Status SaveRecoveredContentToMemory(const ObjectMetaPb &meta, const std::shared_
 }  // namespace
 
 MetaDataRecoveryManager::MetaDataRecoveryManager(
-    const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, ClusterManager *clusterManager,
+    const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, ClusterAccess clusterAccess,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
     uint64_t metadataSize, const std::shared_ptr<WorkerOcEvictionManager> &evictionManager,
-    const std::shared_ptr<ThreadPool> &memCpyThreadPool)
+    const std::shared_ptr<ThreadPool> &memCpyThreadPool, const cluster::PlacementFacade *topologyPlacement,
+    worker::MetadataRouteOptions topologyRouteOptions, RecoveredContentSaver recoveredContentSaver)
     : localAddress_(localAddress),
       objectTable_(objectTable),
-      clusterManager_(clusterManager),
+      clusterAccess_(std::move(clusterAccess)),
+      topologyPlacement_(topologyPlacement),
+      topologyRouteOptions_(topologyRouteOptions),
       workerMasterApiManager_(workerMasterApiManager),
       metadataSize_(metadataSize),
       evictionManager_(evictionManager),
-      memCpyThreadPool_(memCpyThreadPool)
+      memCpyThreadPool_(memCpyThreadPool),
+      recoveredContentSaver_(std::move(recoveredContentSaver))
 {
 }
 
@@ -122,11 +125,6 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
     RecoverySummary summary;
     summary.requestedCount = objectKeys.size();
     if (objectKeys.empty()) {
-        return summary;
-    }
-    if (clusterManager_ == nullptr) {
-        summary.status = Status(K_RUNTIME_ERROR, "clusterManager is null");
-        summary.failedIds = objectKeys;
         return summary;
     }
     if (objectTable_ == nullptr) {
@@ -182,9 +180,8 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
     if (metas.empty()) {
         return summary;
     }
-    if (clusterManager_ == nullptr || workerMasterApiManager_ == nullptr) {
-        summary.status = clusterManager_ == nullptr ? Status(K_RUNTIME_ERROR, "clusterManager is null")
-                                                    : Status(K_RUNTIME_ERROR, "workerMasterApiManager is null");
+    if (workerMasterApiManager_ == nullptr) {
+        summary.status = Status(K_RUNTIME_ERROR, "workerMasterApiManager is null");
         appendFailedMetas();
         return summary;
     }
@@ -196,7 +193,7 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
         return summary;
     }
 
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
     grouped.AppendFailuresToGroup();
     auto &groupedByMaster = grouped.groups;
     std::vector<const GroupItem *> groupedByMasterKeys;
@@ -232,7 +229,7 @@ MetaDataRecoveryManager::GroupedByMaster MetaDataRecoveryManager::BuildGroupedBy
     const std::vector<std::string> &objectKeys, const std::string &stanbyAddr) const
 {
     if (stanbyAddr.empty()) {
-        auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+        auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
         grouped.AppendFailuresToGroup();
         return std::move(grouped.groups);
     }
@@ -338,9 +335,12 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(
 
         auto foundContent = recoveredContents.find(meta.object_key());
         if (foundContent != recoveredContents.end() && foundContent->second != nullptr) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                SaveRecoveredContentToMemory(meta, foundContent->second, entry, evictionManager_, memCpyThreadPool_),
-                FormatString("[ObjectKey %s] SaveRecoveredContentToMemory failed.", meta.object_key()));
+            auto saveRc = recoveredContentSaver_ == nullptr
+                              ? SaveRecoveredContentToMemory(meta, foundContent->second, entry, evictionManager_,
+                                                             memCpyThreadPool_)
+                              : recoveredContentSaver_(meta, foundContent->second, entry);
+            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(saveRc, FormatString("[ObjectKey %s] SaveRecoveredContentToMemory failed.",
+                                                                  meta.object_key()));
         }
         recoveredObjectKeys.emplace_back(meta.object_key());
 
@@ -352,10 +352,10 @@ Status MetaDataRecoveryManager::RecoverLocalEntries(
 }
 
 Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> &metas,
-                                                std::vector<std::string> &failedIds, std::string stanbyMasterAddr)
+                                                std::vector<std::string> &failedIds,
+                                                std::string stanbyMasterAddr)
 {
     RETURN_OK_IF_TRUE(metas.empty());
-    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, K_RUNTIME_ERROR, "clusterManager is null");
     CHECK_FAIL_RETURN_STATUS(workerMasterApiManager_ != nullptr, K_RUNTIME_ERROR, "workerMasterApiManager is null");
     LOG(INFO) << "recovery meta from slot preload begin";
 
@@ -363,6 +363,15 @@ Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> 
     latestMetaByKey.reserve(metas.size());
     std::vector<std::string> objectKeys;
     objectKeys.reserve(metas.size());
+    SelectLatestMetas(metas, failedIds, latestMetaByKey, objectKeys);
+    RETURN_OK_IF_TRUE(latestMetaByKey.empty());
+    return DispatchRecoveryMetas(GroupRecoveryMetas(objectKeys, latestMetaByKey, stanbyMasterAddr), failedIds);
+}
+
+void MetaDataRecoveryManager::SelectLatestMetas(
+    const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &failedIds,
+    std::unordered_map<std::string, ObjectMetaPb> &latestMetaByKey, std::vector<std::string> &objectKeys) const
+{
     for (const auto &meta : metas) {
         if (meta.object_key().empty()) {
             failedIds.emplace_back("");
@@ -378,20 +387,25 @@ Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> 
             it->second = meta;
         }
     }
-    RETURN_OK_IF_TRUE(latestMetaByKey.empty());
+}
 
+MetaDataRecoveryManager::MetasByMaster MetaDataRecoveryManager::GroupRecoveryMetas(
+    const std::vector<std::string> &objectKeys,
+    const std::unordered_map<std::string, ObjectMetaPb> &latestMetaByKey,
+    const std::string &stanbyMasterAddr) const
+{
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeysByMaster;
     if (!stanbyMasterAddr.empty()) {
         HostPort masterAddr;
         masterAddr.ParseString(stanbyMasterAddr);
         groupedKeysByMaster[masterAddr] = { objectKeys.begin(), objectKeys.end() };
     } else {
-        auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+        auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
         grouped.AppendFailuresToGroup();
         groupedKeysByMaster = std::move(grouped.groups);
     }
 
-    std::unordered_map<HostPort, std::vector<ObjectMetaPb>> groupedMetasByMaster;
+    MetasByMaster groupedMetasByMaster;
     groupedMetasByMaster.reserve(groupedKeysByMaster.size());
     for (const auto &item : groupedKeysByMaster) {
         auto &groupedMetas = groupedMetasByMaster[item.first];
@@ -403,8 +417,13 @@ Status MetaDataRecoveryManager::RecoverMetadata(const std::vector<ObjectMetaPb> 
             }
         }
     }
+    return groupedMetasByMaster;
+}
 
-    using GroupItem = decltype(groupedMetasByMaster)::value_type;
+Status MetaDataRecoveryManager::DispatchRecoveryMetas(
+    const MetasByMaster &groupedMetasByMaster, std::vector<std::string> &failedIds) const
+{
+    using GroupItem = MetasByMaster::value_type;
     std::vector<const GroupItem *> groupedMetas;
     groupedMetas.reserve(groupedMetasByMaster.size());
     for (const auto &item : groupedMetasByMaster) {
@@ -480,8 +499,8 @@ bool MetaDataRecoveryManager::FillRecoveredMeta(const std::string &objectKey, Ob
     return true;
 }
 
-bool MetaDataRecoveryManager::InitRecoverApi(const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
-                                             HostPort &addr,
+bool MetaDataRecoveryManager::InitRecoverApi(const HostPort &masterAddr,
+                                             const std::vector<std::string> &objectKeys, HostPort &addr,
                                              std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                                              DispatchResult &result) const
 {
@@ -519,7 +538,13 @@ void MetaDataRecoveryManager::SendRecoverBatch(const HostPort &masterAddr, const
     if (req.metas_size() == 0) {
         return;
     }
-    Status rc = clusterManager_->CheckConnection(addr);
+    if (clusterAccess_.checkConnection == nullptr) {
+        result.failedIds.insert(result.failedIds.end(), batchObjectKeys.begin(), batchObjectKeys.end());
+        result.status = Status(K_RUNTIME_ERROR, "metadata recovery checkConnection callback is not set");
+        LOG(ERROR) << FormatString("CheckConnection callback is not set, master: %s", masterAddr.ToString());
+        return;
+    }
+    Status rc = clusterAccess_.checkConnection(addr);
     if (rc.IsError()) {
         result.failedIds.insert(result.failedIds.end(), batchObjectKeys.begin(), batchObjectKeys.end());
         result.status = rc;

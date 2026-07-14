@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -43,8 +40,11 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/object/object_enum.h"
+#include "datasystem/cluster/routing/placement_types.h"
 #include "datasystem/worker/object_cache/eviction_list.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/metadata_route_options.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -64,22 +64,24 @@ namespace master {
 class DeleteAllCopyMetaRspPb;
 class MasterOCServiceImpl;
 }
-class ClusterManager;
 namespace object_cache {
-using datasystem::ClusterManager;
 
 class WorkerOcEvictionManager : public std::enable_shared_from_this<WorkerOcEvictionManager> {
 public:
+
     /**
      * @brief Construct WorkerOcEvictionManager.
      * @param[in] objectTable The pointer to a ObjectTable.
      * @param[in] localAddress Address of the worker.
      * @param[in] masterAddress Address of the local master.
      * @param[in] masterOc Pointer to the master object cache service.
-     * @param[in] hashRing Pointer to the hash ring implementation.
+     * @param[in] topologyPlacement Borrowed cluster placement service.
+     * @param[in] topologyRouteOptions Worker metadata-routing mode and local endpoint facts.
      */
     WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress, HostPort masterAddress,
-                            master::MasterOCServiceImpl *masterOc = nullptr);
+                            master::MasterOCServiceImpl *masterOc = nullptr,
+                            const cluster::PlacementFacade *topologyPlacement = nullptr,
+                            worker::MetadataRouteOptions topologyRouteOptions = worker::MetadataRouteOptions{});
 
     ~WorkerOcEvictionManager()
     {
@@ -137,12 +139,12 @@ public:
     Status GetObjectsInfoFromOldest(size_t maxScanCount, std::vector<EvictionList::Node> &res);
 
     /**
-     * @brief Setter function to assign the cluster manager back pointer.
-     * @param[in] clusterManager The cluster manager pointer to assign
+     * @brief Setter function to assign the topology engine back pointer.
+     * @param[in] topologyEngine The topology engine pointer to assign
      */
-    void SetClusterManager(ClusterManager *clusterManager)
+    void SetTopologyEngine(worker::WorkerTopologyReferences *topologyEngine)
     {
-        clusterManager_ = clusterManager;
+        topologyEngine_ = topologyEngine;
     }
 
     /**
@@ -312,8 +314,22 @@ private:
 
     /**
      * @brief Remove meta in master.
+     * @param[in,out] objectKeyVersions Evicted object versions, updated with per-owner removal results.
+     * @return Status of the metadata removal pass.
      */
     Status RemoveMetaFromMasterForEviction(EvictDeletedObjects &objectKeyVersions);
+
+    /**
+     * @brief Remove eviction metadata for one metadata-owner group.
+     * @param[in] masterAddr Metadata owner address.
+     * @param[in] objectKeys Object keys routed to the owner.
+     * @param[in] objectKeyVersions Object versions supplied by the eviction caller.
+     * @param[out] failedObjects Objects that must remain pending.
+     * @param[out] lastRc Last group error returned to the caller.
+     */
+    void RemoveEvictionMetaGroup(const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+                                 const EvictDeletedObjects &objectKeyVersions, EvictDeletedObjects &failedObjects,
+                                 Status &lastRc);
 
     /**
      * @brief Execute the selected eviction action for a locked object.
@@ -630,7 +646,9 @@ private:
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_{ nullptr };
     master::MasterOCServiceImpl *masterOc_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
+    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
+    worker::MetadataRouteOptions topologyRouteOptions_;
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
     std::mutex primaryEndLifeMutex_;

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,18 +12,24 @@
  */
 
 #include <gtest/gtest.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include <cerrno>
+#include <chrono>
+#include <csignal>
+#include <cstdlib>
 #include <cstdint>
 #include <ctime>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
-#include <fstream>
-#include <nlohmann/json.hpp>
 
 #include "common.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/random_data.h"
@@ -35,6 +38,7 @@
 #include "datasystem/kv_client.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/object_client.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/status.h"
 #include "oc_client_common.h"
 #include "datasystem/utils/embedded_config.h"
@@ -42,10 +46,54 @@
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_string(etcd_address);
 
-using json = nlohmann::json;
-
 namespace datasystem {
 namespace st {
+namespace {
+constexpr int EMBEDDED_CHILD_GET_TIMEOUT_MS = 30'000;
+constexpr auto EMBEDDED_CHILD_WAIT_TIMEOUT = std::chrono::seconds(45);
+constexpr auto EMBEDDED_CHILD_POLL_INTERVAL = std::chrono::milliseconds(100);
+
+void KillAndReapChildren(std::vector<pid_t> &children)
+{
+    for (const auto pid : children) {
+        (void)kill(pid, SIGKILL);
+    }
+    for (const auto pid : children) {
+        int status = 0;
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+        }
+    }
+    children.clear();
+}
+
+bool WaitForChildrenSuccess(const std::vector<pid_t> &children)
+{
+    std::vector<pid_t> remaining = children;
+    const auto deadline = std::chrono::steady_clock::now() + EMBEDDED_CHILD_WAIT_TIMEOUT;
+    while (!remaining.empty() && std::chrono::steady_clock::now() < deadline) {
+        for (auto iter = remaining.begin(); iter != remaining.end();) {
+            int status = 0;
+            const auto result = waitpid(*iter, &status, WNOHANG);
+            if (result == 0 || (result < 0 && errno == EINTR)) {
+                ++iter;
+                continue;
+            }
+            if (result < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
+                KillAndReapChildren(remaining);
+                return false;
+            }
+            iter = remaining.erase(iter);
+        }
+        std::this_thread::sleep_for(EMBEDDED_CHILD_POLL_INTERVAL);
+    }
+    if (!remaining.empty()) {
+        KillAndReapChildren(remaining);
+        return false;
+    }
+    return true;
+}
+}  // namespace
+
 class EmbeddedClientTest : public OCClientCommon {
 public:
     void TearDown() override
@@ -413,61 +461,54 @@ public:
         configArgs_.emplace("auto_del_dead_node", "true");
     }
 
-    Status GetHashJson(json &ringJson)
+    void InitTopologyStore()
     {
-        std::string ringDataPath = cluster_->GetRootDir() + "/ring.dat";
-        std::string ringJsonPath = cluster_->GetRootDir() + "/ring.json";
-        auto cmd = FormatString(
-            "%s --endpoints=%s  get /datasystem/ring/  --write-out=json | sed -n 's/.*\"value\":\"\\([^\"]*\\)\".*/\\1/p' | base64 -d > "
-            "%s && %s -d %s > %s",
-            SearchPath("etcdctl"), FLAGS_etcd_address, ringDataPath, HASH_PHRASE_PATH, ringDataPath, ringJsonPath);
-        RETURN_IF_NOT_OK(ExecuteCmd(cmd));
-        std::ifstream file(ringJsonPath);
-        if (!file.is_open()) {
-            return Status(K_RUNTIME_ERROR, "Failed to open file: " + ringJsonPath);
+        if (topologyDb_ != nullptr) {
+            return;
         }
-        try {
-            ringJson = json::parse(file);
-        } catch (const json::parse_error &e) {
-            return Status(K_RUNTIME_ERROR, "JSON parse error in file " + ringJsonPath + ": " + e.what());
-        }
-        return Status::OK();
+        FLAGS_etcd_address = cluster_->GetEtcdAddrs();
+        topologyDb_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
+        DS_ASSERT_OK(topologyDb_->Init());
+        (void)RegisterTopologyTables(*topologyDb_);
+    }
+
+    void GetTopologyRing(::datasystem::ClusterTopologyPb &ring)
+    {
+        InitTopologyStore();
+        std::string value;
+        DS_ASSERT_OK(topologyDb_->Get(GetTopologyTableName(), "", value));
+        ASSERT_TRUE(ring.ParseFromString(value)) << "Failed to parse committed v3 topology ring";
     }
 
     template <typename F>
-    void WaitHashRingChange(F &&f, uint64_t timeoutMs = 60000)  // default wait 60000 ms
+    void WaitTopologyChange(F &&f, uint64_t timeoutMs = 60000)  // default wait 60000 ms
     {
         auto timeOut = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         bool flag = false;
-        json ringJson;
+        ::datasystem::ClusterTopologyPb ring;
         while (std::chrono::steady_clock::now() < timeOut) {
-            DS_ASSERT_OK(GetHashJson(ringJson));
-            if (f(ringJson)) {
+            GetTopologyRing(ring);
+            if (f(ring)) {
                 flag = true;
                 break;
             }
             const int interval = 100;  // 100ms;
             std::this_thread::sleep_for(std::chrono::milliseconds(interval));
         }
-        LOG(INFO) << "Check " << (flag ? "success" : "failed") << ", Ring info:" << ringJson.dump();
+        LOG(INFO) << "Check " << (flag ? "success" : "failed") << ", topology ring:" << ring.ShortDebugString();
         ASSERT_TRUE(flag);
     }
 
-    void WaitAllNodesJoinIntoHashRing(size_t num, uint64_t timeoutSec = 60)
+    void WaitAllNodesActiveInTopology(size_t num, uint64_t timeoutSec = 60)
     {
         int S2Ms = 1000;
-        WaitHashRingChange(
-            [&](const json &hashRing) {
-                if (!hashRing.contains("workers") || !hashRing["workers"].is_object()) {
+        WaitTopologyChange(
+            [&](const ::datasystem::ClusterTopologyPb &ring) {
+                if (static_cast<size_t>(ring.members_size()) != num) {
                     return false;
                 }
-                auto &workers = hashRing["workers"];
-                if (workers.size() != num || hashRing.contains("add_node_info") || hashRing.contains("del_node_info")) {
-                    return false;
-                }
-                for (const auto &[addr, info] : workers.items()) {
-                    (void)addr;
-                    if (!info.contains("state") || info["state"] != "ACTIVE") {
+                for (const auto &worker : ring.members()) {
+                    if (worker.second.state() != ::datasystem::MembershipPb::ACTIVE) {
                         return false;
                     }
                 }
@@ -490,6 +531,9 @@ public:
         }
         ofs.close();
     }
+
+private:
+    std::unique_ptr<EtcdStore> topologyDb_;
 };
 
 TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest)
@@ -499,19 +543,19 @@ TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest)
         DS_ASSERT_OK(StartEmbeddedNode(0));
         KVClient* client = &KVClient::EmbeddedInstance();
         std::string val;
-        DS_ASSERT_OK(client->Get("killpid1", val, 60000)); // timeout is 20000 ms;
+        DS_ASSERT_OK(client->Get("killpid1", val, EMBEDDED_CHILD_GET_TIMEOUT_MS));
         DS_ASSERT_OK(client->ShutDown());
-        exit(0);
+        _exit(EXIT_SUCCESS);
     }
     auto pid1 = fork();
     if (pid1 == 0) {
         DS_ASSERT_OK(StartEmbeddedNode(1));
         KVClient* client = &KVClient::EmbeddedInstance();
         std::string val;
-        DS_ASSERT_OK(client->Get("testfinish", val, 60000)); // timeout is 20000 ms;
-        sleep(1); // wait client shutdown.
+        DS_ASSERT_OK(client->Get("testfinish", val, EMBEDDED_CHILD_GET_TIMEOUT_MS));
+        sleep(1);  // Wait for the peer client to shut down.
         DS_ASSERT_OK(client->ShutDown());
-        exit(0);
+        _exit(EXIT_SUCCESS);
     }
     DS_ASSERT_OK(WaitWorkerReady(0));
     DS_ASSERT_OK(WaitWorkerReady(1));
@@ -532,7 +576,7 @@ TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest)
         std::string newKey = cli0->GenerateKey();
         cli0.reset();
         DS_ASSERT_OK(cli1->Set("killpid1", "aaa"));
-        WaitAllNodesJoinIntoHashRing(1);
+        WaitAllNodesActiveInTopology(1, 30);
         for (int i = 0; i < kKeys; ++i) {
             std::string got;
             DS_ASSERT_OK(cli1->Get(keys[i], got));
@@ -545,12 +589,9 @@ TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest)
         ASSERT_EQ(newGot, newVal);
         DS_ASSERT_OK(cli1->Set("testfinish", "aaa"));
         cli1.reset();
-        exit(0);
+        _exit(EXIT_SUCCESS);
     }
-    int s1, s2, s0;
-    waitpid(pid0, &s0, 0);
-    waitpid(pid1, &s1, 0);
-    waitpid(pid2, &s2, 0);
+    ASSERT_TRUE(WaitForChildrenSuccess({ pid0, pid1, pid2 }));
 }
 
 TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterVoluntaryShutDownTest)
@@ -565,7 +606,7 @@ TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterVoluntaryShutDownTest)
     auto pid0 = fork();
     if (pid0 == 0) {
         DS_ASSERT_OK(StartEmbeddedNode(0));
-        WaitAllNodesJoinIntoHashRing(2);
+        WaitAllNodesActiveInTopology(2);
         KVClient* client = &KVClient::EmbeddedInstance();
         for (int i = 0; i < kKeys; ++i) {
             DS_ASSERT_OK(client->Set(keys[i], vals[i]));
@@ -577,9 +618,9 @@ TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterVoluntaryShutDownTest)
     auto pid1 = fork();
     if (pid1 == 0) {
         DS_ASSERT_OK(StartEmbeddedNode(1));
-        WaitAllNodesJoinIntoHashRing(2);
+        WaitAllNodesActiveInTopology(2);
         KVClient* client = &KVClient::EmbeddedInstance();
-        WaitAllNodesJoinIntoHashRing(1);
+        WaitAllNodesActiveInTopology(1);
         for (int i = 0; i < kKeys; ++i)  {
             std::string got;
             DS_ASSERT_OK(client->Get(keys[i], got));

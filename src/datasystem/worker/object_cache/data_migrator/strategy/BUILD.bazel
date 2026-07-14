@@ -13,7 +13,8 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/object_cache:node_info",
         "//src/datasystem/common/util:thread",
-        "//src/datasystem/worker/cluster_manager:cluster_manager_header",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:worker_topology_references",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker:worker_master_api_manager_base",
         "//include/datasystem/utils:utils_headers",
@@ -33,7 +34,8 @@ ds_cc_library(
     ],
     deps = [
         ":node_selector",
-        "//src/datasystem/worker/cluster_manager:cluster_manager_header",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:worker_topology_references",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:selection_strategy",
         "//include/datasystem/object:object_headers",
         "//src/datasystem/protos:worker_object_cc_proto",
@@ -53,7 +55,8 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
-        "//src/datasystem/worker/cluster_manager:cluster_manager_header",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:worker_topology_references",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:selection_strategy",
         "//include/datasystem/object:object_headers"
     ]

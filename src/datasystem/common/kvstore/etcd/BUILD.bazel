@@ -16,7 +16,7 @@ ds_cc_library(
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:coordinator_cc_proto",
-        "//src/datasystem/topology:membership_types",
+        "//src/datasystem/cluster:cluster_membership_codec",
     ],
 )
 

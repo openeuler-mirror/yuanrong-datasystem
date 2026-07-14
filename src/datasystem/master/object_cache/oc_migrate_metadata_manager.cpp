@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,10 +16,13 @@
  */
 #include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
 
+#include <algorithm>
+#include <exception>
 #include <unordered_set>
 #include <vector>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
@@ -31,24 +31,34 @@
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
-#include "datasystem/protos/hash_ring.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/hash_ring/hash_ring_event.h"
-#include "datasystem/common/task_action/task_action_registry.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
 static constexpr int MOVE_THREAD_NUM = 4;
 constexpr uint32_t OBJECT_BATCH = 300;  // Comparison test: The performance is optimal when the batch number is 300.
-static const std::string OC_MIGRATE_METADATA_MANAGER = "OCMigrateMetadataManager";
+
+Status BuildMigrationFailureStatus(const Status &lastStatus,
+                                   const OCMigrateMetadataManager::MigrateMetaInfo &info,
+                                   double elapsedSeconds, bool isNetworkRecovery, bool connected)
+{
+    return Status(K_RPC_UNAVAILABLE,
+                  FormatString("LastStatus: %s. The connection to %s is %s. Unfinished obj size %zu. "
+                               "Time elapsed %.3f seconds. isNetworkRecovery %s",
+                               lastStatus.ToString(), info.destAddr, connected ? "ready" : "unavailable",
+                               info.objectKeys.size(), elapsedSeconds, isNetworkRecovery ? "true" : "false"));
+}
+
 OCMigrateMetadataManager &OCMigrateMetadataManager::Instance()
 {
     static OCMigrateMetadataManager instance;
     return instance;
 }
 
-Status OCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                                      ClusterManager *cm, MetadataManagerHolder *metadataManagerHolder)
+Status OCMigrateMetadataManager::Init(
+    const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
+    worker::WorkerTopologyReferences *cm, MetadataManagerHolder *metadataManagerHolder)
 {
     localHostPort_ = localHostPort;
     akSkManager_ = std::move(akSkManager);
@@ -56,19 +66,6 @@ Status OCMigrateMetadataManager::Init(const HostPort &localHostPort, std::shared
     metadataManagerHolder_ = metadataManagerHolder;
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "MigrateMetadataThreadPool");
 
-    HashRingEvent::MigrateRanges::GetInstance().AddSubscriber(
-        OC_MIGRATE_METADATA_MANAGER,
-        [this](const std::string &workerId, const std::string &dest, const std::string &destWorkerId,
-               const worker::HashRange &ranges, bool isNetworkRecovery) {
-            return MigrateByRanges(workerId, dest, destWorkerId, ranges, isNetworkRecovery);
-        });
-    auto migrateByTask = [this](const TransferTask &task) {
-        return MigrateByRanges(task.sourceWorkerAddr, task.targetWorkerAddr, "", task.placementScope.ranges, false);
-    };
-    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::MIGRATE_SCALE_UP_METADATA,
-                                                    OC_MIGRATE_METADATA_MANAGER, migrateByTask);
-    TaskActionRegistry::GetInstance().AddSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_METADATA,
-                                                    OC_MIGRATE_METADATA_MANAGER, std::move(migrateByTask));
     return Status::OK();
 }
 
@@ -81,39 +78,103 @@ OCMigrateMetadataManager::~OCMigrateMetadataManager()
 void OCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
-    HashRingEvent::MigrateRanges::GetInstance().RemoveSubscriber(OC_MIGRATE_METADATA_MANAGER);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::MIGRATE_SCALE_UP_METADATA,
-                                                       OC_MIGRATE_METADATA_MANAGER);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::MIGRATE_VOLUNTARY_METADATA,
-                                                       OC_MIGRATE_METADATA_MANAGER);
     cm_ = nullptr;
 }
 
-Status OCMigrateMetadataManager::MigrateByRanges(const std::string &workerId, const std::string &dest,
-                                                 const std::string &destWorkerId, const worker::HashRange &ranges,
-                                                 bool isNetworkRecovery)
+Status OCMigrateMetadataManager::MigrateTopologyMetadata(
+    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+    const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+    const cluster::CancellationToken &cancellation)
 {
-    CHECK_FAIL_RETURN_STATUS(cm_ != nullptr, K_RUNTIME_ERROR, "OCMigrateMetadataManager has not inited.");
-    std::string rangesStr;
-    for (const auto &range : ranges) {
-        rangesStr += "[" + std::to_string(range.first) + ", " + std::to_string(range.second) + "], ";
-    }
-    LOG(INFO) << "migrate task excute, src worker id : " << workerId << " , address: " << localHostPort_.ToString()
-              << ", to dest workerAddr: " << dest << ", dest worker id: " << destWorkerId << ", ranges: " << rangesStr;
-    INJECT_POINT("MigrateByRanges.Delay");
-    std::vector<std::string> objRefToBeMigrated;
-    std::vector<std::string> remoteClientIds;
-    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
-                                     "workerId not exists");
+    CHECK_FAIL_RETURN_STATUS(action.source.has_value() && action.target.has_value(), K_INVALID,
+                             "topology metadata migration lacks source or target");
+    CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology metadata migration cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology metadata migration deadline exceeded");
+    std::shared_ptr<master::OCMetadataManager> metadata;
+    RETURN_IF_NOT_OK(metadataManagerHolder_->GetOcMetadataManager(metadata));
     MigrateMetaInfo info;
-    info.destAddr = dest;
-    info.destWorkerId = destWorkerId;
-    info.ranges = ranges;
-    ocMetadataManager->GetMetasMatch(
-        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, info.objectKeys);
+    info.destAddr = action.target->address;
+    info.operationId = businessOperationId;
+    info.topologyVersion = action.topologyVersion;
+    info.batchEpoch = action.batchEpoch;
+    info.sourceMemberId = action.source->id;
+    info.targetMemberId = action.target->id;
+    metadata->GetMetasMatch([&filter](const std::string &key) { return filter.Contains(key); }, info.objectKeys);
+    CollectTopologyMigrationKeys(metadata, filter, info);
+    if (info.selectedKeys.empty()) {
+        return Status::OK();
+    }
+    auto rc = RunTopologyMigration(metadata, std::move(info), deadline, cancellation);
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology metadata migration deadline exceeded");
+    return rc;
+}
 
-    return MigrateMetaDataWithRetry(ocMetadataManager, info, isNetworkRecovery);
+void OCMigrateMetadataManager::CollectTopologyMigrationKeys(
+    const std::shared_ptr<master::OCMetadataManager> &metadata, const cluster::IKeyFilter &filter,
+    MigrateMetaInfo &info)
+{
+    const auto matches = [&filter](const std::string &key) { return filter.Contains(key); };
+    info.selectedKeys.insert(info.objectKeys.begin(), info.objectKeys.end());
+    std::vector<std::string> vectorKeys;
+    metadata->GetRemoteClientIdsMatch(matches, vectorKeys);
+    info.selectedKeys.insert(vectorKeys.begin(), vectorKeys.end());
+    vectorKeys.clear();
+    metadata->GetSubscibeInfoMatch(matches, vectorKeys);
+    info.selectedKeys.insert(vectorKeys.begin(), vectorKeys.end());
+    std::unordered_set<std::string> setKeys;
+    metadata->GetObjRefsMatch(matches, setKeys);
+    info.selectedKeys.insert(setKeys.begin(), setKeys.end());
+    setKeys.clear();
+    metadata->GetNestedRefsMatch(matches, setKeys);
+    info.selectedKeys.insert(setKeys.begin(), setKeys.end());
+    GlobalDeleteInfoMap deleteKeys;
+    metadata->GetObjGlobalCacheDeletesMatch(matches, deleteKeys);
+    for (const auto &entry : deleteKeys) {
+        info.selectedKeys.emplace(entry.first);
+    }
+    std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> asyncKeys;
+    metadata->GetMetasInAsyncQueueMatch(matches, asyncKeys);
+    for (const auto &entry : asyncKeys) {
+        info.selectedKeys.emplace(entry.first);
+    }
+    vectorKeys.clear();
+    // Device metadata is represented by one pseudo-key and migrates as an indivisible table.
+    metadata->GetDeviceOcManager()->GetDeviceMetasMatch(matches, vectorKeys);
+    info.selectedKeys.insert(vectorKeys.begin(), vectorKeys.end());
+}
+
+Status OCMigrateMetadataManager::RunTopologyMigration(
+    const std::shared_ptr<master::OCMetadataManager> &metadata, MigrateMetaInfo info,
+    std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
+{
+    const auto futureKey = std::make_pair(info.destAddr, info.operationId);
+    TbbFutureThreadTable::accessor accessor;
+    if (!futureThread_.find(accessor, futureKey)) {
+        auto traceId = Trace::Instance().GetTraceID();
+        auto future = threadPool_->Submit([this, metadata, info = std::move(info), traceId]() mutable {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            return AsyncMigrateMetadata(metadata, info);
+        });
+        futureThread_.emplace(accessor, futureKey, std::move(future));
+    }
+    while (std::chrono::steady_clock::now() < deadline && !cancellation.IsCancelled()) {
+        const auto pollDeadline = std::min(deadline, std::chrono::steady_clock::now() + TOPOLOGY_CANCELLATION_POLL);
+        if (accessor->second.wait_until(pollDeadline) == std::future_status::ready) {
+            try {
+                auto result = accessor->second.get();
+                futureThread_.erase(accessor);
+                return result.first;
+            } catch (const std::exception &error) {
+                futureThread_.erase(accessor);
+                RETURN_STATUS(K_RUNTIME_ERROR, std::string("topology object migration exception: ") + error.what());
+            }
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology object migration cancelled");
+    RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "topology object migration deadline exceeded");
 }
 
 Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
@@ -132,11 +193,13 @@ Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
         // 2. Submit the scale-up task first, and then process the put event of the clusterNodeTable of the scale-up
         // node, retry until success.
         // 3. for dest worker timeout, retry for 3 times, interval is 100 ms
-        if ((!isNetworkRecovery && (status = cm_->CheckConnection(destAddr)).IsError())) {
+        if ((!isNetworkRecovery && (status = worker::CheckTopologyMemberConnection(cm_, destAddr, true)).IsError())) {
             LOG(ERROR) << "Check connection of " << info.destAddr << " failed: " << status.ToString();
             static const int totleRetryTimes = 3;
             static const int sleepTimeMs = 100;
-            if (cm_->CheckWorkerIsScaleDown(destAddr.ToString())) {
+            auto validWorkers = worker::GetValidTopologyMembers(cm_);
+            if (validWorkers.find(destAddr.ToString()) == validWorkers.end()
+                || worker::IsTopologyMemberPreLeaving(cm_, destAddr.ToString())) {
                 // worker is scale down
                 LOG(WARNING) << "The dest node cannot be found, so the migration task is abandoned.";
                 break;
@@ -170,11 +233,8 @@ Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
         return Status::OK();
     }
 
-    return Status(K_RPC_UNAVAILABLE,
-                  FormatString("LastStatus: %s. The connection to %s is %u. Unfinished obj size %u. "
-                               "Time elapsed %d seconds. isNetworkRecovery %s",
-                               status.ToString(), info.destAddr, cm_->CheckConnection(destAddr).IsOk(),
-                               info.objectKeys.size(), timer.ElapsedSecond(), isNetworkRecovery));
+    const bool connected = worker::CheckTopologyMemberConnection(cm_, destAddr, true).IsOk();
+    return BuildMigrationFailureStatus(status, info, timer.ElapsedSecond(), isNetworkRecovery, connected);
 }
 
 Status OCMigrateMetadataManager::MigrateMetaData(const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
@@ -185,7 +245,7 @@ Status OCMigrateMetadataManager::MigrateMetaData(const std::shared_ptr<master::O
         LOG(ERROR) << "Submit migrate task failed: " << status.GetMsg();
         return status;
     }
-    auto workerId = ocMetadataManager->GetWorkerId();
+    auto workerId = info.operationId.empty() ? ocMetadataManager->GetWorkerId() : info.operationId;
     status = GetMigrateMetadataResult(workerId, info.destAddr, info.failedIds);
     if (status.IsError()) {
         LOG(ERROR) << "GetMigrateMetadataResult failed. " << status.GetMsg();
@@ -197,6 +257,9 @@ Status OCMigrateMetadataManager::StartMigrateMetadataForScaleout(
     const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, MigrateMetaInfo &info)
 {
     auto futureKey = std::make_pair(info.destAddr, ocMetadataManager->GetWorkerId());
+    if (!info.operationId.empty()) {
+        futureKey.second = info.operationId;
+    }
     TbbFutureThreadTable::accessor accessor;
     if (futureThread_.find(accessor, futureKey)) {
         RETURN_STATUS(
@@ -383,24 +446,28 @@ bool OCMigrateMetadataManager::TryFillAsyncL2Meta(
 }
 
 void OCMigrateMetadataManager::FillRemoteClientIds(const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
-                                                   const worker::HashRange &ranges, const std::string &destAddr,
+                                                   const std::unordered_set<std::string> &selectedKeys,
+                                                   const std::string &destAddr,
                                                    MigrateMetadataReqPb &req)
 {
     std::vector<std::string> migrationClientIds;
     ocMetadataManager->GetRemoteClientIdsMatch(
-        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, migrationClientIds);
+        [&selectedKeys](const std::string &objKey) { return selectedKeys.count(objKey) > 0; },
+        migrationClientIds);
     for (auto &remoteClientId : migrationClientIds) {
         ocMetadataManager->FillClientIdRefsForMigration(remoteClientId, destAddr, req.add_client_id_refs());
     }
 }
 
 void OCMigrateMetadataManager::FillSubscribeInfos(const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
-                                                  const worker::HashRange &ranges, MigrateMetadataReqPb &req)
+                                                  const std::unordered_set<std::string> &selectedKeys,
+                                                  MigrateMetadataReqPb &req)
 {
     std::vector<std::string> subObjs;
     std::vector<SubscribeInfoPb> subInfos;
     ocMetadataManager->GetSubscibeInfoMatch(
-        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, subObjs);
+        [&selectedKeys](const std::string &objKey) { return selectedKeys.count(objKey) > 0; },
+        subObjs);
     ocMetadataManager->FillSubMetas(subObjs, subInfos);
     *req.mutable_sub_metas() = { subInfos.begin(), subInfos.end() };
 }
@@ -411,7 +478,7 @@ Status OCMigrateMetadataManager::MigrateMetadataForScaleout(
 {
     MigrateMetadataReqPb req;
     uint32_t count = 0;
-    req.set_source_addr(localHostPort_.ToString());
+    InitializeMigrationRequest(info, req);
     std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> asyncMap;
     for (const auto &objectKey : info.objectKeys) {
         MetaForMigrationPb meta;
@@ -430,7 +497,7 @@ Status OCMigrateMetadataManager::MigrateMetadataForScaleout(
         if (count >= OBJECT_BATCH) {
             RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, asyncMap));
             req.Clear();
-            req.set_source_addr(localHostPort_.ToString());
+            InitializeMigrationRequest(info, req);
             count = 0;
         }
     }
@@ -445,13 +512,26 @@ Status OCMigrateMetadataManager::MigrateMetadataForScaleout(
     return Status::OK();
 }
 
+void OCMigrateMetadataManager::InitializeMigrationRequest(const MigrateMetaInfo &info,
+                                                          MigrateMetadataReqPb &req) const
+{
+    req.set_source_addr(localHostPort_.ToString());
+    if (info.topologyVersion == 0) {
+        return;
+    }
+    req.set_topology_version(info.topologyVersion);
+    req.set_batch_epoch(info.batchEpoch);
+    req.set_source_member_id(info.sourceMemberId);
+    req.set_target_member_id(info.targetMemberId);
+}
+
 void OCMigrateMetadataManager::MigrateDeviceMetaForScaleout(
     const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, std::unique_ptr<MasterMasterOCApi> &api,
     MigrateMetaInfo &info)
 {
     MigrateMetadataReqPb req;
-    req.set_source_addr(localHostPort_.ToString());
-    GetAndFillMigrateDeviceMetaInfo(ocMetadataManager, info.ranges, req);
+    InitializeMigrationRequest(info, req);
+    GetAndFillMigrateDeviceMetaInfo(ocMetadataManager, info.selectedKeys, req);
     std::vector<std::string> failedIds;
     if (!ocMetadataManager->GetDeviceOcManager()->CheckDeviceMetasMigrateInfoIsEmpty(req)) {
         LOG(INFO) << "Device metas are not empty, start to migrate device meta.";
@@ -460,12 +540,13 @@ void OCMigrateMetadataManager::MigrateDeviceMetaForScaleout(
 }
 
 void OCMigrateMetadataManager::GetAndFillMigrateDeviceMetaInfo(
-    const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, const worker::HashRange &ranges,
-    MigrateMetadataReqPb &req)
+    const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
+    const std::unordered_set<std::string> &selectedKeys, MigrateMetadataReqPb &req)
 {
     std::vector<std::string> migrationKeys;
     ocMetadataManager->GetDeviceOcManager()->GetDeviceMetasMatch(
-        [this, ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); }, migrationKeys);
+        [&selectedKeys](const std::string &objKey) { return selectedKeys.count(objKey) > 0; },
+        migrationKeys);
     if (migrationKeys.size() > 0) {
         ocMetadataManager->GetDeviceOcManager()->FillDeviceMetas(req);
     }
@@ -476,71 +557,67 @@ Status OCMigrateMetadataManager::MigrateNoMetaInfoForScaleout(
     MigrateMetaInfo &info, std::vector<std::string> &failedIds)
 {
     MigrateMetadataReqPb req;
-    req.set_source_addr(localHostPort_.ToString());
+    InitializeMigrationRequest(info, req);
     uint64_t count = 0;
 
     // migrate object subscribe info.
-    FillSubscribeInfos(ocMetadataManager, info.ranges, req);
+    FillSubscribeInfos(ocMetadataManager, info.selectedKeys, req);
     // migrate master app ref
-    FillRemoteClientIds(ocMetadataManager, info.ranges, info.destAddr, req);
+    FillRemoteClientIds(ocMetadataManager, info.selectedKeys, info.destAddr, req);
     if (static_cast<uint64_t>(req.remote_client_ids_size() + req.sub_metas_size()) >= OBJECT_BATCH) {
         RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds));
         req.Clear();
         count = 0;
-        req.set_source_addr(localHostPort_.ToString());
+        InitializeMigrationRequest(info, req);
     } else {
         count += (static_cast<uint64_t>(req.remote_client_ids_size()) + static_cast<uint64_t>(req.sub_metas_size()));
     }
 
-    auto matchFunc = [this, ranges = info.ranges](const std::string &objKey) { return cm_->IsInRange(ranges, objKey); };
-
-    std::unordered_set<std::string> allKeys;
-    // migrate objs only have ref.
-    std::unordered_set<std::string> objectRefs;
-    ocMetadataManager->GetObjRefsMatch(matchFunc, objectRefs);
-    allKeys = objectRefs;
-
-    // migrate left nested keys.
-    std::unordered_set<std::string> objectNestedRefs;
-    ocMetadataManager->GetNestedRefsMatch(matchFunc, objectNestedRefs);
-    allKeys.insert(objectNestedRefs.begin(), objectNestedRefs.end());
-
-    // migrate objs only have global cache
-    GlobalDeleteInfoMap globalCacheDeletes;
-    ocMetadataManager->GetObjGlobalCacheDeletesMatch(matchFunc, globalCacheDeletes);
-    std::transform(globalCacheDeletes.begin(), globalCacheDeletes.end(), std::inserter(allKeys, allKeys.begin()),
-                   [](const auto &pair) { return pair.first; });
-
-    // migrate objs only wait for async delete.
-    std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> asyncL2Metas;
-    ocMetadataManager->GetMetasInAsyncQueueMatch(matchFunc, asyncL2Metas);
-    std::transform(asyncL2Metas.begin(), asyncL2Metas.end(), std::inserter(allKeys, allKeys.begin()),
-                   [](const auto &pair) { return pair.first; });
-
-    for (auto it = allKeys.begin(); it != allKeys.end(); ++it) {
+    NoMetaMigrationKeys keys;
+    CollectNoMetaMigrationKeys(ocMetadataManager, info.selectedKeys, keys);
+    for (auto it = keys.allKeys.begin(); it != keys.allKeys.end(); ++it) {
         const auto &objectKey = *it;
         MetaForMigrationPb meta;
         meta.set_only_ref(true);  // This flag means the object has no ObjectMetaPb.
         meta.set_object_key(objectKey);
-        bool add = TryFillObjectRefMeta(objectKey, objectRefs, ocMetadataManager, meta)
-                   | TryFillObjectNestedRefMeta(objectKey, objectNestedRefs, ocMetadataManager, meta)
-                   | TryFillGlobalCacheDeleteMeta(objectKey, globalCacheDeletes, meta)
-                   | TryFillAsyncL2Meta(objectKey, asyncL2Metas, meta);
+        bool add = TryFillObjectRefMeta(objectKey, keys.objectRefs, ocMetadataManager, meta)
+                   | TryFillObjectNestedRefMeta(objectKey, keys.objectNestedRefs, ocMetadataManager, meta)
+                   | TryFillGlobalCacheDeleteMeta(objectKey, keys.globalCacheDeletes, meta)
+                   | TryFillAsyncL2Meta(objectKey, keys.asyncL2Metas, meta);
         if (add) {
             req.mutable_object_metas()->Add(std::move(meta));
             ++count;
         }
-        if (count >= OBJECT_BATCH || (count > 0 && std::next(it) == allKeys.end())) {
+        if (count >= OBJECT_BATCH || (count > 0 && std::next(it) == keys.allKeys.end())) {
             RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds));
             req.Clear();
             count = 0;
-            req.set_source_addr(localHostPort_.ToString());
+            InitializeMigrationRequest(info, req);
         }
     }
     if (count > 0) {
         RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds));
     }
     return Status::OK();
+}
+
+void OCMigrateMetadataManager::CollectNoMetaMigrationKeys(
+    const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
+    const std::unordered_set<std::string> &selectedKeys, NoMetaMigrationKeys &keys)
+{
+    auto matchFunc = [&selectedKeys](const std::string &objectKey) { return selectedKeys.count(objectKey) > 0; };
+    ocMetadataManager->GetObjRefsMatch(matchFunc, keys.objectRefs);
+    keys.allKeys = keys.objectRefs;
+    ocMetadataManager->GetNestedRefsMatch(matchFunc, keys.objectNestedRefs);
+    keys.allKeys.insert(keys.objectNestedRefs.begin(), keys.objectNestedRefs.end());
+    ocMetadataManager->GetObjGlobalCacheDeletesMatch(matchFunc, keys.globalCacheDeletes);
+    std::transform(keys.globalCacheDeletes.begin(), keys.globalCacheDeletes.end(),
+                   std::inserter(keys.allKeys, keys.allKeys.begin()),
+                   [](const auto &pair) { return pair.first; });
+    ocMetadataManager->GetMetasInAsyncQueueMatch(matchFunc, keys.asyncL2Metas);
+    std::transform(keys.asyncL2Metas.begin(), keys.asyncL2Metas.end(),
+                   std::inserter(keys.allKeys, keys.allKeys.begin()),
+                   [](const auto &pair) { return pair.first; });
 }
 
 }  // namespace master

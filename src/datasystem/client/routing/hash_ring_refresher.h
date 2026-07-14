@@ -34,7 +34,7 @@
 
 #include "datasystem/client/routing/worker_router.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -43,7 +43,7 @@ namespace client {
 class HashRingRefresher {
 public:
     using FetchRpc = std::function<Status(const HostPort &workerAddr, uint64_t currentVersion,
-                                          HashRingPb &ring, std::string &masterAddress,
+                                          ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
                                           uint64_t &newVersion, bool &changed,
                                           std::unordered_map<std::string, std::string> &hostIdMap)>;
 
@@ -58,7 +58,7 @@ public:
 private:
     void RefreshLoop();
     Status DoRefresh();
-    void UpdateWorkerList(const HashRingPb &ring);
+    void UpdateWorkerList(const ::datasystem::ClusterTopologyPb &ring);
 
     std::shared_ptr<WorkerRouter> router_;
     FetchRpc fetchRpc_;

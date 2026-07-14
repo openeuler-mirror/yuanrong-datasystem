@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,6 +24,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
@@ -116,6 +114,13 @@ using EtcdRangeGetVector = std::vector<RangeSearchResult>;
 
 class EtcdWatch : public std::enable_shared_from_this<EtcdWatch> {
 public:
+
+    /**
+     * @brief Monitor exact keys and prefix ranges through a plain ETCD connection.
+     * @param[in] address ETCD address.
+     * @param[in] prefixMap Physical watch targets and start revisions.
+     * @param[in] exactKeys Targets that must omit the ETCD range end.
+     */
     EtcdWatch(std::string address, std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
               std::unordered_set<std::string> exactKeys);
 
@@ -123,6 +128,7 @@ public:
      * @brief Monitors key changes in etcd.
      * @param[in] address Etcd address.
      * @param[in] prefixMap Prefix to be monitored on etcd.
+     * @param[in] exactKeys Targets that must omit the ETCD range end.
      * @param[in] clientKit Parameters required for authentication between route client and etcd.
      */
     EtcdWatch(std::string address, std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
@@ -242,6 +248,7 @@ public:
     Status GenerateFakeEventIfNeeded(bool watchedFailed = false);
 
 private:
+
     /**
      * @brief Store read/write events in an event queue.
      * @param[in] response The response received from the watch events
@@ -306,11 +313,20 @@ private:
     Status GenerateFakePutEventIfNeeded(bool watchedFailed,
                                         std::unordered_map<std::string, VersionInfo> &copyKeyVersion,
                                         std::unordered_map<std::string, int64_t> &curMap);
+
     /**
      * @brief Delay generate fake put event.
      * @param[out] outKeyValue The key value get from etcd.
      */
     void DelayGenerateFakePutEvent(const RangeSearchResult &outKeyValue);
+
+    /**
+     * @brief Schedule one delayed compensation PUT without retaining map iterators.
+     * @param[in] outKeyValue Latest ETCD value and revision.
+     * @param[in] processed Previously processed version, or null when unseen.
+     * @return K_OK when scheduling succeeds; the scheduling status otherwise.
+     */
+    Status ScheduleDelayedFakePutEvent(const RangeSearchResult &outKeyValue, const VersionInfo *processed);
 
     /**
      * @brief Generate fake delete event if needed.

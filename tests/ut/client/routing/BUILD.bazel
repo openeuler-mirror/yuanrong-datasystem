@@ -8,7 +8,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/client/routing:routing",
         "//src/datasystem/common/util:net_util",
-        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
         "//tests/ut:ut_common",
     ],
 )
@@ -19,7 +19,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/client/routing:routing",
         "//src/datasystem/common/util:net_util",
-        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
         "//tests/ut:ut_common",
     ],
 )
@@ -30,7 +30,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/client/routing:routing",
         "//src/datasystem/common/util:net_util",
-        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
         "//tests/ut:ut_common",
     ],
 )

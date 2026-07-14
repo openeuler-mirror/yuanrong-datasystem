@@ -31,7 +31,7 @@ constexpr size_t MAX_CLUSTER_NAME_SIZE = 128;
 constexpr size_t TASK_DIGEST_SIZE = 32;
 constexpr size_t TASK_KIND_PREFIX_SIZE = 3;
 constexpr size_t MIN_TASK_ID_SIZE = TASK_KIND_PREFIX_SIZE + 1 + 1 + TASK_DIGEST_SIZE;
-constexpr char ROOT_PREFIX[] = "/datasystem/";
+constexpr char ROOT_PREFIX[] = "/datasystem";
 const std::string EMPTY_KEY;
 
 bool IsAlphaNumeric(char value)
@@ -94,7 +94,7 @@ Status ValidateAddress(const std::string &address)
 
 Status TopologyKeyHelper::Create(std::string clusterName, std::unique_ptr<TopologyKeyHelper> &helper)
 {
-    if (!IsValidClusterName(clusterName)) {
+    if (!clusterName.empty() && !IsValidClusterName(clusterName)) {
         LOG(ERROR) << "Invalid cluster name for topology keyspace";
         return Status(K_INVALID, "invalid cluster name for topology keyspace");
     }
@@ -105,7 +105,10 @@ Status TopologyKeyHelper::Create(std::string clusterName, std::unique_ptr<Topolo
 
 TopologyKeyHelper::TopologyKeyHelper(std::string clusterName) : clusterName_(std::move(clusterName))
 {
-    const std::string root = ROOT_PREFIX + clusterName_;
+    std::string root(ROOT_PREFIX);
+    if (!clusterName_.empty()) {
+        root.append("/").append(clusterName_);
+    }
     topologyTable_ = root + "/topology";
     migrateTaskTable_ = root + "/tasks/migrate";
     deleteTaskTable_ = root + "/tasks/delete";

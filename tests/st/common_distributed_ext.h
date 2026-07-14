@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,22 +25,29 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/strings_util.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
-#include "datasystem/worker/hash_ring/hash_ring_tools.h"
+#include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace st {
-
 const int WORKER_RECEIVE_DELAY = 1;
 const int RETRY_TIMEOUT_MS = 30000;
+
+template <typename Container>
+typename Container::iterator LoopNext(Container &container, typename Container::iterator iter)
+{
+    ++iter;
+    return iter == container.end() ? container.begin() : iter;
+}
 
 struct WorkerEntry {
     std::string uuid;
@@ -72,71 +76,60 @@ public:
         FLAGS_etcd_address = etcdAddress;
         etcd_ = std::make_unique<EtcdStore>(etcdAddress);
         DS_ASSERT_OK(etcd_->Init());
-        DS_ASSERT_OK(etcd_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX));
-        DS_ASSERT_OK(etcd_->CreateTable(ETCD_CLUSTER_TABLE, "/" + std::string(ETCD_CLUSTER_TABLE)));
+        DS_ASSERT_OK(RegisterTopologyTables(*etcd_));
     }
 
-    void GetHashRingPb(HashRingPb &ring)
+    void GetClusterTopologyPb(ClusterTopologyPb &ring)
     {
         if (!etcd_) {
             InitTestEtcdInstance();
         }
         std::string value;
-        DS_ASSERT_OK(etcd_->Get(ETCD_RING_PREFIX, "", value));
+        DS_ASSERT_OK(etcd_->Get(GetTopologyTableName(), "", value));
         ASSERT_TRUE(ring.ParseFromString(value));
     }
 
-    void ObtainHashTokens()
+    void ObtainTokens()
     {
-        HashRingPb ring;
-        GetHashRingPb(ring);
+        ClusterTopologyPb ring;
+        GetClusterTopologyPb(ring);
         hashTokens_.clear();
-        for (const auto &kv : ring.workers()) {
-            if (kv.second.state() != WorkerPb::ACTIVE && kv.second.state() != WorkerPb::LEAVING) {
+        for (const auto &kv : ring.members()) {
+            if (kv.second.state() != MembershipPb::ACTIVE && kv.second.state() != MembershipPb::LEAVING) {
                 continue;
             }
             const auto &workerId = kv.first;
-            for (auto token : kv.second.hash_tokens()) {
+            for (auto token : kv.second.tokens()) {
                 hashTokens_.insert({ token, workerId });
             }
         }
     }
 
-    void AssertAllNodesJoinIntoHashRing(int num)
+    void AssertAllNodesJoinIntoClusterTopology(int num)
     {
-        HashRingPb ring;
-        GetHashRingPb(ring);
-        ASSERT_EQ(ring.workers_size(), num) << ring.ShortDebugString();
-        for (auto &worker : ring.workers()) {
-            ASSERT_TRUE(worker.second.state() == WorkerPb::ACTIVE) << ring.ShortDebugString();
+        ClusterTopologyPb ring;
+        GetClusterTopologyPb(ring);
+        ASSERT_EQ(ring.members_size(), num) << ring.ShortDebugString();
+        for (auto &worker : ring.members()) {
+            ASSERT_TRUE(worker.second.state() == MembershipPb::ACTIVE) << ring.ShortDebugString();
         }
-        ASSERT_TRUE(ring.add_node_info_size() == 0) << ring.ShortDebugString();
-        ASSERT_TRUE(ring.del_node_info_size() == 0) << ring.ShortDebugString();
     }
 
     void AssertDelNodeInfoExist()
     {
-        if (!etcd_) {
-            InitTestEtcdInstance();
-        }
-        std::string value;
-        DS_ASSERT_OK(etcd_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
-        ASSERT_TRUE(ring.ParseFromString(value));
-        ASSERT_TRUE(ring.del_node_info_size() != 0) << ring.ShortDebugString();
+        FAIL() << "Phase2 topology no longer stores legacy del_node_info in ClusterTopologyPb.";
     }
 
-    void WaitAllNodesJoinIntoHashRing(int num, uint64_t timeoutSec = 60)
+    void WaitAllMembersJoinClusterTopology(int num, uint64_t timeoutSec = 60)
     {
         int S2Ms = 1000;
-        WaitHashRingChange(
-            [&](const HashRingPb &hashRing) {
-                if (hashRing.workers_size() != num || hashRing.add_node_info_size() != 0
-                    || hashRing.del_node_info_size() != 0) {
+        WaitClusterTopologyChange(
+            [&](const ClusterTopologyPb &hashRing) {
+                if (hashRing.members_size() != num) {
                     return false;
                 }
-                for (auto &worker : hashRing.workers()) {
-                    if (worker.second.state() != WorkerPb::ACTIVE) {
+                for (auto &worker : hashRing.members()) {
+                    if (worker.second.state() != MembershipPb::ACTIVE) {
                         return false;
                     }
                 }
@@ -147,17 +140,17 @@ public:
     }
 
     template <typename F>
-    void WaitHashRingChange(F &&f, uint64_t timeoutMs = shutdownTimeoutMs)
+    void WaitClusterTopologyChange(F &&f, uint64_t timeoutMs = shutdownTimeoutMs)
     {
         if (!etcd_) {
             InitTestEtcdInstance();
         }
         auto timeOut = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         bool flag = false;
-        HashRingPb ring;
+        ClusterTopologyPb ring;
         while (std::chrono::steady_clock::now() < timeOut) {
             std::string hashRingStr;
-            DS_ASSERT_OK(etcd_->Get(ETCD_RING_PREFIX, "", hashRingStr));
+            DS_ASSERT_OK(etcd_->Get(GetTopologyTableName(), "", hashRingStr));
             ASSERT_TRUE(ring.ParseFromString(hashRingStr));
             if (f(ring)) {
                 flag = true;
@@ -166,8 +159,7 @@ public:
             const int interval = 100;  // 100ms;
             std::this_thread::sleep_for(std::chrono::milliseconds(interval));
         }
-        LOG(INFO) << "Check " << (flag ? "success" : "failed")
-                  << ", Ring info:" << worker::HashRingToJsonString(ring);
+        LOG(INFO) << "Check " << (flag ? "success" : "failed") << ", Ring info:" << ring.ShortDebugString();
         ASSERT_TRUE(flag);
     }
 
@@ -188,19 +180,19 @@ public:
         kill(GetCluster()->GetWorkerPid(workerIdx), SIGTERM);
     }
 
-    void GetWorkerUuidMap(std::map<std::string, std::string> &workerUuids)
+    void GetMemberIdMap(std::map<std::string, std::string> &workerUuids)
     {
         if (!etcd_) {
             InitTestEtcdInstance();
         }
 
         std::string value;
-        DS_ASSERT_OK(etcd_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
+        DS_ASSERT_OK(etcd_->Get(GetTopologyTableName(), "", value));
+        ClusterTopologyPb ring;
         ASSERT_TRUE(ring.ParseFromString(value));
         workerUuids.clear();
-        for (auto &kv : ring.workers()) {
-            workerUuids.emplace(kv.second.worker_uuid(), kv.first);
+        for (auto &kv : ring.members()) {
+            workerUuids.emplace(BytesUuidToString(kv.second.id()), kv.first);
         }
     }
 
@@ -209,7 +201,7 @@ public:
         auto cluster = GetCluster();
         std::map<std::string, std::string> workerUuids;
         std::map<std::string, std::pair<HostPort, int>> workerUuidWithIndex;
-        GetWorkerUuidMap(workerUuids);
+        GetMemberIdMap(workerUuids);
         for (auto index : indexes) {
             workersInfo_.erase(index);
             HostPort addr;
@@ -228,7 +220,7 @@ public:
             auto workerUuid = kv.first;
             auto iter = workerUuidWithIndex.find(workerUuid);
             if (iter != workerUuidWithIndex.end()) {
-                iter = worker::LoopNext(workerUuidWithIndex, iter);
+                iter = LoopNext(workerUuidWithIndex, iter);
                 workersInfo_.emplace(index, WorkerEntry{ .uuid = workerUuid,
                                                          .addr = kv.second.first,
                                                          .index = index,
@@ -242,7 +234,7 @@ public:
 
     bool GetTwoWorkerNotBackupEachOther(int &index1, int &index2)
     {
-        ObtainHashTokens();
+        ObtainTokens();
         auto getEntryByAddr = [this](std::string &addr) {
             WorkerEntry entry;
             for (const auto &kv : workersInfo_) {
@@ -257,7 +249,7 @@ public:
         auto iter = hashTokens_.begin();
         while (iter != hashTokens_.end()) {
             auto addr1 = iter->second;
-            auto addr2 = worker::LoopNext(hashTokens_, iter)->second;
+            auto addr2 = LoopNext(hashTokens_, iter)->second;
             auto entry1 = getEntryByAddr(addr1);
             auto entry2 = getEntryByAddr(addr2);
             if (entry1.uuid.empty() || entry2.uuid.empty()) {
@@ -294,7 +286,7 @@ public:
     {
         auto hash = MurmurHash3_32(id);
         if (hashTokens_.empty()) {
-            ObtainHashTokens();
+            ObtainTokens();
         }
         if (workersInfo_.empty()) {
             InitWorkersInfoMap(indexes);

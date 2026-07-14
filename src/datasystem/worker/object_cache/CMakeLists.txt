@@ -1,13 +1,16 @@
 set(WORKER_OC_SRCS
         worker_master_oc_api.cpp
         worker_worker_oc_api.cpp
+        worker_worker_peer_state_codec.cpp
         worker_oc_service_impl.cpp
+        object_cache_worker_flags.cpp
         worker_request_manager.cpp
         worker_worker_oc_service_impl.cpp
         worker_worker_transport_service_impl.cpp
         master_worker_oc_service_impl.cpp
         worker_oc_eviction_manager.cpp
         worker_oc_spill.cpp
+        object_meta_route_helper.cpp
         obj_cache_hashmap.cpp
         obj_cache_shm_unit.cpp
         async_send_manager.cpp
@@ -82,12 +85,11 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         worker_object_protos
         slot_recovery_protos
         master_object_protos
+        cluster_topology_scope
+        cluster_topology
         worker_client_manager
-        cluster_manager
+        worker_topology_references
         worker_health_check
-        membership_value_codec
-        worker_node_info
-        common_task_action
         )
 
 list(APPEND WORKER_OBJECT_CACHE_DEPEND_LIBS common_rdma)

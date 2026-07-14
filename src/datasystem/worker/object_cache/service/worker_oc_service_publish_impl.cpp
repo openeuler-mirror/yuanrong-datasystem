@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +17,8 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_publish_impl.h"
 
 #include <utility>
+
+#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -58,11 +57,11 @@ static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam,
-                                                       ClusterManager *clusterManager,
+                                                       worker::WorkerTopologyReferences *topologyEngine,
                                                        std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                        std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress)
@@ -140,7 +139,7 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     PerfPoint point(PerfKey::WORKER_CREATE_META);
 
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(objectKey, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(objectKey, topologyPlacement_, topologyRouteOptions_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                              "hash master get failed, CreateMetadataToMaster failed");
     std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func = [&workerMasterApi](CreateMetaReqPb &metaReq,
@@ -189,7 +188,7 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     VLOG(1) << FormatString("Send Update metadata to master for object: %s, address: %s", objectKey,
                             localAddress_.ToString());
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(objectKey, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(objectKey, topologyPlacement_, topologyRouteOptions_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                              "hash master get failed, UpdateMetadataToMaster failed");
     std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func = [&workerMasterApi](UpdateMetaReqPb &metaReq,
@@ -260,7 +259,7 @@ Status WorkerOcServicePublishImpl::RollbackPublishFailure(ObjectKV &objectKV, Ob
     objectKV.GetObjEntry()->stateInfo.SetCacheInvalid(true);
     if (newLifeState == ObjectLifeState::OBJECT_SEALED) {
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-            workerMasterApiManager_->GetWorkerMasterApi(objectKey, clusterManager_);
+            workerMasterApiManager_->GetWorkerMasterApi(objectKey, topologyPlacement_, topologyRouteOptions_);
         CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
                                  "Hash master get failed, RollbackPublish failed");
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->RollbackSeal(objectKey, static_cast<uint32_t>(oldLifeState)),

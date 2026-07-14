@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,8 +16,10 @@
  */
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 
+#include <algorithm>
 #include <sstream>
 
+#include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/strings_util.h"
@@ -31,6 +30,14 @@ namespace object_cache {
 namespace {
 constexpr size_t GET_MATCH_OBJECT_BATCH = 500;
 constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
+
+bool RangeContains(const Range &range, uint32_t value)
+{
+    if (range.first < range.second) {
+        return value > range.first && value <= range.second;
+    }
+    return value > range.first || value <= range.second;
+}
 }
 
 bool MetadataRecoverySelector::SelectionRequest::Empty() const
@@ -49,9 +56,8 @@ std::string MetadataRecoverySelector::SelectionRequest::ToString() const
     return ss.str();
 }
 
-MetadataRecoverySelector::MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable,
-                                                   ClusterManager *clusterManager)
-    : objectTable_(objectTable), clusterManager_(clusterManager)
+MetadataRecoverySelector::MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable)
+    : objectTable_(objectTable)
 {
 }
 
@@ -68,9 +74,12 @@ MetadataRecoverySelector::SelectionRequest MetadataRecoverySelector::BuildSelect
 
 Status MetadataRecoverySelector::BuildMatchFunc(const SelectionRequest &request, MatchFunc &matchFunc) const
 {
-    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, K_RUNTIME_ERROR, "clusterManager is null");
-    matchFunc = [this, ranges = request.ranges](const std::string &objKey) {
-        return clusterManager_->IsInRange(ranges, objKey);
+    CHECK_FAIL_RETURN_STATUS(!request.ranges.empty(), K_INVALID, "metadata recovery selection ranges are empty");
+    matchFunc = [ranges = request.ranges](const std::string &objKey) {
+        const uint32_t objectHash = MurmurHash3_32(objKey);
+        return std::any_of(ranges.begin(), ranges.end(), [objectHash](const Range &range) {
+            return RangeContains(range, objectHash);
+        });
     };
     return Status::OK();
 }

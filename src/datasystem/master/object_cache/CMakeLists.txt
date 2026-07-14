@@ -32,11 +32,12 @@ set(MASTER_OC_DEPEND_LIBS
         common_persistence_api
         common_signal
         master_object_cache_store
+        master_metadata_redirect
         master_heartbeat_protos
         master_object_protos
         worker_object_protos
-        cluster_manager
-        common_task_action
+        cluster_topology_scope
+        cluster_topology
         )
 
 add_library(master_object_cache STATIC ${MASTER_OC_SRCS})

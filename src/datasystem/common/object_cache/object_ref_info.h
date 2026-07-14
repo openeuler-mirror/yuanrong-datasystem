@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -278,6 +275,9 @@ public:
         for (const auto &kv : clientRefTable_) {
             std::vector<std::string> objKeys;
             kv.second->GetRefIds(objKeys);
+            if (objKeys.empty()) {
+                continue;
+            }
             refTable.emplace(kv.first, objKeys);
         }
     };
@@ -391,6 +391,7 @@ public:
     }
 
 private:
+
     /**
      * @brief Try to erase the refId from clientRefTable And remoteClientIdSet_.
      * @param[in] refId The ref key, clientId(in worker side) or address (in master side).
@@ -490,6 +491,7 @@ public:
     void InitShmRefForClient(const ClientKey &clientId, bool supportMultiShmRefCount);
 
 #ifdef WITH_TESTS
+
     /**
      * @brief Check one object whether be referred by client.
      * @param[in] clientId uuid of client.
@@ -543,6 +545,7 @@ public:
     void FlushMaybeExpiredQueue(uint64_t nowMs);
 
 private:
+
     /**
      * @brief Remove shared memory unit reference from the client table and shm table.
      * @param[in] clientId uuid of client.

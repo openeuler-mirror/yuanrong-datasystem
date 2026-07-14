@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,6 +19,7 @@
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/log/log.h"
@@ -31,9 +29,10 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
-#include "datasystem/topology/membership/worker_node_info.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/cluster/membership/membership_value_codec.h"
 
-#include "datasystem/worker/cluster_manager/cluster_constants.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
 
 DS_DECLARE_string(log_dir);
 
@@ -84,15 +83,12 @@ void ResolveHostId(const std::string &hostIdEnvName, std::string &hostId)
 
 std::string ExtractWorkerAddrFromClusterKey(const std::string &key)
 {
-    auto tablePos = key.find(CLUSTER_TABLE);
+    const std::string membershipSegment = ETCD_MEMBERSHIP_KEY_SEGMENT;
+    auto tablePos = key.rfind(membershipSegment);
     if (tablePos == std::string::npos) {
         return key;
     }
-    auto begin = tablePos + std::string(CLUSTER_TABLE).size();
-    if (begin < key.size() && key[begin] == '/') {
-        ++begin;
-    }
-    return key.substr(begin);
+    return key.substr(tablePos + membershipSegment.size());
 }
 
 std::string PrefixRangeEnd(const std::string &prefix)
@@ -110,24 +106,39 @@ std::string PrefixRangeEnd(const std::string &prefix)
     return "";
 }
 
+std::string MemberLifecycleStateName(cluster::MemberLifecycleState state)
+{
+    switch (state) {
+        case cluster::MemberLifecycleState::STARTING:
+            return "start";
+        case cluster::MemberLifecycleState::RESTARTING:
+            return "restart";
+        case cluster::MemberLifecycleState::RECOVERING:
+            return "recover";
+        case cluster::MemberLifecycleState::READY:
+            return "ready";
+        case cluster::MemberLifecycleState::EXITING:
+            return "exiting";
+        case cluster::MemberLifecycleState::DOWNGRADE_RESTARTING:
+            return "d_rst";
+        case cluster::MemberLifecycleState::UNKNOWN:
+        default:
+            return "unknown";
+    }
+}
+
 void AppendReadyWorker(const std::string &key, const std::string &valueStr, const std::string &hostId,
                        std::vector<std::string> &sameHost, std::vector<std::string> &other,
                        std::unordered_map<std::string, uint32_t> &workersStateCount)
 {
-    topology::WorkerServiceInfo value;
-    auto rc = topology::WorkerServiceInfo::FromString(valueStr, value);
+    cluster::MembershipValue value;
+    auto rc = cluster::MembershipValueCodec::Decode(valueStr, value);
     if (rc.IsError()) {
         LOG(WARNING) << "Failed to parse keep alive value for worker " << key << ": " << rc.ToString();
         return;
     }
-    std::string stateStr;
-    rc = topology::WorkerServiceStateToString(value.state, stateStr);
-    if (rc.IsError()) {
-        LOG(WARNING) << "Failed to parse worker service state for worker " << key << ": " << rc.ToString();
-        return;
-    }
-    workersStateCount[stateStr]++;
-    if (value.state != topology::WorkerServiceState::READY) {
+    workersStateCount[MemberLifecycleStateName(value.lifecycleState)]++;
+    if (value.lifecycleState != cluster::MemberLifecycleState::READY) {
         return;
     }
     auto workerAddr = ExtractWorkerAddrFromClusterKey(key);
@@ -143,29 +154,7 @@ void AppendReadyWorkerFromProto(const std::string &key, const std::string &value
                                 std::vector<std::string> &sameHost, std::vector<std::string> &other,
                                 std::unordered_map<std::string, uint32_t> &workersStateCount)
 {
-    topology::WorkerServiceInfo value;
-    auto rc = topology::WorkerServiceInfo::FromProto(valueStr, value);
-    if (rc.IsError()) {
-        LOG(WARNING) << "Failed to parse worker service info proto for worker " << key << ": " << rc.ToString();
-        return;
-    }
-    std::string stateStr;
-    rc = topology::WorkerServiceStateToString(value.state, stateStr);
-    if (rc.IsError()) {
-        LOG(WARNING) << "Failed to parse worker service state for worker " << key << ": " << rc.ToString();
-        return;
-    }
-    workersStateCount[stateStr]++;
-    if (value.state != topology::WorkerServiceState::READY) {
-        return;
-    }
-    auto workerAddr = ExtractWorkerAddrFromClusterKey(key);
-    VLOG(1) << "Worker " << workerAddr << " is ready with hostId: " << value.hostId;
-    if (!hostId.empty() && value.hostId == hostId) {
-        sameHost.emplace_back(std::move(workerAddr));
-    } else {
-        other.emplace_back(std::move(workerAddr));
-    }
+    AppendReadyWorker(key, valueStr, hostId, sameHost, other, workersStateCount);
 }
 
 Status SelectWorkerFromPartitions(const std::vector<std::string> &sameHost, const std::vector<std::string> &other,
@@ -264,10 +253,13 @@ Status ServiceDiscovery::Init()
                                      "Failed to connect to etcd.");
     ResolveHostId(hostIdEnvName_, hostId_);
 
-    std::string etcdTablePrefix = clusterName_.empty() ? "" : "/" + clusterName_;
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(cluster::TopologyKeyHelper::Create(clusterName_, keys),
+                                     "Invalid cluster name for service discovery.");
+    membershipTable_ = keys->MembershipTable();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        etcdStore_->CreateTable(CLUSTER_TABLE, etcdTablePrefix + "/" + std::string(CLUSTER_TABLE)),
-        "The table already exists. tableName: " + std::string(CLUSTER_TABLE));
+        etcdStore_->CreateTableWithExactPrefix(membershipTable_, membershipTable_),
+        "The membership table already exists. tableName: " + membershipTable_);
     return Status::OK();
 }
 
@@ -279,7 +271,7 @@ Status ServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::
 
     int64_t nodeRevision;
     std::vector<std::pair<std::string, std::string>> outKeyValues;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->GetAll(CLUSTER_TABLE, outKeyValues, nodeRevision),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(etcdStore_->GetAll(membershipTable_, outKeyValues, nodeRevision),
                                      "Failed to fetch cluster info from etcd, ensure etcd service is healthy.");
 
     sameHost.clear();
@@ -367,7 +359,7 @@ Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &same
     sameHost.clear();
     other.clear();
     std::unordered_map<std::string, uint32_t> workersStateCount;
-    const std::string clusterTablePrefix = "/" + std::string(CLUSTER_TABLE) + "/";
+    const std::string clusterTablePrefix = "/" + std::string(COORDINATION_CLUSTER_TABLE) + "/";
     auto rangeEnd = PrefixRangeEnd(clusterTablePrefix);
     CHECK_FAIL_RETURN_STATUS(!rangeEnd.empty(), K_INVALID, "Failed to build coordinator cluster table range.");
 

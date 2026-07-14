@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,6 +16,7 @@
  */
 
 #include "datasystem/worker/object_cache/service/worker_oc_service_global_reference_impl.h"
+
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -30,18 +28,26 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 using namespace datasystem::worker;
 using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
+namespace {
+Status CheckMetaOwnerConnection(worker::WorkerTopologyReferences *topologyEngine, const HostPort &masterAddr)
+{
+    const bool allowDirectoryLag = topologyEngine != nullptr && topologyEngine->centralizedMetadata;
+    return worker::CheckTopologyMemberConnection(topologyEngine, masterAddr, allowDirectoryLag);
+}
+}  // namespace
 
 WorkerOcServiceGlobalReferenceImpl::WorkerOcServiceGlobalReferenceImpl(
-    WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
+    WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable, std::shared_ptr<AkSkManager> akSkManager,
     HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       globalRefTable_(std::move(globalRefTable)),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress)
@@ -160,12 +166,12 @@ Status WorkerOcServiceGlobalReferenceImpl::ReleaseGRefs(const ReleaseGRefsReqPb 
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_RELEASEGREFS);
     access.RemoteClientId(req.remote_client_id());
     HostPort masterAddr;
-    if (clusterManager_ == nullptr) {
+    if (topologyEngine_ == nullptr) {
         RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
     }
-    RETURN_IF_NOT_OK(clusterManager_->GetMasterAddr(req.remote_client_id(), masterAddr));
+    RETURN_IF_NOT_OK(worker::ResolveTopologyOwner(topologyEngine_, req.remote_client_id(), masterAddr));
     if (masterAddr != localAddress_) {
-        RETURN_IF_NOT_OK(clusterManager_->CheckConnection(masterAddr));
+        RETURN_IF_NOT_OK(CheckMetaOwnerConnection(topologyEngine_, masterAddr));
     }
     auto api = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
     CHECK_FAIL_RETURN_STATUS(api != nullptr, StatusCode::K_INVALID,
@@ -196,7 +202,7 @@ Status WorkerOcServiceGlobalReferenceImpl::QueryGlobalRefNum(const QueryGlobalRe
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_QUERY_GLOBAL_REF_NUM);
     access.ObjectKeysRef(namespaceUris);
     // Group ObjectKeys by master
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(namespaceUris);
+    auto grouped = BuildMetaOwnerRouteGroups(namespaceUris, topologyEngine_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     // Send requests for each master
@@ -330,14 +336,14 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const GIncreaseReq
                                                               std::vector<std::string> &failIncIds)
 {
     const std::string &remoteClientId = req.remote_client_id();
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(firstIncIds);
+    auto grouped = BuildMetaOwnerRouteGroups(firstIncIds, topologyEngine_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     Status lastErr;
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first;
         std::vector<std::string> &currentIncIds = item.second;
-        Status res = clusterManager_->CheckConnection(masterAddr);
+        Status res = CheckMetaOwnerConnection(topologyEngine_, masterAddr);
         if (res.IsError()) {
             LOG(ERROR) << FormatString("The master %s of [%s] cannot be connected: %s", masterAddr.ToString(),
                                        VectorToString(currentIncIds), res.ToString());
@@ -409,7 +415,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string 
 {
     INJECT_POINT("worker.gdecrease");
     // Group ObjectKeys by master
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(finishDecIds);
+    auto grouped = BuildMetaOwnerRouteGroups(finishDecIds, topologyEngine_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     Status status = Status::OK();
@@ -418,7 +424,7 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string 
     for (auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first;
         std::vector<std::string> &currentIncIds = item.second;
-        Status res = clusterManager_->CheckConnection(masterAddr);
+        Status res = CheckMetaOwnerConnection(topologyEngine_, masterAddr);
         master::GDecreaseReqPb req;
         *req.mutable_object_keys() = { currentIncIds.begin(), currentIncIds.end() };
         req.set_address(localAddress_.ToString());
@@ -489,12 +495,45 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRefWithLock(
     return rc;
 }
 
+Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRefWithLock(
+    const HostPort &masterAddr, const std::vector<std::string> &objectKeys, std::vector<std::string> &increaseFailedIds)
+{
+    RETURN_OK_IF_TRUE(objectKeys.empty());
+    std::unordered_set<std::string> objectKeySet(objectKeys.begin(), objectKeys.end());
+    std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
+    std::vector<std::string> increaseMasterObjs;
+    globalRefTable_->GetAllRef(refTable);
+    for (const auto &objRef : refTable) {
+        if (objectKeySet.count(objRef.first) != 0) {
+            increaseMasterObjs.emplace_back(objRef.first);
+        }
+    }
+    RETURN_OK_IF_TRUE(increaseMasterObjs.empty());
+
+    LOG(INFO) << "Gincrease master ref with lock to master " << masterAddr.ToString()
+              << ", object size: " << increaseMasterObjs.size();
+    std::map<std::string, std::shared_ptr<SafeObjType>> lockedEntries;
+    BatchGRefLock(increaseMasterObjs, true, lockedEntries);
+    Raii unlockAll([&lockedEntries]() { BatchGRefUnlock(lockedEntries); });
+    RETURN_OK_IF_TRUE(increaseMasterObjs.empty());
+
+    Status rc = GIncreaseMasterRef(increaseMasterObjs, masterAddr, increaseFailedIds);
+    if (rc.IsError() && increaseFailedIds.empty()) {
+        increaseFailedIds.insert(increaseFailedIds.end(), increaseMasterObjs.begin(), increaseMasterObjs.end());
+    }
+    CHECK_FAIL_RETURN_STATUS(
+        rc.IsOk() && increaseFailedIds.empty(), rc.IsError() ? rc.GetCode() : K_RUNTIME_ERROR,
+        rc.IsError() ? rc.GetMsg()
+                     : "GIncreaseMasterRef failed object size: " + std::to_string(increaseFailedIds.size()));
+    return rc;
+}
+
 Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncreaseReqPb &req,
                                                                    const std::vector<std::string> &firstIncIds,
                                                                    std::vector<std::string> &failIncIds)
 {
     // Group ObjectKeys by master
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(firstIncIds);
+    auto grouped = BuildMetaOwnerRouteGroups(firstIncIds, topologyEngine_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     // Send requests for each master
@@ -504,7 +543,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
         const HostPort &masterAddr = item.first;
         std::vector<std::string> &currentFirstIncIds = item.second;
         std::vector<std::string> rpcFailedIds;
-        Status res = clusterManager_->CheckConnection(masterAddr);
+        Status res = CheckMetaOwnerConnection(topologyEngine_, masterAddr);
         if (res.IsError()) {
             LOG(ERROR) << FormatString("The master %s of [%s] cannot be connected: %s", masterAddr.ToString(),
                                        VectorToString(currentFirstIncIds), res.ToString());
@@ -525,7 +564,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFirstIds(const GIncrea
                 currentFirstIncIds.clear();
                 std::vector<std::string> tmpFailIds;
                 (void)globalRefTable_->GDecreaseRef(clientId, rpcFailedIds, tmpFailIds, currentFirstIncIds);
-                (void)failIncIds.insert(failIncIds.end(), tmpFailIds.begin(), tmpFailIds.end());
+                (void)failIncIds.insert(failIncIds.end(), rpcFailedIds.begin(), rpcFailedIds.end());
             }
         }
     }
@@ -558,10 +597,17 @@ Status WorkerOcServiceGlobalReferenceImpl::GIncreaseMasterRef(const std::vector<
         return masterResult;
     }
     Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    (void)failIncIds.insert(failIncIds.end(), rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
     if (recvRc.IsError()) {
         LOG(ERROR) << "GIncreaseMasterRef response " << LogHelper::IgnoreSensitive(rsp);
-        failIncIds = { rsp.failed_object_keys().begin(), rsp.failed_object_keys().end() };
+        if (failIncIds.empty()) {
+            failIncIds = { newReq.object_keys().begin(), newReq.object_keys().end() };
+        }
         return recvRc;
+    }
+    if (!failIncIds.empty()) {
+        LOG(ERROR) << "GIncreaseMasterRef response contains failed object keys: " << LogHelper::IgnoreSensitive(rsp);
+        RETURN_STATUS(K_RUNTIME_ERROR, "GIncreaseMasterRef failed object size: " + std::to_string(failIncIds.size()));
     }
     return Status::OK();
 }
@@ -640,7 +686,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const Clie
                                                                       std::vector<std::string> &failDecIds)
 {
     // Group ObjectKeys by master
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(finishDecIds);
+    auto grouped = BuildMetaOwnerRouteGroups(finishDecIds, topologyEngine_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     Status status = Status::OK();
@@ -651,7 +697,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const Clie
         std::vector<std::string> &currentFinishDecIds = item.second;
         std::vector<std::string> rpcFailedIds;
         std::unordered_set<std::string> rpcUnAliveIds;
-        Status res = clusterManager_->CheckConnection(masterAddr);
+        Status res = CheckMetaOwnerConnection(topologyEngine_, masterAddr);
         if (res.IsError()) {
             rpcFailedIds = currentFinishDecIds;
         }
@@ -723,7 +769,7 @@ Status WorkerOcServiceGlobalReferenceImpl::IncNestedRef(const std::vector<std::s
 {
     // Send notifications to owner masters
     // Get map of objectKeys grouped by master
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(nestedObjectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(nestedObjectKeys, topologyEngine_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
 
@@ -752,7 +798,7 @@ Status WorkerOcServiceGlobalReferenceImpl::DecNestedRef(const std::vector<std::s
                                                         std::vector<std::string> &unAliveIds)
 {
     // Get map of objectKeys grouped by master
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(nestedObjectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(nestedObjectKeys, topologyEngine_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
 

@@ -31,7 +31,7 @@
 #include "datasystem/client/routing/i_worker_filter.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -47,7 +47,9 @@ enum class WorkerRingState {
     INITIAL,
     JOINING,
     ACTIVE,
+    PRE_LEAVING,
     LEAVING,
+    FAILED,
 };
 
 class WorkerRouter {
@@ -69,7 +71,7 @@ public:
     std::vector<HostPort> GetAvailableWorkers() const;
 
     // Called by Refresher to update hash ring data.
-    void UpdateHashRing(std::shared_ptr<const HashRingPb> ring,
+    void UpdateHashRing(std::shared_ptr<const ::datasystem::ClusterTopologyPb> ring,
                         std::shared_ptr<const std::unordered_map<std::string, std::string>> hostIdMap);
 
     // Broadcast state change to all filters.
@@ -84,7 +86,7 @@ private:
 
     // Single atomic snapshot — all readers see consistent ring + index + sameNode.
     struct RingView {
-        std::shared_ptr<const HashRingPb> ring;
+        std::shared_ptr<const ::datasystem::ClusterTopologyPb> ring;
         std::shared_ptr<const std::vector<HostPort>> sameNodeWorkers;
         struct TokenIndex {
             std::vector<std::pair<uint32_t, int>> tokenToWorker;
@@ -99,7 +101,7 @@ private:
     Status SelectWorkerFromView(const std::string &key, SelectStrategy strategy, HostPort &worker,
                                 const std::vector<HostPort> &exclude,
                                 const std::shared_ptr<const RingView> &view) const;
-    static std::shared_ptr<const RingView::TokenIndex> BuildTokenIndex(const HashRingPb &ring);
+    static std::shared_ptr<const RingView::TokenIndex> BuildTokenIndex(const ::datasystem::ClusterTopologyPb &ring);
 };
 
 }  // namespace client

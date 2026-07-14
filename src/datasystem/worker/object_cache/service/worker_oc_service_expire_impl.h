@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,12 +17,12 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_EXPIRE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_EXPIRE_IMPL_H
 
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/object_posix.service.rpc.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 namespace datasystem {
@@ -33,7 +30,7 @@ namespace object_cache {
 
 class WorkerOcServiceExpireImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
+    WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
                               std::shared_ptr<AkSkManager> akSkManager);
 
     /**
@@ -45,6 +42,7 @@ public:
     Status Expire(const ExpireReqPb &req, ExpireRspPb &rsp);
 
 private:
+
     /**
      * @brief Set expiration time of the specified objects in the master.
      * @param[in] objectKeys The keys to set expiration for.
@@ -53,12 +51,13 @@ private:
      * @param[out] absentObj The objects whose metadata fails to be queried.
      * @param[out] objExpireFailed The objects failed to expire.
      * @param[out] rsp The expire response protobuf.
+     * @return K_OK on success; the expiration status otherwise.
      */
     Status ExpireFromMaster(std::vector<std::string> objectKeys, const HostPort &masterAddr, uint32_t ttlSeconds,
                             std::vector<std::string> &absentObj, std::unordered_set<std::string> &objExpireFailed,
                             ExpireRspPb &rsp);
 
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ThreadPool> batchExpireThreadPool_{ nullptr };
 

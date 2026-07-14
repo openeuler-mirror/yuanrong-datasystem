@@ -6,11 +6,21 @@ set(WORKER_UPDATE_FLAG_CHECK_DEPEND_LIBS
 add_library(worker_update_flag_check STATIC worker_update_flag_check.cpp)
 target_link_libraries(worker_update_flag_check PRIVATE ${WORKER_UPDATE_FLAG_CHECK_DEPEND_LIBS})
 
+set(WORKER_HEALTH_CHECK_DEPEND_LIBS
+        common_util
+        common_log
+        )
+
+add_library(worker_health_check STATIC worker_health_check.cpp)
+target_link_libraries(worker_health_check PRIVATE ${WORKER_HEALTH_CHECK_DEPEND_LIBS})
+
+add_library(worker_topology_references STATIC worker_topology_references.cpp)
+target_include_directories(worker_topology_references PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(worker_topology_references PUBLIC cluster_topology common_util)
+
 add_subdirectory(object_cache)
 add_subdirectory(stream_cache)
-add_subdirectory(hash_ring)
 add_subdirectory(client_manager)
-add_subdirectory(cluster_manager)
 add_subdirectory(coordinator)
 
 # Set source files
@@ -20,6 +30,7 @@ set(WORKER_SRCS
         worker_service_impl.cpp
         worker_service_accessor.cpp
         worker_oc_server.cpp
+        worker_topology_phase_callbacks.cpp
         worker_liveness_check.cpp
         worker_cli.cpp
         worker_flags.cpp
@@ -43,6 +54,8 @@ set(WORKER_DEPEND_LIBS
         common_slot_client
         common_shared_memory
         common_util
+        cluster_topology_scope
+        cluster_topology
         common_metrics
         common_signal
         string_ref
@@ -56,13 +69,11 @@ set(WORKER_DEPEND_LIBS
         worker_object_cache
         worker_stream_cache
         rpc_stub_cache_mgr
-        worker_hash_ring
-        common_task_action
         worker_client_manager
         worker_update_flag_check
-        cluster_manager
+        worker_health_check
         coordinator_watch_service_impl
-        worker_node_info
+        worker_topology_references
         )
 
 if (WITH_TESTS)

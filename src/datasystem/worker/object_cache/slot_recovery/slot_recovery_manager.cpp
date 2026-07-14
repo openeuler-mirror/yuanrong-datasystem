@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,6 +22,8 @@
 #include <limits>
 #include <random>
 #include <unordered_map>
+
+#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -374,12 +373,13 @@ SlotRecoveryManager::~SlotRecoveryManager()
 }
 
 Status SlotRecoveryManager::Init(
-    const HostPort &localAddress, ClusterManager *clusterManager, std::shared_ptr<PersistenceApi> persistApi,
+    const HostPort &localAddress, worker::WorkerTopologyReferences *topologyEngine,
+    std::shared_ptr<PersistenceApi> persistApi,
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
     datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager)
 {
     localAddress_ = localAddress;
-    clusterManager_ = clusterManager;
+    topologyEngine_ = topologyEngine;
     persistenceApi_ = std::move(persistApi);
     workerMasterApiManager_ = std::move(apiManager);
     metadataRecoveryManager_ = metadataRecoveryManager;
@@ -416,10 +416,10 @@ void SlotRecoveryManager::Shutdown()
 
 std::vector<std::string> SlotRecoveryManager::GetStableActiveWorkers() const
 {
-    if (clusterManager_ == nullptr) {
+    if (topologyEngine_ == nullptr) {
         return {};
     }
-    const auto &workers = clusterManager_->GetActiveWorkersInHashRing();
+    const auto &workers = worker::GetActiveTopologyMembers(topologyEngine_);
     return { workers.begin(), workers.end() };
 }
 

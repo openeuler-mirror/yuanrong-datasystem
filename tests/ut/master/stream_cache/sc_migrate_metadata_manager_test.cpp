@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -78,6 +75,26 @@ public:
         return Status{ K_RUNTIME_ERROR, "runtime error" };
     }
 
+    void VerifyTopologyMigrationDeadlineReplay()
+    {
+        SCMigrateMetadataManager::MigrateMetaInfo info;
+        info.destAddr = "127.0.0.1:1";
+        info.operationId = "task-operation";
+        const auto key = std::make_pair(info.destAddr, info.operationId);
+        std::promise<std::pair<Status, std::vector<std::string>>> result;
+        TbbFutureThreadTable::accessor accessor;
+        migrateManager_.futureThread_.emplace(accessor, key, result.get_future());
+        accessor.release();
+        cluster::CancellationToken cancellation;
+        auto rc = migrateManager_.RunTopologyMigration(nullptr, info, std::chrono::steady_clock::now(), cancellation);
+        EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+        result.set_value({ Status::OK(), {} });
+        rc = migrateManager_.RunTopologyMigration(
+            nullptr, info, std::chrono::steady_clock::now() + std::chrono::seconds(1), cancellation);
+        EXPECT_TRUE(rc.IsOk()) << rc.ToString();
+        EXPECT_TRUE(migrateManager_.futureThread_.empty());
+    }
+
 protected:
     SCMigrateMetadataManager migrateManager_;
 };
@@ -100,6 +117,11 @@ TEST_F(SCMigrateMetadataManagerTest, MigrateMeetError)
     info.streamNames.emplace_back("stream2");
     info.streamNames.emplace_back("stream3");
     MigrateMetaDataWithError(info);
+}
+
+TEST_F(SCMigrateMetadataManagerTest, TopologyMigrationDeadlineKeepsOwnedFutureForReplay)
+{
+    VerifyTopologyMigrationDeadlineReplay();
 }
 
 }  // namespace ut

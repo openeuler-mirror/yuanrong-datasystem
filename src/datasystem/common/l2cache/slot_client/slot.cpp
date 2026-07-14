@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,6 +24,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "datasystem/common/flags/flags.h"
@@ -62,6 +60,20 @@ DS_DEFINE_validator(distributed_disk_sync_batch_bytes, [](const char *flagName, 
 namespace datasystem {
 namespace {
 constexpr size_t SLOT_IO_CHUNK_BYTES = 4UL * 1024UL * 1024UL;
+constexpr int64_t NANOS_PER_MICROSECOND = 1000;
+constexpr int64_t MICROS_PER_SECOND = 1000'000;
+
+Status GetFileIdentity(const std::string &path, int64_t &modifiedTimeUs, uint64_t &inode)
+{
+    struct stat statBuf{};
+    if (stat(path.c_str(), &statBuf) != 0) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "Get file identity failed, path: " + path + ", errno: "
+                                           + std::to_string(errno) + ", errmsg: " + StrErr(errno));
+    }
+    modifiedTimeUs = statBuf.st_mtim.tv_sec * MICROS_PER_SECOND + statBuf.st_mtim.tv_nsec / NANOS_PER_MICROSECOND;
+    inode = static_cast<uint64_t>(statBuf.st_ino);
+    return Status::OK();
+}
 
 std::string BaseName(const std::string &path)
 {
@@ -246,7 +258,7 @@ Status Slot::BuildRuntimeStateLocked()
     runtime_.manifest = manifest;
     runtime_.snapshot = snapshot;
     auto manifestPath = JoinPath(slotPath_, "manifest");
-    RETURN_IF_NOT_OK(GetFileModifiedTime(manifestPath, runtime_.manifestModifiedTimeUs));
+    RETURN_IF_NOT_OK(GetFileIdentity(manifestPath, runtime_.manifestModifiedTimeUs, runtime_.manifestInode));
     runtime_.initialized = true;
     RETURN_IF_NOT_OK(writer_.Init(slotPath_, manifest));
     VLOG(1) << "Built slot runtime state successfully, slotId=" << slotId_ << ", slotPath=" << slotPath_
@@ -260,11 +272,12 @@ bool Slot::IsRuntimeStaleLocked() const
         return true;
     }
     int64_t currentManifestMtimeUs = 0;
-    auto rc = GetFileModifiedTime(JoinPath(slotPath_, "manifest"), currentManifestMtimeUs);
+    uint64_t currentManifestInode = 0;
+    auto rc = GetFileIdentity(JoinPath(slotPath_, "manifest"), currentManifestMtimeUs, currentManifestInode);
     if (rc.IsError()) {
         return true;
     }
-    return currentManifestMtimeUs != runtime_.manifestModifiedTimeUs;
+    return currentManifestMtimeUs != runtime_.manifestModifiedTimeUs || currentManifestInode != runtime_.manifestInode;
 }
 
 Status Slot::FlushRuntimeLocked(bool force)
@@ -662,12 +675,12 @@ Status Slot::Repair()
     RETURN_IF_NOT_OK(SlotSnapshot::Replay(slotPath_, manifest, snapshot));
     runtime_.manifest = manifest;
     runtime_.snapshot = snapshot;
-    RETURN_IF_NOT_OK(GetFileModifiedTime(JoinPath(slotPath_, "manifest"), runtime_.manifestModifiedTimeUs));
+    RETURN_IF_NOT_OK(
+        GetFileIdentity(JoinPath(slotPath_, "manifest"), runtime_.manifestModifiedTimeUs, runtime_.manifestInode));
     runtime_.initialized = true;
     RETURN_IF_NOT_OK(writer_.Init(slotPath_, manifest));
-    VLOG(1) << "Slot repair end, slotId=" << slotId_ << ", slotPath=" << slotPath_
-            << ", recordCount=" << records.size() << ", validBytes=" << validBytes
-            << ", " << ManifestDebugString(manifest);
+    VLOG(1) << "Slot repair end, slotId=" << slotId_ << ", slotPath=" << slotPath_ << ", recordCount=" << records.size()
+            << ", validBytes=" << validBytes << ", " << ManifestDebugString(manifest);
     return Status::OK();
 }
 
@@ -1230,10 +1243,11 @@ Status Slot::PersistManifest(const SlotManifestData &manifest)
     RETURN_IF_NOT_OK(EnsureActiveFiles(persisted));
     if (runtime_.initialized) {
         runtime_.manifest = persisted;
-        RETURN_IF_NOT_OK(GetFileModifiedTime(JoinPath(slotPath_, "manifest"), runtime_.manifestModifiedTimeUs));
+        RETURN_IF_NOT_OK(
+            GetFileIdentity(JoinPath(slotPath_, "manifest"), runtime_.manifestModifiedTimeUs, runtime_.manifestInode));
     }
-    VLOG(1) << "Slot persisted manifest, slotId=" << slotId_ << ", slotPath=" << slotPath_
-            << ", " << ManifestDebugString(persisted);
+    VLOG(1) << "Slot persisted manifest, slotId=" << slotId_ << ", slotPath=" << slotPath_ << ", "
+            << ManifestDebugString(persisted);
     return Status::OK();
 }
 

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -32,21 +29,23 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
 
 class WorkerOcServicePublishImpl : public WorkerOcServiceCrudCommonApi {
 public:
+
     /**
      * @brief Construct WorkerOcServicePublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
-     * @param[in] clusterManager The cluster manager pointer to assign.
+     * @param[in] topologyEngine Borrowed Worker topology dependencies.
      * @param[in] memCpyThreadPool Used to copy data to memory.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] localAddress The local worker address.
      */
-    WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
+    WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
                                std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<AkSkManager> akSkManager,
                                HostPort &localAddress);
 
@@ -197,7 +196,7 @@ private:
      */
     Status TryDeleteObjFromEvictionAndSpillFile(ObjectKV &objectKV, bool isInsert);
 
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
 

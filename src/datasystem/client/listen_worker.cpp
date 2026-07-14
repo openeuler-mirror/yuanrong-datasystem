@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -58,15 +55,7 @@ ListenWorker::~ListenWorker()
         int error = shutdown(socketFd_, SHUT_RDWR);
         VLOG(HEARTBEAT_LEVEL) << FormatString("shutdown socket fd:%d, error:%d ", (int)socketFd_, error);
     }
-    bool expected = false;
-    if (heartbeatType_ == HeartbeatType::RPC_HEARTBEAT
-        && workerListenedThreadJoined_.compare_exchange_strong(expected, true)) {
-        waitPost_->Set();
-        firstHeartbeatWaitPost_->Set();
-        if (workerListenedThread_.joinable()) {
-            workerListenedThread_.join();
-        }
-    }
+    JoinListenWorker();
     VLOG(1) << "ListenWorker Destructor End.";
 }
 
@@ -125,14 +114,40 @@ void ListenWorker::StopListenWorker(bool stopActively)
     }
     stop_ = true;
     workerAvailable_ = false;
+    if (stopActively) {
+        JoinListenWorker();
+    }
+}
+
+void ListenWorker::JoinListenWorker()
+{
     bool expected = false;
-    if (stopActively && heartbeatType_ == HeartbeatType::RPC_HEARTBEAT
+    if (heartbeatType_ == HeartbeatType::RPC_HEARTBEAT
         && workerListenedThreadJoined_.compare_exchange_strong(expected, true)) {
         waitPost_->Set();
+        firstHeartbeatWaitPost_->Set();
         if (workerListenedThread_.joinable()) {
             workerListenedThread_.join();
         }
     }
+}
+
+Status ListenWorker::NotifyClientRemovable()
+{
+    clientCommonWorker_->removable_.store(true, std::memory_order_relaxed);
+    if (heartbeatType_ == HeartbeatType::NO_HEARTBEAT) {
+        return Status::OK();
+    }
+    bool workerReboot = false;
+    bool clientRemoved = false;
+    bool isWorkerVoluntaryScaleDown = false;
+    std::vector<int64_t> expiredWorkerFds;
+    RETURN_IF_NOT_OK(clientCommonWorker_->SendHeartbeat(workerReboot, clientRemoved,
+                                                        clientCommonWorker_->clientDeadTimeoutMs_,
+                                                        isWorkerVoluntaryScaleDown,
+                                                        fdReleaseHelper_.GetReleasedWorkerFds(), expiredWorkerFds));
+    fdReleaseHelper_.Update(std::move(expiredWorkerFds));
+    return Status::OK();
 }
 
 int64_t GetRemainTime(Timer &timer, int64_t nodeTimeoutMs)

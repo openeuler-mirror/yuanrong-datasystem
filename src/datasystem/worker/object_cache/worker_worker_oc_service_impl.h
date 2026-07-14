@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,16 +17,19 @@
 #ifndef DATASYSTEM_WORKER_OC_WORKER_SERVICE_IMPL_H
 #define DATASYSTEM_WORKER_OC_WORKER_SERVICE_IMPL_H
 
+#include <functional>
+
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_send_lane.h"
-#include "datasystem/topology/coordination_backend/coordination_backend.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
+#include "datasystem/cluster/runtime/control_backend_state.h"
 #include "datasystem/protos/worker_object.irpc.pb.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
 #include "datasystem/protos/worker_object.brpc.pb.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -37,14 +37,22 @@ class WorkerOCServiceImpl;
 
 class WorkerWorkerOCServiceImpl : public WorkerWorkerOCService, public IWorkerWorkerOCService {
 public:
+    using BackendObservationProvider = std::function<cluster::ControlBackendObservation()>;
+
     /**
      * @brief Construct WorkerWorkerOCServiceImpl.
      * @param[in] clientSvc The implementation of worker service.
      * @param[in] akSkManager Used to do AK/SK authenticate.
+     * @param[in] etcdStore Pointer to the Worker-owned EtcdStore.
+     * @param[in] coordinationBackend Worker coordination backend.
+     * @param[in] topologyEngine Borrowed Worker topology dependencies.
+     * @param[in] backendObservationProvider Callback returning current local backend evidence.
      */
     WorkerWorkerOCServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc,
                               std::shared_ptr<AkSkManager> akSkManager, EtcdStore *etcdStore,
-                              topology::ICoordinationBackend *coordinationBackend, ClusterManager *clusterManager);
+                              cluster::ICoordinationBackend *coordinationBackend,
+                              worker::WorkerTopologyReferences *topologyEngine,
+                              BackendObservationProvider backendObservationProvider);
 
     ~WorkerWorkerOCServiceImpl() override;
 
@@ -305,6 +313,7 @@ private:
     Status GatherWrite(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> aggregatedMem,
                        std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req,
                        const std::shared_ptr<UrmaSendLaneLease> &sendLaneLease);
+
     /**
      * @brief Helper function pre-process and then trigger GetObjectRemoteImpl.
      * @param[in] req Remote get request.
@@ -360,8 +369,9 @@ private:
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;  // pointer to EtcdStore
-    topology::ICoordinationBackend *coordinationBackend_;
-    ClusterManager *clusterManager_;
+    cluster::ICoordinationBackend *coordinationBackend_;
+    worker::WorkerTopologyReferences *topologyEngine_;
+    BackendObservationProvider backendObservationProvider_;
     std::shared_ptr<ThreadPool> communicatorThreadPool_{ nullptr };
 };
 }  // namespace object_cache

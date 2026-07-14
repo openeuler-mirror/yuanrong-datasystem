@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -58,6 +55,7 @@ class OCGlobalCacheDeleteManager {
     };
 
 public:
+
     /**
      * @brief Construct OCGlobalCacheDeleteManager for notifying global cache to delete object.
      */
@@ -104,7 +102,14 @@ public:
      * @param[in] extraRanges Obtains the data of specified object-key hash ranges if not empty.
      * @return Status of the call.
      */
-    Status RecoverDeletedIds(bool isFromRocksdb, const worker::HashRange &extraRanges = {});
+    Status RecoverDeletedIds(bool isFromRocksdb);
+
+    /**
+     * @brief Rebuild in-memory delete state from task-scoped persisted records.
+     * @param[in] deleteObjects Filtered persisted key/value records for one topology task.
+     * @return K_OK after all valid records are applied.
+     */
+    Status RecoverTopologyDeletedIds(const std::vector<std::pair<std::string, std::string>> &deleteObjects);
 
     /**
      * @brief Get the version of the deleting objects.
@@ -150,6 +155,7 @@ public:
     }
 
 private:
+
     /**
      * @brief Start the process of deleting global cache object.
      */
@@ -216,7 +222,6 @@ private:
      * when the delay time elapse, we try to delete, in this time, if we can't find the given version of the object in
      * l2 storage once again, we consider this version has failed to upload to persistence, we will complete the
      * deletion, erase the key in the map.
-     *
      * the map is store the stopwatch to calculate delay time, key is:<objectKey>/<version>
      */
     std::unordered_map<std::string, Timer> waitToCompleteDeleteObjMap_;

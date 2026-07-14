@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Legacy etcd cluster-table member service information codecs.
+ * Description: ETCD membership lease value compatibility codec.
  */
 #ifndef DATASYSTEM_COMMON_KVSTORE_ETCD_MEMBER_SERVICE_INFO_H
 #define DATASYSTEM_COMMON_KVSTORE_ETCD_MEMBER_SERVICE_INFO_H
@@ -24,11 +24,10 @@
 #include <string>
 
 #include "datasystem/protos/coordinator.pb.h"
-#include "datasystem/topology/membership/membership_types.h"
+#include "datasystem/cluster/membership/membership_types.h"
 #include "datasystem/utils/status.h"
 
-namespace datasystem {
-namespace topology {
+namespace datasystem::cluster {
 
 struct MemberServiceInfo {
     int64_t timestamp = 0;
@@ -46,6 +45,5 @@ struct MemberServiceInfo {
 Status MemberLifecycleStateToString(MemberLifecycleState state, std::string &stateStr);
 Status StringToMemberLifecycleState(const std::string &stateStr, MemberLifecycleState &state);
 
-}  // namespace topology
-}  // namespace datasystem
+}  // namespace datasystem::cluster
 #endif  // DATASYSTEM_COMMON_KVSTORE_ETCD_MEMBER_SERVICE_INFO_H

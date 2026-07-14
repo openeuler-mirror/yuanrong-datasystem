@@ -83,7 +83,7 @@ Status HashRingRefresher::DoRefresh()
     }
 
     for (const auto &worker : workers) {
-        HashRingPb ring;
+        ::datasystem::ClusterTopologyPb ring;
         std::string masterAddress;
         uint64_t newVersion = 0;
         bool changed = false;
@@ -98,7 +98,7 @@ Status HashRingRefresher::DoRefresh()
         if (changed) {
             currentVersion_.store(newVersion);
             UpdateWorkerList(ring);
-            auto ringPtr = std::make_shared<HashRingPb>(std::move(ring));
+            auto ringPtr = std::make_shared<::datasystem::ClusterTopologyPb>(std::move(ring));
             auto hostIdMapPtr = std::make_shared<const std::unordered_map<std::string, std::string>>(
                 std::move(hostIdMap));
             router_->UpdateHashRing(std::move(ringPtr), std::move(hostIdMapPtr));
@@ -108,12 +108,12 @@ Status HashRingRefresher::DoRefresh()
     return Status(K_NOT_FOUND, "No reachable worker for hash ring refresh");
 }
 
-void HashRingRefresher::UpdateWorkerList(const HashRingPb &ring)
+void HashRingRefresher::UpdateWorkerList(const ::datasystem::ClusterTopologyPb &ring)
 {
     std::vector<HostPort> updatedWorkers;
-    updatedWorkers.reserve(ring.workers_size());
-    for (const auto &entry : ring.workers()) {
-        if (entry.second.state() != WorkerPb_StatePb_ACTIVE) {
+    updatedWorkers.reserve(ring.members_size());
+    for (const auto &entry : ring.members()) {
+        if (entry.second.state() != ::datasystem::MembershipPb::ACTIVE) {
             continue;
         }
         HostPort worker;

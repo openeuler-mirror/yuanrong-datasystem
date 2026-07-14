@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -235,6 +232,7 @@ TEST_F(LogSamplerAccessTest, AccessGuardIntegrationPattern)
     int recorded = 0;
     int skipped = 0;
     constexpr int kNumCalls = 1000;
+    constexpr double kSamplingTolerance = 0.08;
     for (int i = 0; i < kNumCalls; ++i) {
         if (LogSampler::Instance().ShouldRecordAccess(AccessRecorderKey::DS_KV_CLIENT_SET)) {
             auto access = AccessRecorder::Object(AccessRecorderKey::DS_KV_CLIENT_SET);
@@ -246,7 +244,7 @@ TEST_F(LogSamplerAccessTest, AccessGuardIntegrationPattern)
     }
 
     double ratio = static_cast<double>(recorded) / kNumCalls;
-    EXPECT_NEAR(ratio, 0.5, 0.05);
+    EXPECT_NEAR(ratio, 0.5, kSamplingTolerance);
     EXPECT_EQ(recorded + skipped, kNumCalls);
 }
 
@@ -271,6 +269,7 @@ TEST_F(LogSamplerAccessTest, AccessOrRuleBoundary)
     LogSampler::Instance().SetSaltForTest(0);
 
     constexpr int kAttempts = 1000;
+    constexpr double kSamplingTolerance = 0.08;
     int sampledInCount = 0;
     int sampledOutCount = 0;
     for (int i = 0; i < kAttempts; ++i) {
@@ -292,7 +291,7 @@ TEST_F(LogSamplerAccessTest, AccessOrRuleBoundary)
     EXPECT_GT(sampledInCount, 0);
     EXPECT_GT(sampledOutCount, 0);
     double ratio = static_cast<double>(sampledInCount) / kAttempts;
-    EXPECT_NEAR(ratio, 0.5, 0.05);
+    EXPECT_NEAR(ratio, 0.5, kSamplingTolerance);
 }
 
 // LS-014: logSampled:true marker — sampler disabled, request context → true

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,8 +19,8 @@
 
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/selection_strategy.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -34,20 +31,23 @@ public:
         /**
          * @brief The first stage of migration, where the migration starts and initial checks are performed.
          * @details In this stage, the migration is allowed only if the available space ratio is above a high threshold
-         *          (e.g., 50%) and the node is not leaving.
+         * (e.g., 50%) and the node is not leaving.
          */
         FIRST,
+
         /**
          * @brief The second stage of migration, where the migration continues with a lower available space threshold.
          * @details In this stage, the migration is allowed if the available space ratio is above a lower threshold
-         *          (e.g., 20%) and the node is not leaving.
+         * (e.g., 20%) and the node is not leaving.
          */
         SECOND,
+
         /**
          * @brief The third stage of migration, where the migration is allowed regardless of the available space ratio.
          * @details In this stage, the migration is allowed as long as the node is not leaving.
          */
         THIRD,
+
         /**
          * @brief The final stage of migration, where the migration is always allowed.
          * @details In this stage, the migration is unconditionally allowed to ensure all remaining data is migrated.
@@ -55,8 +55,8 @@ public:
         FINAL
     };
 
-    ScaleDownNodeSelector(ClusterManager *clusterManager, HostPort &localAddress)
-        : clusterManager_(clusterManager),
+    ScaleDownNodeSelector(worker::WorkerTopologyReferences *topologyEngine, HostPort &localAddress)
+        : topologyEngine_(topologyEngine),
           localAddress_(localAddress),
           currentStage_(Stage::FIRST),
           currentDiskStage_(Stage::FIRST)
@@ -92,6 +92,7 @@ public:
     void UpdateForRedirect(const std::string &currentWorker) override;
 
 private:
+
     /**
      * @brief Evaluates whether the migration condition for a specific stage is met.
      * @param[in] stage The migration stage to evaluate.
@@ -112,7 +113,7 @@ private:
     std::unordered_set<std::string> visitedAddresses_;
     std::unordered_set<std::string> visitedAddressesForDisk_;
 
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     HostPort &localAddress_;
 
     Stage currentStage_;

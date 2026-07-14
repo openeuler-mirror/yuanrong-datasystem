@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -45,7 +42,12 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/common/log/log.h"
+#include "datasystem/worker/worker_topology_references.h"
+
+#include "datasystem/cluster/executor/key_filter.h"
+#include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/flags/flags.h"
@@ -54,6 +56,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -86,12 +89,10 @@
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
-#include "datasystem/topology/coordination_backend/coordination_backend.h"
-#include "datasystem/topology/membership/membership_value_codec.h"
-#include "datasystem/topology/membership/worker_node_info.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/master_object.service.rpc.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_manager.h"
@@ -101,10 +102,7 @@
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
-#include "datasystem/worker/cluster_manager/cluster_constants.h"
 #include "datasystem/worker/cluster_event_type.h"
-#include "datasystem/worker/hash_ring/hash_ring_event.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
@@ -113,10 +111,11 @@
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/object_meta_route_helper.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
-#include "datasystem/worker/cluster_manager/worker_health_check.h"
+#include "datasystem/worker/worker_health_check.h"
 
 DS_DEFINE_int32(oc_thread_num, 32, "Thread number of worker service");
 DS_DEFINE_validator(oc_thread_num, &Validator::ValidateThreadNum);
@@ -155,9 +154,73 @@ using namespace datasystem::master;
 using namespace datasystem::worker;
 namespace datasystem {
 namespace object_cache {
+namespace {
+constexpr char CLUSTER_TOPOLOGY_SCHEMA_VERSION[] = "1";
+
+Status ToTopologyChangeTypePb(cluster::TopologyChangeType type, ::datasystem::TypePb &typePb)
+{
+    switch (type) {
+        case cluster::TopologyChangeType::SCALE_OUT:
+            typePb = ::datasystem::SCALE_OUT;
+            return Status::OK();
+        case cluster::TopologyChangeType::SCALE_IN:
+            typePb = ::datasystem::SCALE_IN;
+            return Status::OK();
+        case cluster::TopologyChangeType::FAILURE:
+            typePb = ::datasystem::FAILURE;
+            return Status::OK();
+    }
+    RETURN_STATUS(K_INVALID, "Invalid cluster topology change type");
+}
+
+Status BuildClusterTopologyPb(const cluster::TopologySnapshot &snapshot, ::datasystem::ClusterTopologyPb &topologyPb)
+{
+    topologyPb.set_cluster_has_init(snapshot.ClusterHasInit());
+    topologyPb.set_version(snapshot.Version());
+    topologyPb.set_schema_version(CLUSTER_TOPOLOGY_SCHEMA_VERSION);
+    for (const auto &member : snapshot.Members()) {
+        auto &memberPb = (*topologyPb.mutable_members())[member.identity.address];
+        memberPb.set_id(member.identity.id);
+        memberPb.set_state(static_cast<::datasystem::MembershipPb::StatePb>(member.state));
+        for (uint32_t token : member.tokens) {
+            memberPb.add_tokens(token);
+        }
+    }
+    if (snapshot.GetActiveBatch().has_value()) {
+        ::datasystem::TypePb typePb = ::datasystem::SCALE_OUT;
+        RETURN_IF_NOT_OK(ToTopologyChangeTypePb(snapshot.GetActiveBatch()->type, typePb));
+        topologyPb.mutable_active_batch()->set_type(typePb);
+        topologyPb.mutable_active_batch()->set_epoch(snapshot.GetActiveBatch()->epoch);
+    }
+    return Status::OK();
+}
+
+Status BuildRoutingHostIdMap(cluster::ICoordinationBackend &backend,
+                             google::protobuf::Map<std::string, std::string> &hostIdMap)
+{
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(FLAGS_cluster_name, keys));
+    std::vector<std::pair<std::string, std::string>> members;
+    RETURN_IF_NOT_OK(backend.GetAll(keys->MembershipTable(), members));
+    for (const auto &entry : members) {
+        cluster::MembershipValue membership;
+        auto rc = cluster::MembershipValueCodec::Decode(entry.second, membership);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Skip invalid membership while building routing host map for " << entry.first << ": "
+                         << rc.ToString();
+            continue;
+        }
+        hostIdMap[entry.first] = std::move(membership.hostId);
+    }
+    return Status::OK();
+}
+}  // namespace
+
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
 static constexpr int64_t URMA_WARMUP_REQUEST_TIMEOUT_MS = 5'000;
+static constexpr int64_t TOPOLOGY_READY_WAIT_TIMEOUT_S = 60;
+static constexpr size_t MAX_TOPOLOGY_SCALE_IN_CLEANUP_STATES = 1'024;
 
 uint64_t PayloadBytes(const std::vector<RpcMessage> &payloads)
 {
@@ -189,7 +252,8 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
                                          std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                                          std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
                                          MasterOCServiceImpl *masterOCService,
-                                         topology::ICoordinationBackend *coordinationBackend)
+                                         cluster::ICoordinationBackend *coordinationBackend,
+                                         worker::WorkerTopologyReferences *topologyEngine)
     : WorkerOCService(std::move(serverAddr)),
       localMasterAddress_(std::move(masterAddr)),
       persistenceApi_(persistApi),
@@ -197,6 +261,9 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
       evictionManager_(std::move(evictionManager)),
       etcdStore_(etcdStore),
       coordinationBackend_(coordinationBackend),
+      topologyEngine_(topologyEngine),
+      topologyPlacement_(topologyEngine_ == nullptr ? nullptr : topologyEngine_->placement),
+      topologyMembership_(topologyEngine_ == nullptr ? nullptr : topologyEngine_->membership),
       akSkManager_(std::move(manager))
 {
     initOkFuture_ = initOk_.get_future();
@@ -219,7 +286,6 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
         initOk_.set_value(Status(K_RUNTIME_ERROR, "WorkerOCServiceImpl init fail"));
         setValue_ = true;
     }
-    HashRingEvent::BeforeVoluntaryExit::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     clearDataFlow_.reset();
     AddLocalFailedNodeEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
     NodeRestartEvent::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_IMPL);
@@ -262,6 +328,15 @@ Status WorkerOCServiceImpl::InitL2Cache()
     return Status::OK();
 }
 
+worker::MetadataRouteOptions WorkerOCServiceImpl::BuildMetaRouteOptions(bool requireAvailableTarget) const
+{
+    worker::MetadataRouteOptions options;
+    options.centralizedMode = !FLAGS_enable_distributed_master;
+    options.requireAvailableTarget = requireAvailableTarget;
+    options.masterAddress = localMasterAddress_;
+    return options;
+}
+
 void WorkerOCServiceImpl::InitServiceImpl()
 {
     WorkerOcServiceCrudParam param{
@@ -275,32 +350,35 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .asyncSendManager = asyncSendManager_,
         .metadataSize = metadataSize_,
         .persistenceApi = persistenceApi_,
-        .clusterManager = clusterManager_,
+        .topologyEngine = topologyEngine_,
+        .topologyPlacement = topologyPlacement_,
+        .topologyMembership = topologyMembership_,
+        .topologyRouteOptions = BuildMetaRouteOptions(true),
     };
-    createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, clusterManager_, akSkManager_, localAddress_);
+    createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, topologyEngine_, akSkManager_, localAddress_);
 
-    publishProc_ = std::make_shared<WorkerOcServicePublishImpl>(param, clusterManager_, memCpyThreadPool_, akSkManager_,
+    publishProc_ = std::make_shared<WorkerOcServicePublishImpl>(param, topologyEngine_, memCpyThreadPool_, akSkManager_,
                                                                 localAddress_);
 
-    multiPublishProc_ = std::make_shared<WorkerOcServiceMultiPublishImpl>(param, clusterManager_, memCpyThreadPool_,
+    multiPublishProc_ = std::make_shared<WorkerOcServiceMultiPublishImpl>(param, topologyEngine_, memCpyThreadPool_,
                                                                           threadPool_, akSkManager_, localAddress_);
 
     migrateRateController_ =
         std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
     getProc_ =
-        std::make_shared<WorkerOcServiceGetImpl>(param, clusterManager_, etcdStore_, memCpyThreadPool_, threadPool_,
+        std::make_shared<WorkerOcServiceGetImpl>(param, topologyEngine_, etcdStore_, memCpyThreadPool_, threadPool_,
                                                  akSkManager_, localAddress_, migrateRateController_);
 
     deleteProc_ =
-        std::make_shared<WorkerOcServiceDeleteImpl>(param, clusterManager_, akSkManager_, localAddress_, getProc_);
+        std::make_shared<WorkerOcServiceDeleteImpl>(param, topologyEngine_, akSkManager_, localAddress_, getProc_);
 
-    gRefProc_ = std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, clusterManager_, globalRefTable_,
+    gRefProc_ = std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, topologyEngine_, globalRefTable_,
                                                                      akSkManager_, localAddress_);
 
     gMigrateProc_ = std::make_shared<WorkerOcServiceMigrateImpl>(
-        param, clusterManager_, memCpyThreadPool_, akSkManager_, GetLocalAddr().ToString(), migrateRateController_);
+        param, topologyEngine_, memCpyThreadPool_, akSkManager_, GetLocalAddr().ToString(), migrateRateController_);
 
-    expireProc_ = std::make_shared<WorkerOcServiceExpireImpl>(param, clusterManager_, akSkManager_);
+    expireProc_ = std::make_shared<WorkerOcServiceExpireImpl>(param, topologyEngine_, akSkManager_);
     initOk_.set_value(Status::OK());
     setValue_ = true;
 }
@@ -309,9 +387,22 @@ Status WorkerOCServiceImpl::Init()
 {
     InitMetaSize();
     RETURN_IF_NOT_OK(ResetHealthProbe());
-
     auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(localMasterAddress_);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "get worker master api failed, Init failed");
+    RETURN_IF_NOT_OK(InitThreadResources());
+    RETURN_IF_NOT_OK(evictionManager_->Init(globalRefTable_, akSkManager_));
+    RETURN_IF_NOT_OK(InitL2Cache());
+    WorkerRequestManager::SetDeleteObjectsFunc(
+        [this](const std::string &objectKey, uint64_t version) -> Status { return DeleteObject(objectKey, version); });
+    workerDevOcManager_ = std::make_shared<WorkerDeviceOcManager>(this);
+    lastReconTime_ = GetSteadyClockTimeStampMs();  // Record current timestamp in case we need reconciliation.
+    RETURN_IF_NOT_OK(StartDecreaseReferenceProcess());
+    RETURN_IF_NOT_OK(InitRecoveryServices());
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::InitThreadResources()
+{
     RETURN_IF_EXCEPTION_OCCURS(threadPool_ = std::make_shared<ThreadPool>(FLAGS_oc_thread_num, 0, "OcGetThread"));
     RETURN_IF_EXCEPTION_OCCURS(memCpyThreadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM));
     datasystem::Parallel::InitParallelThreadPool(PARALLEL_THREAD_NUM, FLAGS_oc_thread_num);
@@ -334,27 +425,29 @@ Status WorkerOCServiceImpl::Init()
     uint32_t decThreadMaxNum = FLAGS_max_client_num / SHM_QUEUE_SLOT_NUM + 1;  // Keeping in sync with lockId
     RETURN_IF_EXCEPTION_OCCURS(decThreadPool_ =
                                    std::make_unique<ThreadPool>(decThreadMinNum, decThreadMaxNum, "OcDecRef"));
-    RETURN_IF_NOT_OK(evictionManager_->Init(globalRefTable_, akSkManager_));
-    RETURN_IF_NOT_OK(InitL2Cache());
-    WorkerRequestManager::SetDeleteObjectsFunc(
-        [this](const std::string &objectKey, uint64_t version) -> Status { return DeleteObject(objectKey, version); });
-    workerDevOcManager_ = std::make_shared<WorkerDeviceOcManager>(this);
-    lastReconTime_ = GetSteadyClockTimeStampMs();  // Record current timestamp in case we need reconciliation.
-    RETURN_IF_NOT_OK(StartDecreaseReferenceProcess());
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::InitRecoveryServices()
+{
+    MetaDataRecoveryManager::ClusterAccess clusterAccess;
+    clusterAccess.checkConnection = [this](const HostPort &addr) {
+        CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "topologyEngine is null");
+        return worker::CheckTopologyMemberConnection(topologyEngine_, addr);
+    };
     metadataRecoveryManager_ =
-        std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, clusterManager_, workerMasterApiManager_,
-                                                  metadataSize_, evictionManager_, memCpyThreadPool_);
+        std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, std::move(clusterAccess),
+                                                  workerMasterApiManager_, metadataSize_, evictionManager_,
+                                                  memCpyThreadPool_, topologyPlacement_, BuildMetaRouteOptions(true));
     AsyncResourceReleaser::Instance().Init(objectTable_);
     InitServiceImpl();
-    NodeSelector::Instance().Init(localAddress_.ToString(), clusterManager_, workerMasterApiManager_);
+    NodeSelector::Instance().Init(localAddress_.ToString(), topologyEngine_, workerMasterApiManager_);
     getProc_->Init();
-    RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, clusterManager_, persistenceApi_,
+    RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, topologyEngine_, persistenceApi_,
                                                 workerMasterApiManager_, etcdStore_, metadataRecoveryManager_.get()));
     clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
         objectTable_, globalRefTable_, workerMasterApiManager_, gRefProc_, deleteProc_, metadataRecoveryManager_.get(),
-        clusterManager_, localAddress_.ToString());
-    HashRingEvent::BeforeVoluntaryExit::GetInstance().AddSubscriber(
-        WORKER_OC_SERVICE_IMPL, [this](const std::string &taskId) { return ProcessVoluntaryScaledown(taskId); });
+        topologyEngine_, localAddress_.ToString());
     AddLocalFailedNodeEvent::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const HostPort &node) { return PushMetadataToMaster(node); });
     NodeRestartEvent::GetInstance().AddSubscriber(
@@ -363,7 +456,6 @@ Status WorkerOCServiceImpl::Init()
     EraseFailedNodeApiEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL,
                                                          [this](HostPort &node) { EraseFailedWorkerMasterApi(node); });
     StartNodeCheckEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL, [this] { return GiveUpReconciliation(); });
-
     return Status::OK();
 }
 
@@ -381,7 +473,7 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     }
     (void)resp;
-    if (clusterManager_ != nullptr && clusterManager_->CheckLocalNodeIsExiting()) {
+    if (topologyEngine_ != nullptr && worker::IsLocalTopologyMemberExiting(topologyEngine_)) {
         constexpr int logInterval = 60;
         LOG_EVERY_T(INFO, logInterval) << "[HealthCheck] Worker is exiting now";
         RETURN_STATUS(StatusCode::K_SCALE_DOWN, "Worker is exiting now");
@@ -558,103 +650,204 @@ void WorkerOCServiceImpl::GetObjectsMatch(std::function<bool(const std::string &
               << " ElapsedMilliSecond: " << timer.ElapsedMilliSecond();
 }
 
+Status WorkerOCServiceImpl::GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr)
+{
+    return destAddr.ParseString(srcAddr);
+}
+
 void WorkerOCServiceImpl::RegisterAsyncTasksDoneChecker(AsyncTasksDoneChecker checker)
 {
     asyncTasksDoneChecker_ = std::move(checker);
 }
 
-Status WorkerOCServiceImpl::ProcessVoluntaryScaledown(const std::string &taskId)
+Status WorkerOCServiceImpl::SelectTopologyScaleInObjects(std::vector<std::string> &copies,
+                                                         std::vector<std::string> &primaries) const
 {
-    INJECT_POINT("ScaleUpTask.NotRunVoluntaryDownTask");
-    LOG(INFO) << "ProcessVoluntaryScaledown.., obj size in worker is: " << objectTable_->GetSize()
-              << " task id:" << taskId;
-    std::vector<std::string> needMigrateDataIds;
-    std::vector<std::string> needWaitIds;
-    std::vector<std::string> needMigrateL2CacheIds;
-    RETURN_IF_NOT_OK(BeforeMigrateData(taskId, needMigrateDataIds, needWaitIds, needMigrateL2CacheIds));
-    INJECT_POINT("VoluntaryScaledown.MigrateData.Delay");
-    RETURN_IF_NOT_OK(MigrateData(needMigrateDataIds, taskId));
-    // When we have finish migrate data task, we can remove the location.
-    std::vector<std::string> removeFailedIds;
-    GroupAndRemoveMeta(needMigrateDataIds, master::RemoveMetaReqPb::NORMAL, removeFailedIds, needMigrateDataIds,
-                       needWaitIds, needMigrateL2CacheIds);
-    LOG(INFO) << "ProcessVoluntaryScaledown finished";
-
-    std::lock_guard<std::shared_timed_mutex> l(clearIdsMutex_);
-    voluntaryScaleDownClearIds_ = std::move(needWaitIds);
-    if (asyncTasksDoneChecker_ != nullptr) {
-        RETURN_IF_NOT_OK(asyncTasksDoneChecker_(taskId));
-    }
-    RETURN_IF_NOT_OK(MigrateL2CacheData(needMigrateL2CacheIds, taskId));
-    if (persistenceApi_ != nullptr) {
-        LOG_IF_ERROR(persistenceApi_->CleanupLocalSlots(), "CleanupLocalSlots failed");
+    for (const auto &entryPair : *objectTable_) {
+        const auto &entry = entryPair.second;
+        RETURN_IF_NOT_OK_APPEND_MSG(entry->TryRLock(), "member-wide object selection needs retry");
+        Raii unlock([&entry]() { entry->RUnlock(); });
+        auto &destination = (*entry)->stateInfo.IsPrimaryCopy() ? primaries : copies;
+        destination.emplace_back(entryPair.first);
     }
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::BeforeMigrateData(const std::string &taskId, std::vector<std::string> &needMigrateDataIds,
-                                              std::vector<std::string> &needWaitIds,
-                                              std::vector<std::string> &needMigrateL2CacheIds)
+Status WorkerOCServiceImpl::PrepareTopologyScaleInData(const std::vector<std::string> &copies,
+                                                       const std::vector<std::string> &primaries,
+                                                       std::vector<std::string> &migrateIds,
+                                                       std::vector<std::string> &waitIds,
+                                                       std::vector<std::string> &l2Ids,
+                                                       const std::string &businessOperationId)
 {
-    std::vector<std::string> objectKeysNeedRemovelocation, objKeysNeedGiveupPrimary;
-    for (const auto &kv : *objectTable_) {
-        std::shared_ptr<SafeObjType> entry = kv.second;
-        if (entry->TryRLock().IsError()) {
-            continue;
-        }
-        Raii readUnlock([&entry]() { entry->RUnlock(); });
-        if (!(*entry)->stateInfo.IsPrimaryCopy()) {
-            objectKeysNeedRemovelocation.emplace_back(kv.first);
-        }
-        if ((*entry)->stateInfo.IsPrimaryCopy()) {
-            objKeysNeedGiveupPrimary.emplace_back(kv.first);
-        }
-    }
-    std::vector<std::string> removeFailedIds;
-    LOG(INFO) << "Need remove location object size: " << objectKeysNeedRemovelocation.size()
-              << ", need give up location object size: " << objKeysNeedGiveupPrimary.size();
-    GroupAndRemoveMeta(objectKeysNeedRemovelocation, master::RemoveMetaReqPb::NORMAL, removeFailedIds,
-                       needMigrateDataIds, needWaitIds, needMigrateL2CacheIds);
-
-    std::vector<std::string> giveupMetaFailedIds;
-    GroupAndRemoveMeta(objKeysNeedGiveupPrimary, master::RemoveMetaReqPb::GIVEUP_PRIMARY, giveupMetaFailedIds,
-                       needMigrateDataIds, needWaitIds, needMigrateL2CacheIds);
-
-    // retry for failed ids.
-    const int intervalMs = 500;
-    const int giveUpIdsMaxRetryTime = 10;
-    int retryTime = 0;
-    while (true) {
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!clusterManager_->CheckVoluntaryTaskExpired(taskId), K_RUNTIME_ERROR,
-                                             FormatString("task id %s has expired, no need retry", taskId));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!clusterManager_->CheckVoluntaryScaleDown(), K_RUNTIME_ERROR,
-                                             FormatString("this node maybe failed or only one node left, no need to "
-                                                          "excute voluntary scale down migrate data task, task id: %s",
-                                                          taskId));
-
-        if (removeFailedIds.empty() && giveupMetaFailedIds.empty()) {
-            break;
-        }
-        if (retryTime > giveUpIdsMaxRetryTime) {
-            needMigrateDataIds.insert(needMigrateDataIds.end(), giveupMetaFailedIds.begin(), giveupMetaFailedIds.end());
-            giveupMetaFailedIds.clear();
-        }
-        objectKeysNeedRemovelocation = removeFailedIds;
-        objKeysNeedGiveupPrimary = giveupMetaFailedIds;
-        removeFailedIds.clear();
-        giveupMetaFailedIds.clear();
-        if (!objectKeysNeedRemovelocation.empty()) {
-            GroupAndRemoveMeta(objectKeysNeedRemovelocation, master::RemoveMetaReqPb::NORMAL, removeFailedIds,
-                               needMigrateDataIds, needWaitIds, needMigrateL2CacheIds);
-        }
-        if (!objKeysNeedGiveupPrimary.empty()) {
-            GroupAndRemoveMeta(objKeysNeedGiveupPrimary, master::RemoveMetaReqPb::GIVEUP_PRIMARY, giveupMetaFailedIds,
-                               needMigrateDataIds, needWaitIds, needMigrateL2CacheIds);
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
-        retryTime++;
-    }
+    std::vector<std::string> copyFailures;
+    GroupAndRemoveMeta(copies, master::RemoveMetaReqPb::NORMAL, copyFailures, migrateIds, waitIds, l2Ids,
+                       businessOperationId);
+    std::vector<std::string> primaryFailures;
+    GroupAndRemoveMeta(primaries, master::RemoveMetaReqPb::GIVEUP_PRIMARY, primaryFailures, migrateIds, waitIds, l2Ids,
+                       businessOperationId);
+    CHECK_FAIL_RETURN_STATUS(copyFailures.empty() && primaryFailures.empty(), K_TRY_AGAIN,
+                             "member-wide metadata removal needs retry");
     return Status::OK();
+}
+
+Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhaseAction &action,
+                                                     const std::string &businessOperationId,
+                                                     std::chrono::steady_clock::time_point deadline,
+                                                     const cluster::CancellationToken &cancellation)
+{
+    CHECK_FAIL_RETURN_STATUS(!action.taskId.empty(), K_INVALID, "ScaleIn callback lacks task id");
+    CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology ScaleIn deadline exceeded");
+    std::vector<std::string> copies;
+    std::vector<std::string> primaries;
+    std::vector<std::string> migrateIds;
+    std::vector<std::string> waitIds;
+    std::vector<std::string> l2Ids;
+    RETURN_IF_NOT_OK(SelectTopologyScaleInObjects(copies, primaries));
+    RETURN_IF_NOT_OK(
+        PrepareTopologyScaleInData(copies, primaries, migrateIds, waitIds, l2Ids, businessOperationId));
+    RETURN_IF_NOT_OK(MigrateData(migrateIds, action.taskId, deadline, cancellation));
+    std::vector<std::string> failures;
+    GroupAndRemoveMeta(migrateIds, master::RemoveMetaReqPb::NORMAL, failures, migrateIds, waitIds, l2Ids,
+                       businessOperationId);
+    CHECK_FAIL_RETURN_STATUS(failures.empty(), K_TRY_AGAIN, "migrated metadata removal needs retry");
+    {
+        std::lock_guard<std::shared_timed_mutex> lock(clearIdsMutex_);
+        voluntaryScaleDownClearIds_ = std::move(waitIds);
+    }
+    if (asyncTasksDoneChecker_ != nullptr) {
+        RETURN_IF_NOT_OK(asyncTasksDoneChecker_(action.taskId, deadline, cancellation));
+    }
+    RETURN_IF_NOT_OK(MigrateL2CacheData(l2Ids, action.taskId, deadline, cancellation));
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::GetOrCreateTopologyScaleInCleanupState(
+    const cluster::IKeyFilter &filter, const std::string &businessOperationId,
+    std::shared_ptr<PreparedScaleInCleanupState> &state)
+{
+    {
+        std::lock_guard<std::mutex> lock(topologyScaleInCleanupMutex_);
+        const auto iter = topologyScaleInCleanupByOperation_.find(businessOperationId);
+        if (iter != topologyScaleInCleanupByOperation_.end()) {
+            state = iter->second.lock();
+            if (state != nullptr) {
+                return Status::OK();
+            }
+        }
+    }
+    auto candidate = std::make_shared<PreparedScaleInCleanupState>();
+    for (const auto &entry : *objectTable_) {
+        if (filter.Contains(entry.first)) {
+            candidate->objectIds.emplace_back(entry.first);
+        }
+    }
+    std::lock_guard<std::mutex> lock(topologyScaleInCleanupMutex_);
+    const auto existing = topologyScaleInCleanupByOperation_.find(businessOperationId);
+    if (existing != topologyScaleInCleanupByOperation_.end()) {
+        state = existing->second.lock();
+        if (state != nullptr) {
+            return Status::OK();
+        }
+    }
+    for (auto iter = topologyScaleInCleanupByOperation_.begin(); iter != topologyScaleInCleanupByOperation_.end();) {
+        iter = iter->second.expired() ? topologyScaleInCleanupByOperation_.erase(iter) : std::next(iter);
+    }
+    CHECK_FAIL_RETURN_STATUS(topologyScaleInCleanupByOperation_.size() < MAX_TOPOLOGY_SCALE_IN_CLEANUP_STATES,
+                             K_TRY_AGAIN, "topology ScaleIn cleanup state capacity reached");
+    state = std::move(candidate);
+    topologyScaleInCleanupByOperation_.emplace(businessOperationId, state);
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::AuthorizeTopologyScaleInCleanup(
+    const std::shared_ptr<PreparedScaleInCleanupState> &state)
+{
+    std::lock_guard<std::mutex> lock(topologyScaleInCleanupMutex_);
+    state->authorized = true;
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ApplyTopologyCleanupEffects(const std::vector<std::string> &objectIds,
+                                                        const std::string &businessOperationId)
+{
+    std::vector<std::string> failures;
+    std::vector<std::string> migrateIds;
+    std::vector<std::string> waitIds;
+    std::vector<std::string> l2Ids;
+    GroupAndRemoveMeta(objectIds, master::RemoveMetaReqPb::NORMAL, failures, migrateIds, waitIds, l2Ids,
+                       businessOperationId);
+    CHECK_FAIL_RETURN_STATUS(failures.empty() && migrateIds.empty() && waitIds.empty() && l2Ids.empty(), K_TRY_AGAIN,
+                             "task-scoped source cleanup is not ready");
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ApplyTopologyScaleInCleanup(
+    const std::string &businessOperationId, const std::shared_ptr<PreparedScaleInCleanupState> &state,
+    std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
+{
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology cleanup cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology cleanup deadline exceeded");
+    {
+        std::lock_guard<std::mutex> lock(topologyScaleInCleanupMutex_);
+        CHECK_FAIL_RETURN_STATUS(state->authorized, K_INVALID, "topology ScaleIn cleanup is not authorized");
+        if (state->applied) {
+            return Status::OK();
+        }
+    }
+    const auto remainingUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(deadline - std::chrono::steady_clock::now()).count();
+    ApiDeadlineGuard deadlineGuard(remainingUs, InUs{});
+    RETURN_IF_NOT_OK(ApplyTopologyCleanupEffects(state->objectIds, businessOperationId));
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology cleanup cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology cleanup deadline exceeded");
+    std::lock_guard<std::mutex> lock(topologyScaleInCleanupMutex_);
+    state->applied = true;
+    topologyScaleInCleanupByOperation_.erase(businessOperationId);
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::PrepareTopologyScaleInCleanup(const cluster::TopologyPhaseAction &action,
+                                                          const cluster::IKeyFilter &filter,
+                                                          const std::string &businessOperationId,
+                                                          std::chrono::steady_clock::time_point deadline,
+                                                          const cluster::CancellationToken &cancellation,
+                                                          std::function<Status()> &authorize,
+                                                          cluster::TopologyCleanupEffect &apply)
+{
+    CHECK_FAIL_RETURN_STATUS(!action.taskId.empty(), K_INVALID, "ScaleIn cleanup lacks task id");
+    CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology cleanup operation id");
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology cleanup cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology cleanup deadline exceeded");
+    std::shared_ptr<PreparedScaleInCleanupState> state;
+    RETURN_IF_NOT_OK(GetOrCreateTopologyScaleInCleanupState(filter, businessOperationId, state));
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology cleanup cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology cleanup deadline exceeded");
+    authorize = [this, state] {
+        return AuthorizeTopologyScaleInCleanup(state);
+    };
+    apply = [this, businessOperationId, state](std::chrono::steady_clock::time_point applyDeadline,
+                                               const cluster::CancellationToken &applyCancellation) {
+        return ApplyTopologyScaleInCleanup(businessOperationId, state, applyDeadline, applyCancellation);
+    };
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::SubmitTopologyFailureCleanup(
+    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+    const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+    const cluster::CancellationToken &cancellation)
+{
+    CHECK_FAIL_RETURN_STATUS(clearDataFlow_ != nullptr, K_NOT_READY, "clear-data flow is not initialized");
+    return clearDataFlow_->SubmitTopologyFailureCleanup(action, filter, businessOperationId, deadline, cancellation);
 }
 
 Status WorkerOCServiceImpl::RemoveWriteBackIdsLocation()
@@ -717,9 +910,25 @@ Status WorkerOCServiceImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req,
     return gMigrateProc_->MigrateDataDirect(req, rsp);
 }
 
+Status WorkerOCServiceImpl::CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline)
+{
+    RETURN_OK_IF_TRUE(gMigrateProc_ == nullptr);
+    return gMigrateProc_->CloseIncomingMigrationAdmissionAndWait(deadline);
+}
+
 Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId)
 {
-    DataMigrator migrator(MigrateType::SCALE_DOWN, clusterManager_, localAddress_, akSkManager_, objectTable_, taskId);
+    DataMigrator migrator(MigrateType::SCALE_DOWN, topologyEngine_, localAddress_, akSkManager_, objectTable_, taskId);
+    migrator.Init();
+    return migrator.Migrate(objectKeys, {});
+}
+
+Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
+                                        std::chrono::steady_clock::time_point deadline,
+                                        const cluster::CancellationToken &cancellation)
+{
+    DataMigrator migrator(MigrateType::SCALE_DOWN, topologyEngine_, localAddress_, akSkManager_, objectTable_, taskId,
+                          DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
     migrator.Init();
     return migrator.Migrate(objectKeys, {});
 }
@@ -727,7 +936,18 @@ Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKe
 Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds,
                                                const std::string &taskId)
 {
-    DataMigrator migrator(MigrateType::SCALE_DOWN, clusterManager_, localAddress_, akSkManager_, objectTable_, taskId);
+    DataMigrator migrator(MigrateType::SCALE_DOWN, topologyEngine_, localAddress_, akSkManager_, objectTable_, taskId);
+    migrator.Init();
+    return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
+}
+
+Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds,
+                                               const std::string &taskId,
+                                               std::chrono::steady_clock::time_point deadline,
+                                               const cluster::CancellationToken &cancellation)
+{
+    DataMigrator migrator(MigrateType::SCALE_DOWN, topologyEngine_, localAddress_, akSkManager_, objectTable_, taskId,
+                          DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
     migrator.Init();
     return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
 }
@@ -754,7 +974,6 @@ Status WorkerOCServiceImpl::FillRequestMetaByMaster(const RequestMetaFromWorkerR
     const auto &masterAddress = req.address();
     HostPort masterAddr;
     RETURN_IF_NOT_OK(masterAddr.ParseString(masterAddress));
-
     std::vector<std::string> objectKeys;
     GetAllObjectKeys(objectKeys);
     rsp.set_address(localAddress_.ToString());
@@ -781,17 +1000,14 @@ Status WorkerOCServiceImpl::PushMetadataToMaster(const HostPort &masterAddr)
 {
     master::PushMetaToMasterReqPb req;
     master::PushMetaToMasterRspPb rsp;
-    // send meta-data for all objects owned by the masterAddr
     RETURN_IF_NOT_OK(FillObjData(req, masterAddr));
 
-    // send all references to object owners
     std::vector<std::string> objectKeys;
     FillRefData(masterAddr, objectKeys);
     *req.mutable_gref_object_keys() = { objectKeys.begin(), objectKeys.end() };
 
     VLOG(1) << "PushMetadataToMaster: " << LogHelper::IgnoreSensitive(req);
-
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
+    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, PushMeta failed");
     RETURN_IF_NOT_OK(workerMasterApi->PushMetadataToMaster(req, rsp));
     VLOG(1) << "Push metadata to master success.";
@@ -807,11 +1023,12 @@ void WorkerOCServiceImpl::GetAllObjectKeys(std::vector<std::string> &objectKeys)
     LOG(INFO) << "GetAllObjectKeys finished, objectKeys size:" << objectKeys.size();
 }
 
-Status WorkerOCServiceImpl::GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr) const
+Status WorkerOCServiceImpl::GetMetaAddressNotCheckConnection(const std::string &objKey,
+                                                             HostPort &masterAddr) const
 {
-    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_NOT_READY,
-                             "ETCD cluster manager is not provided.");
-    return clusterManager_->LocateMetaOwner(objKey, false, masterAddr);
+    CHECK_FAIL_RETURN_STATUS(topologyPlacement_ != nullptr, StatusCode::K_NOT_READY,
+                             "Topology placement facade is not provided.");
+    return ResolveMetaOwner(objKey, topologyPlacement_, BuildMetaRouteOptions(false), masterAddr);
 }
 
 void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const HostPort &targetMasterAddr,
@@ -845,8 +1062,11 @@ void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const HostP
         SetObjectMetaFields(metadata, objectKey, *currSafeObj);
     }
     ConfigPb *configPb = metadata->mutable_config();
-    configPb->set_write_mode((uint64_t)(*currSafeObj)->modeInfo.GetWriteMode());
-    configPb->set_data_format((uint64_t)(*currSafeObj)->stateInfo.GetDataFormat());
+    configPb->set_write_mode(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetWriteMode()));
+    configPb->set_data_format(static_cast<uint32_t>((*currSafeObj)->stateInfo.GetDataFormat()));
+    configPb->set_consistency_type(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetConsistencyType()));
+    configPb->set_cache_type(static_cast<uint32_t>((*currSafeObj)->modeInfo.GetCacheType()));
+    configPb->set_is_replica(!(*currSafeObj)->stateInfo.IsPrimaryCopy());
     isFill = true;
 }
 
@@ -910,22 +1130,22 @@ Status WorkerOCServiceImpl::RecoverMetadataOfData(const std::vector<std::string>
 
 Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &workerAddr)
 {
-    RETURN_OK_IF_TRUE(!FLAGS_enable_metadata_recovery);
     LOG(INFO) << "Begin to recover metadata of restarted worker: " << workerAddr
               << ", local worker: " << localAddress_.ToString();
-    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, K_RUNTIME_ERROR, "clusterManager is null");
+    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "topologyEngine is null");
     CHECK_FAIL_RETURN_STATUS(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR, "metadataRecoveryManager is null");
-    auto *hashRing = clusterManager_->GetHashRing();
-    CHECK_FAIL_RETURN_STATUS(hashRing != nullptr, K_RUNTIME_ERROR, "hashRing is null");
+    HostPort restartedAddress;
+    RETURN_IF_NOT_OK(restartedAddress.ParseString(workerAddr));
 
-    MetadataRecoverySelector selector(objectTable_, clusterManager_);
-    MetadataRecoverySelector::SelectionRequest selectReq;
-    selectReq.includeL2CacheIds = true;
-    selectReq.ranges = hashRing->GetHashRangeByWorker(workerAddr);
-    RETURN_OK_IF_TRUE(selectReq.ranges.empty());
-    LOG(INFO) << "Recover metadata after node restart, select request: " << selectReq.ToString();
+    MetadataRecoverySelector selector(objectTable_);
     std::vector<std::string> matchObjIds;
-    RETURN_IF_NOT_OK(selector.Select(selectReq, matchObjIds));
+    selector.Select(
+        [this, &restartedAddress](const std::string &objectKey) {
+            HostPort metadataOwner;
+            return GetMetaAddressNotCheckConnection(objectKey, metadataOwner).IsOk()
+                   && metadataOwner == restartedAddress;
+        },
+        true, matchObjIds);
     RETURN_OK_IF_TRUE(matchObjIds.empty());
 
     std::vector<std::string> failedIds;
@@ -940,14 +1160,14 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
 
 Status WorkerOCServiceImpl::ClearObject(const ClearDataReqPb &req)
 {
-    worker::HashRange ranges;
-    clearDataFlow_->SubmitClearDataAsync(req, ranges);
+    clearDataFlow_->SubmitClearDataAsync(req);
     return Status::OK();
 }
 
 Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr)
 {
-    RETURN_OK_IF_TRUE(!FLAGS_enable_metadata_recovery);
+    // Restart recovery is required even when failure-time metadata recovery is disabled. A restarted metadata owner
+    // cannot rely on persisted metadata in the target architecture, so surviving workers always rebuild it best-effort.
     RETURN_OK_IF_TRUE(workerAddr.empty() || workerAddr == localAddress_.ToString());
     if (threadPool_ == nullptr) {
         return RecoverMetadataOfRestartedWorker(workerAddr);
@@ -1067,6 +1287,7 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
             clientReconnectPost_.WaitFor(FLAGS_client_reconnect_wait_s * s2ms);
             waited_ = true;
         }
+        ClearDisconnectedClientRefsForReconciliation();
     }
     // reconciliation global references with master.
     std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
@@ -1077,10 +1298,10 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
             needDelGrefIds.emplace_back(id);
         }
     }
-    if (!needDelGrefIds.empty() && FLAGS_enable_reconciliation) {
-        auto grouped = clusterManager_->GroupKeysByMetaOwner(needDelGrefIds);
-        Status result = ReconciliationDecrRef(grouped.groups);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(result, "Decrease gref in master failed. Error: " + rc.ToString());
+    if (FLAGS_enable_reconciliation && !req.source_address().empty()) {
+        RETURN_IF_NOT_OK(ReconcileGlobalRefsWithSourceMaster(req, refTable, needDelGrefIds));
+    } else if (FLAGS_enable_reconciliation && (req.is_restart() || !req.gref_object_keys().empty())) {
+        RETURN_STATUS(K_INVALID, "Reconciliation request missing source master address.");
     }
     LOG(INFO) << "Reconciliation with master " << req.source_address() << " is done.";
     RETURN_IF_NOT_OK(GetReadyToWork(req));
@@ -1091,32 +1312,36 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
 Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
 {
     ScopedRequestContext ctx;
-    int hashWorkerNum = 0;
-    RETURN_IF_NOT_OK(clusterManager_->GetHashRingWorkerNum(hashWorkerNum));
-    if ((hashWorkerNum >= 0 && hashWorkerNum == numRecon_) || (hashWorkerNum < 0 && numRecon_ == 1)) {
+    int hashWorkerNum = topologyEngine_->centralizedMetadata
+                            ? -1
+                            : static_cast<int>(worker::GetValidTopologyMembers(topologyEngine_).size());
+    if ((hashWorkerNum > 0 && numRecon_ >= hashWorkerNum) || (hashWorkerNum < 0 && numRecon_ >= 1)) {
         LOG(INFO) << "Reconciliation with all masters is done.";
-        RETURN_IF_NOT_OK(CheckWaitNodeTableComplete());
+        RETURN_IF_NOT_OK(CheckWaitTopologyReady());
         if (req.is_restart()) {
             LOG(INFO) << "Restart finish. Set health file.";
-            if (!clusterManager_->IsFirstKeepAliveSent() && clusterManager_->IsEtcdAvailableWhenStart()) {
+            if (!coordinationBackend_->IsFirstKeepAliveSent()
+                && topologyEngine_->controlBackendAvailableAtStartup) {
                 RETURN_STATUS(K_NOT_READY,
                               "Setting the health file is not allowed before the first lease is successfully created");
             }
             setHealthFile_.store(true);
             RETURN_IF_NOT_OK(SetHealthProbe());
         }
-        if (clusterManager_->CheckLocalNodeIsExiting()) {
+        if (worker::IsLocalTopologyMemberExiting(topologyEngine_)) {
             INJECT_POINT("recover.toexiting.delay");
             CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
-            RETURN_IF_NOT_OK(coordinationBackend_->UpdateNodeState(topology::MemberLifecycleState::EXITING));
+            RETURN_IF_NOT_OK(coordinationBackend_->UpdateNodeState(cluster::MemberLifecycleState::EXITING));
         } else {
-            RETURN_IF_NOT_OK(clusterManager_->InformEtcdReconciliationDone());
+            HostPort localAddress;
+            RETURN_IF_NOT_OK(localAddress.ParseString(topologyEngine_->localAddress));
+            RETURN_IF_NOT_OK(coordinationBackend_->InformReconciliationDone(localAddress));
         }
     } else {
         LOG(INFO) << "Has finished reconciliation master num: " << numRecon_ << ", total expect num: " << hashWorkerNum;
     }
     INJECT_POINT("WorkerOCServiceImpl.Reconciliation.expectedReconNum", [this](int expectedReconNum) {
-        if (!setHealthFile_.load() && expectedReconNum == numRecon_) {
+        if (!setHealthFile_.load() && expectedReconNum > 0 && numRecon_ >= expectedReconNum) {
             setHealthFile_.store(true);
             RETURN_IF_NOT_OK(SetHealthProbe());
             RETURN_IF_NOT_OK(UpdateLocalNodeReady());
@@ -1127,26 +1352,61 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::ReconciliationDecrRef(
-    const std::unordered_map<HostPort, std::vector<std::string>> &objKeysGrpByMaster)
+Status WorkerOCServiceImpl::ReconciliationDecrRef(const HostPort &sourceMasterAddr,
+                                                  const std::vector<std::string> &objectKeys)
 {
-    // Send requests for each master
-    for (auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first;
-        const std::vector<std::string> &currentNeedDelGrefIds = item.second;
-        auto func = [this, &currentNeedDelGrefIds, &masterAddr](int32_t) {
-            std::unordered_set<std::string> unAliveIds;
-            std::vector<std::string> failDecIds;
-            auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-            CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                                     "hash master get failed, Reconciliation failed");
-            return workerMasterApi->GDecreaseMasterRef(currentNeedDelGrefIds, unAliveIds, failDecIds);
-        };
-        constexpr int32_t timeoutMs = 1000 * 60;
-        Status rc = RetryOnError(
-            timeoutMs, func, []() { return Status::OK(); },
-            { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE });
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Push need deleted metadata to master failed: " + rc.ToString());
+    auto func = [this, &objectKeys, &sourceMasterAddr](int32_t) {
+        std::unordered_set<std::string> unAliveIds;
+        std::vector<std::string> failDecIds;
+        auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(sourceMasterAddr);
+        CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
+                                 "hash master get failed, Reconciliation failed");
+        return workerMasterApi->GDecreaseMasterRef(objectKeys, unAliveIds, failDecIds);
+    };
+    constexpr int32_t timeoutMs = 1000 * 60;
+    Status rc = RetryOnError(
+        timeoutMs, func, []() { return Status::OK(); },
+        { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE });
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Push need deleted metadata to master failed: " + rc.ToString());
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ReconciliationIncrRef(const HostPort &sourceMasterAddr,
+                                                  const std::vector<std::string> &objectKeys)
+{
+    RETURN_OK_IF_TRUE(objectKeys.empty());
+    std::vector<std::string> failedIds;
+    auto func = [this, &sourceMasterAddr, &objectKeys, &failedIds](int32_t) {
+        failedIds.clear();
+        return gRefProc_->GIncreaseMasterRefWithLock(sourceMasterAddr, objectKeys, failedIds);
+    };
+    constexpr int32_t timeoutMs = 1000 * 60;
+    Status rc = RetryOnError(
+        timeoutMs, func, []() { return Status::OK(); },
+        { StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE });
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Restore missing gref in master failed: " + rc.ToString());
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        failedIds.empty(), K_RUNTIME_ERROR,
+        "Restore missing gref in master failed object size: " + std::to_string(failedIds.size()));
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ReconcileGlobalRefsWithSourceMaster(
+    const PushMetaToWorkerReqPb &req,
+    const std::unordered_map<std::string, std::unordered_set<ClientKey>> &refTable,
+    const std::vector<std::string> &needDelGrefIds)
+{
+    HostPort sourceMasterAddr;
+    RETURN_IF_NOT_OK(sourceMasterAddr.ParseString(req.source_address()));
+    std::unordered_set<std::string> sourceMasterRefIds(req.gref_object_keys().begin(), req.gref_object_keys().end());
+    auto needIncGrefIds = CollectMissingSourceMasterRefs(sourceMasterAddr, refTable, sourceMasterRefIds);
+    if (!needDelGrefIds.empty()) {
+        Status result = ReconciliationDecrRef(sourceMasterAddr, needDelGrefIds);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(result, "Decrease gref in master failed. Error: " + result.ToString());
+    }
+    if (!needIncGrefIds.empty()) {
+        Status result = ReconciliationIncrRef(sourceMasterAddr, needIncGrefIds);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(result, "Increase gref in master failed. Error: " + result.ToString());
     }
     return Status::OK();
 }
@@ -1220,7 +1480,8 @@ Status WorkerOCServiceImpl::ClearDeviceMetaData(const ClientKey &clientId)
         gcThreadPool_->Execute([this, clientId, traceId] {
             auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
             std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-                workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
+                workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_,
+                                                            BuildMetaRouteOptions(true));
             if (workerMasterApi == nullptr) {
                 LOG(ERROR) << "hash master get failed, GetP2P meta failed";
                 return;
@@ -1290,6 +1551,63 @@ void WorkerOCServiceImpl::AsyncClearClientRef(const ClientKey &clientId, uint64_
     } else {
         LOG(INFO) << "[Ref] AsyncClearClientRef finish for client id: " << clientId;
     }
+}
+
+std::vector<ClientKey> WorkerOCServiceImpl::CollectDisconnectedClientRefIds() const
+{
+    std::unordered_map<ClientKey, std::vector<std::string>> refTable;
+    globalRefTable_->GetAllClientRef(refTable);
+
+    std::vector<ClientKey> disconnectedClientIds;
+    for (const auto &clientRefs : refTable) {
+        const auto &clientId = clientRefs.first;
+        if (ClientManager::Instance().GetClientInfo(clientId) == nullptr) {
+            disconnectedClientIds.emplace_back(clientId);
+        }
+    }
+    return disconnectedClientIds;
+}
+
+void WorkerOCServiceImpl::ClearDisconnectedClientRefsForReconciliation()
+{
+    auto disconnectedClientIds = CollectDisconnectedClientRefIds();
+    if (disconnectedClientIds.empty()) {
+        return;
+    }
+    LOG(INFO) << "[Ref] Clear disconnected client refs during restart reconciliation, client count: "
+              << disconnectedClientIds.size();
+    for (const auto &clientId : disconnectedClientIds) {
+        AsyncClearClientRef(clientId);
+    }
+}
+
+std::vector<std::string> WorkerOCServiceImpl::CollectMissingSourceMasterRefs(
+    const HostPort &sourceMasterAddr,
+    const std::unordered_map<std::string, std::unordered_set<ClientKey>> &localRefTable,
+    const std::unordered_set<std::string> &sourceMasterRefIds) const
+{
+    std::vector<std::string> missingIds;
+    for (const auto &localRef : localRefTable) {
+        const auto &objectKey = localRef.first;
+        if (sourceMasterRefIds.count(objectKey) != 0) {
+            continue;
+        }
+        HostPort masterAddr;
+        Status rc = GetMetaAddressNotCheckConnection(objectKey, masterAddr);
+        if (rc.IsError()) {
+            LOG(WARNING) << "[Ref] Skip restoring missing source master ref for " << objectKey
+                         << ", failed to locate meta owner: " << rc.ToString();
+            continue;
+        }
+        if (masterAddr == sourceMasterAddr) {
+            missingIds.emplace_back(objectKey);
+        }
+    }
+    if (!missingIds.empty()) {
+        LOG(INFO) << "[Ref] Restore missing source master refs during reconciliation, source master: "
+                  << sourceMasterAddr.ToString() << ", object count: " << missingIds.size();
+    }
+    return missingIds;
 }
 
 Status WorkerOCServiceImpl::GetObjectFromAnywhere(const ReadKey &readKey, const master::QueryMetaInfoPb &queryMeta,
@@ -1588,7 +1906,7 @@ Status WorkerOCServiceImpl::RemoveMetaFromMaster(const std::list<std::string> &o
 
     // Group ObjectKeys by master
     std::vector<std::string> objectKeys(objectKeysRemove.begin(), objectKeysRemove.end());
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, BuildMetaRouteOptions(true));
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
 
@@ -1832,22 +2150,44 @@ size_t WorkerOCServiceImpl::GetMetadataSize() const
     return metadataSize_;
 }
 
-Status WorkerOCServiceImpl::IfNeedTriggerReconciliation()
+Status WorkerOCServiceImpl::ReconcileMembershipChange()
 {
-    // only use this function to reconcile with central master when enable_distribute_master is true.
-    LOG(INFO) << "Just started. Ask master whether this worker needs reconciliation.";
-    HostPort masterAddr(localMasterAddress_);
-    auto api = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-    CHECK_FAIL_RETURN_STATUS(api != nullptr, StatusCode::K_INVALID,
-                             "Getting master api failed. masterAddrs=" + masterAddr.ToString());
+    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "Topology references are unavailable");
+    std::set<std::string> masterAddresses;
+    if (topologyEngine_->centralizedMetadata) {
+        masterAddresses.emplace(localMasterAddress_.ToString());
+    } else {
+        masterAddresses = worker::GetValidTopologyMembers(topologyEngine_);
+        // The local metadata master still participates while this member is transitioning through restart admission.
+        masterAddresses.emplace(topologyEngine_->localAddress);
+    }
+    CHECK_FAIL_RETURN_STATUS(!masterAddresses.empty(), K_NOT_READY,
+                             "No committed metadata owner is available for restart reconciliation");
+    const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
+    for (const auto &masterAddress : masterAddresses) {
+        LOG_IF_ERROR(ScheduleReconciliationRequest(masterAddress, eventTimestamp),
+                     "Failed to schedule restart reconciliation with metadata owner " + masterAddress);
+    }
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ScheduleReconciliationRequest(const std::string &masterAddress, int64_t eventTimestamp)
+{
+    CHECK_FAIL_RETURN_STATUS(threadPool_ != nullptr && workerMasterApiManager_ != nullptr, K_NOT_READY,
+                             "Reconciliation runtime is unavailable");
+    HostPort address;
+    RETURN_IF_NOT_OK(address.ParseString(masterAddress));
+    auto api = workerMasterApiManager_->GetWorkerMasterApi(address);
+    CHECK_FAIL_RETURN_STATUS(api != nullptr, K_NOT_READY, "Getting metadata owner API failed: " + masterAddress);
     auto traceId = Trace::Instance().GetTraceID();
-    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-
-    ReconciliationQueryPb req;
-    ReconciliationRspPb rsp;
-    req.set_event_timestamp(std::chrono::system_clock::now().time_since_epoch().count());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api->IfNeedTriggerReconciliation(req, rsp), "worker reconciliation failed");
-
+    RETURN_IF_EXCEPTION_OCCURS(threadPool_->Execute([api = std::move(api), eventTimestamp, traceId, masterAddress] {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+        ReconciliationQueryPb req;
+        ReconciliationRspPb rsp;
+        req.set_event_timestamp(eventTimestamp);
+        LOG_IF_ERROR(api->ReconcileMembershipChange(req, rsp),
+                     "Restart reconciliation request failed for metadata owner " + masterAddress);
+    }));
     return Status::OK();
 }
 
@@ -1890,21 +2230,18 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
 {
     LOG(INFO) << "Determining startup path for restart: reconciliation and local slot recovery.";
     bool isRestart = false;
-    RETURN_IF_NOT_OK(clusterManager_->IsRestart(isRestart));
-    if (!isRestart || !clusterManager_->IsEtcdAvailableWhenStart() || !FLAGS_enable_reconciliation) {
-        RETURN_IF_NOT_OK(CheckWaitNodeTableComplete());
+    isRestart = topologyEngine_->restart;
+    if (!isRestart || !topologyEngine_->controlBackendAvailableAtStartup || !FLAGS_enable_reconciliation) {
+        RETURN_IF_NOT_OK(CheckWaitTopologyReady());
         LOG(INFO) << "Did not restart so no need to reconcile. Set health file.";
         setHealthFile_.store(true);
         RETURN_IF_NOT_OK(SetHealthProbe());
-        if (clusterManager_->IsEtcdAvailableWhenStart()) {
+        if (topologyEngine_->controlBackendAvailableAtStartup) {
             RETURN_IF_NOT_OK(UpdateLocalNodeReady());
         }
     } else {
         LOG(INFO) << "Local node restarted. Need reconciliation.";
-        if (clusterManager_->IsCentralized()) {
-            LOG(INFO) << "Local node has centralized master. Will trigger reconciliation by myself.";
-            RETURN_IF_NOT_OK(IfNeedTriggerReconciliation());
-        }
+        RETURN_IF_NOT_OK(ReconcileMembershipChange());
     }
     LOG_IF_ERROR(slotRecoveryManager_->ScheduleLocalPendingTasksFromStore(), "Recover slot failed");
     if (isRestart) {
@@ -1974,9 +2311,10 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
     // In case of centralized master, reconciliation is triggered by starting worker. No need to wait for
     // reconciliation requests from master.
     bool isRestart = false;
-    auto rc = clusterManager_->IsRestart(isRestart);
-    if (clusterManager_->IsCentralized() || rc.IsError() || !isRestart
-        || !clusterManager_->IsEtcdAvailableWhenStart()) {
+    isRestart = topologyEngine_->restart;
+    auto rc = Status::OK();
+    if (topologyEngine_->centralizedMetadata || rc.IsError() || !isRestart
+        || !topologyEngine_->controlBackendAvailableAtStartup) {
         return Status::OK();
     }
     if (!FLAGS_enable_reconciliation) {
@@ -2021,15 +2359,16 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
 Status WorkerOCServiceImpl::UpdateLocalNodeReady()
 {
     CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_RUNTIME_ERROR, "Coordination backend is null");
-    return coordinationBackend_->UpdateNodeState(topology::MemberLifecycleState::READY);
+    return coordinationBackend_->UpdateNodeState(cluster::MemberLifecycleState::READY);
 }
 
 Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, std::string &finishReason,
                                                                bool &shouldSetReady)
 {
     static const int64_t MAX_WAIT_TIME_SEC = 60;  // 60s
-    int hashWorkerNum = 0;
-    RETURN_IF_NOT_OK(clusterManager_->GetHashRingWorkerNum(hashWorkerNum));
+    int hashWorkerNum = topologyEngine_->centralizedMetadata
+                            ? -1
+                            : static_cast<int>(worker::GetValidTopologyMembers(topologyEngine_).size());
     // no need to set health or not ready to set health
     if (setHealthFile_) {
         finishReason = "health file has already been set";
@@ -2048,16 +2387,28 @@ Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, s
         finishReason = FormatString("give up waiting, expected: %d", hashWorkerNum);
         LOG(ERROR) << "Did not finish reconciling with all masters within " << MAX_WAIT_TIME_SEC << " seconds. Give up."
                    << " Plan to reconciliate with: " << hashWorkerNum << ", had reconciliated with: " << numRecon_;
-        clusterManager_->CompleteNodeTableWithFakeNode();
+        LOG(WARNING) << "Topology reconciliation timed out before all expected masters replied.";
     } else {
         finishReason = FormatString("all reconciliations received, expected: %d", hashWorkerNum);
     }
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::CheckWaitNodeTableComplete()
+Status WorkerOCServiceImpl::CheckWaitTopologyReady()
 {
-    return clusterManager_->CheckWaitNodeTableComplete();
+    constexpr int64_t waitIntervalMs = 100;
+    constexpr int logPerCount = 10;
+    const int64_t timeoutMs = std::max<int64_t>(TOPOLOGY_READY_WAIT_TIMEOUT_S, FLAGS_node_timeout_s) * SECS_TO_MS;
+    Timer timer;
+    auto rc = worker::CheckTopologyServingReady(topologyEngine_);
+    while (rc.GetCode() == K_NOT_READY && timer.ElapsedMilliSecond() < timeoutMs && !IsTermSignalReceived()) {
+        LOG_FIRST_AND_EVERY_N(INFO, logPerCount)
+            << "Waiting topology ready before setting worker health, elapsed ms: " << timer.ElapsedMilliSecond()
+            << ", status: " << rc.ToString();
+        std::this_thread::sleep_for(std::chrono::milliseconds(waitIntervalMs));
+        rc = worker::CheckTopologyServingReady(topologyEngine_);
+    }
+    return rc;
 }
 
 Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &req, PublishDeviceObjectRspPb &resp,
@@ -2112,19 +2463,19 @@ Status WorkerOCServiceImpl::GetDeviceObject(
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
-    threadPool_->Execute(
-        [objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this, traceID]() mutable {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
-            auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
-            if (initRc.IsError()) {
-                LOG(ERROR) << initRc.GetMsg();
-                LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
-                return;
-            }
-            workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
-            LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
-        });
+    threadPool_->Execute([objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this,
+                          traceID]() mutable {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
+        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            LOG(ERROR) << initRc.GetMsg();
+            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+            return;
+        }
+        workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
+        LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
+    });
     return Status::OK();
 }
 
@@ -2139,7 +2490,8 @@ Status WorkerOCServiceImpl::PutP2PMeta(const PutP2PMetaReqPb &req, PutP2PMetaRsp
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_,
+                                                    BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, PutP2PMeta failed");
     PutP2PMetaReqPb reqCopy = req;
     reqCopy.set_worker_address(localAddress_.ToString());
@@ -2255,7 +2607,8 @@ Status WorkerOCServiceImpl::SendRootInfo(const SendRootInfoReqPb &req, SendRootI
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_,
+                                                    BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, GetP2P meta failed");
     SendRootInfoReqPb reqCopy = req;
     return workerMasterApi->SendRootInfo(reqCopy, resp);
@@ -2292,7 +2645,8 @@ Status WorkerOCServiceImpl::RecvRootInfo(
             LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
             return;
         }
-        LOG_IF_ERROR(workerDevOcManager_->ProcessRecvRootInfoRequest(req, serverApi), "Process RecvRootInfo failed");
+        LOG_IF_ERROR(workerDevOcManager_->ProcessRecvRootInfoRequest(req, serverApi),
+                     "Process RecvRootInfo failed");
         LOG(INFO) << "Process RecvRootInfo done";
     });
     return Status::OK();
@@ -2306,7 +2660,8 @@ Status WorkerOCServiceImpl::AckRecvFinish(const AckRecvFinishReqPb &req, AckRecv
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_,
+                                                    BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, GetP2P meta failed");
     AckRecvFinishReqPb reqCopy = req;
     return workerMasterApi->AckRecvFinish(reqCopy, resp);
@@ -2316,7 +2671,8 @@ Status WorkerOCServiceImpl::RemoveP2PLocation(const RemoveP2PLocationReqPb &req,
 {
     ScopedRequestContext ctx;
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_,
+                                                    BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, GetP2P meta failed");
     RemoveP2PLocationReqPb reqCopy = req;
     return workerMasterApi->RemoveP2PLocation(reqCopy, resp);
@@ -2388,7 +2744,6 @@ Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb 
 Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_EXIST_LATENCY);
     ReadLock noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -2421,51 +2776,30 @@ Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRing
     ScopedRequestContext ctx;
     RETURN_RUNTIME_ERROR_IF_NULL(akSkManager_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
-    auto *hashRing = clusterManager_->GetHashRing();
-    RETURN_RUNTIME_ERROR_IF_NULL(hashRing);
+    RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(worker::LoadTopologySnapshot(topologyEngine_, snapshot));
+    rsp.set_version(snapshot->Version());
+    rsp.set_master_address(FLAGS_master_address);
 
-    HashRingPb ring;
-    uint64_t currentVersion = 0;
-    hashRing->GetHashRingPbSnapshot(ring, currentVersion);
-    rsp.set_version(currentVersion);
-    if (req.version() != 0 && req.version() == currentVersion) {
+    if (req.version() != 0 && snapshot->Version() == req.version()) {
         rsp.set_hash_ring_changed(false);
         return Status::OK();
     }
 
+    rsp.set_hash_ring_changed(true);
+    RETURN_IF_NOT_OK(BuildClusterTopologyPb(*snapshot, *rsp.mutable_hash_ring()));
     CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_NOT_READY,
                              "Coordination backend is unavailable for hash ring refresh");
-    std::vector<std::pair<std::string, std::string>> workers;
-    RETURN_IF_NOT_OK(coordinationBackend_->GetAll(CLUSTER_TABLE, workers));
-
-    auto *hostIdMap = rsp.mutable_host_id_map();
-    for (const auto &entry : workers) {
-        topology::MembershipValue membership;
-        auto rc = topology::MembershipValueCodec::Decode(entry.second, membership);
-        if (rc.IsOk()) {
-            (*hostIdMap)[entry.first] = std::move(membership.hostId);
-            continue;
-        }
-
-        topology::WorkerServiceInfo legacyInfo;
-        rc = topology::WorkerServiceInfo::FromString(entry.second, legacyInfo);
-        if (rc.IsOk()) {
-            (*hostIdMap)[entry.first] = std::move(legacyInfo.hostId);
-        }
-    }
-
-    *rsp.mutable_hash_ring() = std::move(ring);
-    rsp.set_master_address(FLAGS_master_address);
-    rsp.set_hash_ring_changed(true);
-    return Status::OK();
+    return BuildRoutingHostIdMap(*coordinationBackend_, *rsp.mutable_host_id_map());
 }
 
 Status WorkerOCServiceImpl::DeleteDevObjects(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp)
 {
     LOG(INFO) << "Worker delete device objects: " << VectorToString(req.object_keys());
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, clusterManager_);
+        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_,
+                                                    BuildMetaRouteOptions(true));
     CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, GetP2P meta failed");
     DeleteAllCopyMetaReqPb reqCopy;
     DeleteAllCopyMetaRspPb respFromMaster;

@@ -185,7 +185,14 @@ public:
 
     Status CheckCoordinatorStateAsyncRead(int64_t tag, CheckCoordinatorStateRspPb &rsp);
 
-    Status GetClusterStateAsyncWrite(GetClusterStateReqPb &req, int64_t &tag);
+    /**
+     * @brief Start one deadline-bounded cluster-state RPC.
+     * @param[in] req Cluster-state request signed by this API.
+     * @param[in] timeoutMs Positive RPC timeout in milliseconds.
+     * @param[out] tag Async response tag.
+     * @return Status of the call.
+     */
+    Status GetClusterStateAsyncWrite(GetClusterStateReqPb &req, int32_t timeoutMs, int64_t &tag);
 
     Status GetClusterStateAsyncRead(int64_t tag, GetClusterStateRspPb &rsp);
 

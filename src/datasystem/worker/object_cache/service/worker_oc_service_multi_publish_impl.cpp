@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +18,8 @@
 
 #include <cstddef>
 #include <utility>
+
+#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -51,10 +50,11 @@ namespace object_cache {
 static constexpr int RETRY_INTERNAL_MS_META_MOVING = 200;
 static constexpr int THREAD_WAIT_TIME_MS = 10;
 WorkerOcServiceMultiPublishImpl::WorkerOcServiceMultiPublishImpl(
-    WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager, std::shared_ptr<ThreadPool> memCpyThreadPool,
-    std::shared_ptr<ThreadPool> threadPool, std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
+    WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
+    std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<ThreadPool> threadPool,
+    std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
       akSkManager_(std::move(akSkManager)),
@@ -376,8 +376,8 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     const MultiPublishReqPb &pubReq, CreateMultiMetaRspPb &totalResp, std::vector<uint64_t> &versions)
 {
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_ROUTER);
-    auto grouped = clusterManager_->GroupKeysByMetaOwnerWithIndex(objectKeys);
-    const auto &objGroup = grouped.groups;
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyEngine_);
+    const auto &objGroup = grouped.indexedGroups;
     // Fixme: Currently, even if there is only one object for which the master node has not been identified, we will
     // refuse to process all objects, which is very inefficient.
     CHECK_FAIL_RETURN_STATUS(grouped.failures.empty(), K_RPC_UNAVAILABLE,
@@ -464,7 +464,7 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("Multiple set fails to save object %s to l2cache.", keys[idx]);
             std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-                workerMasterApiManager_->GetWorkerMasterApi(kv.GetObjKey(), clusterManager_);
+                workerMasterApiManager_->GetWorkerMasterApi(kv.GetObjKey(), topologyPlacement_, topologyRouteOptions_);
             master::RollbackMultiMetaReqPb req;
             master::RollbackMultiMetaRspPb resp;
             req.set_address(localAddress_.ToString());

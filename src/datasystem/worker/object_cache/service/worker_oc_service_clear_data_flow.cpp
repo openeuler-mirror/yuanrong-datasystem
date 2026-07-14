@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,12 +17,16 @@
 
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 
+#include "datasystem/cluster/executor/key_filter.h"
+
 #include <algorithm>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/flags/flags.h"
@@ -38,10 +39,8 @@
 #include "datasystem/common/util/thread.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/cluster_event_type.h"
-#include "datasystem/worker/hash_ring/hash_ring_event.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/object_kv.h"
-#include "datasystem/common/task_action/task_action_registry.h"
 
 DS_DECLARE_bool(enable_metadata_recovery);
 
@@ -98,22 +97,24 @@ void HandleGroupKeysByMetaOwnerFailures(const std::unordered_map<std::string, St
         }
     }
     for (const auto &kv : summaries) {
-        LOG(INFO) << "Get master for ClearObject failed, object size: " << kv.second.count << ", status: " << kv.first
+        LOG(INFO) << "Get master for ClearObject failed, object size: " << kv.second.count
+                  << ", status: " << kv.first
                   << ", sample object keys: " << VectorToString(kv.second.sampleObjectKeys);
     }
 }
 
 std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
-    ClusterManager *clusterManager,
+    worker::WorkerTopologyReferences *topologyEngine,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
-    const HostPort &masterAddr, const std::vector<std::string> &objectKeys, std::unordered_set<std::string> &failedIds)
+    const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+    std::unordered_set<std::string> &failedIds)
 {
     if (masterAddr.Empty()) {
         InsertFailedIds(objectKeys, failedIds);
         LOG(WARNING) << "Skip ClearObject because master address is unresolved, object size: " << objectKeys.size();
         return nullptr;
     }
-    auto rc = clusterManager->CheckConnection(masterAddr);
+    auto rc = worker::CheckTopologyMemberConnection(topologyEngine, masterAddr);
     if (rc.IsError()) {
         InsertFailedIds(objectKeys, failedIds);
         LOG(ERROR) << "CheckConnection before ClearObject failed, status: " << rc.ToString();
@@ -127,43 +128,25 @@ std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
     return workerMasterApi;
 }
 
-ClearDataReqPb BuildClearDataReq(const worker::HashRange &ranges)
-{
-    ClearDataReqPb req;
-    for (const auto &range : ranges) {
-        auto *reqRange = req.add_ranges();
-        reqRange->set_from(range.first);
-        reqRange->set_end(range.second);
-    }
-    return req;
 }
-}  // namespace
 
 WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
     std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager,
     std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc, std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc,
-    MetaDataRecoveryManager *metadataRecoveryManager, ClusterManager *clusterManager, std::string localAddress)
+    MetaDataRecoveryManager *metadataRecoveryManager, worker::WorkerTopologyReferences *topologyEngine,
+    std::string localAddress)
     : objectTable_(std::move(objectTable)),
       globalRefTable_(std::move(globalRefTable)),
       workerMasterApiManager_(std::move(workerMasterApiManager)),
       gRefProc_(std::move(gRefProc)),
       deleteProc_(std::move(deleteProc)),
       metadataRecoveryManager_(metadataRecoveryManager),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       localAddress_(std::move(localAddress))
 {
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
     clearDataThreadPool_ = std::make_shared<ThreadPool>(0, CLEAR_DATA_THREAD_NUM, "scaledown_handle_thread");
-    auto submitClearData = [this](const worker::HashRange &ranges) {
-        SubmitClearDataAsync(BuildClearDataReq(ranges), ranges);
-        return Status::OK();
-    };
-    HashRingEvent::LocalClearDataWithoutMeta::GetInstance().AddSubscriber(WORKER_OC_SERVICE_CLEAR_DATA_FLOW,
-                                                                          submitClearData);
-    TaskActionRegistry::GetInstance().AddSubscriber(
-        TransferTaskType::CLEANUP_PASSIVE_LOCAL_DATA_WITHOUT_META, WORKER_OC_SERVICE_CLEAR_DATA_FLOW,
-        [submitClearData](const TransferTask &task) { return submitClearData(task.placementScope.ranges); });
 }
 
 WorkerOcServiceClearDataFlow::~WorkerOcServiceClearDataFlow()
@@ -171,14 +154,54 @@ WorkerOcServiceClearDataFlow::~WorkerOcServiceClearDataFlow()
     if (exitFlag_ != nullptr) {
         exitFlag_->store(true);
     }
-    HashRingEvent::LocalClearDataWithoutMeta::GetInstance().RemoveSubscriber(WORKER_OC_SERVICE_CLEAR_DATA_FLOW);
-    TaskActionRegistry::GetInstance().RemoveSubscriber(TransferTaskType::CLEANUP_PASSIVE_LOCAL_DATA_WITHOUT_META,
-                                                       WORKER_OC_SERVICE_CLEAR_DATA_FLOW);
     clearDataThreadPool_.reset();
 }
 
-void WorkerOcServiceClearDataFlow::SubmitClearDataAsync(const ClearDataReqPb &req, const worker::HashRange &clearRanges,
-                                                        uint64_t retryTimes)
+Status WorkerOcServiceClearDataFlow::SubmitTopologyFailureCleanup(
+    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+    const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+    const cluster::CancellationToken &cancellation)
+{
+    CHECK_FAIL_RETURN_STATUS(action.failed.has_value(), K_INVALID, "failure cleanup lacks failed member");
+    CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
+    CHECK_FAIL_RETURN_STATUS(clearDataThreadPool_ != nullptr, K_NOT_READY, "clear-data flow is stopped");
+    CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology data cleanup cancelled");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology data cleanup deadline exceeded");
+    OwnedTopologyClearRequest request{ action, businessOperationId, {} };
+    request.objectIds.reserve(objectTable_->GetSize());
+    for (const auto &entry : *objectTable_) {
+        if (filter.Contains(entry.first)) {
+            request.objectIds.emplace_back(entry.first);
+        }
+    }
+    SubmitOwnedTopologyCleanup(std::move(request));
+    return Status::OK();
+}
+
+void WorkerOcServiceClearDataFlow::SubmitOwnedTopologyCleanup(OwnedTopologyClearRequest request)
+{
+    if (clearDataThreadPool_ == nullptr) {
+        LOG(ERROR) << "ClearData thread pool is nullptr, skip topology cleanup.";
+        return;
+    }
+    auto exitFlag = exitFlag_;
+    clearDataThreadPool_->Execute([this, request = std::move(request), exitFlag] {
+        if (exitFlag != nullptr && exitFlag->load()) {
+            return;
+        }
+        ClearDataRetryIds retryIds;
+        ClearMatchedObjects(request.objectIds, retryIds);
+        RebuildRefForMatchedObjects(request.objectIds, retryIds);
+        if (!retryIds.Empty()) {
+            LOG(WARNING) << "Topology cleanup needs retry, operation: " << request.businessOperationId
+                         << ", failed object size: " << retryIds.Size();
+            SubmitRetryClearDataAsync({}, 0, retryIds);
+        }
+    });
+}
+
+void WorkerOcServiceClearDataFlow::SubmitClearDataAsync(const ClearDataReqPb &req, uint64_t retryTimes)
 {
     if (clearDataThreadPool_ == nullptr) {
         LOG(ERROR) << "ClearData thread pool is nullptr, skip clear data.";
@@ -186,7 +209,7 @@ void WorkerOcServiceClearDataFlow::SubmitClearDataAsync(const ClearDataReqPb &re
     }
     auto traceID = Trace::Instance().GetTraceID();
     auto exitFlag = exitFlag_;
-    clearDataThreadPool_->Execute([this, req, clearRanges, retryTimes, traceID, exitFlag] {
+    clearDataThreadPool_->Execute([this, req, retryTimes, traceID, exitFlag] {
         if (exitFlag != nullptr && exitFlag->load()) {
             return;
         }
@@ -196,11 +219,9 @@ void WorkerOcServiceClearDataFlow::SubmitClearDataAsync(const ClearDataReqPb &re
         if (!retryIds.Empty()) {
             LOG(WARNING) << "ClearData async task need retry, retryTimes: " << retryTimes
                          << ", failed object size: " << retryIds.Size() << ", status: " << rc.ToString();
-            RetryClearDataAsync(req, clearRanges, retryIds, retryTimes + 1);
+            RetryClearDataAsync(req, retryIds, retryTimes + 1);
             return;
         }
-        LOG_IF_ERROR(HashRingEvent::LocalClearDataWithoutMetaFinish::GetInstance().NotifyAll(clearRanges),
-                     "Notify local clear-data finish failed");
         LOG_IF_ERROR(rc, "ClearData async task failed");
     });
 }
@@ -215,8 +236,7 @@ Status WorkerOcServiceClearDataFlow::ClearObject(const ClearDataReqPb &req)
     return rc;
 }
 
-void WorkerOcServiceClearDataFlow::SubmitRetryClearDataAsync(const ClearDataReqPb &req,
-                                                             const worker::HashRange &clearRanges, uint64_t retryTimes,
+void WorkerOcServiceClearDataFlow::SubmitRetryClearDataAsync(const ClearDataReqPb &req, uint64_t retryTimes,
                                                              const ClearDataRetryIds &retryIds)
 {
     if (clearDataThreadPool_ == nullptr) {
@@ -225,7 +245,7 @@ void WorkerOcServiceClearDataFlow::SubmitRetryClearDataAsync(const ClearDataReqP
     }
     auto traceID = Trace::Instance().GetTraceID();
     auto exitFlag = exitFlag_;
-    clearDataThreadPool_->Execute([this, req, clearRanges, retryTimes, retryIds, traceID, exitFlag] {
+    clearDataThreadPool_->Execute([this, req, retryTimes, retryIds, traceID, exitFlag] {
         if (exitFlag != nullptr && exitFlag->load()) {
             return;
         }
@@ -235,32 +255,31 @@ void WorkerOcServiceClearDataFlow::SubmitRetryClearDataAsync(const ClearDataReqP
         if (!nextRetryIds.Empty()) {
             LOG(WARNING) << "Retry ClearData async task need retry, retryTimes: " << retryTimes
                          << ", failed object size: " << nextRetryIds.Size();
-            RetryClearDataAsync(req, clearRanges, nextRetryIds, retryTimes + 1);
+            RetryClearDataAsync(req, nextRetryIds, retryTimes + 1);
             return;
         }
-        LOG_IF_ERROR(HashRingEvent::LocalClearDataWithoutMetaFinish::GetInstance().NotifyAll(clearRanges),
-                     "Notify local clear-data finish failed");
     });
 }
 
-void WorkerOcServiceClearDataFlow::RetryClearDataAsync(const ClearDataReqPb &req, const worker::HashRange &clearRanges,
+void WorkerOcServiceClearDataFlow::RetryClearDataAsync(const ClearDataReqPb &req,
                                                        const ClearDataRetryIds &retryIds, uint64_t retryTimes)
 {
     TimerQueue::TimerImpl timer;
     auto traceID = Trace::Instance().GetTraceID();
     auto exitFlag = exitFlag_;
-    auto retryTask = [this, req, clearRanges, retryIds, retryTimes, traceID, exitFlag] {
+    auto retryTask = [this, req, retryIds, retryTimes, traceID, exitFlag] {
         if (exitFlag != nullptr && exitFlag->load()) {
             return;
         }
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        SubmitRetryClearDataAsync(req, clearRanges, retryTimes, retryIds);
+        SubmitRetryClearDataAsync(req, retryTimes, retryIds);
     };
     LOG_IF_ERROR(TimerQueue::GetInstance()->AddTimer(CLEAR_OBJECT_RETRY_INTERVAL_MS, retryTask, timer),
                  "Add retry ClearData timer failed");
 }
 
-Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req, std::vector<std::string> &matchObjIds)
+Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req,
+                                                       std::vector<std::string> &matchObjIds)
 {
     bool includeL2CacheIds = FLAGS_enable_metadata_recovery;
     auto selectionRequest = MetadataRecoverySelector::BuildSelectionRequest(req, includeL2CacheIds);
@@ -269,7 +288,7 @@ Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req
         return Status::OK();
     }
     LOG(INFO) << selectionRequest.ToString();
-    MetadataRecoverySelector selector(objectTable_, clusterManager_);
+    MetadataRecoverySelector selector(objectTable_);
     return selector.Select(selectionRequest, matchObjIds);
 }
 
@@ -283,12 +302,14 @@ Status WorkerOcServiceClearDataFlow::ClearDataImpl(const ClearDataReqPb &req, Cl
     return Status::OK();
 }
 
-void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req, const ClearDataRetryIds &retryIds,
+void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req,
+                                                      const ClearDataRetryIds &retryIds,
                                                       ClearDataRetryIds &nextRetryIds)
 {
-    LOG(INFO) << "retry clear data without meta in worker, clear failed object size: " << retryIds.clearFailedIds.size()
-              << ", increase failed object size: " << retryIds.increaseFailedIds.size()
-              << ", recover app ref failed object size: " << retryIds.recoverAppRefFailedIds.size();
+    LOG(INFO) << "retry clear data without meta in worker, clear failed object size: "
+              << retryIds.clearFailedIds.size() << ", increase failed object size: "
+              << retryIds.increaseFailedIds.size() << ", recover app ref failed object size: "
+              << retryIds.recoverAppRefFailedIds.size();
     std::vector<std::string> retryClearObjectKeys{ retryIds.clearFailedIds.begin(), retryIds.clearFailedIds.end() };
     (void)req;
     ClearMatchedObjects(retryClearObjectKeys, nextRetryIds);
@@ -300,10 +321,9 @@ void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req,
     RetryRecoverMasterAppRef(retryRecoverAppRefObjectKeys, nextRetryIds);
 }
 
-void WorkerOcServiceClearDataFlow::FillCheckObjectDataLocationReq(const std::vector<std::string> &objectKeys,
-                                                                  master::CheckObjectDataLocationReqPb &req,
-                                                                  std::vector<std::string> &requestObjectKeys,
-                                                                  std::unordered_set<std::string> &failedIds) const
+void WorkerOcServiceClearDataFlow::FillCheckObjectDataLocationReq(
+    const std::vector<std::string> &objectKeys, master::CheckObjectDataLocationReqPb &req,
+    std::vector<std::string> &requestObjectKeys, std::unordered_set<std::string> &failedIds) const
 {
     req.set_address(localAddress_);
     req.set_redirect(true);
@@ -353,13 +373,13 @@ void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(const std::vec
     if (objectKeys.empty()) {
         return;
     }
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyEngine_);
     auto &objKeysGrpByMasterId = grouped.groups;
     HandleGroupKeysByMetaOwnerFailures(grouped.failures, failedIds);
 
     for (auto &item : objKeysGrpByMasterId) {
         auto workerMasterApi =
-            GetWorkerMasterApiForClear(clusterManager_, workerMasterApiManager_, item.first, item.second, failedIds);
+            GetWorkerMasterApiForClear(topologyEngine_, workerMasterApiManager_, item.first, item.second, failedIds);
         if (workerMasterApi == nullptr) {
             continue;
         }

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -55,7 +52,7 @@ Status MasterSCServiceImpl::Init()
     size_t minThreads = std::min<size_t>(MIN_THREADS, FLAGS_master_sc_thread_num);
     RETURN_IF_EXCEPTION_OCCURS(threadPool_ =
                                    std::make_unique<ThreadPool>(minThreads, FLAGS_master_sc_thread_num, "MScThreads"));
-    RETURN_IF_NOT_OK(SCMigrateMetadataManager::Instance().Init(GetLocalAddr(), akSkManager_, clusterManager_,
+    RETURN_IF_NOT_OK(SCMigrateMetadataManager::Instance().Init(GetLocalAddr(), akSkManager_, topologyEngine_,
                                                                metadataManagerHolder_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "MasterSCServiceImpl initialization success";
     return Status::OK();
@@ -278,17 +275,18 @@ Status MasterSCServiceImpl::QueryGlobalConsumersNum(const QueryGlobalNumReqPb &r
 Status MasterSCServiceImpl::StartCheckMetadata()
 {
     bool isRestart = false;
-    RETURN_IF_NOT_OK(clusterManager_->IsRestart(isRestart));
-    if (!isRestart || !clusterManager_->IsEtcdAvailableWhenStart()) {
+    isRestart = topologyEngine_->restart;
+    if (!isRestart || !topologyEngine_->controlBackendAvailableAtStartup) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(clusterManager_->CheckWaitNodeTableComplete());
+    std::shared_ptr<const cluster::TopologySnapshot> topologySnapshot;
+    RETURN_IF_NOT_OK(worker::LoadTopologySnapshot(topologyEngine_, topologySnapshot));
     std::vector<HostPort> nodeAddrs;
     // Why does it get node list from etcd instead of cluster manager or hashring?
     // Because in case of centralized master, we have no hashring, and can get list from only etcd and cluster manager.
     // We want a complete list without absence of any running node. Since the list in cluster manager is from etcd,
     // getting list directly from etcd can avoid possible delay in rpc resulting in miss of nodes.
-    RETURN_IF_NOT_OK(clusterManager_->GetNodeAddrListFromEtcd(nodeAddrs));
+    RETURN_IF_NOT_OK(worker::GetTopologyMemberAddresses(topologyEngine_, nodeAddrs));
     const size_t maxThreadNum = 20;
     // Add a condition to forbid thread pool size creation with minThreadNum 0 to avoid cpp runtime exception.
     if (nodeAddrs.empty()) {
@@ -330,6 +328,9 @@ Status MasterSCServiceImpl::MigrateSCMetadata(const MigrateSCMetadataReqPb &req,
         }
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(copyReq), "AK/SK failed.");
+    RETURN_IF_NOT_OK(worker::ValidateTopologyMigrationRequest(
+        topologyEngine_, req.topology_version(), req.batch_epoch(), req.source_member_id(),
+        req.target_member_id(), req.source_addr()));
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.MigrateSCMetadata");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -29,6 +26,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#include "datasystem/worker/worker_topology_references.h"
 
 #include <google/protobuf/repeated_field.h>
 
@@ -94,13 +93,13 @@ void AddReplacePrimaryObjectInfos(master::ReplacePrimaryReqPb &req, const std::v
 }  // namespace
 
 WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam,
-                                                       ClusterManager *clusterManager,
+                                                       worker::WorkerTopologyReferences *topologyEngine,
                                                        std::shared_ptr<ThreadPool> memcpyThreadPool,
                                                        std::shared_ptr<AkSkManager> akSkManager,
                                                        const std::string &localAddr,
                                                        std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
-      clusterManager_(clusterManager),
+      topologyEngine_(topologyEngine),
       memcpyThreadPool_(std::move(memcpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddr_(localAddr),
@@ -119,11 +118,6 @@ Status WorkerOcServiceMigrateImpl::PrepareMigrateData(const MigrateDataReqPb &re
             return Status(StatusCode::K_NO_SPACE, "Slot migration allocate memory failed");
         }
         RETURN_IF_NOT_OK(allocRc);
-    }
-    if (clusterManager_ != nullptr && clusterManager_->IsDataMigrationStarted()) {
-        auto failedIds = CollectRequestObjectKeys(req.objects());
-        FillMigrateDataResponse(req, {}, failedIds, false, rsp);
-        RETURN_STATUS(StatusCode::K_NOT_READY, "Data migration already in progress");
     }
     return Status::OK();
 }
@@ -151,6 +145,63 @@ Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, Mi
     RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, "OOM");
 }
 
+Status WorkerOcServiceMigrateImpl::CheckMigrateDataAdmission(const MigrateDataReqPb &req, MigrateDataRspPb &rsp)
+{
+    auto rc = AcquireIncomingMigrationAdmission();
+    if (rc.IsOk()) {
+        return Status::OK();
+    }
+    std::unordered_set<std::string> failedIds;
+    std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
+                   [](const auto &info) { return info.object_key(); });
+    FillMigrateDataResponse(req, {}, failedIds, false, rsp);
+    rsp.set_scale_down_state(MigrateDataRspPb::DATA_MIGRATION_STARTED);
+    return rc;
+}
+
+Status WorkerOcServiceMigrateImpl::AcquireIncomingMigrationAdmission()
+{
+    std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
+    const bool localExiting = worker::IsLocalTopologyMemberExiting(topologyEngine_);
+    CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_ && !localExiting, StatusCode::K_NOT_READY,
+                             "Target Worker is exiting and cannot accept migrated data");
+    ++incomingMigrationCount_;
+    return Status::OK();
+}
+
+void WorkerOcServiceMigrateImpl::ReleaseIncomingMigrationAdmission()
+{
+    std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
+    if (incomingMigrationCount_ == 0) {
+        LOG(ERROR) << "Incoming migration admission counter is already zero.";
+        return;
+    }
+    --incomingMigrationCount_;
+    if (incomingMigrationCount_ == 0) {
+        incomingMigrationCv_.notify_all();
+    }
+}
+
+Status WorkerOcServiceMigrateImpl::CloseIncomingMigrationAdmissionAndWait(
+    std::chrono::steady_clock::time_point deadline)
+{
+    std::unique_lock<std::mutex> lock(incomingMigrationMutex_);
+    incomingMigrationAdmissionClosed_ = true;
+    if (incomingMigrationCount_ > 0) {
+        LOG(INFO) << "[Graceful exit] Waiting for " << incomingMigrationCount_
+                  << " admitted incoming migration request(s) to finish.";
+    }
+    const bool drained =
+        incomingMigrationCv_.wait_until(lock, deadline, [this] { return incomingMigrationCount_ == 0; });
+    if (!drained) {
+        LOG(ERROR) << "[Graceful exit] Timed out with " << incomingMigrationCount_
+                   << " incoming migration request(s) still running; admission remains closed.";
+        RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                      "Timed out waiting for admitted incoming migrations to finish");
+    }
+    return Status::OK();
+}
+
 Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
                                                std::vector<RpcMessage> payloads)
 {
@@ -158,6 +209,19 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
                               static_cast<int>(req.type()), req.objects_size(), VectorToString(GetObjects(req)),
                               req.is_slot_migration(), req.slot_id());
     INJECT_POINT("worker.migrate_service.return");
+    RETURN_IF_NOT_OK(CheckMigrateDataAdmission(req, rsp));
+    Raii admission([this] { ReleaseIncomingMigrationAdmission(); });
+#ifdef WITH_TESTS
+    if (afterAdmissionTestHook_) {
+        afterAdmissionTestHook_();
+    }
+#endif
+    return MigrateDataImpl(req, rsp, std::move(payloads));
+}
+
+Status WorkerOcServiceMigrateImpl::MigrateDataImpl(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
+                                                   std::vector<RpcMessage> payloads)
+{
     RETURN_IF_NOT_OK(CheckResource(req, rsp));
     std::unordered_map<std::string, std::shared_ptr<ShmUnit>> units;
     RETURN_IF_NOT_OK(PrepareMigrateData(req, rsp, units));
@@ -215,6 +279,16 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqP
     LOG(INFO) << FormatString("[Migrate Data] Count: %d, Objects: %s", req.objects_size(),
                               VectorToString(GetObjects(req)));
     RETURN_OK_IF_TRUE(req.objects().empty());
+    auto admissionRc = AcquireIncomingMigrationAdmission();
+    if (admissionRc.IsError()) {
+        return PrepareMigrateDataDirectError(req, rsp, admissionRc.GetCode(), admissionRc.GetMsg());
+    }
+    Raii admission([this] { ReleaseIncomingMigrationAdmission(); });
+#ifdef WITH_TESTS
+    if (afterAdmissionTestHook_) {
+        afterAdmissionTestHook_();
+    }
+#endif
     RETURN_IF_NOT_OK(PreCheckMigrateDataDirect(req, rsp));
     return MigrateDataDirectImpl(req, rsp);
 }
@@ -237,9 +311,6 @@ Status WorkerOcServiceMigrateImpl::PreCheckMigrateDataDirect(const MigrateDataDi
 {
     if (!IsMemoryAvailable(0, MigrateType::SPILL)) {
         return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_OUT_OF_MEMORY, "OOM");
-    }
-    if (clusterManager_ != nullptr && clusterManager_->CheckLocalNodeIsExiting()) {
-        return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_SCALE_DOWN, "Worker is exiting");
     }
     if (!IsUrmaEnabled()) {
         return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_RUNTIME_ERROR, "URMA is not enabled");
@@ -404,7 +475,8 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
                                                        QueryMetaMap &queryMetas,
                                                        std::unordered_set<std::string> &failedIds)
 {
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    std::vector<std::string> objectKeyList(objectKeys.begin(), objectKeys.end());
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeyList, topologyPlacement_, topologyRouteOptions_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     Status lastRc;
@@ -751,7 +823,8 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
                                                       std::unordered_set<std::string> &failedIds)
 {
     auto objectKeys = CollectObjectInfoKeys(needSendMasterIds);
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    std::vector<std::string> objectKeyList{ objectKeys.begin(), objectKeys.end() };
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeyList, topologyPlacement_, topologyRouteOptions_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     Status lastRc;
@@ -839,15 +912,7 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
             rsp.set_limit_rate(rateController_->CalculateNewRate(req.worker_addr()));
         }
     }
-    if (clusterManager_ != nullptr) {
-        if (clusterManager_->IsPreLeaving(localAddr_)) {
-            rsp.set_scale_down_state(MigrateDataRspPb::NEED_SCALE_DOWN);
-        } else if (clusterManager_->IsDataMigrationStarted()) {
-            rsp.set_scale_down_state(MigrateDataRspPb::DATA_MIGRATION_STARTED);
-        } else {
-            rsp.set_scale_down_state(MigrateDataRspPb::NONE);
-        }
-    }
+    rsp.set_scale_down_state(MigrateDataRspPb::NONE);
 }
 
 void WorkerOcServiceMigrateImpl::FillMigrateDataDirectResponse(const MigrateDataDirectReqPb &req,

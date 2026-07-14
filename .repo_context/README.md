@@ -95,25 +95,17 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │   │   ├── quality.build-test-debug.json
 │   │   ├── quality.cmake-build.json
 │   │   ├── quality.tests-and-reproduction.json
-│   │   ├── runtime.cluster-manager.json
-│   │   ├── runtime.cluster-management.json
 │   │   ├── runtime.etcd-metadata.json
-│   │   ├── runtime.hash-ring.json
+│   │   ├── runtime.topology.json
 │   │   └── runtime.worker-runtime.json
 │   ├── runtime/
 │   │   ├── README.md
-│   │   ├── cluster-manager/
-│   │   │   ├── README.md
-│   │   │   └── design.md
 │   │   ├── worker-runtime.md
-│   │   ├── cluster-management.md
-│   │   ├── cluster-management-dfx-matrix.md
 │   │   ├── etcd-metadata/
 │   │   │   ├── README.md
 │   │   │   └── design.md
-│   │   └── hash-ring/
-│   │       ├── README.md
-│   │       └── design.md
+│   │   └── topology/
+│   │       └── README.md
 │   ├── infra/
 │   │   ├── README.md
 │   │   ├── common-infra.md
@@ -178,7 +170,7 @@ It is not a place for long-lived compatibility shims, redirect stubs, or partial
 │       │   ├── etcd-metadata/
 │       │   │   ├── README.md
 │       │   │   └── implementation.md
-│       │   └── hash-ring/
+│       │   └── topology/
 │       │       ├── README.md
 │       │       └── implementation.md
 │       ├── quality/
@@ -238,7 +230,7 @@ The first pass is intentionally coarse. It currently covers:
 - an upkeep playbook for formal module-context generation and backfill;
 - feature workflow guidance for l2 cache and secondary-storage changes;
 - cross-module observability and operations guidance for diagnosis, health checks, and performance troubleshooting.
-- detailed runtime cluster-management packages for ETCD/Metastore metadata access, hash-ring topology management, and
-  cluster-manager lifecycle/routing behavior.
+- detailed runtime topology packages for ETCD/Metastore metadata access, v3 topology management, membership, routing,
+  and scale-transition behavior.
 
 The next recommended deep dives are recorded in `.repo_context/roadmap.md`.

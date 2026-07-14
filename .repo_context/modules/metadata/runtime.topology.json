@@ -1,0 +1,69 @@
+{
+  "id": "runtime.topology",
+  "title": "Runtime Topology",
+  "status": "active",
+  "domain": "runtime",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/runtime/topology/README.md",
+    "design": null,
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/runtime/topology/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/cluster",
+    "src/datasystem/protos/cluster_topology.proto",
+    "src/datasystem/worker/worker_oc_server.cpp",
+    "src/datasystem/worker/worker_topology_references.cpp"
+  ],
+  "key_tests": [
+    "tests/ut/cluster",
+    "tests/ut/worker/object_cache",
+    "tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.worker-runtime",
+      "runtime.etcd-metadata",
+      "infra.slot",
+      "runtime.object-cache-eviction"
+    ],
+    "split_signals": [
+      "persisted_schema",
+      "distributed_lifecycle",
+      "routing_surface",
+      "recovery_lifecycle",
+      "operator_config_surface",
+      "coordination_backend"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "TopologyEngine",
+      "runtime topology",
+      "ClusterTopologyPb",
+      "cluster topology",
+      "topology repository",
+      "routing snapshot",
+      "placement facade",
+      "controller recovery",
+      "worker membership",
+      "voluntary scale down"
+    ],
+    "intent_examples": [
+      "understand worker membership and topology startup",
+      "debug topology route lookup or placement decisions",
+      "change cluster_topology schema or topology repository behavior",
+      "review scale-out, scale-in, Failure, restart, or controller recovery behavior",
+      "validate topology task execution and metadata migration coordination"
+    ]
+  }
+}

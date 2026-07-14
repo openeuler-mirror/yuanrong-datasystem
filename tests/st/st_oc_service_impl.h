@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -29,10 +26,12 @@ namespace datasystem {
 namespace st {
 class StOCServiceImpl : public UtOCService {
 public:
-    explicit StOCServiceImpl(object_cache::WorkerOCServiceImpl *workerOc, ClusterManager *clusterManager,
-                             MetadataManagerHolder *metadataManagerHolder, std::shared_ptr<AkSkManager> akSkManager)
+    explicit StOCServiceImpl(object_cache::WorkerOCServiceImpl *workerOc,
+                             worker::WorkerTopologyReferences *topologyEngine,
+                             MetadataManagerHolder *metadataManagerHolder,
+                             std::shared_ptr<AkSkManager> akSkManager)
         : workerOc_(workerOc),
-          clusterManager_(clusterManager),
+          topologyEngine_(topologyEngine),
           metadataManagerHolder_(metadataManagerHolder),
           akSkManager_(std::move(akSkManager))
     {
@@ -55,7 +54,7 @@ public:
     Status GetWorkerGRefTable(const GRefTableReqPb &req, GRefTableRspPb &rsp);
 
     /**
-     * @brief Get the node table in cluster manager.
+     * @brief Get the topology node table.
      * @param[in] req The rpc request protobuf.
      * @param[out] rsp The rpc response protobuf.
      * @return K_OK on success; the error code otherwise.
@@ -71,7 +70,7 @@ public:
 
 private:
     object_cache::WorkerOCServiceImpl *workerOc_;
-    ClusterManager *clusterManager_;
+    worker::WorkerTopologyReferences *topologyEngine_;
     MetadataManagerHolder *metadataManagerHolder_;
     std::shared_ptr<AkSkManager> akSkManager_;
 };

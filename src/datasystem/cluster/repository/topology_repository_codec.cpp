@@ -50,32 +50,32 @@ Status SerializeCanonical(const google::protobuf::MessageLite &message, std::str
     return Status::OK();
 }
 
-Status ToPbType(TopologyChangeType type, v3::TypePb &output)
+Status ToPbType(TopologyChangeType type, ::datasystem::TypePb &output)
 {
     switch (type) {
         case TopologyChangeType::SCALE_OUT:
-            output = v3::SCALE_OUT;
+            output = ::datasystem::SCALE_OUT;
             return Status::OK();
         case TopologyChangeType::SCALE_IN:
-            output = v3::SCALE_IN;
+            output = ::datasystem::SCALE_IN;
             return Status::OK();
         case TopologyChangeType::FAILURE:
-            output = v3::FAILURE;
+            output = ::datasystem::FAILURE;
             return Status::OK();
     }
     RETURN_STATUS(K_INVALID, "invalid topology change type");
 }
 
-Status FromPbType(v3::TypePb type, TopologyChangeType &output)
+Status FromPbType(::datasystem::TypePb type, TopologyChangeType &output)
 {
     switch (type) {
-        case v3::SCALE_OUT:
+        case ::datasystem::SCALE_OUT:
             output = TopologyChangeType::SCALE_OUT;
             return Status::OK();
-        case v3::SCALE_IN:
+        case ::datasystem::SCALE_IN:
             output = TopologyChangeType::SCALE_IN;
             return Status::OK();
-        case v3::FAILURE:
+        case ::datasystem::FAILURE:
             output = TopologyChangeType::FAILURE;
             return Status::OK();
         default:
@@ -122,7 +122,7 @@ bool IsCanonicalRanges(const std::vector<TopologyTaskRange> &ranges, const std::
 }
 
 void EncodeRanges(const std::vector<TopologyTaskRange> &ranges,
-                  google::protobuf::RepeatedPtrField<v3::TokenRangePb> *output)
+                  google::protobuf::RepeatedPtrField<::datasystem::TokenRangePb> *output)
 {
     for (const auto &range : ranges) {
         auto *rangePb = output->Add();
@@ -133,7 +133,7 @@ void EncodeRanges(const std::vector<TopologyTaskRange> &ranges,
     }
 }
 
-Status DecodeRanges(const google::protobuf::RepeatedPtrField<v3::TokenRangePb> &input,
+Status DecodeRanges(const google::protobuf::RepeatedPtrField<::datasystem::TokenRangePb> &input,
                     std::vector<TopologyTaskRange> &ranges, std::string &executor)
 {
     CHECK_FAIL_RETURN_STATUS(!input.empty() && static_cast<size_t>(input.size()) <= MAX_TASK_RANGES, K_INVALID,
@@ -157,20 +157,20 @@ Status TopologyRepositoryCodec::EncodeTopology(const TopologyState &state, std::
 {
     std::shared_ptr<const TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(TopologySnapshot::Create(state, 0, VALIDATION_DIGEST, snapshot));
-    v3::ClusterTopologyPb pb;
+    ::datasystem::ClusterTopologyPb pb;
     pb.set_cluster_has_init(snapshot->ClusterHasInit());
     pb.set_version(snapshot->Version());
     pb.set_schema_version(SCHEMA_VERSION);
     for (const auto &member : snapshot->Members()) {
         auto &memberPb = (*pb.mutable_members())[member.identity.address];
         memberPb.set_id(member.identity.id);
-        memberPb.set_state(static_cast<v3::MembershipPb::StatePb>(member.state));
+        memberPb.set_state(static_cast<::datasystem::MembershipPb::StatePb>(member.state));
         for (uint32_t token : member.tokens) {
             memberPb.add_tokens(token);
         }
     }
     if (snapshot->GetActiveBatch().has_value()) {
-        v3::TypePb typePb;
+        ::datasystem::TypePb typePb;
         RETURN_IF_NOT_OK(ToPbType(snapshot->GetActiveBatch()->type, typePb));
         pb.mutable_active_batch()->set_type(typePb);
         pb.mutable_active_batch()->set_epoch(snapshot->GetActiveBatch()->epoch);
@@ -181,7 +181,7 @@ Status TopologyRepositoryCodec::EncodeTopology(const TopologyState &state, std::
 Status TopologyRepositoryCodec::DecodeTopology(const std::string &value, TopologyState &state)
 {
     CHECK_FAIL_RETURN_STATUS(value.size() <= MAX_VALUE_BYTES, K_INVALID, "topology value exceeds limit");
-    v3::ClusterTopologyPb pb;
+    ::datasystem::ClusterTopologyPb pb;
     CHECK_FAIL_RETURN_STATUS(pb.ParseFromString(value) && pb.schema_version() == SCHEMA_VERSION, K_INVALID,
                              "invalid topology value");
     CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(pb.members_size()) <= MAX_TOPOLOGY_MEMBERS, K_INVALID,
@@ -198,8 +198,8 @@ Status TopologyRepositoryCodec::DecodeTopology(const std::string &value, Topolog
     decoded.members.reserve(static_cast<size_t>(pb.members_size()));
     for (const auto &[address, memberPb] : pb.members()) {
         const int stateValue = static_cast<int>(memberPb.state());
-        CHECK_FAIL_RETURN_STATUS(stateValue >= static_cast<int>(v3::MembershipPb::INITIAL)
-                                     && stateValue <= static_cast<int>(v3::MembershipPb::FAILED),
+        CHECK_FAIL_RETURN_STATUS(stateValue >= static_cast<int>(::datasystem::MembershipPb::INITIAL)
+                                     && stateValue <= static_cast<int>(::datasystem::MembershipPb::FAILED),
                                  K_INVALID, "invalid member state");
         Member member{ { memberPb.id(), address }, static_cast<MemberState>(memberPb.state()), {} };
         member.tokens.assign(memberPb.tokens().begin(), memberPb.tokens().end());
@@ -224,7 +224,7 @@ Status TopologyRepositoryCodec::EncodeMigrateTask(const TopologyMigrateTask &tas
     RETURN_IF_NOT_OK(ValidateMemberAddress(task.executorAddress));
     CHECK_FAIL_RETURN_STATUS(task.epoch > 0 && IsCanonicalRanges(task.sourceRanges, task.executorAddress), K_INVALID,
                              "invalid migrate task");
-    v3::MigrateTaskPb pb;
+    ::datasystem::MigrateTaskPb pb;
     pb.set_target_address(task.targetAddress);
     EncodeRanges(task.sourceRanges, pb.mutable_source_ranges());
     return SerializeCanonical(pb, value);
@@ -235,7 +235,7 @@ Status TopologyRepositoryCodec::DecodeMigrateTask(const std::string &taskId, Top
 {
     RETURN_IF_NOT_OK(ValidateTaskContext(taskId, 'm', epoch));
     CHECK_FAIL_RETURN_STATUS(epoch > 0 && value.size() <= MAX_VALUE_BYTES, K_INVALID, "invalid task context");
-    v3::MigrateTaskPb pb;
+    ::datasystem::MigrateTaskPb pb;
     CHECK_FAIL_RETURN_STATUS(pb.ParseFromString(value) && !pb.target_address().empty(), K_INVALID,
                              "invalid migrate task value");
     RETURN_IF_NOT_OK(ValidateMemberAddress(pb.target_address()));
@@ -252,7 +252,7 @@ Status TopologyRepositoryCodec::EncodeDeleteTask(const TopologyDeleteTask &task,
     RETURN_IF_NOT_OK(ValidateMemberAddress(task.executorAddress));
     CHECK_FAIL_RETURN_STATUS(task.epoch > 0 && IsCanonicalRanges(task.recoveryRanges, task.executorAddress), K_INVALID,
                              "invalid delete task");
-    v3::DeleteNodeTaskPb pb;
+    ::datasystem::DeleteNodeTaskPb pb;
     pb.set_failed_address(task.failedAddress);
     EncodeRanges(task.recoveryRanges, pb.mutable_recovery_ranges());
     return SerializeCanonical(pb, value);
@@ -263,7 +263,7 @@ Status TopologyRepositoryCodec::DecodeDeleteTask(const std::string &taskId, uint
 {
     RETURN_IF_NOT_OK(ValidateTaskContext(taskId, 'd', epoch));
     CHECK_FAIL_RETURN_STATUS(epoch > 0 && value.size() <= MAX_VALUE_BYTES, K_INVALID, "invalid task context");
-    v3::DeleteNodeTaskPb pb;
+    ::datasystem::DeleteNodeTaskPb pb;
     CHECK_FAIL_RETURN_STATUS(pb.ParseFromString(value) && !pb.failed_address().empty(), K_INVALID,
                              "invalid delete task value");
     RETURN_IF_NOT_OK(ValidateMemberAddress(pb.failed_address()));
@@ -279,9 +279,9 @@ Status TopologyRepositoryCodec::EncodeNotify(const TopologyTaskNotify &notify, s
     CHECK_FAIL_RETURN_STATUS(!notify.taskIds.empty() && std::is_sorted(notify.taskIds.begin(), notify.taskIds.end())
                                  && duplicate == notify.taskIds.end() && notify.taskIds.size() <= MAX_NOTIFY_TASK_REFS,
                              K_INVALID, "invalid notify task ids");
-    v3::TypePb typePb;
+    ::datasystem::TypePb typePb;
     RETURN_IF_NOT_OK(ToPbType(notify.type, typePb));
-    v3::TaskNotifyPb pb;
+    ::datasystem::TaskNotifyPb pb;
     pb.set_type(typePb);
     for (const auto &taskId : notify.taskIds) {
         RETURN_IF_NOT_OK(ValidateTaskId(taskId));
@@ -299,7 +299,7 @@ Status TopologyRepositoryCodec::EncodeNotify(const TopologyTaskNotify &notify, s
 Status TopologyRepositoryCodec::DecodeNotify(const std::string &value, TopologyTaskNotify &notify)
 {
     CHECK_FAIL_RETURN_STATUS(value.size() <= MAX_NOTIFY_VALUE_BYTES, K_INVALID, "notify value exceeds limit");
-    v3::TaskNotifyPb pb;
+    ::datasystem::TaskNotifyPb pb;
     CHECK_FAIL_RETURN_STATUS(pb.ParseFromString(value), K_INVALID, "invalid notify value");
     TopologyTaskNotify decoded;
     RETURN_IF_NOT_OK(FromPbType(pb.type(), decoded.type));

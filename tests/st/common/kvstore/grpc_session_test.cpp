@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +17,7 @@
 
 #include <string>
 #include "common.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
 #include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
 
@@ -76,8 +74,10 @@ TEST_F(GrpcSessionTest, TestPutClusterTableWithoutLeaseId)
 
     std::string val = "val";
     int timeoutMs = 1'000;
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    DS_ASSERT_OK(cluster::TopologyKeyHelper::Create("grpc-session", keys));
     etcdserverpb::PutRequest putReq;
-    putReq.set_key(ETCD_CLUSTER_TABLE);
+    putReq.set_key(keys->MembershipTable() + "/127.0.0.1:1");
     putReq.set_value(val);
     etcdserverpb::PutResponse putRsp;
     DS_ASSERT_NOT_OK(kvSession->SendRpc("Put::etcd_kv_Put", putReq, putRsp, &etcdserverpb::KV::Stub::Put, "",

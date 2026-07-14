@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +18,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_DELETE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_DELETE_IMPL_H
 
+#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/utils/status.h"
 
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -31,7 +29,7 @@ namespace object_cache {
 
 class WorkerOcServiceDeleteImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
+    WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
                               std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
                               std::shared_ptr<WorkerOcServiceGetImpl> getProc);
 
@@ -60,6 +58,7 @@ public:
     Status DeletePersistenceObject(const DeletePersistenceObjectReqPb &req, DeletePersistenceObjectRspPb &rsp);
 
 private:
+
     /**
      * @brief Execute persistence-only delete on the async delete thread pool.
      * @param[in] req The rpc request protobuf.
@@ -88,7 +87,7 @@ private:
 
     /**
      * @brief Send request to master to delete meta and get response.
-     *        Master will notify other workers to delete these objects asynchronously.
+     * Master will notify other workers to delete these objects asynchronously.
      * @param[in] needDeleteObjectKey The ids of the objects which will be delete on master.
      * @param[out] failedObjectKeys The failed object keys.
      * @return Status of the call.
@@ -118,7 +117,7 @@ private:
      */
     Status DeleteObjectFromNotification(const std::string &objectKey, uint64_t version, bool async);
 
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 

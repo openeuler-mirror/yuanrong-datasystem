@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -61,26 +58,13 @@ Status StOCServiceImpl::GetWorkerGRefTable(const GRefTableReqPb &req, GRefTableR
 Status StOCServiceImpl::GetCmNodeTable(const CmNodeTableReqPb &req, CmNodeTableRspPb &rsp)
 {
     (void)req;
-    const int ZERO = 0;
-    const int ONE = 1;
-    const int TWO = 2;
-    const int THREE = 3;
-    const int NUM_TOKENS = 4;
-
-    const auto &tableStr = clusterManager_->ClusterNodeTableToString();
-    for (const std::string &nodeStr : tableStr) {
-        std::vector<std::string> tokens;
-        std::stringstream ss(nodeStr);
-        for (std::string token; std::getline(ss, token, ';');) {
-            tokens.emplace_back(token);
-        }
-        CHECK_FAIL_RETURN_STATUS(tokens.size() == NUM_TOKENS, StatusCode::K_INVALID,
-                                 "String should be of format \"hostport:timeEpoch:stateStr:additionEventType\"");
+    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "topology engine is null");
+    for (const auto &worker : worker::GetValidTopologyMembers(topologyEngine_)) {
         auto nodePb = rsp.add_cm_node_table();
-        nodePb->set_hostport(tokens[ZERO]);
-        nodePb->set_time_epoch(tokens[ONE]);
-        nodePb->set_state(tokens[TWO]);
-        nodePb->set_addition_event_type(tokens[THREE]);
+        nodePb->set_hostport(worker);
+        nodePb->set_time_epoch("0");
+        nodePb->set_state(worker::IsTopologyMemberPreLeaving(topologyEngine_, worker) ? "pre_leaving" : "active");
+        nodePb->set_addition_event_type("ready");
     }
     return Status::OK();
 }

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -43,8 +40,6 @@ constexpr size_t REBALANCE_BATCH_MAX_OBJECTS = 512;
 #ifdef WITH_TESTS
 uint64_t SubtractOffsetOrZero(uint64_t value, int64_t offset)
 {
-    // Compute |offset| without undefined behavior on INT64_MIN.
-    // The +1/-1 pattern avoids negating INT64_MIN directly.
     auto absOffset = static_cast<uint64_t>(-(offset + 1)) + 1;
     return value > absOffset ? value - absOffset : 0;
 }
@@ -53,7 +48,7 @@ uint64_t SubtractOffsetOrZero(uint64_t value, int64_t offset)
 
 RebalanceExecutor::RebalanceExecutor(RebalanceExecutorConfig config)
     : localAddress_(std::move(config.localAddress)),
-      clusterManager_(config.clusterManager),
+      topologyEngine_(config.topologyEngine),
       akSkManager_(std::move(config.akSkManager)),
       objectTable_(std::move(config.objectTable)),
       evictionManager_(std::move(config.evictionManager)),
@@ -119,8 +114,9 @@ void RebalanceExecutor::SubmitBusyResult(const master::RebalanceTaskPb &task, co
     LOG(WARNING) << FormatString("Reject rebalance task %s because task %s is still running", task.task_id(),
                                  runningTaskId);
     try {
-        executorPool_.Execute(
-            [this, task]() { ReportResult(task, master::REBALANCE_TASK_FAILED, 0, 0, 0, "source worker is busy"); });
+        executorPool_.Execute([this, task]() {
+            ReportResult(task, master::REBALANCE_TASK_FAILED, 0, 0, 0, "source worker is busy");
+        });
     } catch (const std::exception &e) {
         LOG(ERROR) << "Submit busy rebalance result " << task.task_id() << " failed: " << e.what();
     } catch (...) {
@@ -131,9 +127,9 @@ void RebalanceExecutor::SubmitBusyResult(const master::RebalanceTaskPb &task, co
 Status RebalanceExecutor::ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr,
                                        uint64_t localDeadlineMs) const
 {
-    CHECK_FAIL_RETURN_STATUS(
-        task.source_worker() == localAddress_.ToString(), K_INVALID,
-        FormatString("Task source %s is not local worker %s", task.source_worker(), localAddress_.ToString()));
+    CHECK_FAIL_RETURN_STATUS(task.source_worker() == localAddress_.ToString(), K_INVALID,
+                             FormatString("Task source %s is not local worker %s", task.source_worker(),
+                                          localAddress_.ToString()));
     CHECK_FAIL_RETURN_STATUS(!task.target_worker().empty(), K_INVALID, "Rebalance target worker is empty");
     CHECK_FAIL_RETURN_STATUS(task.max_bytes() > 0, K_INVALID, "Rebalance max bytes is zero");
     CHECK_FAIL_RETURN_STATUS(!IsExpired(localDeadlineMs), K_RUNTIME_ERROR, "Rebalance task is expired");
@@ -188,8 +184,6 @@ uint64_t RebalanceExecutor::NowMsForExpiryCheck() const
 uint64_t RebalanceExecutor::BuildLocalDeadlineMs(const master::RebalanceTaskPb &task) const
 {
     if (task.timeout_ms() == 0) {
-        // Compatibility fallback for tasks produced before timeout_ms was set.
-        // This keeps the legacy absolute-deadline behavior and its known cross-node clock-skew risk.
         return task.deadline_ms();
     }
     return SaturatingAdd(NowMsForExpiryCheck(), task.timeout_ms());
@@ -256,8 +250,8 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
             break;
         }
         if (migrator == nullptr) {
-            migrator = std::make_unique<object_cache::DataMigrator>(MigrateType::SPILL, clusterManager_, localAddress_,
-                                                                    akSkManager_, objectTable_, task.task_id(), 0);
+            migrator = std::make_unique<object_cache::DataMigrator>(
+                MigrateType::SPILL, topologyEngine_, localAddress_, akSkManager_, objectTable_, task.task_id(), 0);
             migrator->Init();
         }
         auto rc = ExecuteBatch(task, targetAddr, stats, *migrator);
@@ -324,10 +318,10 @@ uint64_t RebalanceExecutor::CalculateMigratedBytes(const std::unordered_map<std:
 
 Status RebalanceExecutor::GetWorkerMasterApi(std::shared_ptr<WorkerMasterOCApi> &workerMasterApi) const
 {
-    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr && apiManager_ != nullptr, K_RUNTIME_ERROR,
+    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr && apiManager_ != nullptr, K_RUNTIME_ERROR,
                              "Rebalance executor is not initialized");
     HostPort masterAddr;
-    RETURN_IF_NOT_OK(clusterManager_->GetMetaAddress(RESOURCE_MONITOR_MASTER, masterAddr));
+    RETURN_IF_NOT_OK(worker::ResolveTopologyOwner(topologyEngine_, RESOURCE_MONITOR_MASTER, masterAddr));
     workerMasterApi = apiManager_->GetWorkerMasterApi(masterAddr);
     RETURN_RUNTIME_ERROR_IF_NULL(workerMasterApi);
     return Status::OK();
@@ -358,8 +352,8 @@ void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, master
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
         auto rc = GetWorkerMasterApi(workerMasterApi);
         if (rc.IsError()) {
-            LOG(WARNING) << FormatString("Get worker master api failed, taskId: %s, retry: %d, rc: %s", task.task_id(),
-                                         i, rc.ToString());
+            LOG(WARNING) << FormatString("Get worker master api failed, taskId: %s, retry: %d, rc: %s",
+                                         task.task_id(), i, rc.ToString());
             std::this_thread::sleep_for(std::chrono::milliseconds(REPORT_RESULT_RETRY_INTERVAL_MS));
             continue;
         }
@@ -368,8 +362,8 @@ void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, master
         if (rc.IsOk()) {
             return;
         }
-        LOG(WARNING) << FormatString("Report rebalance result failed, taskId: %s, retry: %d, rc: %s", task.task_id(), i,
-                                     rc.ToString());
+        LOG(WARNING) << FormatString("Report rebalance result failed, taskId: %s, retry: %d, rc: %s", task.task_id(),
+                                     i, rc.ToString());
         std::this_thread::sleep_for(std::chrono::milliseconds(REPORT_RESULT_RETRY_INTERVAL_MS));
     }
     LOG(ERROR) << FormatString(

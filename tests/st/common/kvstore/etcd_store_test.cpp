@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,6 +15,8 @@
  * Description: Test interface to ETCD
  */
 #include <cassert>
+#include <condition_variable>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -32,15 +31,15 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
-#include "datasystem/common/kvstore/etcd/member_service_info.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
+#include "datasystem/common/kvstore/etcd/member_service_info.h"
 #include "datasystem/common/util/ssl_authorization.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/object_client.h"
 #include "datasystem/object/object_enum.h"
-#include "datasystem/topology/membership/worker_node_info.h"
+#include "datasystem/common/kvstore/etcd/member_service_info.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "etcd/api/mvccpb/kv.pb.h"
 
@@ -48,7 +47,9 @@ using namespace datasystem;
 
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_string(cluster_name);
+DS_DECLARE_bool(auto_del_dead_node);
 DS_DECLARE_bool(enable_etcd_auth);
+DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_string(etcd_target_name_override);
 DS_DECLARE_string(encrypt_kit);
 DS_DECLARE_string(etcd_passphrase_path);
@@ -56,13 +57,8 @@ DS_DECLARE_string(etcd_passphrase_path);
 namespace datasystem {
 namespace st {
 namespace {
-Status GetMemberStateString(const std::string &value, std::string &state)
-{
-    topology::MemberServiceInfo memberInfo;
-    RETURN_IF_NOT_OK(topology::MemberServiceInfo::FromString(value, memberInfo));
-    return topology::MemberLifecycleStateToString(memberInfo.state, state);
+constexpr uint32_t TEST_LOCAL_FAILURE_TIMEOUT_S = 1;
 }
-}  // namespace
 
 class EtcdStoreTest : public ExternalClusterTest {
 protected:
@@ -107,7 +103,7 @@ protected:
     void ReceivedEvents(mvccpb::Event &&event)
     {
         eventCount_++;
-        EXPECT_EQ(tablePrefix_ + "/" + watchKey_[eventCount_ - 1], event.kv().key());
+        EXPECT_EQ(PhysicalTablePrefix() + "/" + watchKey_[eventCount_ - 1], event.kv().key());
         if (event.type() != 1) {
             if (watchValue_[eventCount_ - 1] != "pass") {
                 EXPECT_EQ(watchValue_[eventCount_ - 1], event.kv().value());
@@ -115,6 +111,11 @@ protected:
         }
         LOG(INFO) << "Revision: " << event.kv().mod_revision() << " Count: " << eventCount_ << " Event type "
                   << event.type() << " key " << event.kv().key();
+    }
+
+    std::string PhysicalTablePrefix() const
+    {
+        return "/" + FLAGS_cluster_name + tablePrefix_;
     }
 
     void ReceivedEvents2(mvccpb::Event &&event)
@@ -152,52 +153,59 @@ protected:
     int eventCount_ = 0;
 };
 
+void ExpectKeepAliveState(const std::string &value, cluster::MemberLifecycleState expected)
+{
+    cluster::MemberServiceInfo info;
+    DS_ASSERT_OK(cluster::MemberServiceInfo::FromProto(value, info));
+    EXPECT_EQ(info.state, expected);
+}
+
 TEST(EtcdStoreWorkerServiceInfoTest, TestToStringAndFromStringRoundTrip)
 {
-    topology::WorkerServiceInfo in{ 12345, topology::WorkerServiceState::READY, "host-a", "v1" };
+    cluster::MemberServiceInfo in{ 12345, cluster::MemberLifecycleState::READY, "host-a", "v1" };
     std::string str = in.ToString();
     EXPECT_EQ(str, "12345;ready;host-a;v1");
 
-    topology::WorkerServiceInfo out;
-    Status rc = topology::WorkerServiceInfo::FromString(str, out);
+    cluster::MemberServiceInfo out;
+    Status rc = cluster::MemberServiceInfo::FromString(str, out);
     DS_EXPECT_OK(rc);
     EXPECT_EQ(out.timestamp, 12345);
-    EXPECT_EQ(out.state, topology::WorkerServiceState::READY);
+    EXPECT_EQ(out.state, cluster::MemberLifecycleState::READY);
     EXPECT_EQ(out.hostId, "host-a");
     EXPECT_EQ(out.compatibilityVersion, "v1");
 }
 
 TEST(EtcdStoreWorkerServiceInfoTest, TestWithoutSecondDelimiter)
 {
-    topology::WorkerServiceInfo value{ 123, topology::WorkerServiceState::READY, "", "" };
+    cluster::MemberServiceInfo value{ 123, cluster::MemberLifecycleState::READY, "", "" };
     std::string str = value.ToString();
     EXPECT_EQ(str, "123;ready");
-    topology::WorkerServiceInfo parsed;
-    Status rc = topology::WorkerServiceInfo::FromString(str, parsed);
+    cluster::MemberServiceInfo parsed;
+    Status rc = cluster::MemberServiceInfo::FromString(str, parsed);
     DS_EXPECT_OK(rc);
     EXPECT_EQ(parsed.timestamp, 123);
-    EXPECT_EQ(parsed.state, topology::WorkerServiceState::READY);
+    EXPECT_EQ(parsed.state, cluster::MemberLifecycleState::READY);
     EXPECT_EQ(parsed.hostId, "");
 }
 
 TEST(EtcdStoreWorkerServiceInfoTest, TestEmptyHostId)
 {
-    topology::WorkerServiceInfo parsed;
-    Status rc = topology::WorkerServiceInfo::FromString("123;ready;", parsed);
+    cluster::MemberServiceInfo parsed;
+    Status rc = cluster::MemberServiceInfo::FromString("123;ready;", parsed);
     DS_EXPECT_OK(rc);
     EXPECT_EQ(parsed.timestamp, 123);
-    EXPECT_EQ(parsed.state, topology::WorkerServiceState::READY);
+    EXPECT_EQ(parsed.state, cluster::MemberLifecycleState::READY);
     EXPECT_EQ(parsed.hostId, "");
 }
 
 TEST(EtcdStoreWorkerServiceInfoTest, TestFromStringWithoutFirstDelimiter)
 {
-    topology::WorkerServiceInfo out{ 1, topology::WorkerServiceState::READY, "host", "v1" };
-    Status rc = topology::WorkerServiceInfo::FromString("invalid_value", out);
+    cluster::MemberServiceInfo out{ 1, cluster::MemberLifecycleState::READY, "host", "v1" };
+    Status rc = cluster::MemberServiceInfo::FromString("invalid_value", out);
     DS_EXPECT_NOT_OK(rc);
     EXPECT_EQ(rc.GetCode(), K_INVALID);
     EXPECT_EQ(out.timestamp, 0);
-    EXPECT_EQ(out.state, topology::WorkerServiceState::UNSPECIFIED);
+    EXPECT_EQ(out.state, cluster::MemberLifecycleState::UNKNOWN);
     EXPECT_EQ(out.hostId, "");
     EXPECT_EQ(out.compatibilityVersion, "");
 }
@@ -318,9 +326,7 @@ TEST_F(EtcdStoreTest, LEVEL1_TestPutLease3)
     std::string value;
     rc = db_->Get(tableName_, key1, value);
     DS_EXPECT_OK(rc);
-    std::string state;
-    DS_EXPECT_OK(GetMemberStateString(value, state));
-    EXPECT_EQ(state, "start");
+    ExpectKeepAliveState(value, cluster::MemberLifecycleState::STARTING);
 
     // wait for lease timeout of 10000ms
     std::this_thread::sleep_for(std::chrono::milliseconds(10000));
@@ -329,8 +335,7 @@ TEST_F(EtcdStoreTest, LEVEL1_TestPutLease3)
     std::string value2;
     rc = db_->Get(tableName_, key1, value2);
     DS_EXPECT_OK(rc);
-    DS_EXPECT_OK(GetMemberStateString(value2, state));
-    EXPECT_EQ(state, "start");
+    ExpectKeepAliveState(value2, cluster::MemberLifecycleState::STARTING);
     EXPECT_EQ(value, value2);
 
     // wait for lease timeout of 20000ms
@@ -339,8 +344,7 @@ TEST_F(EtcdStoreTest, LEVEL1_TestPutLease3)
     // Read the KV pair again. The KV pair should not be deleted due to keep alive operation.
     rc = db_->Get(tableName_, key1, value2);
     DS_EXPECT_OK(rc);
-    DS_EXPECT_OK(GetMemberStateString(value2, state));
-    EXPECT_EQ(state, "start");
+    ExpectKeepAliveState(value2, cluster::MemberLifecycleState::STARTING);
     EXPECT_EQ(value, value2);
 }
 
@@ -474,6 +478,8 @@ TEST_F(EtcdStoreTest, TestWatchEvents3)
 TEST_F(EtcdStoreTest, TestKeepAliveFailedDueToNetworkerFailure)
 {
     FLAGS_node_timeout_s = 3;  // node timeout is 3 s
+    FLAGS_node_dead_timeout_s = TEST_LOCAL_FAILURE_TIMEOUT_S;
+    FLAGS_auto_del_dead_node = true;
     datasystem::inject::Set("EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)");
     InitTestEtcdInstance();
     ASSERT_TRUE(db_ != nullptr && tableCreated_);
@@ -617,6 +623,55 @@ TEST_F(EtcdStoreTest, TestEtcdShutdownLogic)
     DS_EXPECT_OK(rc);
 }
 
+TEST_F(EtcdStoreTest, ShutdownEventSourcesPreservesSynchronousOperations)
+{
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    db_->SetEventHandler([](mvccpb::Event &&) {});
+    DS_ASSERT_OK(db_->WatchEvents(tableName_, "watch-key", 0));
+    DS_ASSERT_OK(db_->InitKeepAlive(tableName_, "member-key", false));
+
+    DS_ASSERT_OK(db_->ShutdownEventSources());
+
+    const std::string key = "synchronous-key";
+    const std::string expected = "synchronous-value";
+    DS_ASSERT_OK(db_->Put(tableName_, key, expected));
+    std::string actual;
+    DS_ASSERT_OK(db_->Get(tableName_, key, actual));
+    EXPECT_EQ(actual, expected);
+}
+
+TEST_F(EtcdStoreTest, ExactWatchDoesNotReceiveNeighborPrefixKey)
+{
+    struct EventState {
+        // Protects eventKeys and coordinates the received condition variable.
+        std::mutex mutex;
+        // Uses mutex to signal changes to eventKeys.
+        std::condition_variable received;
+        std::vector<std::string> eventKeys;
+    };
+    constexpr auto eventDeadline = std::chrono::seconds(5);
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    const std::string exactKey = "notify/127.0.0.1:10001";
+    auto state = std::make_shared<EventState>();
+    db_->SetEventHandler([state](mvccpb::Event &&event) {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->eventKeys.emplace_back(event.kv().key());
+        state->received.notify_all();
+    });
+    DS_ASSERT_OK(db_->WatchEvents({ WatchElement{ tableName_, exactKey, 0, true } }));
+    DS_ASSERT_OK(db_->Put(tableName_, exactKey + "-neighbor", "ignored"));
+    DS_ASSERT_OK(db_->Put(tableName_, exactKey, "accepted"));
+    std::unique_lock<std::mutex> lock(state->mutex);
+    ASSERT_TRUE(state->received.wait_for(lock, eventDeadline, [&state] { return !state->eventKeys.empty(); }));
+    ASSERT_EQ(state->eventKeys.size(), 1);
+    ASSERT_GE(state->eventKeys.front().size(), exactKey.size());
+    EXPECT_EQ(state->eventKeys.front().substr(state->eventKeys.front().size() - exactKey.size()), exactKey);
+    lock.unlock();
+    DS_ASSERT_OK(db_->ShutdownEventSources());
+}
+
 TEST_F(EtcdStoreTest, TestGetAll)
 {
     LOG(INFO) << "Test EtcdStore getall api.";
@@ -716,7 +771,7 @@ TEST_F(EtcdStoreTest, TestTransactionCompareValue)
     EXPECT_EQ(rc, Status::OK());
 
     std::string value2 = "valueA2";
-    std::string etcdKey1 = tablePrefix_ + "/" + key1;
+    std::string etcdKey1 = PhysicalTablePrefix() + "/" + key1;
     Transaction transaction;
     transaction.StartTransaction();
     ASSERT_EQ(transaction.CompareKeyValue(etcdKey1, value1), Status::OK());
@@ -735,7 +790,7 @@ TEST_F(EtcdStoreTest, TestTransactionCompareValue)
     // Transaction error for an empty kv
     std::string key2 = "keyA2";
     std::string valueKey2 = "valueA2";
-    std::string etcdKey2 = tablePrefix_ + "/" + key2;
+    std::string etcdKey2 = PhysicalTablePrefix() + "/" + key2;
     transaction.StartTransaction();
     ASSERT_EQ(transaction.CompareKeyValue(etcdKey2, ""), Status::OK());
     ASSERT_EQ(transaction.Put(etcdKey2, valueKey2), Status::OK());
@@ -755,7 +810,7 @@ TEST_F(EtcdStoreTest, TestTransactionCompareKeyVersion)
     EXPECT_EQ(rc, Status::OK());
 
     std::string value2 = "valueA2";
-    std::string etcdKey1 = tablePrefix_ + "/" + key1;
+    std::string etcdKey1 = PhysicalTablePrefix() + "/" + key1;
     Transaction transaction;
     transaction.StartTransaction();
     ASSERT_EQ(transaction.CompareKeyVersion(etcdKey1, version), Status::OK());
@@ -775,7 +830,7 @@ TEST_F(EtcdStoreTest, TestTransactionCompareKeyVersion)
     // Transaction error for an empty kv
     std::string key2 = "keyA2";
     std::string valueKey2 = "valueA2";
-    std::string etcdKey2 = tablePrefix_ + "/" + key2;
+    std::string etcdKey2 = PhysicalTablePrefix() + "/" + key2;
     transaction.StartTransaction();
     ASSERT_EQ(transaction.CompareKeyVersion(etcdKey2, 0), Status::OK());
     ASSERT_EQ(transaction.Put(etcdKey2, valueKey2), Status::OK());

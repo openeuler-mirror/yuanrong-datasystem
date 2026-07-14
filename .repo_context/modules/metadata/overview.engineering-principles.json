@@ -38,7 +38,7 @@
       "overview.repository-skills",
       "quality.tests-and-reproduction",
       "infra.common-infra",
-      "runtime.cluster-management"
+      "runtime.topology"
     ],
     "split_signals": [
       "repository_level_policy",

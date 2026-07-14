@@ -15,9 +15,11 @@ ds_cc_library(
         "stream_metadata.h",
     ],
     deps = [
+        "//src/datasystem/worker:worker_topology_references",
         ":master_worker_sc_api_header",
         ":rpc_session_manager",
         ":topology_manager",
+        "//src/datasystem/cluster:cluster_topology_scope",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/stream_cache:consumer_meta",
         "//src/datasystem/common/stream_cache:stream_fields",
@@ -28,7 +30,6 @@ ds_cc_library(
         "//src/datasystem/protos:worker_stream_cc_proto",
         "//src/datasystem/protos:worker_stream_zmq_cc_proto",
         "//src/datasystem/worker:cluster_event_type",
-        "//src/datasystem/common/task_action",
         "//src/datasystem/worker/stream_cache/metrics:sc_metrics_header",
     ],
 )
@@ -42,6 +43,7 @@ ds_cc_library(
         "master_sc_service_impl.h",
     ],
     deps = [
+        "//src/datasystem/worker:worker_topology_references",
         ":master_worker_sc_api_header",
         ":rpc_session_manager",
         ":sc_metadata_manager",
@@ -132,9 +134,10 @@ ds_cc_library(
         "sc_migrate_metadata_manager.h",
     ],
     deps = [
+        "//src/datasystem/worker:worker_topology_references",
+        "//src/datasystem/cluster:cluster_topology_scope",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/master:metadata_manager_holder",
-        "//src/datasystem/common/task_action",
         "@tbb",
     ],
 )

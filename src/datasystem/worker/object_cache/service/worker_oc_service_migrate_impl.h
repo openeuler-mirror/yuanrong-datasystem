@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,13 +18,16 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MIGRATE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MIGRATE_IMPL_H
 
+#include <chrono>
+#include <condition_variable>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
-#include <future>
 
 #include <google/protobuf/repeated_field.h>
 
@@ -45,6 +45,7 @@
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -60,18 +61,25 @@ using RedirectMap =
 class WorkerOcServiceMigrateImpl : public WorkerOcServiceCrudCommonApi,
                                    std::enable_shared_from_this<WorkerOcServiceMigrateImpl> {
 public:
+
     /**
      * @brief Construct WorkerOcServicePublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
-     * @param[in] clusterManager The cluster manager pointer to assign.
+     * @param[in] topologyEngine Borrowed Worker topology dependencies.
      * @param[in] memcpyThreadPool Memory copy thread pool.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] localAddr Local worker address.
+     * @param[in] rateController Shared migration rate controller.
      */
-    WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, ClusterManager *clusterManager,
+    WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
                                std::shared_ptr<ThreadPool> memcpyThreadPool, std::shared_ptr<AkSkManager> akSkManager,
                                const std::string &localAddr,
                                std::shared_ptr<MigrateDataRateController> rateController);
+
+    /**
+     * @brief Destroy the migration request processor.
+     */
+    ~WorkerOcServiceMigrateImpl() = default;
 
     /**
      * @brief Migrate data.
@@ -89,6 +97,24 @@ public:
      * @return Status of the call.
      */
     Status MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
+
+    /**
+     * @brief Close incoming migration admission and wait for admitted requests until deadline.
+     * @param[in] deadline Absolute monotonic drain deadline.
+     * @return K_OK after the drain; K_RPC_DEADLINE_EXCEEDED if admitted requests remain.
+     */
+    Status CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline);
+
+#ifdef WITH_TESTS
+    /**
+     * @brief Install a deterministic test hook invoked while an incoming request owns admission.
+     * @param[in] hook Hook installed before the test request starts.
+     */
+    void SetAfterAdmissionTestHook(std::function<void()> hook)
+    {
+        afterAdmissionTestHook_ = std::move(hook);
+    }
+#endif
 
     /**
      * @brief Query metadata from master.
@@ -513,6 +539,35 @@ private:
     Status CheckResource(const MigrateDataReqPb &req, MigrateDataRspPb &rsp);
 
     /**
+     * @brief Reject an incoming migration after this Worker enters its local ScaleIn exit gate.
+     * @param[in] req Migrate data request.
+     * @param[out] rsp Migrate data response carrying retryable target state.
+     * @return K_OK while accepting migrations; K_NOT_READY after local ScaleIn starts.
+     */
+    Status CheckMigrateDataAdmission(const MigrateDataReqPb &req, MigrateDataRspPb &rsp);
+
+    /**
+     * @brief Acquire one incoming migration admission slot.
+     * @return K_OK while the gate is open; K_NOT_READY after local ScaleIn starts.
+     */
+    Status AcquireIncomingMigrationAdmission();
+
+    /**
+     * @brief Release one incoming migration admission slot.
+     */
+    void ReleaseIncomingMigrationAdmission();
+
+    /**
+     * @brief Perform one admitted socket migration request.
+     * @param[in] req Migrate data request.
+     * @param[out] rsp Migrate data response.
+     * @param[in] payloads Object data.
+     * @return K_OK on success, the error otherwise.
+     */
+    Status MigrateDataImpl(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
+                           std::vector<RpcMessage> payloads);
+
+    /**
      * @brief Get migrate data objects.
      * @param[in] req Migrate data request.
      * @return Object list.
@@ -605,7 +660,7 @@ private:
                                             std::unordered_set<std::string> &failedIds,
                                             ObjectInfoMap &needSendMasterIds, Status &status);
 
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ThreadPool> memcpyThreadPool_{ nullptr };
 
@@ -614,7 +669,18 @@ private:
     std::string localAddr_;
 
     std::shared_ptr<MigrateDataRateController> rateController_;
-    
+
+    // Protects incomingMigrationAdmissionClosed_ and incomingMigrationCount_.
+    std::mutex incomingMigrationMutex_;
+    std::condition_variable incomingMigrationCv_;
+    bool incomingMigrationAdmissionClosed_{ false };
+    uint64_t incomingMigrationCount_{ 0 };
+
+#ifdef WITH_TESTS
+    // Test-only hook installed before a request starts and left immutable until that request returns.
+    std::function<void()> afterAdmissionTestHook_;
+#endif
+
     std::shared_timed_mutex unitMutex_;
     std::unordered_map<std::string, std::shared_ptr<ShmUnit>> failedSlotUnits_;
 };

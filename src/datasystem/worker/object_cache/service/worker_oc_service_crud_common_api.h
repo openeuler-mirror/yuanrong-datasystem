@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,7 +20,10 @@
 #include <algorithm>
 #include <chrono>
 #include <future>
+#include <string>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/utils/status.h"
@@ -33,17 +33,21 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_pool.h"
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
+#include "datasystem/worker/object_cache/object_meta_route_helper.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
 class AsyncPersistenceDelManager {
 public:
+
     /**
      * @brief AsyncPersistenceDelManager.
      * @param[in] pool oldVerDelAsyncPool.
@@ -89,11 +93,15 @@ struct WorkerOcServiceCrudParam {
     std::shared_ptr<AsyncSendManager> asyncSendManager;
     size_t metadataSize;
     std::shared_ptr<PersistenceApi> persistenceApi;
-    ClusterManager *clusterManager;
+    worker::WorkerTopologyReferences *topologyEngine;
+    const cluster::PlacementFacade *topologyPlacement;
+    cluster::MembershipEndpointView *topologyMembership;
+    worker::MetadataRouteOptions topologyRouteOptions;
 };
 
 class WorkerOcServiceCrudCommonApi {
 public:
+
     /**
      * @brief Construct WorkerOcServiceCrudCommonApi.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
@@ -318,6 +326,7 @@ public:
      * @param localAddress the local address
      * @param batchKeyVersions the map for the key and version
      * @param response Response of the call
+     * @param topologyOperationId Fenced topology operation id, or empty for ordinary traffic.
      * @return Status
      */
     Status RemoveMeta(const std::list<std::string> &objectKeysRemoveList,
@@ -325,7 +334,7 @@ public:
                       const master::RemoveMetaReqPb::Cause removeCause, const uint64_t version, bool needRedirct,
                       const std::string &localAddress,
                       const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
-                      master::RemoveMetaRspPb &response);
+                      master::RemoveMetaRspPb &response, const std::string &topologyOperationId);
 
     /**
      * @brief Remove metadata redirect master
@@ -337,13 +346,14 @@ public:
      * @param needMigrateIds Need migrateIds.
      * @param needWaitIds Need waited Ids
      * @param needMigrateL2CacheIds Need migrate L2 cache ids.
+     * @param topologyOperationId Fenced topology operation id, or empty for ordinary traffic.
      * @return Status of the call
      */
     Status RemoveMetadataFromRedirectMaster(
         master::RemoveMetaRspPb &rsp, const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
         const std::unordered_map<std::string, uint64_t> &batchKeyVersions, std::vector<std::string> &failedIds,
         std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds,
-        std::vector<std::string> &needMigrateL2CacheIds);
+        std::vector<std::string> &needMigrateL2CacheIds, const std::string &topologyOperationId);
 
     /**
      * @brief
@@ -356,13 +366,15 @@ public:
      * @param[out] needMigrateIds need to migrate ids.
      * @param[out] needWaitIds Need wait ids.
      * @param[out] needMigrateL2CacheIds Need migrate L2 cache ids.
+     * @param[in] topologyOperationId Fenced topology operation id, or empty for ordinary traffic.
      */
     void BatchRemoveMeta(const std::vector<std::string> &objectKeys,
                          const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                          const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
                          const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
                          std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                         std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds);
+                         std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds,
+                         const std::string &topologyOperationId);
 
     /**
      * @brief GroupAndRemoveMeta
@@ -374,14 +386,17 @@ public:
      * @param[out] needMigrateIds need to migrate ids.
      * @param[out] needWaitIds Need wait ids.
      * @param[out] needMigrateL2CacheIds Need migrate L2 cache ids.
+     * @param[in] topologyOperationId Fenced topology operation id, or empty for ordinary traffic.
      */
     void GroupAndRemoveMeta(const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
                             const std::string &localAddress,
                             const std::unordered_map<std::string, uint64_t> &objKeyVersions,
                             std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                            std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds);
+                            std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds,
+                            const std::string &topologyOperationId = "");
 
 protected:
+
     /**
      * #brief Check if CheckIfNeedRetry
      * @param rsp Response of redirect
@@ -418,7 +433,10 @@ protected:
     size_t metadataSize_{ 0 };
 
     L2StorageType supportL2Storage_;
-    ClusterManager *clusterManager_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
+    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
+    cluster::MembershipEndpointView *topologyMembership_{ nullptr };
+    worker::MetadataRouteOptions topologyRouteOptions_;
 
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager_{ nullptr };
 };

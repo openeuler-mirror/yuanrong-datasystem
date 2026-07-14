@@ -6,7 +6,6 @@ add_subdirectory(cluster)
 add_subdirectory(coordinator)
 add_subdirectory(master)
 add_subdirectory(server)
-add_subdirectory(topology)
 add_subdirectory(worker)
 
 if (BUILD_PYTHON_API)

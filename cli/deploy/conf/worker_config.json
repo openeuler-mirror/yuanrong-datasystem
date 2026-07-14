@@ -319,10 +319,6 @@
         "value": "true",
         "description": "Decide whether to remove the node from hash ring or not when node is dead"
     },
-    "enable_hash_ring_self_healing": {
-        "value": "false",
-        "description": "Whether to support self-healing when the hash ring is in an abnormal state, default is false."
-    },
     "client_dead_timeout_s": {
         "value": "120",
         "description": "Maximum time interval for the worker to determine client death, Value range: [3, UINT64_MAX)."

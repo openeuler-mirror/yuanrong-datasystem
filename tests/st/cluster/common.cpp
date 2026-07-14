@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +17,8 @@
 #include "common.h"
 
 #include "cluster/test_port_allocator.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/uuid_generator.h"
@@ -28,6 +27,7 @@
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_bool(alsologtostderr);
 DS_DECLARE_string(log_dir);
+DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
 namespace st {
@@ -53,6 +53,58 @@ std::string GetTestCaseDataDir()
     GetCurTestName(caseName, name);
     std::string userDir = rootDir + "/" + caseName + "." + name;
     return userDir;
+}
+
+std::string GetTestClusterName()
+{
+    return FLAGS_cluster_name;
+}
+
+std::string GetTopologyTableName(const std::string &clusterName)
+{
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    auto rc = cluster::TopologyKeyHelper::Create(clusterName, keys);
+    if (rc.IsError()) {
+        LOG(ERROR) << "Failed to build test topology table: " << rc.ToString();
+        return {};
+    }
+    return keys->TopologyTable();
+}
+
+std::string GetTopologyTableName()
+{
+    return GetTopologyTableName(FLAGS_cluster_name);
+}
+
+std::string GetMembershipTableName(const std::string &clusterName)
+{
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    auto rc = cluster::TopologyKeyHelper::Create(clusterName, keys);
+    if (rc.IsError()) {
+        LOG(ERROR) << "Failed to build test membership table: " << rc.ToString();
+        return {};
+    }
+    return keys->MembershipTable();
+}
+
+std::string GetMembershipTableName()
+{
+    return GetMembershipTableName(FLAGS_cluster_name);
+}
+
+Status RegisterTopologyTables(EtcdStore &store, const std::string &clusterName)
+{
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(clusterName, keys));
+    auto rc = store.CreateTableWithExactPrefix(keys->TopologyTable(), keys->TopologyTable());
+    RETURN_IF_NOT_OK_EXCEPT(rc, K_DUPLICATED);
+    rc = store.CreateTableWithExactPrefix(keys->MembershipTable(), keys->MembershipTable());
+    return rc.GetCode() == K_DUPLICATED ? Status::OK() : rc;
+}
+
+Status RegisterTopologyTables(EtcdStore &store)
+{
+    return RegisterTopologyTables(store, FLAGS_cluster_name);
 }
 
 namespace {

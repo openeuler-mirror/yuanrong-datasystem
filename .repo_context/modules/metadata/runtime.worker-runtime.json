@@ -22,7 +22,7 @@
   "key_tests": [],
   "module_boundary": {
     "related_modules": [
-      "runtime.cluster-management",
+      "runtime.topology",
       "infra.slot",
       "infra.observability"
     ],

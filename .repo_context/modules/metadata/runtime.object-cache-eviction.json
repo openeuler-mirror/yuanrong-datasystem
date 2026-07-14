@@ -31,13 +31,12 @@
   "key_tests": [
     "tests/ut/worker/object_cache/worker_oc_eviction_test.cpp",
     "tests/ut/worker/object_cache/worker_oc_spill_eviction_test.cpp",
-    "tests/st/worker/object_cache/worker_oc_eviction_test.cpp",
     "tests/st/client/kv_cache/kv_cache_client_evict_test.cpp"
   ],
   "module_boundary": {
     "related_modules": [
       "runtime.worker-runtime",
-      "runtime.cluster-manager",
+      "runtime.topology",
       "runtime.etcd-metadata",
       "infra.l2cache",
       "infra.slot"

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -41,17 +38,20 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/thread.h"
+#include "datasystem/cluster/executor/key_filter.h"
+#include "datasystem/cluster/executor/storage_scan_plan.h"
 #include "datasystem/master/object_cache/store/meta_async_queue.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/hash_ring/hash_ring_allocator.h"
 
 namespace datasystem {
 enum ObjectMetaStoreEventType : uint32_t {
     GET_HASH_RANGE_NON_BLOCK,
 };
 
-using GetHashRangeNonBlockEvent = EventSubscribers<GET_HASH_RANGE_NON_BLOCK, std::function<void(worker::HashRange &)>>;
+using GetHashRangeNonBlockEvent =
+    EventSubscribers<GET_HASH_RANGE_NON_BLOCK,
+                     std::function<void(std::vector<std::pair<uint32_t, uint32_t>> &)>>;
 
 namespace master {
 static const std::string HEALTH_STATUS = "ready";
@@ -90,6 +90,7 @@ struct NotifyWorkerOp {
 class ObjectMetaStore {
 public:
     enum WriteType : uint8_t { ROCKS_ONLY = 0, ROCKS_ASYNC_ETCD = 1, ROCKS_SYNC_ETCD = 2 };
+    enum class TopologyScanTable : uint8_t { OBJECT_META = 0, GLOBAL_CACHE_DELETE, ASYNC_WORKER_OP };
 
     /**
      * @brief Construct ObjectMetaStore.
@@ -198,13 +199,34 @@ public:
      * @brief Get pairs from ETCD table and write to rocksdb table.
      * @param[in] tablePrefix ETCD table prefix.
      * @param[in] rocksTable Need write rocksdb table.
-     * @param[in] extraRanges Obtains the data of specified object-key hash ranges if not empty.
      * @param[out] outMetas KV paris.
      * @return Status of the call
      */
     Status GetFromEtcd(const std::string &tablePrefix, const std::string &rocksTable,
-                       const worker::HashRange &extraRanges,
                        std::vector<std::pair<std::string, std::string>> &outMetas);
+
+    /**
+     * @brief Scan object metadata candidates for one opaque topology task scope.
+     * @param[in] plan Opaque candidate scan plan derived from the task scope.
+     * @param[in] filter Final correctness predicate applied to every candidate key.
+     * @param[in] visitor Effect-free consumer invoked only for matching object keys.
+     * @return K_OK on a complete scan; storage, visitor or unsupported-plan error otherwise.
+     */
+    Status ScanTopologyScope(
+        const cluster::StorageScanPlan &plan, const cluster::IKeyFilter &filter,
+        const std::function<Status(const std::string &, const std::string &)> &visitor);
+
+    /**
+     * @brief Scan one approved metadata table for an opaque topology task scope.
+     * @param[in] plan Opaque candidate scan plan derived from the task scope.
+     * @param[in] filter Final logical object-key predicate for every candidate.
+     * @param[in] table Approved metadata table whose keys have a known logical-key encoding.
+     * @param[in] visitor Consumer invoked only after logical-key filtering.
+     * @return K_OK on a complete scan; storage, decoding or visitor error otherwise.
+     */
+    Status ScanTopologyScope(
+        const cluster::StorageScanPlan &plan, const cluster::IKeyFilter &filter, TopologyScanTable table,
+        const std::function<Status(const std::string &, const std::string &)> &visitor);
 
     /**
      * @brief Add nested object relationship to nested object table.
@@ -359,7 +381,7 @@ public:
     /**
      * @brief Obtains the usage of the queue for asynchronously writing ETCD data.
      * @note currentSize: the number of tasks in the current queue.
-     *       totalLimit:  the maximum queue capacity
+     * totalLimit:  the maximum queue capacity
      * @return The Usage: "currentSize/totalLimit/workerL2CacheQueueUsag"
      */
     std::string GetETCDAsyncQueueUsage();
@@ -448,6 +470,7 @@ public:
                                  const std::string &traceId);
 
 private:
+
     /**
      * @brief Check if etcd enable.
      * @return Status of the call.

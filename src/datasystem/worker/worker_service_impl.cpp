@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,7 +18,9 @@
 
 #include <cstdint>
 #include <shared_mutex>
-#include "datasystem/worker/cluster_manager/worker_health_check.h"
+
+#include "datasystem/worker/worker_topology_references.h"
+#include "datasystem/worker/worker_health_check.h"
 #ifdef __linux__
 #include <linux/memfd.h>
 #endif
@@ -213,10 +212,10 @@ Status WorkerServiceImpl::CheckClientVersion(const std::string &clientVersion)
     return Status::OK();
 }
 
-const std::string WorkerServiceImpl::GetStandbyWorker()
+const std::string WorkerServiceImpl::GetLocalStandbyWorker()
 {
     std::string standbyWorker;
-    Status rc = clusterManager_->GetStandbyWorker(standbyWorker);
+    Status rc = worker::GetStandbyTopologyMember(topologyEngine_, topologyEngine_->localAddress, standbyWorker);
     if (rc.IsError()) {
         VLOG(HEARTBEAT_LEVEL) << "Get standby worker failed: " << rc.ToString();
         return "";
@@ -229,26 +228,8 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     bool remainClient = !req.client_id().empty();
     auto clientId = ClientKey::Intern(remainClient ? req.client_id() : GetStringUuid());
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
-                                     "Authenticate failed");
-    if (!IsHealthy() && (clusterManager_ != nullptr && clusterManager_->CheckLocalNodeIsExiting())) {
-        LOG(WARNING) << "Register client failed because worker is exiting and unhealthy now";
-        RETURN_STATUS(StatusCode::K_NOT_READY, "Worker is exiting and unhealthy now!");
-    }
-
-    auto serverFd = req.server_fd();
-    if (serverFd > 0) {
-        std::lock_guard<std::shared_timed_mutex> lck(mutex_);
-        INJECT_POINT("WorkerServiceImpl.RegisterClient.BlowAuth");
-        CHECK_FAIL_RETURN_STATUS(unboundedUnixSockFds_.find(serverFd) != unboundedUnixSockFds_.end(),
-                                 K_SERVER_FD_CLOSED, FormatString("Fd %d has been released", serverFd));
-        (void)unboundedUnixSockFds_.erase(serverFd);
-        if (!req.shm_enabled()) {
-            // close scmtcp fd for remote client
-            LOG(INFO) << "the connection not enable shm, close fd: " << serverFd;
-            RETRY_ON_EINTR(close(serverFd));
-        }
-    }
+    RETURN_IF_NOT_OK(ValidateRegisterClientRequest(req, tenantId));
+    RETURN_IF_NOT_OK(ConsumeRegisterClientFd(req));
     RaiiPlus raiiP([&req]() {
         if (req.shm_enabled() && req.server_fd() > 0) {
             RETRY_ON_EINTR(close(req.server_fd()));
@@ -264,26 +245,9 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     }
     uint32_t lockId = 0;
     uint32_t pipelineQueueId = OsXprtPipln::INVALID_PIPLN_QUEUE_ID;
-    auto shmEnabled = req.shm_enabled();
-    int32_t socketFd = shmEnabled ? req.server_fd() : INVALID_SOCKET_FD;
     bool supportMultiShmRefCount = req.support_multi_shm_ref_count();
-    LOG(INFO) << "Register client: " << clientId << ", pod: " << req.pod_name() << ", version: " << version
-              << ", compatibility version: " << compatibilityVersion.ToString() << ", socket fd: " << socketFd
-              << ", shmEnabled: " << shmEnabled << ", tenantId: " << tenantId
-              << ", enable cross node: " << req.enable_cross_node() << ", reconnect client: " << remainClient
-              << ", heartbeat: " << req.heartbeat_enabled() << ", supportMultiShmRefCount: " << supportMultiShmRefCount;
-    INJECT_POINT("WorkerServiceImpl.RegisterClient.AboveAddClient");
-    INJECT_POINT("worker.RegisterClient.multi_shm_ref_count", [&supportMultiShmRefCount](bool multiShmRefCount) {
-        supportMultiShmRefCount &= multiShmRefCount;
-        return Status::OK();
-    });
-    if (req.heartbeat_enabled()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            worker_->AddClient(clientId, shmEnabled, socketFd, tenantId, req.enable_cross_node(), req.pod_name(),
-                               supportMultiShmRefCount, req.device_id(), compatibilityVersion, lockId,
-                               &pipelineQueueId),
-            "worker add client failed");
-    }
+    RETURN_IF_NOT_OK(AddRegisteringClient(req, clientId, tenantId, compatibilityVersion, lockId, pipelineQueueId,
+                                          supportMultiShmRefCount));
     // After executing "AddClient", the server fd will be bound to the client and released when the client loses
     // connection, so there is no need to roll back.
     raiiP.ClearAllTask();
@@ -296,11 +260,79 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     uint64_t mmapSize = 0;
     ptrdiff_t offset = 0;
     ShmKey id;
-    if (shmEnabled) {
+    if (req.shm_enabled()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id),
                                          "worker process get ShmQ unit failed");
     }
+    PopulateRegisterClientResponse(rsp, clientId, tenantId, lockId, pipelineQueueId, supportMultiShmRefCount, fd,
+                                   mmapSize, offset, id);
+    INJECT_POINT("worker.RegisterClient.end", [&rsp](int injectedFd) {
+        rsp.set_store_fd(injectedFd);
+        return Status::OK();
+    });
+    LOG(INFO) << "Register client " << clientId << " done, healthy: " << !rsp.unhealthy()
+              << ", worker support multi shm ref count:" << rsp.support_multi_shm_ref_count();
+    return Status::OK();
+}
 
+Status WorkerServiceImpl::ValidateRegisterClientRequest(const RegisterClientReqPb &req, std::string &tenantId) const
+{
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
+                                     "Authenticate failed");
+    if (topologyEngine_ != nullptr && worker::IsLocalTopologyMemberExiting(topologyEngine_)) {
+        LOG(WARNING) << "Register client failed because the Worker is draining for ScaleIn";
+        RETURN_STATUS(StatusCode::K_NOT_READY, "Worker is draining for ScaleIn");
+    }
+    return Status::OK();
+}
+
+Status WorkerServiceImpl::ConsumeRegisterClientFd(const RegisterClientReqPb &req)
+{
+    auto serverFd = req.server_fd();
+    RETURN_OK_IF_TRUE(serverFd <= 0);
+    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    INJECT_POINT("WorkerServiceImpl.RegisterClient.BlowAuth");
+    CHECK_FAIL_RETURN_STATUS(unboundedUnixSockFds_.find(serverFd) != unboundedUnixSockFds_.end(), K_SERVER_FD_CLOSED,
+                             FormatString("Fd %d has been released", serverFd));
+    (void)unboundedUnixSockFds_.erase(serverFd);
+    if (!req.shm_enabled()) {
+        LOG(INFO) << "the connection not enable shm, close fd: " << serverFd;
+        RETRY_ON_EINTR(close(serverFd));
+    }
+    return Status::OK();
+}
+
+Status WorkerServiceImpl::AddRegisteringClient(
+    const RegisterClientReqPb &req, const ClientKey &clientId, const std::string &tenantId,
+    const CompatibilityVersion &compatibilityVersion, uint32_t &lockId, uint32_t &pipelineQueueId,
+    bool &supportMultiShmRefCount)
+{
+    auto shmEnabled = req.shm_enabled();
+    int32_t socketFd = shmEnabled ? req.server_fd() : INVALID_SOCKET_FD;
+    LOG(INFO) << "Register client: " << clientId << ", pod: " << req.pod_name() << ", version: " << req.version()
+              << ", compatibility version: " << compatibilityVersion.ToString() << ", socket fd: " << socketFd
+              << ", shmEnabled: " << shmEnabled << ", tenantId: " << tenantId
+              << ", enable cross node: " << req.enable_cross_node()
+              << ", reconnect client: " << !req.client_id().empty() << ", heartbeat: " << req.heartbeat_enabled()
+              << ", supportMultiShmRefCount: " << supportMultiShmRefCount;
+    INJECT_POINT("WorkerServiceImpl.RegisterClient.AboveAddClient");
+    INJECT_POINT("worker.RegisterClient.multi_shm_ref_count", [&supportMultiShmRefCount](bool multiShmRefCount) {
+        supportMultiShmRefCount &= multiShmRefCount;
+        return Status::OK();
+    });
+    RETURN_OK_IF_TRUE(!req.heartbeat_enabled());
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        worker_->AddClient(clientId, shmEnabled, socketFd, tenantId, req.enable_cross_node(), req.pod_name(),
+                           supportMultiShmRefCount, req.device_id(), compatibilityVersion, lockId, &pipelineQueueId),
+        "worker add client failed");
+    return Status::OK();
+}
+
+void WorkerServiceImpl::PopulateRegisterClientResponse(
+    RegisterClientRspPb &rsp, const ClientKey &clientId, const std::string &tenantId, uint32_t lockId,
+    uint32_t pipelineQueueId, bool supportMultiShmRefCount, int fd, uint64_t mmapSize, ptrdiff_t offset,
+    const ShmKey &id)
+{
     rsp.set_page_size(FLAGS_page_size);
     rsp.set_quorum_timeout_mult(timeoutMultiplier_);
     rsp.set_client_id(clientId);
@@ -308,8 +340,9 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
     rsp.set_worker_start_id(workerStartId_);
     rsp.set_shm_threshold(FLAGS_oc_shm_transfer_threshold_kb * KB);
     rsp.set_worker_uuid(workerUuid_);
-    rsp.set_worker_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
-    rsp.set_standby_worker(GetStandbyWorker());
+    rsp.set_worker_compatibility_version(
+        CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
+    rsp.set_standby_worker(GetLocalStandbyWorker());
     rsp.set_node_timeout_s(FLAGS_node_timeout_s);
     rsp.set_store_fd(fd);
     rsp.set_mmap_size(mmapSize);
@@ -330,14 +363,6 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
         rsp.set_fast_transport_mode(FastTransportMode::UB);
     }
 #endif
-
-    INJECT_POINT("worker.RegisterClient.end", [&rsp](int fd) {
-        rsp.set_store_fd(fd);
-        return Status::OK();
-    });
-    LOG(INFO) << "Register client " << clientId << " done, healthy: " << !rsp.unhealthy()
-              << ", worker support multi shm ref count:" << rsp.support_multi_shm_ref_count();
-    return Status::OK();
 }
 
 Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &rsp)
@@ -368,15 +393,15 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     }
     // If the client has been removed, UpdateLastHeartbeat will return RuntimeError. Otherwise, OK is returned.
     rsp.set_client_removed(status.IsError());
-    rsp.set_standby_worker(GetStandbyWorker());
+    rsp.set_standby_worker(GetLocalStandbyWorker());
     rsp.set_unhealthy(!IsHealthy());
     SetAvailableWorkers(rsp);
     LogSampler::Instance().PopulateConfigProto(rsp.mutable_log_sample_config());
-    if (clusterManager_ != nullptr) {
-        rsp.set_is_voluntary_scale_down(clusterManager_->CheckLocalNodeIsExiting());
+    if (topologyEngine_ != nullptr) {
+        rsp.set_is_voluntary_scale_down(worker::IsLocalTopologyMemberExiting(topologyEngine_));
     } else {
         const int logDuration = 30;
-        LOG_EVERY_T(WARNING, logDuration) << "[Heartbeat] Etcd manager is null";
+        LOG_EVERY_T(WARNING, logDuration) << "[Heartbeat] Cluster topology dependencies are unavailable";
     }
 
     auto expiredFds = memory::Allocator::Instance()->GetAllExpiredFds();

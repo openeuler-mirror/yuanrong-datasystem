@@ -10,8 +10,7 @@
   - `src/datasystem/worker/*`
   - `src/datasystem/common/log/*`
   - `src/datasystem/common/metrics/*`
-  - `src/datasystem/worker/cluster_manager/*`
-  - `src/datasystem/worker/hash_ring/*`
+  - `src/datasystem/cluster/*`
   - `tests/*`
 - Primary source-of-truth files:
   - `src/datasystem/worker/worker_main.cpp`
@@ -25,15 +24,14 @@
   - `src/datasystem/common/metrics/res_metric_collector.cpp`
   - `src/datasystem/common/metrics/metrics_exporter.cpp`
   - `src/datasystem/common/metrics/hard_disk_exporter/hard_disk_exporter.cpp`
-  - `src/datasystem/worker/cluster_manager/cluster_manager.cpp`
-  - `src/datasystem/worker/hash_ring/hash_ring.cpp`
+  - `src/datasystem/cluster/runtime/topology_engine.cpp`
   - `tests/README.md`
   - `build.sh`
 - Last verified against source:
   - `2026-04-13`
 - Related context docs:
   - `.repo_context/modules/runtime/worker-runtime.md`
-  - `.repo_context/modules/runtime/cluster-management.md`
+  - `.repo_context/modules/runtime/topology/README.md`
   - `.repo_context/modules/infra/logging/design.md`
   - `.repo_context/modules/infra/metrics/design.md`
   - `.repo_context/modules/quality/tests-and-reproduction.md`
@@ -43,7 +41,7 @@
 ## Purpose
 
 - Why this design document exists:
-  - provide a cross-module reference for how to localize functionality, performance, and operations problems using the signals already exposed by runtime, logging, metrics, and cluster-management code.
+  - provide a cross-module reference for how to localize functionality, performance, and operations problems using the signals already exposed by runtime, logging, metrics, and topology code.
 - What problem this module solves:
   - reduce time-to-localization by mapping symptoms to the right logs, metrics, configs, runtime files, and source entrypoints instead of treating diagnosis as an ad hoc code search.
 - Who or what depends on this module:
@@ -62,7 +60,7 @@
 - How the feature is expected to be used:
   - start from a symptom, jump to the right signal class, inspect the first code or config entrypoints, collect a minimal evidence set, then either localize to one module or escalate with a narrower problem statement.
 - What other functions or modules it may affect:
-  - logging and metrics design changes, worker startup ordering, cluster-management config, hash-ring recovery behavior, test selection, and future operator runbooks.
+  - logging and metrics design changes, worker startup ordering, topology config, topology recovery behavior, test selection, and future operator runbooks.
 - Expected user or operator experience:
   - performance:
     - issue localization should not require reading the whole codebase when the right signal map exists.
@@ -140,7 +138,7 @@
   - worker startup and shutdown define the core runtime lifecycle;
   - logging provides severity logs, access logs, trace IDs, and crash output;
   - metrics provides periodic resource monitor files;
-  - cluster-management and hash-ring code influence whether the node is logically healthy for traffic;
+  - topology code influences whether the node is logically healthy for traffic;
   - readiness and liveness files provide operator-facing health artifacts.
 - Key runtime roles or processes:
   - request or service threads serving object, stream, and worker APIs;
@@ -186,7 +184,7 @@
 - External protocols, schemas, or data formats:
   - filesystem-backed probe files for readiness and liveness;
   - severity log files, access log lines, resource monitor lines, and crash logs;
-  - cluster-management metadata behavior through ETCD or Metastore-backed runtime paths.
+  - topology metadata behavior through ETCD or Metastore-backed runtime paths.
 - CLI commands, config flags, or environment variables:
   - runtime health and operations-related flags such as `ready_check_path`, `liveness_check_path`, `liveness_probe_timeout_s`, `log_monitor`, `log_monitor_exporter`, `log_monitor_interval_ms`, `log_dir`, `etcd_address`, and `metastore_address`
   - test and reproduction entrypoints through `build.sh`
@@ -198,7 +196,7 @@
 - Cross-module integration points:
   - readiness and liveness depend on worker runtime behavior;
   - evidence collection depends on logging and metrics configuration;
-  - cluster health interpretation depends on cluster-management and hash-ring behavior.
+  - cluster health interpretation depends on topology behavior.
 - Upstream and downstream dependencies:
   - upstream operators or tests depend on these artifacts to decide whether a node is healthy;
   - downstream diagnosis depends on stable file and config semantics.
@@ -214,7 +212,7 @@
 | liveness check | periodic worker health probing and file update | `src/datasystem/worker/worker_liveness_check.cpp` | distinct from readiness |
 | logging subsystem | ordinary logs, access logs, crash logs, trace continuity | `src/datasystem/common/log/*` | main evidence surface for failures |
 | metrics subsystem | periodic resource monitor files | `src/datasystem/common/metrics/*` | main evidence surface for resource and backlog issues |
-| cluster-management paths | node coordination, metadata backend behavior, routing state | `src/datasystem/worker/cluster_manager/*`, `hash_ring/*` | often root cause for "alive but unhealthy" behavior |
+| topology paths | node coordination, metadata backend behavior, routing state | `src/datasystem/cluster/*`, `src/datasystem/worker/worker_oc_server.cpp` | often root cause for "alive but unhealthy" behavior |
 
 ## Main Flows
 
@@ -301,7 +299,7 @@ Failure-sensitive steps:
 ## External Interaction And Dependency Analysis
 
 - Dependency graph summary:
-  - diagnosis depends on worker runtime, logging, metrics, cluster-management, and tests together;
+  - diagnosis depends on worker runtime, logging, metrics, topology, and tests together;
   - health decisions depend on both process state and signal state.
 - Critical upstream services or modules:
   - worker startup and service initialization;
@@ -314,7 +312,7 @@ Failure-sensitive steps:
 - Failure impact from each critical dependency:
   - logging failure reduces evidence quality;
   - metrics failure reduces resource or backlog visibility;
-  - cluster-management or metadata failure can leave the process alive but functionally unhealthy;
+  - topology or metadata failure can leave the process alive but functionally unhealthy;
   - filesystem failure can remove both evidence and health artifacts.
 - Version, protocol, or schema coupling:
   - file names and monitor-line layouts are operational contracts;
@@ -358,14 +356,14 @@ Failure-sensitive steps:
 - Availability goals or service-level expectations:
   - operators should be able to distinguish "service unavailable", "service degraded", and "service available but observability degraded".
 - Deployment topology and redundancy model:
-  - the current evidence model is process-local and node-local; cluster availability is influenced by worker, metadata backend, and hash-ring behavior outside a single file artifact.
+  - the current evidence model is process-local and node-local; cluster availability is influenced by worker, metadata backend, and topology behavior outside a single file artifact.
 - Single-point-of-failure analysis:
   - a single worker process can lose evidence or health artifacts if its local filesystem or runtime init fails;
   - metadata backend misconfiguration can make a whole node unhealthy despite a live process.
 - Failure domains and blast-radius limits:
   - ordinary logs, monitor files, and probe files can fail independently;
   - readiness and liveness are separate signals;
-  - cluster-management issues can be broader than one node's local logs imply.
+  - topology issues can be broader than one node's local logs imply.
 - Health checks, readiness, and traffic removal conditions:
   - readiness indicates worker service startup and stub connectivity success;
   - liveness indicates periodic internal checks still pass and the probe file is fresh;
@@ -551,7 +549,7 @@ Failure-sensitive steps:
 ## Open Questions
 
 - which startup paths beyond the worker binary should be documented as first-class health producers in future updates;
-- whether more cluster-management recovery signals should be pulled into this area as dedicated subdocuments;
+- whether more topology recovery signals should be pulled into this area as dedicated subdocuments;
 - whether deployment automation already depends on stable readiness and liveness file contents beyond current code comments.
 
 ## Pending Verification

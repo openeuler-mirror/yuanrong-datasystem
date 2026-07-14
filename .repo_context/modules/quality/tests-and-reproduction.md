@@ -201,14 +201,14 @@ python3 -m unittest
 - Verified from `tests/st/CMakeLists.txt`:
   - `ds_st`: default ST bucket after excluding cluster, stream, object, KV, embedded-client, device, and helper files.
   - `ds_st_stream_cache`: ST files under `**/stream_cache`.
-  - `ds_st_object_cache`: ST files under `**/object_cache`; includes `tests/st/worker/object_cache/coordinator_backend_cluster_test.cpp`, which starts one `datasystem_coordinator` plus two workers without ETCD and verifies coordinator watch propagation across worker restart.
+  - `ds_st_object_cache`: ST files under `**/object_cache`; topology coverage in this phase uses the ETCD backend.
   - `ds_st_kv_cache`: ST files under `**/kv_cache`.
   - `ds_st_embedded_client`: `tests/st/embedded_client` plus cluster helper sources.
   - `ds_device_llt`: device tests; generic hetero ST sources prefer a real runtime backend when
     `DeviceManagerFactory::ProbeBackend()` finds GPU or NPU, and fall back to `AclDeviceManagerMock` only when no
     accelerator backend is detected. Ascend manager self-tests still force the Ascend/mock path when no usable Ascend
     environment is present. Real hetero GPU/NPU builds still copy the matching plugin libraries when enabled.
-  - helper tools: `curve_keygen` and `hashring_parser`.
+  - helper tool: `curve_keygen`.
 - Verified from `tests/perf/zmq/CMakeLists.txt`:
   - `zmq_perf_client`
   - `zmq_perf_server`
@@ -322,9 +322,9 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
   - check `ds_ut_stream`, `ds_st_stream_cache`, and ST paths under `tests/st/client/stream_cache`.
 - Worker embedding or in-process worker startup:
   - inspect and run `ds_st_embedded_client`.
-- Cluster, hash-ring, scale, failover, or ETCD behavior:
-  - start in `tests/st/client/*_scale*`, `tests/st/worker/object_cache/hash_ring_test.cpp`,
-    `tests/st/cluster`, and the owning runtime/cluster module docs.
+- Topology, scale, failover, or ETCD behavior:
+  - start with `tests/ut/cluster`, `tests/st/client/*_scale*`, `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`,
+    `tests/st/cluster`, and `.repo_context/modules/runtime/topology/README.md`.
 - Device or hetero behavior:
   - start with `ds_device_llt`, `tests/st/device`, and Python device tests under `tests/python`.
 - Transport or RPC behavior:

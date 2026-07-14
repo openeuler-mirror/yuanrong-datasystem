@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,7 +18,6 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 
 #include <etcd/api/mvccpb/kv.pb.h>
-#include <signal.h>
 #include <sstream>
 #include <thread>
 
@@ -31,7 +27,6 @@
 #include "datasystem/common/kvstore/etcd/etcd_keep_alive.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/file_util.h"
@@ -63,6 +58,10 @@ DS_DEFINE_string(etcd_password, "", "Password for etcd authentication");
 DS_DEFINE_uint32(etcd_token_refresh_interval_s, 30, "etcd authentication token refresh interval in seconds");
 
 namespace datasystem {
+namespace {
+constexpr int KEEPALIVE_RETRY_DELAY_SEC = 5;
+constexpr int NETWORK_FAILURE_CONFIRM_MIN_TIMES = 3;
+}  // namespace
 
 static std::string GetBackendAddress()
 {
@@ -100,7 +99,6 @@ Status EtcdStore::Init()
     RETURN_IF_EXCEPTION_OCCURS(keepAlivePool_ =
                                    std::make_unique<ThreadPool>(NUM_KEEPALIVE_THREADS, 0, "EtcdKeepAlive"));
     RETURN_IF_EXCEPTION_OCCURS(watchRunPool_ = std::make_unique<ThreadPool>(NUM_WATCH_THREADS, 0, "EtcdWatch"));
-    GrpcSessionBase::SetIsKeepAliveTimeoutHandler(std::bind(&EtcdStore::IsKeepAliveTimeout, this));
     return Status::OK();
 }
 
@@ -278,6 +276,17 @@ Status EtcdStore::CreateTable(const std::string &tableName, const std::string &t
     return Status::OK();
 }
 
+Status EtcdStore::CreateTableWithExactPrefix(const std::string &tableName, const std::string &tablePrefix)
+{
+    std::lock_guard<std::shared_timed_mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(tableMap_.find(tableName) == tableMap_.end(), K_DUPLICATED,
+                             "The table already exists. tableName:" + tableName);
+    CHECK_FAIL_RETURN_STATUS(!tablePrefix.empty() && tablePrefix.front() == '/', K_INVALID,
+                             "ETCD table prefix must be an absolute path.");
+    tableMap_.emplace(tableName, tablePrefix);
+    return Status::OK();
+}
+
 Status EtcdStore::DropTable(const std::string &tableName)
 {
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
@@ -404,7 +413,7 @@ Status EtcdStore::GetLeaseIDWithReconnectIfError(const int64_t ttlInSec, std::at
     return rc;
 }
 
-Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTimer)
+Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer)
 {
     std::future<Status> fStatus;
     // This block is protected by write lock for the leaseKeepAlive_ pointer to make it threadsafe
@@ -438,7 +447,6 @@ Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTim
                                   keepAliveTimeoutTimer.ElapsedMilliSecond()));
             return Status::OK();
         });
-        deathTimer.Clear();
     }
 
     // Wait for this child thread and then return its rc to caller
@@ -454,15 +462,15 @@ Status EtcdStore::AutoCreate()
     // set timestamp before each put
     int64_t timeStamp = std::chrono::system_clock::now().time_since_epoch().count();
     keepAliveValue_.timestamp = timeStamp;
-    std::string valueStr = keepAliveValue_.ToString();
+    std::string valueStr = keepAliveValue_.ToProto();
     CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_INVALID, "Node state should not be empty.");
     RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_));
     // Only use "start" and "restart" tag the first time doing Put()
     // After that remove the tag and append "recover", because the next time using it should be something
     // like network recovery.
-    if (keepAliveValue_.state == topology::MemberLifecycleState::STARTING
-        || keepAliveValue_.state == topology::MemberLifecycleState::RESTARTING) {
-        keepAliveValue_.state = topology::MemberLifecycleState::RECOVERING;
+    if (keepAliveValue_.state == cluster::MemberLifecycleState::STARTING
+        || keepAliveValue_.state == cluster::MemberLifecycleState::RESTARTING) {
+        keepAliveValue_.state = cluster::MemberLifecycleState::RECOVERING;
     }
     return Status::OK();
 }
@@ -470,6 +478,8 @@ Status EtcdStore::AutoCreate()
 Status EtcdStore::InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                                 bool isEtcdAvailableWhenStart)
 {
+    // A process may own multiple ETCD stores, but only the membership-lease owner can define graceful-exit behavior.
+    GrpcSessionBase::SetIsKeepAliveTimeoutHandler(std::bind(&EtcdStore::IsKeepAliveTimeout, this));
     keepAliveTableName_ = tableName;
     keepAliveKey_ = key;
     std::string hostId;
@@ -491,28 +501,25 @@ Status EtcdStore::InitKeepAlive(const std::string &tableName, const std::string 
     keepAliveValue_.hostId = hostId;
     keepAliveValue_.compatibilityVersion = CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString();
     if (!isEtcdAvailableWhenStart) {
-        keepAliveValue_.state = topology::MemberLifecycleState::DOWNGRADE_RESTARTING;
+        keepAliveValue_.state = cluster::MemberLifecycleState::DOWNGRADE_RESTARTING;
     } else if (isRestart) {
-        keepAliveValue_.state = topology::MemberLifecycleState::RESTARTING;
+        keepAliveValue_.state = cluster::MemberLifecycleState::RESTARTING;
     } else {
-        keepAliveValue_.state = topology::MemberLifecycleState::STARTING;
+        keepAliveValue_.state = cluster::MemberLifecycleState::STARTING;
     }
     return LaunchKeepAliveThreads();
 }
 
-Status EtcdStore::UpdateNodeState(topology::MemberLifecycleState state)
+Status EtcdStore::UpdateNodeState(cluster::MemberLifecycleState state)
 {
     CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
                              "The key written to the cluster table must be bound to a lease");
-    topology::MemberServiceInfo value = keepAliveValue_;
+    cluster::MemberServiceInfo value = keepAliveValue_;
     value.state = state;
-    RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, value.ToString(), leaseId_));
+    auto valueStr = value.ToProto();
+    CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_INVALID, "Node state should not be empty.");
+    RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_));
     return Status::OK();
-}
-
-Status EtcdStore::UpdateNodeState(cluster::MemberLifecycleState state)
-{
-    return UpdateNodeState(static_cast<topology::MemberLifecycleState>(state));
 }
 
 Status EtcdStore::HandleKeepAliveFailed()
@@ -547,15 +554,13 @@ Status EtcdStore::LaunchKeepAliveThreads()
     LOG(INFO) << "Starting KeepAlive monitoring thread";
     keepAlivePool_->Execute([this, traceId] {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        int RETRY_DELAY = 5;
-        static int networkFailedConfirmMinTimes = 3;
+        int retryDelaySec = KEEPALIVE_RETRY_DELAY_SEC;
         int networkFailedConfirmTimes = 0;
-        int64_t leaseId = 0;
-        bool needHandleKeepAlivefailed = true;  // Avoid generating multiple duplicate fake events.
+        int64_t observedLeaseId = 0;
+        bool needHandleKeepAliveFailure = true;  // Avoid generating multiple duplicate fake events.
         keepAliveTimeoutTimer_.Reset();
-        Timer deathTimer;
         while (!keepAliveExit_) {
-            Status rc = RunKeepAliveTask(keepAliveTimeoutTimer_, deathTimer);
+            Status rc = RunKeepAliveTask(keepAliveTimeoutTimer_);
             INJECT_POINT("EtcdStore.LaunchKeepAliveThreads.shutdown", [&rc]() {
                 rc = Status::OK();
                 return;
@@ -567,63 +572,14 @@ Status EtcdStore::LaunchKeepAliveThreads()
                 keepAliveExit_ = true;
                 continue;
             }
-            keepAliveTimeout_ = true;
-            if (keepAliveTimeoutTimer_.ElapsedMilliSecond() < EtcdKeepAlive::GetLeaseExpiredMs()) {
+            if (!ProcessKeepAliveFailure(rc, observedLeaseId, networkFailedConfirmTimes,
+                                         needHandleKeepAliveFailure)) {
                 continue;
-            }
-            LOG(INFO) << "Keep alive task completed with error: " << rc.ToString()
-                      << "keep alive failed time: " << keepAliveTimeoutTimer_.ElapsedMilliSecond();
-            if (leaseId != leaseId_) {
-                leaseId = leaseId_;
-                networkFailedConfirmTimes = 0;
-                needHandleKeepAlivefailed = true;
-            }
-            bool etcdAvaliableWhenNetworkFailed = false;
-            if (needHandleKeepAlivefailed && checkEtcdStateWhenNetworkFailedHandler_ != nullptr) {
-                etcdAvaliableWhenNetworkFailed = checkEtcdStateWhenNetworkFailedHandler_();
-                if (!etcdAvaliableWhenNetworkFailed) {
-                    // No peer can reach etcd either, so this is a cluster-wide outage, not a local fault.
-                    // Reset the failure timer and confirmation counter so they only measure local failures.
-                    keepAliveTimeoutTimer_.Reset();
-                    networkFailedConfirmTimes = 0;
-                }
-            }
-            // retry-based failure check
-            if (etcdAvaliableWhenNetworkFailed && ++networkFailedConfirmTimes >= networkFailedConfirmMinTimes) {
-                auto rc1 = HandleKeepAliveFailed();
-                LOG_IF_ERROR(rc1, "add remove event failed when keep alive failed");
-                if (rc1.IsOk()) {
-                    LOG(INFO) << "Confirmed to be a network failure";
-                    needHandleKeepAlivefailed = false;
-                    // Theoretically, the kill signal should not be sent through this timer, but in order to prevent the
-                    // suicide mechanism from failing due to unknown reasons, this timer is used as a guarantee, and the
-                    // deviation is set to 10s.
-                    deathTimer.AdjustTimeoutAndReset((FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s + 10)
-                                                     * SECS_TO_MS);
-                }
-            } else if (deathTimer.IsTimeout()) {
-                LOG(INFO) << "The node scaling time has been reached and the lease has not been renewed. Scaling down "
-                             "should be performed.";
-                Provider::Instance().FlushLogs();
-                (void)raise(SIGKILL);
-            } else {
-                LOG(INFO) << "Etcd is currently not available for keepAlive, we only need to retry, no other "
-                             "additional operations are required.";
-            }
-            // independant timeout-based failure check
-            if (etcdAvaliableWhenNetworkFailed
-                && keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND
-                && FLAGS_auto_del_dead_node) {
-                LOG(WARNING) << FormatString(
-                    "local node failed time %ld has been reached %ld, need kill local worker, Scaling down.",
-                    keepAliveTimeoutTimer_.ElapsedMilliSecond(), FLAGS_node_dead_timeout_s * MS_PER_SECOND);
-                Provider::Instance().FlushLogs();
-                (void)raise(SIGKILL);
             }
             // Allow some time for network to recover and then retry to create the keep alive again.
             INJECT_POINT("EtcdStore.LaunchKeepAliveThreads.loopQuickly",
-                         [&RETRY_DELAY](int timeS) { RETRY_DELAY = timeS; });
-            std::this_thread::sleep_for(std::chrono::seconds(RETRY_DELAY));
+                         [&retryDelaySec](int timeS) { retryDelaySec = timeS; });
+            std::this_thread::sleep_for(std::chrono::seconds(retryDelaySec));
             LOG(INFO) << "Retry to recreate keep alive";
         }
         LOG(INFO) << "Shutting down keep alive monitoring thread.";
@@ -631,8 +587,45 @@ Status EtcdStore::LaunchKeepAliveThreads()
     return Status::OK();
 }
 
+bool EtcdStore::ProcessKeepAliveFailure(const Status &status, int64_t &observedLeaseId, int &confirmTimes,
+                                        bool &needHandleFailure)
+{
+    keepAliveTimeout_ = true;
+    if (keepAliveTimeoutTimer_.ElapsedMilliSecond() < EtcdKeepAlive::GetLeaseExpiredMs()) {
+        return false;
+    }
+    LOG(INFO) << "Keep alive task completed with error: " << status.ToString()
+              << "keep alive failed time: " << keepAliveTimeoutTimer_.ElapsedMilliSecond();
+    if (observedLeaseId != leaseId_) {
+        observedLeaseId = leaseId_;
+        confirmTimes = 0;
+        needHandleFailure = true;
+    }
+    bool storeAvailable = false;
+    if (needHandleFailure && checkEtcdStateWhenNetworkFailedHandler_ != nullptr) {
+        storeAvailable = checkEtcdStateWhenNetworkFailedHandler_();
+        if (!storeAvailable) {
+            keepAliveTimeoutTimer_.Reset();
+            confirmTimes = 0;
+        }
+    }
+    if (storeAvailable && ++confirmTimes >= NETWORK_FAILURE_CONFIRM_MIN_TIMES) {
+        auto rc = HandleKeepAliveFailed();
+        LOG_IF_ERROR(rc, "add remove event failed when keep alive failed");
+        if (rc.IsOk()) {
+            LOG(WARNING) << "Confirmed local ETCD network isolation; keep the process alive and report the "
+                            "membership deletion event.";
+            needHandleFailure = false;
+        }
+    } else {
+        LOG(INFO) << "ETCD is unavailable for keepalive; retry without terminating the process.";
+    }
+    return true;
+}
+
 Status EtcdStore::InitWatch(std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
-                            std::unordered_set<std::string> exactKeys, const std::function<Status()> &writable)
+                            std::unordered_set<std::string> exactKeys,
+                            const std::function<Status()> &writable)
 {
     // Main thread and retry thread share watchEvents_ pointer
     WriteLock lock(&watchLock_);
@@ -1072,26 +1065,23 @@ Status EtcdStore::GetEtcdPrefix(const std::string &tableName, std::string &prefi
     return Status::OK();
 }
 
-Status EtcdStore::InformEtcdReconciliationDone(const HostPort &workerAddr)
+Status EtcdStore::InformReconciliationDone(const HostPort &workerAddr)
 {
     CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
                              "The key written to the cluster table must be bound to a lease");
     std::string valueStr;
-    RETURN_IF_NOT_OK(Get(ETCD_CLUSTER_TABLE, workerAddr.ToString(), valueStr));
-    topology::MemberServiceInfo value;
-    RETURN_IF_NOT_OK(topology::MemberServiceInfo::FromString(valueStr, value));
+    RETURN_IF_NOT_OK(Get(keepAliveTableName_, workerAddr.ToString(), valueStr));
+    cluster::MemberServiceInfo value;
+    RETURN_IF_NOT_OK(cluster::MemberServiceInfo::FromProto(valueStr, value));
     INJECT_POINT("recover.toReady.delay");
-    if (value.state == topology::MemberLifecycleState::RESTARTING
-        || value.state == topology::MemberLifecycleState::RECOVERING) {
-        value.state = topology::MemberLifecycleState::READY;
-        RETURN_IF_NOT_OK(PutWithLeaseId(ETCD_CLUSTER_TABLE, workerAddr.ToString(), value.ToString(), CheckLeaseId()));
+    if (value.state == cluster::MemberLifecycleState::RESTARTING
+        || value.state == cluster::MemberLifecycleState::RECOVERING) {
+        value.state = cluster::MemberLifecycleState::READY;
+        auto readyValue = value.ToProto();
+        CHECK_FAIL_RETURN_STATUS(!readyValue.empty(), K_INVALID, "Node state should not be empty.");
+        RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, workerAddr.ToString(), readyValue, CheckLeaseId()));
     }
     return Status::OK();
-}
-
-Status EtcdStore::InformReconciliationDone(const HostPort &workerAddr)
-{
-    return InformEtcdReconciliationDone(workerAddr);
 }
 
 std::unique_ptr<GrpcSession<etcdserverpb::KV>> Transaction::rpcSession_ = nullptr;

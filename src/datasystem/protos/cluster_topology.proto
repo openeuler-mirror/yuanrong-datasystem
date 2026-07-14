@@ -16,7 +16,7 @@
 
 syntax = "proto3";
 
-package datasystem.v3;
+package datasystem;
 
 option cc_enable_arenas = true;
 

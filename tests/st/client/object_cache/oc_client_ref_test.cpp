@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,7 +21,8 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/protos/object_posix.stub.rpc.pb.h"
 
 DS_DECLARE_string(etcd_address);
@@ -1891,13 +1889,13 @@ public:
     void GetWorkerUuids()
     {
         std::string value;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
+        DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
+        ClusterTopologyPb ring;
         ring.ParseFromString(value);
-        for (auto worker : ring.workers()) {
+        for (auto worker : ring.members()) {
             HostPort workerAddr;
             DS_ASSERT_OK(workerAddr.ParseString(worker.first));
-            uuidMap_.emplace(std::move(workerAddr), worker.second.worker_uuid());
+            uuidMap_.emplace(std::move(workerAddr), BytesUuidToString(worker.second.id()));
         }
     }
 
@@ -1916,9 +1914,8 @@ public:
         LOG(INFO) << "The etcd address is:" << FLAGS_etcd_address << std::endl;
         db_ = std::make_unique<EtcdStore>(etcdAddress);
         if ((db_ != nullptr) && (db_->Init().IsOk())) {
-            db_->DropTable(ETCD_RING_PREFIX);
             // We don't check rc here. If table to drop does not exist, it's fine.
-            (void)db_->CreateTable(ETCD_RING_PREFIX, ETCD_RING_PREFIX);
+            (void)RegisterTopologyTables(*db_);
         }
     }
 
@@ -2330,40 +2327,47 @@ public:
     }
 
     const int timeoutMs_ = 5000;  // 5s timeout
+    const int requestTimeoutMs_ = 300;  // 300ms request timeout
 };
 
 TEST_F(OCRemoteClientIdDfxTest, MasterTimeout)
 {
-    std::shared_ptr<ObjectClient> client0;
     std::shared_ptr<ObjectClient> client1;
-    InitTestClient(0, client0, timeoutMs_);
-    InitTestClient(1, client1, timeoutMs_);
+    InitTestClient(1, client1, timeoutMs_, requestTimeoutMs_);
 
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 1, "ClusterManager.checkConnection", "return(K_MASTER_TIMEOUT)"));
+    auto db = InitTestEtcdInstance();
+    SetWorkerHashInjection({ 0, 1 });
+    std::vector<std::string> failedMasterKeys;
+    std::vector<std::string> healthyMasterKeys;
+    GetObjectKeysHashToWorker(db.get(), 0, 2, failedMasterKeys);
+    GetObjectKeysHashToWorker(db.get(), 1, 1, healthyMasterKeys);
+    const std::string remoteClientId = "remote_client_id";
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc",
+                                           "return(K_RPC_DEADLINE_EXCEEDED)"));
     {
         // fail if no success objects
-        std::string objectKey = "obj";
         std::vector<std::string> failObjects;
-        auto status = (client1->GIncreaseRef({ objectKey }, failObjects));
+        auto status = (client1->GIncreaseRef({ failedMasterKeys[0] }, failObjects, remoteClientId));
         LOG(INFO) << "--status: " << status;
         EXPECT_NE(status.GetCode(), K_OK) << status;
         EXPECT_TRUE(!failObjects.empty()) << VectorToString(failObjects);
     }
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, "WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc"));
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "ClusterManager.checkConnection",
-                                           "1*return(K_MASTER_TIMEOUT)->1*return(K_OK)"));
     {
         // success if partly fail, and return the fail ids
-        std::string objectKey1;
-        DS_ASSERT_OK(client1->GenerateObjectKey("obj1", objectKey1));
-        std::string objectKey0;
-        DS_ASSERT_OK(client0->GenerateObjectKey("obj0", objectKey0));
-
+        std::shared_ptr<ObjectClient> partialClient;
+        InitTestClient(1, partialClient, timeoutMs_, requestTimeoutMs_);
         std::vector<std::string> failObjects;
-        auto status = (client1->GIncreaseRef({ objectKey0, objectKey1 }, failObjects));
-        LOG(INFO) << "--status: " << status;  // ignore the verification of status code.
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc",
+                                               "return(K_RPC_DEADLINE_EXCEEDED)"));
+        auto status =
+            (partialClient->GIncreaseRef({ failedMasterKeys[1], healthyMasterKeys[0] }, failObjects, remoteClientId));
+        DS_EXPECT_OK(status);
         EXPECT_EQ(failObjects.size(), 1) << VectorToString(failObjects);
+        EXPECT_EQ(failObjects[0], failedMasterKeys[1]);
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, "WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc"));
     }
 }
 

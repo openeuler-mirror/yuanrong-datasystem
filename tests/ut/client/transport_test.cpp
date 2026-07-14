@@ -192,8 +192,7 @@ public:
     Status InvokeSet(int64_t, PublishReqPb &request, const std::vector<MemView> &payloads,
                      PublishRspPb &response, uint32_t &workerVersion) override
     {
-        (void)response;
-        (void)workerVersion;
+        static_cast<void>(response);
         ++setInvokeCount;
         invokedSetRequests.push_back(request);
         invokedSetPayloadSizes.push_back(payloads.size());
@@ -402,7 +401,7 @@ public:
 
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override
     {
-        (void)buffer;
+        static_cast<void>(buffer);
         ++setCount;
         setParams.push_back(param);
         if (!setStatuses.empty()) {

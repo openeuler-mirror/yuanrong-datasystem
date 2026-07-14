@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -31,61 +28,51 @@
 #include "client/kv_cache/kv_client_common.h"
 #include "client/object_cache/oc_client_common.h"
 #include "common.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/protos/hash_ring.pb.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/hash_ring/hash_ring_tools.h"
 
 DS_DECLARE_string(etcd_address);
 
 namespace datasystem {
 namespace st {
-
 constexpr int SCALE_UP_ADD_TIME = 3;
 constexpr int SCALE_DOWN_ADD_TIME = 5;
 constexpr int WORKER_RECEIVE_DELAY = 1;
 class KVClientScaleCommon : virtual public OCClientCommon, public KVClientCommon {
 public:
-    void AssertAllNodesJoinIntoHashRing(int num)
+    void AssertAllNodesJoinIntoClusterTopology(int num)
     {
         if (!db_) {
             InitTestEtcdInstance();
         }
         std::string value;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
+        DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
+        ClusterTopologyPb ring;
         ASSERT_TRUE(ring.ParseFromString(value));
-        ASSERT_EQ(ring.workers_size(), num) << ring.ShortDebugString();
-        for (auto &worker : ring.workers()) {
-            ASSERT_TRUE(worker.second.state() == WorkerPb::ACTIVE) << ring.ShortDebugString();
+        ASSERT_EQ(ring.members_size(), num) << ring.ShortDebugString();
+        for (auto &worker : ring.members()) {
+            ASSERT_TRUE(worker.second.state() == MembershipPb::ACTIVE) << ring.ShortDebugString();
         }
-        ASSERT_TRUE(ring.add_node_info_size() == 0) << ring.ShortDebugString();
-        ASSERT_TRUE(ring.del_node_info_size() == 0) << ring.ShortDebugString();
     }
 
     void AssertDelNodeInfoExist()
     {
-        if (!db_) {
-            InitTestEtcdInstance();
-        }
-        std::string value;
-        DS_ASSERT_OK(db_->Get(ETCD_RING_PREFIX, "", value));
-        HashRingPb ring;
-        ASSERT_TRUE(ring.ParseFromString(value));
-        ASSERT_TRUE(ring.del_node_info_size() != 0) << ring.ShortDebugString();
+        FAIL() << "Phase2 topology no longer stores legacy del_node_info in ClusterTopologyPb.";
     }
 
-    void WaitAllNodesJoinIntoHashRing(int num, uint64_t timeoutSec = 60, std::string azName = "")
+    void WaitAllMembersJoinClusterTopology(int num, uint64_t timeoutSec = 60, std::string azName = "")
     {
         int S2Ms = 1000;
-        WaitHashRingChange(
-            [&](const HashRingPb &hashRing) {
-                if (hashRing.workers_size() != num || hashRing.add_node_info_size() != 0
-                    || hashRing.del_node_info_size() != 0) {
+        WaitClusterTopologyChange(
+            [&](const ClusterTopologyPb &hashRing) {
+                if (hashRing.members_size() != num) {
                     return false;
                 }
-                for (auto &worker : hashRing.workers()) {
-                    if (worker.second.state() != WorkerPb::ACTIVE) {
+                for (auto &worker : hashRing.members()) {
+                    if (worker.second.state() != MembershipPb::ACTIVE) {
                         return false;
                     }
                 }
@@ -95,11 +82,19 @@ public:
         sleep(WORKER_RECEIVE_DELAY);
     }
 
-    void WaitAddNodeInfoInHashRing(uint64_t timeoutSec = 60, std::string azName = "", bool needDelay = true)
+    void WaitJoiningMember(uint64_t timeoutSec = 60, std::string azName = "", bool needDelay = true)
     {
         int S2Ms = 1000;
-        WaitHashRingChange([&](const HashRingPb &hashRing) { return !hashRing.add_node_info().empty(); },
-                           timeoutSec * S2Ms, azName);
+        WaitClusterTopologyChange(
+            [](const ClusterTopologyPb &hashRing) {
+                for (const auto &worker : hashRing.members()) {
+                    if (worker.second.state() == MembershipPb::JOINING) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            timeoutSec * S2Ms, azName);
         // We only checked the status of etcd, and there will be a delay in workers subscribing to this information.
         if (needDelay) {
             sleep(WORKER_RECEIVE_DELAY);
@@ -110,12 +105,9 @@ public:
                                         std::string azName = "")
     {
         int S2Ms = 1000;
-        WaitHashRingChange(
-            [&](const HashRingPb &hashRing) {
-                if (hashRing.add_node_info_size() != 0 || hashRing.del_node_info_size() != 0) {
-                    return false;
-                }
-                for (auto &worker : hashRing.workers()) {
+        WaitClusterTopologyChange(
+            [&](const ClusterTopologyPb &hashRing) {
+                for (auto &worker : hashRing.members()) {
                     if (worker.first == workerAddr) {
                         return false;
                     }
@@ -127,18 +119,19 @@ public:
     }
 
     template <typename F>
-    void WaitHashRingChange(F &&f, uint64_t timeoutMs = shutdownTimeoutMs, std::string azName = "")
+    void WaitClusterTopologyChange(F &&f, uint64_t timeoutMs = shutdownTimeoutMs, std::string azName = "")
     {
         if (!db_) {
             InitTestEtcdInstance();
         }
+        const auto topologyTable = azName.empty() ? GetTopologyTableName() : GetTopologyTableName(azName);
+        DS_ASSERT_OK(azName.empty() ? RegisterTopologyTables(*db_) : RegisterTopologyTables(*db_, azName));
         auto timeOut = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         bool flag = false;
-        HashRingPb ring;
+        ClusterTopologyPb ring;
         while (std::chrono::steady_clock::now() < timeOut) {
             std::string hashRingStr;
-            auto trueRingTable = azName.empty() ? ETCD_RING_PREFIX : '/' + azName + ETCD_RING_PREFIX;
-            DS_ASSERT_OK(db_->Get(trueRingTable, "", hashRingStr));
+            DS_ASSERT_OK(db_->Get(topologyTable, "", hashRingStr));
             ASSERT_TRUE(ring.ParseFromString(hashRingStr));
             if (f(ring)) {
                 flag = true;
@@ -147,8 +140,7 @@ public:
             const int interval = 100;  // 100ms;
             std::this_thread::sleep_for(std::chrono::milliseconds(interval));
         }
-        LOG(INFO) << "Check " << (flag ? "success" : "failed")
-                  << ", Ring info:" << worker::HashRingToJsonString(ring);
+        LOG(INFO) << "Check " << (flag ? "success" : "failed") << ", Ring info:" << ring.ShortDebugString();
         ASSERT_TRUE(flag);
     }
 
@@ -172,6 +164,14 @@ public:
                 DS_ASSERT_OK(client->Get(workeridKey, outVal));
             }
         }
+    }
+
+    void WaitTopologyTasksDrained(std::initializer_list<uint32_t>, uint64_t timeoutSec = 60)
+    {
+        constexpr uint64_t millisecondsPerSecond = 1'000;
+        WaitClusterTopologyChange(
+            [](const ClusterTopologyPb &topology) { return !topology.has_active_batch(); },
+            timeoutSec * millisecondsPerSecond);
     }
 
 protected:

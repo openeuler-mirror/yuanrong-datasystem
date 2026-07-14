@@ -12,8 +12,7 @@
   - `src/datasystem/common/kvstore`
   - `src/datasystem/common/l2cache`
   - `src/datasystem/worker/object_cache`
-  - `src/datasystem/worker/cluster_manager`
-  - `src/datasystem/worker/hash_ring`
+  - `src/datasystem/cluster`
   - `src/datasystem/master`
   - `tests/st/client/kv_cache`
   - `tests/st/worker/object_cache`
@@ -26,7 +25,7 @@
 Use this playbook when a change touches:
 
 - ETCD, Metastore, RocksDB, l2cache, slot storage, or local persisted files;
-- object metadata, copy metadata, hash-ring metadata, cluster membership, or recovery incidents;
+- object metadata, copy metadata, topology metadata, cluster membership, or recovery incidents;
 - worker restart, passive scale-down, voluntary scale-down, scale-up, or failover;
 - compaction, cleanup, preload, spill/load, migration, transfer, or ownership handoff;
 - storage format, record format, manifest/index semantics, or version compatibility.
@@ -71,12 +70,10 @@ If the answer is "no persistence needed", record why when the state crosses an a
 
 Use the nearest module docs first, then source:
 
-- `.repo_context/modules/runtime/cluster-manager/README.md`
-- `.repo_context/modules/runtime/hash-ring/README.md`
+- `.repo_context/modules/runtime/topology/README.md`
 - `.repo_context/modules/runtime/etcd-metadata/README.md`
 - `.repo_context/modules/infra/l2cache/design.md`
 - `.repo_context/modules/infra/slot/design.md`
-- `.repo_context/modules/runtime/cluster-management-dfx-matrix.md`
 
 Useful searches:
 

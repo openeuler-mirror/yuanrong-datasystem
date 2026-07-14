@@ -6,12 +6,6 @@ ds_cc_test(
     name = "embedded_client_test",
     srcs = ["embedded_client_test.cpp"],
     tags = ["manual"],
-    data = [
-        "//tests/st:hashring_parser",
-    ],
-    copts = [
-        '-DHASH_PHRASE_PATH=\\"tests/st/hashring_parser\\"',
-    ],
     deps = [
         "//src/datasystem/client:datasystem",
         "//src/datasystem/client/kv_cache:kv_client",

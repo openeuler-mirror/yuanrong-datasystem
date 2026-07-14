@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -33,11 +30,11 @@
 DS_DECLARE_string(obs_endpoint);
 DS_DECLARE_string(sfs_path);
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
+
 /**
  * the purpose is:
  * take in consider that, when we delete the object which is in uploading process, in this scenarios we need
  * delay some time to retry.
- *
  * the perfect delay time is a little larger than object upload time, but it is hard to calculate that time, so we
  * set to a hour
  */
@@ -350,12 +347,12 @@ void OCGlobalCacheDeleteManager::GetDeletedObjects(std::map<std::string, DeleteM
     deleteIds = deleteIds_;
 }
 
-Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb, const worker::HashRange &extraRanges)
+Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb)
 {
     std::vector<std::pair<std::string, std::string>> deleteObjects;
     if (!objectStore_->IsRocksdbRunning()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE,
-                                                                   extraRanges, deleteObjects),
+                                                                   deleteObjects),
                                          "Load global cache delete objects from etcd failed.");
         for (const auto &iter : deleteObjects) {
             RETURN_IF_NOT_OK(objectStore_->PutToRocksStore(GLOBAL_CACHE_TABLE, iter.first, iter.second));
@@ -366,12 +363,17 @@ Status OCGlobalCacheDeleteManager::RecoverDeletedIds(bool isFromRocksdb, const w
                                              "Load global cache delete objects from rocksdb failed.");
         } else {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                objectStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE, extraRanges,
-                                          deleteObjects),
+                objectStore_->GetFromEtcd(ETCD_GLOBAL_CACHE_TABLE_PREFIX, GLOBAL_CACHE_TABLE, deleteObjects),
                 "Load global cache delete objects from etcd failed.");
         }
     }
 
+    return RecoverTopologyDeletedIds(deleteObjects);
+}
+
+Status OCGlobalCacheDeleteManager::RecoverTopologyDeletedIds(
+    const std::vector<std::pair<std::string, std::string>> &deleteObjects)
+{
     LOG(INFO) << "Recover delete object count:" << deleteObjects.size();
     for (const auto &info : deleteObjects) {
         const std::string &key = info.first;

@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -20,6 +17,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -51,11 +50,11 @@ NodeSelector::~NodeSelector()
     Shutdown();
 }
 
-void NodeSelector::Init(const std::string &localAddress, ClusterManager *clusterManager,
+void NodeSelector::Init(const std::string &localAddress, worker::WorkerTopologyReferences *topologyEngine,
                         std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager)
 {
-    if (!clusterManager || !apiManager) {
-        LOG(WARNING) << "The clusterManager_ or apiManager_ is empty, can not set running and start worker thread";
+    if (!topologyEngine || !apiManager) {
+        LOG(WARNING) << "The topologyEngine_ or apiManager_ is empty, can not set running and start worker thread";
         return;
     }
     if (running_.exchange(true)) {
@@ -63,7 +62,7 @@ void NodeSelector::Init(const std::string &localAddress, ClusterManager *cluster
         return;
     }
     localAddress_ = localAddress;
-    clusterManager_ = clusterManager;
+    topologyEngine_ = topologyEngine;
     apiManager_ = std::move(apiManager);
     running_.store(true);
 
@@ -89,7 +88,7 @@ void NodeSelector::Shutdown()
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
-    clusterManager_ = nullptr;
+    topologyEngine_  = nullptr;
     apiManager_.reset();
     LOG(INFO) << "NodeSelector shutdown";
 }
@@ -109,7 +108,7 @@ void NodeSelector::UnregisterRebalanceTaskHandler()
 Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNodes, const std::string &preferNode,
                                 size_t needSize, std::string &outNode)
 {
-    // 1. If rankList_ is empty, obtain Standby worker from ClusterManager and return;
+    // 1. If rankList_ is empty, obtain Standby worker from TopologyEngine and return;
     // 2. If the maximum remaining capacity in rankList_ is less than 1MB, return K_NO_SPACE;
     // 3. If the remaining capacity of the preferNode > needSize, select it;
     // 4. Randomly select the top n (5) nodes with available capacity > needSize, excluding nodes in excludedNodes;
@@ -117,10 +116,11 @@ Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNo
     //   do not select nodes that are not ready.
     std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
     if (rankList_.empty()) {
-        return GetStandbyWorker(excludeNodes, outNode);
+        return GetLocalStandbyWorker(excludeNodes, outNode);
     }
     auto maxLeftMemory = rankList_[0].availableMemory;
-    CHECK_FAIL_RETURN_STATUS(maxLeftMemory > 1 * MB_TO_BYTES, K_NO_SPACE, "The max available memory in not enough");
+    CHECK_FAIL_RETURN_STATUS(maxLeftMemory > 1 * MB_TO_BYTES,
+                             K_NO_SPACE, "The max available memory in not enough");
 
     auto it = std::find_if(rankList_.begin(), rankList_.end(),
                            [&preferNode](NodeInfo info) { return info.nodeId == preferNode; });
@@ -162,12 +162,12 @@ Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNo
     return Status::OK();
 }
 
-Status NodeSelector::GetStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode)
+Status NodeSelector::GetLocalStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode)
 {
     std::string worker = localAddress_;
     int maxCount = 5;
     for (int i = 0; i < maxCount; ++i) {
-        RETURN_IF_NOT_OK(clusterManager_->GetStandbyWorkerByAddr(worker, outNode));
+        RETURN_IF_NOT_OK(worker::GetStandbyTopologyMember(topologyEngine_, worker, outNode));
         if (outNode == localAddress_) {
             outNode.clear();
             RETURN_STATUS(K_NOT_FOUND, "Not found the stand by worker");
@@ -212,14 +212,14 @@ Status NodeSelector::TryGetAvailableMemoryFromSnapshot(const std::string &addres
     std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
     hasSnapshot = !rankList_.empty();
     if (!hasSnapshot) {
-        RETURN_STATUS(K_NOT_FOUND,
-                      FormatString("Remote node %s resource info not found, local node %s", address, localAddress_));
+        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
+                                                localAddress_));
     }
     auto it = std::find_if(rankList_.begin(), rankList_.end(),
                            [&address](const NodeInfo &info) { return info.nodeId == address; });
     if (it == rankList_.end()) {
-        RETURN_STATUS(K_NOT_FOUND,
-                      FormatString("Remote node %s resource info not found, local node %s", address, localAddress_));
+        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
+                                                localAddress_));
     }
     if (!it->isReady) {
         RETURN_STATUS(K_NOT_READY, FormatString("Remote node %s is not ready for resource selection, local node %s",
@@ -267,9 +267,8 @@ void NodeSelector::WorkerThread()
 
 Status NodeSelector::GetWorkerMasterApi(std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi)
 {
-    // get the master address info
     HostPort masterAddr;
-    RETURN_IF_NOT_OK(clusterManager_->GetMetaAddress(RESOURCE_MONITOR_MASTER, masterAddr));
+    RETURN_IF_NOT_OK(worker::ResolveTopologyOwner(topologyEngine_, RESOURCE_MONITOR_MASTER, masterAddr));
     VLOG_EVERY_N(RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL, RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N)
         << "Get " << RESOURCE_MONITOR_MASTER << " address: " << masterAddr.ToString();
     workerMasterApi = apiManager_->GetWorkerMasterApi(masterAddr);
@@ -287,14 +286,14 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
     auto *allocator = datasystem::memory::Allocator::Instance();
     const auto availableMemory = allocator->GetMemoryAvailToHighWater();
     const auto usedMemory = allocator->GetTotalRealMemoryUsage();
-    const auto memoryLimit = allocator->GetMaxMemoryLimit();
+    const auto memoryLimit = allocator->GetTotalMemoryLimit();
     stat->set_address(localAddress_);
     stat->set_available_memory(availableMemory);
     stat->set_used_memory(usedMemory);
+    stat->set_memory_limit(memoryLimit);
     // Report capacity as current used memory plus memory still available to the high watermark.
     stat->set_memory_capacity(usedMemory + availableMemory);
-    stat->set_memory_limit(memoryLimit);
-    stat->set_is_ready(!(clusterManager_->CheckLocalNodeIsExiting()));
+    stat->set_is_ready(!(worker::IsLocalTopologyMemberExiting(topologyEngine_)));
     {
         std::lock_guard<std::mutex> lck(token_->mutex_);
         if (!token_->alive) {

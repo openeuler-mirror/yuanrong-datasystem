@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -79,6 +76,7 @@ protected:
 template <typename T>
 class GrpcSession : public GrpcSessionBase {
 public:
+
     /**
      * @brief Creating an RPC session class.
      * @param[in] addresses Destination host port.
@@ -225,7 +223,8 @@ public:
         auto checker = [&methodName, &req]() -> Status {
             if constexpr (HasMemberFunc_lease<Request>::value) {
                 CHECK_FAIL_RETURN_STATUS(
-                    !(methodName == "Put::etcd_kv_Put" && req.key().find(ETCD_CLUSTER_TABLE) != std::string::npos
+                    !(methodName == "Put::etcd_kv_Put"
+                      && req.key().find(ETCD_MEMBERSHIP_KEY_SEGMENT) != std::string::npos
                       && req.lease() == 0),
                     K_INVALID, "The key written to the cluster table must be bound to a lease");
             }
@@ -373,6 +372,7 @@ public:
     }
 
 private:
+
     /**
      * @brief This method is used to obtain different AccessRecorderKey for different etcd request types.
      * @param[in] methodName The type of etcd request.

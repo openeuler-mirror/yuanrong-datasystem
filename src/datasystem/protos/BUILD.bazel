@@ -111,7 +111,7 @@ proto_library(
     srcs = ["object_posix.proto"],
     strip_import_prefix = PROTO_ROOT,
     deps = [
-        ":hash_ring_proto",
+        ":cluster_topology_proto",
         ":meta_transport_proto",
         ":p2p_subscribe_proto",
         ":rpc_option_proto",
@@ -190,20 +190,6 @@ zmq_cc_proto_library(
         ":utils_cc_proto",
         ":worker_object_cc_proto",
     ],
-)
-
-proto_library(
-    name = "hash_ring_proto",
-    srcs = [
-        "hash_ring.proto",
-        "hash_ring_v2.proto",
-    ],
-    strip_import_prefix = PROTO_ROOT,
-)
-
-cc_proto_library(
-    name = "hash_ring_cc_proto",
-    deps = [":hash_ring_proto"],
 )
 
 proto_library(
@@ -319,7 +305,6 @@ proto_library(
     ],
     strip_import_prefix = PROTO_ROOT,
     deps = [
-        ":hash_ring_proto",
         ":meta_transport_proto",
         ":object_posix_proto",
         ":p2p_subscribe_proto",
@@ -456,7 +441,6 @@ zmq_cc_proto_library(
 zmq_cc_proto_library(
     name = "worker_object_zmq_cc_proto",
     extra_protos = [
-        ":hash_ring_proto",
         ":object_posix_proto",
         ":p2p_subscribe_proto",
         ":rpc_option_proto",
@@ -466,7 +450,6 @@ zmq_cc_proto_library(
     proto = "worker_object.proto",
     proto_root = ZMQ_PROTO_ROOT,
     deps = [
-        ":hash_ring_cc_proto",
         ":meta_transport_cc_proto",
         ":object_posix_cc_proto",
         ":rpc_option_cc_proto",
@@ -478,7 +461,7 @@ zmq_cc_proto_library(
 zmq_cc_proto_library(
     name = "object_posix_zmq_cc_proto",
     extra_protos = [
-        ":hash_ring_proto",
+        ":cluster_topology_proto",
         ":p2p_subscribe_proto",
         ":utils_proto",
         ":rpc_option_proto",
@@ -487,7 +470,7 @@ zmq_cc_proto_library(
     proto = "object_posix.proto",
     proto_root = ZMQ_PROTO_ROOT,
     deps = [
-        ":hash_ring_cc_proto",
+        ":cluster_topology_cc_proto",
         ":meta_transport_cc_proto",
         ":object_posix_cc_proto",
         ":p2p_subscribe_cc_proto",
@@ -764,7 +747,15 @@ cc_library(
 # --- worker_object brpc adapter (4 services) ---
 genrule(
     name = "worker_object_brpc_gen",
-    srcs = ["worker_object.proto", "hash_ring.proto", "meta_transport.proto", "object_posix.proto", "p2p_subscribe.proto", "rpc_option.proto", "utils.proto"],
+    srcs = [
+        "cluster_topology.proto",
+        "meta_transport.proto",
+        "object_posix.proto",
+        "p2p_subscribe.proto",
+        "rpc_option.proto",
+        "utils.proto",
+        "worker_object.proto",
+    ],
     tools = [
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
@@ -795,7 +786,7 @@ cc_library(
     strip_include_prefix = ".",
     include_prefix = "datasystem/protos",
     deps = [
-        ":worker_object_cc_proto", ":hash_ring_cc_proto", ":meta_transport_cc_proto",
+        ":worker_object_cc_proto", ":meta_transport_cc_proto",
         ":object_posix_cc_proto", ":p2p_subscribe_cc_proto", ":rpc_option_cc_proto", ":utils_cc_proto",
         "@com_github_apache_brpc//:brpc",
         "//include/datasystem/utils:utils_headers",
@@ -812,7 +803,16 @@ cc_library(
 # --- master_object brpc adapter ---
 genrule(
     name = "master_object_brpc_gen",
-    srcs = ["master_object.proto", "object_posix.proto", "p2p_subscribe.proto", "rpc_option.proto", "utils.proto", "worker_object.proto", "hash_ring.proto", "meta_transport.proto"],
+    srcs = [
+        "cluster_topology.proto",
+        "master_object.proto",
+        "meta_transport.proto",
+        "object_posix.proto",
+        "p2p_subscribe.proto",
+        "rpc_option.proto",
+        "utils.proto",
+        "worker_object.proto",
+    ],
     tools = [
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
@@ -845,7 +845,7 @@ cc_library(
     deps = [
         ":master_object_cc_proto", ":object_posix_cc_proto", ":p2p_subscribe_cc_proto",
         ":rpc_option_cc_proto", ":utils_cc_proto", ":worker_object_cc_proto",
-        ":hash_ring_cc_proto", ":meta_transport_cc_proto",
+        ":meta_transport_cc_proto",
         "@com_github_apache_brpc//:brpc",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
@@ -1005,7 +1005,7 @@ genrule(
     name = "object_posix_brpc_gen",
     srcs = [
         "object_posix.proto",
-        "hash_ring.proto",
+        "cluster_topology.proto",
         "rpc_option.proto",
         "utils.proto",
         "p2p_subscribe.proto",
@@ -1057,7 +1057,7 @@ cc_library(
     include_prefix = "datasystem/protos",
     deps = [
         ":object_posix_cc_proto",
-        ":hash_ring_cc_proto",
+        ":cluster_topology_cc_proto",
         ":rpc_option_cc_proto",
         ":utils_cc_proto",
         ":p2p_subscribe_cc_proto",

@@ -6,12 +6,12 @@
   - `third_party/protos/etcd`
   - `src/datasystem/common/kvstore/etcd`
   - `src/datasystem/common/kvstore/metastore`
-  - integration from `src/datasystem/worker/cluster_manager` and `src/datasystem/worker/hash_ring`
+  - integration from `src/datasystem/cluster` and `src/datasystem/worker/worker_oc_server.cpp`
 - Why this module exists:
   - provide the ETCD v3 API surface used by the worker runtime;
   - wrap ETCD KV, watch, lease keepalive, transaction/CAS, health, authentication, and election RPCs behind project-local APIs;
   - provide an in-process ETCD-compatible Metastore server for deployments using `metastore_address`;
-  - host the canonical cluster-membership and hash-ring metadata backend used by cluster management.
+  - host the canonical v3 topology and membership metadata backend used by runtime topology.
 - Primary source files to verify against:
   - `third_party/protos/etcd/api/etcdserverpb/rpc.proto`
   - `third_party/protos/etcd/api/mvccpb/kv.proto`
@@ -48,8 +48,6 @@
   - `.repo_context/modules/metadata/runtime.etcd-metadata.json`
 - Matching `design.md`:
   - `.repo_context/modules/runtime/etcd-metadata/design.md`
-- Cross-module DFX matrix:
-  - `.repo_context/modules/runtime/cluster-management-dfx-matrix.md`
 - Matching feature playbook:
   - `.repo_context/playbooks/features/runtime/etcd-metadata/implementation.md`
 - Reason if either is intentionally omitted:
@@ -62,8 +60,8 @@
   - project ETCD client wrappers in `src/datasystem/common/kvstore/etcd`;
   - ETCD-compatible in-process backend in `src/datasystem/common/kvstore/metastore`.
 - Candidate sibling submodules considered:
-  - `hash_ring` remains a sibling runtime module; it stores one hot serialized `HashRingPb` through this module but owns ring semantics.
-  - `cluster_manager` remains a sibling runtime module; it owns worker lifecycle state and event interpretation.
+  - `runtime.topology` remains a sibling runtime module; it owns worker lifecycle state, route lookup, and v3 topology
+    ring semantics while using this module for ETCD-compatible storage and watches.
   - object metadata tables under ETCD are runtime consumers, not owners of the ETCD client.
 - Why Metastore is included here:
   - it registers the same ETCD gRPC services used by `EtcdStore` and is selected by `metastore_address` as an ETCD-compatible backend.
@@ -92,8 +90,7 @@
   - `EtcdElector::Campaign`, `Leader`, `Observe`, `Resign`, `LeaseKeepAlive`
   - `MetaStoreServer::Start`, `Stop`
 - Important constants:
-  - `ETCD_RING_PREFIX`: `/datasystem/ring`
-  - `ETCD_CLUSTER_TABLE`: `datasystem/cluster` without a leading slash because prefix is customized by cluster name
+  - `ETCD_MEMBERSHIP_KEY_SEGMENT`: `/cluster/`, used to enforce lease-bound membership writes across cluster namespaces
   - `ETCD_MASTER_ADDRESS_TABLE`: `/datasystem`
   - `ETCD_META_TABLE_PREFIX`, `ETCD_LOCATION_TABLE_PREFIX`, `ETCD_ASYNC_WORKER_OP_TABLE_PREFIX`, `ETCD_GLOBAL_CACHE_TABLE_PREFIX`
   - worker states in ETCD values: `ready`, `exiting`, `d_rst`
@@ -101,8 +98,8 @@
 ## Main Dependencies
 
 - Upstream callers:
-  - `ClusterManager` creates tables, starts watches, initializes keepalive, consumes worker events, and calls node state updates.
-  - `HashRing` reads/writes `/datasystem/ring` through CAS and responds to ring watch events.
+  - Worker topology composition creates exact cluster-scoped tables, starts role-minimal watches and initializes keepalive.
+  - `TopologyRepository` reads/writes topology records through CAS and responds to backend watch events.
   - object-cache metadata modules store metadata/location/global-cache records under ETCD metadata prefixes.
   - CLI and tests use ETCD store helpers for inspection and fault scenarios.
 - Downstream dependencies:
@@ -131,7 +128,8 @@ Important nuance:
 
 1. `EtcdStore::CreateTable(tableName, tablePrefix)` records an in-memory mapping from table name to ETCD prefix.
 2. When `cluster_name` is configured, normal table prefixes become `/<cluster_name><tablePrefix>`.
-3. `ETCD_CLUSTER_TABLE` is special: it intentionally has no leading slash and relies on customized prefixing.
+3. `CreateTableWithExactPrefix` registers already validated absolute topology/membership prefixes without applying the
+   legacy `cluster_name` rewrite a second time.
 4. `Put`, `Get`, `Delete`, `PrefixSearch`, and `RangeSearch` compose `realKey = tablePrefix + "/" + key`.
 5. `GetAll` and prefix/range queries strip table prefixes before returning caller-facing keys.
 
@@ -157,28 +155,37 @@ Important nuance:
 
 ### Lease Keepalive And Worker Liveness
 
-1. `EtcdStore::InitKeepAlive(table, key, isRestart, isEtcdAvailableWhenStart)` prepares a `WorkerServiceInfo` with timestamp, service state, optional host id, and the local worker compatibility version.
+1. `EtcdStore::InitKeepAlive(table, key, isRestart, isEtcdAvailableWhenStart)` prepares a `MembershipValue` with timestamp, service state, optional host id, and the local member compatibility version.
 2. Initial states are `start`, `restart`, or `d_rst`; after the first successful write, later automatic writes use `recover`.
 3. `RunKeepAliveTask` creates an ETCD lease with TTL `node_timeout_s`, creates `EtcdKeepAlive`, writes the cluster table key with that lease, then runs the keepalive loop.
 4. `EtcdKeepAlive::Run` periodically sends `LeaseKeepAlive` requests after `LivenessHealthCheckEvent` notifications.
-5. If keepalive fails longer than the lease-expiry threshold, the parent monitor either retries, emits a fake DELETE event, starts a death timer, or kills the worker when `auto_del_dead_node` and `node_dead_timeout_s` policy require it.
+5. If keepalive fails longer than the lease-expiry threshold, the parent monitor keeps retrying and, after peer/store
+   evidence confirms local isolation, emits one fake DELETE event. It never terminates the process; readiness/admission
+   and external lifecycle management own isolation and restart policy.
 6. `UpdateNodeState` rewrites the local cluster-table value with the active lease.
-7. `InformEtcdReconciliationDone` turns `restart` or `recover` into `ready` after reconciliation.
+7. `InformReconciliationDone` uses the keepalive table selected by `InitKeepAlive` and turns `restart` or `recover`
+   into `ready` after reconciliation.
+8. A process can own several `EtcdStore` instances, but only the instance that calls `InitKeepAlive` installs the
+   process-level graceful-exit keepalive-timeout handler. Watch/KV-only stores must not replace that authority.
 
 Important nuance:
 
-- Writes to `ETCD_CLUSTER_TABLE` must be bound to a lease. `GrpcSession::SendRpc` explicitly rejects cluster-table `Put` requests whose lease is `0`.
-- Keepalive failure can synthesize a local DELETE event even before a real ETCD watch event arrives, so cluster-manager deletion logic must treat event source carefully.
+- Writes whose physical key contains the membership `/cluster/` segment must be bound to a lease.
+  `GrpcSession::SendRpc` rejects matching `Put` requests whose lease is `0`.
+- Keepalive failure can synthesize a local DELETE event even before a real ETCD watch event arrives, so topology deletion
+  logic must treat the event as local control-plane evidence and remain idempotent. The monitor keeps the process alive.
 
 ### Watch And Event Compensation
 
-1. `EtcdStore::WatchEvents` converts table/key pairs to ETCD prefixes and starts `EtcdWatch`.
-2. `EtcdWatch::CreateWatch` watches each prefix with `range_end = prefix + "\xFF"` and `start_revision + 1`.
+1. `EtcdStore::WatchEvents` converts table/key pairs to physical targets and starts `EtcdWatch`.
+2. Exact targets omit `range_end`; collection targets use `range_end = prefix + "\xFF"`; both start at
+   `start_revision + 1`.
 3. The producer reads the ETCD watch stream and queues events.
 4. The consumer filters stale events using local `keyVersion_`, runs the RocksDB cluster-info update callback, then calls the runtime event handler.
-5. DELETE events under `ETCD_CLUSTER_TABLE` are ignored if the backend is not writable.
+5. DELETE events under a membership `/cluster/` key are ignored if the backend is not writable.
 6. When the watch stream fails, `ReInitWatch` first calls `RetrieveEventActively`, then reopens the stream.
-7. A passive compensation thread periodically prefix-searches ETCD and generates fake PUT/DELETE events for missed state.
+7. A passive compensation thread periodically searches ETCD and filters exact targets before generating fake PUT/DELETE
+   events for missed state.
 
 Important nuance:
 
@@ -217,13 +224,13 @@ Important nuance:
   - `tests/st/common/kvstore/grpc_session_test.cpp`
   - `tests/ut/common/kvstore/metastore_server_test.cpp`
   - `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`
-  - `tests/st/worker/object_cache/cluster_manager_test.cpp`
+  - `tests/ut/cluster/coordination_backend_contract_test.cpp`
 
 ## Review And Bugfix Notes
 
 - Common change risks:
   - changing ETCD table prefixes changes persisted key layout and watch routing;
-  - changing CAS retry behavior directly affects hash-ring and cluster-manager scale operations;
+  - changing CAS retry behavior directly affects topology scale operations;
   - changing keepalive state strings affects restart, reconciliation, voluntary exit, and passive deletion;
   - changing watch filtering or compensation can duplicate, suppress, or reorder cluster events;
   - changing Metastore transaction or history behavior can diverge from external ETCD behavior.
@@ -243,8 +250,9 @@ Important nuance:
 - The ETCD wrapper is both a generic KV client and a runtime membership/watch/keepalive policy engine. This makes the module boundary blurry and pushes cluster-specific behavior into a common library.
 - CAS is implemented as read-process-transaction over full values. Hot keys such as `/datasystem/ring` can create heavy ETCD load and high conflict rates during cluster scale or failure storms.
 - CAS conflict handling is bounded by a generic error retry counter, so large writer fanout can surface as operation failure rather than backpressure-aware convergence.
-- Watch compensation improves resilience but creates two event sources: ETCD stream events and synthesized fake events. This increases duplicate/order reasoning cost for cluster-manager and hash-ring handlers.
-- Keepalive failure handling mixes transport diagnosis, local fake DELETE generation, retry, death timers, and `SIGKILL`; this couples ETCD network behavior to worker lifecycle policy.
+- Watch compensation improves resilience but creates two event sources: ETCD stream events and synthesized fake events. This increases duplicate/order reasoning cost for topology handlers.
+- Keepalive failure handling still mixes transport diagnosis, local fake DELETE generation, and retry in the common ETCD
+  wrapper. It no longer owns death timers or `SIGKILL`; external lifecycle management owns process termination.
 - In-memory Metastore shares ETCD-compatible APIs but has limited history and no verified persistent durability in this layer, so behavior can differ from an external ETCD cluster under restart, compaction, or long watch gaps.
 - Table prefix mappings live only in `EtcdStore` memory while data lives in ETCD/Metastore, so callers must recreate identical table mappings before accessing data.
 - ETCD auth/TLS, router-client TLS, normal worker sessions, transaction static sessions, watch sessions, and keepalive sessions have different creation paths, which raises the risk of inconsistent backend or security behavior.

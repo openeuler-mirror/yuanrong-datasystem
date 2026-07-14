@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -48,6 +45,7 @@ namespace master {
 static constexpr int ASYNC_MIN_THREAD_NUM = 1;
 static constexpr int ASYNC_MAX_THREAD_NUM = 4;
 
+
 static constexpr double US_PER_MS = 1000.0;
 
 MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
@@ -74,10 +72,10 @@ void MasterOCServiceImpl::Shutdown()
 
 Status MasterOCServiceImpl::Init()
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
+    RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
     reconciliationAsyncPool_ =
         std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "Reconciliation");
-    RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, clusterManager_,
+    RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, topologyEngine_,
                                                                metadataManagerHolder_));
     return Status::OK();
 }
@@ -153,9 +151,9 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     point.Record();
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     if (ShouldPrintLatencySummary(totalUs, config)) {
-        PhaseDurationResult result =
-            ComputePhaseDurations(Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
-                                  Trace::Instance().GetLatencyTickDroppedCount());
+        PhaseDurationResult result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
         bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
         MergeDownstreamPhases(result);
         bool gateHit = CheckPhaseGate(result, config);
@@ -225,7 +223,8 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     auto totalMs = timer.ElapsedMilliSecond();
     GetMasterTimeCost().Append("Total CreateCopyMeta", totalMs);
     auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("CreateCopyMeta done, cost: %.1fms, %s", totalMs, GetMasterTimeCost().GetInfo());
+    VLOG(vlogLevel) << FormatString("CreateCopyMeta done, cost: %.1fms, %s", totalMs,
+                                    GetMasterTimeCost().GetInfo());
     return status;
 }
 
@@ -288,9 +287,9 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     }
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     if (ShouldPrintLatencySummary(totalUs, config)) {
-        PhaseDurationResult result =
-            ComputePhaseDurations(Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
-                                  Trace::Instance().GetLatencyTickDroppedCount());
+        PhaseDurationResult result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
         bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
         MergeDownstreamPhases(result);
         bool gateHit = CheckPhaseGate(result, config);
@@ -301,8 +300,8 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     GetMasterTimeCost().Append("Total QueryMeta", totalMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
-                        FormatString("QueryMeta done, target num %d, success num %d, cost: %.3fms, %s",
-                                     req.ids().size(), rsp.query_metas_size(), totalMs, GetMasterTimeCost().GetInfo()));
+        FormatString("QueryMeta done, target num %d, success num %d, cost: %.3fms, %s", req.ids().size(),
+                     rsp.query_metas_size(), totalMs, GetMasterTimeCost().GetInfo()));
     return Status::OK();
 }
 
@@ -381,9 +380,9 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
     }
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     if (ShouldPrintLatencySummary(totalUs, config)) {
-        PhaseDurationResult result =
-            ComputePhaseDurations(Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
-                                  Trace::Instance().GetLatencyTickDroppedCount());
+        PhaseDurationResult result = ComputePhaseDurations(
+            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+            Trace::Instance().GetLatencyTickDroppedCount());
         bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
         MergeDownstreamPhases(result);
         bool gateHit = CheckPhaseGate(result, config);
@@ -527,8 +526,8 @@ Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
 
     // Iterate all workers concurrently.
     std::vector<HostPort> allWorkers;
-    RETURN_RUNTIME_ERROR_IF_NULL(clusterManager_);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetClusterNodeAddresses(allWorkers),
+    RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::GetTopologyMemberAddresses(topologyEngine_, allWorkers),
                                      "cluster manager get cluster addrs failed");
 
     std::vector<std::string> objectKeys(req.object_keys().begin(), req.object_keys().end());
@@ -537,8 +536,9 @@ Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
         return Status::OK();
     }
     if (req.object_keys_size() > 0) {
-        std::unordered_map<std::string, QueryGlobalRefNumReqPb> queryTarget = QueryWorkerGRefReqPbGen(
-            std::unordered_set<std::string>(objectKeys.begin(), objectKeys.end()), ocMetadataManager);
+        std::unordered_map<std::string, QueryGlobalRefNumReqPb> queryTarget =
+            QueryWorkerGRefReqPbGen(
+                std::unordered_set<std::string>(objectKeys.begin(), objectKeys.end()), ocMetadataManager);
         for (const auto &targetWorker : queryTarget) {
             QueryGlobalRefNumRspPb rspWorker;
             HostPort addr;
@@ -721,23 +721,29 @@ Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const Reconciliation
     HostPort workerAddr;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerAddr.ParseString(req.hostport()), "workeradd parse failed");
     LOG(INFO) << "The master receives a reconciliation request from the worker on " << req.hostport() << ".";
-    CHECK_FAIL_RETURN_STATUS(clusterManager_ != nullptr, StatusCode::K_INVALID, "No ClusterManager is provided.");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        clusterManager_->IfNeedTriggerReconciliation(workerAddr, req.event_timestamp(), true), "reconciliation failed");
-    GetMasterTimeCost().Append("Total IfNeedTriggerReconciliation", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master IfNeedTriggerReconciliation %s", GetMasterTimeCost().GetInfo());
+    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, StatusCode::K_INVALID, "No TopologyEngine is provided.");
+    // TopologyController continuously reconciles membership; consume its current immutable Snapshot here.
+    std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
+                                     "GetOcMetadataManager failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->ProcessWorkerRestart(workerAddr.ToString(),
+                                                                             req.event_timestamp(), true),
+                                     "Master process worker restart failed");
+    GetMasterTimeCost().Append("Total ReconcileMembershipChange", timer.ElapsedMilliSecond());
+    LOG(INFO) << FormatString("The operations of master ReconcileMembershipChange %s",
+                              GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
-Status MasterOCServiceImpl::IfNeedTriggerReconciliation(
+Status MasterOCServiceImpl::ReconcileMembershipChange(
     std::shared_ptr<ServerUnaryWriterReader<ReconciliationRspPb, ReconciliationQueryPb>> serverApi)
 {
     (void)reconciliationAsyncPool_->Submit([this, serverApi] {
         ReconciliationQueryPb req;
         ReconciliationRspPb rsp;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "IfNeedTriggerReconciliation read request failed");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "ReconcileMembershipChange read request failed");
         RETURN_IF_NOT_OK(IfNeedTriggerReconciliationImpl(req, rsp));
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "IfNeedTriggerReconciliation write failed");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "ReconcileMembershipChange write failed");
         return Status::OK();
     });
     return Status::OK();
@@ -778,6 +784,9 @@ Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, Mig
     ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(worker::ValidateTopologyMigrationRequest(
+        topologyEngine_, req.topology_version(), req.batch_epoch(), req.source_member_id(),
+        req.target_member_id(), req.source_addr()));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");

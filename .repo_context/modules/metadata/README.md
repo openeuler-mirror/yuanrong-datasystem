@@ -23,10 +23,8 @@ Current canonical records:
 - `overview.repository-skills.json`
 - `client.client-sdk.json`
 - `runtime.worker-runtime.json`
-- `runtime.cluster-management.json`
 - `runtime.etcd-metadata.json`
-- `runtime.hash-ring.json`
-- `runtime.cluster-manager.json`
+- `runtime.topology.json`
 - `infra.common-infra.json`
 - `infra.l2cache.json`
 - `infra.slot.json`

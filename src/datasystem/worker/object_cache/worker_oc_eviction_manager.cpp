@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -39,6 +36,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/arena_group_key.h"
+#include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -50,11 +48,10 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/object_meta_route_helper.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
-#include "datasystem/master/object_cache/master_oc_service_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
 DS_DECLARE_uint32(eviction_reserve_mem_threshold_mb);
@@ -192,12 +189,16 @@ WorkerOcEvictionManager::EvictionTraceAggregator::GetSummaries() const
 }
 
 WorkerOcEvictionManager::WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress,
-                                                 HostPort masterAddress, master::MasterOCServiceImpl *masterOc)
+                                                 HostPort masterAddress, master::MasterOCServiceImpl *masterOc,
+                                                 const cluster::PlacementFacade *topologyPlacement,
+                                                 worker::MetadataRouteOptions topologyRouteOptions)
     : objectTable_(std::move(objectTable)),
       localAddress_(std::move(localAddress)),
       masterAddress_(std::move(masterAddress)),
       isDone_(true),
-      masterOc_(masterOc)
+      masterOc_(masterOc),
+      topologyPlacement_(topologyPlacement),
+      topologyRouteOptions_(std::move(topologyRouteOptions))
 {
 }
 
@@ -288,24 +289,17 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
 {
     RETURN_OK_IF_TRUE(objectKeyVersions.empty());
     VLOG(DEBUG_LOG_LEVEL) << "RemoveMetaFromMasterForEviction start. Object count: " << objectKeyVersions.size();
-    if (clusterManager_ == nullptr) {
-        RETURN_STATUS(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
+    if (topologyPlacement_ == nullptr) {
+        RETURN_STATUS(StatusCode::K_NOT_FOUND, "Topology placement facade is not provided");
     }
     EvictDeletedObjects failedObjects;
     Status lastRc;
-    auto addFailedObjects = [&objectKeyVersions, &failedObjects, &lastRc](const std::vector<std::string> &objectKeys,
-                                                                          const Status &rc) {
-        lastRc = rc;
-        for (const auto &objectKey : objectKeys) {
-            failedObjects[objectKey] = objectKeyVersions.at(objectKey);
-        }
-    };
     std::vector<std::string> objectKeys;
     objectKeys.reserve(objectKeyVersions.size());
     for (const auto &item : objectKeyVersions) {
         objectKeys.emplace_back(item.first);
     }
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
     grouped.AppendFailuresToGroup();
     auto &objKeysGrpByMaster = grouped.groups;
     INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster",
@@ -318,51 +312,59 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
                                objKeysGrpByMaster[HostPort()].emplace_back(objectKey);
                            });
     for (const auto &item : objKeysGrpByMaster) {
-        const HostPort &masterAddr = item.first;
-        const auto &currentObjectKeys = item.second;
-        if (currentObjectKeys.empty()) {
-            continue;
-        }
-        if (masterAddr.Empty()) {
-            addFailedObjects(currentObjectKeys, { K_NOT_FOUND, "Cannot find master for eviction remove-meta." });
-            continue;
-        }
-        auto workerMasterApi =
-            worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
-        auto rc = workerMasterApi->Init();
-        if (rc.IsError()) {
-            addFailedObjects(currentObjectKeys, rc);
-            continue;
-        }
-        master::RemoveMetaReqPb req;
-        master::RemoveMetaRspPb rsp;
-        req.set_address(localAddress_.ToString());
-        req.set_cause(master::RemoveMetaReqPb::EVICTION);
-        req.set_version(UINT64_MAX);
-        *req.mutable_ids() = { currentObjectKeys.begin(), currentObjectKeys.end() };
-        for (const auto &objectKey : currentObjectKeys) {
-            auto *objKeyVersionPb = req.add_id_with_version();
-            objKeyVersionPb->set_id(objectKey);
-            objKeyVersionPb->set_version(objectKeyVersions.at(objectKey));
-        }
-        rc = workerMasterApi->RemoveMeta(req, rsp);
-        if (rc.IsError()) {
-            LOG(ERROR) << FormatString("RemoveMeta failed, object count %zu, status: %s.", currentObjectKeys.size(),
-                                       rc.ToString());
-            addFailedObjects(currentObjectKeys, rc);
-            continue;
-        }
-        if (rsp.meta_is_moving()) {
-            addFailedObjects(currentObjectKeys, { K_TRY_AGAIN, "Meta is moving." });
-            continue;
-        }
-        if (!rsp.failed_ids().empty()) {
-            std::vector<std::string> failedIds(rsp.failed_ids().begin(), rsp.failed_ids().end());
-            addFailedObjects(failedIds, { K_TRY_AGAIN, "RemoveMeta returned failed ids." });
-        }
+        RemoveEvictionMetaGroup(item.first, item.second, objectKeyVersions, failedObjects, lastRc);
     }
     objectKeyVersions = std::move(failedObjects);
     return objectKeyVersions.empty() ? Status::OK() : lastRc;
+}
+
+void WorkerOcEvictionManager::RemoveEvictionMetaGroup(
+    const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+    const EvictDeletedObjects &objectKeyVersions, EvictDeletedObjects &failedObjects, Status &lastRc)
+{
+    auto addFailedObjects = [&objectKeyVersions, &failedObjects, &lastRc](const std::vector<std::string> &failedKeys,
+                                                                         const Status &rc) {
+        lastRc = rc;
+        for (const auto &objectKey : failedKeys) {
+            failedObjects[objectKey] = objectKeyVersions.at(objectKey);
+        }
+    };
+    if (objectKeys.empty()) {
+        return;
+    }
+    if (masterAddr.Empty()) {
+        addFailedObjects(objectKeys, { K_NOT_FOUND, "Cannot find master for eviction remove-meta." });
+        return;
+    }
+    auto workerMasterApi =
+        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
+    auto rc = workerMasterApi->Init();
+    if (rc.IsError()) {
+        addFailedObjects(objectKeys, rc);
+        return;
+    }
+    master::RemoveMetaReqPb req;
+    master::RemoveMetaRspPb rsp;
+    req.set_address(localAddress_.ToString());
+    req.set_cause(master::RemoveMetaReqPb::EVICTION);
+    req.set_version(UINT64_MAX);
+    *req.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
+    for (const auto &objectKey : objectKeys) {
+        auto *objectVersion = req.add_id_with_version();
+        objectVersion->set_id(objectKey);
+        objectVersion->set_version(objectKeyVersions.at(objectKey));
+    }
+    rc = workerMasterApi->RemoveMeta(req, rsp);
+    if (rc.IsError()) {
+        LOG(ERROR) << FormatString("RemoveMeta failed, object count %zu, status: %s.", objectKeys.size(),
+                                   rc.ToString());
+        addFailedObjects(objectKeys, rc);
+    } else if (rsp.meta_is_moving()) {
+        addFailedObjects(objectKeys, { K_TRY_AGAIN, "Meta is moving." });
+    } else if (!rsp.failed_ids().empty()) {
+        std::vector<std::string> failedIds(rsp.failed_ids().begin(), rsp.failed_ids().end());
+        addFailedObjects(failedIds, { K_TRY_AGAIN, "RemoveMeta returned failed ids." });
+    }
 }
 
 void WorkerOcEvictionManager::GetObjectNextAction(SafeObjType &entry, std::unique_ptr<EvictionTrace> &trace,
@@ -818,8 +820,8 @@ std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> WorkerOcEvictionManager
 
 void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks)
 {
-    if (clusterManager_ == nullptr) {
-        LOG(ERROR) << "ETCD cluster manager is not provided for primary end-life eviction.";
+    if (topologyPlacement_ == nullptr) {
+        LOG(ERROR) << "Topology placement facade is not provided for primary end-life eviction.";
         ReaddPrimaryEndLifeTasks(tasks);
         return;
     }
@@ -831,7 +833,7 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndL
         objectKeys.emplace_back(task.objectKey);
         taskByKey.emplace(task.objectKey, task);
     }
-    auto grouped = clusterManager_->GroupKeysByMetaOwner(objectKeys);
+    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
     auto &groupedKeys = grouped.groups;
 
     std::unordered_set<std::string> routeFailedKeys;
@@ -1315,15 +1317,20 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
     const auto &objectKey = objectKV.GetObjKey();
     VLOG(DEBUG_LOG_LEVEL) << "DeleteNoneL2CacheEvictableObject start. ObjectKey: " << objectKey;
     // Get Master address from objectKey
-    if (clusterManager_ == nullptr) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "ETCD cluster manager is not provided");
+    if (topologyPlacement_ == nullptr) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "Topology placement facade is not provided");
     }
-    HostPort masterAddr;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clusterManager_->GetMetaAddress(objectKey, masterAddr),
-                                     "Get metadata address failed.");
+    auto grouped = BuildMetaOwnerRouteGroups(std::vector<std::string>{ objectKey }, topologyPlacement_,
+                                             topologyRouteOptions_);
+    auto failed = grouped.failures.find(objectKey);
+    if (failed != grouped.failures.end()) {
+        return failed->second;
+    }
+    CHECK_FAIL_RETURN_STATUS(!grouped.groups.empty(), K_NOT_FOUND, "No metadata address found.");
+    const auto &masterAddr = grouped.groups.begin()->first;
 
-    auto workerMasterApi =
-        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
+    auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_,
+                                                                              masterOc_);
     RETURN_IF_NOT_OK(workerMasterApi->Init());
     master::DeleteAllCopyMetaReqPb req;
     req.add_object_keys(objectKey);

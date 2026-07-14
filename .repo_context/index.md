@@ -23,7 +23,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | choose the default workflow for feature, bugfix, or refactor work | `playbooks/features/infra-engineering-workflow.md` | `modules/overview/engineering-principles.md`, touched source/tests |
 | assess a performance-sensitive change | `playbooks/features/performance-change.md` | `src/datasystem/client`, `src/datasystem/worker`, `src/datasystem/common/perf`, `dsbench`, `tests/perf` |
 | assess concurrency, shared state, or memory lifetime risk | `playbooks/features/concurrency-and-memory-safety.md` | touched locks, queues, callbacks, buffers, and tests |
-| assess persistence, recovery, failover, or compaction risk | `playbooks/features/recovery-and-persistence.md` | `modules/infra/slot/design.md`, `modules/runtime/cluster-management-dfx-matrix.md`, touched source/tests |
+| assess persistence, recovery, failover, or compaction risk | `playbooks/features/recovery-and-persistence.md` | `modules/infra/slot/design.md`, `modules/runtime/topology/README.md`, touched source/tests |
 | review a PR or diff | `playbooks/reviews/pr-review-checklist.md` | touched source/tests, `.gitee/PULL_REQUEST_TEMPLATE/PULL_REQUEST_TEMPLATE.zh-cn.md` |
 | self-verify before claiming completion | `playbooks/upkeep/ai-self-verification.md` | `git status`, `git diff`, relevant test or metadata commands |
 | understand repository-local skills or decide whether a natural-language request should trigger one | `modules/overview/repository-skills.md` | `.skills/*/SKILL.md`, `.skills/*/scripts/*` |
@@ -35,11 +35,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | understand public SDK APIs and Python bindings | `modules/client/client-sdk.md` | `include/datasystem/*`, `src/datasystem/client`, `src/datasystem/pybind_api`, `python/yr/datasystem` |
 | understand worker startup and runtime services | `modules/runtime/worker-runtime.md` | `src/datasystem/worker/*` |
 | understand worker object cache eviction, END_LIFE, spill eviction, or master metadata cleanup from eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*`, `src/datasystem/master/object_cache/oc_metadata_manager.*` |
-| understand cluster metadata, ETCD, Metastore, and hash-ring coordination | `modules/runtime/cluster-management.md` | `modules/runtime/etcd-metadata/README.md`, `modules/runtime/hash-ring/README.md`, `modules/runtime/cluster-manager/README.md` |
-| review scale-up, scale-down, restart, or ETCD crash DFX coverage | `modules/runtime/cluster-management-dfx-matrix.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `tests/st/client/kv_cache/kv_client_scale_test.cpp`, `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp` |
+| understand runtime topology, worker membership, route lookup, scale, restart, or degraded startup | `modules/runtime/topology/README.md` | `src/datasystem/cluster`, `src/datasystem/protos/cluster_topology.proto`, `src/datasystem/worker/worker_oc_server.cpp` |
 | understand ETCD proto/client access, watch, keepalive, CAS, or Metastore behavior | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |
-| understand distributed hash-ring initialization, add node, remove node, restart, or voluntary scale-down | `modules/runtime/hash-ring/README.md` | `src/datasystem/worker/hash_ring`, `src/datasystem/protos/hash_ring.proto` |
-| understand worker cluster membership, node restart, passive/voluntary scale-down coordination, or route lookup | `modules/runtime/cluster-manager/README.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/worker_oc_server.cpp`, `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp` |
 | understand shared infra used across modules | `modules/infra/common-infra.md` | `src/datasystem/common/*` |
 | understand l2 cache architecture, backend boundaries, or when a change needs design-first handling | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
 | understand `l2_cache_type` backend selection, flags, or `PersistenceApi` dispatch | `modules/infra/l2cache/l2-cache-type.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/common/flags/*`, `src/datasystem/worker/worker_oc_server.cpp` |
@@ -84,11 +81,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |
 | worker runtime | `modules/runtime/worker-runtime.md` | `src/datasystem/worker` |
 | object cache eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/eviction_list.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*` |
-| cluster coordination overview | `modules/runtime/cluster-management.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `third_party/protos/etcd` |
-| cluster DFX scenario matrix | `modules/runtime/cluster-management-dfx-matrix.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `src/datasystem/common/kvstore/etcd`, `tests/st/client/kv_cache` |
+| runtime topology | `modules/runtime/topology/README.md` | `src/datasystem/cluster`, `src/datasystem/protos/cluster_topology.proto`, `src/datasystem/worker/worker_oc_server.cpp` |
 | ETCD metadata backend | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |
-| hash ring | `modules/runtime/hash-ring/README.md` | `src/datasystem/worker/hash_ring`, `src/datasystem/protos/hash_ring.proto` |
-| cluster manager | `modules/runtime/cluster-manager/README.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/worker_oc_server.cpp`, `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp` |
 | common infrastructure | `modules/infra/common-infra.md` | `src/datasystem/common` |
 | l2 cache and secondary storage | `modules/infra/l2cache/README.md` | `src/datasystem/common/l2cache`, `src/datasystem/worker/object_cache/slot_recovery*` |
 | l2 cache architecture | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |

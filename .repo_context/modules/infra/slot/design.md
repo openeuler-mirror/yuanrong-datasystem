@@ -151,6 +151,8 @@
 
 - Current implementation or baseline behavior:
   - `SlotClient` hashes `objectKey` into `DISTRIBUTED_DISK_SLOT_NUM = 128` slots and lazily creates slot instances.
+  - cached runtime state tracks both manifest modification time and inode, so an atomic manifest replacement is observed
+    even when the filesystem reports the same microsecond-level timestamp.
   - distributed-disk roots are built by `BuildSlotStoreRootForWorker(distributed_disk_path, cluster_name,
     SanitizeSlotWorkerNamespace(worker_address))`.
   - request-path `timeoutMs` exists on interfaces but is currently ignored by `SlotClient`.

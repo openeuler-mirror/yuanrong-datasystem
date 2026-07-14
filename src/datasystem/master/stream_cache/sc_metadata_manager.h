@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -25,6 +22,7 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/net_util.h"
@@ -34,7 +32,7 @@
 #include "datasystem/master/stream_cache/stream_metadata.h"
 #include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/stream/stream_config.h"
-#include "datasystem/worker/cluster_manager/cluster_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
@@ -42,6 +40,7 @@ using TbbMetaHashmap = tbb::concurrent_hash_map<std::string, std::shared_ptr<Str
 
 class SCMetadataManager : public MetadataRedirectHelper {
 public:
+
     /**
      * @brief Construct a new SCMetadataManager instance.
      * @param[in] masterHostPort The master address.
@@ -52,8 +51,8 @@ public:
      * @param[in] workerId The worker id.
      */
     SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                      std::shared_ptr<RpcSessionManager> rpcSessionManager, ClusterManager *cm, RocksStore *rocksStore,
-                      const std::string &workerId);
+                      std::shared_ptr<RpcSessionManager> rpcSessionManager, worker::WorkerTopologyReferences *cm,
+                      RocksStore *rocksStore, const std::string &workerId);
 
     /**
      * @brief Shutdown the sc metadata manager module.
@@ -61,12 +60,12 @@ public:
     void Shutdown() override;
 
     /**
-     * @brief WorkerOCServer uses the SetClusterManager method to directly pass the std::unique_ptr address of
-     * clusterManager_ to SCMetadataManager. If the clusterManager_ destructor releases the memory, a core dump occurs
+     * @brief WorkerOCServer uses the SetTopologyEngine method to directly pass the std::unique_ptr address of
+     * topologyEngine_ to SCMetadataManager. If the topologyEngine_ destructor releases the memory, a core dump occurs
      * when the SCMetadataManager object that holds the pointer address operates the address. Therefore, the
-     * ClusterManager needs to notify the SCMetadataManager before exiting.
+     * TopologyEngine needs to notify the SCMetadataManager before exiting.
      */
-    void SetClusterManagerToNullptr();
+    void SetTopologyEngineToNullptr();
 
     /**
      * @brief Initialize SCMetadataManager.
@@ -202,11 +201,38 @@ public:
      * @param[in] hashRanges The optional hash ranges, for passive scale down recovery purposes.
      * @return K_OK on success; the error code otherwise.
      */
-    Status CheckMetadata(const std::vector<HostPort> &workerAddrs, const worker::HashRange &hashRanges = {});
+    Status CheckMetadata(const std::vector<HostPort> &workerAddrs);
+
+    /**
+     * @brief Reconcile stream metadata from one failure-task executor using an opaque scope.
+     * @param[in] action Validated failure participants and topology fence facts.
+     * @param[in] filter Final stream-name predicate for the failure task.
+     * @param[in] businessOperationId Stable idempotency identity for this business step.
+     * @param[in] deadline Absolute monotonic callback deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK on success; the recovery error otherwise.
+     */
+    Status RecoverTopologyFailure(
+        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+        const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+        const cluster::CancellationToken &cancellation);
+
+    /**
+     * @brief Force-close stream metadata for one confirmed failed member.
+     * @param[in] action Validated failure participants and topology fence facts.
+     * @param[in] businessOperationId Stable idempotency identity for this business step.
+     * @param[in] deadline Absolute monotonic callback deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK on success; the cleanup error otherwise.
+     */
+    Status CleanupTopologyFailedMember(
+        const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
+        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Start check metadata with worker.
      * @param[in] workerAddr The worker address.
+     * @param[in] hashRanges Optional explicit owner ranges for distributed startup reconciliation.
      */
     void StartCheckMetadata(const HostPort &workerAddr);
 
@@ -217,8 +243,8 @@ public:
     void StartClearWorkerMetadata(const HostPort &workerAddr);
 
     /**
-     * @brief Get worker id.
-     * @return std::string the worker id.
+     * @brief Get rocksworker id.
+     * @return std::string the rocksworker id.
      */
     std::string GetWorkerId()
     {
@@ -248,8 +274,16 @@ private:
      * @param[in/out] streamsMayNeedAutoDelete Streams that may need to be automatically deleted.
      * @return K_OK on success; the error code otherwise.
      */
-    Status CheckMetadataImpl(const HostPort &workerAddr, const worker::HashRange &hashRanges,
+    Status CheckMetadataImpl(const HostPort &workerAddr,
                              std::unordered_set<std::string> &streamsMayNeedAutoDelete);
+
+    /**
+     * @brief Query all stream metadata from one peer for topology-filtered reconciliation.
+     * @param[in] workerAddr Peer Worker address.
+     * @param[out] metaRsp Stream metadata returned by the peer.
+     * @return K_OK on success; the peer query status otherwise.
+     */
+    Status QueryTopologyMetadata(const HostPort &workerAddr, std::vector<GetStreamMetadataRspPb> &metaRsp);
 
     /**
      * @brief Create stream metadata if not exist and add to the hashmap.
@@ -343,14 +377,13 @@ private:
      */
     Status UpdateMetadata(std::vector<GetStreamMetadataRspPb> &metaRsp, const HostPort &workerAddr,
                           std::unordered_set<std::string> &streamsMayNeedAutoDelete,
-                          const worker::HashRange &hashRanges);
+                          const cluster::IKeyFilter *filter = nullptr);
 
     /**
      * @brief Recover metadata of faulty worker from the other workers.
      * @param[in] extraRanges The hash range of faulty worker.
      * @return Status of the result.
      */
-    Status RecoverMetadataOfFaultyWorker(const worker::HashRange &extraRanges);
 
     /**
      * @brief Send Delete Stream Context to a worker
@@ -387,8 +420,11 @@ private:
     /**
      * @brief Check metadata with worker and retry for rpc timeout.
      * @param[in] workerAddr The worker address.
+     * @param[in] timer Retry budget timer shared by asynchronous attempts.
+     * @param[in] retryTimes Number of attempts already issued.
      */
-    void CheckMetadataWithAsyncRetry(const HostPort &workerAddr, std::shared_ptr<Timer> timer, size_t retryTimes = 0);
+    void CheckMetadataWithAsyncRetry(const HostPort &workerAddr, std::shared_ptr<Timer> timer,
+                                     size_t retryTimes = 0);
 
     /**
      * @brief Actively trigger automatic deletion

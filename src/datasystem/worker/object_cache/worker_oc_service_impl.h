@@ -1,12 +1,9 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
- *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
  * http://www.apache.org/licenses/LICENSE-2.0
- *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -21,6 +18,7 @@
 #define DATASYSTEM_WORKER_OBJECT_CACHE_WORKER_SERVICE_IMPL_H
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <future>
@@ -47,6 +45,7 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_migrate_impl.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
+#include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/common/util/queue/blocking_queue.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
@@ -65,9 +64,10 @@
 #include "datasystem/protos/share_memory.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
+#include "datasystem/cluster/routing/placement_types.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
-#include "datasystem/worker/hash_ring/hash_ring.h"
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/worker/object_cache/async_rpc_request_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
@@ -83,13 +83,11 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
 class MasterOCServiceImpl;
-}
-namespace topology {
-class ICoordinationBackend;
 }
 namespace object_cache {
 
@@ -105,23 +103,28 @@ enum LockMode { Read = 0, Write = 1 };
 
 class WorkerOCServiceImpl : public WorkerOCService, public IWorkerOCService {
 public:
-    using AsyncTasksDoneChecker = std::function<Status(const std::string &)>;
+    using AsyncTasksDoneChecker = std::function<Status(
+        const std::string &, std::chrono::steady_clock::time_point, const cluster::CancellationToken &)>;
 
     /**
      * @brief Construct WorkerOCServiceImpl.
      * @param[in] serverAddr The address of local worker node.
      * @param[in] masterAddr The address of the master node.
      * @param[in] objectTable The object table.
-     * @param[in] akSkManager Used to do AK/SK authenticate.
+     * @param[in] manager Used to do AK/SK authenticate.
      * @param[in] evictionManager The eviction manager.
+     * @param[in] persistApi Persistence service client.
      * @param[in] etcdStore Pointer to EtcdStore owned by WorkerOcServer.
-     * @param[in] masterOCServicer The master service.
+     * @param[in] masterOCService The master service.
+     * @param[in] coordinationBackend Coordination backend used by recovery workflows.
+     * @param[in] topologyEngine Borrowed Worker topology dependencies.
      */
     WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
                         std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                         std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
                         master::MasterOCServiceImpl *masterOCService = nullptr,
-                        topology::ICoordinationBackend *coordinationBackend = nullptr);
+                        cluster::ICoordinationBackend *coordinationBackend = nullptr,
+                        worker::WorkerTopologyReferences *topologyEngine = nullptr);
 
     ~WorkerOCServiceImpl() override;
 
@@ -155,30 +158,20 @@ public:
      * @param[out] needMigrateIds need to migrate ids.
      * @param[out] needWaitIds Need wait ids.
      * @param[out] needMigrateL2CacheIds Need migrate L2 cache ids.
+     * @param[in] topologyOperationId Fenced topology operation id, or empty for ordinary traffic.
      */
     void GroupAndRemoveMeta(const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
                             std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                            std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds)
+                            std::vector<std::string> &needWaitIds,
+                            std::vector<std::string> &needMigrateL2CacheIds,
+                            const std::string &topologyOperationId = "")
     {
-        INJECT_POINT("ProcessVoluntaryScaledown", [this] {
-            Timer timer;
-            uint64_t sleepTimeMs = 100;
-            uint64_t maxSecond = 5;
-            while (timer.ElapsedSecond() < maxSecond) {
-                std::string key = std::string(ETCD_RING_PREFIX) + "/";
-                RangeSearchResult res;
-                HashRingPb newRing;
-                if (etcdStore_->RawGet(key, res).IsOk() && newRing.ParseFromString(res.value)
-                    && !newRing.add_node_info().empty()) {
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
-            }
+        INJECT_POINT("ProcessVoluntaryScaledown", [] {
             return;
         });
         getProc_->GroupAndRemoveMeta(objKeys, removeCase, localAddress_.ToString(),
                                      std::unordered_map<std::string, uint64_t>{}, failedIds, needMigrateIds,
-                                     needWaitIds, needMigrateL2CacheIds);
+                                     needWaitIds, needMigrateL2CacheIds, topologyOperationId);
     }
 
     /**
@@ -194,29 +187,58 @@ public:
      * @param[in] req The rpc request protobuf
      * @param[out] resp The rpc response protobuf
      * @return K_OK on success; the error code otherwise.
-     *         K_DUPLICATED: the object already exists, no need to create.
+     * K_DUPLICATED: the object already exists, no need to create.
      */
     Status Create(const CreateReqPb &req, CreateRspPb &resp) override;
 
     /**
-     * @brief Process worker scale down.
-     * @return return status of the call.
+     * @brief Drain all local object data once for one member-wide ScaleIn batch.
+     * @param[in] action Validated ScaleIn participants and task identity.
+     * @param[in] businessOperationId Stable idempotency identity for this phase.
+     * @param[in] deadline Absolute monotonic callback deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK on success; a retryable or terminal business error otherwise.
      */
-    Status ProcessVoluntaryScaledown(const std::string &taskId);
+    Status DrainTopologyScaleInData(
+        const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
+        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
+
+    /**
+     * @brief Prepare task-scoped ScaleIn cleanup and return authorization plus a bounded effect.
+     * @param[in] action Validated ScaleIn participants and task identity.
+     * @param[in] filter Final object-key predicate for this task.
+     * @param[in] businessOperationId Stable idempotency identity for this cleanup.
+     * @param[in] deadline Absolute monotonic callback deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @param[out] authorize Non-empty no-IO local authorization closure on success.
+     * @param[out] apply Non-empty bounded idempotent effect closure on success.
+     * @return K_OK on success; a preparation error otherwise.
+     */
+    Status PrepareTopologyScaleInCleanup(
+        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+        const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+        const cluster::CancellationToken &cancellation, std::function<Status()> &authorize,
+        cluster::TopologyCleanupEffect &apply);
+
+    /**
+     * @brief Submit owned local cleanup work for one failure task scope.
+     * @param[in] action Validated Failure participants and task identity.
+     * @param[in] filter Final object-key predicate for this task.
+     * @param[in] businessOperationId Stable idempotency identity for this phase.
+     * @param[in] deadline Absolute monotonic callback deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK after owned work is accepted; an error otherwise.
+     */
+    Status SubmitTopologyFailureCleanup(
+        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+        const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
+        const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Register callback for waiting until async tasks in server are done.
      * @param[in] checker callback waits internally and returns status.
      */
     void RegisterAsyncTasksDoneChecker(AsyncTasksDoneChecker checker);
-
-    /**
-     * @brief Before migrate data process.
-     * @param[out] needMigrateDataIds Need migrate data object ld list.
-     * @param[out] needWaitIds Need wait finished object key list.
-     */
-    Status BeforeMigrateData(const std::string &taskId, std::vector<std::string> &needMigrateDataIds,
-                             std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds);
 
     /**
      * @brief Migrate data when scale down happen.
@@ -236,13 +258,32 @@ public:
     Status MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp);
 
     /**
+     * @brief Close incoming object migration admission and wait for admitted requests until deadline.
+     * @param[in] deadline Absolute monotonic drain deadline.
+     * @return K_OK after the drain; K_RPC_DEADLINE_EXCEEDED if admitted requests remain.
+     */
+    Status CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline);
+
+    /**
      * @brief Migrate data when voluntary scale down happen.
      * @param[in] objectKeys Need migrate data object key list.
      * @param[in] taskId task id of voluntary scale down task, if task id is empty, it means we
-     *                   careless about the task id.
+     * careless about the task id.
      * @return Status of the call
      */
     Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId);
+
+    /**
+     * @brief Migrate data for a bounded topology callback.
+     * @param[in] objectKeys Object keys to migrate.
+     * @param[in] taskId Fenced topology task id.
+     * @param[in] deadline Absolute callback deadline.
+     * @param[in] cancellation Cooperative callback cancellation signal.
+     * @return Status of the migration.
+     */
+    Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
+                       std::chrono::steady_clock::time_point deadline,
+                       const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Migrate L2 cache data with slot-based grouping.
@@ -251,6 +292,18 @@ public:
      * @return Status of the call.
      */
     Status MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds, const std::string &taskId);
+
+    /**
+     * @brief Migrate L2 cache data for a bounded topology callback.
+     * @param[in] needMigrateL2CacheIds L2 cache object keys to migrate.
+     * @param[in] taskId Fenced topology task id.
+     * @param[in] deadline Absolute callback deadline.
+     * @param[in] cancellation Cooperative callback cancellation signal.
+     * @return Status of the migration.
+     */
+    Status MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds, const std::string &taskId,
+                              std::chrono::steady_clock::time_point deadline,
+                              const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Handle Put/Publish/Seal request from client.
@@ -346,6 +399,14 @@ public:
      * @return Status of the call.
      */
     Status DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp) override;
+
+    /**
+     * @brief Get the Primary Replica Addr object
+     * @param srcAddr Src addr
+     * @param destAddr Dest addr
+     * @return Status of the calll
+     */
+    Status GetPrimaryReplicaAddr(const std::string &srcAddr, HostPort &destAddr);
 
     /**
      * @brief Invalidate a share memory unit.
@@ -460,10 +521,18 @@ public:
     Status ClearObject(const ClearDataReqPb &req);
 
     /**
-     * @brief Ask the master whether this node needs reconciliation. If needed, trigger it.
-     * @return Status
+     * @brief Ask every current metadata owner to reconcile this restarted Worker.
+     * @return Status of scheduling the reconciliation requests.
      */
-    Status IfNeedTriggerReconciliation();
+    Status ReconcileMembershipChange();
+
+    /**
+     * @brief Schedule one restart reconciliation request to a metadata owner.
+     * @param[in] masterAddress Metadata owner address from the current topology.
+     * @param[in] eventTimestamp Stable timestamp shared by this restart fanout.
+     * @return Status of creating the API and scheduling the bounded asynchronous request.
+     */
+    Status ScheduleReconciliationRequest(const std::string &masterAddress, int64_t eventTimestamp);
 
     /**
      * @brief Get the metadata size for specific data size.
@@ -473,12 +542,12 @@ public:
 
     /**
      * @brief Setter function to assign the cluster manager back pointer.
-     * @param[in] clusterManager The cluster manager pointer to assign
+     * @param[in] topologyEngine The topology engine pointer to assign.
      */
-    void SetClusterManager(ClusterManager *clusterManager)
+    void SetTopologyEngine(worker::WorkerTopologyReferences *topologyEngine)
     {
-        clusterManager_ = clusterManager;
-        evictionManager_->SetClusterManager(clusterManager);
+        topologyEngine_ = topologyEngine;
+        evictionManager_->SetTopologyEngine(topologyEngine);
     }
 
     /**
@@ -767,10 +836,10 @@ public:
     Status GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp) override;
 
     /**
-     * @brief Get the current hash ring and worker-to-host mapping for SDK routing.
-     * @param[in] req Client-side routing version.
-     * @param[out] rsp Hash ring snapshot when the version has changed.
-     * @return Status of the call.
+     * @brief Return the current cluster topology to the SDK for client-side routing.
+     * @param[in] req Client topology version used to avoid an unchanged payload.
+     * @param[out] rsp Current version and a complete topology when the version changed.
+     * @return K_OK on success; K_NOT_READY before the first legal topology publish.
      */
     Status GetHashRing(const GetHashRingReqPb &req, GetHashRingRspPb &rsp) override;
 
@@ -794,7 +863,7 @@ public:
      */
     bool MigrateDataStarted()
     {
-        return clusterManager_->IsDataMigrationStarted();
+        return worker::IsLocalTopologyMemberExiting(topologyEngine_);
     }
 
     /**
@@ -813,6 +882,80 @@ public:
     Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp);
 
 private:
+    Status InitThreadResources();
+    Status InitRecoveryServices();
+
+    struct PreparedScaleInCleanupState {
+        std::vector<std::string> objectIds;
+        bool authorized{ false };
+        bool applied{ false };
+    };
+
+    /**
+     * @brief Reuse an existing operation state or materialize its filtered object ids once.
+     * @param[in] filter Opaque task-scoped key filter.
+     * @param[in] businessOperationId Stable idempotency identity authorizing topology cleanup.
+     * @param[out] state Existing or newly registered cleanup state.
+     * @return K_OK on success; K_TRY_AGAIN when the bounded registry is full.
+     */
+    Status GetOrCreateTopologyScaleInCleanupState(
+        const cluster::IKeyFilter &filter, const std::string &businessOperationId,
+        std::shared_ptr<PreparedScaleInCleanupState> &state);
+
+    /**
+     * @brief Select and classify only objects admitted by a topology task filter.
+     * @param[in] filter Opaque task-scoped key filter.
+     * @param[out] copies Selected local copy object ids.
+     * @param[out] primaries Selected local primary object ids.
+     * @return Status of the selection pass.
+     */
+    Status SelectTopologyScaleInObjects(std::vector<std::string> &copies,
+                                        std::vector<std::string> &primaries) const;
+
+    /**
+     * @brief Remove task-scoped metadata and materialize data migration inputs.
+     * @param[in] copies Selected local copy object ids.
+     * @param[in] primaries Selected local primary object ids.
+     * @param[out] migrateIds Object ids requiring data migration.
+     * @param[out] waitIds Object ids whose migration completion must be awaited.
+     * @param[out] l2Ids Object ids requiring L2 cleanup.
+     * @return Status of the preparation pass.
+     */
+    Status PrepareTopologyScaleInData(const std::vector<std::string> &copies,
+                                      const std::vector<std::string> &primaries,
+                                      std::vector<std::string> &migrateIds,
+                                      std::vector<std::string> &waitIds,
+                                      std::vector<std::string> &l2Ids,
+                                      const std::string &businessOperationId);
+
+    /**
+     * @brief Authorize one operation-keyed cleanup state without external work.
+     * @param[in] state Prepared cleanup state to authorize once.
+     * @return K_OK on an initial or repeated authorization; an input status otherwise.
+     */
+    Status AuthorizeTopologyScaleInCleanup(const std::shared_ptr<PreparedScaleInCleanupState> &state);
+
+    /**
+     * @brief Apply one authorized operation-keyed cleanup outside the Snapshot publication gate.
+     * @param[in] businessOperationId Stable idempotency identity authorizing topology cleanup.
+     * @param[in] state Authorized cleanup state.
+     * @param[in] deadline Original callback attempt deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
+     * @return K_OK after the idempotent effect is complete; an effect status otherwise.
+     */
+    Status ApplyTopologyScaleInCleanup(const std::string &businessOperationId,
+                                       const std::shared_ptr<PreparedScaleInCleanupState> &state,
+                                       std::chrono::steady_clock::time_point deadline,
+                                       const cluster::CancellationToken &cancellation);
+
+    /**
+     * @brief Complete bounded metadata cleanup after final local authorization.
+     * @param[in] objectIds Task-scoped object ids requiring cleanup side effects.
+     * @param[in] businessOperationId Stable idempotency identity authorizing topology cleanup.
+     * @return Status of the bounded cleanup pass.
+     */
+    Status ApplyTopologyCleanupEffects(const std::vector<std::string> &objectIds,
+                                       const std::string &businessOperationId);
     friend class MasterWorkerOCServiceImpl;
     friend class WorkerWorkerOCServiceImpl;
     friend class WorkerDeviceOcManager;
@@ -908,6 +1051,13 @@ private:
     Status GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr) const;
 
     /**
+     * @brief Build routing options for metadata owner placement lookups.
+     * @param[in] requireAvailableTarget Whether route lookup must reject unavailable targets.
+     * @return Route options for topology placement.
+     */
+    worker::MetadataRouteOptions BuildMetaRouteOptions(bool requireAvailableTarget) const;
+
+    /**
      * @brief Update object version from worker or redis when object is expired
      * @param[in] objectKV The ObjCacheShmUnit to that we are updating and its corresponding objectKey
      * Note that the object itself is locked by the caller first.
@@ -971,6 +1121,33 @@ private:
     void AsyncClearClientRef(const ClientKey &clientId, uint64_t retryTimes = 0);
 
     /**
+     * @brief Collect client ids that still have worker-side global refs but are not connected to this worker.
+     * @return Client ids with stale local worker global refs.
+     */
+    std::vector<ClientKey> CollectDisconnectedClientRefIds() const;
+
+    /**
+     * @brief Clear worker-side global refs left by clients that did not reconnect during restart reconciliation.
+     */
+    void ClearDisconnectedClientRefsForReconciliation();
+
+    /**
+     * @brief Collect local worker refs that are missing from the source master's ref table.
+     * @param[in] sourceMasterAddr The source master address from PushMetaToWorker request.
+     * @param[in] localRefTable The local worker global ref table after disconnected clients are cleared.
+     * @param[in] sourceMasterRefIds Object keys reported by the source master.
+     * @return Object keys that should be restored to the source master.
+     */
+    std::vector<std::string> CollectMissingSourceMasterRefs(
+        const HostPort &sourceMasterAddr,
+        const std::unordered_map<std::string, std::unordered_set<ClientKey>> &localRefTable,
+        const std::unordered_set<std::string> &sourceMasterRefIds) const;
+    Status ReconcileGlobalRefsWithSourceMaster(
+        const PushMetaToWorkerReqPb &req,
+        const std::unordered_map<std::string, std::unordered_set<ClientKey>> &refTable,
+        const std::vector<std::string> &needDelGrefIds);
+
+    /**
      * @brief Lock a batch of objects.
      * @param[in] objectKeys The object key.
      * @param[out] lockedEntries Locked entries map.
@@ -1000,10 +1177,11 @@ private:
 
     static const bool OUTER_LOCK = true;
     static const bool BOTH_LOCKS = true;
+
     /**
      * @brief Add object table data to heartbeat request
      * @param[in] req The heartbeat request extended protobuf
-     * @param[in] masterAddr The metadata owner address
+     * @param[in] masterAddr The metadata owner address.
      * @return Status of the call
      */
     Status FillObjData(master::PushMetaToMasterReqPb &req, const HostPort &masterAddr);
@@ -1017,10 +1195,19 @@ private:
 
     /**
      * @brief send requests decreasing gref to masters.
-     * @param[in] objKeysGrpByMaster object keys grouped by master.
+     * @param[in] sourceMasterAddr Metadata owner from which references are removed.
+     * @param[in] objectKeys Object keys whose master references need to be removed.
      * @return Status
      */
-    Status ReconciliationDecrRef(const std::unordered_map<HostPort, std::vector<std::string>> &objKeysGrpByMaster);
+    Status ReconciliationDecrRef(const HostPort &sourceMasterAddr, const std::vector<std::string> &objectKeys);
+
+    /**
+     * @brief send requests increasing gref to masters.
+     * @param[in] sourceMasterAddr Metadata owner to which references are restored.
+     * @param[in] objectKeys object keys whose master refs need to be restored.
+     * @return Status
+     */
+    Status ReconciliationIncrRef(const HostPort &sourceMasterAddr, const std::vector<std::string> &objectKeys);
 
     /**
      * @brief Helper function to assign fields to the metadata protobuf
@@ -1049,11 +1236,11 @@ private:
                                       std::vector<std::string> &objectKeysNotInRsp);
 
     /**
-     * @brief Check whether the size of the node table in ClusterManager equals to the number of running workers.
+     * @brief Check whether the size of the node table in TopologyEngine equals to the number of running workers.
      * If not, wait until they are equal or time is out.
      * @return Status
      */
-    Status CheckWaitNodeTableComplete();
+    Status CheckWaitTopologyReady();
 
     /**
      * @brief Get all objectKeys from objectTable_.
@@ -1129,9 +1316,11 @@ private:
     std::shared_ptr<SlotRecoveryManager> slotRecoveryManager_{ nullptr };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
-    ClusterManager *clusterManager_{ nullptr };  // back pointer to the cluster manager
-    EtcdStore *etcdStore_;                       // pointer to EtcdStore in WorkerOcServer
-    topology::ICoordinationBackend *coordinationBackend_{ nullptr };
+    EtcdStore *etcdStore_;                   // pointer to EtcdStore in WorkerOcServer
+    cluster::ICoordinationBackend *coordinationBackend_{ nullptr };
+    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
+    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
+    cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     // Wait for client reconnect when worker crash and recovery.
     WaitPost clientReconnectPost_;
     bool waited_{ false };
@@ -1156,12 +1345,14 @@ private:
 
     std::shared_timed_mutex clearIdsMutex_;                     // to protect voluntaryScaleDownClearIds_
     std::vector<std::string> voluntaryScaleDownClearIds_ = {};  // need clear ids before voluntary scaledown
+    // Protects topologyScaleInCleanupByOperation_ and each referenced cleanup state's authorization/application flags.
+    std::mutex topologyScaleInCleanupMutex_;
+    std::unordered_map<std::string, std::weak_ptr<PreparedScaleInCleanupState>> topologyScaleInCleanupByOperation_;
+
     /**
      * the thread pool is only use for delete old version of object in l2cache.
-     *
      * when use l2cache to persistence, it store the object by version; that is, a version is corresponds to a
      * file in l2cache; when the object is update, the old version object in l2cache need delete
-     *
      */
     std::shared_ptr<ThreadPool> oldVerDelAsyncPool_{ nullptr };
 
