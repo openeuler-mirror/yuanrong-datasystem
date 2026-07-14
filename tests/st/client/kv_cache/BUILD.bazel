@@ -200,6 +200,24 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "kv_client_transport_set_test",
+    srcs = ["kv_client_transport_set_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:request_context",
+        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+    ],
+)
+
+ds_cc_test(
     name = "kv_client_dist_master_test",
     srcs = ["kv_client_dist_master_test.cpp"],
     tags = ["manual"],

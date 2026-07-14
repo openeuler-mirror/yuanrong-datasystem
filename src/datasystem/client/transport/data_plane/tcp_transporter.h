@@ -48,6 +48,7 @@ public:
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                   const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;
+    Status Release(const ShmKey &shmId, const TransportRequestContext &context) override;
 
 private:
     std::shared_ptr<WorkerRpcClient> rpcClient_;

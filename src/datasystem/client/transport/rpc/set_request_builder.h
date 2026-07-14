@@ -31,13 +31,22 @@
 namespace datasystem {
 namespace client {
 
+struct TransportRequestContext {
+    std::string clientId;
+    std::string token;
+    std::string tenantId;
+};
+
 struct TransportCreateParam {
+    TransportRequestContext requestContext;
     CacheType cacheType = CacheType::MEMORY;
     ConsistencyType consistencyType = ConsistencyType::PRAM;
+    WriteMode writeMode = WriteMode::NONE_L2_CACHE;
     int64_t subTimeoutMs = 0;
 };
 
 struct TransportSetParam {
+    TransportRequestContext requestContext;
     std::unordered_set<std::string> nestedKeys;
     uint32_t ttlSecond = 0;
     ExistenceOpt existence = ExistenceOpt::NONE;

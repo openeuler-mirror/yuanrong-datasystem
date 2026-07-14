@@ -44,6 +44,8 @@
 
 #include "datasystem/client/client_flags_monitor.h"
 #include "datasystem/client/mmap/immap_table_entry.h"
+#include "datasystem/client/routing/routing.h"
+#include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/common/device/device_manager_factory.h"
@@ -119,6 +121,7 @@ constexpr double US_PER_MS = 1000.0;
 namespace datasystem {
 namespace {
 constexpr size_t MIN_SHUFFLE_CANDIDATE_COUNT = 2;
+constexpr size_t SET_ROUTE_MAX_ATTEMPTS = 3;
 const std::unordered_set<std::string> NON_GFLAG_KV_CLIENT_CONFIG_KEYS = {
     "client_access_log_filename",
     "client_log_without_pid",
@@ -334,6 +337,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     connectTimeoutMs_ = connectOptions.connectTimeoutMs;
     requestTimeoutMs_ = connectOptions.requestTimeoutMs != 0 ? connectOptions.requestTimeoutMs : connectTimeoutMs_;
     token_ = connectOptions.token;
+    transportToken_ = std::make_shared<const SensitiveValue>(connectOptions.token);
     tenantId_ = connectOptions.tenantId;
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     enableCrossNodeConnection_ = connectOptions.enableCrossNodeConnection;
@@ -384,6 +388,13 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     }
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
 
+    // Stop new release submissions and drain queued reference releases while worker transports are still alive.
+    auto asyncReleasePool = asyncReleasePool_;
+    {
+        std::lock_guard<std::shared_timed_mutex> lck(shutdownMux_);
+        asyncReleasePool_ = nullptr;
+    }
+    asyncReleasePool = nullptr;
     if (routing_ != nullptr) {
         routing_->Shutdown();
         routing_.reset();
@@ -396,14 +407,6 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     asyncGetRPCPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
     asyncDevDeletePool_ = nullptr;
-    // Protect concurrent read and write access to asyncReleasePool_ variable and don't hold the lock when release the
-    // thread pool.
-    auto asyncReleasePool = asyncReleasePool_;
-    {
-        std::lock_guard<std::shared_timed_mutex> lck(shutdownMux_);
-        asyncReleasePool_ = nullptr;
-    }
-    asyncReleasePool = nullptr;
 
     if (devOcImpl_ != nullptr) {
         devOcImpl_->SetThreadInterruptFlag2True();
@@ -511,25 +514,20 @@ Status ObjectClientImpl::InitTransportLayer()
     }
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
     RETURN_RUNTIME_ERROR_IF_NULL(asyncGetRPCPool_);
+    RETURN_RUNTIME_ERROR_IF_NULL(asyncReleasePool_);
     auto transportLayer =
-        std::make_unique<client::TransportLayer>(transportSignature_, asyncGetRPCPool_, fastTransportMemSize_);
+        std::make_unique<client::TransportLayer>(transportSignature_, asyncGetRPCPool_, fastTransportMemSize_,
+                                                 BrpcChannelConfig{}, asyncReleasePool_);
     RETURN_IF_NOT_OK(transportLayer->Init());
     transportLayer_ = std::move(transportLayer);
-    LOG(INFO) << "[TransportGet] Transport layer initialized";
+    LOG(INFO) << "Client transport layer initialized";
     return Status::OK();
 }
 
 Status ObjectClientImpl::FetchRoutingHashRing(const HostPort &workerAddr, uint64_t currentVersion,
     GetHashRingRspPb &response)
 {
-    if (transportLayer_ == nullptr) {
-        // Default path (enableLocalCache=true) does not use TransportLayer.
-        // Routing hash ring refresh is handled by the legacy worker-mediated path,
-        // so skip here and return OK with no change.
-        response.set_version(currentVersion);
-        response.set_hash_ring_changed(false);
-        return Status::OK();
-    }
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     return transportLayer_->GetHashRing(workerAddr, currentVersion, response);
 }
 
@@ -765,6 +763,7 @@ void ObjectClientImpl::ClearFailedInitAttempt()
     ShutdownMetricsThread(false);
     ShutdownPerfThread();
     ShutdownShmRefReconcileThread();
+    asyncReleasePool_ = nullptr;
     if (routing_ != nullptr) {
         routing_->Shutdown();
         routing_.reset();
@@ -795,7 +794,6 @@ void ObjectClientImpl::ClearFailedInitAttempt()
     asyncGetCopyPool_ = nullptr;
     asyncSwitchWorkerPool_ = nullptr;
     asyncDevDeletePool_ = nullptr;
-    asyncReleasePool_ = nullptr;
 }
 
 Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, const KVClientConfig *clientConfig)
@@ -2513,10 +2511,13 @@ Status ObjectClientImpl::DecreaseReferenceCntImpl(const ShmKey &shmId, bool isSh
 
 Status ObjectClientImpl::UpdateToken(SensitiveValue &token)
 {
+    SensitiveValue tokenCopy(token);
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-    return workerApi->UpdateToken(token);
+    RETURN_IF_NOT_OK(workerApi->UpdateToken(token));
+    std::atomic_store(&transportToken_, std::make_shared<const SensitiveValue>(std::move(tokenCopy)));
+    return Status::OK();
 }
 
 Status ObjectClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue &secretKey)
@@ -2527,9 +2528,10 @@ Status ObjectClientImpl::UpdateAkSk(const std::string &accessKey, SensitiveValue
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    SensitiveValue transportSecretKey(secretKey);
     RETURN_IF_NOT_OK(workerApi->UpdateAkSk(accessKey, secretKey));
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
-    return transportSignature_->SetClientAkSk(accessKey, secretKey);
+    return transportSignature_->SetClientAkSk(accessKey, std::move(transportSecretKey));
 }
 
 Status ObjectClientImpl::UpdateConfig(const std::string &configJson)
@@ -2679,7 +2681,7 @@ Status ObjectClientImpl::TimedMemoryCopyWithDeadline(const std::shared_ptr<Buffe
 Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
                                        const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
                                        uint32_t ttlSecond, const std::shared_ptr<IClientWorkerApi> &workerApi,
-                                       int existence)
+                                       int existence, SetFailureStage &failureStage)
 {
     auto config = GetClientLatencyTraceConfig();
     const bool traceEnabled = ShouldCollectLatencyTrace(config);
@@ -2691,7 +2693,9 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_START);
     }
+    failureStage = SetFailureStage::CREATE;
     RETURN_IF_NOT_OK(workerApi->Create(objectKey, size, version, metadataSize, shmBuf, urmaDataInfo, param.cacheType));
+    failureStage = SetFailureStage::TRANSFER;
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_CREATE_RPC_END);
     }
@@ -2723,6 +2727,7 @@ Status ObjectClientImpl::ProcessShmPut(const std::string &objectKey, const uint8
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
     }
+    failureStage = SetFailureStage::PUBLISH;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerApi->Publish(objInfo, !urmaDataInfo || objInfo->ubDataSentByMemoryCopy,
                                                          false, nestedObjectKeys, ttlSecond, existence),
                                      FormatString("Put object %s", objectKey));
@@ -2792,6 +2797,158 @@ Status ObjectClientImpl::Publish(const std::vector<std::shared_ptr<DeviceBuffer>
     return result;
 }
 
+Status ObjectClientImpl::SelectSetRoute(const std::string &objectKey,
+                                        const std::vector<HostPort> &excludedWorkers,
+                                        SetRouteContext &routeContext)
+{
+    SetRouteContext selected;
+    if (enableLocalCache_) {
+        RETURN_IF_NOT_OK(GetAvailableWorkerApi(selected.clientApi, selected.invokeGuard));
+        selected.worker = selected.clientApi->hostPort_;
+        selected.directWorkerApi = selected.clientApi;
+        routeContext = std::move(selected);
+        return Status::OK();
+    }
+    RETURN_RUNTIME_ERROR_IF_NULL(routing_);
+    RETURN_IF_NOT_OK(routing_->SelectWorker(objectKey, client::SelectStrategy::HASH_RING_AFFINITY,
+                                            selected.worker, excludedWorkers));
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        const auto node = currentNode_.load();
+        CHECK_FAIL_RETURN_STATUS(node < workerApi_.size() && workerApi_[node] != nullptr, K_NOT_READY,
+                                 "No client identity is available for routed Set");
+        selected.clientApi = workerApi_[node];
+        selected.clientApi->IncreaseInvokeCount();
+        selected.invokeGuard =
+            std::make_unique<Raii>([api = selected.clientApi]() { api->DecreaseInvokeCount(); });
+    }
+    if (selected.worker == selected.clientApi->hostPort_) {
+        selected.directWorkerApi = selected.clientApi;
+    }
+    routeContext = std::move(selected);
+    return Status::OK();
+}
+
+client::TransportRequestContext ObjectClientImpl::BuildTransportRequestContext(
+    const SetRouteContext &routeContext) const
+{
+    client::TransportRequestContext context;
+    context.clientId = routeContext.clientApi->clientId_;
+    const auto token = std::atomic_load(&transportToken_);
+    if (token != nullptr && !token->Empty()) {
+        context.token.assign(token->GetData(), token->GetSize());
+    }
+    const auto &requestTenantId = GetRequestContext()->tenantId;
+    context.tenantId = requestTenantId.empty() ? tenantId_ : requestTenantId;
+    return context;
+}
+
+Status ObjectClientImpl::ProcessTransportPut(
+    const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
+    const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence,
+    const SetRouteContext &routeContext, SetFailureStage &failureStage)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    const auto requestContext = BuildTransportRequestContext(routeContext);
+    client::TransportCreateParam createParam;
+    createParam.requestContext = requestContext;
+    createParam.cacheType = param.cacheType;
+    createParam.consistencyType = param.consistencyType;
+    createParam.writeMode = param.writeMode;
+    failureStage = SetFailureStage::CREATE;
+    std::shared_ptr<ObjectBuffer> buffer;
+    RETURN_IF_NOT_OK(transportLayer_->Create(routeContext.worker, objectKey, size, createParam, buffer));
+
+    failureStage = SetFailureStage::TRANSFER;
+    Status copyRc = buffer->MemoryCopy(data, size);
+    if (copyRc.IsError()) {
+        LOG_IF_ERROR(transportLayer_->Release(*buffer, requestContext),
+                     "Release routed Set allocation after MemoryCopy failure failed");
+        return copyRc;
+    }
+    client::TransportSetParam setParam;
+    setParam.requestContext = requestContext;
+    setParam.nestedKeys = nestedObjectKeys;
+    setParam.ttlSecond = ttlSecond;
+    setParam.existence = static_cast<ExistenceOpt>(existence);
+    failureStage = SetFailureStage::PUBLISH;
+    Status setRc = transportLayer_->Set(*buffer, setParam);
+    if (setRc.GetCode() == K_URMA_NEED_CONNECT) {
+        // TransportLayer returns this only after same-worker UB reconnect failed, before Publish was sent.
+        failureStage = SetFailureStage::TRANSFER;
+    }
+    return setRc;
+}
+
+bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureStage failureStage,
+                                             const HostPort &worker, std::vector<HostPort> &excludedWorkers)
+{
+    if (routing_ == nullptr) {
+        return false;
+    }
+    if (status.GetCode() == K_SCALE_DOWN) {
+        if (std::find(excludedWorkers.begin(), excludedWorkers.end(), worker) == excludedWorkers.end()) {
+            excludedWorkers.emplace_back(worker);
+        }
+        return true;
+    }
+    const bool connectionFailure = status.GetCode() == K_CLIENT_WORKER_DISCONNECT
+                                   || status.GetCode() == K_RPC_UNAVAILABLE;
+    const bool transferFailure = status.GetCode() == K_URMA_NEED_CONNECT;
+    if (connectionFailure || transferFailure) {
+        routing_->UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
+    }
+    // A Publish connection error is ambiguous. It must not be replayed on another worker.
+    return (failureStage == SetFailureStage::CREATE && connectionFailure)
+           || (failureStage == SetFailureStage::TRANSFER && transferFailure);
+}
+
+Status ObjectClientImpl::ExecuteSetFlow(
+    const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
+    const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence)
+{
+    std::vector<HostPort> excludedWorkers;
+    Status rc(K_RUNTIME_ERROR, "Set route attempts exhausted");
+    for (size_t attempt = 0; attempt < SET_ROUTE_MAX_ATTEMPTS; ++attempt) {
+        RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
+        SetRouteContext routeContext;
+        RETURN_IF_NOT_OK(SelectSetRoute(objectKey, excludedWorkers, routeContext));
+        VLOG(1) << FormatString("[Set] attempt: %zu, objectKey: %s, clientId: %s, worker: %s", attempt + 1,
+                                objectKey, routeContext.clientApi->clientId_, routeContext.worker.ToString());
+        SetFailureStage failureStage = SetFailureStage::CREATE;
+        if (routeContext.directWorkerApi != nullptr && routeContext.directWorkerApi->ShmCreateable(size)) {
+            rc = ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
+                               routeContext.directWorkerApi, existence, failureStage);
+            if (rc.IsOk() || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers)) {
+                return rc;
+            }
+            continue;
+        }
+        if (routeContext.directWorkerApi != nullptr && transportLayer_ == nullptr) {
+            if (IsUrmaEnabled()) {
+                return ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond,
+                                     routeContext.directWorkerApi, existence, failureStage);
+            }
+            auto info = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
+            const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
+            if (traceEnabled) {
+                Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
+            }
+            rc = routeContext.directWorkerApi->Publish(info, false, false, nestedObjectKeys, ttlSecond, existence);
+            if (traceEnabled) {
+                Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
+            }
+            return rc;
+        }
+        rc = ProcessTransportPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence,
+                                 routeContext, failureStage);
+        if (rc.IsOk() || !HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers)) {
+            return rc;
+        }
+    }
+    return rc;
+}
+
 Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                              const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence)
 {
@@ -2809,32 +2966,9 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_START);
     }
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
-
     Timer setTimer;
-    LOG(INFO) << FormatString("[Set] Begin, objectKey: %s, clientId: %s, worker: %s, path: %s", objectKey,
-                              workerApi->clientId_, workerApi->hostPort_.ToString(),
-                              workerApi->ShmCreateable(size) ? "SHM" : "UB");
-    bool isShm = workerApi->ShmCreateable(size);
-    Status rc;
-    if (isShm || IsUrmaEnabled()) {
-        rc = ProcessShmPut(objectKey, data, size, param, nestedObjectKeys, ttlSecond, workerApi, existence);
-    } else {
-        if (traceEnabled) {
-            Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_START);
-        }
-        auto objInfo = MakeObjectBufferInfo(objectKey, const_cast<uint8_t *>(data), size, 0, param, false, 0);
-        rc = workerApi->Publish(objInfo, isShm, false, nestedObjectKeys, ttlSecond, existence);
-        if (traceEnabled) {
-            Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_PUBLISH_RPC_END);
-        }
-        if (rc.IsError()) {
-            LOG(ERROR) << FormatString("Put object %s failed: %s", objectKey, rc.ToString());
-        }
-    }
+    Status rc = ExecuteSetFlow(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_END);
     }

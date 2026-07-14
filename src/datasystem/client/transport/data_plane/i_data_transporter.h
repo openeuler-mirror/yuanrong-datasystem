@@ -90,6 +90,14 @@ public:
      */
     virtual Status Set(ObjectBuffer &buffer, const TransportSetParam &param) = 0;
 
+    /**
+     * @brief Release worker-side resources allocated for a transport buffer.
+     * @param[in] shmId Worker allocation identifier.
+     * @param[in] context Client identity and tenant context used by the release RPC.
+     * @return K_OK on success; the error code otherwise.
+     */
+    virtual Status Release(const ShmKey &shmId, const TransportRequestContext &context) = 0;
+
     virtual AccessTransportKind Kind() const = 0;
 
     virtual bool IsAlive() const = 0;

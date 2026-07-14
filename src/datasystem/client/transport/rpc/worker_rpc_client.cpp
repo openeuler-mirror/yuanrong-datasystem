@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
@@ -113,6 +114,13 @@ Status WorkerRpcClient::DoInvokeSet(const RpcOptions &options, const PublishReqP
     return controlStub_->Publish(options, request, response, payloads);
 }
 
+Status WorkerRpcClient::DoInvokeDecreaseReference(const RpcOptions &options,
+                                                  const DecreaseReferenceRequest &request,
+                                                  DecreaseReferenceResponse &response)
+{
+    return controlStub_->DecreaseReference(options, request, response);
+}
+
 Status WorkerRpcClient::DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
                                             GetHashRingRspPb &response)
 {
@@ -178,6 +186,7 @@ Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
     PerfPoint perfPoint(PerfKey::RPC_CLIENT_PUBLISH_OBJECT);
+    INJECT_POINT("WorkerRpcClient.InvokeSet.beforeRpc");
     Status rc = DoInvokeSet(options, request, response, payloads);
     if (rc.IsError()) {
         if (request.is_retry() && request.is_seal() && rc.GetCode() == K_OC_ALREADY_SEALED) {
@@ -190,6 +199,31 @@ Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
     workerVersion = connectionGeneration_;
     perfPoint.Record();
     return Status::OK();
+}
+
+Status WorkerRpcClient::InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker RPC client is not initialized");
+    CHECK_FAIL_RETURN_STATUS(!context.clientId.empty(), K_INVALID, "DecreaseReference client ID must not be empty");
+    CHECK_FAIL_RETURN_STATUS(!shmId.Empty(), K_INVALID, "DecreaseReference shm ID must not be empty");
+    DecreaseReferenceRequest request;
+    request.set_client_id(context.clientId);
+    request.add_object_keys(shmId);
+    request.set_token(context.token);
+    request.set_tenant_id(context.tenantId);
+    request.set_is_routed(true);
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    DecreaseReferenceResponse response;
+    Status rc = DoInvokeDecreaseReference(options, request, response);
+    if (rc.IsError()) {
+        return WithRpcDiag(rc, "DecreaseReference", workerAddress_);
+    }
+    return Status(static_cast<StatusCode>(response.error().error_code()), response.error().error_msg());
 }
 
 Status WorkerRpcClient::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response)

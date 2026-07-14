@@ -63,7 +63,7 @@ Status TcpTransporter::Create(const HostPort &workerAddr, const std::string &key
     info->dataSize = size;
     info->metadataSize = 0;
     info->workerAddr = workerAddr;
-    info->objectMode = ModeInfo(param.consistencyType, WriteMode::NONE_L2_CACHE, param.cacheType);
+    info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
     info->ubDataSentByMemoryCopy = false;
     // ObjectBuffer owns and validates the plain TCP allocation.
     info->pointer = nullptr;
@@ -89,6 +89,13 @@ Status TcpTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     uint32_t workerVersion = 0;
     RETURN_IF_NOT_OK(rpcClient_->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
     return SetTransportResponseStatus(rsp, AccessTransportKind::TCP, param.isSeal, param.isRetry);
+}
+
+Status TcpTransporter::Release(const ShmKey &shmId, const TransportRequestContext &context)
+{
+    (void)shmId;
+    (void)context;
+    return Status::OK();
 }
 
 }  // namespace client

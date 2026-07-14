@@ -32,8 +32,8 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/object/object_buffer.h"
-#include "datasystem/utils/status.h"
 #include "datasystem/protos/object_posix.pb.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace client {
@@ -41,7 +41,8 @@ namespace client {
 class TransportLayer {
 public:
     explicit TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
-                            uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig = {});
+                            uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig = {},
+                            std::shared_ptr<ThreadPool> releasePool = nullptr);
     ~TransportLayer();
 
     /** @brief Initialize transport runtime resources before data-plane connections are created. */
@@ -75,6 +76,9 @@ public:
      */
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param);
 
+    /** @brief Release an unfinished worker allocation after a local copy failure. */
+    Status Release(ObjectBuffer &buffer, const TransportRequestContext &context);
+
     /** @brief Fetch a versioned hash-ring snapshot through the cached worker channel. */
     Status GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response);
 
@@ -86,8 +90,12 @@ protected:
                    std::shared_ptr<TransportAdvisor> advisor);
 
 private:
+    void ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId,
+                         const TransportRequestContext &context);
+
     std::shared_ptr<DataPlaneManager> manager_;
     std::shared_ptr<TransportAdvisor> advisor_;
+    std::shared_ptr<ThreadPool> releasePool_;
     std::unique_ptr<ObjectReadFlow> objectRead_;
 };
 

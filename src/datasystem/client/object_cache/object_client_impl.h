@@ -29,6 +29,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "re2/re2.h"
@@ -722,6 +723,31 @@ public:
     std::string GetTransportType() const;
 
 private:
+    enum class SetFailureStage { CREATE, TRANSFER, PUBLISH };
+
+    struct SetRouteContext {
+        HostPort worker;
+        std::shared_ptr<IClientWorkerApi> clientApi;
+        std::shared_ptr<IClientWorkerApi> directWorkerApi;
+        std::unique_ptr<Raii> invokeGuard;
+    };
+
+    Status SelectSetRoute(const std::string &objectKey, const std::vector<HostPort> &excludedWorkers,
+                          SetRouteContext &routeContext);
+
+    client::TransportRequestContext BuildTransportRequestContext(const SetRouteContext &routeContext) const;
+
+    Status ProcessTransportPut(const std::string &objectKey, const uint8_t *data, uint64_t size,
+                               const FullParam &param, const std::unordered_set<std::string> &nestedObjectKeys,
+                               uint32_t ttlSecond, int existence, const SetRouteContext &routeContext,
+                               SetFailureStage &failureStage);
+
+    bool HandleSetRouteFailure(const Status &status, SetFailureStage failureStage, const HostPort &worker,
+                               std::vector<HostPort> &excludedWorkers);
+
+    Status ExecuteSetFlow(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
+                          const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond, int existence);
+
     friend Buffer;
     friend DeviceBuffer;
     friend ClientDeviceObjectManager;
@@ -1305,7 +1331,8 @@ private:
      */
     Status ProcessShmPut(const std::string &objectKey, const uint8_t *data, uint64_t size, const FullParam &param,
                          const std::unordered_set<std::string> &nestedObjectKeys, uint32_t ttlSecond,
-                         const std::shared_ptr<IClientWorkerApi> &workerApi, int existence);
+                         const std::shared_ptr<IClientWorkerApi> &workerApi, int existence,
+                         SetFailureStage &failureStage);
 
     /**
      * @brief Mmap-lookup of a shared-memory object, bounded by the current API deadline.
@@ -1658,6 +1685,7 @@ private:
     std::shared_ptr<ThreadPool> asyncDevDeletePool_;
     std::shared_ptr<ThreadPool> asyncReleasePool_;
     std::shared_ptr<Signature> transportSignature_;
+    std::shared_ptr<const SensitiveValue> transportToken_;
     std::unique_ptr<client::TransportLayer> transportLayer_;
     std::shared_ptr<client::Routing> routing_;
 

@@ -43,10 +43,14 @@ Status BuildCreateRequest(const std::string &key, uint64_t size, const Transport
 {
     RETURN_IF_NOT_OK(ValidateCreateRequest(key, size, param));
     request.Clear();
+    request.set_client_id(param.requestContext.clientId);
     request.set_object_key(key);
     request.set_data_size(size);
+    request.set_token(param.requestContext.token);
+    request.set_tenant_id(param.requestContext.tenantId);
     request.set_cache_type(static_cast<uint32_t>(param.cacheType));
     request.set_request_timeout(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
+    request.set_is_routed(true);
     return Status::OK();
 }
 
@@ -55,6 +59,7 @@ Status ValidateSetRequest(const ObjectBufferInfo &info, const TransportSetParam 
     CHECK_FAIL_RETURN_STATUS(Validator::IsInNonNegativeInt32(param.subTimeoutMs), K_INVALID,
                              "Set sub-timeout must fit a non-negative int32");
     CHECK_FAIL_RETURN_STATUS(!info.objectKey.empty(), K_INVALID, "Set object key must not be empty");
+    CHECK_FAIL_RETURN_STATUS(!param.requestContext.clientId.empty(), K_INVALID, "Set client ID must not be empty");
     return Status::OK();
 }
 
@@ -62,7 +67,10 @@ Status BuildSetRequest(const ObjectBufferInfo &info, const TransportSetParam &pa
 {
     request.Clear();
     *request.mutable_nested_keys() = { param.nestedKeys.begin(), param.nestedKeys.end() };
+    request.set_client_id(param.requestContext.clientId);
     request.set_object_key(info.objectKey);
+    request.set_token(param.requestContext.token);
+    request.set_tenant_id(param.requestContext.tenantId);
     // WorkerRpcClient adds the AK/SK signature after all request fields are finalized.
     request.set_ttl_second(param.ttlSecond);
     request.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
@@ -84,6 +92,7 @@ Status BuildSetRequest(const ObjectBufferInfo &info, const TransportSetParam &pa
     request.set_shm_id(info.shmId);
     request.set_keep(param.keep);
     request.set_is_retry(param.isRetry);
+    request.set_is_routed(true);
     return Status::OK();
 }
 
@@ -94,7 +103,7 @@ Status SetTransportResponseStatus(const PublishRspPb &response, AccessTransportK
     // Set errors are in the RPC return Status, handled by TransportLayer::Set's rebuild ladder.
     // Seal-retry K_OC_ALREADY_SEALED is normalized by WorkerRpcClient::InvokeSet, where the RPC Status is available.
     (void)response;
-    (void)kind;
+    AccessTransportTracker::Record(kind);
     (void)isSeal;
     (void)isRetry;
     return Status::OK();
@@ -105,6 +114,8 @@ Status ValidateCreateRequest(const std::string &key, uint64_t size, const Transp
     CHECK_FAIL_RETURN_STATUS(Validator::IsInNonNegativeInt32(param.subTimeoutMs), K_INVALID,
                              "Create sub-timeout must fit a non-negative int32");
     CHECK_FAIL_RETURN_STATUS(!key.empty(), K_INVALID, "Create object key must not be empty");
+    CHECK_FAIL_RETURN_STATUS(!param.requestContext.clientId.empty(), K_INVALID,
+                             "Create client ID must not be empty");
     CHECK_FAIL_RETURN_STATUS(size > 0, K_INVALID, "Create data size must be positive");
     CHECK_FAIL_RETURN_STATUS(
         size < MAX_PUB_SIZE, K_INVALID,
