@@ -455,14 +455,9 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
         }
         newEncapsulatedData->SetDataWithoutLck(rpcStub);
     }
-    // For brpc: wait for socket health check OUTSIDE the lock so we don't block
-    // concurrent GetStub calls on the same LRU partition for up to 3s.
-    // Channel::Init() is non-blocking -- health check runs periodically in a
-    // background thread.  Waiting here gives the caller a ready-to-use channel
-    // without serializing cache access behind the TCP handshake.
     if (FLAGS_use_brpc) {
         HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
-        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        (void)WaitForBrpcSocketAvailable(brpcAddr, 1, 0);
     }
     LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs, accessElapsedMs,
                     createElapsedMs, attempts);
