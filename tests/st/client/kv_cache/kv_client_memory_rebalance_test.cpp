@@ -524,6 +524,25 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_ReportResultRpcFailureExpire
    AssertReadable(client1_, sourceBatch);
 }
 
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, BusyGuardSelfHealProbesAfterBudgetElapsed)
+{
+    WaitAllNodesActiveInHashRing(3);
+    constexpr char PROBE_POINT[] = "MigrateDataHandler.SelfHealBusyRate.probe";
+    SetInjectAction(WORKER0, PROBE_POINT, "100000*call()");
+    SetInjectAction(WORKER0, "migrate.limiter.is_busy_node", "100000*return()");
+    for (auto target : { WORKER1, WORKER2 }) {
+        SetInjectAction(target, "worker.migrate_service.return", "1*sleep(3100)");
+    }
+
+    auto probeBaseline = GetInjectCount(WORKER0, PROBE_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+    auto sourceBatch = WriteObjects(client0_, "rebalance_busy_after_budget", 9, 'b');
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+    WaitForInjectCount(WORKER0, PROBE_POINT, probeBaseline + 1, 15000);
+    AssertReadable(client0_, sourceBatch);
+}
+
 class LEVEL1_KVClientMemoryRebalanceEvictSpillRegressionTest : public KVClientCommon {
 public:
    void SetClusterSetupOptions(ExternalClusterOptions &opts) override

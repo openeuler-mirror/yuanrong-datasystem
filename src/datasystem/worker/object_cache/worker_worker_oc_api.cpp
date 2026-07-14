@@ -223,6 +223,25 @@ Status WorkerRemoteWorkerOCApi::MigrateData(MigrateDataReqPb &req, const std::ve
     return WithRpcDiag(rc, "MigrateData", localHostPort_, hostPort_);
 }
 
+Status WorkerRemoteWorkerOCApi::MigrateDataProbe(MigrateDataReqPb &req, MigrateDataRspPb &rsp, int timeoutMs)
+{
+    if (rpcSession_ == nullptr && brpcSession_ == nullptr) {
+        return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "MigrateDataProbe",
+                           localHostPort_, hostPort_);
+    }
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    constexpr int kMinProbeTimeoutMs = 100;
+    if (timeoutMs < kMinProbeTimeoutMs) {
+        timeoutMs = kMinProbeTimeoutMs;
+    }
+    RpcOptions opts;
+    opts.SetTimeout(timeoutMs);
+    std::vector<MemView> emptyPayloads;
+    auto rc = brpcSession_ ? brpcSession_->MigrateData(opts, req, rsp, emptyPayloads)
+                           : rpcSession_->MigrateData(opts, req, rsp, emptyPayloads);
+    return WithRpcDiag(rc, "MigrateDataProbe", localHostPort_, hostPort_);
+}
+
 Status WorkerRemoteWorkerOCApi::MigrateDataDirect(MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
     RpcOptions opts;

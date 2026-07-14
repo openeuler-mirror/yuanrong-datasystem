@@ -824,15 +824,20 @@ void WorkerOcServiceMigrateImpl::FillMigrateDataResponse(const MigrateDataReqPb 
         rsp.set_disk_remain_bytes(0);
         rsp.set_limit_rate(0);
     } else {
-        rateController_->SlidingWindowUpdateRate(req.bytes_send());
+        if (req.bytes_send() > 0) {
+            rateController_->SlidingWindowUpdateRate(req.bytes_send());
+        }
         rsp.set_remain_bytes(CalcRemainBytes(req.type()));
         rsp.set_available_ratio(memory::Allocator::Instance()->GetMemoryAvailableRatio());
         uint64_t diskRemainBytes = memory::Allocator::Instance()->GetTotalRealMemoryFree(memory::CacheType::DISK);
         constexpr double remainThreshold = 0.8;
         rsp.set_disk_remain_bytes(static_cast<uint64_t>(diskRemainBytes * remainThreshold));
         rsp.set_disk_available_ratio(memory::Allocator::Instance()->GetMemoryAvailableRatio(memory::CacheType::DISK));
-        uint64_t limitRate = rateController_->CalculateNewRate(req.worker_addr());
-        rsp.set_limit_rate(limitRate);
+        if (req.worker_addr().empty()) {
+            rsp.set_limit_rate(rateController_->PeekAvailableRate(req.worker_addr()));
+        } else {
+            rsp.set_limit_rate(rateController_->CalculateNewRate(req.worker_addr()));
+        }
     }
     if (clusterManager_ != nullptr) {
         if (clusterManager_->IsPreLeaving(localAddr_)) {

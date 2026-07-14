@@ -20,7 +20,9 @@
 #ifndef DATASYSTEM_MIGRATE_DATA_HANDLER_H
 #define DATASYSTEM_MIGRATE_DATA_HANDLER_H
 
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -38,9 +40,17 @@ namespace object_cache {
 
 class MigrateDataHandler {
 public:
+    static constexpr uint64_t BUSY_HEAL_BUDGET_MS = 3000;
+    static constexpr uint64_t BUSY_HEAL_INITIAL_SLEEP_MS = 100;
+    static constexpr uint64_t BUSY_HEAL_MAX_SLEEP_MS = 800;
+    static constexpr uint64_t BUSY_HEAL_BACKOFF_FACTOR = 2;
+    static constexpr int BUSY_HEAL_MAX_PROBES = 3;
+    static constexpr uint64_t BUSY_HEAL_CANCEL_POLL_MS = 10;
+
     MigrateDataHandler(MigrateType type, const std::string &localAddr,
                        const std::vector<ImmutableString> &needMigrateDataIds, std::shared_ptr<ObjectTable> objectTable,
                        std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi, std::shared_ptr<SelectionStrategy> strategy,
+                       std::atomic<bool> *stoppingPtr,
                        std::shared_ptr<MigrateProgress> progress = nullptr, bool isRetry = false, uint32_t slotId = 0);
 
     ~MigrateDataHandler() = default;
@@ -121,11 +131,26 @@ private:
     void SendDataToRemote(bool isSlotMigration = false);
 
     /**
-     * @brief Try update rate by response for 5 times.
-     * @param[in] rate Rate from response.
-     * @return K_OK if success, the error otherwise.
+     * @brief Update rate from response, or self-heal when rate is zero.
+     * @param[in] rate Rate from response. If zero, triggers bounded self-heal probing.
+     * @return K_OK if rate is non-zero or self-heal succeeds, the error otherwise.
      */
     Status TryUpdateRate(uint64_t rate);
+
+    /**
+     * @brief Self-heal busy rate limiter with bounded budget and exponential backoff.
+     * @return K_OK if rate recovered, the error otherwise (K_NOT_READY or last RPC error).
+     */
+    Status SelfHealBusyRate();
+
+    /**
+     * @brief Build and cache the final self-heal status from the probe outcome.
+     * @param[in] rate Final recovered rate (0 means still busy).
+     * @param[in] probesMade Number of probes executed.
+     * @param[in] lastErr Last RPC error (if any) from probing.
+     * @return K_OK if rate recovered, the error otherwise (cancelled, K_NOT_READY, or last RPC error).
+     */
+    Status BuildHealResult(uint64_t rate, int probesMade, const Status &lastErr);
 
     /**
      * @brief Construct the migrate data result.
@@ -208,6 +233,10 @@ private:
     std::shared_ptr<MigrateTransport> transport_;
     bool isRetry_{ false };
     uint32_t slotId_{ 0 };
+
+    bool selfHealAttempted_{ false };
+    Status lastHealStatus_;
+    std::atomic<bool> *stoppingPtr_{ nullptr };
 
     std::unordered_set<ImmutableString> successIds_;
     std::unordered_set<ImmutableString> failedIds_;
