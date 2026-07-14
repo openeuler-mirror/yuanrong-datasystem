@@ -631,23 +631,6 @@ public:
     }
 
     /**
-     * @brief Get the JFS priority used when creating new JFS instances.
-     * @return JFS priority value.
-     */
-    uint8_t GetJfsPriority() const
-    {
-        return jfsPriority_;
-    }
-
-    /**
-     * @brief Gets the priority and sl for CTP.
-     * @param[out] priority The priority index for current tp_type
-     * @param[out] sl The sl for current tp_type
-     * @return Whether the priority/sl is fetched from device capability.
-     */
-    bool GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const;
-
-    /**
      * @brief Get the Jetty priority used when creating new Jetty instances.
      * @return Jetty priority value.
      */
@@ -836,7 +819,6 @@ private:
     size_t GetRetiringOrPendingJettyCount();
 
     const urma_token_t urmaToken_ = { 0xACFE };  // default token
-    uint8_t jfsPriority_ = 0;
     uint8_t jettyPriority_ = 0;
     urma_device_attr_t urmaDeviceAttribute_ = {};
     std::unique_ptr<UrmaContext> context_;
