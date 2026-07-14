@@ -99,6 +99,18 @@ public:
      */
     void SetHardFreeMemory();
 
+    /**
+     * @brief Get the size of this shm unit in the same unit as the real memory usage (sallocx).
+     *        For a standalone allocation, returns the sallocx real size of the base pointer.
+     *        For an aggregated slice distributed from a ShmOwner, sallocx is invalid on the interior
+     *        pointer, so the distributed slice size (needSize) is returned as a best-effort proxy.
+     *        Returns 0 if no memory is allocated.
+     * @note The caller must hold the owning object's read lock so the underlying ShmUnit
+     *       (pointer/shmOwner_/size) is stable for the duration of the call.
+     * @return The migratable size in bytes.
+     */
+    uint64_t GetMigratableSize() const;
+
 private:
     friend class ShmOwner;
 

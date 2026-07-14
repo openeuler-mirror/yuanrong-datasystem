@@ -103,7 +103,11 @@ Status RebalanceCandidateProvider::TryGetObjectSize(const std::string &objectKey
         entry->RUnlock();
         RETURN_STATUS(K_NOT_FOUND, "Skip object that is being rebalanced");
     }
-    objectSize = object->GetDataSize();
+    // Size in the real-memory-usage (sallocx) unit so it matches task.max_bytes and the usage-rate denominator.
+    // For standalone allocations this is the sallocx real size (fixes the payload-vs-realSize over-migration);
+    // for aggregated slices GetMigratableSize returns the distributed slice size (needSize) as a proxy.
+    auto shmUnit = object->GetShmUnit();
+    objectSize = (shmUnit == nullptr) ? 0 : shmUnit->GetMigratableSize();
     if (objectSize == 0) {
         evictionManager_->UnmarkRebalancingObject(objectKey);
         entry->RUnlock();

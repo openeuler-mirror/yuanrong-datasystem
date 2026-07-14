@@ -76,6 +76,21 @@ void ShmUnit::SetHardFreeMemory()
     needHardFree_ = true;
 }
 
+uint64_t ShmUnit::GetMigratableSize() const
+{
+    if (pointer == nullptr) {
+        return 0;
+    }
+    // Aggregated slice: pointer is an interior offset into a ShmOwner chunk, so sallocx is invalid on it;
+    // use the distributed slice size (= needSize, set by ShmOwner::DistributeMemory) as the accounting size.
+    if (shmOwner_ != nullptr) {
+        return size;
+    }
+    // Standalone allocation: pointer is a jemalloc base. Query its real allocated size so rebalance accounting
+    // matches the real memory usage (sallocx) unit used by max_bytes and the usage-rate denominator.
+    return datasystem::memory::Allocator::Instance()->GetAllocatedSize(pointer);
+}
+
 Status ShmUnit::FreeMemory()
 {
     RETURN_OK_IF_TRUE(pointer == nullptr);
