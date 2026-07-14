@@ -37,6 +37,7 @@
 #include "datasystem/common/constants.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/math_util.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
@@ -227,10 +228,17 @@ Status ActiveSpillFile::Write(const void *buffer, size_t count, off_t offset)
     return WriteFile(fd_, buffer, count, offset);
 }
 
-void ActiveSpillFile::Sync()
+Status ActiveSpillFile::Sync()
 {
-    INJECT_POINT("worker.Spill.Sync", [] {});
-    (void)syncfs(fd_);
+    INJECT_POINT("worker.Spill.Sync", []() { return Status::OK(); });
+    INJECT_POINT("worker.Spill.SyncError", []() {
+        return Status(StatusCode::K_IO_ERROR, "Injected sync failure");
+    });
+    if (syncfs(fd_) != 0) {
+        return Status(StatusCode::K_IO_ERROR,
+                      FormatString("syncfs failed for fd %d, errno=%d, errmsg=%s", fd_, errno, StrErr(errno)));
+    }
+    return Status::OK();
 }
 
 int ActiveSpillFile::GetFd()
@@ -285,7 +293,29 @@ Status SpillFileManager::SpillSmallObject(const std::string &objectKey, const vo
     }
 
     PerfPoint point(PerfKey::WORKER_SPILL_FLUSH_BUFFER);
+    return FlushSpillBuffer(objectKey);
+}
 
+Status SpillFileManager::SpillBufferFailure(const std::string &objectKey, const Status &rc)
+{
+    spillIoCounters_.spillInFailCount.fetch_add(1, std::memory_order_relaxed);
+    buffer_.Remove(objectKey);
+    return rc;
+}
+
+Status SpillFileManager::FlushedSpillBufferFailure(const std::string &objectKey, const std::string &path, size_t size,
+                                                   const Status &rc)
+{
+    auto status = SpillBufferFailure(objectKey, rc);
+    auto fileInfoIter = tenant2FileInfo_[DEFAULT_TENANT_ID].find(path);
+    if (fileInfoIter != tenant2FileInfo_[DEFAULT_TENANT_ID].end()) {
+        fileInfoIter->second.holesSize += size;
+    }
+    return status;
+}
+
+Status SpillFileManager::FlushSpillBuffer(const std::string &failedObjectKey)
+{
     SpillBuffer spillBuffer;
     // Copy SpillBuffer will ignore the deleted object data.
     buffer_.CloneTo(spillBuffer);
@@ -293,33 +323,49 @@ Status SpillFileManager::SpillSmallObject(const std::string &objectKey, const vo
 
     ObjectLocation flushLoc;
     std::shared_ptr<ActiveSpillFile> file;
-    RETURN_IF_NOT_OK(FindBestWriteFile(DEFAULT_TENANT_ID, spillBuffer.Size(), flushLoc, file));
+    Status rc = FindBestWriteFile(DEFAULT_TENANT_ID, spillBuffer.Size(), flushLoc, file);
+    if (rc.IsError()) {
+        return SpillBufferFailure(failedObjectKey, rc);
+    }
     // Write to file.
     Timer timer;
-    RETURN_IF_NOT_OK(file->Write(spillBuffer.GetData(), flushLoc.size, flushLoc.offset));
+    rc = file->Write(spillBuffer.GetData(), flushLoc.size, flushLoc.offset);
+    if (rc.IsError()) {
+        return FlushedSpillBufferFailure(failedObjectKey, flushLoc.path, spillBuffer.Size(), rc);
+    }
     auto writeElapsed = timer.ElapsedMilliSecond();
-    // Create location.
+
+    // Keep fileInfoMutex_ held until Sync succeeds so concurrent operations cannot modify the
+    // buffer while this batch is pending commit.
+    // Sync to disk.
+    timer.Reset();
+    Status syncRc = file->Sync();
+    auto syncElapsed = timer.ElapsedMilliSecond();
+    if (syncRc.IsError()) {
+        LOG(WARNING) << FormatString("Sync failed when flushing spill buffer, fd: %d, status: %s", file->GetFd(),
+                                     syncRc.ToString());
+        return FlushedSpillBufferFailure(failedObjectKey, flushLoc.path, spillBuffer.Size(), syncRc);
+    }
+
+    // Publish locations and clear the buffer only after the data is synced successfully.
     for (const auto &kv : index) {
-        const auto &objectKey = kv.first;
+        const auto &bufferedObjectKey = kv.first;
         const auto &offset = kv.second.first;
         const auto &size = kv.second.second;
         ObjectLocation loc;
         loc.path = flushLoc.path;
         loc.offset = flushLoc.offset + offset;
         loc.size = size;
-        UpdateSpillInfo(DEFAULT_TENANT_ID, objectKey, loc);
+        UpdateSpillInfo(DEFAULT_TENANT_ID, bufferedObjectKey, loc);
     }
-
     buffer_.Reset();
-    lock.unlock();
-
-    // Sync to disk.
-    timer.Reset();
-    file->Sync();
-    auto syncElapsed = timer.ElapsedMilliSecond();
     LOG(INFO) << FormatString(
         "Id: %d, Flush %d objects and %d bytes from buffer to file, fd: %d, write: %fms, sync: %fms.", id_,
         index.size(), spillBuffer.Size(), file->GetFd(), writeElapsed, syncElapsed);
+
+    // Count physical SSD write from buffer flush (one write op covers multiple buffered objects).
+    spillIoCounters_.spillInCount.fetch_add(1, std::memory_order_relaxed);
+    spillIoCounters_.spillInBytes.fetch_add(spillBuffer.Size(), std::memory_order_relaxed);
     return Status::OK();
 }
 
@@ -327,7 +373,6 @@ Status SpillFileManager::Spill(const std::string &objectKey,
                                const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size)
 {
     PerfPoint point(PerfKey::WORKER_SPILL);
-    // Default tenant can write to buffer, otherwise spill to file.
     auto tenantId = TenantAuthManager::ExtractTenantId(objectKey);
     std::replace(tenantId.begin(), tenantId.end(), '/', '_');
     if (size <= sizeThreshold_ && tenantId == DEFAULT_TENANT_ID) {
@@ -336,49 +381,96 @@ Status SpillFileManager::Spill(const std::string &objectKey,
             FormatString("Spill small object %s[size: %ld] but payload size is %ld", objectKey, size, payloads.size()));
         return SpillSmallObject(objectKey, payloads[0].first, payloads[0].second);
     }
+    return SpillToFile(objectKey, tenantId, payloads, size);
+}
 
+Status SpillFileManager::WriteSpillObject(
+    const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, SpillFileContext &context)
+{
+    Timer timer;
+    std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
+    context.waitLockElapsed = timer.ElapsedMilliSecond();
+
+    Status rc = FindBestWriteFile(context.tenantId, context.size, context.location, context.file);
+    if (rc.IsError()) {
+        spillIoCounters_.spillInFailCount.fetch_add(1, std::memory_order_relaxed);
+        return rc;
+    }
+    // Add id to FileInfo to prevent files from being deleted when the object list is empty.
+    tenant2FileInfo_[context.tenantId][context.location.path].objectKeys.insert(context.objectKey);
+    lock.unlock();
+
+    // Write to file.
+    timer.Reset();
+    rc = WriteFile(context.file, payloads, context.location.offset);
+    if (rc.IsError()) {
+        spillIoCounters_.spillInFailCount.fetch_add(1, std::memory_order_relaxed);
+        std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
+        tenant2FileInfo_[context.tenantId][context.location.path].objectKeys.erase(context.objectKey);
+        return rc;
+    }
+    totalSpillFileDiskSize += context.size;
+    context.writeElapsed = timer.ElapsedMilliSecond();
+    return Status::OK();
+}
+
+Status SpillFileManager::SyncSpillObject(SpillFileContext &context)
+{
+    Timer timer;
+    timer.Reset();
+    Status syncRc = context.file->Sync();
+    context.syncElapsed = timer.ElapsedMilliSecond();
+    if (syncRc.IsError()) {
+        spillIoCounters_.spillInFailCount.fetch_add(1, std::memory_order_relaxed);
+        std::unique_lock<std::shared_timed_mutex> failedLock(fileInfoMutex_);
+        auto fileInfoIter = tenant2FileInfo_[context.tenantId].find(context.location.path);
+        if (fileInfoIter != tenant2FileInfo_[context.tenantId].end()) {
+            (void)fileInfoIter->second.objectKeys.erase(context.objectKey);
+            fileInfoIter->second.holesSize += context.size;
+        }
+        LOG(WARNING) << FormatString("Sync failed for object %s, fd: %d, status: %s", context.objectKey,
+                                     context.file->GetFd(), syncRc.ToString());
+        return syncRc;
+    }
+
+    // Count physical SSD write (large objects only; small objects counted at flush).
+    spillIoCounters_.spillInCount.fetch_add(1, std::memory_order_relaxed);
+    spillIoCounters_.spillInBytes.fetch_add(context.size, std::memory_order_relaxed);
+
+    // update after spill to file.
+    {
+        std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
+        objLocations_[context.objectKey] = context.location;
+    }
+    return Status::OK();
+}
+
+Status SpillFileManager::SpillToFile(const std::string &objectKey, const std::string &tenantId,
+                                     const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size)
+{
+    SpillFileContext context;
+    context.objectKey = objectKey;
+    context.tenantId = tenantId;
+    context.size = size;
     INJECT_POINT("worker.Spill", [](int waitTimeMs) {
         std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
         return Status::OK();
     });
 
-    Timer timer;
-    std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
-    auto waitLockElapsed = timer.ElapsedMilliSecond();
-
-    PerfPoint p(PerfKey::WORKER_SPILL_WRITE_FILE);
-    ObjectLocation loc;
-    std::shared_ptr<ActiveSpillFile> file;
-    RETURN_IF_NOT_OK(FindBestWriteFile(tenantId, size, loc, file));
-    // Add id to FileInfo to prevent files from being deleted when the object list is empty.
-    tenant2FileInfo_[tenantId][loc.path].objectKeys.insert(objectKey);
-    lock.unlock();
-
-    // Write to file.
-    timer.Reset();
-    Status rc = WriteFile(file, payloads, loc.offset);
+    PerfPoint point(PerfKey::WORKER_SPILL_WRITE_FILE);
+    Status rc = WriteSpillObject(payloads, context);
     if (rc.IsError()) {
-        std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
-        tenant2FileInfo_[tenantId][loc.path].objectKeys.erase(objectKey);
         return rc;
     }
-    totalSpillFileDiskSize += size;
-    auto writeElapsed = timer.ElapsedMilliSecond();
-
-    // Sync to disk.
-    timer.Reset();
-    file->Sync();
-    p.Record();
-    auto syncElapsed = timer.ElapsedMilliSecond();
-
-    // update after spill to file.
-    {
-        std::unique_lock<std::shared_timed_mutex> lock(fileInfoMutex_);
-        objLocations_[objectKey] = loc;
+    rc = SyncSpillObject(context);
+    point.Record();
+    if (rc.IsError()) {
+        return rc;
     }
     LOG(INFO) << FormatString(
         "Id: %d, Spill object [%s], fd: %d, path: %s, offset: %ld, size: %ld, wait: %fms, write: %fms, syncfs: %fms",
-        id_, objectKey, file->GetFd(), loc.path, loc.offset, loc.size, waitLockElapsed, writeElapsed, syncElapsed);
+        id_, context.objectKey, context.file->GetFd(), context.location.path, context.location.offset,
+        context.location.size, context.waitLockElapsed, context.writeElapsed, context.syncElapsed);
     return Status::OK();
 }
 
@@ -558,7 +650,7 @@ Status SpillFileManager::LoadFromDisk(const std::string &objectKey, void *buffer
             FormatString("Invalid size: %zu, offset: %zu, objectSize: %zu", size, offset, objectSize));
         return file->Read(buffer, size, objectOffset + offset);
     };
-    return LoadFromDiskImpl(objectKey, readBufferFunc, readFileFunc);
+    return LoadFromDiskImpl(objectKey, size, readBufferFunc, readFileFunc);
 }
 
 Status SpillFileManager::LoadFromDisk(const std::string &objectKey, std::vector<RpcMessage> &messages, size_t size,
@@ -577,10 +669,10 @@ Status SpillFileManager::LoadFromDisk(const std::string &objectKey, std::vector<
             FormatString("Invalid size: %zu, offset: %zu, objectSize: %zu", size, offset, objectSize));
         return file->ReadToRpcMessage(size, objectOffset + offset, messages);
     };
-    return LoadFromDiskImpl(objectKey, readBufferFunc, readFileFunc);
+    return LoadFromDiskImpl(objectKey, size, readBufferFunc, readFileFunc);
 }
 
-Status SpillFileManager::DeleteFromDisk(const std::string &objectKey, uint64_t &decSize)
+Status SpillFileManager::DeleteFromDisk(const std::string &objectKey, uint64_t &decSize, bool isEviction)
 {
     PerfPoint point(PerfKey::WORKER_SPILL_DELETE);
     Timer timer;
@@ -618,6 +710,12 @@ Status SpillFileManager::DeleteFromDisk(const std::string &objectKey, uint64_t &
     (void)objLocations_.erase(objectKey);
     fileInfo.holesSize += decSize;
     DeleteLargeObj(objectKey, loc, fileInfoMap);
+
+    // Count physical SSD eviction only when the deletion is eviction-triggered.
+    if (isEviction) {
+        spillIoCounters_.spillEvictCount.fetch_add(1, std::memory_order_relaxed);
+        spillIoCounters_.spillEvictBytes.fetch_add(decSize, std::memory_order_relaxed);
+    }
     return Status::OK();
 }
 
@@ -864,7 +962,7 @@ Status SpillFileManager::CopyObjects(const FileInfo &fileinfo, const std::string
                 << ", offset: " << newLocation.offset << ", size: " << newLocation.size;
         throttle_.LimitIORate(newLocation.size);
     }
-    newFileinfo.file->Sync();
+    RETURN_IF_NOT_OK(newFileinfo.file->Sync());
     LOG(INFO) << FormatString("[Compact] copy %d objects from %s to new file %s success.", oldObjectLocationsMap.size(),
                               fileinfo.path, newFileinfo.path);
     return Status::OK();
@@ -926,7 +1024,7 @@ Status WorkerOcSpill::Init()
                                   initial95SpillFreeSpace_);
     }
     for (uint32_t i = 0; i < FLAGS_spill_thread_num; i++) {
-        auto tmpMgr = std::make_unique<SpillFileManager>(i);
+        auto tmpMgr = std::make_unique<SpillFileManager>(i, spillIoCounters_);
         tmpMgr->Init(realSpillDirectory);
         fileMgr_.emplace_back(std::move(tmpMgr));
     }
@@ -987,6 +1085,7 @@ Status WorkerOcSpill::Spill(const std::string &objectKey,
 
     if (IsSpaceFull(size)) {
         LOG(INFO) << FormatString("[ObjectKey %s] The spill space is full.", objectKey);
+        spillIoCounters_.spillInFailCount.fetch_add(1, std::memory_order_relaxed);
         RETURN_STATUS(K_NO_SPACE, "No space when WorkerOcSpill::Spill");
     }
     size_t mgrIndex = GetMgrIndex(objectKey);
@@ -1020,11 +1119,11 @@ Status WorkerOcSpill::Get(const std::string &objectKey, std::vector<RpcMessage> 
     return status;
 }
 
-Status WorkerOcSpill::Delete(const std::string &objectKey)
+Status WorkerOcSpill::Delete(const std::string &objectKey, bool isEviction)
 {
     size_t mgrIndex = GetMgrIndex(objectKey);
     uint64_t decSize = 0;
-    RETURN_IF_NOT_OK(fileMgr_[mgrIndex]->DeleteFromDisk(objectKey, decSize));
+    RETURN_IF_NOT_OK(fileMgr_[mgrIndex]->DeleteFromDisk(objectKey, decSize, isEviction));
     CHECK_FAIL_RETURN_STATUS(totalActiveSpilledSize_ >= decSize, K_RUNTIME_ERROR,
                              FormatString("Computation overflow: totalActiveSpilledSize_=%llu, decSize=%llu",
                                           totalActiveSpilledSize_.load(), decSize));
@@ -1158,6 +1257,52 @@ std::string WorkerOcSpill::GetSpillUsage()
     auto workerSpillHardDiskUsage = totalActiveSpilledSize_.load() / static_cast<float>(spillSizeLimit);
     return FormatString("%lu/%lu/%lu/%.3f", totalActiveSpilledSize_.load(), totalSpillFileDiskSize.load(),
                         spillSizeLimit, workerSpillHardDiskUsage);
+}
+
+std::string WorkerOcSpill::GetSpillIoStats()
+{
+    std::lock_guard<std::mutex> lock(spillIoStatsMutex_);
+
+    // 1. Read current cumulative snapshot
+    SpillIoSnapshot cur;
+    cur.spillInCount = spillIoCounters_.spillInCount.load(std::memory_order_relaxed);
+    cur.spillInBytes = spillIoCounters_.spillInBytes.load(std::memory_order_relaxed);
+    cur.spillInFailCount = spillIoCounters_.spillInFailCount.load(std::memory_order_relaxed);
+    cur.spillOutCount = spillIoCounters_.spillOutCount.load(std::memory_order_relaxed);
+    cur.spillOutBytes = spillIoCounters_.spillOutBytes.load(std::memory_order_relaxed);
+    cur.spillEvictCount = spillIoCounters_.spillEvictCount.load(std::memory_order_relaxed);
+    cur.spillEvictBytes = spillIoCounters_.spillEvictBytes.load(std::memory_order_relaxed);
+
+    // 2. Reset the rolling one-hour snapshot after one hour has elapsed, before computing the delta.
+    constexpr uint64_t kOneHourMs = 3600UL * 1000;
+    uint64_t nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+    INJECT_POINT_NO_RETURN("worker.Spill.GetSpillIoStats.clockOffsetMs", [&nowMs](int64_t offsetMs) {
+        if (offsetMs >= 0) {
+            nowMs = SaturatingAdd(nowMs, static_cast<uint64_t>(offsetMs));
+        }
+    });
+    if (lastHourlyResetTimeMs_ == 0 || (nowMs - lastHourlyResetTimeMs_) >= kOneHourMs) {
+        prevSnapshot_ = cur;
+        lastHourlyResetTimeMs_ = nowMs;
+    }
+
+    // 3. Compute rolling one-hour delta (hour-to-date within the rolling window)
+    uint64_t dInCount = cur.spillInCount - prevSnapshot_.spillInCount;
+    uint64_t dInBytes = cur.spillInBytes - prevSnapshot_.spillInBytes;
+    uint64_t dInFail = cur.spillInFailCount - prevSnapshot_.spillInFailCount;
+    uint64_t dOutCount = cur.spillOutCount - prevSnapshot_.spillOutCount;
+    uint64_t dOutBytes = cur.spillOutBytes - prevSnapshot_.spillOutBytes;
+    uint64_t dEvictCount = cur.spillEvictCount - prevSnapshot_.spillEvictCount;
+    uint64_t dEvictBytes = cur.spillEvictBytes - prevSnapshot_.spillEvictBytes;
+
+    // 4. Format: 7 cumulative / 7 current_hour
+    return FormatString("%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu/%lu",
+                        cur.spillInCount, cur.spillInBytes, cur.spillInFailCount,
+                        cur.spillOutCount, cur.spillOutBytes,
+                        cur.spillEvictCount, cur.spillEvictBytes,
+                        dInCount, dInBytes, dInFail,
+                        dOutCount, dOutBytes,
+                        dEvictCount, dEvictBytes);
 }
 
 uint64_t WorkerOcSpill::GetSpillLimitSize()

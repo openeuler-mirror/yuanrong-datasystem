@@ -1095,7 +1095,7 @@ Status WorkerOcEvictionManager::DeletePrimaryEndLifeLocal(const PrimaryEndLifeCa
     const auto &objectKey = candidate.task.objectKey;
     auto &entry = *candidate.entry;
     if (entry->IsSpilled()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Delete(objectKey),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Delete(objectKey, true),
                                          FormatString("[ObjectKey %s] Delete from disk failed", objectKey));
     }
     entry->stateInfo.SetSpillState(false);
@@ -1346,7 +1346,7 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
     }
 
     if (objectKV.GetObjEntry()->IsSpilled()) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Delete(objectKey),
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Delete(objectKey, true),
                                          FormatString("[ObjectKey %s] Delete from disk failed", objectKey));
     }
     objectKV.GetObjEntry()->stateInfo.SetSpillState(false);
@@ -1360,7 +1360,7 @@ Status WorkerOcEvictionManager::DeleteL2CacheEvictableObject(const ObjectKV &obj
 {
     const auto &objectKey = objectKV.GetObjKey();
     auto &entry = objectKV.GetObjEntry();
-    RETURN_IF_NOT_OK_EXCEPT(WorkerOcSpill::Instance()->Delete(objectKey), StatusCode::K_NOT_FOUND);
+    RETURN_IF_NOT_OK_EXCEPT(WorkerOcSpill::Instance()->Delete(objectKey, true), StatusCode::K_NOT_FOUND);
     entry->stateInfo.SetSpillState(false);
     return Status::OK();
 }
