@@ -17,6 +17,7 @@
 #include "datasystem/coordinator/coordinator_service_impl.h"
 
 #include "datasystem/common/coordinator/key_value_entry.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/logging.h"
@@ -84,8 +85,18 @@ Status CoordinatorServiceImpl::Init()
     cfg.hwm_ = RPC_LIGHT_SERVICE_HWM;
     cfg.udsEnabled_ = false;
 
-    builder_.AddEndPoint(RpcChannel::TcpipEndPoint(coordinatorAddr_));
-    builder_.AddService(this, cfg);
+    if (FLAGS_use_brpc) {
+        // brpc path: register ZMQ builder for common infra, brpc handles the RPC service.
+        // CoordinatorServiceImpl : ICoordinatorService → CoordinatorServiceBrpcAdapter in Start().
+        brpcAddr_ = coordinatorAddr_.Host();
+        brpcPort_ = coordinatorAddr_.Port() + kBrpcPortOffset;
+        builder_.SetUseBrpc(true).SetBrpcAddr(brpcAddr_, brpcPort_);
+        builder_.AddService(this, cfg);
+    } else {
+        // ZMQ path (original)
+        builder_.AddEndPoint(RpcChannel::TcpipEndPoint(coordinatorAddr_));
+        builder_.AddService(this, cfg);
+    }
     return Status::OK();
 }
 
@@ -93,7 +104,15 @@ Status CoordinatorServiceImpl::Start()
 {
     RETURN_IF_NOT_OK(builder_.Init(rpcServer_));
     RETURN_IF_NOT_OK(builder_.BuildAndStart(rpcServer_));
-    LOG(INFO) << "datasystem coordinator started at " << coordinatorAddr_.ToString();
+
+    if (FLAGS_use_brpc && rpcServer_->IsBrpc()) {
+        brpcAdapter_ = std::make_unique<CoordinatorServiceBrpcAdapter>(*this);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcAdapter_.get()));
+        RETURN_IF_NOT_OK(rpcServer_->StartBrpcServer(brpcAddr_, brpcPort_));
+    }
+
+    LOG(INFO) << "datasystem coordinator started at " << coordinatorAddr_.ToString()
+              << (FLAGS_use_brpc ? " (brpc)" : " (ZMQ)");
     return Status::OK();
 }
 
@@ -101,7 +120,8 @@ Status CoordinatorServiceImpl::Shutdown()
 {
     LOG(INFO) << "Coordinator process executing a shutdown.";
     if (rpcServer_ != nullptr) {
-        rpcServer_->Shutdown();
+        rpcServer_->Shutdown();   // Stops brpc (StopBrpcServer) + ZMQ internally.
+        brpcAdapter_.reset();     // Safe: brpc server already stopped, no longer references adapter.
         rpcServer_.reset();
     }
     // Reset in reverse dependency order

@@ -384,6 +384,19 @@ ds_cc_test(
     ],
 )
 
+# CoordinatorWatchService brpc adapter test
+ds_cc_test(
+    name = "coordinator_watch_service_test",
+    srcs = ["coordinator_watch_service_test.cpp"],
+    deps = [
+        "//src/datasystem/protos:coordinator_brpc",
+        "//src/datasystem/protos:coordinator_zmq_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/coordinator:coordinator_watch_service_impl",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # 汇总测试套件
 test_suite(
     name = "all_worker_tests",
@@ -392,6 +405,7 @@ test_suite(
         "async_updatelocation_test",
         "authenticate_test",
         "client_manager_test",
+        "coordinator_watch_service_test",
         "hash_ring_allocator_test",
         "hash_ring_health_check_test",
         "lock_map_test",

@@ -21,6 +21,7 @@
 #define DATASYSTEM_COORDINATOR_COORDINATOR_SERVICE_IMPL_H
 
 #include <memory>
+#include <string>
 
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
@@ -30,11 +31,12 @@
 #include "datasystem/common/rpc/rpc_server.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/coordinator/watch_dispatcher_impl.h"
+#include "datasystem/protos/coordinator.brpc.pb.h"
 #include "datasystem/protos/coordinator.service.rpc.pb.h"
 
 namespace datasystem {
 namespace coordinator {
-class CoordinatorServiceImpl : public CoordinatorService {
+class CoordinatorServiceImpl : public CoordinatorService, public ICoordinatorService {
 public:
     CoordinatorServiceImpl(const HostPort &localAddress);
     ~CoordinatorServiceImpl() override = default;
@@ -56,6 +58,10 @@ public:
 private:
     HostPort coordinatorAddr_;
     RpcServer::Builder builder_;
+    // brpc mode — MUST be declared before rpcServer_: the brpc adapter holds a
+    // reference to *this and is registered with the brpc::Server inside rpcServer_.
+    // On destruction, rpcServer_ (~RpcServer → StopBrpcServer) must outlive the adapter.
+    std::unique_ptr<CoordinatorServiceBrpcAdapter> brpcAdapter_;
     std::unique_ptr<RpcServer> rpcServer_;
     std::shared_ptr<MemoryKvStore> memStore_;
     std::shared_ptr<WatchRegistry> watchRegistry_;
@@ -63,6 +69,9 @@ private:
     std::shared_ptr<SteadyClockReal> clock_;
     std::shared_ptr<TtlManager> ttlManager_;
     std::shared_ptr<CoordinatorStore> store_;
+    // brpc mode address (set in Init, consumed in Start)
+    std::string brpcAddr_;
+    int brpcPort_ = 0;
 };
 }  // namespace coordinator
 }  // namespace datasystem
