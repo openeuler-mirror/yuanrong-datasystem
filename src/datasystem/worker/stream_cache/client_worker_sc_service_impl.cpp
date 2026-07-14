@@ -160,8 +160,8 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
                                      "Authenticate failed.");
     LOG(INFO) << "Worker received CreateProducer request: " << LogHelper::IgnoreSensitive(req);
-    TimeoutDuration parentDuration = scTimeoutDuration;
-    Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+    TimeoutDuration parentDuration = GetRequestContext()->scTimeoutDuration;
+    Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CheckConnection(namespaceUri), "worker check connection failed");
 
@@ -171,8 +171,8 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
     // so that it does not hold up the rpc threads.
     auto traceId = Trace::Instance().GetTraceID();
     threadPool_->Execute([=]() mutable {
-        scTimeoutDuration = parentDuration;  // lambda capture gets the parents copy. assign the copy to thread local
-        Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+        GetRequestContext()->scTimeoutDuration = parentDuration;
+        Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         CreateProducerRspPb rsp;
         Status rc = CreateProducerImpl(namespaceUri, req, rsp);
@@ -226,8 +226,8 @@ Status ClientWorkerSCServiceImpl::CreateProducerHandleSend(std::shared_ptr<Worke
         RETURN_IF_NOT_OK(RedirectRetryWhenMetaMoving(masterReq, masterRsp, api, func));
         return Status::OK();
     };
-    return WorkerMasterOcApiManager::RetryForReplicaNotReady(scTimeoutDuration.CalcRealRemainingTime(),
-                                                             std::move(createProducerFn));
+    return WorkerMasterOcApiManager::RetryForReplicaNotReady(
+        GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(createProducerFn));
 }
 
 Status ClientWorkerSCServiceImpl::CreateProducerImpl(const std::string &namespaceUri, const CreateProducerReqPb &req,
@@ -368,8 +368,8 @@ Status ClientWorkerSCServiceImpl::CloseProducerInternal(
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
                                      "Authenticate failed.");
-    TimeoutDuration parentDuration = scTimeoutDuration;
-    Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+    TimeoutDuration parentDuration = GetRequestContext()->scTimeoutDuration;
+    Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     LOG(INFO) << "Worker received CloseProducer request:" << LogHelper::IgnoreSensitive(req);
     const std::string &producerId = req.producer_id();
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
@@ -381,8 +381,8 @@ Status ClientWorkerSCServiceImpl::CloseProducerInternal(
     // so that it does not hold up the rpc threads.
     auto traceId = Trace::Instance().GetTraceID();
     threadPool_->Execute([=]() mutable {
-        scTimeoutDuration = parentDuration;  // lambda capture gets the parents copy. assign the copy to thread local
-        Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+        GetRequestContext()->scTimeoutDuration = parentDuration;
+        Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         CloseProducerRspPb rsp;
         Status rc = CloseProducerImpl(producerId, namespaceUri, true);
@@ -461,8 +461,8 @@ Status ClientWorkerSCServiceImpl::CloseProducerHandleSend(std::shared_ptr<Worker
         streamList = needCloseList;
         return Status::OK();
     };
-    return WorkerMasterOcApiManager::RetryForReplicaNotReady(scTimeoutDuration.CalcRealRemainingTime(),
-                                                             std::move(closeProducerFn));
+    return WorkerMasterOcApiManager::RetryForReplicaNotReady(
+        GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(closeProducerFn));
 }
 
 Status ClientWorkerSCServiceImpl::CloseProducerImpl(const std::string &producerId, const std::string &streamName,
@@ -582,8 +582,9 @@ Status ClientWorkerSCServiceImpl::SendBatchedCloseProducerReq(std::set<std::stri
         Status masterCloseRcPerCall;
         std::string masterAddr;
         do {
-            CHECK_FAIL_RETURN_STATUS(scTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
-                                     "Rpc timeout");
+            CHECK_FAIL_RETURN_STATUS(
+                GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime() > 0,
+                K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
 
             // We only send a CloseProducer Request on last producer close
             VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[S:%s] Sending close producer to master. Attempt: %d",
@@ -663,8 +664,8 @@ Status ClientWorkerSCServiceImpl::SubscribeInternal(
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
                                      "Authenticate failed.");
-    TimeoutDuration parentDuration = scTimeoutDuration;
-    Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+    TimeoutDuration parentDuration = GetRequestContext()->scTimeoutDuration;
+    Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     PerfPoint point(PerfKey::WORKER_CREATE_SUB_ALL);
 
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
@@ -674,8 +675,8 @@ Status ClientWorkerSCServiceImpl::SubscribeInternal(
     // so that it does not hold up the rpc threads.
     auto traceId = Trace::Instance().GetTraceID();
     threadPool_->Execute([=]() mutable {
-        scTimeoutDuration = parentDuration;  // lambda capture gets the parents copy. assign the copy to thread local
-        Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+        GetRequestContext()->scTimeoutDuration = parentDuration;
+        Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         SubscribeRspPb rsp;
         Status rc = SubscribeImpl(namespaceUri, req, rsp);
@@ -738,8 +739,8 @@ Status ClientWorkerSCServiceImpl::SubscribeHandleSend(std::shared_ptr<StreamMana
         INJECT_POINT("ClientWorkerSC.Subscribe.TimingHole");
         return rc;
     };
-    return WorkerMasterOcApiManager::RetryForReplicaNotReady(scTimeoutDuration.CalcRealRemainingTime(),
-                                                             std::move(subscribeFn));
+    return WorkerMasterOcApiManager::RetryForReplicaNotReady(
+        GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(subscribeFn));
 }
 
 Status ClientWorkerSCServiceImpl::SubscribeImpl(const std::string &namespaceUri, const SubscribeReqPb &req,
@@ -857,8 +858,8 @@ Status ClientWorkerSCServiceImpl::CloseConsumerInternal(
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
                                      "Authenticate failed.");
-    TimeoutDuration parentDuration = scTimeoutDuration;
-    Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+    TimeoutDuration parentDuration = GetRequestContext()->scTimeoutDuration;
+    Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     LOG(INFO) << "Worker received CloseConsumer request:" << LogHelper::IgnoreSensitive(req);
     const std::string &consumerId = req.consumer_id();
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, req.stream_name());
@@ -869,8 +870,8 @@ Status ClientWorkerSCServiceImpl::CloseConsumerInternal(
     // so that it does not hold up the rpc threads.
     auto traceId = Trace::Instance().GetTraceID();
     threadPool_->Execute([=]() mutable {
-        scTimeoutDuration = parentDuration;  // lambda capture gets the parents copy. assign the copy to thread local
-        Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+        GetRequestContext()->scTimeoutDuration = parentDuration;
+        Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         Status rc = CloseConsumerImpl(consumerId, namespaceUri, req.subscription_name(), true, WORKER_LOCK_ID);
         if (rc.IsOk() || rc.GetCode() == StatusCode::K_SC_CONSUMER_NOT_FOUND) {
@@ -933,8 +934,8 @@ Status ClientWorkerSCServiceImpl::CloseConsumerImpl(const std::string &consumerI
                 };
             return RedirectRetryWhenMetaMoving(req, rsp, api, func);
         };
-        rc = WorkerMasterOcApiManager::RetryForReplicaNotReady(scTimeoutDuration.CalcRealRemainingTime(),
-                                                               std::move(closeConsumerFn));
+        rc = WorkerMasterOcApiManager::RetryForReplicaNotReady(
+            GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(closeConsumerFn));
         LOG_IF_ERROR(rc, FormatString("Close Consumer [%s] failed in master [%s]: %s. ForceClose: %s", consumerId,
                                       masterAddr, rc.GetMsg(), forceClose ? "true" : "false"));
     }
@@ -1125,7 +1126,7 @@ Status ClientWorkerSCServiceImpl::DeleteStreamImpl(const DeleteStreamReqPb &req,
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     (void)rsp;
-    Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+    Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     PerfPoint point(PerfKey::WORKER_DELETE_STREAM_ALL);
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
@@ -1209,8 +1210,8 @@ Status ClientWorkerSCServiceImpl::DeleteStreamHandleSend(const std::string &stre
                                          "workerMasterApi delete stream failed on master " + api->Address());
         return Status::OK();
     };
-    return WorkerMasterOcApiManager::RetryForReplicaNotReady(scTimeoutDuration.CalcRealRemainingTime(),
-                                                             std::move(deleteFn));
+    return WorkerMasterOcApiManager::RetryForReplicaNotReady(
+        GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(deleteFn));
 }
 
 Status ClientWorkerSCServiceImpl::QueryGlobalProducersNum(const QueryGlobalNumReqPb &req, QueryGlobalNumRsqPb &rsp)
@@ -1250,8 +1251,8 @@ Status ClientWorkerSCServiceImpl::QueryGlobalProducersNumImpl(const QueryGlobalN
         LOG(INFO) << "worker QueryGlobalProducersNum done, namespaceUri: " << namespaceUri;
         return Status::OK();
     };
-    return WorkerMasterOcApiManager::RetryForReplicaNotReady(scTimeoutDuration.CalcRealRemainingTime(),
-                                                             std::move(queryFn));
+    return WorkerMasterOcApiManager::RetryForReplicaNotReady(
+        GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(queryFn));
 }
 
 Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNum(const QueryGlobalNumReqPb &req, QueryGlobalNumRsqPb &rsp)
@@ -1292,8 +1293,8 @@ Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNumImpl(const QueryGlobalN
         return Status::OK();
     };
 
-    return WorkerMasterOcApiManager::RetryForReplicaNotReady(scTimeoutDuration.CalcRealRemainingTime(),
-                                                             std::move(queryFn));
+    return WorkerMasterOcApiManager::RetryForReplicaNotReady(
+        GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(queryFn));
 }
 
 std::string ClientWorkerSCServiceImpl::LogPrefix(bool withAddress) const
@@ -1661,8 +1662,8 @@ Status ClientWorkerSCServiceImpl::CheckConnection(const std::string &streamName)
         }
         return Status::OK();
     };
-    return WorkerMasterOcApiManager::RetryForReplicaNotReady(scTimeoutDuration.CalcRealRemainingTime(),
-                                                             std::move(func));
+    return WorkerMasterOcApiManager::RetryForReplicaNotReady(
+        GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(func));
 }
 
 Status ClientWorkerSCServiceImpl::UnblockProducer(
@@ -1710,11 +1711,11 @@ Status ClientWorkerSCServiceImpl::DeleteStreamContext(const std::string &streamN
 {
     LOG(INFO) << FormatString("[%s, S:%s] DelStreamContext request started with forceDelete: %d", LogPrefix(true),
                               streamName, forceDelete);
-    scTimeoutDuration.Init(timeout);
-    Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+    GetRequestContext()->scTimeoutDuration.Init(timeout);
+    Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     std::shared_ptr<StreamManager> streamManager;
     INJECT_POINT("ClientWorkerSCServiceImpl.DeleteStreamContext.timeout", [](int timeout) {
-        scTimeoutDuration.Init(timeout);
+        GetRequestContext()->scTimeoutDuration.Init(timeout);
         return Status::OK();
     });
     StreamManagerMap::const_accessor accessor;

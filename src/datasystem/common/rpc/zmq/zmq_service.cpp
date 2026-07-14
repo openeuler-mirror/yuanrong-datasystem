@@ -660,7 +660,7 @@ Status ZmqService::WorkerCB::WorkerEntryImpl(MetaPb &meta, ZmqMsgFrames &inMsg, 
     int fd = meta.route_fd();
     const int idx = meta.method_index();
     if (idx >= 0) {
-        auto remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+        auto remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
             FormatString("The remaining time of the RPC request is %lld, which has exceeded the "
@@ -706,12 +706,12 @@ Status ZmqService::WorkerCB::WorkerEntry(int64_t timeoutUs, int64_t elapsedUs)
             impl_->RejectAndReplyDeadlineExceeded(meta, serverRemainingUs, elapsedUs);
             return Status::OK();
         }
-        reqTimeoutDuration.InitUs(serverRemainingUs);
-        scTimeoutDuration.InitUs(serverRemainingUs);
+        GetRequestContext()->reqTimeoutDuration.InitUs(serverRemainingUs);
+        GetRequestContext()->scTimeoutDuration.InitUs(serverRemainingUs);
         ApiDeadline::Instance().InitUs(serverRemainingUs);
     } else {
-        reqTimeoutDuration.Init();
-        scTimeoutDuration.Init();
+        GetRequestContext()->reqTimeoutDuration.Init();
+        GetRequestContext()->scTimeoutDuration.Init();
         ApiDeadline::Instance().Reset();
     }
     VLOG(RPC_LOG_LEVEL) << FormatString("Worker %s started for service '%s' Method %d serving %s", GetWorkerId(),
@@ -1253,12 +1253,12 @@ Status ZmqService::DirectExecInternalMethod(ZmqMetaMsgFrames &inFrames, ZmqMetaM
                        FormatString("RPC deadline exceeded, remaining %ld us.", serverRemainingUs))));
             return Status::OK();
         }
-        reqTimeoutDuration.InitUs(serverRemainingUs);
-        scTimeoutDuration.InitUs(serverRemainingUs);
+        GetRequestContext()->reqTimeoutDuration.InitUs(serverRemainingUs);
+        GetRequestContext()->scTimeoutDuration.InitUs(serverRemainingUs);
         ApiDeadline::Instance().InitUs(serverRemainingUs);
     } else {
-        reqTimeoutDuration.Init();
-        scTimeoutDuration.Init();
+        GetRequestContext()->reqTimeoutDuration.Init();
+        GetRequestContext()->scTimeoutDuration.Init();
         ApiDeadline::Instance().Reset();
     }
     LOG_IF_ERROR(worker->WorkerEntryWithoutMsgQ(inFrames, outFrames), "worker entry failed");

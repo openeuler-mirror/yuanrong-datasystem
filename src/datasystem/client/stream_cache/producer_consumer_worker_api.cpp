@@ -29,6 +29,7 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/log/trace.h"
 
 namespace datasystem {
@@ -77,7 +78,7 @@ Status ProducerConsumerWorkerApi::DoGetDataPageRpc(ClientWorkerApi &workerApi, G
     auto pair = workerApi.GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
     RpcOptions opts;
     opts.SetTimeout(pair.first);
-    reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
+    GetRequestContext()->reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
     req.set_timeout_ms(pair.second);
     RETURN_IF_NOT_OK(workerApi.signature_->GenerateSignature(req));
     if (FLAGS_use_brpc) {
@@ -143,7 +144,7 @@ Status ProducerConsumerWorkerApi::DoAllocBigShmMemoryRpc(ClientWorkerApi &worker
     auto pair = workerApi.GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
     RpcOptions opts;
     opts.SetTimeout(pair.first);
-    reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
+    GetRequestContext()->reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
     req.set_sub_timeout(pair.second);
     // Even without AKSK authentication, this field should still be set in this scenario because worker
     // relies on this field to determine the order of requests.
@@ -185,7 +186,7 @@ Status ProducerConsumerWorkerApi::ReleaseBigElementMemory(const std::string &str
     INJECT_POINT("ProducerConsumerWorkerApi.ReleaseBigElementMemory.preReleaseBigShmMemory");
     // Note: timeout is not relevant here but thread_local must be set
     // variable.
-    reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(RpcOptions().GetTimeout()));
+    GetRequestContext()->reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(RpcOptions().GetTimeout()));
     if (FLAGS_use_brpc) {
         auto session = workerApi->brpcRpcSession_;
         if (session == nullptr) {
@@ -275,7 +276,7 @@ Status ProducerConsumerWorkerApi::DoCreateShmPageRpc(ClientWorkerApi &workerApi,
     auto pair = workerApi.GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
     RpcOptions opts;
     opts.SetTimeout(pair.first);
-    reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
+    GetRequestContext()->reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
     req.set_sub_timeout(pair.second);
     // Even without AKSK authentication, this field should still be set in this scenario because worker
     // relies on this field to determine the order of requests.
@@ -318,7 +319,7 @@ Status ProducerConsumerWorkerApi::CloseProducer(const std::string &streamName, c
 
     RpcOptions opts;
     opts.SetTimeout(workerApi->requestTimeoutMs_);
-    reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->requestTimeoutMs_));
     PerfPoint point(PerfKey::RPC_WORKER_CLOSE_PRODUCER);
     if (FLAGS_use_brpc) {
         auto session = workerApi->brpcRpcSession_;
@@ -364,7 +365,7 @@ Status ProducerConsumerWorkerApi::CloseConsumer(const std::string &streamName, c
 
     RpcOptions opts;
     opts.SetTimeout(workerApi->requestTimeoutMs_);
-    reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->requestTimeoutMs_));
     PerfPoint point(PerfKey::RPC_WORKER_CLOSE_CONSUMER);
     if (FLAGS_use_brpc) {
         auto session = workerApi->brpcRpcSession_;
@@ -407,7 +408,7 @@ Status ProducerConsumerWorkerApi::GetLastAppendCursor(const std::string &streamN
 
     RpcOptions opts;
     opts.SetTimeout(workerApi->rpcTimeoutMs_);
-    reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->rpcTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(workerApi->ClientGetRequestTimeout(workerApi->rpcTimeoutMs_));
     if (FLAGS_use_brpc) {
         auto session = workerApi->brpcRpcSession_;
         if (session == nullptr) {

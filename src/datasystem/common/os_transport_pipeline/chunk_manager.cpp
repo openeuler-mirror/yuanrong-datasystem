@@ -41,6 +41,7 @@
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "os-transport/os_transport.h"
 
 #define LOG_AND_SET_FIRST_ERROR(code, msg)              \
@@ -491,7 +492,7 @@ Status ChunkManager::WaitPiplnStep12Done()
 {
     Status firstError = Status::OK();
     for (auto &info : reqInfos_) {
-        int64_t remainingTimeMs = datasystem::reqTimeoutDuration.CalcRealRemainingTime();
+        int64_t remainingTimeMs = datasystem::GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         if (isClient_) {
             // client wait step 2 cancel or done
             bool done = info.second.WaitCancelOrDone(remainingTimeMs);

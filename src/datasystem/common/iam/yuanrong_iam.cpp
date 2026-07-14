@@ -36,6 +36,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
@@ -297,7 +298,7 @@ Status YuanRongIAM::SendRequestAndRetry(
     std::vector<int64_t> retryIntervalSecMs = { 100, 500, 1500, 3000 };
     int64_t retryTimeMs = 15000;
     size_t retryTime = 0;
-    int maxRetryMs = std::min(retryTimeMs, reqTimeoutDuration.CalcRemainingTime());
+    int maxRetryMs = std::min(retryTimeMs, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     while (timer.ElapsedMilliSecond() < maxRetryMs) {
         setAuthHeader(request);
         const int64_t requestTimeoutMs = 5000;

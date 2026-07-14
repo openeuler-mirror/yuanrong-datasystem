@@ -58,6 +58,7 @@
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/version.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
@@ -894,7 +895,7 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
     Timer time = Timer(recvClientFdState_.getClientFdTimeoutMs);
     RpcOptions opts;
     opts.SetTimeout(recvClientFdState_.getClientFdTimeoutMs);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(recvClientFdState_.getClientFdTimeoutMs));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(recvClientFdState_.getClientFdTimeoutMs));
     if (!tenantId.empty()) {
         req.set_tenant_id(tenantId);
         RETURN_IF_NOT_OK(SetToken(req));
@@ -1100,7 +1101,7 @@ Status ClientWorkerRemoteCommonApi::AsyncFirstUrmaHandshake(uint32_t workerVersi
 #endif
     LOG(INFO) << "[URMA_INIT] first_hs addr=" << hostPort_.ToString() << " clientId=" << clientId_
               << " ver=" << workerVersion;
-    reqTimeoutDuration.InitWithPositiveTime(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(ClientGetRequestTimeout(requestTimeoutMs_));
     Status status = TryUrmaHandshake();
     uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
     if (workerVersion != currentWorkerVersion) {
@@ -1163,7 +1164,7 @@ void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry(uint32_t workerVers
                 continue;
             }
             timer.Reset();
-            reqTimeoutDuration.InitWithPositiveTime(rpcTimeout);
+            GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(rpcTimeout);
             Status status = TryUrmaHandshake();
             currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
             if (workerVersion != currentWorkerVersion) {

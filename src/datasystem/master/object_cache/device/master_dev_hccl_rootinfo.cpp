@@ -22,6 +22,8 @@
 #include <memory>
 #include <vector>
 
+#include "datasystem/common/util/request_context.h"
+
 namespace datasystem {
 namespace master {
 Status HcclRootInfoTable::PutRootInfo(const std::string &hcclPeerId, const std::string &rootInfo)
@@ -125,7 +127,7 @@ Status HcclRootInfoSubscriptionTable::ReturnFromRecvRootInfoRequest(std::shared_
     VLOG(1) << FormatString("Begin to ReturnFromRecvRootInfoRequest, client id: %d, deviceId: %d", request->clientId_,
                             request->deviceId_);
     std::lock_guard<std::mutex> lck(request->mutex_);
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {
         RemoveRecvRootInfoRequest(request);
         return request->serverApi_->SendStatus({ K_RPC_DEADLINE_EXCEEDED, "Rpc timeout" });

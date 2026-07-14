@@ -38,6 +38,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/string_intern/string_ref.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -718,7 +719,7 @@ Status WorkerOcServiceMigrateImpl::WaitRemoteReadTasks(std::vector<ReadTask> &ta
     const auto metaSize = GetMetadataSize();
     Status lastRc;
     for (auto &task : tasks) {
-        auto remainingTime = []() { return reqTimeoutDuration.CalcRealRemainingTime(); };
+        auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
         Status waitRc = WaitFastTransportEvent(task.eventKeys, remainingTime, errorHandler);
         if (waitRc.IsError()) {

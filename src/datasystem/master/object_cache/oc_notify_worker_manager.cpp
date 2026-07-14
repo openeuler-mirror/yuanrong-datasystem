@@ -600,7 +600,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
 {
     std::vector<std::tuple<std::string, std::string, uint32_t, uint64_t>> asyncNotifyIds;
     Timer timer;
-    int64_t realTimeoutMs = timeoutDuration.CalcRealRemainingTime();
+    int64_t realTimeoutMs = GetRequestContext()->timeoutDuration.CalcRealRemainingTime();
     std::string traceID = Trace::Instance().GetTraceID();
     std::vector<std::future<SendResult>> futures;
     futures.reserve(replicas2Obj.size());
@@ -632,7 +632,7 @@ Status OCNotifyWorkerManager::DoNotifyWorkerDeleteSendRequest(
                 needAbort.store(true);
                 return { nullptr, -1, address, Status(StatusCode::K_RUNTIME_ERROR, "Rpc timeout") };
             }
-            timeoutDuration.Init(realTimeoutMs - elapsed);
+            GetRequestContext()->timeoutDuration.Init(realTimeoutMs - elapsed);
             std::shared_ptr<MasterWorkerOCApi> api;
             Status st = GetMasterWorkerApi(address, api);
             int64_t tag = -1;
@@ -944,7 +944,7 @@ void OCNotifyWorkerManager::ProcessChangePrimaryCopy(
     constexpr int64_t maxRpcTimeoutMs = 3 * 1000;            // Each ChangePrimaryCopy RPC timeout is 3 seconds.
     constexpr int64_t maxProcessTimeoutMs = 30 * 60 * 1000;  // Stop retrying after 30 minutes.
     Timer processTimer;
-    Raii resetDuration([]() { timeoutDuration.Reset(); });
+    Raii resetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
     std::unordered_map<std::string, std::unordered_set<std::string>> toBeChanged = input;
     // Key is object key, value is the set of excluded workers.
     std::unordered_map<std::string, std::unordered_set<std::string>> needReselectPrimary;
@@ -963,7 +963,7 @@ void OCNotifyWorkerManager::ProcessChangePrimaryCopy(
                 LOG(INFO) << "ProcessChangePrimaryCopy finish, current worker recieved term signal";
                 return;
             }
-            timeoutDuration.Init(maxRpcTimeoutMs);
+            GetRequestContext()->timeoutDuration.Init(maxRpcTimeoutMs);
             std::unordered_set<std::string> successIds;
             (void)SendChangePrimaryCopy(it.first, it.second, successIds);
             for (const auto &id : it.second) {
@@ -1053,7 +1053,7 @@ void OCNotifyWorkerManager::DecNestedRefs(const std::string &workerAddr, const s
 
     for (uint64_t i = 0; i < batchCount; i++) {
         // Asynchronous call, shared by current thread using timeoutDuration.
-        timeoutDuration.Init(RPC_TIMEOUT);
+        GetRequestContext()->timeoutDuration.Init(RPC_TIMEOUT);
         NotifyMasterDecNestedReqPb req;
         NotifyMasterDecNestedResPb rsp;
         uint64_t start = i * batchSize;

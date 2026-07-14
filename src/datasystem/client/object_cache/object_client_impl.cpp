@@ -85,6 +85,7 @@
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/validator.h"
@@ -3467,7 +3468,7 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
         && !(getParam.isRH2DSupported && IsRemoteH2DEnabled()) && configuredUbSize == 0) {
         shouldRecordTransport = true;
         std::vector<ObjMetaInfo> objMetas;
-        std::string tenantId = g_ContextTenantId.empty() ? tenantId_ : g_ContextTenantId;
+        std::string tenantId = GetRequestContext()->tenantId.empty() ? tenantId_ : GetRequestContext()->tenantId;
         Timer metaTimer;
         Status metaRc = workerApi->GetObjMetaInfo(tenantId, objectsNeedToGet, objMetas);
         getParam.ubGetObjMetaElapsedMs = static_cast<int64_t>(metaTimer.ElapsedMilliSecond());
@@ -3992,13 +3993,13 @@ std::string ObjectClientImpl::ConstructObjKeyWithTenantId(const std::string &obj
     std::string tenantId;
     if (!token_.Empty()) {
         tenantId = "";
-    } else if (g_ContextTenantId.empty()) {
+    } else if (GetRequestContext()->tenantId.empty()) {
         tenantId = tenantId_;
     } else {
-        tenantId = g_ContextTenantId;
+        tenantId = GetRequestContext()->tenantId;
     }
     if (!tenantId.empty()) {
-        objKeyWithTenant = g_ContextTenantId + K_SEPARATOR + objKey;
+        objKeyWithTenant = GetRequestContext()->tenantId + K_SEPARATOR + objKey;
     }
     return objKeyWithTenant;
 }
@@ -4219,7 +4220,7 @@ Status ObjectClientImpl::Set(const std::shared_ptr<Buffer> &buffer)
     AccessTransportTracker::Reset();
     RETURN_IF_NOT_OK(IsClientReady());
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
-    reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     CHECK_FAIL_RETURN_STATUS(buffer != nullptr, K_INVALID, "The buffer should not be empty.");
     RETURN_IF_NOT_OK(buffer->CheckDeprecated());
     std::shared_lock<std::shared_timed_mutex> shutdownLck(shutdownMux_);

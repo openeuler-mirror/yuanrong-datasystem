@@ -4,6 +4,7 @@
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 
 namespace datasystem {
@@ -130,17 +131,17 @@ TEST(ApiDeadlineTest, GuardSurvivesInnerReqTimeoutInitWithoutReset)
 {
     // Regression guard for BatchRemoveMeta's empty-batchKeyVersions branch: an
     // outer deadline is active and an ApiDeadlineGuard has Push'd its state. The
-    // inner scope only calls reqTimeoutDuration.Init(RPC_TIMEOUT) for the RPC
+    // inner scope only calls GetRequestContext()->reqTimeoutDuration.Init(RPC_TIMEOUT) for the RPC
     // budget and must NOT call ApiDeadline::Reset(). The guard's Pop() must
     // restore the outer deadline instead of hitting an empty saved stack.
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().InitUs(10 * 1000 * 1000);  // 10s outer deadline
     EXPECT_TRUE(ApiDeadline::Instance().IsInitialized());
     {
         ApiDeadlineGuard guard(5 * 1000 * 1000, InUs{});  // Push outer state, install 5s budget
         EXPECT_TRUE(ApiDeadline::Instance().IsInitialized());
-        reqTimeoutDuration.Init(RPC_TIMEOUT);  // inner RPC budget only; no Reset()
+        GetRequestContext()->reqTimeoutDuration.Init(RPC_TIMEOUT);  // inner RPC budget only; no Reset()
         EXPECT_TRUE(ApiDeadline::Instance().IsInitialized());
     }
     // Pop() restored the saved 10s state. If Reset() had cleared savedStates_,
@@ -150,87 +151,87 @@ TEST(ApiDeadlineTest, GuardSurvivesInnerReqTimeoutInitWithoutReset)
     EXPECT_GT(remainingUs, 0);
     EXPECT_LE(remainingUs, 10 * 1000 * 1000);
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
 }
 
 // Regression for issue #615: Set(buffer)'s UB data-plane write (Buffer::Publish, which
-// runs before the Publish RPC) reads thread-local reqTimeoutDuration. A prior RPC (e.g.
+// runs before the Publish RPC) reads thread-local GetRequestContext()->reqTimeoutDuration. A prior RPC (e.g.
 // Create) could leave it with an expired budget, making the UB write return
 // K_URMA_WAIT_TIMEOUT. Set(buffer) must re-init reqTimeoutDuration from the fresh
 // ApiDeadline at entry. Covers the <=10ms (no-decay) and >10ms (scaled) regimes.
 TEST(ApiDeadlineTest, SetBufferReinitsReqTimeoutDurationBeforePreRpcDataPlane)
 {
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
-    reqTimeoutDuration.InitUs(5'000);  // 5ms, as a prior RPC would
+    GetRequestContext()->reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.InitUs(5'000);  // 5ms, as a prior RPC would
     std::this_thread::sleep_for(std::chrono::milliseconds(20));  // exceed the prior budget
-    EXPECT_LE(reqTimeoutDuration.CalcRemainingTime(), 0);  // stale read the UB write would hit
+    EXPECT_LE(GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(), 0);  // stale read the UB write would hit
     {
         ApiDeadlineGuard guard(8);  // <=10ms regime: decay bypassed
-        reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
-        EXPECT_GT(reqTimeoutDuration.CalcRemainingTime(), 0);
+        GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+        EXPECT_GT(GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(), 0);
     }
     {
         ApiDeadlineGuard guard(200);  // >10ms regime: decay applies
-        reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
-        EXPECT_GT(reqTimeoutDuration.CalcRemainingTime(), 0);
+        GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
+        EXPECT_GT(GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(), 0);
     }
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
 }
 
 TEST(InitTimeoutsFromDispatchTest, InitsBothTimeoutsWhenPositive)
 {
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
     auto dispatchTime = std::chrono::steady_clock::now();
     auto rc = InitTimeoutsFromDispatch(10000, dispatchTime);
     EXPECT_EQ(rc, Status::OK());
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     EXPECT_GT(remainingUs, 0);
     EXPECT_GE(remainingUs, 8000);
     EXPECT_LE(remainingUs, 11000);
     EXPECT_TRUE(ApiDeadline::Instance().IsInitialized());
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
 }
 
 TEST(InitTimeoutsFromDispatchTest, ReturnsExceededWhenQueueDelayExhaustsBudget)
 {
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
     auto oldTime = std::chrono::steady_clock::now() - std::chrono::hours(1);
     auto rc = InitTimeoutsFromDispatch(5000, oldTime);
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
 }
 
 TEST(InitTimeoutsFromDispatchTest, ReturnsExceededWhenZeroBudget)
 {
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
     auto dispatchTime = std::chrono::steady_clock::now();
     auto rc = InitTimeoutsFromDispatch(0, dispatchTime);
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
 }
 
 TEST(InitTimeoutsFromDispatchTest, ReturnsExceededWhenNegativeBudget)
 {
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
     auto dispatchTime = std::chrono::steady_clock::now();
     auto rc = InitTimeoutsFromDispatch(-5000, dispatchTime);
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
 }
 
 TEST(InitTimeoutsFromDispatchTest, ResetOnExhaustedBudgetClearsInitializedState)
 {
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
     ApiDeadline::Instance().InitUs(5 * 1000 * 1000);
     EXPECT_TRUE(ApiDeadline::Instance().IsInitialized());
@@ -239,7 +240,7 @@ TEST(InitTimeoutsFromDispatchTest, ResetOnExhaustedBudgetClearsInitializedState)
     EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_FALSE(ApiDeadline::Instance().IsInitialized());
     EXPECT_GT(ApiDeadline::Instance().ApiRemainingUs(), 0);
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
 }
 
@@ -272,51 +273,51 @@ TEST(ApiDeadlineTest, ApiDeadlineGuardNegativeFallsBackToRpcTimeout)
 TEST(GetRemainingUsForMetaTest, ReturnsApiDeadlineRemainingWhenInitialized)
 {
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().InitUs(5 * 1000 * 1000);  // 5s, not expired
     int64_t remaining = GetRemainingUsForMeta();
     EXPECT_GT(remaining, 0);
     EXPECT_LE(remaining, 5 * 1000 * 1000);
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
 }
 
 TEST(GetRemainingUsForMetaTest, ReturnsOneWhenApiDeadlineExpired)
 {
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().InitUs(0);  // deadline is now -> expired
     int64_t remaining = GetRemainingUsForMeta();
     EXPECT_EQ(remaining, 1);
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
 }
 
 TEST(GetRemainingUsForMetaTest, ReturnsReqTimeoutDurationRemainingWhenApiDeadlineUninitialized)
 {
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
-    reqTimeoutDuration.InitUs(5 * 1000 * 1000);  // 5s
+    GetRequestContext()->reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.InitUs(5 * 1000 * 1000);  // 5s
     int64_t remaining = GetRemainingUsForMeta();
     EXPECT_GT(remaining, 0);
     EXPECT_LE(remaining, 5 * 1000 * 1000);
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
 }
 
 TEST(GetRemainingUsForMetaTest, ReturnsRpcTimeoutWhenBothUninitialized)
 {
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     int64_t remaining = GetRemainingUsForMeta();
     EXPECT_EQ(remaining, static_cast<int64_t>(RPC_TIMEOUT) * ONE_THOUSAND);
     ApiDeadline::Instance().Reset();
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
 }
 
 TEST(InitTimeoutsFromDispatchTest, PushPopRestoresOuterDeadlineAfterReinit)
 {
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
     ApiDeadline::Instance().InitUs(5 * 1000 * 1000);
     int64_t outerRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
@@ -336,7 +337,7 @@ TEST(InitTimeoutsFromDispatchTest, PushPopRestoresOuterDeadlineAfterReinit)
     int64_t restoredRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
     EXPECT_GT(restoredRemainingUs, 10000);
     EXPECT_NEAR(restoredRemainingUs, outerRemainingUs, 100000);
-    reqTimeoutDuration.Reset();
+    GetRequestContext()->reqTimeoutDuration.Reset();
     ApiDeadline::Instance().Reset();
 }
 

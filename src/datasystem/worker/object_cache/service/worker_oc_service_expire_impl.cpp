@@ -52,7 +52,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
 {
     ScopedRequestContext ctx;
     Timer timer;
-    int64_t realTimeoutMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t realTimeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     LOG(INFO) << "Expire start from client:" << req.client_id();
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
@@ -76,7 +76,7 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
         futures.emplace_back(batchExpireThreadPool_->Submit([&, item, timer]() {
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
             int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
-            reqTimeoutDuration.Init(realTimeoutMs - elapsed);
+            GetRequestContext()->reqTimeoutDuration.Init(realTimeoutMs - elapsed);
 
             HostPort workerAddr = item.first;
             const std::vector<std::string> &currentIds = item.second;

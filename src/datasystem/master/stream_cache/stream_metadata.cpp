@@ -27,6 +27,7 @@
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/master/stream_cache/sc_notify_worker_manager.h"
@@ -99,6 +100,7 @@ Status StreamMetadata::PubIncreaseNodeStart(const StreamFields &streamFields, co
     }
     // Check timeout before processing isFirstProducer, it might happen that the request already timed out,
     // so another CreateProducer request of the stream comes through from the same worker.
+    auto &scTimeoutDuration = GetRequestContext()->scTimeoutDuration;
     CHECK_FAIL_RETURN_STATUS(scTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
                              "CreateProducer RPC timeout.");
 
@@ -253,6 +255,7 @@ Status StreamMetadata::PubIncreaseNodeImpl(const HostPort &pubWorkerAddress, std
     // Check after the UpdateTopoNotification, the RPC can be done through local bypass, that would run without
     // scTimeoutDuration. If it timeout, we should rollback because worker side should have stopped waiting for
     // response.
+    auto &scTimeoutDuration = GetRequestContext()->scTimeoutDuration;
     CHECK_FAIL_RETURN_STATUS(scTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
                              "CreateProducer RPC timeout.");
     return Status::OK();
@@ -327,6 +330,7 @@ Status StreamMetadata::SubIncreaseNode(const ConsumerMetaPb &consumerMeta, bool 
     HostPort subWorkerAddress(consumerMeta.worker_address().host(), consumerMeta.worker_address().port());
     WriteLockHelper wlocker(LOCK_ARGS_MSG_FN(mutex_, LogPrefix));
     INJECT_POINT("master.SubIncreaseNode.afterLock");
+    auto &scTimeoutDuration = GetRequestContext()->scTimeoutDuration;
     CHECK_FAIL_RETURN_STATUS(scTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("[%s] Subscribe Request timeout.", LogPrefix()));
     LOG(INFO) << "Topo for stream " << streamName_ << ":" << *topoManager_;
@@ -450,6 +454,7 @@ Status StreamMetadata::SubIncreaseNodeImpl(const ConsumerMetaPb &consumerMeta, c
     if (retainStateChange) {
         retainData_.SetRetainDataState(RetainDataState::State::NOT_RETAIN);
     }
+    auto &scTimeoutDuration = GetRequestContext()->scTimeoutDuration;
     CHECK_FAIL_RETURN_STATUS(scTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("[%s] Request timeout.", LogPrefix()));
     return Status::OK();
@@ -858,7 +863,7 @@ Status StreamMetadata::ProcessClearAllRemotePub(const std::shared_ptr<MasterWork
                 RETRY_TIMEOUT_MS,
                 [&masterRemoteWorkerOCApi, &subWorkerAddress, &tagId, this](int32_t timeoutMs) {
                     RETURN_IF_NOT_OK(CheckWorkerStatus(subWorkerAddress));
-                    scTimeoutDuration.Init(timeoutMs);
+                    GetRequestContext()->scTimeoutDuration.Init(timeoutMs);
                     return masterRemoteWorkerOCApi->ClearAllRemotePubAsynWrite(streamName_, tagId);
                 },
                 []() { return Status::OK(); }, retryOn, maxRpcTimeoutMs));

@@ -136,7 +136,7 @@ Status WorkerOcServiceCrudCommonApi::SaveBinaryObjectToPersistence(ObjectKV &obj
     buf->rdbuf()->pubsetbuf(static_cast<char *>(shmUnit->GetPointer()) + entry->GetMetadataSize(),
                             entry->GetDataSize());
 
-    int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%ld ms).", -remainingTime));
     PerfPoint point(PerfKey::WORKER_SAVE_L2_CACHE);
@@ -420,7 +420,7 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(
                 continue;
             }
             if (batchKeyVersions.empty()) {
-                reqTimeoutDuration.Init(RPC_TIMEOUT);
+                GetRequestContext()->reqTimeoutDuration.Init(RPC_TIMEOUT);
             }
             master::RemoveMetaRspPb response;
             auto result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true, localAddress,
@@ -444,7 +444,7 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(
     }
     if (count > 0) {
         if (batchKeyVersions.empty()) {
-            reqTimeoutDuration.Init(RPC_TIMEOUT);
+            GetRequestContext()->reqTimeoutDuration.Init(RPC_TIMEOUT);
         }
         master::RemoveMetaRspPb response;
         Status result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true, localAddress,

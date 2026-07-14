@@ -58,6 +58,27 @@ struct RequestContext {
     // Per-request transport kind tracked by AccessTransportTracker.
     // Default SHM=0; full enum definition in access_recorder.h.
     AccessTransportKind accessTransportKind = static_cast<AccessTransportKind>(0);
+
+    // Per-request timeout trackers (replaces ScopedBthreadLocal<TimeoutDuration>).
+    // Each request lazily inits its own TimeoutDuration (default RPC_TIMEOUT) at
+    // entry; subsequent reads via GetRequestContext()->xxxTimeoutDuration are
+    // zero-overhead after taking a reference. Under brpc M:N this is the only
+    // correct place for per-request deadline state — the old globals leaked
+    // across requests when a bthread yielded and the pthread picked up another.
+    TimeoutDuration reqTimeoutDuration;
+    TimeoutDuration scTimeoutDuration;
+    TimeoutDuration timeoutDuration;
+
+    // Per-request auth context (replaces ScopedBthreadLocal<ZmqMessage/string/uint64_t>).
+    // Set at request entry (ZMQ: zmq_server_stream_base.h ReadPb; client SDK:
+    // signature.h GenerateSignature) and consumed by authenticate.cpp /
+    // ak_sk_manager.h before any yield. Moving it here eliminates cross-tenant
+    // auth leakage under M:N scheduling.
+    ZmqMessage serializedMessage;
+    std::string tenantId;
+    std::string reqAk;
+    std::string reqSignature;
+    uint64_t reqTimestamp = 0;
 };
 
 // Initialize the per-bthread key. Must be called once during server init.
@@ -79,7 +100,6 @@ RequestContext* GetRequestContext(const char* file = __builtin_FILE(), int line 
 // SetRequestContext(), and restores the previous context on destruction.
 // Nested ScopedRequestContext is safe: the destructor restores the outer
 // context rather than clearing to nullptr.
-//
 // Usage in brpc handlers:
 //   ScopedRequestContext ctx;
 //   // ... handler logic, may return early ...
@@ -103,6 +123,26 @@ public:
             inheritedTraceID = traceID;
         } else {
             inheritedTraceID = Trace::Instance().GetTraceID();
+        }
+        // Inherit per-request timeout/auth state from the outer context so that
+        // nested ScopedRequestContext (created by business-layer handlers after
+        // the transport-layer entry already set deadlines) does NOT reset
+        // timeouts to defaults. Without this, a handler creating an inner scope
+        // would read default-constructed timeouts — a regression vs the old
+        // globals which were independent of ScopedRequestContext.
+        // Note: serializedMessage (ZmqMessage) has deleted copy semantics, and
+        // the auth strings are consumed (std::move'd out) before business
+        // handlers create nested scopes, so they are intentionally NOT inherited.
+        if (saved_ != nullptr) {
+            ctx_.reqTimeoutDuration = saved_->reqTimeoutDuration;
+            ctx_.scTimeoutDuration = saved_->scTimeoutDuration;
+            ctx_.timeoutDuration = saved_->timeoutDuration;
+            // serializedMessage: not inherited (ZmqMessage copy is deleted;
+            // consumed before nested scope creation)
+            ctx_.tenantId = saved_->tenantId;
+            ctx_.reqAk = saved_->reqAk;
+            ctx_.reqSignature = saved_->reqSignature;
+            ctx_.reqTimestamp = saved_->reqTimestamp;
         }
         SetRequestContext(&ctx_);
         if (!inheritedTraceID.empty()) {

@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
 
 namespace datasystem {
@@ -78,7 +79,8 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
     Status rc = RetryOnRPCErrorByCount(maxRetryCount_,
                                        [&]() {
                                            rspPb.Clear();
-                                           reqTimeoutDuration.InitWithPositiveTime(migrateDirectTimeoutMs);
+                                           GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(
+                                               migrateDirectTimeoutMs);
                                            return req.api->NotifyRemoteGet(reqPb, rspPb);
                                        },
                                        {});

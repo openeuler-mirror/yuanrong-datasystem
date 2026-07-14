@@ -35,6 +35,7 @@
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/common/log/log.h"
@@ -89,9 +90,9 @@ TEST_F(WorkerRemoteWorkerRpcDiagnosticTest, MigrateDataDirectSessionNullReportsR
     MigrateDataDirectReqPb req;
     MigrateDataDirectRspPb rsp;
 
-    reqTimeoutDuration.Init(testRpcTimeoutMs);
+    GetRequestContext()->reqTimeoutDuration.Init(testRpcTimeoutMs);
     Status rc = api.MigrateDataDirect(req, rsp);
-    reqTimeoutDuration.Init();
+    GetRequestContext()->reqTimeoutDuration.Init();
 
     ASSERT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
     EXPECT_NE(rc.GetMsg().find("[" + local.ToString() + "]-MigrateDataDirect->[" + remote.ToString() + "]"),

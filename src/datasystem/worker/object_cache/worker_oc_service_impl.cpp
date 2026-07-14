@@ -371,7 +371,7 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
 {
     INJECT_POINT("worker.HealthCheck.begin");
     ReadLock noRecon;
-    auto rc = ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime());
+    auto rc = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     if (rc.IsError()) {
         LOG(WARNING) << rc;
         return rc;
@@ -427,8 +427,9 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     Status rc = publishProc_->Publish(req, resp, payloads);
     if (rc.IsOk()) {
         auto clientId = ClientKey::Intern(req.client_id());
@@ -460,8 +461,9 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     auto clientId = ClientKey::Intern(req.client_id());
     RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads, clientId));
     const bool clientShmEnabled = WorkerOcServiceCrudCommonApi::ClientShmEnabled(clientId);
@@ -999,8 +1001,9 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     Status rc = createProc_->Create(req, resp);
     if (rc.IsOk()) {
         UpdateWorkerObjectGauge(objectTable_);
@@ -1017,7 +1020,7 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
     access.ObjectKeysRef(req.object_key());
     Raii raii([&returnStatus, &access]() { access.Result(returnStatus).Record(); });
     ReadLock noRecon;
-    returnStatus = ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime());
+    returnStatus = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     if (returnStatus.IsError()) {
         LOG(ERROR) << "validate worker state failed:" << returnStatus.ToString();
         return returnStatus;
@@ -1033,7 +1036,7 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
 {
     ScopedRequestContext ctx;
     INJECT_POINT("Reconciliation.before");
-    reqTimeoutDuration.Init(RPC_TIMEOUT);
+    GetRequestContext()->reqTimeoutDuration.Init(RPC_TIMEOUT);
     ApiDeadline::Instance().Reset();
     LOG(INFO) << "Reconciliation called between worker: " << localAddress_.ToString()
               << " and master: " << req.source_address();
@@ -1152,8 +1155,9 @@ Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterR
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     return getProc_->Get(serverApi);
 }
 
@@ -1247,7 +1251,7 @@ void WorkerOCServiceImpl::AsyncClearClientRef(const ClientKey &clientId, uint64_
         std::vector<std::string> failedIds;
         LOG(INFO) << "[Ref] AsyncClearClientRef for client id: " << clientId
                   << ", objects: " << VectorToString(objectKeys);
-        reqTimeoutDuration.Init();
+        GetRequestContext()->reqTimeoutDuration.Init();
         ApiDeadline::Instance().Reset();
         LOG_IF_ERROR(gRefProc_->GDecreaseRefWithLock(objectKeys, clientId, failedIds), "GDecreaseRef failed.");
         return failedIds.empty();
@@ -1469,8 +1473,9 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
     ScopedRequestContext ctx;
     Timer timer;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     Status decResult = Status::OK();
     for (const auto &shmId : shmIds) {
         Status rc = memoryRefTable_->RemoveShmUnit(clientId, shmId);
@@ -1522,8 +1527,9 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
                                      "Authenticate failed");
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
 
     std::vector<ShmKey> confirmedExpiredShmIds;
     confirmedExpiredShmIds.reserve(req.confirmed_expired_shm_ids_size());
@@ -1542,8 +1548,9 @@ Status WorkerOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGR
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
 
     return gRefProc_->ReleaseGRefs(req, resp);
 }
@@ -1552,8 +1559,9 @@ Status WorkerOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRsp
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
 
     return gRefProc_->GIncreaseRef(req, resp);
 }
@@ -1562,8 +1570,9 @@ Status WorkerOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRsp
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
 
     return gRefProc_->GDecreaseRef(req, resp);
 }
@@ -1607,8 +1616,9 @@ Status WorkerOCServiceImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteA
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     PerfPoint point(PerfKey::WORKER_DELETE_OBJECT);
     if (req.are_device_objects()) {
         return DeleteDevObjects(req, resp);
@@ -1634,8 +1644,9 @@ Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, I
     ScopedRequestContext ctx;
     Timer timer;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     LOG(INFO) << FormatString("InvalidateBuffer begin, cliendId: %s, objectKey: %s", req.client_id(), req.object_key());
@@ -1666,8 +1677,9 @@ Status WorkerOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
 
     return gRefProc_->QueryGlobalRefNum(req, rsp);
 }
@@ -1949,7 +1961,7 @@ Status WorkerOCServiceImpl::WarmupUrmaConnectionToPeer(const std::string &peerAd
     CHECK_FAIL_RETURN_STATUS(!peerAddr.empty(), K_INVALID, "URMA warmup peer address is empty.");
     CHECK_FAIL_RETURN_STATUS(!peerKey.empty(), K_INVALID, "URMA warmup peer key is empty.");
     CHECK_FAIL_RETURN_STATUS(getProc_ != nullptr, K_NOT_READY, "Object cache get service is not ready.");
-    reqTimeoutDuration.Init(URMA_WARMUP_REQUEST_TIMEOUT_MS);
+    GetRequestContext()->reqTimeoutDuration.Init(URMA_WARMUP_REQUEST_TIMEOUT_MS);
     ApiDeadline::Instance().Reset();
     return getProc_->WarmupGetObjectFromRemoteWorker(peerAddr, peerKey, URMA_WARMUP_OBJECT_SIZE);
 }
@@ -2058,8 +2070,9 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
         WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, clientId, shmUnits, memoryRefTable_));
     PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     const std::string &objectKey = req.dev_object_key();
     std::string namespaceUri = TenantAuthManager::ConstructNamespaceUriWithTenantId(tenantId, objectKey);
 
@@ -2074,8 +2087,9 @@ Status WorkerOCServiceImpl::GetDeviceObject(
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     GetDeviceObjectReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
@@ -2090,7 +2104,7 @@ Status WorkerOCServiceImpl::GetDeviceObject(
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
 
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
@@ -2143,15 +2157,16 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
     ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_SUBSCRIBE_EVENT);
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     SubscribeReceiveEventReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
     auto clientId = ClientKey::Intern(req.src_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
@@ -2182,8 +2197,9 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_GET_P2PMEATA);
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     GetP2PMetaReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
@@ -2192,7 +2208,7 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     const auto clientId = ClientKey::Intern(req.dev_obj_meta(0).locations().begin()->client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
@@ -2248,15 +2264,16 @@ Status WorkerOCServiceImpl::RecvRootInfo(
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noRecon, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     RecvRootInfoReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
     auto clientId = ClientKey::Intern(req.src_client_id());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId, clientId),
                                      "Authenticate failed.");
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
@@ -2308,8 +2325,9 @@ Status WorkerOCServiceImpl::GetDataInfo(
 {
     ScopedRequestContext ctx;
     ReadLock noReconciliation;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     GetDataInfoReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
     std::string tenantId;
@@ -2318,7 +2336,7 @@ Status WorkerOCServiceImpl::GetDataInfo(
     int64_t subTimeout = req.sub_timeout();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
@@ -2349,8 +2367,9 @@ Status WorkerOCServiceImpl::WaitInit()
 Status WorkerOCServiceImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, GetObjMetaInfoRspPb &resp)
 {
     ReadLock noReconciliation;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     return getProc_->GetObjMetaInfo(req, resp);
 }
 
@@ -2358,8 +2377,9 @@ Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb 
 {
     ScopedRequestContext ctx;
     ReadLock noReconciliation;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     return getProc_->QuerySize(req, rsp);
 }
 
@@ -2368,8 +2388,9 @@ Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_EXIST_LATENCY);
     ReadLock noReconciliation;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     PerfPoint perfPoint(PerfKey::WORKER_EXIST);
     return getProc_->Exist(req, rsp);
 }
@@ -2378,16 +2399,18 @@ Status WorkerOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
     ScopedRequestContext ctx;
     ReadLock noReconciliation;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     return expireProc_->Expire(req, rsp);
 }
 
 Status WorkerOCServiceImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp)
 {
     ReadLock noReconciliation;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(noReconciliation, reqTimeoutDuration.CalcRemainingTime()),
-                                     "validate worker state failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        "validate worker state failed");
     return getProc_->GetMetaInfo(req, rsp);
 };
 

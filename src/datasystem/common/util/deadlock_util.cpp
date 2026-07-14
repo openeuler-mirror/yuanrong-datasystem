@@ -24,6 +24,7 @@
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {
@@ -34,7 +35,7 @@ Status RetryWhenDeadlock(const std::function<Status()> &fn)
 {
     Status rc = fn();
     if (rc.GetCode() == K_WORKER_TIMEOUT) {
-        int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+        int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         while (remainingTimeMs > 0) {
             LOG(INFO) << FormatString("Remote worker timeout, try again.");
             uint64_t min = std::min<uint64_t>(remainingTimeMs, RETRY_DELAY_MIN_MS);
@@ -45,7 +46,7 @@ Status RetryWhenDeadlock(const std::function<Status()> &fn)
             if (rc.GetCode() != K_WORKER_TIMEOUT) {
                 break;
             }
-            remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+            remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         }
     }
     return rc;

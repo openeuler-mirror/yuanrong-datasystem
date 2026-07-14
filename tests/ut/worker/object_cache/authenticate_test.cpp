@@ -33,6 +33,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/protos/share_memory.pb.h"
 #include "datasystem/protos/ut_object.pb.h"
@@ -77,7 +78,8 @@ public:
             akSkManager->GenerateSignature(req);
         }
         auto serializedStr = req.SerializeAsString();
-        RETURN_IF_NOT_OK(g_SerializedMessage.CopyBuffer(serializedStr.c_str(), serializedStr.size()));
+        RETURN_IF_NOT_OK(GetRequestContext()->serializedMessage.CopyBuffer(
+            serializedStr.c_str(), serializedStr.size()));
 
         return worker::AuthenticateRequest(akSkManager, req, req.tenant_id(), tenantId);
     }
@@ -87,7 +89,7 @@ public:
     {
         RETURN_IF_NOT_OK(akSkManager->GenerateSignature(req));
         auto serializedStr = req.SerializeAsString();
-        return g_SerializedMessage.CopyBuffer(serializedStr.c_str(), serializedStr.size());
+        return GetRequestContext()->serializedMessage.CopyBuffer(serializedStr.c_str(), serializedStr.size());
     }
 
     template <typename Req>

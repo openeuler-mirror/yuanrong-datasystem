@@ -230,7 +230,7 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
     if (rc.GetCode() == K_OUT_OF_MEMORY && retryOnOOM) {
         INJECT_POINT("worker.AllocateMemory.afterOOM");
         for (int t : WAIT_MSECOND) {
-            auto remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+            auto remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             if (remainingTime <= K_MIN_OOM_RETRY_TIMEOUT_MS) {
                 VLOG(1) << FormatString(
                     "Stop OOM retry to reserve reply time: remainingTime %ld ms, objectKey: %s, needSize %ld",

@@ -26,6 +26,7 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/utils/status.h"
 #include "sc_client_common.h"
 #include "datasystem/stream_client.h"
@@ -338,7 +339,7 @@ TEST_F(PubSubComplexTest, TestCreateWritePageTimeout)
             const size_t elementSize = randomData_.GetRandomUint64(minEleSize, maxEleSize);
             std::string data(elementSize, 'a');
             Element ele(reinterpret_cast<uint8_t *>(data.data()), data.size());
-            reqTimeoutDuration.Init(residualReqTimeoutDurationTimeoutMs);
+            GetRequestContext()->reqTimeoutDuration.Init(residualReqTimeoutDurationTimeoutMs);
             RETURN_IF_NOT_OK(producer->Send(ele));
         }
         std::vector<Element> out;

@@ -1737,7 +1737,7 @@ void OCMetadataManager::TransferSyncDeleteRequest(
         return;
     }
     std::string traceID = Trace::Instance().GetTraceID();
-    int64_t timeout = timeoutDuration.CalcRealRemainingTime();
+    int64_t timeout = GetRequestContext()->timeoutDuration.CalcRealRemainingTime();
     Timer timer;
     asyncTaskPool_->Execute([this, deleteMediator, serverApi, response, traceID, timer, timeout]() mutable {
         auto ids = deleteMediator.GetObjKeys();
@@ -1750,7 +1750,7 @@ void OCMetadataManager::TransferSyncDeleteRequest(
             LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
             return;
         }
-        timeoutDuration.Init(timeout - elapsed);
+        GetRequestContext()->timeoutDuration.Init(timeout - elapsed);
         NotifyDeleteAndClearMeta(deleteMediator, false);
         SetDeleteAllCopyMetaRspPb(deleteMediator.GetStatus(), deleteMediator.GetFailedObjs(), response);
         LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
@@ -2110,7 +2110,7 @@ Status OCMetadataManager::NotifyWorkerDelete(const std::string &sourceWorker,
         }
     }
 
-    int64_t timeoutMs = timeoutDuration.CalcRealRemainingTime();
+    int64_t timeoutMs = GetRequestContext()->timeoutDuration.CalcRealRemainingTime();
     INJECT_POINT("OCMetadataManager.NotifyWorkerDelete.timeoutMs", [&timeoutMs](int time) {
         timeoutMs = time;
         return Status::OK();
@@ -3091,7 +3091,7 @@ Status OCMetadataManager::ReleaseGRefsToMaster(const std::string &remoteClientId
 
     ReleaseGRefsReqPb req;
     ReleaseGRefsRspPb rsp;
-    int64_t remainingTime = timeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->timeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%ld ms).", -remainingTime));
     req.set_timeout(remainingTime);
@@ -3118,7 +3118,7 @@ Status OCMetadataManager::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb &
     std::vector<std::string> objectKeys;
     globalRefTable_->GetClientRefIds(remoteClientId, objectKeys);
     master::GDecreaseReqPb decReq;
-    int64_t remainingTime_ = timeoutDuration.CalcRemainingTime();
+    int64_t remainingTime_ = GetRequestContext()->timeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime_ > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%ld ms).", -remainingTime_));
     decReq.set_timeout(remainingTime_);
@@ -3198,7 +3198,7 @@ void OCMetadataManager::AsyncNotifyWorkerGDec(
     const std::string &remoteClientId)
 {
     LOG(INFO) << "Async notify worker GDecreaseRef result";
-    int64_t timeout = timeoutDuration.CalcRealRemainingTime();
+    int64_t timeout = GetRequestContext()->timeoutDuration.CalcRealRemainingTime();
     Timer timer;
     std::string traceID = Trace::Instance().GetTraceID();
     asyncTaskPool_->Execute([=]() mutable {
@@ -3210,7 +3210,7 @@ void OCMetadataManager::AsyncNotifyWorkerGDec(
             LOG_IF_ERROR(serverApi->SendStatus(Status(K_RUNTIME_ERROR, "Rpc timeout")), "Send status failed");
             return;
         }
-        timeoutDuration.Init(timeout - elapsed);
+        GetRequestContext()->timeoutDuration.Init(timeout - elapsed);
         NotifyDeleteAndClearMeta(delMediator, false);
         RollbackIfGDecRefFail(delMediator, failedDecIds, remoteClientId);
         SetGDecreaseRefRspPb(delMediator.GetStatus(), std::move(failedDecIds), delMediator.GetNotRefIds(), resp);

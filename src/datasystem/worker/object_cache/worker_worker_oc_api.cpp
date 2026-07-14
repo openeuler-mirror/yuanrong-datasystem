@@ -87,7 +87,7 @@ Status WorkerRemoteWorkerOCApi::GetObjectRemote(GetObjectRemoteReqPb &req, GetOb
         RETURN_STATUS(K_TRY_AGAIN, "DFX test, try again!");
     });
     RpcOptions opts;
-    int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     if (remainingTime <= 0) {
         return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
                                   FormatString("Request timeout (%ld ms).", -remainingTime)),
@@ -112,7 +112,7 @@ Status WorkerRemoteWorkerOCApi::GetObjectRemote(
 {
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_OUTBOUND_LATENCY);
     RpcOptions opts;
-    int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     if (remainingTime <= 0) {
         return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
                                   FormatString("Request timeout (%lld ms).", -remainingTime)),
@@ -148,7 +148,7 @@ Status WorkerRemoteWorkerOCApi::BatchGetObjectRemote(
     std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> *clientApi)
 {
     RpcOptions opts;
-    int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     if (remainingTime <= 0) {
         return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
                                   FormatString("Request timeout (%ld ms).", -remainingTime)),
@@ -226,7 +226,7 @@ Status WorkerRemoteWorkerOCApi::MigrateData(MigrateDataReqPb &req, const std::ve
 Status WorkerRemoteWorkerOCApi::MigrateDataDirect(MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
     RpcOptions opts;
-    int64_t remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTime <= 0) {
         return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
                                   FormatString("Request timeout (%ld ms).", -remainingTime)),
@@ -249,7 +249,7 @@ Status WorkerRemoteWorkerOCApi::MigrateDataDirect(MigrateDataDirectReqPb &req, M
 Status WorkerRemoteWorkerOCApi::NotifyRemoteGet(NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
     RpcOptions opts;
-    int64_t remainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTime <= 0) {
         return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
                                   FormatString("Request timeout (%ld ms).", -remainingTime)),

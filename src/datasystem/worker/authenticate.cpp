@@ -20,6 +20,8 @@
 
 #include "datasystem/worker/authenticate.h"
 
+#include "datasystem/common/util/request_context.h"
+
 DS_DEFINE_bool(skip_authenticate, false, "hack to skip authenticate");
 
 namespace datasystem {
@@ -30,10 +32,11 @@ Status AuthenticateMessageInternal(std::shared_ptr<AkSkManager> akSkManager, con
 {
     CHECK_FAIL_RETURN_STATUS(akSkManager != nullptr, StatusCode::K_INVALID, "AK/SK manager has not been initialized.");
     auto tenantAuthEnabled = TenantAuthManager::Instance()->AuthEnabled();
-    auto signature = std::move(g_ReqSignature);
-    auto accessKey = std::move(g_ReqAk);
-    auto timestamp = g_ReqTimestamp;
-    ZmqMessage serializedStr = std::move(g_SerializedMessage);
+    auto* ctx = GetRequestContext();
+    auto signature = std::move(ctx->reqSignature);
+    auto accessKey = std::move(ctx->reqAk);
+    auto timestamp = ctx->reqTimestamp;
+    ZmqMessage serializedStr = std::move(ctx->serializedMessage);
     if (tenantAuthEnabled) {
         if (!token.empty()) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(TenantAuthManager::Instance()->TenantTokenAuth(token, tenantId),

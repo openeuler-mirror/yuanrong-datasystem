@@ -115,7 +115,7 @@ Status WorkerOcServiceDeleteImpl::DeletePersistenceObject(const DeletePersistenc
     VLOG(1) << "DeletePersistenceObject begin, request: " << LogHelper::IgnoreSensitive(req);
     CHECK_FAIL_RETURN_STATUS(persistenceDeleteThreadPool_ != nullptr, StatusCode::K_RUNTIME_ERROR,
                              "Persistence delete thread pool is not initialized");
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, StatusCode::K_RPC_DEADLINE_EXCEEDED,
                              "DeletePersistenceObject rpc timeout before scheduling task");
     auto traceID = Trace::Instance().GetTraceID();
@@ -200,7 +200,7 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyImpl(const DeleteAllCopyReqPb &re
 
     std::vector<std::string> failedObjectKeys;
     Status rc = RetryWhenDeadlock([this, &needDeleteObjs, &failedObjectKeys, &deletedSize] {
-        if (reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
+        if (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
             return Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
         }
         if (!failedObjectKeys.empty()) {

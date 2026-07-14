@@ -887,7 +887,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     const std::string callerAddress =
         GetRemoteAddressFromBatchGetReq(req, requestAddress).IsOk() ? requestAddress.ToString() : "";
     const auto &firstObjectKey = req.requests_size() > 0 ? req.requests(0).object_key() : "";
-    auto realRemainingTime = reqTimeoutDuration.CalcRealRemainingTime();
+    auto realRemainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     VLOG(1) << AppendSrcDstForLog(
         FormatString("[Get/RemotePull] Receive, count: %d, remainingTime: %zu", req.requests_size(), realRemainingTime),
         callerAddress, FLAGS_worker_address);
@@ -1006,7 +1006,7 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
     std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp, BatchGetObjectRemoteRspPb &rsp,
     std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum, const Status &fallbackStatus)
 {
-    auto remainingTime = []() { return reqTimeoutDuration.CalcRemainingTime(); };
+    auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(); };
     const auto srcAddress = localAddress_.ToString();
     auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum, &fallbackStatus, &srcAddress,
                          &req](Status &status) {

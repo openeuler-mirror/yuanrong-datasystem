@@ -30,6 +30,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 
 namespace datasystem {
 namespace client {
@@ -43,7 +44,7 @@ Status EmbeddedMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenan
         RETURN_STATUS(StatusCode::K_INVALID, err.str());
     }
 
-    std::string realTenantId = !tenantId.empty() ? tenantId : g_ContextTenantId;
+    std::string realTenantId = !tenantId.empty() ? tenantId : GetRequestContext()->tenantId;
     std::vector<std::shared_ptr<memory::ArenaGroup>> arenaGroups;
     for (int i = 0; i < static_cast<int>(memory::CacheType::DEV_HOST); i++) {
         memory::ArenaGroupKey key;

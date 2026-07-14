@@ -25,6 +25,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/util/memory.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
@@ -73,7 +74,7 @@ Status WorkerDevReqManager::ReturnFromGetDeviceObjectRequest(std::shared_ptr<Get
 
     std::lock_guard<std::mutex> lck(req->mutex_);
     req->SetStatus(lastRc);
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {
         RemoveRequest(req);
         auto rc = req->lastRc_.IsOk() ? Status(K_RPC_DEADLINE_EXCEEDED, "Rpc timeout") : req->lastRc_;

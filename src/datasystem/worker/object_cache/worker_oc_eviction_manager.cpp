@@ -491,16 +491,13 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
     EvictFailedList evictFailedIds;
     // IMPORTANT — declaration order:
     // evictionAggregator MUST be declared before spillTasks.
-    //
     // spillTasks entries hold EvictionTrace objects whose aggregator_ pointer
     // points to evictionAggregator (set at line ~trace->aggregator_ = &evictionAggregator).
     // C++ destroys local variables in reverse declaration order, so spillTasks
     // (and the EvictionTrace objects inside it) are destroyed BEFORE evictionAggregator.
-    //
     // When an EvictionTrace is destroyed, its destructor calls
     // aggregator_->Add(*this), which appends data into evictionAggregator.
     // If evictionAggregator were destroyed first, this would be a use-after-free.
-    //
     // Additionally, async spill futures may hold EvictionTrace objects whose
     // destructors fire when the future completes. ReleaseSpillFutures(..., true)
     // at the end of this function blocks until ALL futures are ready, ensuring
@@ -1060,9 +1057,9 @@ Status WorkerOcEvictionManager::DeleteAllCopyMetaForPrimaryEndLife(
         objKeyVersionPb->set_version(candidate.task.version);
     }
     master::DeleteAllCopyMetaRspPb rsp;
-    reqTimeoutDuration.Init(PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS);
+    GetRequestContext()->reqTimeoutDuration.Init(PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS);
     ApiDeadline::Instance().Reset();
-    Raii resetTimeout([] { reqTimeoutDuration.Reset(); });
+    Raii resetTimeout([] { GetRequestContext()->reqTimeoutDuration.Reset(); });
     RETURN_IF_NOT_OK(workerMasterApi->DeleteAllCopyMeta(req, rsp));
     return CollectDeleteAllCopyMetaResult(rsp, failedKeys);
 }

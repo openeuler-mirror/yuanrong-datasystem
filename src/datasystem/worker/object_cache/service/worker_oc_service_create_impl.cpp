@@ -70,7 +70,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
     access.ObjectKeyProvider([&req]() -> std::string { return req.object_key(); }).DataSize(req.data_size());
     VLOG(1) << FormatString("Receive create meta request, clientId: %s, objectKey: %s, size: %zu", req.client_id(),
                             req.object_key(), req.data_size());
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     INJECT_POINT_NO_RETURN("WorkerOcServiceCreateImpl.Create.timeoutMs",
                            [&remainingTimeMs]() { remainingTimeMs = -1; });
     if (remainingTimeMs <= 0) {

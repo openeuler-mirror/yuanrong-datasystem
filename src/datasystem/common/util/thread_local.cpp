@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,20 +15,20 @@
  */
 
 /**
- * Description: some thread_local object.
+ * Description: Per-request context definitions.
+ *
+ * The 8 global ScopedBthreadLocal<T> definitions that formerly lived here
+ * have been migrated INTO the RequestContext struct (see request_context.h).
+ * Per-request timeout/auth state is now accessed via GetRequestContext()->field.
+ *
+ * This translation unit is kept as a build-graph anchor: the BUILD.bazel
+ * alias `//src/datasystem/common/util:thread_local` points at common_util_impl,
+ * and many targets depend on it. Removing the file would orphan the alias;
+ * keeping it empty preserves the build graph without reintroducing globals.
  */
 
 #include "datasystem/common/util/thread_local.h"
 
 namespace datasystem {
-thread_local TimeoutDuration timeoutDuration(RPC_TIMEOUT);
-thread_local TimeoutDuration scTimeoutDuration(RPC_TIMEOUT);
-thread_local TimeoutDuration reqTimeoutDuration(RPC_TIMEOUT);
-thread_local ZmqMessage g_SerializedMessage;
-// ZMQ fallback: used when GetRequestContext() returns nullptr (ZMQ pthread handler paths).
-// In brpc M:N handlers, per-request isolation is provided by RequestContext.
-thread_local std::string g_ContextTenantId;
-thread_local std::string g_ReqAk;
-thread_local std::string g_ReqSignature;
-thread_local uint64_t g_ReqTimestamp;
+// Intentionally empty — no per-request globals remain.
 }  // namespace datasystem

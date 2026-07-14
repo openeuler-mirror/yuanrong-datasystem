@@ -311,7 +311,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vecto
     if (masterAddrs.empty()) {
         return Status::OK();
     }
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     if (remainingUs <= 0) {
         return Status(K_RPC_DEADLINE_EXCEEDED,
                       FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));

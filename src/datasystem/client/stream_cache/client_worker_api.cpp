@@ -31,6 +31,7 @@
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/rpc/unix_sock_fd.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/protos/rpc_option.pb.h"
@@ -100,7 +101,7 @@ Status ClientWorkerApi::CreateProducer(const std::string &streamName, const std:
     req.set_encrypt_stream(producerConf.encryptStream);
     req.set_reserve_size(producerConf.reserveSize);
     req.set_stream_mode(producerConf.streamMode);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_PRODUCER);
@@ -149,7 +150,7 @@ Status ClientWorkerApi::Subscribe(const std::string &streamName, const std::stri
     req.set_allocated_subscription_config(configReqPtr.release());
     req.set_client_id(clientId_);
     req.set_consumer_id(consumerId);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_CREATE_SUBSCRIBE);
@@ -193,7 +194,7 @@ Status ClientWorkerApi::DeleteStream(const std::string &streamName)
     DeleteStreamRspPb rsp;
     req.set_stream_name(streamName);
     req.set_client_id(clientId_);
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
 
     PerfPoint point(PerfKey::RPC_WORKER_DELETE_STREAM);
@@ -216,7 +217,7 @@ Status ClientWorkerApi::QueryGlobalProducersNum(const std::string &streamName, u
     req.set_stream_name(streamName);
     req.set_client_id(clientId_);
 
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
     if (FLAGS_use_brpc) {
@@ -235,7 +236,7 @@ Status ClientWorkerApi::QueryGlobalConsumersNum(const std::string &streamName, u
     QueryGlobalNumRsqPb rsp;
     req.set_stream_name(streamName);
 
-    reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
+    GetRequestContext()->reqTimeoutDuration.Init(ClientGetRequestTimeout(requestTimeoutMs_));
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetTokenAndTenantId(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));

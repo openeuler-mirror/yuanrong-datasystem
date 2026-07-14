@@ -78,7 +78,7 @@ Status MasterSCServiceImpl::CreateProducerImpl(
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     LOG(INFO) << FormatString("Master receive create producer request: <%s> with timeout: %d",
                               LogHelper::IgnoreSensitive(req.producer_meta()), req.timeout());
-    Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+    Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.CreateProducer");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),
@@ -88,8 +88,8 @@ Status MasterSCServiceImpl::CreateProducerImpl(
         // active during the logic of this request so that it can be re-used by other requests.
         auto traceId = Trace::Instance().GetTraceID();
         threadPool_->Execute([=]() mutable {
-            scTimeoutDuration.Init(timer.GetRemainingTimeMs());
-            Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+            GetRequestContext()->scTimeoutDuration.Init(timer.GetRemainingTimeMs());
+            Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             Status rc = scMetadataManager->CreateProducer(req, rsp);
             CheckErrorReturn(
@@ -137,8 +137,8 @@ Status MasterSCServiceImpl::CloseProducerImpl(
         // active during the logic of this request so that it can be re-used by other requests.
         auto traceId = Trace::Instance().GetTraceID();
         threadPool_->Execute([=]() mutable {
-            scTimeoutDuration.Init(timer.GetRemainingTimeMs());
-            Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+            GetRequestContext()->scTimeoutDuration.Init(timer.GetRemainingTimeMs());
+            Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             Status rc = scMetadataManager->CloseProducer(req, rsp);
             CheckErrorReturn(rc, rsp, "CloseProducerImpl failed with rc", serverApi);
@@ -176,8 +176,8 @@ Status MasterSCServiceImpl::SubscribeImpl(
         // active during the logic of this request so that it can be re-used by other requests.
         auto traceId = Trace::Instance().GetTraceID();
         threadPool_->Execute([=]() mutable {
-            scTimeoutDuration.Init(timer.GetRemainingTimeMs());
-            Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+            GetRequestContext()->scTimeoutDuration.Init(timer.GetRemainingTimeMs());
+            Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             Status rc = scMetadataManager->Subscribe(req, rsp);
             CheckErrorReturn(rc, rsp,
@@ -216,8 +216,8 @@ Status MasterSCServiceImpl::CloseConsumerImpl(
         // active during the logic of this request so that it can be re-used by other requests.
         auto traceId = Trace::Instance().GetTraceID();
         threadPool_->Execute([=]() mutable {
-            scTimeoutDuration.Init(timer.GetRemainingTimeMs());
-            Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+            GetRequestContext()->scTimeoutDuration.Init(timer.GetRemainingTimeMs());
+            Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
             Status rc = scMetadataManager->CloseConsumer(req, rsp);
             CheckErrorReturn(rc, rsp,
@@ -226,7 +226,7 @@ Status MasterSCServiceImpl::CloseConsumerImpl(
         });
     } else {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(scMetadataManager->CloseConsumer(req, rsp), "CloseConsumer failed");
-        scTimeoutDuration.Reset();
+        GetRequestContext()->scTimeoutDuration.Reset();
     }
 
     return Status::OK();
@@ -234,8 +234,8 @@ Status MasterSCServiceImpl::CloseConsumerImpl(
 
 Status MasterSCServiceImpl::DeleteStream(const DeleteStreamReqPb &req, DeleteStreamRspPb &rsp)
 {
-    scTimeoutDuration.Init(req.timeout());
-    Raii outerResetDuration([]() { scTimeoutDuration.Reset(); });
+    GetRequestContext()->scTimeoutDuration.Init(req.timeout());
+    Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.DeleteStream");

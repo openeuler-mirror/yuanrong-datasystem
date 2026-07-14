@@ -26,6 +26,7 @@
 #include "datasystem/common/rpc/zmq/zmq_common.h"
 #include "datasystem/common/rpc/zmq/zmq_msg_queue.h"
 #include "datasystem/common/rpc/zmq/zmq_payload.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 
 namespace datasystem {
@@ -48,9 +49,9 @@ protected:
 
     void SetMetaAuthInfo()
     {
-        meta_.set_access_key(std::move(g_ReqAk));
-        meta_.set_signature(std::move(g_ReqSignature));
-        meta_.set_timestamp(g_ReqTimestamp);
+        meta_.set_access_key(std::move(GetRequestContext()->reqAk));
+        meta_.set_signature(std::move(GetRequestContext()->reqSignature));
+        meta_.set_timestamp(GetRequestContext()->reqTimestamp);
     }
 
     ZmqMsgFrames inMsg_;

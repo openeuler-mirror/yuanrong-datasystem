@@ -24,6 +24,7 @@
 #include "datasystem/common/rpc/rpc_credential.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
 #include "datasystem/common/util/status_helper.h"
@@ -62,7 +63,7 @@ Status MasterMasterOCApi::MigrateMetadata(MigrateMetadataReqPb &req, MigrateMeta
 
 Status MasterMasterOCApi::GIncreaseMasterAppRef(const GIncreaseReqPb &req, GIncreaseRspPb &rsp)
 {
-    int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%lld ms).", -remainingTime));
     if (remainingTime > INT_MAX) {
@@ -77,7 +78,7 @@ Status MasterMasterOCApi::GIncreaseMasterAppRef(const GIncreaseReqPb &req, GIncr
 
 Status MasterMasterOCApi::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb &req, ReleaseGRefsRspPb &rsp)
 {
-    int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%lld ms).", -remainingTime));
     if (remainingTime > INT_MAX) {
@@ -92,7 +93,7 @@ Status MasterMasterOCApi::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb &
 
 Status MasterMasterOCApi::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRspPb &rsp)
 {
-    int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                              FormatString("Request timeout (%lld ms).", -remainingTime));
     RpcOptions opts;
@@ -105,9 +106,9 @@ Status MasterMasterOCApi::DeleteAllCopyMeta(DeleteAllCopyMetaReqPb &request, Del
 {
     RpcOptions opts;
     return RetryOnErrorRepent(
-        reqTimeoutDuration.CalcRealRemainingTime(),
+        GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(),
         [this, &opts, &request, &response](int32_t) {
-            int64_t remainingTime = reqTimeoutDuration.CalcRemainingTime();
+            int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
                                      FormatString("Request timeout (%lld ms).", -remainingTime));
             opts.SetTimeout(remainingTime);

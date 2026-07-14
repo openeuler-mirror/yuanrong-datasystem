@@ -20,6 +20,8 @@
 #include "datasystem/master/object_cache/device/master_dev_npu_events.h"
 #include <shared_mutex>
 
+#include "datasystem/common/util/request_context.h"
+
 namespace datasystem {
 namespace master {
 NpuEvent::NpuEvent(const SubscribeEventTypePb &eventType, const std::string &objectKey, const std::string &dstClientId,
@@ -169,7 +171,7 @@ Status NpuEventsSubscriptionTable::ReturnFromSubscribeReceiveEventRequest(
     LOG(INFO) << FormatString("Begin to ReturnFromSubscribeReceiveEventRequest, client id: %d, deviceId: %d",
                               request->clientId_, request->deviceId_);
     std::lock_guard<std::mutex> lck(request->mutex_);
-    int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     if (remainingTimeMs <= 0) {
         RemoveSubscribeReceiveEventRequest(request);
         return request->serverApi_->SendStatus({ K_RPC_DEADLINE_EXCEEDED, "Rpc timeout" });

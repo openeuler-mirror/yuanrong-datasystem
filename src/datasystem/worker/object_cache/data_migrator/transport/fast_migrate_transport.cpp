@@ -23,6 +23,7 @@
 #include <cmath>
 
 #include "datasystem/common/rdma/rdma_util.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
 
 namespace datasystem {
@@ -93,7 +94,8 @@ Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &r
     Status rc = RetryOnRPCErrorByCount(maxRetryCount_,
                                        [&]() {
                                            rspPb.Clear();
-                                           reqTimeoutDuration.InitWithPositiveTime(migrateDirectTimeoutMs);
+                                           GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(
+                                               migrateDirectTimeoutMs);
                                            return req.api->MigrateDataDirect(reqPb, rspPb);
                                        },
                                        {});

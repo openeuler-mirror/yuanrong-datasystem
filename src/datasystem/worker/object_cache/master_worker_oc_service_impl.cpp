@@ -151,7 +151,7 @@ Status MasterWorkerOCServiceImpl::PublishMeta(const PublishMetaReqPb &req, Publi
     (void)resp;
     LOG(INFO) << FormatString("[ObjectKey %s] Publish meta for object", req.meta().object_key());
     auto traceID = Trace::Instance().GetTraceID();
-    int64_t remainingUs = reqTimeoutDuration.CalcRealRemainingTimeUs();
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before PublishMeta dispatch, remaining %ld us.", remainingUs));
     auto dispatchTime = std::chrono::steady_clock::now();
@@ -163,7 +163,7 @@ Status MasterWorkerOCServiceImpl::PublishMeta(const PublishMetaReqPb &req, Publi
                                        req.meta().object_key(), initRc.GetMsg());
             return;
         }
-        Raii outerResetDuration([]() { timeoutDuration.Reset(); });
+        Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
         Status rc = Status::OK();
         master::QueryMetaInfoPb queryMeta;
         std::vector<RpcMessage> payloads;

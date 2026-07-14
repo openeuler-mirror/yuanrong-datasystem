@@ -28,6 +28,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/random_data.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/master/object_cache/device/master_dev_hccl_rootinfo.h"
 #include "datasystem/master/object_cache/device/master_dev_npu_events.h"
@@ -196,7 +197,7 @@ Status MasterDevOcManager::ProcessGetP2PMetaRequest(
                     request,
                     [timer, subTimeout, this](std::shared_ptr<GetP2PMetaRequest> req) {
                         int64_t elapsed = timer.ElapsedMilliSecond();
-                        reqTimeoutDuration.Init(subTimeout - elapsed);
+                        GetRequestContext()->reqTimeoutDuration.Init(subTimeout - elapsed);
                         return objectGetP2PMetaReqSubscriptionTable_->ReturnGetP2PMetaRequest(std::move(req));
                     },
                     subTimeout);

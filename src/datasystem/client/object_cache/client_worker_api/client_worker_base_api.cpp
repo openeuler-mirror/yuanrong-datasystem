@@ -30,6 +30,7 @@
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/strings_util.h"
 
 using datasystem::client::ClientWorkerRemoteCommonApi;
@@ -263,7 +264,9 @@ Status ClientWorkerBaseApi::PipelineDataTransferHelper(const std::shared_ptr<Obj
         // Wait for any event if inflight exists
         if (freeChunks.size() < pipelineDepth) {
             std::shared_ptr<Event> event = nullptr;
-            Status rc = waiter->WaitAny(std::chrono::milliseconds(reqTimeoutDuration.CalcRealRemainingTime()), event);
+            auto &reqTimeoutDuration = GetRequestContext()->reqTimeoutDuration;
+            Status rc = waiter->WaitAny(
+                std::chrono::milliseconds(reqTimeoutDuration.CalcRealRemainingTime()), event);
             CHECK_FAIL_RETURN_STATUS(rc.IsOk(), K_RUNTIME_ERROR, rc.ToString());
             uint64_t eventId = event->GetRequestId();
             // Event should be ready

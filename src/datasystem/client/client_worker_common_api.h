@@ -49,6 +49,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/share_memory.stub.rpc.pb.h"
@@ -482,7 +483,7 @@ protected:
 
     void SetTenantId(std::string &tenantId) override
     {
-        tenantId = g_ContextTenantId;
+        tenantId = GetRequestContext()->tenantId;
     }
 
     Status Connect(RegisterClientReqPb &req, int32_t timeoutMs, bool reconnection = false,

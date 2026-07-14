@@ -30,6 +30,7 @@
 
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/l2cache/l2_storage.h"
+#include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_pool.h"
 
 #include "datasystem/worker/object_cache/async_send_manager.h"
@@ -125,8 +126,9 @@ public:
         static const int64_t maxSleepTimeMs = 128;
         int64_t sleepTimeMs = initSleepTimeMs;
         while (true) {
-            CHECK_FAIL_RETURN_STATUS(reqTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
-                                     "Rpc timeout");
+            CHECK_FAIL_RETURN_STATUS(
+                GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             RETURN_IF_NOT_OK(fun(req, rsp));
             if (rsp.info().redirect_meta_address().empty()) {
                 return Status::OK();
@@ -143,7 +145,7 @@ public:
                 return Status::OK();
             }
             rsp.Clear();
-            int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+            int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
@@ -166,12 +168,13 @@ public:
         static const int64_t maxSleepTimeMs = 128;
         int64_t sleepTimeMs = initSleepTimeMs;
         while (true) {
-            CHECK_FAIL_RETURN_STATUS(reqTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
-                                     "Rpc timeout");
+            CHECK_FAIL_RETURN_STATUS(
+                GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             RETURN_IF_NOT_OK(func(req, rsp));
             RETURN_OK_IF_TRUE(rsp.info_size() == 0 || !rsp.meta_is_moving());
             rsp.Clear();
-            int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+            int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
@@ -195,12 +198,13 @@ public:
         static const int64_t maxSleepTimeMs = 128;
         int64_t sleepTimeMs = initSleepTimeMs;
         while (true) {
-            CHECK_FAIL_RETURN_STATUS(reqTimeoutDuration.CalcRealRemainingTime() > 0, K_RPC_DEADLINE_EXCEEDED,
-                                     "Rpc timeout");
+            CHECK_FAIL_RETURN_STATUS(
+                GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             RETURN_IF_NOT_OK(func(req, rsp, payload));
             RETURN_OK_IF_TRUE(rsp.info_size() == 0 || !rsp.meta_is_moving());
             rsp.Clear();
-            int64_t remainingTimeMs = reqTimeoutDuration.CalcRealRemainingTime();
+            int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
