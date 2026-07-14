@@ -76,7 +76,18 @@ Status StringToBytes(const std::string &sizeStr, uint64_t &byteSize)
         return Status(K_INVALID, "Invalid size format: '" + sizeStr + "'");
     }
     std::string numStr = sizeStr.substr(0, unitPos);
-    double number = std::stod(numStr);
+    double number = 0.0;
+    size_t consumed = 0;
+    try {
+        number = std::stod(numStr, &consumed);
+    } catch (const std::invalid_argument &) {
+        return Status(K_INVALID, "Failed to parse '" + sizeStr + "' as size: invalid argument");
+    } catch (const std::out_of_range &) {
+        return Status(K_INVALID, "Failed to parse '" + sizeStr + "' as size: value out of range");
+    }
+    if (consumed != numStr.size()) {
+        return Status(K_INVALID, "Failed to parse '" + sizeStr + "' as size: unexpected trailing characters");
+    }
     std::string unitStr = sizeStr.substr(unitPos);
     double factor = 1;
     if (!unitStr.empty()) {
