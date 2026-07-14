@@ -39,6 +39,33 @@ DS_DEFINE_int32_dynamic(v, 0, "Show all VLOG(m) messages for m <= this.");
 DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
+
+// Fork-safety: record the PID at process startup.
+//
+// Why: spdlog's async logger uses a background thread_pool worker that blocks
+// on a condition variable (push_cv_.wait()). When fork() is called, only the
+// calling thread survives into the child process; the worker thread is gone.
+// The inherited pthread_cond_t still references the vanished worker in its
+// internal wait queue, making it corrupted. Any subsequent LOG() in the child
+// that tries to post to the async queue will call push_cv_.notify_one() on
+// this corrupted condvar, causing a deadlock.
+//
+// Additionally, the inherited thread_pool shared_ptr would be destructed when
+// the child exits, triggering ~thread_pool() which posts block-policy terminate
+// messages and joins non-existent workers -> another deadlock.
+//
+// Solution: detect fork() by comparing getpid() against the startup PID. If
+// they differ, we're in a fork child process. Return nullptr to force LOG()
+// to fall back to ToStderr() (see LogMessageImpl::Flush), completely bypassing
+// the async thread_pool and avoiding the corrupted condvar.
+//
+// Trade-off: fork children's logs go to stderr only, not to files. This is
+// acceptable for the primary use case (test harness fork children that simulate
+// client crashes and exit quickly). If production code ever needs fork children
+// to write to files, a more complex solution (pthread_atfork handler to rebuild
+// the pool) would be required.
+static const pid_t PROCESS_STARTUP_PID = getpid();
+
 // thread_local log buffer for log message formatting.
 //
 // Why thread_local is safe here under brpc cooperative M:N:
@@ -96,6 +123,15 @@ static void AppendLogMessageImplPrefix(const std::string &podName, std::ostream 
 static DsLogger GetMessageLogger()
 {
     PerfPoint point(PerfKey::GET_MESSAGE_LOGGER);
+
+    // Fork-safety: if we're in a fork child process, return nullptr to bypass
+    // the async thread_pool. The inherited condvar is corrupted (worker thread
+    // doesn't exist), so any LOG() would deadlock. Returning nullptr causes
+    // LogMessageImpl::Flush() to call ToStderr() instead of ToSpdlog().
+    if (getpid() != PROCESS_STARTUP_PID) {
+        return nullptr;
+    }
+
     if (Provider::IsAlive()) {
         auto lp = Provider::Instance().GetLoggerProvider();
         if (lp) {
@@ -184,6 +220,12 @@ void LogMessageImpl::ToStderr()
 
     std::cerr.write(g_ThreadLogData, static_cast<std::streamsize>(msgSize_));
     std::cerr << '\n';
+
+    // Fork-safety: in fork children, FATAL logs must also trigger abort
+    // to maintain consistency with ToSpdlog behavior
+    if (level_ == SPDLOG_LEVEL_CRITICAL) {
+        (void)raise(SIGABRT);
+    }
 }
 
 void LogMessageImpl::Flush()
