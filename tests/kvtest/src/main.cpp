@@ -404,6 +404,7 @@ static int RunServerMode(const Config &cfg) {
     connOpts.connectTimeoutMs = cfg.connectTimeoutMs;
     connOpts.requestTimeoutMs = cfg.requestTimeoutMs;
     connOpts.enableCrossNodeConnection = cfg.enableCrossNodeConnection;
+    connOpts.enableLocalCache = cfg.enableLocalCache;
     connOpts.fastTransportMemSize = cfg.fastTransportMemSize;
 
     auto client = std::make_shared<KVClient>(connOpts);

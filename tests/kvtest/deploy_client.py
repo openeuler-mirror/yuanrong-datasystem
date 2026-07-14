@@ -967,6 +967,7 @@ def cmd_gen_config(args):
             'connect_timeout_ms': 1000,
             'request_timeout_ms': 20,
             'enable_cross_node_connection': True,
+            'enable_local_cache': True,
             'fast_transport_mem_size': '512MB',
         },
     }

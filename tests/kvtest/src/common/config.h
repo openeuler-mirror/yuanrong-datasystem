@@ -65,6 +65,7 @@ struct Config {
     int notifyIntervalUs = 0; // delay between peer notifications in microseconds, 0 = parallel
     bool enableJitter = true; // randomize sleep to stagger requests
     bool enableCrossNodeConnection = true; // allow failover to standby workers on other nodes
+    bool enableLocalCache = true;          // enable SDK client local cache, default true
     int batchKeysCount = 1;                 // batch 操作的 key 数量，1 = 单 key 兼容
     int msetBatchSize = 8;   // keys per MSet call
     int mgetBatchSize = 8;   // keys per MGet call

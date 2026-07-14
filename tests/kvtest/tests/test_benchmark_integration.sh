@@ -67,6 +67,7 @@ gen_config() {
     "connect_timeout_ms": 1000,
     "request_timeout_ms": 20,
     "enable_cross_node_connection": true,
+    "enable_local_cache": true,
     "fast_transport_mem_size": "512MB"
   },
   "data_sizes": ["1MB"],
@@ -97,6 +98,7 @@ gen_config_dual() {
     "connect_timeout_ms": 1000,
     "request_timeout_ms": 20,
     "enable_cross_node_connection": true,
+    "enable_local_cache": true,
     "fast_transport_mem_size": "512MB"
   },
   "data_sizes": ["1MB"],
