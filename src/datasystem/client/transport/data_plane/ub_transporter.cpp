@@ -191,7 +191,7 @@ Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key,
     info->objectKey = key;
     info->dataSize = size;
     info->workerAddr = workerAddr;
-    info->objectMode = ModeInfo(param.consistencyType, WriteMode::NONE_L2_CACHE, param.cacheType);
+    info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
     info->ubDataSentByMemoryCopy = false;
 
     if (createRsp.has_urma_info()) {
@@ -290,7 +290,17 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
         RETURN_IF_NOT_OK(rpcClient->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
     }
 
-    return SetTransportResponseStatus(rsp, AccessTransportKind::UB, param.isSeal, param.isRetry);
+    const auto kind = info.ubDataSentByMemoryCopy ? AccessTransportKind::UB : AccessTransportKind::TCP;
+    return SetTransportResponseStatus(rsp, kind, param.isSeal, param.isRetry);
+}
+
+Status UbTransporter::Release(const ShmKey &shmId, const TransportRequestContext &context)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+    if (shmId.Empty()) {
+        return Status::OK();
+    }
+    return rpcClient_->InvokeDecreaseReference(context, shmId);
 }
 
 }  // namespace client

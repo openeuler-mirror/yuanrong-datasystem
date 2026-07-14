@@ -50,6 +50,11 @@ public:
     {
         return Status(K_NOT_SUPPORTED, "ShmTransporter::Set not implemented");
     }
+
+    Status Release(const ShmKey & /* shmId */, const TransportRequestContext & /* context */) override
+    {
+        return Status::OK();
+    }
 };
 }  // namespace client
 }  // namespace datasystem

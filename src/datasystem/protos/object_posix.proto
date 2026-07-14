@@ -51,6 +51,8 @@ message CreateReqPb {
   string tenant_id = 5;
   uint32 cache_type = 6;
   int64 request_timeout = 7;
+  // Routed SDK requests are authenticated by signature and do not require registration on every target worker.
+  bool is_routed = 8;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -113,6 +115,8 @@ message PublishReqPb {
   ExistenceOptPb existence = 13;
   string tenant_id = 14;
   uint32 cache_type = 15;
+  // Routed SDK requests are authenticated by signature and do not require registration on every target worker.
+  bool is_routed = 16;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -228,6 +232,8 @@ message DecreaseReferenceRequest {
   repeated string object_keys = 2;
   string token = 3;
   string tenant_id = 4;
+  // Routed SDK requests are authenticated by signature and do not require registration on every target worker.
+  bool is_routed = 5;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

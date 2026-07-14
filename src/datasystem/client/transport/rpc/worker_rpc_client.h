@@ -23,7 +23,9 @@
 #include <memory>
 #include <vector>
 
+#include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -63,6 +65,9 @@ public:
                              const std::vector<MemView> &payloads, PublishRspPb &response,
                              uint32_t &workerVersion);
 
+    /** @brief Release a worker-side allocation created for a routed Set transaction. */
+    virtual Status InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId);
+
     /** @brief Exchange URMA connection data over this worker's cached brpc channel. */
     virtual Status ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response);
 
@@ -90,6 +95,9 @@ protected:
 
     virtual Status DoInvokeSet(const RpcOptions &options, const PublishReqPb &request,
                                PublishRspPb &response, const std::vector<MemView> &payloads);
+
+    virtual Status DoInvokeDecreaseReference(const RpcOptions &options, const DecreaseReferenceRequest &request,
+                                              DecreaseReferenceResponse &response);
 
     virtual Status DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
                                        GetHashRingRspPb &response);

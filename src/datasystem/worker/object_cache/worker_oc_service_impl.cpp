@@ -1492,7 +1492,9 @@ Status WorkerOCServiceImpl::DecreaseReference(const DecreaseReferenceRequest &re
     ScopedRequestContext ctx;
     Timer timer;
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(akSkManager_, req, tenantId);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     if (req.object_keys_size() > 0) {
         LOG(INFO) << FormatString("[shmId %s] [client: %s] DoDecrease", req.object_keys(0), req.client_id());
     }

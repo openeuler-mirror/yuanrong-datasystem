@@ -45,8 +45,15 @@
   - KV and Object client code share the same deep backend implementation through `object_cache::ObjectClientImpl`.
   - `client::TransportLayer` provides worker-address-based `Get` plus transport-native `Create`/`Set` primitives. Its
     TCP Set path publishes an RPC payload, while its UB Set path writes the payload through URMA and publishes an empty
-    payload, with bounded TCP fallback on UB write failure. These primitives are not yet wired into
-    `ObjectClientImpl`; that integration remains a separate behavior change.
+    payload, with bounded TCP fallback on UB write failure. `ObjectClientImpl::Put` uses these primitives for the
+    non-SHM routed Set path and keeps one worker address fixed across Create, payload transfer, and Publish.
+  - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing` and Set selects the key's metadata
+    owner with `HASH_RING_AFFINITY`; unavailable workers are excluded during bounded pre-Publish retries. With local
+    cache enabled, Set preserves the legacy current-worker path and does not initialize the direct transport runtime.
+  - Routed transport requests carry the gateway client id, token snapshot, thread tenant context, and shared transport
+    `Signature`. Target workers authenticate routed Create, Publish, and cleanup requests by signature without requiring
+    endpoint-local client registration. UB allocations are released asynchronously after the final Publish attempt, or
+    synchronously after a local copy failure; shutdown drains the release queue before closing data-plane connections.
   - Public `ObjectBuffer` keeps transport-owned state opaque and exposes a status-returning `Create` factory; callers
     must pass state whose dynamic type is `ObjectBufferInfo`. Source-tree transport code uses
     `src/datasystem/client/transport/object_buffer_internal.h` for typed access, preventing installed SDK headers from
@@ -91,7 +98,7 @@
 | `PerfClient` | `src/datasystem/client/perf_client/perf_client.cpp` | perf log reset/get helper for worker/client performance diagnostics |
 | `ObjectClient` | `src/datasystem/client/object_cache/object_client.cpp` -> `object_cache::ObjectClientImpl` | object semantics are thin wrappers around shared implementation |
 | direct object read | `src/datasystem/client/transport/transport_layer.cpp` -> `object_read/ObjectReadFlow` | groups keys by routed meta owner, then independently polls each key's returned data-worker locations through endpoint transporters |
-| SDK object routing | `src/datasystem/client/object_cache/object_client_impl.cpp` -> `src/datasystem/client/routing/*` | `ObjectClientImpl` owns routing initialization, versioned hash-ring refresh, and shutdown; routing returns the initial worker address while transport owns read retries and redirects |
+| SDK object routing | `src/datasystem/client/object_cache/object_client_impl.cpp` -> `src/datasystem/client/routing/*` | `ObjectClientImpl` owns routing initialization, versioned hash-ring refresh, worker selection, failure-state updates, and shutdown; transport owns endpoint connection reuse and same-worker retries |
 | `HeteroClient` | `src/datasystem/client/hetero_cache/hetero_client.cpp` plus object/device helpers | integrates D2H/H2D/D2D style operations |
 | `StreamClient` | `src/datasystem/client/stream_cache/stream_client.cpp` -> `client::stream_cache::StreamClientImpl` | separate stream cache implementation family |
 | `Context` | `src/datasystem/client/context/context.cpp` | thread-local trace and tenant context helpers |
@@ -104,8 +111,8 @@
   - connection and request timeout controls
   - token auth, curve key fields, AK/SK fields, tenant id
   - cross-node and exclusive connection toggles
-  - local-cache routing toggle; `enableLocalCache=false` supports single- and multi-key full-object `Get`, with
-    per-key partial results and without L2 loading or RH2D
+  - local-cache routing toggle; `enableLocalCache=false` routes Set to the key's metadata owner and supports single-
+    and multi-key full-object `Get`, with per-key partial results and without L2 loading or RH2D
   - remote H2D toggle
   - optional `IServiceDiscovery`; the public implementations are ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`
   - fast transport shared-memory size
@@ -196,6 +203,10 @@
     mutex; different endpoints can initialize connections concurrently and the same endpoint is initialized once.
   - transport RPC clients share a transport-owned `Signature` instance and sign each fully populated request immediately
     before sending it.
+  - Set retries rebuild RPC or UB state once on the same worker inside `TransportLayer`. Cross-worker retry starts a
+    new Create transaction, excludes `K_SCALE_DOWN` workers without poisoning their global health, and reports
+    connection failures through `Routing::UpdateState`. A Publish connection failure is treated as ambiguous and is
+    never replayed on another worker.
   - transport-layer Get keeps flow-stage summaries plus endpoint, retry, redirect, and replica details in
     `[TransportGet]` debug logs. Like the gateway Get path, it does not remap existing status codes; when every key
     fails, it returns the first failure in input order without logging that user-visible error again. Transport-specific
@@ -206,6 +217,9 @@
   - `tests/st/client/kv_cache/kv_client_transport_get_test.cpp` covers single-key and same-owner multi-key transport
     reads. It disables the local cache, applies the same deterministic hash rule in the SDK and worker processes, and
     resolves the metadata owner through the real SDK `Routing` path before asserting TCP or UB data transport.
+  - `tests/st/client/kv_cache/kv_client_transport_set_test.cpp` covers the routed Set transaction over TCP or UB. It
+    verifies successful data and metadata publication, complete transaction rerouting after a Publish-time scale-down
+    response, and the rule that an ambiguous Publish connection failure is not replayed on another worker.
   - standby failover candidate order is randomized per switch attempt, so when one worker fails a batch of clients can spread across the remaining ready workers instead of stampeding to the first candidate in a shared list.
   - Python `DsTensorClient` depends on `HeteroClient`; tensor features are not an independent transport stack.
 - Useful debug points:

@@ -32,8 +32,9 @@ namespace datasystem {
 namespace client {
 
 TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
-                               uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig)
-    : advisor_(std::make_shared<TransportAdvisor>())
+                               uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig,
+                               std::shared_ptr<ThreadPool> releasePool)
+    : advisor_(std::make_shared<TransportAdvisor>()), releasePool_(std::move(releasePool))
 {
     manager_ =
         std::make_shared<DataPlaneManager>(std::move(signature), fastTransportMemSize, std::move(channelConfig));
@@ -111,16 +112,62 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
                      << " after Set failed: " << rc;
         manager_->Teardown(workerAddr);
     } else {
+        const auto &info = ObjectBufferInternal::GetInfo(buffer);
+        ScheduleRelease(workerAddr, info.shmId, param.requestContext);
         return rc;
     }
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
-    retryParam.isRetry = true;
-    rc = transporter->Set(buffer, retryParam);
-    if (rc.IsError()) {
-        LOG(WARNING) << "Set still failed after rebuilding transport for worker " << workerAddr.ToString()
-                     << ": " << rc;
+    Status rebuildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
+    if (rebuildRc.IsOk()) {
+        retryParam.isRetry = true;
+        rc = transporter->Set(buffer, retryParam);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Set still failed after rebuilding transport for worker " << workerAddr.ToString()
+                         << ": " << rc;
+        }
+    } else {
+        rc = rebuildRc;
     }
+    const auto &info = ObjectBufferInternal::GetInfo(buffer);
+    ScheduleRelease(workerAddr, info.shmId, param.requestContext);
     return rc;
+}
+
+Status TransportLayer::Release(ObjectBuffer &buffer, const TransportRequestContext &context)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
+    const HostPort workerAddr = ObjectBufferInternal::GetInfo(buffer).workerAddr;
+    const ShmKey shmId = ObjectBufferInternal::GetInfo(buffer).shmId;
+    std::shared_ptr<IDataTransporter> transporter;
+    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, advisor_->GetTransportHint(workerAddr), transporter));
+    return transporter->Release(shmId, context);
+}
+
+void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId,
+                                     const TransportRequestContext &context)
+{
+    if (shmId.Empty()) {
+        return;
+    }
+    if (releasePool_ == nullptr) {
+        std::shared_ptr<IDataTransporter> transporter;
+        Status rc = manager_->GetOrCreate(workerAddr, advisor_->GetTransportHint(workerAddr), transporter);
+        if (rc.IsOk()) {
+            rc = transporter->Release(shmId, context);
+        }
+        LOG_IF_ERROR(rc, "Release routed Set allocation failed");
+        return;
+    }
+    auto manager = manager_;
+    auto advisor = advisor_;
+    releasePool_->Execute([manager, advisor, workerAddr, shmId, context]() {
+        std::shared_ptr<IDataTransporter> transporter;
+        Status rc = manager->GetOrCreate(workerAddr, advisor->GetTransportHint(workerAddr), transporter);
+        if (rc.IsOk()) {
+            rc = transporter->Release(shmId, context);
+        }
+        LOG_IF_ERROR(rc, "Async release of routed Set allocation failed");
+    });
 }
 
 Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response)
@@ -134,6 +181,8 @@ Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentV
 
 void TransportLayer::Shutdown()
 {
+    // Drain pending DecreaseReference tasks before closing their endpoint connections.
+    releasePool_.reset();
     objectRead_.reset();
     if (manager_ != nullptr) {
         manager_->Shutdown();

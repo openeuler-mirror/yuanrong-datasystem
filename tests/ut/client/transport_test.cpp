@@ -70,6 +70,25 @@ std::shared_ptr<Signature> MakeSignature()
     return std::make_shared<Signature>();
 }
 
+TransportRequestContext MakeRequestContext()
+{
+    return { "client-1", "token-1", "tenant-1" };
+}
+
+TransportCreateParam MakeCreateParam()
+{
+    TransportCreateParam param;
+    param.requestContext = MakeRequestContext();
+    return param;
+}
+
+TransportSetParam MakeSetParam()
+{
+    TransportSetParam param;
+    param.requestContext = MakeRequestContext();
+    return param;
+}
+
 void AddLocation(master::QueryAndGetRspPb &response, const std::string &key, const HostPort &address,
                  uint64_t size = 4)
 {
@@ -195,6 +214,14 @@ public:
         return Status::OK();
     }
 
+    Status InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId) override
+    {
+        ++decreaseReferenceCount;
+        decreaseReferenceContexts.push_back(context);
+        decreaseReferenceShmIds.push_back(shmId);
+        return decreaseReferenceStatus;
+    }
+
     bool IsAlive() const override
     {
         return alive;
@@ -224,8 +251,10 @@ public:
     // Create/Set fake state
     int createInvokeCount = 0;
     int setInvokeCount = 0;
+    int decreaseReferenceCount = 0;
     Status createInvokeStatus = Status::OK();
     Status setInvokeStatus = Status::OK();
+    Status decreaseReferenceStatus = Status::OK();
     bool createResponseHasUrmaInfo = false;
     int64_t createResponseMetadataSize = 0;
     StatusCode createResponseCode = K_OK;
@@ -234,6 +263,8 @@ public:
     std::vector<PublishReqPb> invokedSetRequests;
     std::vector<size_t> invokedSetPayloadSizes;
     std::vector<std::vector<std::string>> invokedSetPayloadData;
+    std::vector<TransportRequestContext> decreaseReferenceContexts;
+    std::vector<ShmKey> decreaseReferenceShmIds;
     std::function<void()> onSetInvoke;
     std::function<void()> afterSetInvoke;
 };
@@ -263,8 +294,10 @@ public:
     GetHashRingReqPb invokedHashRingRequest;
     CreateReqPb invokedCreateRequest;
     PublishReqPb invokedSetRequest;
+    DecreaseReferenceRequest invokedDecreaseReferenceRequest;
     int createInvokeCount = 0;
     int setInvokeCount = 0;
+    int decreaseReferenceInvokeCount = 0;
     Status createInvokeStatus = Status::OK();
     Status setInvokeStatus = Status::OK();
 
@@ -300,6 +333,14 @@ protected:
         ++setInvokeCount;
         invokedSetRequest = request;
         return setInvokeStatus;
+    }
+
+    Status DoInvokeDecreaseReference(const RpcOptions &, const DecreaseReferenceRequest &request,
+                                     DecreaseReferenceResponse &) override
+    {
+        ++decreaseReferenceInvokeCount;
+        invokedDecreaseReferenceRequest = request;
+        return Status::OK();
     }
 
     Status DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
@@ -353,6 +394,7 @@ public:
         info->dataSize = size;
         info->metadataSize = 0;
         info->workerAddr = workerAddr;
+        info->shmId = ShmKey::Intern("fake-shm-id");
         info->pointer = static_cast<uint8_t *>(malloc(size + 1));
         memset(info->pointer, 0, size + 1);
         return ObjectBufferInternal::Create(info, buffer);
@@ -369,6 +411,13 @@ public:
             return rc;
         }
         return Status::OK();
+    }
+
+    Status Release(const ShmKey &, const TransportRequestContext &context) override
+    {
+        ++releaseCount;
+        releaseContexts.push_back(context);
+        return releaseStatus;
     }
 
     void CloseDataPlane() override
@@ -390,11 +439,14 @@ public:
     // Create/Set fake state
     int createCount = 0;
     int setCount = 0;
+    int releaseCount = 0;
+    Status releaseStatus = Status::OK();
     std::vector<Status> createStatuses;
     std::vector<Status> setStatuses;
     std::vector<std::string> createdKeys;
     std::vector<uint64_t> createdSizes;
     std::vector<TransportSetParam> setParams;
+    std::vector<TransportRequestContext> releaseContexts;
 };
 
 class FakeDataPlaneManager : public DataPlaneManager {
@@ -664,6 +716,17 @@ TEST(WorkerRpcClientTest, SignsCreateAndSetBeforeRpc)
     EXPECT_EQ(client.invokedSetRequest.access_key(), "access-1");
     EXPECT_FALSE(client.invokedSetRequest.signature().empty());
     EXPECT_EQ(client.invokedSetRequest.object_key(), "publish-key");
+
+    TransportRequestContext context{ "client-1", "token-1", "tenant-1" };
+    ASSERT_TRUE(client.InvokeDecreaseReference(context, ShmKey::Intern("shm-1")).IsOk());
+    EXPECT_EQ(client.decreaseReferenceInvokeCount, 1);
+    EXPECT_EQ(client.invokedDecreaseReferenceRequest.client_id(), "client-1");
+    EXPECT_EQ(client.invokedDecreaseReferenceRequest.object_keys(0), "shm-1");
+    EXPECT_EQ(client.invokedDecreaseReferenceRequest.token(), "token-1");
+    EXPECT_EQ(client.invokedDecreaseReferenceRequest.tenant_id(), "tenant-1");
+    EXPECT_TRUE(client.invokedDecreaseReferenceRequest.is_routed());
+    EXPECT_EQ(client.invokedDecreaseReferenceRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedDecreaseReferenceRequest.signature().empty());
 }
 
 TEST(WorkerRpcClientTest, RetrySealAlreadySealedIsSuccess)
@@ -1547,13 +1610,41 @@ TEST(ObjectBufferTest, MoveAssignmentTransfersOwnershipAndData)
 
 // --- TcpTransporter Create/Set tests ---
 
+TEST(SetRequestBuilderTest, PreservesIdentityTenantAndWriteOptions)
+{
+    TransportCreateParam createParam = MakeCreateParam();
+    createParam.cacheType = CacheType::DISK;
+    CreateReqPb createRequest;
+    ASSERT_TRUE(BuildCreateRequest("request-key", 64, createParam, createRequest).IsOk());
+    EXPECT_EQ(createRequest.client_id(), "client-1");
+    EXPECT_EQ(createRequest.token(), "token-1");
+    EXPECT_EQ(createRequest.tenant_id(), "tenant-1");
+    EXPECT_TRUE(createRequest.is_routed());
+
+    ObjectBufferInfo info;
+    info.objectKey = "request-key";
+    info.dataSize = 64;
+    info.metadataSize = 0;
+    info.objectMode = ModeInfo(ConsistencyType::PRAM, WriteMode::WRITE_THROUGH_L2_CACHE, CacheType::DISK);
+    TransportSetParam setParam = MakeSetParam();
+    setParam.ttlSecond = 60;
+    PublishReqPb setRequest;
+    Status rc = BuildSetRequest(info, setParam, setRequest);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    EXPECT_EQ(setRequest.client_id(), "client-1");
+    EXPECT_EQ(setRequest.token(), "token-1");
+    EXPECT_EQ(setRequest.tenant_id(), "tenant-1");
+    EXPECT_TRUE(setRequest.is_routed());
+    EXPECT_EQ(setRequest.write_mode(), static_cast<uint32_t>(WriteMode::WRITE_THROUGH_L2_CACHE));
+}
+
 TEST(TcpTransporterTest, CreateAllocatesBuffer)
 {
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
     TcpTransporter transporter(rpcClient);
     std::shared_ptr<ObjectBuffer> buffer;
 
-    TransportCreateParam param;
+    TransportCreateParam param = MakeCreateParam();
     param.cacheType = CacheType::MEMORY;
     param.consistencyType = ConsistencyType::PRAM;
 
@@ -1568,7 +1659,7 @@ TEST(TcpTransporterTest, CreateRejectsInvalidArguments)
 {
     TcpTransporter transporter(std::make_shared<FakeWorkerRpcClient>());
     std::shared_ptr<ObjectBuffer> buffer;
-    TransportCreateParam param;
+    TransportCreateParam param = MakeCreateParam();
     EXPECT_EQ(transporter.Create(MakeAddress(9000), "", 1, param, buffer).GetCode(), K_INVALID);
     EXPECT_EQ(transporter.Create(MakeAddress(9000), "key", 0, param, buffer).GetCode(), K_INVALID);
     param.subTimeoutMs = -1;
@@ -1584,7 +1675,7 @@ TEST(TcpTransporterTest, SetCallsInvokeSet)
 
     // Create a buffer first
     std::shared_ptr<ObjectBuffer> buffer;
-    TransportCreateParam createParam;
+    TransportCreateParam createParam = MakeCreateParam();
     ASSERT_TRUE(transporter.Create(MakeAddress(9000), "set-key", 64, createParam, buffer).IsOk());
 
     // Write data
@@ -1592,7 +1683,7 @@ TEST(TcpTransporterTest, SetCallsInvokeSet)
     ASSERT_TRUE(buffer->MemoryCopy(data, sizeof(data)).IsOk());
 
     // Set
-    TransportSetParam setParam;
+    TransportSetParam setParam = MakeSetParam();
     setParam.subTimeoutMs = 500;
     setParam.ttlSecond = 60;
     Status rc = transporter.Set(*buffer, setParam);
@@ -1600,6 +1691,10 @@ TEST(TcpTransporterTest, SetCallsInvokeSet)
     EXPECT_EQ(rpcClient->setInvokeCount, 1);
     EXPECT_EQ(rpcClient->invokedSetPayloadSizes.size(), 1u);
     EXPECT_EQ(rpcClient->invokedSetPayloadSizes[0], 1u);  // one payload
+    ASSERT_EQ(rpcClient->invokedSetRequests.size(), 1u);
+    EXPECT_EQ(rpcClient->invokedSetRequests[0].client_id(), "client-1");
+    EXPECT_EQ(rpcClient->invokedSetRequests[0].token(), "token-1");
+    EXPECT_EQ(rpcClient->invokedSetRequests[0].tenant_id(), "tenant-1");
 }
 
 TEST(TcpTransporterTest, SetPropagatesRpcError)
@@ -1609,10 +1704,10 @@ TEST(TcpTransporterTest, SetPropagatesRpcError)
     TcpTransporter transporter(rpcClient);
 
     std::shared_ptr<ObjectBuffer> buffer;
-    TransportCreateParam createParam;
+    TransportCreateParam createParam = MakeCreateParam();
     ASSERT_TRUE(transporter.Create(MakeAddress(9000), "err-key", 64, createParam, buffer).IsOk());
 
-    TransportSetParam setParam;
+    TransportSetParam setParam = MakeSetParam();
     EXPECT_EQ(transporter.Set(*buffer, setParam).GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(rpcClient->setInvokeCount, 1);
 }
@@ -1632,7 +1727,7 @@ TEST(UbTransporterTest, SetUrmaSuccessPublishesWithoutTcpPayload)
     ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
     ASSERT_TRUE(buffer->MemoryCopy("data", 4).IsOk());
 
-    ASSERT_TRUE(transporter.Set(*buffer, {}).IsOk());
+    ASSERT_TRUE(transporter.Set(*buffer, MakeSetParam()).IsOk());
     EXPECT_EQ(transporter.writeCount, 1);
     ASSERT_EQ(rpcClient->invokedSetPayloadSizes.size(), 1u);
     EXPECT_EQ(rpcClient->invokedSetPayloadSizes[0], 0u);
@@ -1655,7 +1750,7 @@ TEST(UbTransporterTest, SetUrmaFailureFallsBackToCorrectTcpPayload)
     ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
     ASSERT_TRUE(buffer->MemoryCopy("data", 4).IsOk());
 
-    ASSERT_TRUE(transporter.Set(*buffer, {}).IsOk());
+    ASSERT_TRUE(transporter.Set(*buffer, MakeSetParam()).IsOk());
     EXPECT_EQ(transporter.writeCount, 1);
     ASSERT_EQ(rpcClient->invokedSetPayloadData.size(), 1u);
     ASSERT_EQ(rpcClient->invokedSetPayloadData[0].size(), 1u);
@@ -1676,7 +1771,7 @@ TEST(UbTransporterTest, RejectedFallbackPreservesReconnectStatus)
     std::shared_ptr<ObjectBuffer> buffer;
     ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
 
-    EXPECT_EQ(transporter.Set(*buffer, {}).GetCode(), K_URMA_NEED_CONNECT);
+    EXPECT_EQ(transporter.Set(*buffer, MakeSetParam()).GetCode(), K_URMA_NEED_CONNECT);
     EXPECT_EQ(rpcClient->setInvokeCount, 0);
 }
 
@@ -1707,7 +1802,7 @@ TEST(UbTransporterTest, CloseDataPlaneWaitsForInflightSet)
     ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
 
     Status setStatus;
-    std::thread setThread([&]() { setStatus = transporter.Set(*buffer, {}); });
+    std::thread setThread([&]() { setStatus = transporter.Set(*buffer, MakeSetParam()); });
     invokeStartedFuture.wait();
     std::thread closeThread([&]() { transporter.CloseDataPlane(); });
     allowInvoke.set_value();
@@ -1724,7 +1819,7 @@ TEST(TransportLayerTest, CreateDelegatesToTransporter)
     auto manager = std::make_shared<FakeDataPlaneManager>();
     TestTransportLayer layer(manager);
 
-    TransportCreateParam param;
+    TransportCreateParam param = MakeCreateParam();
     std::shared_ptr<ObjectBuffer> buffer;
     Status rc = layer.Create(MakeAddress(30), "layer-create-key", 256, param, buffer);
     ASSERT_TRUE(rc.IsOk()) << rc.ToString();
@@ -1736,12 +1831,26 @@ TEST(TransportLayerTest, CreateRejectsInvalidRequestBeforeBuildingTransport)
 {
     auto manager = std::make_shared<FakeDataPlaneManager>();
     TestTransportLayer layer(manager);
-    TransportCreateParam param;
+    TransportCreateParam param = MakeCreateParam();
     std::shared_ptr<ObjectBuffer> buffer;
 
     EXPECT_EQ(layer.Create(MakeAddress(30), "", 256, param, buffer).GetCode(), K_INVALID);
     EXPECT_EQ(layer.Create(MakeAddress(30), "key", UINT64_MAX, param, buffer).GetCode(), K_INVALID);
     EXPECT_EQ(manager->transportBuildCount, 0);
+}
+
+TEST(TransportLayerTest, SuccessfulSetReleasesAllocationOnce)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    TestTransportLayer layer(manager);
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(MakeAddress(30), "release-key", 64, MakeCreateParam(), buffer).IsOk());
+
+    ASSERT_TRUE(layer.Set(*buffer, MakeSetParam()).IsOk());
+    ASSERT_NE(manager->lastTransporter, nullptr);
+    EXPECT_EQ(manager->lastTransporter->releaseCount, 1);
+    ASSERT_EQ(manager->lastTransporter->releaseContexts.size(), 1u);
+    EXPECT_EQ(manager->lastTransporter->releaseContexts[0].clientId, "client-1");
 }
 
 TEST(TransportLayerTest, SetRetryOnUrmaNeedConnect)
@@ -1753,11 +1862,11 @@ TEST(TransportLayerTest, SetRetryOnUrmaNeedConnect)
     TestTransportLayer layer(manager);
 
     // Create first
-    TransportCreateParam createParam;
+    TransportCreateParam createParam = MakeCreateParam();
     std::shared_ptr<ObjectBuffer> buffer;
     ASSERT_TRUE(layer.Create(MakeAddress(31), "retry-key", 64, createParam, buffer).IsOk());
 
-    TransportSetParam setParam;
+    TransportSetParam setParam = MakeSetParam();
     Status rc = layer.Set(*buffer, setParam);
     EXPECT_TRUE(rc.IsOk()) << rc.ToString();
     EXPECT_GE(manager->rpcBuildCount, 1);
@@ -1765,6 +1874,11 @@ TEST(TransportLayerTest, SetRetryOnUrmaNeedConnect)
     ASSERT_GE(manager->builtTransporters.size(), 2u);
     ASSERT_EQ(manager->builtTransporters[1]->setParams.size(), 1u);
     EXPECT_TRUE(manager->builtTransporters[1]->setParams[0].isRetry);
+    int releaseCount = 0;
+    for (const auto &transporter : manager->builtTransporters) {
+        releaseCount += transporter->releaseCount;
+    }
+    EXPECT_EQ(releaseCount, 1);
 }
 
 TEST(TransportLayerTest, SetRetryOnRpcUnavailable)
@@ -1775,15 +1889,20 @@ TEST(TransportLayerTest, SetRetryOnRpcUnavailable)
     };
     TestTransportLayer layer(manager);
 
-    TransportCreateParam createParam;
+    TransportCreateParam createParam = MakeCreateParam();
     std::shared_ptr<ObjectBuffer> buffer;
     ASSERT_TRUE(layer.Create(MakeAddress(32), "rpc-retry-key", 64, createParam, buffer).IsOk());
 
-    TransportSetParam setParam;
+    TransportSetParam setParam = MakeSetParam();
     Status rc = layer.Set(*buffer, setParam);
     EXPECT_TRUE(rc.IsOk()) << rc.ToString();
     EXPECT_EQ(manager->rpcBuildCount, 2);       // RPC client rebuilt
     EXPECT_EQ(manager->transportBuildCount, 2);  // transporter rebuilt once
+    int releaseCount = 0;
+    for (const auto &transporter : manager->builtTransporters) {
+        releaseCount += transporter->releaseCount;
+    }
+    EXPECT_EQ(releaseCount, 1);
 }
 
 TEST(TransportLayerTest, SetDoesNotRetrySecondFailure)
@@ -1795,14 +1914,19 @@ TEST(TransportLayerTest, SetDoesNotRetrySecondFailure)
     };
     TestTransportLayer layer(manager);
 
-    TransportCreateParam createParam;
+    TransportCreateParam createParam = MakeCreateParam();
     std::shared_ptr<ObjectBuffer> buffer;
     ASSERT_TRUE(layer.Create(MakeAddress(33), "no-retry-key", 64, createParam, buffer).IsOk());
 
-    TransportSetParam setParam;
+    TransportSetParam setParam = MakeSetParam();
     Status rc = layer.Set(*buffer, setParam);
     EXPECT_EQ(rc.GetCode(), K_URMA_NEED_CONNECT) << rc.ToString();
     EXPECT_GE(manager->transportBuildCount, 2);
+    int releaseCount = 0;
+    for (const auto &transporter : manager->builtTransporters) {
+        releaseCount += transporter->releaseCount;
+    }
+    EXPECT_EQ(releaseCount, 1);
 }
 }  // namespace
 }  // namespace client
