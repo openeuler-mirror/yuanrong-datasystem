@@ -131,6 +131,8 @@ Status UbTransporter::GetOnce(const DataGetRequest &input, uint64_t expectedSize
         useUb = allocRc.IsOk() && buffer != nullptr && owner != nullptr && bufferSize >= expectedSize;
     }
     if (useUb) {
+        request.set_read_offset(0);
+        request.set_read_size(expectedSize);
         *request.mutable_urma_info() = remoteAddr;
         std::string transportInstanceId;
         if (GetLocalTransportInstanceId(transportInstanceId).IsOk()) {
