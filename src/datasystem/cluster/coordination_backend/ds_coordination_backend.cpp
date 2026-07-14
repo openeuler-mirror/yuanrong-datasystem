@@ -166,11 +166,14 @@ Status DsCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     std::vector<int64_t> registeredWatchIds;
     std::vector<CoordinationEvent> initialEvents;
+    std::vector<WatchedKey> watchedKeys;
     for (const auto &watchKey : watchKeys) {
         const std::string realKey = BuildRealKey(watchKey.tableName, watchKey.key);
+        const bool isPrefix = watchKey.key.empty();
+        const std::string rangeEnd = isPrefix ? StringPlusOne(realKey) : "";
         std::vector<KeyValueEntry> initialKvs;
         int64_t watchId = 0;
-        auto rc = proxy_->WatchRange(realKey, StringPlusOne(realKey), watcherAddr_, watchId, initialKvs);
+        auto rc = proxy_->WatchRange(realKey, rangeEnd, watcherAddr_, watchId, initialKvs);
         if (rc.IsError()) {
             if (!registeredWatchIds.empty()) {
                 LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, registeredWatchIds),
@@ -188,13 +191,12 @@ Status DsCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys
             event.revision = kv.modRevision;
             initialEvents.emplace_back(std::move(event));
         }
+        watchedKeys.emplace_back(WatchedKey{ realKey, isPrefix });
     }
     {
         std::lock_guard<std::mutex> lock(watchMutex_);
         watchIds_.insert(watchIds_.end(), registeredWatchIds.begin(), registeredWatchIds.end());
-        for (const auto &watchKey : watchKeys) {
-            watchedKeys_.emplace_back(BuildRealKey(watchKey.tableName, watchKey.key));
-        }
+        watchedKeys_.insert(watchedKeys_.end(), watchedKeys.begin(), watchedKeys.end());
     }
     for (auto &event : initialEvents) {
         LOG(INFO) << "WatchEvents: fake event " << event.ToString();
@@ -518,8 +520,11 @@ void DsCoordinationBackend::HandleWatchEvent(CoordinationEvent &&event)
 bool DsCoordinationBackend::AcceptsWatchEvent(const std::string &key)
 {
     std::lock_guard<std::mutex> lock(watchMutex_);
-    return std::any_of(watchedKeys_.begin(), watchedKeys_.end(), [&key](const std::string &watchedKey) {
-        return key == watchedKey || key.rfind(watchedKey + "/", 0) == 0;
+    return std::any_of(watchedKeys_.begin(), watchedKeys_.end(), [&key](const WatchedKey &watchedKey) {
+        if (watchedKey.isPrefix) {
+            return key.rfind(watchedKey.key, 0) == 0;
+        }
+        return key == watchedKey.key;
     });
 }
 

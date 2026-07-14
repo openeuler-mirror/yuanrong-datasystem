@@ -26,6 +26,67 @@
 namespace datasystem::cluster {
 namespace {
 
+class FakeCoordinatorServiceProxy final : public ICoordinatorServiceProxy {
+public:
+    struct WatchCall {
+        std::string key;
+        std::string rangeEnd;
+        std::string watcherAddr;
+        int64_t watchId{ 0 };
+    };
+
+    ~FakeCoordinatorServiceProxy() override = default;
+
+    Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &, int64_t &, int32_t) override
+    {
+        return Status(K_RUNTIME_ERROR, "unused fake Put");
+    }
+
+    Status Range(const std::string &, const std::string &, std::vector<KeyValueEntry> &, int64_t &, int32_t) override
+    {
+        return Status(K_RUNTIME_ERROR, "unused fake Range");
+    }
+
+    Status DeleteRange(const std::string &, const std::string &, int64_t &, int64_t &, int32_t) override
+    {
+        return Status(K_RUNTIME_ERROR, "unused fake DeleteRange");
+    }
+
+    Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
+                      int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t) override
+    {
+        watchId = nextWatchId_++;
+        initialKvs = initialKvs_;
+        watchCalls_.push_back({ key, rangeEnd, watcherAddr, watchId });
+        return Status::OK();
+    }
+
+    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds, int32_t) override
+    {
+        lastCancelWatcherAddr_ = watcherAddr;
+        cancelledWatchIds_.insert(cancelledWatchIds_.end(), watchIds.begin(), watchIds.end());
+        return Status::OK();
+    }
+
+    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t) override
+    {
+        return Status(K_RUNTIME_ERROR, "unused fake KeepAlive");
+    }
+
+    Status CAS(const std::string &, const CasProcessFunc &, int64_t &, int64_t &) override
+    {
+        return Status(K_RUNTIME_ERROR, "unused fake CAS");
+    }
+
+    std::vector<KeyValueEntry> initialKvs_;
+    std::vector<WatchCall> watchCalls_;
+    std::string lastCancelWatcherAddr_;
+    std::vector<int64_t> cancelledWatchIds_;
+
+private:
+    int64_t nextWatchId_{ 1 };
+};
+
 static_assert(std::is_abstract_v<ICoordinationBackend>);
 static_assert(std::has_virtual_destructor_v<ICoordinationBackend>);
 static_assert(
@@ -85,6 +146,55 @@ TEST(CoordinationBackendContractTest, DsBackendPreservesLegacyMembershipTable)
     EXPECT_EQ(prefix, "/datasystem/cluster");
     EXPECT_TRUE(backend.GetStorePrefix("/datasystem/cluster-a/topology", prefix).IsOk());
     EXPECT_EQ(prefix, "/datasystem/cluster-a/topology");
+}
+
+TEST(CoordinationBackendContractTest, DsBackendPrefixWatchAcceptsCoordinatorChildEvents)
+{
+    FakeCoordinatorServiceProxy proxy;
+    DsCoordinationBackend backend(&proxy, "127.0.0.1:1");
+    int eventCount = 0;
+    std::string acceptedKey;
+    backend.SetEventHandler([&eventCount, &acceptedKey](CoordinationEvent &&event) {
+        ++eventCount;
+        acceptedKey = event.key;
+    });
+
+    ASSERT_TRUE(backend.WatchEvents({ { "/datasystem/c/tasks/migrate", "", 0 } }).IsOk());
+    ASSERT_EQ(proxy.watchCalls_.size(), 1UL);
+    EXPECT_EQ(proxy.watchCalls_[0].key, "/datasystem/c/tasks/migrate/");
+    EXPECT_EQ(proxy.watchCalls_[0].rangeEnd, "/datasystem/c/tasks/migrate0");
+
+    CoordinationEvent accepted{ CoordinationEventType::PUT, "/datasystem/c/tasks/migrate/task-1", "value", 1, 2 };
+    backend.HandleWatchEvent(std::move(accepted));
+    EXPECT_EQ(eventCount, 1);
+    EXPECT_EQ(acceptedKey, "/datasystem/c/tasks/migrate/task-1");
+
+    CoordinationEvent rejected{ CoordinationEventType::PUT, "/datasystem/c/tasks/delete/task-1", "value", 1, 3 };
+    backend.HandleWatchEvent(std::move(rejected));
+    EXPECT_EQ(eventCount, 1);
+}
+
+TEST(CoordinationBackendContractTest, DsBackendExactWatchRejectsCoordinatorChildEvents)
+{
+    FakeCoordinatorServiceProxy proxy;
+    DsCoordinationBackend backend(&proxy, "127.0.0.1:1");
+    int eventCount = 0;
+    backend.SetEventHandler([&eventCount](CoordinationEvent &&) {
+        ++eventCount;
+    });
+
+    ASSERT_TRUE(backend.WatchEvents({ { "/datasystem/c/notify", "127.0.0.1:2", 0 } }).IsOk());
+    ASSERT_EQ(proxy.watchCalls_.size(), 1UL);
+    EXPECT_EQ(proxy.watchCalls_[0].key, "/datasystem/c/notify/127.0.0.1:2");
+    EXPECT_TRUE(proxy.watchCalls_[0].rangeEnd.empty());
+
+    CoordinationEvent accepted{ CoordinationEventType::PUT, "/datasystem/c/notify/127.0.0.1:2", "value", 1, 2 };
+    backend.HandleWatchEvent(std::move(accepted));
+    EXPECT_EQ(eventCount, 1);
+
+    CoordinationEvent rejected{ CoordinationEventType::PUT, "/datasystem/c/notify/127.0.0.1:2/child", "value", 1, 3 };
+    backend.HandleWatchEvent(std::move(rejected));
+    EXPECT_EQ(eventCount, 1);
 }
 
 TEST(CoordinationBackendContractTest, DiagnosticEventOmitsPayload)
