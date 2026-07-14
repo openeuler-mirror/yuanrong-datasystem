@@ -2,6 +2,7 @@
 add_subdirectory(protos)
 add_subdirectory(client)
 add_subdirectory(common)
+add_subdirectory(cluster)
 add_subdirectory(coordinator)
 add_subdirectory(master)
 add_subdirectory(server)

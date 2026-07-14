@@ -52,22 +52,25 @@ std::string GetEventMsg(const mvccpb::Event &event)
     return s.str();
 }
 
-EtcdWatch::EtcdWatch(std::string address, std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap)
+EtcdWatch::EtcdWatch(std::string address, std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
+                     std::unordered_set<std::string> exactKeys)
     : watchPool_(WATCH_TASK_THREAD_NUM),
       shuttingDown_(false),
       address_(std::move(address)),
       prefixMap_(std::move(prefixMap)),
+      exactKeys_(std::move(exactKeys)),
       startupSyncPoint_(false)
 {
     keyVersion_ = std::make_unique<std::unordered_map<std::string, VersionInfo>>();
 }
 
 EtcdWatch::EtcdWatch(std::string address, std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
-                     RouterClientCurveKit clientKit)
+                     std::unordered_set<std::string> exactKeys, RouterClientCurveKit clientKit)
     : watchPool_(WATCH_TASK_THREAD_NUM),
       shuttingDown_(false),
       address_(std::move(address)),
       prefixMap_(std::move(prefixMap)),
+      exactKeys_(std::move(exactKeys)),
       startupSyncPoint_(false),
       clientCurveKit_(std::move(clientKit)),
       isRouterClientCurveConnect_(true)
@@ -351,7 +354,9 @@ Status EtcdWatch::CreateWatch()
         etcdserverpb::WatchRequest watchReq;
         etcdserverpb::WatchCreateRequest createReq;
         createReq.set_key(it.first);
-        createReq.set_range_end(it.first + "\xFF");
+        if (exactKeys_.count(it.first) == 0) {
+            createReq.set_range_end(it.first + "\xFF");
+        }
         createReq.set_start_revision(it.second + 1);
         watchReq.mutable_create_request()->CopyFrom(createReq);
         stream_->Write(watchReq, (void *)WATCH_WRITE);
@@ -536,6 +541,9 @@ Status EtcdWatch::GenerateFakePutEventIfNeeded(bool watchedFailed,
         prefix2Revision.emplace(it.first, revision);
 
         for (const auto &outKeyValue : outKeyValues) {
+            if (exactKeys_.count(it.first) > 0 && outKeyValue.key != it.first) {
+                continue;
+            }
             auto iter = copyKeyVersion.find(outKeyValue.key);
             if (iter != copyKeyVersion.end() && iter->second.modRevision >= outKeyValue.modRevision) {
                 (void)copyKeyVersion.erase(outKeyValue.key);
@@ -613,7 +621,9 @@ void EtcdWatch::GenerateFakeDeleteEventIfNeeded(const std::unordered_map<std::st
         }
         int64_t curRevision = 0;
         for (const auto &pair2 : prefix2Revision) {
-            if (pair.first.find(pair2.first) != std::string::npos) {
+            const bool matches = exactKeys_.count(pair2.first) > 0 ? pair.first == pair2.first
+                                                                   : pair.first.rfind(pair2.first, 0) == 0;
+            if (matches) {
                 curRevision = pair2.second;
                 break;
             }

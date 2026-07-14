@@ -1,0 +1,27 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "coordination_backend",
+    srcs = [
+        "coordination_backend.cpp",
+        "ds_coordination_backend.cpp",
+        "etcd_coordination_backend.cpp",
+    ],
+    hdrs = [
+        "coordination_backend.h",
+        "ds_coordination_backend.h",
+        "etcd_coordination_backend.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/cluster:cluster_membership_codec",
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/kvstore:kv_store",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:coordinator_cc_proto",
+    ],
+)

@@ -27,6 +27,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <unordered_set>
 
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
@@ -115,7 +116,8 @@ using EtcdRangeGetVector = std::vector<RangeSearchResult>;
 
 class EtcdWatch : public std::enable_shared_from_this<EtcdWatch> {
 public:
-    EtcdWatch(std::string address, std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap);
+    EtcdWatch(std::string address, std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
+              std::unordered_set<std::string> exactKeys);
 
     /**
      * @brief Monitors key changes in etcd.
@@ -124,7 +126,7 @@ public:
      * @param[in] clientKit Parameters required for authentication between route client and etcd.
      */
     EtcdWatch(std::string address, std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
-              RouterClientCurveKit clientKit);
+              std::unordered_set<std::string> exactKeys, RouterClientCurveKit clientKit);
 
     ~EtcdWatch();
 
@@ -361,6 +363,8 @@ private:
     std::shared_timed_mutex prefixMapMutex_;  // protect prefixMap_;
     // Prefix to be watched. <prefix, revision>
     std::unique_ptr<std::unordered_map<std::string, int64_t>> prefixMap_;
+    // Physical keys that use an exact watch instead of a prefix range.
+    const std::unordered_set<std::string> exactKeys_;
 
     // GRPC client context for watch request.
     std::unique_ptr<grpc::ClientContext> context_;

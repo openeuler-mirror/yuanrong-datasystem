@@ -75,6 +75,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/operation_logger_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/dynamic_config_updater_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_monitor_gate_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_config_monitor_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/.*\\.cpp$)
 
 if (NOT BUILD_WITH_RDMA)
     list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/rdma/.*\\.cpp$")
@@ -114,6 +115,33 @@ add_executable(coordinator_store_perf_test
         common/coordinator/coordinator_store_perf_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
+add_executable(cluster_topology_contract_ut
+        cluster/cluster_topology_schema_test.cpp
+        cluster/coordination_backend_contract_test.cpp
+        cluster/coordination_event_dispatcher_test.cpp
+        cluster/hash_algorithm_test.cpp
+        cluster/hash_key_filter_test.cpp
+        cluster/membership_contract_test.cpp
+        cluster/placement_facade_test.cpp
+        cluster/storage_scan_plan_test.cpp
+        cluster/testing/fake_coordination_backend.cpp
+        cluster/topology_controller_test.cpp
+        cluster/topology_dfx_test.cpp
+        cluster/topology_engine_test.cpp
+        cluster/topology_failure_classifier_test.cpp
+        cluster/topology_key_helper_test.cpp
+        cluster/topology_observer_test.cpp
+        cluster/topology_plan_builder_test.cpp
+        cluster/topology_reader_test.cpp
+        cluster/topology_repository_codec_test.cpp
+        cluster/topology_repository_test.cpp
+        cluster/topology_runtime_composition_test.cpp
+        cluster/topology_shutdown_test.cpp
+        cluster/topology_snapshot_test.cpp
+        cluster/topology_task_executor_test.cpp
+        cluster/topology_task_janitor_test.cpp
+        cluster/topology_task_materializer_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
 
 
 target_link_libraries(ds_ut PRIVATE
@@ -146,6 +174,11 @@ target_link_libraries(ds_ut_slot_store PRIVATE
         common_util
         common_request_context)
 target_link_libraries(coordinator_store_perf_test PRIVATE ${DS_UT_DEPEND_LIBS})
+target_link_libraries(cluster_topology_contract_ut PRIVATE
+        GTest::gtest
+        GTest::gmock
+        cluster_topology
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
 
 
 
@@ -174,6 +207,7 @@ add_datasystem_test(ds_ut_stream TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_store_perf_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(cluster_topology_contract_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 
 add_ds_ut_executable(log_perf_ut

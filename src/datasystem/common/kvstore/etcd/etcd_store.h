@@ -24,6 +24,7 @@
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <grpcpp/grpcpp.h>
@@ -46,6 +47,10 @@ class KV;
 };
 
 namespace datasystem {
+namespace cluster {
+enum class MemberLifecycleState;
+}
+
 static constexpr char ETCD_ADDR_PATTREN[] = ",";
 const int64_t MIN_RPC_TIMEOUT_MS = 5000;  // 5s
 
@@ -53,6 +58,7 @@ struct WatchElement {
     std::string tableName;
     std::string key;
     int64_t startRevision;
+    bool exact{ false };
 };
 
 class EtcdStore : public KvStore {
@@ -106,6 +112,12 @@ public:
      * @return Status of the call
      */
     Status Shutdown();
+
+    /**
+     * @brief Idempotently stop watch and keepalive event sources while preserving synchronous KV operations.
+     * @return Status of the call.
+     */
+    Status ShutdownEventSources();
 
     /**
      * @brief Create a new table (aka column family in RocksDB's term).
@@ -389,6 +401,13 @@ public:
     Status UpdateNodeState(topology::MemberLifecycleState state);
 
     /**
+     * @brief Update node state through the standalone Cluster Topology adapter.
+     * @param[in] state Cluster Topology membership state.
+     * @return Status of the call.
+     */
+    Status UpdateNodeState(cluster::MemberLifecycleState state);
+
+    /**
      * @brief Get real etcd key prefix by tableName.
      * @param[in] tableName The etcd table name
      * @param[out] prefix The real etcd key prefix stored in etcd.
@@ -402,6 +421,13 @@ public:
      * @return Return status.
      */
     Status InformEtcdReconciliationDone(const HostPort &workerAddr);
+
+    /**
+     * @brief Preserve the backend-neutral reconciliation method name used by Cluster Topology.
+     * @param[in] workerAddr Local member address.
+     * @return Status of the call.
+     */
+    Status InformReconciliationDone(const HostPort &workerAddr);
 
     /**
      * @brief Return the lease ID used for keep alive.
@@ -518,10 +544,12 @@ private:
     /**
      * @brief Creates and initializes the watch
      * @param[in] prefixMap Prefix to watch for
+     * @param[in] exactKeys Physical targets that use exact-key ETCD watches.
      * @param[in] writable Check if etcd is writable
      * @return Status of the call
      */
     Status InitWatch(std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
+                     std::unordered_set<std::string> exactKeys,
                      const std::function<Status()> &writable);
 
     /**
