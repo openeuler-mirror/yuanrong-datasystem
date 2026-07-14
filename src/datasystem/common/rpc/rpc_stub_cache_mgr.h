@@ -58,6 +58,10 @@ enum class StubPriority : int {
     INVALID = 100
 };
 
+// NOTE: This enum only covers stubs managed through RpcStubCacheMgr with per-service-type
+// channel pooling. Common worker RPCs (Heartbeat, RegisterClient, DisconnectClient,
+// GetClientFd, GetSocketPath) use WorkerService_BrpcGenericStub directly in
+// ClientWorkerRemoteCommonApi -- they are NOT routed through StubType/RpcStubCacheMgr.
 enum class StubType : int {
     WORKER_WORKER_OC_SVC = 0,
     WORKER_MASTER_OC_SVC = 1,

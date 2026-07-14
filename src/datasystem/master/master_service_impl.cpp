@@ -43,6 +43,12 @@ Status MasterServiceImpl::Init()
     return Status::OK();
 }
 
+// NOTE: This Heartbeat is dead code. Client→worker heartbeat is handled by
+// WorkerServiceImpl::Heartbeat() (worker/worker_service_impl.cpp), reached via
+// WorkerService_BrpcGenericStub (brpc) or WorkerServiceSession (ZMQ).
+// MasterServiceImpl runs in the worker process but its Heartbeat() is never invoked
+// over the network -- the proto service registered on the brpc/ZMQ server is
+// WorkerService, not MasterService.
 Status MasterServiceImpl::Heartbeat(const HeartbeatReqPb &request, HeartbeatRspPb &response)
 {
     (void)request;
