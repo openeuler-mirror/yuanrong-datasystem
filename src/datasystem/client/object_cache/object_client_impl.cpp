@@ -376,6 +376,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     ShutdownPerfThread();
     ShutdownShmRefReconcileThread();
     ShutdownPiplnMsgQueueThread();
+    StopWorkerHealthProbe();
     INJECT_POINT("ObjClient.ShutDown");
     // Step0: Check client's status to determine whether it meets the conditions for executing shutdown.
     Status rc = clientStateManager_->ProcessShutdown(needRollbackState, isDestruct);
@@ -4819,6 +4820,118 @@ Status ObjectClientImpl::HealthCheck(ServerState &state)
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     return workerApi->HealthCheck(state);
+}
+
+Status ObjectClientImpl::SetWorkerHealthCallback(std::function<void(const Status &)> callback,
+                                                 uint32_t intervalMs)
+{
+    // Validate arguments first so that an invalid call leaves the existing probe thread and
+    // callback untouched. The lifecycle critical section below has side effects (joins the old
+    // thread, swaps the callback, creates a new thread); we must not enter it for a call that
+    // will fail validation.
+    if (callback != nullptr) {
+        RETURN_IF_NOT_OK(IsClientReady());
+        CHECK_FAIL_RETURN_STATUS(intervalMs > 0, K_INVALID,
+                                 "SetWorkerHealthCallback: intervalMs must be > 0.");
+    }
+
+    // Lifecycle critical section: stop-old, swap-callback, start-new / clear are atomic with
+    // respect to any concurrent Set or Stop. The probe thread never takes this mutex, and
+    // ShutDown calls us before tearing down connections, so join here cannot deadlock.
+    // After joining the old probe thread, workerHealthCb_ is safe to write without extra
+    // locking: no probe thread is alive to read it, and the new probe is started only after.
+    std::lock_guard<std::mutex> lk(workerHealthProbeLifecycleMux_);
+
+    // Stop and join any existing probe thread first so the old callback is guaranteed not to
+    // fire after we swap in the new one (or clear it).
+    if (workerHealthProbeThread_ != nullptr) {
+        workerHealthProbeStop_.store(true);
+        workerHealthProbeExitPost_.Set();
+        if (workerHealthProbeThread_->joinable()) {
+            workerHealthProbeThread_->join();
+        }
+        workerHealthProbeThread_.reset();
+    }
+
+    // Clearing path: leave the probe stopped and the callback nulled.
+    if (callback == nullptr) {
+        workerHealthCb_ = nullptr;
+        return Status::OK();
+    }
+
+    // Install the new callback and start a fresh probe thread.
+    workerHealthCb_ = std::move(callback);
+    workerHealthIntervalMs_ = intervalMs;
+    workerHealthProbeStop_.store(false);
+    workerHealthProbeExitPost_.Clear();
+    workerHealthProbeThread_ = std::make_unique<Thread>([this] { WorkerHealthProbeLoop(); });
+    workerHealthProbeThread_->set_name("HealthProbe");
+    return Status::OK();
+}
+
+void ObjectClientImpl::StopWorkerHealthProbe()
+{
+    // Lifecycle mutex serializes concurrent stop/set/shutdown so that thread join, callback
+    // swap, and thread creation never race. The probe thread itself never takes this mutex,
+    // and ShutDown calls us before tearing down connections, so join here cannot deadlock.
+    // After join returns, workerHealthCb_ is safe to write without extra locking.
+    std::lock_guard<std::mutex> lk(workerHealthProbeLifecycleMux_);
+    if (workerHealthProbeThread_ == nullptr) {
+        workerHealthCb_ = nullptr;  // Already stopped; also clear any leftover callback.
+        return;
+    }
+    workerHealthProbeStop_.store(true);
+    workerHealthProbeExitPost_.Set();
+    if (workerHealthProbeThread_->joinable()) {
+        workerHealthProbeThread_->join();
+    }
+    workerHealthProbeThread_.reset();
+    workerHealthCb_ = nullptr;
+    // Leave workerHealthProbeStop_ true; Set clears it when starting a new probe.
+}
+
+void ObjectClientImpl::WorkerHealthProbeLoop()
+{
+    LOG(INFO) << "Worker health probe thread started, intervalMs=" << workerHealthIntervalMs_;
+    // Two exit paths cooperate: the loop condition catches Set() that arrives between
+    // iterations (no WaitFor pending), and WaitFor returning true catches Set() that
+    // arrives while sleeping. Both must be checked for prompt, race-free shutdown.
+    while (!workerHealthProbeStop_.load()) {
+        // Probe current connected worker. Status semantics match KVClient::HealthCheck().
+        // GetAvailableWorkerApi returns OK and a non-null workerApi when a worker is connected;
+        // any other outcome (client not ready, no worker, raii creation failure) is surfaced
+        // directly as the probe status so the caller observes the same error code as HealthCheck()
+        // would return under the same conditions.
+        std::shared_ptr<IClientWorkerApi> workerApi;
+        std::unique_ptr<Raii> raii;
+        Status probeRc = GetAvailableWorkerApi(workerApi, raii);
+        if (probeRc.IsOk()) {
+            // GetAvailableWorkerApi guarantees workerApi is non-null on OK.
+            ServerState state = ServerState::NORMAL;
+            probeRc = workerApi->HealthCheck(state);
+        }
+        // Invoke the callback. No lock needed: SetWorkerHealthCallback joins this thread
+        // before swapping workerHealthCb_, so the field is stable while we read it here.
+        // The callback contract forbids calling KVClient APIs from within.
+        std::function<void(const Status &)> cb = workerHealthCb_;
+        if (cb) {
+            // The user callback runs on the probe thread; Thread::WrapFn is noexcept, so an
+            // escaping exception would terminate the whole client process. Catch here to
+            // isolate callback bugs from SDK availability.
+            try {
+                cb(probeRc);
+            } catch (const std::exception &e) {
+                LOG(ERROR) << "Worker health callback threw: " << e.what();
+            } catch (...) {
+                LOG(ERROR) << "Worker health callback threw unknown exception.";
+            }
+        }
+        // Wait for the interval or until stop is signaled.
+        if (workerHealthProbeExitPost_.WaitFor(workerHealthIntervalMs_)) {
+            break;
+        }
+    }
+    LOG(INFO) << "Worker health probe thread exiting.";
 }
 
 Status ObjectClientImpl::DevPublish(const std::vector<std::string> &objectKeys,

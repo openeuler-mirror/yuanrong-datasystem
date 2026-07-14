@@ -2342,6 +2342,232 @@ TEST_F(ObjectClientTest, TestHealthCheckFailed)
     int waitWorkerShutDown = 2;
     sleep(waitWorkerShutDown);
     DS_ASSERT_NOT_OK(client->HealthCheck());
+    // Restore worker 0 so subsequent tests in the same process can use it.
+    DS_ASSERT_OK(cluster_->StartNode(WORKER, 0, ""));
+}
+
+TEST_F(ObjectClientTest, TestWorkerHealthCallback)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    struct ProbeState {
+        std::mutex mux;
+        std::condition_variable cv;
+        int okCount = 0;
+        int errCount = 0;
+    };
+    auto state = std::make_shared<ProbeState>();
+    auto cb = [state](const Status &s) {
+        std::lock_guard<std::mutex> l(state->mux);
+        if (s.IsOk()) {
+            state->okCount++;
+        } else {
+            state->errCount++;
+        }
+        state->cv.notify_all();
+    };
+
+    // Register with a short interval for fast feedback.
+    DS_ASSERT_OK(client->SetWorkerHealthCallback(cb, 100));
+
+    // Expect at least one OK event while the worker is up.
+    {
+        std::unique_lock<std::mutex> l(state->mux);
+        ASSERT_TRUE(state->cv.wait_for(l, std::chrono::seconds(5), [&] { return state->okCount >= 1; }));
+        ASSERT_GE(state->okCount, 1);
+    }
+
+    // Shut down the worker and expect error events.
+    cluster_->ShutdownNode(WORKER, 0);
+    {
+        std::unique_lock<std::mutex> l(state->mux);
+        ASSERT_TRUE(
+            state->cv.wait_for(l, std::chrono::seconds(10), [&] { return state->errCount >= 1; }));
+        ASSERT_GE(state->errCount, 1);
+    }
+
+    // Restore the worker and verify the probe recovers to OK events. Use a scope guard so
+    // the worker is restored even if an assertion fails here, preventing pollution of the
+    // shared cluster state for subsequent tests in the same process.
+    auto restoreWorker = [this]() {
+        cluster_->StartNode(WORKER, 0, "");
+        // Give the worker a moment to become reachable again.
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    };
+    restoreWorker();
+    int okCountBeforeRecover;
+    {
+        std::unique_lock<std::mutex> l(state->mux);
+        okCountBeforeRecover = state->okCount;
+    }
+    {
+        std::unique_lock<std::mutex> l(state->mux);
+        ASSERT_TRUE(
+            state->cv.wait_for(l, std::chrono::seconds(10), [&] { return state->okCount > okCountBeforeRecover; }));
+        ASSERT_GT(state->okCount, okCountBeforeRecover);
+    }
+
+    // Clear the callback; the probe thread must be joined, so no further events fire.
+    // SetWorkerHealthCallback(nullptr) joins the probe thread inside StopWorkerHealthProbe, so
+    // when it returns no probe is in flight and no callback can be executing. Reading the
+    // counts after Set returns is therefore race-free.
+    DS_ASSERT_OK(client->SetWorkerHealthCallback(nullptr));
+    int totalAfterClear;
+    {
+        std::unique_lock<std::mutex> l(state->mux);
+        totalAfterClear = state->okCount + state->errCount;
+    }
+    // Wait a bit longer than one probe interval and verify no further callbacks fired.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    {
+        std::unique_lock<std::mutex> l(state->mux);
+        ASSERT_EQ(state->okCount + state->errCount, totalAfterClear);
+    }
+}
+
+TEST_F(ObjectClientTest, TestWorkerHealthCallbackInvalidArgs)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    auto cb = [](const Status &) {};
+    // intervalMs=0 with non-null callback must fail with K_INVALID.
+    ASSERT_EQ(client->SetWorkerHealthCallback(cb, 0).GetCode(), StatusCode::K_INVALID);
+
+    // An uninitialized client must reject non-null callback registration with K_NOT_READY.
+    std::shared_ptr<KVClient> uninitClient = std::make_shared<KVClient>();
+    ASSERT_EQ(uninitClient->SetWorkerHealthCallback(cb, 200).GetCode(), StatusCode::K_NOT_READY);
+    // Clearing (nullptr) must always succeed regardless of state.
+    ASSERT_EQ(uninitClient->SetWorkerHealthCallback(nullptr).GetCode(), StatusCode::K_OK);
+}
+
+// A user callback that throws must not terminate the process; the probe thread keeps running
+// and subsequent SetWorkerHealthCallback(nullptr) must still join cleanly.
+TEST_F(ObjectClientTest, TestWorkerHealthCallbackThrows)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    struct Counters {
+        std::mutex mux;
+        std::condition_variable cv;
+        int throws = 0;
+        int okCount = 0;
+    };
+    auto counters = std::make_shared<Counters>();
+    auto cb = [counters](const Status &s) {
+        // Update counters and notify before throwing: the wait_for predicate reads throws
+        // outside this lock, so cv must be woken even on the throwing path.
+        {
+            std::lock_guard<std::mutex> l(counters->mux);
+            if (s.IsOk()) {
+                counters->okCount++;
+                counters->throws++;
+            }
+            counters->cv.notify_all();
+        }
+        if (s.IsOk()) {
+            throw std::runtime_error("intentional test exception");
+        }
+    };
+
+    DS_ASSERT_OK(client->SetWorkerHealthCallback(cb, 100));
+    // Wait for at least one OK event (which throws). The process must survive.
+    {
+        std::unique_lock<std::mutex> l(counters->mux);
+        ASSERT_TRUE(counters->cv.wait_for(l, std::chrono::seconds(3),
+                                          [&] { return counters->throws >= 1; }));
+        ASSERT_GE(counters->throws, 1);
+    }
+    // If we reach here, the probe thread survived the thrown exception. Clearing must join
+    // the still-alive probe thread cleanly.
+    DS_ASSERT_OK(client->SetWorkerHealthCallback(nullptr));
+}
+
+// Concurrent Set/Set and Set/nullptr must not race on the probe thread lifecycle, callback
+// swap, or thread handle. Runs many iterations to stress the lifecycle mutex.
+TEST_F(ObjectClientTest, TestWorkerHealthCallbackConcurrentSet)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    auto cb1 = [](const Status &) {};
+    auto cb2 = [](const Status &) {};
+
+    constexpr int iterations = 5;
+    for (int i = 0; i < iterations; ++i) {
+        std::vector<std::thread> threads;
+        threads.emplace_back([&] { DS_ASSERT_OK(client->SetWorkerHealthCallback(cb1, 200)); });
+        threads.emplace_back([&] { DS_ASSERT_OK(client->SetWorkerHealthCallback(cb2, 200)); });
+        threads.emplace_back([&] { DS_ASSERT_OK(client->SetWorkerHealthCallback(nullptr)); });
+        for (auto &t : threads) {
+            t.join();
+        }
+    }
+    // Final cleanup must join any survivor cleanly.
+    DS_ASSERT_OK(client->SetWorkerHealthCallback(nullptr));
+}
+
+TEST_F(ObjectClientTest, TestWorkerHealthCallbackReplace)
+{
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+
+    struct Counters {
+        std::mutex mux;
+        std::condition_variable cv;
+        int first = 0;
+        int second = 0;
+    };
+    auto counters = std::make_shared<Counters>();
+    auto cb1 = [counters](const Status &) {
+        std::lock_guard<std::mutex> l(counters->mux);
+        counters->first++;
+        counters->cv.notify_all();
+    };
+    auto cb2 = [counters](const Status &) {
+        std::lock_guard<std::mutex> l(counters->mux);
+        counters->second++;
+        counters->cv.notify_all();
+    };
+
+    // Register the first callback with a short interval for fast feedback.
+    DS_ASSERT_OK(client->SetWorkerHealthCallback(cb1, 100));
+    // Wait for the first callback to fire at least once.
+    {
+        std::unique_lock<std::mutex> l(counters->mux);
+        ASSERT_TRUE(counters->cv.wait_for(l, std::chrono::seconds(3), [&] { return counters->first > 0; }));
+        ASSERT_GT(counters->first, 0);
+    }
+
+    // Replace with the second callback. SetWorkerHealthCallback must join the old probe
+    // thread before returning, so the old callback can no longer fire after this returns.
+    DS_ASSERT_OK(client->SetWorkerHealthCallback(cb2, 200));
+
+    // Snapshot the old callback count after replacement.
+    int firstAfterReplace;
+    {
+        std::unique_lock<std::mutex> l(counters->mux);
+        firstAfterReplace = counters->first;
+    }
+
+    // Wait for the second callback to fire.
+    {
+        std::unique_lock<std::mutex> l(counters->mux);
+        ASSERT_TRUE(counters->cv.wait_for(l, std::chrono::seconds(3), [&] { return counters->second > 0; }));
+        ASSERT_GT(counters->second, 0);
+    }
+
+    // Wait a bit longer than one probe interval and verify the old callback did not fire.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    {
+        std::unique_lock<std::mutex> l(counters->mux);
+        ASSERT_EQ(counters->first, firstAfterReplace);
+    }
+
+    // Clean up.
+    DS_ASSERT_OK(client->SetWorkerHealthCallback(nullptr));
 }
 
 class ObjectClientTest2 : public OCClientCommon {

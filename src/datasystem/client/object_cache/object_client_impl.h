@@ -25,6 +25,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -61,6 +62,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/client/hetero_cache/device_buffer.h"
@@ -714,6 +716,16 @@ public:
      * @return K_OK on any object success; the error code otherwise.
      */
     Status HealthCheck(ServerState &state);
+
+    /**
+     * @brief Register a periodic worker health probe callback. See KVClient::SetWorkerHealthCallback.
+     * @param[in] callback Callback invoked on each probe with the probe Status (OK=healthy), or nullptr to stop.
+     * @param[in] intervalMs Probe interval in milliseconds. Must be > 0 when callback is non-null.
+     * @return K_OK on success (including clearing with nullptr); K_NOT_READY if client not
+     *         initialized (only when callback is non-null); K_INVALID if intervalMs is 0 with
+     *         a non-null callback.
+     */
+    Status SetWorkerHealthCallback(std::function<void(const Status &)> callback, uint32_t intervalMs);
 
     /**
      * @brief Get transport data type between client and worker.
@@ -1553,6 +1565,18 @@ private:
     void ShmRefReconcileThreadFunc();
 
     /**
+     * @brief Stop the periodic worker health probe thread, if running. Joins the thread and
+     *        guarantees the registered callback is not invoked after return.
+     */
+    void StopWorkerHealthProbe();
+
+    /**
+     * @brief Probe loop body: probe current connected worker and deliver the probe Status to
+     *        the registered callback, then wait workerHealthIntervalMs_ before the next probe.
+     */
+    void WorkerHealthProbeLoop();
+
+    /**
      * @brief Decrease the object reference count by one and if no one holds its ref, release it.
      * @param[in] shmId The ID of the object to decrease ref
      * @param[in] isShm A flag indicating how the object will be published (shm or non-shm).
@@ -1678,6 +1702,23 @@ private:
     WaitPost shmRefReconcileExitPost_;
     std::unique_ptr<Thread> shmRefReconcileThread_{ nullptr };
     WaitPost switchPost_;
+
+    // Periodic worker health probe state. The probe thread calls HealthCheck on the current
+    // connected worker at workerHealthIntervalMs_ and delivers the probe Status to
+    // workerHealthCb_ (OK = healthy). Stop is signaled by workerHealthProbeStop_ +
+    // workerHealthProbeExitPost_. Concurrency model: workerHealthProbeLifecycleMux_ serializes
+    // SetWorkerHealthCallback and StopWorkerHealthProbe. Set joins the old probe thread inside
+    // this mutex before swapping the callback, so the callback field is never read and written
+    // concurrently: after join returns no probe thread is alive to read it, and the new probe
+    // thread is started only after the swap. The probe thread itself never takes this mutex,
+    // and ShutDown calls StopWorkerHealthProbe before tearing down connections, so join here
+    // cannot deadlock.
+    std::function<void(const Status &)> workerHealthCb_;
+    std::mutex workerHealthProbeLifecycleMux_;
+    uint32_t workerHealthIntervalMs_ = 0;
+    std::atomic<bool> workerHealthProbeStop_{ false };
+    WaitPost workerHealthProbeExitPost_;
+    std::unique_ptr<Thread> workerHealthProbeThread_{ nullptr };
 
     bool clientEnableP2Ptransfer_ = false;
     int parallismNum_ = 0;
