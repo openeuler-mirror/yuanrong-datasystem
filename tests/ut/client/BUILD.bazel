@@ -62,3 +62,69 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "urma_send_lane_test",
+    srcs = ["urma_send_lane_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rdma:urma_send_lane",
+    ],
+)
+
+# Manual URMA-backed test. It starts a real peer process, imports its receive Jetty, and exercises the multi-chunk
+# UrmaWriteImpl path. Keep it separate from the header-only urma_send_lane_test above.
+ds_cc_test(
+    name = "urma_remote_jetty_reuse_test",
+    srcs = ["urma_remote_jetty_reuse_test.cpp"],
+    tags = ["manual", "urma"],
+    timeout = "long",
+    env_inherit = ["DS_URMA_DEV_NAME"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        # UrmaManager references fast_transport_base.cpp symbols, but common_rdma cannot depend on urma_manager without
+        # a configuration-time cycle. Link both from this environment-test leaf target.
+        "//src/datasystem/common/rdma:common_rdma",
+        "//src/datasystem/common/rdma:urma_manager",
+        "//src/datasystem/common/rdma:urma_resource_header",
+        # Match object-cache UT link closure: common_object_cache intentionally excludes buffer.cpp, and buffer's
+        # object-client/device references are supplied by the existing worker test link workaround.
+        "//src/datasystem/common/object_cache:buffer",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+    ],
+)
+
+# Manual URMA-backed test for the local send-Jetty lifecycle. It deliberately has no peer or remote-Jetty exchange,
+# so failures localize to pre-fill, acquire/release reuse, invalidation, and background refill.
+ds_cc_test(
+    name = "urma_send_jetty_lifecycle_test",
+    srcs = ["urma_send_jetty_lifecycle_test.cpp"],
+    tags = ["manual", "urma"],
+    timeout = "long",
+    env_inherit = ["DS_URMA_DEV_NAME"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rdma:common_rdma",
+        "//src/datasystem/common/rdma:urma_manager",
+        "//src/datasystem/common/rdma:urma_resource_header",
+        "//src/datasystem/common/object_cache:buffer",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+    ],
+)
+
+# Manual URMA-backed fault test. Keep CQE, AE, timeout, and pool-exhaustion coverage out of the normal lifecycle
+# target so failure-path state and diagnosis remain independent.
+ds_cc_test(
+    name = "urma_send_jetty_fault_test",
+    srcs = ["urma_send_jetty_fault_test.cpp"],
+    tags = ["manual", "urma"],
+    timeout = "long",
+    env_inherit = ["DS_URMA_DEV_NAME"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/rdma:common_rdma",
+        "//src/datasystem/common/rdma:urma_manager",
+        "//src/datasystem/common/rdma:urma_resource_header",
+        "//src/datasystem/common/object_cache:buffer",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+    ],
+)

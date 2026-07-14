@@ -77,8 +77,17 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_monitor_gate_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_config_monitor_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/.*\\.cpp$)
 
+# These targets need a real URMA device. Build them separately below instead of adding them to the default ds_ut
+# binary.
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_remote_jetty_reuse_test\\.cpp$")
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_send_jetty_lifecycle_test\\.cpp$")
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_send_jetty_fault_test\\.cpp$")
+
 if (NOT BUILD_WITH_RDMA)
     list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/rdma/.*\\.cpp$")
+endif()
+if (NOT BUILD_WITH_URMA)
+    list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_send_lane_test\\.cpp$")
 endif()
 
 list(APPEND DS_UT_STREAM_SRCS)
@@ -108,6 +117,17 @@ add_ds_ut_executable(ds_ut_object
         ${DS_UT_OBJECT_SRCS}
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
+if (BUILD_WITH_URMA)
+    add_ds_ut_executable(ds_ut_urma_remote_jetty_reuse
+            client/urma_remote_jetty_reuse_test.cpp
+            $<TARGET_OBJECTS:_ds_ut_main_obj>)
+    add_ds_ut_executable(ds_ut_urma_send_jetty_lifecycle
+            client/urma_send_jetty_lifecycle_test.cpp
+            $<TARGET_OBJECTS:_ds_ut_main_obj>)
+    add_ds_ut_executable(ds_ut_urma_send_jetty_fault
+            client/urma_send_jetty_fault_test.cpp
+            $<TARGET_OBJECTS:_ds_ut_main_obj>)
+endif()
 add_executable(ds_ut_slot_store
         common/l2cache/slot_store_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
@@ -164,6 +184,26 @@ target_link_libraries(ds_ut_object PRIVATE
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
+if (BUILD_WITH_URMA)
+    target_link_libraries(ds_ut_urma_remote_jetty_reuse PRIVATE
+            ${DS_UT_HEAVY_LINK_START}
+            ${DS_UT_DEPEND_LIBS}
+            ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+            ${DS_UT_HEAVY_LINK_END}
+            -Wl,--reduce-memory-overheads)
+    target_link_libraries(ds_ut_urma_send_jetty_lifecycle PRIVATE
+            ${DS_UT_HEAVY_LINK_START}
+            ${DS_UT_DEPEND_LIBS}
+            ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+            ${DS_UT_HEAVY_LINK_END}
+            -Wl,--reduce-memory-overheads)
+    target_link_libraries(ds_ut_urma_send_jetty_fault PRIVATE
+            ${DS_UT_HEAVY_LINK_START}
+            ${DS_UT_DEPEND_LIBS}
+            ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+            ${DS_UT_HEAVY_LINK_END}
+            -Wl,--reduce-memory-overheads)
+endif()
 target_link_libraries(ds_ut_slot_store PRIVATE
         GTest::gtest
         GTest::gmock
@@ -208,6 +248,15 @@ add_datasystem_test(ds_ut_object TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_store_perf_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(cluster_topology_contract_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+
+if (BUILD_WITH_URMA)
+    add_datasystem_test(ds_ut_urma_remote_jetty_reuse
+            TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+    add_datasystem_test(ds_ut_urma_send_jetty_lifecycle
+            TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+    add_datasystem_test(ds_ut_urma_send_jetty_fault
+            TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+endif()
 
 
 add_ds_ut_executable(log_perf_ut

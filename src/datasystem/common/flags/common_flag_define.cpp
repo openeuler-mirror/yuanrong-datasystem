@@ -55,6 +55,11 @@ DS_DEFINE_bool(enable_rdma, false, "Option to turn on rdma for OC worker to work
 DS_DEFINE_uint32(urma_poll_size, 8, "Number of complete record to poll at a time, 16 is the max this device can poll");
 DS_DEFINE_uint64(urma_max_write_size_mb, 4, "Maximum URMA write size, unit is MB. Valid range is [1, 2048].");
 DS_DEFINE_uint32(urma_connection_size, 0, "[DEPRECATED] No longer used. JFS/JFR are created per-connection.");
+DS_DEFINE_uint32(urma_send_jetty_lane_pool_size, 200,
+                 "Process-level target number of reusable URMA send Jetty lanes. Each lane is leased by one logical "
+                 "transfer and may carry multiple chunk WRs until that transfer settles.");
+DS_DEFINE_uint32(urma_send_jetty_lane_refill_extra_size, 200,
+                 "Maximum number of retiring or pending URMA send Jetty lanes allowed above the active pool size.");
 DS_DEFINE_bool(urma_register_whole_arena, true,
                "Register the whole arena as segment during init, otherwise, register each object as a segment.");
 DS_DEFINE_bool(enable_ub_numa_affinity, false,

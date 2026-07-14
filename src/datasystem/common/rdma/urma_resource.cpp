@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
+#include <iterator>
 #include <sstream>
 #include <utility>
 
@@ -44,11 +46,32 @@
 
 DS_DECLARE_bool(urma_event_mode);
 DS_DECLARE_uint64(urma_max_write_size_mb);
+DS_DECLARE_uint32(urma_send_jetty_lane_pool_size);
+DS_DECLARE_uint32(urma_send_jetty_lane_refill_extra_size);
 
 namespace datasystem {
 namespace {
 constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 constexpr const char *URMA_ERROR_SUGGEST = "check URMA";
+
+Status BuildRemoteJetty(const UrmaJfrInfo &info, urma_rjetty_t &remoteJetty)
+{
+    urma_eid_t eid{};
+    CHECK_FAIL_RETURN_STATUS(info.eid.size() == URMA_EID_SIZE, K_RUNTIME_ERROR,
+                             FormatString("Eid size mismatch, expected: %d, actual: %d", URMA_EID_SIZE,
+                                          info.eid.size()));
+    auto rc = memcpy_s(eid.raw, URMA_EID_SIZE, info.eid.data(), info.eid.size());
+    CHECK_FAIL_RETURN_STATUS(rc == EOK, K_RUNTIME_ERROR,
+                             FormatString("Unable to copy %d bytes, rc = %d, errno = %d", URMA_EID_SIZE, rc, errno));
+    remoteJetty.jetty_id.eid = eid;
+    remoteJetty.jetty_id.uasid = info.uasid;
+    remoteJetty.jetty_id.id = info.jfrId;
+    remoteJetty.trans_mode = URMA_TM_RM;
+    remoteJetty.type = URMA_JETTY;
+    remoteJetty.tp_type = URMA_CTP;
+    remoteJetty.flag.value = 0;
+    return Status::OK();
+}
 }  // namespace
 
 std::atomic<uint32_t> UrmaJfr::counter_{ 0 };
@@ -162,7 +185,7 @@ Status UrmaJfc::Create(urma_context_t *context, const urma_device_attr_t &device
 
 std::weak_ptr<UrmaConnection> UrmaEvent::GetConnection() const
 {
-    auto jetty = jetty_.lock();
+    auto jetty = GetJetty().lock();
     if (jetty) {
         return jetty->GetConnection();
     }
@@ -409,87 +432,6 @@ UrmaConnection::~UrmaConnection()
     Clear();
 }
 
-std::shared_ptr<UrmaJetty> UrmaConnection::GetJetty() const
-{
-    std::lock_guard<std::mutex> lock(jettyMutex_);
-    return jetty_;
-}
-
-Status UrmaConnection::ReCreateJetty(UrmaResource &resource, const std::shared_ptr<UrmaJetty> &failedJetty)
-{
-    if (failedJetty == nullptr) {
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JETTY_SKIP] failedJetty is null, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-            << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-        return Status::OK();
-    }
-    // failedJetty must come from the UrmaEvent that reported the failure.
-    // connection->jetty_ may already have been swapped to a newly recreated Jetty
-    // by another thread. If we read jetty_ here and call MarkInvalid() on it,
-    // we may incorrectly invalidate the new healthy Jetty instead of the failed one.
-    {
-        std::lock_guard<std::mutex> lock(jettyMutex_);
-        // Keep MarkInvalid() and the recreate decision under jettyMutex_.
-        // The same Jetty may concurrently receive multiple CQE error-9 events:
-        // only one thread is allowed to mark it invalid and recreate jetty_,
-        // while other threads must wait here and observe the recreated state.
-        if (!failedJetty->MarkInvalid()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-                << "[URMA_RECREATE_JETTY_SKIP] Jetty " << failedJetty->GetJettyId()
-                << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-                << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-            return Status::OK();
-        }
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JETTY] Mark Jetty " << failedJetty->GetJettyId()
-            << " invalid and recreate, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-            << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-        CHECK_FAIL_RETURN_STATUS(jetty_ != nullptr, K_RUNTIME_ERROR, "Jetty already cleared for connection");
-        if (jetty_.get() != failedJetty.get()) {
-            LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-                << "[URMA_RECREATE_JETTY_SKIP] Jetty " << failedJetty->GetJettyId()
-                << " is invalid but connection points to another Jetty, remoteAddress="
-                << urmaJfrInfo_.localAddress.ToString() << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-            return Status::OK();
-        }
-        METRIC_TIMER(metrics::KvMetricId::URMA_JETTY_RECREATE_LATENCY);
-        std::shared_ptr<UrmaJetty> newJetty;
-        RETURN_IF_NOT_OK_APPEND_MSG(resource.CreateJetty(newJetty), "Failed to recreate Jetty");
-        newJetty->BindConnection(shared_from_this());
-        jetty_ = std::move(newJetty);
-        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
-            << "[URMA_RECREATE_JETTY] connection switched to newJettyId=" << jetty_->GetJettyId()
-            << ", remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-            << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-    }
-    return resource.AsyncModifyJettyToError(failedJetty);
-}
-
-Status UrmaConnection::ModifyJettyToError(UrmaResource &resource)
-{
-    std::shared_ptr<UrmaJetty> jetty;
-    {
-        std::lock_guard<std::mutex> lock(jettyMutex_);
-        CHECK_FAIL_RETURN_STATUS(jetty_ != nullptr, K_RUNTIME_ERROR, "Jetty already cleared for connection");
-        jetty = jetty_;
-        if (!jetty->MarkInvalid()) {
-            LOG(WARNING) << "[URMA_MODIFY_JETTY_TO_ERROR_SKIP] Jetty " << jetty->GetJettyId()
-                      << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-                      << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-            return Status::OK();
-        }
-        LOG(INFO) << "[URMA_MODIFY_JETTY_TO_ERROR] Mark Jetty " << jetty->GetJettyId()
-                  << " invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-                  << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
-    }
-    return resource.AsyncModifyJettyToError(jetty);
-}
-
-urma_target_jetty_t *UrmaConnection::GetTargetJetty() const
-{
-    return tjetty_ == nullptr ? nullptr : tjetty_->Raw();
-}
-
 Status UrmaConnection::GetRemoteSeg(uint64_t segVa, UrmaRemoteSegmentMap::const_accessor &accessor) const
 {
     if (!tsegs_.find(accessor, segVa)) {
@@ -562,13 +504,14 @@ Status UrmaConnection::UnimportRemoteSeg(uint64_t segmentAddress)
 
 void UrmaConnection::Clear()
 {
-    {
-        std::lock_guard<std::mutex> lock(jettyMutex_);
-        jetty_.reset();
-    }
-    tjetty_.reset();
+    targetJetty_.reset();
     tsegs_.clear();
     urmaJfrInfo_ = UrmaJfrInfo();
+}
+
+UrmaResource::~UrmaResource()
+{
+    Clear();
 }
 
 Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondingDevice)
@@ -601,6 +544,14 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
     constexpr uint32_t threadCount = 1;
     deleteJettyThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJfs");
     RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnRH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw(), JETTY_SIZE));
+
+    // Pre-fill the send Jetty pool to capacity (fail-fast on creation failure).
+    RETURN_IF_NOT_OK(PreFillSendJettyPool());
+
+    // Start background refill thread to top up the pool after failures.
+    refillStop_.store(false);
+    refillNeeded_.store(false);
+    refillThread_ = std::make_unique<std::thread>(&UrmaResource::RefillLoop, this);
     return Status::OK();
 }
 
@@ -680,6 +631,22 @@ void UrmaResource::Clear()
 {
     OsXprtPipln::UnInitOsPiplnRH2DEnv();
 
+    // Stop the background refill thread first so it does not touch the pool during teardown.
+    if (refillThread_ != nullptr && refillThread_->joinable()) {
+        refillStop_.store(true);
+        refillCV_.notify_all();
+        refillThread_->join();
+        refillThread_.reset();
+    }
+    {
+        std::unique_lock<std::shared_timed_mutex> deleteThreadLock(deleteJettyThreadMutex_);
+        deleteJettyThread_.reset();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(sharedRecvJettyMutex_);
+        sharedRecvJetty_.reset();
+    }
     {
         std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
         jettyRegistry_.clear();
@@ -691,6 +658,10 @@ void UrmaResource::Clear()
     {
         std::lock_guard<std::mutex> pendingDeleteLock(pendingDeleteMutex_);
         pendingDeleteJettys_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(jettyPoolMutex_);
+        sendJettyPool_.Clear();
     }
     jettyPriority_ = 0;
     jfc_.reset();
@@ -704,6 +675,52 @@ Status UrmaResource::CreateJetty(std::shared_ptr<UrmaJetty> &jetty, JettyType je
     CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating Jetty");
     RETURN_IF_NOT_OK(UrmaJetty::Create(*this, jettyType, jetty));
     RETURN_IF_NOT_OK(RegisterJetty(jetty));
+    return Status::OK();
+}
+
+Status UrmaResource::GetOrCreateSharedRecvJetty(std::shared_ptr<UrmaJetty> &jetty)
+{
+    jetty.reset();
+    CHECK_FAIL_RETURN_STATUS(context_ != nullptr, K_RUNTIME_ERROR,
+                             "URMA context is null when creating shared recv Jetty");
+    CHECK_FAIL_RETURN_STATUS(jfc_ != nullptr, K_RUNTIME_ERROR, "URMA jfc is null when creating shared recv Jetty");
+
+    std::lock_guard<std::mutex> lock(sharedRecvJettyMutex_);
+    if (sharedRecvJetty_ != nullptr && sharedRecvJetty_->IsValid()) {
+        jetty = sharedRecvJetty_;
+        return Status::OK();
+    }
+    if (sharedRecvJetty_ != nullptr) {
+        LOG(WARNING) << "Discard invalid shared recv Jetty id " << sharedRecvJetty_->GetJettyId();
+        sharedRecvJetty_.reset();
+    }
+
+    std::shared_ptr<UrmaJetty> created;
+    RETURN_IF_NOT_OK_APPEND_MSG(CreateJetty(created, JettyType::RECV), "Failed to create shared recv Jetty");
+    LOG(INFO) << "Created shared recv Jetty id " << created->GetJettyId();
+    sharedRecvJetty_ = std::move(created);
+    jetty = sharedRecvJetty_;
+    return Status::OK();
+}
+
+Status UrmaResource::ImportTargetJetty(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJetty> &targetJetty,
+                                       urma_jetty_t *localJetty)
+{
+    LOG(INFO) << "Begin to import target jft.";
+    bondp_rjetty_t bondpRemoteJetty{};
+    urma_rjetty_t remoteJetty{};
+    RETURN_IF_NOT_OK(BuildRemoteJetty(remoteInfo, remoteJetty));
+    bondpRemoteJetty.base = remoteJetty;
+    bondpRemoteJetty.jetty = localJetty;
+    bondpRemoteJetty.base.flag.bs.has_drv_ext = 1;
+    Timer timer;
+    METRIC_TIMER(metrics::KvMetricId::URMA_IMPORT_JFR);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        UrmaTargetJetty::Import(GetContext(), &(bondpRemoteJetty.base), GetUrmaToken(), targetJetty),
+        FormatString("Failed to import target jetty, remoteInfo: %s", remoteInfo.ToString()));
+    LOG_IF(INFO, timer.ElapsedMilliSecond() > 1)
+        << "[URMA_CONNECT] Import target jetty elapsed = " << timer.ElapsedMilliSecond() << "ms"
+        << ", cpuid: " << sched_getcpu() << ", remoteInfo: " << remoteInfo.ToString();
     return Status::OK();
 }
 
@@ -728,9 +745,13 @@ Status UrmaResource::AsyncModifyJettyToError(std::shared_ptr<UrmaJetty> jetty)
     CHECK_FAIL_RETURN_STATUS(jetty != nullptr, K_RUNTIME_ERROR,
                              "Failed to modify Jetty to error because Jetty is null");
     auto traceId = Trace::Instance().GetTraceID();
+    std::shared_lock<std::shared_timed_mutex> deleteThreadLock(deleteJettyThreadMutex_);
+    CHECK_FAIL_RETURN_STATUS(deleteJettyThread_ != nullptr, K_RUNTIME_ERROR,
+                             "Failed to modify Jetty to error because delete Jetty thread is stopped");
     deleteJettyThread_->Execute([this, jetty, traceId]() {
         auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
         LOG_IF_ERROR(RetireJettyToError(jetty), "RetireJettyToError failed");
+        retiringJettyCount_.fetch_sub(1);
     });
     return Status::OK();
 }
@@ -756,6 +777,11 @@ Status UrmaResource::RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty)
 
 void UrmaResource::AsyncDeleteJetty(uint32_t jettyId)
 {
+    std::shared_lock<std::shared_timed_mutex> deleteThreadLock(deleteJettyThreadMutex_);
+    if (deleteJettyThread_ == nullptr) {
+        LOG(INFO) << "Skip async delete Jetty " << jettyId << " because delete Jetty thread is stopped";
+        return;
+    }
     deleteJettyThread_->Submit([this, jettyId]() {
         std::shared_ptr<UrmaJetty> jetty;
         std::string traceId;
@@ -819,21 +845,266 @@ Status UrmaResource::GetJettyById(uint32_t jettyId, std::shared_ptr<UrmaJetty> &
     return Status::OK();
 }
 
-Status UrmaResource::GetAnyValidJetty(std::shared_ptr<UrmaJetty> &jetty)
+// ============================================================================
+// Process-level send Jetty pool
+// ============================================================================
+
+Status UrmaResource::PreFillSendJettyPool()
 {
-    std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
-    for (auto it = jettyRegistry_.begin(); it != jettyRegistry_.end();) {
-        jetty = it->second.lock();
-        if (jetty == nullptr) {
-            it = jettyRegistry_.erase(it);
-            continue;
+    // Create all Jetties outside the pool lock so driver calls do not block the hot path on
+    // re-Init. On any failure the call fails fast; already-created Jetties are released by
+    // shared_ptr destruction and the caller (Init) aborts startup.
+    std::vector<std::shared_ptr<UrmaJetty>> created;
+    created.reserve(FLAGS_urma_send_jetty_lane_pool_size);
+    for (uint32_t i = 0; i < FLAGS_urma_send_jetty_lane_pool_size; ++i) {
+        std::shared_ptr<UrmaJetty> jetty;
+        auto rc = CreateJetty(jetty);
+        if (rc.IsError()) {
+            LOG(ERROR) << "[URMA_SEND_LANE_POOL] Pre-fill failed, targetCapacity="
+                       << FLAGS_urma_send_jetty_lane_pool_size << ", failedIndex=" << i
+                       << ", createdCount=" << created.size() << ", rc=" << rc.ToString();
+            RETURN_IF_NOT_OK_APPEND_MSG(rc, FormatString("Pre-fill send Jetty pool failed, targetCapacity=%u, "
+                                                         "failedIndex=%u, createdCount=%zu",
+                                                         FLAGS_urma_send_jetty_lane_pool_size, i, created.size()));
         }
-        if (jetty->IsValid()) {
+        created.push_back(std::move(jetty));
+    }
+    {
+        std::lock_guard<std::mutex> lock(jettyPoolMutex_);
+        for (auto &j : created) {
+            sendJettyPool_.Add(std::move(j));
+        }
+    }
+    LOG(INFO) << "[URMA_SEND_LANE_POOL] Pre-filled pool with " << FLAGS_urma_send_jetty_lane_pool_size
+              << " send Jetties";
+    return Status::OK();
+}
+
+void UrmaResource::RefillLoop()
+{
+    constexpr auto kRefillInterval = std::chrono::milliseconds(50);
+    bool retryAfterFailure = false;
+    while (!refillStop_.load()) {
+        {
+            std::unique_lock<std::mutex> lock(refillMutex_);
+            if (retryAfterFailure) {
+                // A failed CreateJetty must not be retried immediately even if another refill notification
+                // arrived while the previous attempt was in progress. Only teardown can interrupt this backoff.
+                refillCV_.wait_for(lock, kRefillInterval, [this] { return refillStop_.load(); });
+            } else {
+                refillCV_.wait_for(lock, kRefillInterval,
+                                   [this] { return refillStop_.load() || refillNeeded_.load(); });
+            }
+            if (refillStop_.load()) {
+                break;
+            }
+            refillNeeded_.store(false);
+        }
+
+        SendJettyPool::Stats poolStats;
+        const auto deficit = GetSendJettyPoolRefillDeficit(poolStats);
+        if (deficit != 0) {
+            retryAfterFailure = RefillSendJettyPool(deficit);
+        } else {
+            retryAfterFailure = false;
+        }
+    }
+}
+
+size_t UrmaResource::GetSendJettyPoolRefillDeficit(SendJettyPool::Stats &poolStats)
+{
+    {
+        std::lock_guard<std::mutex> poolLock(jettyPoolMutex_);
+        poolStats = sendJettyPool_.GetStats();
+    }
+    const auto retiringOrPendingCount = GetRetiringOrPendingJettyCount();
+    const auto targetPoolSize = static_cast<size_t>(FLAGS_urma_send_jetty_lane_pool_size);
+    const auto liveLimit = targetPoolSize + static_cast<size_t>(FLAGS_urma_send_jetty_lane_refill_extra_size);
+    const auto liveAndRetiring = poolStats.poolSize + retiringOrPendingCount;
+    if (poolStats.poolSize < targetPoolSize && liveAndRetiring < liveLimit) {
+        return std::min(targetPoolSize - poolStats.poolSize, liveLimit - liveAndRetiring);
+    }
+    VLOG(1) << "[URMA_SEND_LANE_POOL] Refill skipped, poolSize=" << poolStats.poolSize
+            << ", idleCount=" << poolStats.idleCount << ", retiringOrPendingCount=" << retiringOrPendingCount
+            << ", targetPoolSize=" << targetPoolSize << ", liveLimit=" << liveLimit;
+    return 0;
+}
+
+bool UrmaResource::RefillSendJettyPool(size_t deficit)
+{
+    std::vector<std::shared_ptr<UrmaJetty>> created;
+    for (size_t i = 0; i < deficit; ++i) {
+        std::shared_ptr<UrmaJetty> jetty;
+        auto rc = CreateJetty(jetty);
+        if (rc.IsError()) {
+            LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
+                << "[URMA_SEND_LANE_POOL] Refill CreateJetty failed: " << rc.ToString() << ", created "
+                << created.size() << "/" << deficit << ", will retry next tick";
+            break;
+        }
+        created.push_back(std::move(jetty));
+    }
+    if (created.empty()) {
+        return true;
+    }
+    SendJettyPool::Stats poolStats;
+    {
+        std::lock_guard<std::mutex> poolLock(jettyPoolMutex_);
+        for (auto &jetty : created) {
+            sendJettyPool_.Add(std::move(jetty));
+        }
+        poolStats = sendJettyPool_.GetStats();
+    }
+    LOG(INFO) << "[URMA_SEND_LANE_POOL] Refilled " << created.size() << " send Jetties, poolSize now "
+              << poolStats.poolSize << ", idleCount=" << poolStats.idleCount;
+    return created.size() != deficit;
+}
+
+void UrmaResource::MaybeTriggerRefill()
+{
+    {
+        std::lock_guard<std::mutex> lock(refillMutex_);
+        refillNeeded_.store(true);
+    }
+    refillCV_.notify_one();
+}
+
+void UrmaResource::RemoveFromPoolLocked(const std::shared_ptr<UrmaJetty> &jetty)
+{
+    if (sendJettyPool_.Remove(jetty)) {
+        const auto stats = sendJettyPool_.GetStats();
+        LOG(INFO) << "[URMA_SEND_LANE_POOL] Removed jetty " << jetty->GetJettyId()
+                  << " from pool, poolSize=" << stats.poolSize << ", idleCount=" << stats.idleCount;
+        return;
+    }
+    LOG(WARNING) << "[URMA_SEND_LANE_POOL] Jetty " << jetty->GetJettyId()
+                 << " not found in pool during removal";
+}
+
+Status UrmaResource::AcquireJetty(std::shared_ptr<UrmaJetty> &jetty)
+{
+    std::lock_guard<std::mutex> lock(jettyPoolMutex_);
+
+    // Pop an idle & valid Jetty. After pre-fill the pool holds only valid Jetties, but invalid
+    // entries are skipped defensively (e.g. a Jetty invalidated between release and acquire).
+    while (sendJettyPool_.PopIdle(jetty)) {
+        if (jetty != nullptr && jetty->IsValid()) {
+            const auto stats = sendJettyPool_.GetStats();
+            VLOG(1) << "[URMA_SEND_LANE_POOL] Acquired jetty " << jetty->GetJettyId()
+                    << ", idleCount=" << stats.idleCount << ", poolSize=" << stats.poolSize;
             return Status::OK();
         }
-        ++it;
     }
-    RETURN_STATUS(K_NOT_FOUND, "No valid Jetty found in registry");
+
+    // Pool is full but every Jetty is in use. With the 64-thread / 200-pool sizing this should not
+    // happen in practice; surface K_TRY_AGAIN so the caller can backpressure.
+    const auto stats = sendJettyPool_.GetStats();
+    RETURN_STATUS(K_TRY_AGAIN, FormatString("No idle URMA send Jetty in pool, poolSize=%zu, idleCount=%zu, "
+                                            "inUseCount=%zu",
+                                            stats.poolSize, stats.idleCount, stats.inUseCount));
+}
+
+void UrmaResource::ReleaseJetty(const std::shared_ptr<UrmaJetty> &jetty)
+{
+    if (jetty == nullptr) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(jettyPoolMutex_);
+
+    if (!jetty->IsValid()) {
+        // Jetty was invalidated by ReCreateJetty or RetireJetty and already removed from the pool.
+        LOG(INFO) << "[URMA_SEND_LANE_POOL] Releasing invalid jetty " << jetty->GetJettyId()
+                  << " (already removed from pool)";
+        return;
+    }
+
+    if (sendJettyPool_.Release(jetty)) {
+        const auto stats = sendJettyPool_.GetStats();
+        VLOG(1) << "[URMA_SEND_LANE_POOL] Released jetty " << jetty->GetJettyId()
+                << ", idleCount=" << stats.idleCount;
+        return;
+    }
+
+    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        << "[URMA_SEND_LANE_POOL] Jetty " << jetty->GetJettyId() << " not found in pool during release";
+}
+
+SendJettyPool::Stats UrmaResource::GetSendJettyPoolStats()
+{
+    std::lock_guard<std::mutex> lock(jettyPoolMutex_);
+    return sendJettyPool_.GetStats();
+}
+
+size_t UrmaResource::GetPendingDeleteJettyCount()
+{
+    std::lock_guard<std::mutex> pendingDeleteLock(pendingDeleteMutex_);
+    return pendingDeleteJettys_.size();
+}
+
+size_t UrmaResource::GetRetiringOrPendingJettyCount()
+{
+    return retiringJettyCount_.load() + GetPendingDeleteJettyCount();
+}
+
+Status UrmaResource::ReCreateJetty(const std::shared_ptr<UrmaJetty> &failedJetty)
+{
+    if (failedJetty == nullptr) {
+        return Status::OK();
+    }
+    if (!failedJetty->MarkInvalid()) {
+        // Already invalidated by another thread (concurrent CQE/AE/timeout).
+        return Status::OK();
+    }
+
+    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        << "[URMA_RECREATE_JETTY] Invalidating jetty " << failedJetty->GetJettyId();
+    METRIC_TIMER(metrics::KvMetricId::URMA_JETTY_RECREATE_LATENCY);
+
+    // Remove the failed Jetty from the pool so capacity drops by one; the background refill
+    // thread will top it back up. No driver calls on the foreground path.
+    {
+        std::lock_guard<std::mutex> lock(jettyPoolMutex_);
+        RemoveFromPoolLocked(failedJetty);
+    }
+    retiringJettyCount_.fetch_add(1);
+    MaybeTriggerRefill();
+
+    // Asynchronously move the failed Jetty to error state for cleanup.
+    auto rc = AsyncModifyJettyToError(failedJetty);
+    if (rc.IsError()) {
+        retiringJettyCount_.fetch_sub(1);
+    }
+    return rc;
+}
+
+Status UrmaResource::RetireJetty(const std::shared_ptr<UrmaJetty> &jetty)
+{
+    if (jetty == nullptr) {
+        return Status::OK();
+    }
+    if (!jetty->MarkInvalid()) {
+        LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+            << "[URMA_SEND_LANE_RETIRE] Jetty " << jetty->GetJettyId() << " already invalid, skipping";
+        return Status::OK();
+    }
+
+    LOG_FIRST_AND_EVERY_N(WARNING, K_URMA_WARNING_LOG_EVERY_N)
+        << "[URMA_SEND_LANE_RETIRE] Retiring timed-out Jetty " << jetty->GetJettyId();
+
+    {
+        std::lock_guard<std::mutex> lock(jettyPoolMutex_);
+        RemoveFromPoolLocked(jetty);
+    }
+    retiringJettyCount_.fetch_add(1);
+    MaybeTriggerRefill();
+
+    // Asynchronously move the timed-out Jetty to error state.
+    auto rc = AsyncModifyJettyToError(jetty);
+    if (rc.IsError()) {
+        retiringJettyCount_.fetch_sub(1);
+    }
+    return rc;
 }
 
 }  // namespace datasystem

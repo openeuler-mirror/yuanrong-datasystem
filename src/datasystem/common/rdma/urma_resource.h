@@ -22,11 +22,16 @@
 #define DATASYSTEM_COMMON_RDMA_URMA_RESOURCE_H
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 #include <tbb/concurrent_hash_map.h>
 
 #include <ub/umdk/urma/urma_api.h>
@@ -34,7 +39,9 @@
 
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_info.h"
+#include "datasystem/common/rdma/urma_send_lane.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/common/util/timer.h"
 #include "datasystem/protos/meta_transport.pb.h"
 #include "datasystem/utils/status.h"
 
@@ -52,6 +59,7 @@ enum class JettyType : uint8_t {
     SEND = 0,
     RECV = 1,
 };
+
 class UrmaEvent : public Event {
 public:
     enum class OperationType : uint8_t { UNKNOWN = 0, READ = 1, WRITE = 2 };
@@ -59,24 +67,26 @@ public:
     /**
      * @brief Construct an Urma event for an in-flight request.
      * @param[in] requestId Unique request id.
-     * @param[in] jetty Jetty snapshot at request-submit time. The owning connection is
-     *            recovered via jetty->GetConnection() when needed for recovery.
+     * @param[in] laneLease Request-level send lane lease shared by all chunks in one transfer.
      * @param[in] remoteAddress Remote address string for logging.
      * @param[in] remoteInstanceId Remote instance id for logging.
      * @param[in] dataSize Request data size for logging.
      * @param[in] operationType Read or write.
      * @param[in] waiter Optional waiter used for notification.
      */
-    UrmaEvent(uint64_t requestId, std::weak_ptr<UrmaJetty> jetty, std::string remoteAddress,
+    UrmaEvent(uint64_t requestId, std::shared_ptr<UrmaSendLaneLease> laneLease, std::string remoteAddress,
               std::string remoteInstanceId, uint64_t dataSize, OperationType operationType,
               std::shared_ptr<EventWaiter> waiter = nullptr)
         : Event(requestId, std::move(waiter)),
-          jetty_(std::move(jetty)),
+          laneLease_(std::move(laneLease)),
           remoteAddress_(std::move(remoteAddress)),
           remoteInstanceId_(std::move(remoteInstanceId)),
           dataSize_(dataSize),
           operationType_(operationType)
     {
+        if (laneLease_ != nullptr) {
+            laneLease_->AddEvent();
+        }
     }
 
     ~UrmaEvent() = default;
@@ -102,7 +112,7 @@ public:
 
     /**
      * @brief Get the connection that owned the Jetty at request-submit time.
-     *        Derived from jetty_->GetConnection() rather than stored directly.
+     *        Derived from the lane lease's Jetty rather than stored directly.
      * @return Weak pointer to the associated connection (empty if Jetty expired).
      */
     std::weak_ptr<UrmaConnection> GetConnection() const;
@@ -113,7 +123,7 @@ public:
      */
     std::weak_ptr<UrmaJetty> GetJetty() const
     {
-        return jetty_;
+        return laneLease_ == nullptr ? std::weak_ptr<UrmaJetty>() : std::weak_ptr<UrmaJetty>(laneLease_->GetJetty());
     }
 
     /**
@@ -145,6 +155,24 @@ public:
         return operationType_;
     }
 
+    /**
+     * @brief Mark this event as settled by normal completion.
+     * @return Lane action to execute if this was the final event in the request lease.
+     */
+    UrmaSendLaneLease::SettleAction MarkLaneReleased()
+    {
+        return MarkLaneSettled(false);
+    }
+
+    /**
+     * @brief Mark this event as settled by timeout or local retirement.
+     * @return Lane action to execute if this was the final event in the request lease.
+     */
+    UrmaSendLaneLease::SettleAction MarkLaneRetired()
+    {
+        return MarkLaneSettled(true);
+    }
+
     static const char *OperationTypeName(OperationType type)
     {
         switch (type) {
@@ -158,13 +186,23 @@ public:
     }
 
 private:
+    UrmaSendLaneLease::SettleAction MarkLaneSettled(bool retire)
+    {
+        bool expected = false;
+        if (!laneEventSettled_.compare_exchange_strong(expected, true) || laneLease_ == nullptr) {
+            return UrmaSendLaneLease::SettleAction::NONE;
+        }
+        return retire ? laneLease_->MarkEventRetired() : laneLease_->MarkEventReleased();
+    }
+
     int statusCode_{ 0 };
-    std::weak_ptr<UrmaJetty> jetty_;
+    std::shared_ptr<UrmaSendLaneLease> laneLease_;
     std::string remoteAddress_;
     std::string remoteInstanceId_;
     uint64_t dataSize_{ 0 };
     OperationType operationType_{ OperationType::UNKNOWN };
     uint64_t createTimeUs_{ static_cast<uint64_t>(GetSteadyClockTimeStampUs()) };
+    std::atomic<bool> laneEventSettled_{ false };
 };
 
 class UrmaContext {
@@ -461,20 +499,26 @@ using UrmaRemoteSegmentMap = tbb::concurrent_hash_map<uint64_t, std::unique_ptr<
 
 class UrmaResource;
 
+/**
+ * @brief A URMA connection to a remote peer.
+ *
+ * Each connection holds a single imported remote target Jetty (TJetty) and
+ * the remote segment cache. Local send Jetties are owned by the process-level
+ * pool in UrmaResource and borrowed per-WR.
+ */
 class UrmaConnection : public std::enable_shared_from_this<UrmaConnection> {
 public:
     /**
-     * @brief Construct a connection with a local Jetty and an imported remote target Jetty.
-     * @param[in] jetty Local Jetty used by this connection.
+     * @brief Construct a connection with an imported remote target Jetty.
+     *        Local send Jetties are acquired from the UrmaResource pool at WR-submit time.
      * @param[in] tjetty Imported remote target Jetty.
-     * @param[in] urmaJfrInfo Remote Jetty metadata stored in the legacy JFR-shaped handshake structure.
+     * @param[in] urmaJfrInfo Remote Jetty metadata used for reconnect and logging.
      */
-    UrmaConnection(std::shared_ptr<UrmaJetty> jetty, std::unique_ptr<UrmaTargetJetty> tjetty,
-                   const UrmaJfrInfo &urmaJfrInfo)
-        : jetty_(std::move(jetty)), tjetty_(std::move(tjetty)), urmaJfrInfo_(urmaJfrInfo)
+    UrmaConnection(std::unique_ptr<UrmaTargetJetty> tjetty, const UrmaJfrInfo &urmaJfrInfo)
+        : targetJetty_(std::move(tjetty)), urmaJfrInfo_(urmaJfrInfo)
     {
-        LOG(INFO) << "Created connection with Jetty " << jetty_->GetJettyId() << " and remote Jetty "
-                  << urmaJfrInfo_.jfrId;
+        LOG(INFO) << "[URMA_CONNECTION] Created connection, remote Jetty=" << urmaJfrInfo_.jfrId
+                  << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
     }
 
     ~UrmaConnection();
@@ -488,33 +532,13 @@ public:
     const UrmaJfrInfo &GetUrmaJfrInfo() const;
 
     /**
-     * @brief Get the current local Jetty owned by this connection.
-     * @return Shared pointer to the bound Jetty.
-     */
-    std::shared_ptr<UrmaJetty> GetJetty() const;
-
-    /**
-     * @brief Recreate the connection Jetty for a failed request Jetty.
-     *        The failure marker and replacement are both performed while holding the
-     *        connection lock so only one thread handles a given failed Jetty.
-     * @param[in] resource Urma resource used to create and retire JFS handles.
-     * @param[in] failedJetty The Jetty that observed the CQE failure.
-     * @return Status of the call.
-     */
-    Status ReCreateJetty(UrmaResource &resource, const std::shared_ptr<UrmaJetty> &failedJetty);
-
-    /**
-     * @brief Mark the current connection Jetty invalid and asynchronously move it to error state.
-     * @param[in] resource Urma resource used to retire the Jetty.
-     * @return Status of the call.
-     */
-    Status ModifyJettyToError(UrmaResource &resource);
-
-    /**
      * @brief Get the imported remote target Jetty handle.
-     * @return Raw target Jetty handle.
+     * @return Raw target Jetty handle, or nullptr if not yet imported.
      */
-    urma_target_jetty_t *GetTargetJetty() const;
+    urma_target_jetty_t *GetTargetJetty() const
+    {
+        return targetJetty_ == nullptr ? nullptr : targetJetty_->Raw();
+    }
 
     /**
      * @brief Look up an imported remote segment by its base address.
@@ -544,21 +568,26 @@ public:
 
     /**
      * @brief Release all resources owned by this connection.
+     *        Does not touch local send Jetties (those belong to the UrmaResource pool).
      */
     void Clear();
 
 private:
-    mutable std::mutex jettyMutex_;
-    std::shared_ptr<UrmaJetty> jetty_;
-    std::unique_ptr<UrmaTargetJetty> tjetty_;
+    std::unique_ptr<UrmaTargetJetty> targetJetty_;
     UrmaJfrInfo urmaJfrInfo_;
     UrmaRemoteSegmentMap tsegs_;
 };
 
+/**
+ * @brief Process-level URMA resource manager.
+ *
+ * Owns the URMA context, JFC/JFCE, Jetty registry, async-event delete thread,
+ * and a process-level pool of local send Jetties shared across all connections.
+ */
 class UrmaResource {
 public:
     UrmaResource() = default;
-    ~UrmaResource() = default;
+    ~UrmaResource();
 
     /**
      * @brief Initialize core Urma resources for the local device.
@@ -651,11 +680,68 @@ public:
     }
 
     /**
-     * @brief Create a new Jetty for a connection.
+     * @brief Create a new Jetty (not added to pool; caller decides placement).
      * @param[out] jetty Created Jetty wrapper.
+     * @param[in] jettyType SEND or RECV.
      * @return Status of the call.
      */
     Status CreateJetty(std::shared_ptr<UrmaJetty> &jetty, JettyType jettyType = JettyType::SEND);
+
+    /**
+     * @brief Get or lazily create the process-level receive Jetty published for remote import.
+     * @param[out] jetty Shared receive Jetty used by all handshake responses in this process.
+     * @return Status of the call.
+     */
+    Status GetOrCreateSharedRecvJetty(std::shared_ptr<UrmaJetty> &jetty);
+
+    /**
+     * @brief Import a remote Jetty as a target Jetty.
+     * @param[in] remoteInfo Remote Jetty metadata containing the Jetty ID to import.
+     * @param[out] targetJetty Imported target Jetty handle.
+     * @param[in] localJetty Local send Jetty (may be nullptr; binding happens at WR post time).
+     * @return Status of the call.
+     */
+    Status ImportTargetJetty(const UrmaJfrInfo &remoteInfo, std::unique_ptr<UrmaTargetJetty> &targetJetty,
+                             urma_jetty_t *localJetty);
+
+    // ---- Process-level send Jetty pool ----
+
+    /**
+     * @brief Acquire an idle local send Jetty from the process-level pool.
+     *        The pool is pre-filled to capacity at Init time and refilled in the background
+     *        after failures, so the hot path only pops from the idle list.
+     * @param[out] jetty Acquired send Jetty (in-use until ReleaseJetty is called).
+     * @return Status: OK on success, K_TRY_AGAIN when all pool Jetties are in use.
+     */
+    Status AcquireJetty(std::shared_ptr<UrmaJetty> &jetty);
+
+    /**
+     * @brief Return a local send Jetty to the process-level pool.
+     *        If the Jetty has been marked invalid (by ReCreateJetty or RetireJetty), it has
+     *        already been removed from the pool; the call is a no-op.
+     * @param[in] jetty Jetty to release.
+     */
+    void ReleaseJetty(const std::shared_ptr<UrmaJetty> &jetty);
+
+    /**
+     * @brief Handle a failed Jetty: mark it invalid, remove it from the pool, and trigger
+     *        background refill. The failed Jetty is asynchronously moved to error state.
+     *        Only the first caller for a given Jetty proceeds (via MarkInvalid).
+     * @param[in] failedJetty The Jetty that observed a CQE/AE failure.
+     * @return Status of the call.
+     */
+    Status ReCreateJetty(const std::shared_ptr<UrmaJetty> &failedJetty);
+
+    /**
+     * @brief Retire a timed-out Jetty: mark invalid, remove from pool, trigger background
+     *        refill, and asynchronously move to error state.
+     *        Late completions for the old Jetty will be safely discarded.
+     * @param[in] jetty The Jetty to retire.
+     * @return Status of the call.
+     */
+    Status RetireJetty(const std::shared_ptr<UrmaJetty> &jetty);
+
+    // ---- Async cleanup helpers ----
 
     /**
      * @brief Asynchronously move a Jetty to error state for later cleanup.
@@ -692,12 +778,7 @@ public:
      */
     Status GetJettyById(uint32_t jettyId, std::shared_ptr<UrmaJetty> &jetty);
 
-    /**
-     * @brief Get any valid registered Jetty, used by async-event injection tests.
-     * @param[out] jetty Locked shared pointer to a valid Jetty.
-     * @return Status of the call.
-     */
-    Status GetAnyValidJetty(std::shared_ptr<UrmaJetty> &jetty);
+    SendJettyPool::Stats GetSendJettyPoolStats();
 
     /**
      * @brief Get or lazily create the context-level shared JFR for send-only Jetty.
@@ -719,6 +800,41 @@ private:
      */
     Status RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty);
 
+    /**
+     * @brief Pre-fill the send Jetty pool to FLAGS_urma_send_jetty_lane_pool_size at Init time.
+     *        All Jetties are created outside the pool lock; on any failure the whole call fails
+     *        (fail-fast) and already-created Jetties are dropped by shared_ptr destruction.
+     * @return Status of the call.
+     */
+    Status PreFillSendJettyPool();
+
+    /**
+     * @brief Background loop that refills the pool to capacity after failures.
+     *        Creates Jetties outside the pool lock and pushes them back in.
+     */
+    void RefillLoop();
+
+    size_t GetSendJettyPoolRefillDeficit(SendJettyPool::Stats &poolStats);
+
+    // @return true when at least one Jetty creation failed and the next attempt must wait for a retry tick.
+    bool RefillSendJettyPool(size_t deficit);
+
+    /**
+     * @brief Wake the refill thread to top up the pool.
+     */
+    void MaybeTriggerRefill();
+
+    /**
+     * @brief Remove a Jetty from sendJettyPool_ (swap-with-last) and fix up idle indices.
+     *        Must be called while holding jettyPoolMutex_.
+     * @param[in] jetty Jetty to remove (matched by raw pointer).
+     */
+    void RemoveFromPoolLocked(const std::shared_ptr<UrmaJetty> &jetty);
+
+    size_t GetPendingDeleteJettyCount();
+
+    size_t GetRetiringOrPendingJettyCount();
+
     const urma_token_t urmaToken_ = { 0xACFE };  // default token
     uint8_t jfsPriority_ = 0;
     uint8_t jettyPriority_ = 0;
@@ -727,13 +843,29 @@ private:
     std::unique_ptr<UrmaJfce> jfce_;
     std::unique_ptr<UrmaJfc> jfc_;
     std::unique_ptr<ThreadPool> deleteJettyThread_;
+    std::atomic<size_t> retiringJettyCount_{ 0 };
     std::mutex pendingDeleteMutex_;
     // jetty id to pending delete jetty object with trace context
     std::unordered_map<uint32_t, PendingDeleteJetty> pendingDeleteJettys_;
+    std::shared_timed_mutex deleteJettyThreadMutex_;
     std::mutex jettyRegistryMutex_;
     std::unordered_map<uint32_t, std::weak_ptr<UrmaJetty>> jettyRegistry_;
     std::mutex sharedJettyJfrMutex_;
     std::shared_ptr<UrmaJfr> sharedJettyJfr_;
+    std::mutex sharedRecvJettyMutex_;
+    std::shared_ptr<UrmaJetty> sharedRecvJetty_;
+
+    // ---- Process-level send Jetty pool ----
+    std::mutex jettyPoolMutex_;
+    // All send Jetties managed by the pool (both idle and in-use). Only valid Jetties live here.
+    SendJettyPool sendJettyPool_;
+
+    // ---- Background refill thread ----
+    std::unique_ptr<std::thread> refillThread_;
+    std::mutex refillMutex_;
+    std::condition_variable refillCV_;
+    std::atomic<bool> refillStop_{ true };
+    std::atomic<bool> refillNeeded_{ false };
 };
 
 }  // namespace datasystem
