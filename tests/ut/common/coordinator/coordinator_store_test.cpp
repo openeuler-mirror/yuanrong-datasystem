@@ -33,6 +33,7 @@
 
 #include "ut/common.h"
 #include "datasystem/common/coordinator/coordinator_store.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
 #include "datasystem/common/coordinator/steady_clock.h"
@@ -1493,6 +1494,37 @@ TEST_F(CoordinatorStoreTest, MemoryKvStoreCasMissingKeyDoesNotBumpRevisionOrEmit
 
     ASSERT_EQ(store.CurrentRevision(), 1);
     ASSERT_TRUE(events.empty());
+}
+
+TEST_F(CoordinatorStoreTest, CoordinatorServiceBrpcModeInitAndStartAndShutdown)
+{
+    // Enable brpc mode before constructing the service (FLAGS_use_brpc is read in Init()).
+    FLAGS_use_brpc = true;
+
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18481));
+    DS_ASSERT_OK(service.Init());
+    DS_ASSERT_OK(service.Start());
+
+    // Verify the service can handle RPC in brpc mode.
+    coordinator::PutReqPb putReq;
+    putReq.set_key("/brpc/key");
+    putReq.set_value("brpc_value");
+    coordinator::PutRspPb putRsp;
+    DS_ASSERT_OK(service.Put(putReq, putRsp));
+    ASSERT_TRUE(putRsp.header().is_leader());
+    ASSERT_EQ(putRsp.version(), 1);
+
+    coordinator::RangeReqPb rangeReq;
+    rangeReq.set_key("/brpc/key");
+    coordinator::RangeRspPb rangeRsp;
+    DS_ASSERT_OK(service.Range(rangeReq, rangeRsp));
+    ASSERT_EQ(rangeRsp.kvs_size(), 1);
+    ASSERT_EQ(rangeRsp.kvs(0).value(), "brpc_value");
+
+    DS_ASSERT_OK(service.Shutdown());
+
+    // Restore default for subsequent tests.
+    FLAGS_use_brpc = false;
 }
 }  // namespace ut
 }  // namespace datasystem
