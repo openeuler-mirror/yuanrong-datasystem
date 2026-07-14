@@ -173,6 +173,54 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
     return Status::OK();
 }
 
+Status AcquireUrmaSendLane(const UrmaRemoteAddrPb &urmaInfo, std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    (void)urmaInfo;
+    laneLease.reset();
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(UrmaManager::Instance().AcquireSendLane(urmaInfo, laneLease));
+#endif
+    return Status::OK();
+}
+
+Status SealUrmaSendLaneLease(const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    (void)laneLease;
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(UrmaManager::Instance().SealSendLaneLease(laneLease));
+#endif
+    return Status::OK();
+}
+
+Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                                const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
+                                uint8_t srcChipId, uint8_t dstChipId, bool blocking,
+                                std::vector<uint64_t> &eventKeys,
+                                const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                                std::shared_ptr<EventWaiter> waiter)
+{
+    (void)urmaInfo;
+    (void)localSegAddress;
+    (void)localSegSize;
+    (void)localObjectAddress;
+    (void)readOffset;
+    (void)readSize;
+    (void)metaDataSize;
+    (void)srcChipId;
+    (void)dstChipId;
+    (void)blocking;
+    (void)eventKeys;
+    (void)laneLease;
+    (void)waiter;
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayloadWithLane(
+        urmaInfo, localSegAddress, localSegSize, localObjectAddress, readOffset, readSize, metaDataSize, srcChipId,
+        dstChipId, blocking, eventKeys, laneLease, waiter));
+#endif
+    return Status::OK();
+}
+
 Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
                 const uint64_t &localObjectAddress, const uint64_t &dataSize, const uint64_t &metaSize,
                 std::vector<uint64_t> &keys)
@@ -200,6 +248,22 @@ Status UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalS
     (void)eventKeys;
 #ifdef USE_URMA
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaGatherWrite(remoteInfo, objInfos, blocking, eventKeys));
+#endif
+    return Status::OK();
+}
+
+Status UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                               bool blocking, std::vector<uint64_t> &eventKeys,
+                               const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    (void)remoteInfo;
+    (void)objInfos;
+    (void)blocking;
+    (void)eventKeys;
+    (void)laneLease;
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaGatherWriteWithLane(remoteInfo, objInfos, blocking, eventKeys,
+                                                                       laneLease));
 #endif
     return Status::OK();
 }

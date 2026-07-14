@@ -63,9 +63,10 @@ public:
         return MarkEventSettled(true);
     }
 
-    // Mark the request as failed without consuming an event. This is used when a later chunk
-    // cannot be submitted after earlier chunks have already been posted: the outstanding events
-    // still own their pending count, but the final settlement must retire the shared send lane.
+    // Mark the request as failed without consuming an event. Standalone logical transfers use
+    // this when a later chunk cannot be submitted after earlier chunks were posted. A worker-
+    // to-worker Batch Get passes an externally owned lease and intentionally does not call this
+    // for object-level WR creation or post failures; those failures settle through release.
     SettleAction RequestRetire()
     {
         retireRequested_.store(true);

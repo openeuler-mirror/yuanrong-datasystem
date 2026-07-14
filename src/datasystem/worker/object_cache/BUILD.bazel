@@ -518,6 +518,7 @@ ds_cc_library(
         "//src/datasystem/common/object_cache:shm_guard",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rdma:urma_send_lane",
         "//src/datasystem/common/rdma/npu:remote_h2d_manager",
         "//src/datasystem/common/util:deadlock_util",
         "//src/datasystem/common/util:raii",

@@ -1009,6 +1009,7 @@ Status UrmaManager::AcquireSendLaneFromConnection(const std::shared_ptr<UrmaConn
     auto rc = urmaResource_->AcquireJetty(jetty);
     if (rc.IsError()) {
         if (rc.GetCode() == K_TRY_AGAIN) {
+            INJECT_POINT("UrmaManager.AcquireSendLaneFromConnection.PoolExhausted");
             const auto stats = urmaResource_->GetSendJettyPoolStats();
             RETURN_STATUS_LOG_ERROR(K_TRY_AGAIN,
                                     FormatString("URMA send Jetty lane pool exhausted, poolSize=%zu, idleCount=%zu, "
@@ -1402,7 +1403,8 @@ static urma_status_t PostJettyRw(urma_jetty_t *jetty, urma_opcode_t opcode, urma
     }
 }
 
-Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys)
+Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys,
+                                  const std::shared_ptr<UrmaSendLaneLease> &externalLaneLease)
 {
     if (args.size == 0) {
         return Status::OK();
@@ -1417,19 +1419,39 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     Timer timer;
     std::shared_ptr<UrmaJetty> jetty;
     urma_target_jetty_t *targetJetty = nullptr;
-    RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(args.connection, jetty, targetJetty));
-    auto laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    const bool ownsLaneLease = externalLaneLease == nullptr;
+    auto laneLease = externalLaneLease;
+    if (ownsLaneLease) {
+        RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(args.connection, jetty, targetJetty));
+        laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    } else {
+        laneLease = externalLaneLease;
+        jetty = laneLease->GetJetty();
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jetty != nullptr, K_RUNTIME_ERROR,
+                                             "Batch Get URMA send lane Jetty is null");
+        targetJetty = args.connection == nullptr ? nullptr : args.connection->GetTargetJetty();
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR,
+                                         "Batch Get write got empty remote target Jetty");
     bool laneLeaseSealed = false;
     auto sealLaneLease = [this, &laneLease, &laneLeaseSealed]() {
         if (laneLeaseSealed) {
             return Status::OK();
         }
         laneLeaseSealed = true;
+        // A Batch Get RPC owns an external lease and seals it at RPC scope.
+        // Object-level writes must not settle that lease independently.
         return SealSendLaneLease(laneLease);
     };
-    Raii sealOnExit([&sealLaneLease]() { LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA write lane lease"); });
-    auto cleanupSubmittedEvents = [this, &eventKeys, &sealLaneLease]() {
-        LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA write lane lease during cleanup");
+    Raii sealOnExit([&sealLaneLease, ownsLaneLease]() {
+        if (ownsLaneLease) {
+            LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA write lane lease");
+        }
+    });
+    auto cleanupSubmittedEvents = [this, &eventKeys, &sealLaneLease, ownsLaneLease]() {
+        if (ownsLaneLease) {
+            LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA write lane lease during cleanup");
+        }
         if (eventKeys.empty()) {
             return;
         }
@@ -1451,16 +1473,20 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             return Status::OK();
         }();
         if (injectRc.IsError()) {
-            LOG_IF_ERROR(ApplySendLaneAction(laneLease->RequestRetire(), laneLease->GetJetty()),
-                         "Failed to mark URMA write lane for retirement after injected write failure");
+            if (ownsLaneLease) {
+                LOG_IF_ERROR(ApplySendLaneAction(laneLease->RequestRetire(), laneLease->GetJetty()),
+                             "Failed to mark URMA write lane for retirement after injected write failure");
+            }
             cleanupSubmittedEvents();
             return injectRc;
         }
         auto createRc = CreateEvent(key, args.connection, laneLease, args.remoteAddress, writeSize,
                                     UrmaEvent::OperationType::WRITE, args.waiter);
         if (createRc.IsError()) {
-            LOG_IF_ERROR(ApplySendLaneAction(laneLease->RequestRetire(), laneLease->GetJetty()),
-                         "Failed to mark URMA write lane for retirement after event creation failure");
+            if (ownsLaneLease) {
+                LOG_IF_ERROR(ApplySendLaneAction(laneLease->RequestRetire(), laneLease->GetJetty()),
+                             "Failed to mark URMA write lane for retirement after event creation failure");
+            }
             cleanupSubmittedEvents();
             return createRc;
         }
@@ -1478,7 +1504,12 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                 return Status::OK();
             }();
             if (numaInjectRc.IsError()) {
-                RetireAndDeleteEvent(key);
+                if (ownsLaneLease) {
+                    RetireAndDeleteEvent(key);
+                } else {
+                    // A failed object WR must not retire the RPC-shared lane.
+                    ReleaseAndDeleteEvent(key);
+                }
                 cleanupSubmittedEvents();
                 return numaInjectRc;
             }
@@ -1512,20 +1543,12 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
     return Status::OK();
 }
 
-Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
-                                     const uint64_t &localSegSize, const uint64_t &localObjectAddress,
-                                     const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
-                                     uint8_t srcChipId, uint8_t dstChipId, bool blocking,
-                                     std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter)
+Status UrmaManager::AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo,
+                                    std::shared_ptr<UrmaSendLaneLease> &laneLease)
 {
-    eventKeys.clear();
-    PerfPoint point(PerfKey::URMA_WRITE_TOTAL);
-    const uint64_t segVa = urmaInfo.seg_va();
+    laneLease.reset();
     const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
-    const std::string remoteAddress = requestAddress.ToString();
     std::string remoteConnectionId = urmaInfo.client_id().empty() ? requestAddress.ToString() : urmaInfo.client_id();
-
-    point.RecordAndReset(PerfKey::URMA_WRITE_FIND_CONNECTION);
     std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
     TbbUrmaConnectionMap::const_accessor constAccessor;
     // The comm layer (zmq) has already exchanged the jfr, and we should be able to locate the entry.
@@ -1536,10 +1559,70 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     }
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
                                          FormatString("Failed to find jfr from %s", remoteConnectionId));
+    auto connection = constAccessor->second;
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
+    std::shared_ptr<UrmaJetty> jetty;
+    urma_target_jetty_t *targetJetty = nullptr;
+    RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR,
+                                         "Batch Get got empty remote target Jetty");
+    laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    return Status::OK();
+}
+
+Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                                     const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                     const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
+                                     uint8_t srcChipId, uint8_t dstChipId, bool blocking,
+                                     std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter)
+{
+    return UrmaWritePayloadImpl(urmaInfo, localSegAddress, localSegSize, localObjectAddress, readOffset, readSize,
+                                metaDataSize, srcChipId, dstChipId, blocking, eventKeys, nullptr, waiter);
+}
+
+Status UrmaManager::UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                                             const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                             const uint64_t &readOffset, const uint64_t &readSize,
+                                             const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId,
+                                             bool blocking, std::vector<uint64_t> &eventKeys,
+                                             const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                                             std::shared_ptr<EventWaiter> waiter)
+{
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR,
+                                         "Batch Get URMA send lane lease is null");
+    return UrmaWritePayloadImpl(urmaInfo, localSegAddress, localSegSize, localObjectAddress, readOffset, readSize,
+                                metaDataSize, srcChipId, dstChipId, blocking, eventKeys, laneLease, waiter);
+}
+
+Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                                         const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                         const uint64_t &readOffset, const uint64_t &readSize,
+                                         const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId,
+                                         bool blocking, std::vector<uint64_t> &eventKeys,
+                                         const std::shared_ptr<UrmaSendLaneLease> &externalLaneLease,
+                                         std::shared_ptr<EventWaiter> waiter)
+{
+    eventKeys.clear();
+    PerfPoint point(PerfKey::URMA_WRITE_TOTAL);
+    const uint64_t segVa = urmaInfo.seg_va();
+    const HostPort requestAddress(urmaInfo.request_address().host(), urmaInfo.request_address().port());
+    const std::string remoteAddress = requestAddress.ToString();
+    std::string remoteConnectionId = urmaInfo.client_id().empty() ? requestAddress.ToString() : urmaInfo.client_id();
+    std::shared_ptr<UrmaConnection> connection;
+    point.RecordAndReset(PerfKey::URMA_WRITE_FIND_CONNECTION);
+    std::shared_lock<std::shared_timed_mutex> l(remoteMapMutex_);
+    TbbUrmaConnectionMap::const_accessor constAccessor;
+    auto res = urmaConnectionMap_.find(constAccessor, remoteConnectionId);
+    if (!res && !urmaInfo.client_id().empty()) {
+        remoteConnectionId = requestAddress.ToString();
+        res = urmaConnectionMap_.find(constAccessor, remoteConnectionId);
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(res, K_RUNTIME_ERROR,
+                                         FormatString("Failed to find jfr from %s", remoteConnectionId));
+    connection = constAccessor->second;
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
 
     point.RecordAndReset(PerfKey::URMA_WRITE_FIND_REMOTE_SEGMENT);
-    auto &connection = constAccessor->second;
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(connection != nullptr, K_RUNTIME_ERROR, "Urma connection is null");
     UrmaRemoteSegmentMap::const_accessor remoteSegAccessor;
     RETURN_IF_NOT_OK(connection->GetRemoteSeg(segVa, remoteSegAccessor));
 
@@ -1553,8 +1636,15 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     if (OsXprtPipln::IsPiplnH2DRequest(urmaInfo)) {
         std::shared_ptr<UrmaJetty> jetty;
         urma_target_jetty_t *targetJetty = nullptr;
-        RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
-        auto laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+        const bool ownsLaneLease = externalLaneLease == nullptr;
+        auto laneLease = externalLaneLease;
+        if (ownsLaneLease) {
+            RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
+            laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+        } else {
+            jetty = externalLaneLease->GetJetty();
+            targetJetty = connection->GetTargetJetty();
+        }
         bool laneLeaseSealed = false;
         auto sealLaneLease = [this, &laneLease, &laneLeaseSealed]() {
             if (laneLeaseSealed) {
@@ -1563,8 +1653,13 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
             laneLeaseSealed = true;
             return SealSendLaneLease(laneLease);
         };
-        Raii sealOnExit(
-            [&sealLaneLease]() { LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA pipeline lane lease"); });
+        Raii sealOnExit([&sealLaneLease, ownsLaneLease]() {
+            if (ownsLaneLease) {
+                LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA pipeline lane lease");
+            }
+        });
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jetty != nullptr, K_RUNTIME_ERROR,
+                                             "Write got empty URMA send lane Jetty.");
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR, "Write got empty remote jetty.");
         OsXprtPipln::PiplnSndArgs args;
         args.jetty = jetty->Raw();
@@ -1581,8 +1676,11 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
             CreateEvent(args.serverKey, connection, laneLease, remoteAddress, readSize,
                         UrmaEvent::OperationType::WRITE));
         eventKeys.emplace_back(args.serverKey);
-        auto rc = OsXprtPipln::DoPiplnStep1_StartSender(args);
+        Status rc;
+        rc = OsXprtPipln::DoPiplnStep1_StartSender(args);
         if (rc.IsError()) {
+            // A failed object WR does not retire an RPC-shared lane. The RPC
+            // seals the lease and lets all posted events settle through release.
             ReleaseAndDeleteEvent(args.serverKey);
             eventKeys.clear();
         }
@@ -1600,7 +1698,7 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
     writeLoopArgs.size = readSize;
     writeLoopArgs.srcChipId = srcChipId;
     writeLoopArgs.dstChipId = dstChipId;
-    RETURN_IF_NOT_OK(UrmaWriteImpl(writeLoopArgs, eventKeys));
+    RETURN_IF_NOT_OK(UrmaWriteImpl(writeLoopArgs, eventKeys, externalLaneLease));
     point.Record();
     // If it is blocking wait, we will wait for the write to finish here.
     if (blocking) {
@@ -1706,6 +1804,24 @@ Status UrmaManager::UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &l
 Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
                                     bool blocking, std::vector<uint64_t> &eventKeys)
 {
+    return UrmaGatherWriteImpl(remoteInfo, objInfos, blocking, eventKeys, nullptr);
+}
+
+Status UrmaManager::UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo,
+                                            const std::vector<LocalSgeInfo> &objInfos, bool blocking,
+                                            std::vector<uint64_t> &eventKeys,
+                                            const std::shared_ptr<UrmaSendLaneLease> &laneLease)
+{
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR,
+                                         "Batch Get URMA send lane lease is null");
+    return UrmaGatherWriteImpl(remoteInfo, objInfos, blocking, eventKeys, laneLease);
+}
+
+Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
+                                        const std::vector<LocalSgeInfo> &objInfos, bool blocking,
+                                        std::vector<uint64_t> &eventKeys,
+                                        const std::shared_ptr<UrmaSendLaneLease> &externalLaneLease)
+{
     eventKeys.clear();
     if (objInfos.empty()) {
         return Status::OK();
@@ -1736,8 +1852,19 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
     INJECT_POINT("UrmaManager.GatherWriteError", []() { return Status(K_RUNTIME_ERROR, "Injcect urma wait error"); });
     std::shared_ptr<UrmaJetty> jetty;
     urma_target_jetty_t *targetJetty = nullptr;
-    RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
-    auto laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    const bool ownsLaneLease = externalLaneLease == nullptr;
+    auto laneLease = externalLaneLease;
+    if (ownsLaneLease) {
+        RETURN_IF_NOT_OK(AcquireSendLaneFromConnection(connection, jetty, targetJetty));
+        laneLease = std::make_shared<UrmaSendLaneLease>(jetty);
+    } else {
+        jetty = externalLaneLease->GetJetty();
+        targetJetty = connection->GetTargetJetty();
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(jetty != nullptr, K_RUNTIME_ERROR,
+                                         "Batch Get URMA gather send lane Jetty is null");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR,
+                                         "Gather write got empty remote Jetty");
     bool laneLeaseSealed = false;
     auto sealLaneLease = [this, &laneLease, &laneLeaseSealed]() {
         if (laneLeaseSealed) {
@@ -1746,20 +1873,26 @@ Status UrmaManager::UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::
         laneLeaseSealed = true;
         return SealSendLaneLease(laneLease);
     };
-    Raii sealOnExit(
-        [&sealLaneLease]() { LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA gather write lane lease"); });
+    Raii sealOnExit([&sealLaneLease, ownsLaneLease]() {
+        if (ownsLaneLease) {
+            LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA gather write lane lease");
+        }
+    });
     std::vector<uint64_t> createdEventKeys;
     createdEventKeys.reserve(dstSgeNum);
     std::vector<uint64_t> submittedEventKeys;
     submittedEventKeys.reserve(dstSgeNum);
-    auto cleanupEvents = [this, &createdEventKeys, &submittedEventKeys, &sealLaneLease](size_t submittedCount) {
+    auto cleanupEvents = [this, &createdEventKeys, &submittedEventKeys, &sealLaneLease,
+                          ownsLaneLease](size_t submittedCount) {
         submittedCount = std::min(submittedCount, createdEventKeys.size());
         for (size_t i = submittedCount; i < createdEventKeys.size(); ++i) {
             // These events are after bad_wr (or no WR was posted at all), so the provider cannot complete them.
             ReleaseAndDeleteEvent(createdEventKeys[i]);
         }
         submittedEventKeys.assign(createdEventKeys.begin(), createdEventKeys.begin() + submittedCount);
-        LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA gather write lane lease during cleanup");
+        if (ownsLaneLease) {
+            LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA gather write lane lease during cleanup");
+        }
         if (submittedEventKeys.empty()) {
             return;
         }

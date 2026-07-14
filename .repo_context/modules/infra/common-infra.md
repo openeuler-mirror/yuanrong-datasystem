@@ -117,6 +117,11 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap is `200 + 200`.
     A send lane is leased once per logical transfer and shared by that transfer's chunk WR events; release or retirement
     happens only after the shared request lease is sealed and all associated events have completed, failed, or timed out.
+    Worker-to-worker Batch Get is a narrower RPC-scoped exception: `BatchGetObjectRemoteImpl` acquires one shared lane
+    before object processing, passes it to ordinary and gather writes, and seals it once after all sub-request WRs are
+    created. Object WR creation/provider-post failures use release cleanup in this shared-lease path; only the initial
+    RPC-level pool acquisition returns `K_TRY_AGAIN` for pool backpressure; provider-level concurrent post safety is
+    delegated to the URMA implementation.
   - URMA receive-side Jetty reuse is process-level: `UrmaResource::GetOrCreateSharedRecvJetty()` lazily creates the
     single RECV Jetty/JFR published by TCP handshake responses, and `UrmaResource::Clear()` owns shutdown cleanup.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.

@@ -44,6 +44,8 @@ constexpr uint32_t kDestinationWorker = 1;
 constexpr size_t kValueSize = 512 * 1024;
 constexpr char kSendLaneReleaseInject[] = "UrmaManager.ApplySendLaneAction.Release";
 constexpr char kModifyJettyInject[] = "urma.ModifyJettyToError";
+constexpr char kPauseWriteAfterPostInject[] = "UrmaManager.UrmaWriteAfterPost";
+constexpr char kPoolExhaustedInject[] = "UrmaManager.AcquireSendLaneFromConnection.PoolExhausted";
 
 class UrmaSendJettyPoolStTest : public OCClientCommon {
 public:
@@ -156,6 +158,97 @@ TEST_F(UrmaSendJettyPoolStTest, SmallPoolReusesLaneForSequentialSetAndRemoteGet)
         ASSERT_EQ(got, values[i]);
     }
     WaitForWorkerInjectExecuteCount(kSourceWorker, kSendLaneReleaseInject, kRequestCount);
+}
+
+TEST_F(UrmaSendJettyPoolStTest, BatchGetSharesOneLaneAcrossOverlappingObjects)
+{
+    std::shared_ptr<KVClient> writer;
+    std::shared_ptr<KVClient> reader;
+    InitTestKVClient(kSourceWorker, writer);
+    InitTestKVClient(kDestinationWorker, reader, 10000, false, 10000);
+
+    // The large object disables aggregate handling for the entire request. With more than the parallel threshold,
+    // the server submits individual objects from multiple TBB workers. The whole RPC must still use one send lane.
+    constexpr uint32_t kSmallObjectCount = 1024;
+    constexpr size_t kSmallValueSize = 8 * 1024;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    keys.reserve(kSmallObjectCount + 1);
+    values.reserve(kSmallObjectCount + 1);
+    keys.emplace_back("urma-send-lane-batch-exhaust-big");
+    values.emplace_back(kValueSize, 'a');
+    DS_ASSERT_OK(writer->Set(keys.back(), values.back()));
+    for (uint32_t i = 0; i < kSmallObjectCount; ++i) {
+        keys.emplace_back("urma-send-lane-batch-exhaust-" + std::to_string(i));
+        values.emplace_back(kSmallValueSize, static_cast<char>('b' + (i % 26)));
+        DS_ASSERT_OK(writer->Set(keys.back(), values.back()));
+    }
+
+    // Pause immediately after the first WR is posted. This keeps the RPC-scoped lease in use while other parallel
+    // sub-requests submit on the same Jetty. A pool-exhaustion injection is retained as a direct regression signal.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kSendLaneReleaseInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kPauseWriteAfterPostInject, "1*pause()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kPoolExhaustedInject, "call()"));
+    Status getStatus;
+    std::vector<std::string> got;
+    std::promise<Status> getPromise;
+    auto getFuture = getPromise.get_future();
+    std::thread getThread([reader, keys, &got, promise = std::move(getPromise)]() mutable {
+        promise.set_value(reader->Get(keys, got));
+    });
+
+    bool writePaused = false;
+    Status countStatus = Status::OK();
+    Status exhaustedCountStatus = Status::OK();
+    uint64_t executeCount = 0;
+    uint64_t exhaustedCount = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+        countStatus = cluster_->GetInjectActionExecuteCount(WORKER, kSourceWorker, kPauseWriteAfterPostInject,
+                                                              executeCount);
+        exhaustedCountStatus =
+            cluster_->GetInjectActionExecuteCount(WORKER, kSourceWorker, kPoolExhaustedInject, exhaustedCount);
+        if (countStatus.IsError() || exhaustedCountStatus.IsError()) {
+            break;
+        }
+        writePaused = executeCount > 0;
+        if (writePaused) {
+            break;
+        }
+        if (getFuture.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready) {
+            break;
+        }
+    }
+
+    if (writePaused) {
+        // Give the parallel workers time to submit all other objects while the only lane is held.
+        const auto overlapDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (std::chrono::steady_clock::now() < overlapDeadline) {
+            exhaustedCountStatus =
+                cluster_->GetInjectActionExecuteCount(WORKER, kSourceWorker, kPoolExhaustedInject, exhaustedCount);
+            if (exhaustedCountStatus.IsError() || exhaustedCount > 0) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+    const auto clearStatus = cluster_->ClearInjectAction(WORKER, kSourceWorker, kPauseWriteAfterPostInject);
+    const auto clearExhaustedStatus = cluster_->ClearInjectAction(WORKER, kSourceWorker, kPoolExhaustedInject);
+    getThread.join();
+    getStatus = getFuture.get();
+
+    ASSERT_TRUE(countStatus.IsOk()) << countStatus.ToString();
+    ASSERT_TRUE(exhaustedCountStatus.IsOk()) << exhaustedCountStatus.ToString();
+    ASSERT_TRUE(clearStatus.IsOk()) << clearStatus.ToString();
+    ASSERT_TRUE(clearExhaustedStatus.IsOk()) << clearExhaustedStatus.ToString();
+    ASSERT_TRUE(writePaused) << "the first URMA write was not paused: " << getStatus.ToString();
+    ASSERT_EQ(exhaustedCount, 0U) << "Batch Get acquired more than its RPC-scoped lane";
+    DS_ASSERT_OK(getStatus);
+    WaitForWorkerInjectExecuteCount(kSourceWorker, kSendLaneReleaseInject, 1);
+    ASSERT_EQ(got.size(), values.size());
+    for (size_t i = 0; i < values.size(); ++i) {
+        ASSERT_EQ(got[i], values[i]) << "object index: " << i;
+    }
 }
 
 TEST_F(UrmaSendJettyPoolConcurrentStTest, ConcurrentRemoteGetsSucceedAtConfiguredPoolCapacity)

@@ -309,6 +309,29 @@ public:
                             std::shared_ptr<EventWaiter> waiter = nullptr);
 
     /**
+     * @brief Acquire the single send lane owned by a worker-to-worker Batch Get RPC.
+     * @param[in] urmaInfo Remote address information from one sub-request.
+     * @param[out] laneLease RPC-scoped send lane lease.
+     * @return Status of the call (K_TRY_AGAIN if the pool is exhausted).
+     */
+    Status AcquireSendLane(const UrmaRemoteAddrPb &urmaInfo,
+                           std::shared_ptr<UrmaSendLaneLease> &laneLease);
+
+    /**
+     * @brief Write payloads using an already acquired Batch Get RPC lane.
+     *
+     * The caller owns the lease lifetime and seals it after all sub-requests have
+     * finished creating events. This method never acquires or seals a Jetty lane.
+     */
+    Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                                    const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                    const uint64_t &readOffset, const uint64_t &readSize,
+                                    const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId,
+                                    bool blocking, std::vector<uint64_t> &eventKeys,
+                                    const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                                    std::shared_ptr<EventWaiter> waiter = nullptr);
+
+    /**
      * @brief Does a RDMA read from remote worker memory location
      * 1. Registers the segment if address is not already registered
      * 2. Imports remote segment
@@ -337,6 +360,19 @@ public:
      */
     Status UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos, bool blocking,
                            std::vector<uint64_t> &eventKeys);
+
+    /**
+     * @brief Gather write using an already acquired Batch Get RPC lane.
+     * @see UrmaWritePayloadWithLane
+     */
+    Status UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                                   bool blocking, std::vector<uint64_t> &eventKeys,
+                                   const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+
+    /**
+     * @brief Seal a Batch Get RPC send lane after no more WRs can be created.
+     */
+    Status SealSendLaneLease(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
 
     /**
      * @brief Remove the connection-side state for a remote device.
@@ -630,7 +666,6 @@ private:
     void ReleaseAndDeleteEvent(uint64_t requestId);
     void RetireAndDeleteEvent(uint64_t requestId);
     Status RetireEventLane(const std::shared_ptr<UrmaEvent> &event);
-    Status SealSendLaneLease(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
     Status ApplySendLaneAction(UrmaSendLaneLease::SettleAction action, const std::shared_ptr<UrmaJetty> &jetty);
 
     struct UrmaWriteArgs {
@@ -646,7 +681,20 @@ private:
         uint8_t dstChipId = INVALID_CHIP_ID;
     };
 
-    Status UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys);
+    Status UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys,
+                         const std::shared_ptr<UrmaSendLaneLease> &laneLease = nullptr);
+
+    Status UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                                const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
+                                uint8_t srcChipId, uint8_t dstChipId, bool blocking,
+                                std::vector<uint64_t> &eventKeys,
+                                const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                                std::shared_ptr<EventWaiter> waiter);
+
+    Status UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                               bool blocking, std::vector<uint64_t> &eventKeys,
+                               const std::shared_ptr<UrmaSendLaneLease> &laneLease);
 
     /**
      * @brief Deletes the UrmaEvent object for the request
