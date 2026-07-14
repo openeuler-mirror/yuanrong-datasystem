@@ -84,6 +84,7 @@ ds_cc_library(
     ),
     deps=[
         ":fast_transport_base_header",
+        ":urma_send_lane",
         "//include/datasystem/hetero:hetero_headers",
         "//include/datasystem/object:object_headers",
         "//src/datasystem/client/hetero_cache:hetero_cache_headers",

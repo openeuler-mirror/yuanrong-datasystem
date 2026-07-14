@@ -261,8 +261,9 @@ DS_URMA_DEV_NAME=<device> \
 
 - Manual URMA send-Jetty pool system coverage:
   - `//tests/st/client/object_cache:urma_send_jetty_pool_test` starts real workers and clients with URMA enabled.
-    It verifies sequential small-pool reuse, configured-capacity concurrent remote Get, and recovery after an injected
-    recoverable CQE retires a send Jetty.
+    It verifies sequential small-pool reuse, one-lane ownership across overlapping objects in a Batch Get with pool
+    size 1, configured-capacity concurrent remote Get, and recovery after an injected recoverable CQE retires a send
+    Jetty.
   - It needs the same URMA SDK/runtime and configured device:
 
 ```bash

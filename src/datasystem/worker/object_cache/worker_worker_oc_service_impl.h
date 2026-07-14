@@ -22,6 +22,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
+#include "datasystem/common/rdma/urma_send_lane.h"
 #include "datasystem/topology/coordination_backend/coordination_backend.h"
 #include "datasystem/worker/cluster_manager/cluster_manager.h"
 #include "datasystem/protos/worker_object.irpc.pb.h"
@@ -149,6 +150,9 @@ private:
     struct BatchRh2dContext {
         bool prepared = false;
         int32_t devId = -1;
+        // One worker-to-worker Batch Get RPC owns one URMA lane. Every object
+        // handler in the RPC shares this lease; only the RPC seals it.
+        std::shared_ptr<UrmaSendLaneLease> sendLaneLease;
     };
 
     /**
@@ -189,7 +193,8 @@ private:
                                  std::shared_ptr<ShmUnit> shmUnit, uint64_t localSegAddress, uint64_t localSegSize,
                                  uint64_t offset, uint64_t size, bool blocking, std::vector<uint64_t> &eventKeys,
                                  const std::shared_ptr<AggregateMemory> &batchPtr, bool isFastTransportEnabled,
-                                 bool isPipelineH2DRequest, Status &fastTransportStatus,
+                                 bool isPipelineH2DRequest, BatchRh2dContext *batchRh2dContext,
+                                 Status &fastTransportStatus,
                                  std::string &fastTransportName);
 
     Status HandlePayloadFallback(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
@@ -276,7 +281,8 @@ private:
      * @return Status of the call.
      */
     Status ParallelBatchGetObject(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
-                                  std::vector<ParallelRes> &parallelRes);
+                                  std::vector<ParallelRes> &parallelRes,
+                                  const std::shared_ptr<UrmaSendLaneLease> &sendLaneLease);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to prepare the aggregate info.
@@ -297,7 +303,8 @@ private:
      * @return Status of the call.
      */
     Status GatherWrite(uint64_t subIndex, AggregateInfo &info, std::shared_ptr<AggregateMemory> aggregatedMem,
-                       std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req);
+                       std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req,
+                       const std::shared_ptr<UrmaSendLaneLease> &sendLaneLease);
     /**
      * @brief Helper function pre-process and then trigger GetObjectRemoteImpl.
      * @param[in] req Remote get request.

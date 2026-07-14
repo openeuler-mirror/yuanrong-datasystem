@@ -357,7 +357,8 @@ Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReq
 
 Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &info,
                                               std::shared_ptr<AggregateMemory> aggregatedMem,
-                                              std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req)
+                                              std::vector<ParallelRes> &parallelRes, BatchGetObjectRemoteReqPb &req,
+                                              const std::shared_ptr<UrmaSendLaneLease> &sendLaneLease)
 {
     if (!info.canBatchHandler) {
         return Status::OK();
@@ -376,7 +377,12 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
             .port = urmaInfo.request_address().port(),
             .dstChipId = urmaInfo.has_chip_id() ? static_cast<uint8_t>(urmaInfo.chip_id()) : INVALID_CHIP_ID,
         };
-        rc = UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys);
+        if (sendLaneLease != nullptr) {
+            rc = UrmaGatherWriteWithLane(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys,
+                                         sendLaneLease);
+        } else {
+            rc = UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys);
+        }
     } else if (IsUcpEnabled() && subReq->has_ucp_info()) {
         rc = UcpGatherPut(subReq->ucp_info(), ocClientWorkerSvc_->GetMetadataSize(), aggregatedMem->localSgeInfos,
                           false, loc.eventKeys);
@@ -557,7 +563,8 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
 
         RETURN_IF_NOT_OK(WriteViaFastTransport(req, rsp, entry, shmUnit, localSegAddress, localSegSize, offset, size,
                                                blocking, eventKeys, batchPtr, isFastTransportEnabled,
-                                               isPipelineH2DRequest, fastTransportStatus, fastTransportName));
+                                               isPipelineH2DRequest, batchRh2dContext, fastTransportStatus,
+                                               fastTransportName));
         RETURN_IF_NOT_OK(HandlePayloadFallback(req, rsp, entry, outPayload, shmGuard, shmUnit, fastTransportStatus,
                                                fastTransportName, objectKey, isUrmaFastTransport, isPipelineH2DRequest,
                                                blocking, batchPtr, fallbackStatus, batchRootInfo, batchRh2dContext,
@@ -622,7 +629,8 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
     const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry, std::shared_ptr<ShmUnit> shmUnit,
     uint64_t localSegAddress, uint64_t localSegSize, uint64_t offset, uint64_t size, bool blocking,
     std::vector<uint64_t> &eventKeys, const std::shared_ptr<AggregateMemory> &batchPtr, bool isFastTransportEnabled,
-    bool isPipelineH2DRequest, Status &fastTransportStatus, std::string &fastTransportName)
+    bool isPipelineH2DRequest, BatchRh2dContext *batchRh2dContext, Status &fastTransportStatus,
+    std::string &fastTransportName)
 {
     auto markFastTransferResult = [&rsp, isPipelineH2DRequest](const Status &status) {
         if (status.IsError()) {
@@ -651,9 +659,17 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
             const uint8_t srcChipId = NumaIdToChipId(shmUnit->GetNumaId());
             const uint8_t dstChipId =
                 req.urma_info().has_chip_id() ? static_cast<uint8_t>(req.urma_info().chip_id()) : INVALID_CHIP_ID;
-            auto rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize,
-                                       reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size,
-                                       entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys);
+            Status rc;
+            if (batchRh2dContext != nullptr && batchRh2dContext->sendLaneLease != nullptr) {
+                rc = UrmaWritePayloadWithLane(
+                    req.urma_info(), localSegAddress, localSegSize,
+                    reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size, entry->GetMetadataSize(), srcChipId,
+                    dstChipId, blocking, eventKeys, batchRh2dContext->sendLaneLease);
+            } else {
+                rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize,
+                                      reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size,
+                                      entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys);
+            }
             fastTransportStatus = rc;
             fastTransportName = "UrmaWrite";
             RETURN_IF_NOT_OK(markFastTransferResult(rc));
@@ -928,14 +944,38 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
                                                            std::vector<RpcMessage> &payload)
 {
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE);
+    std::shared_ptr<UrmaSendLaneLease> sendLaneLease;
+    if (IsUrmaEnabled()) {
+        for (const auto &subReq : req.requests()) {
+            if (subReq.has_urma_info()) {
+                // Acquire before any sub-request starts. This is the only
+                // pool acquisition for the whole worker-to-worker Batch Get RPC.
+                RETURN_IF_NOT_OK(AcquireUrmaSendLane(subReq.urma_info(), sendLaneLease));
+                break;
+            }
+        }
+    }
+    bool sendLaneSealed = false;
+    auto sealBatchLane = [&]() {
+        if (sendLaneSealed || sendLaneLease == nullptr) {
+            return Status::OK();
+        }
+        sendLaneSealed = true;
+        return SealUrmaSendLaneLease(sendLaneLease);
+    };
+    Raii sealOnExit([&sealBatchLane]() {
+        LOG_IF_ERROR(sealBatchLane(), "Failed to seal worker-to-worker Batch Get URMA lane");
+    });
+
     std::vector<ParallelRes> parallelRes;
     if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsFastTransportEnabled()) {
-        RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, parallelRes));
+        RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, parallelRes, sendLaneLease));
     } else {
         uint32_t parallelSize = 1;
         parallelRes.resize(parallelSize);
         PerfPoint loopPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_IMPL_LOOP_SERIAL);
         BatchRh2dContext batchRh2dContext;
+        batchRh2dContext.sendLaneLease = sendLaneLease;
         if (req.requests_size() > 0) {
             auto *firstReq = req.mutable_requests(0);
             *(firstReq->mutable_comm_id()) = req.comm_id();
@@ -949,6 +989,11 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
         loopPoint.Record();
     }
 
+    // No new WR can be created after the batch processing loops return. Keep
+    // completion ownership in the events, and let the shared lease settle only
+    // after this single Seal call. Object-level WR failures intentionally do
+    // not request retirement; their cleanup follows release semantics.
+    RETURN_IF_NOT_OK(sealBatchLane());
     return MergeParallelBatchGetResult(req, parallelRes, rsp, payload);
 }
 
@@ -1064,8 +1109,9 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
-                                                         std::vector<ParallelRes> &parallelRes)
+Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
+    BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp, std::vector<ParallelRes> &parallelRes,
+    const std::shared_ptr<UrmaSendLaneLease> &sendLaneLease)
 {
     tbb::task_arena limited;
     if (FLAGS_oc_worker_worker_parallel_nums > 0) {
@@ -1089,6 +1135,7 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(BatchGetObjectRemoteReq
                     batchPtr->localSgeInfos.reserve(endPos - startPos);
                 }
                 BatchRh2dContext batchRh2dContext;
+                batchRh2dContext.sendLaneLease = sendLaneLease;
                 auto *firstReq = req.mutable_requests(startPos);
                 *(firstReq->mutable_comm_id()) = req.comm_id();
                 LOG_IF_ERROR(PrepareBatchRh2dContext(*firstReq, batchRh2dContext), "PrepareBatchRh2dContext failed");
@@ -1100,7 +1147,8 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(BatchGetObjectRemoteReq
                 }
                 loopPoint.Record();
                 PerfPoint pDo(PerfKey::URMA_GATHER_WRITE_DO);
-                LOG_IF_ERROR(GatherWrite(i, info, batchPtr, parallelRes, req), "gather write error!");
+                LOG_IF_ERROR(GatherWrite(i, info, batchPtr, parallelRes, req, sendLaneLease),
+                             "gather write error!");
             }
         });
     });

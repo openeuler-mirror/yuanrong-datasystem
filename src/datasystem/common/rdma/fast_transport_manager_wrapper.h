@@ -22,6 +22,7 @@
 #define DATASYSTEM_COMMON_FAST_TRANSPORT_MANAGER_WRAPPER_H
 
 #include "datasystem/common/rdma/rdma_util.h"
+#include "datasystem/common/rdma/urma_send_lane.h"
 #ifdef USE_URMA
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
@@ -123,6 +124,27 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
                         std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter = nullptr);
 
 /**
+ * @brief Acquire the send lane owned by one worker-to-worker Batch Get RPC.
+ */
+Status AcquireUrmaSendLane(const UrmaRemoteAddrPb &urmaInfo, std::shared_ptr<UrmaSendLaneLease> &laneLease);
+
+/**
+ * @brief Seal a send lane acquired for one worker-to-worker Batch Get RPC.
+ */
+Status SealUrmaSendLaneLease(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+
+/**
+ * @brief Write payload using an already acquired Batch Get RPC send lane.
+ */
+Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
+                                const uint64_t &localSegSize, const uint64_t &localObjectAddress,
+                                const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
+                                uint8_t srcChipId, uint8_t dstChipId, bool blocking,
+                                std::vector<uint64_t> &eventKeys,
+                                const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                                std::shared_ptr<EventWaiter> waiter = nullptr);
+
+/**
  * @brief Trigger UrmaManager logic to import segment and read payload.
  * @param[in] UrmaRemoteAddrPb  Protobuf contians remote host address, remote urma segment address and data offset
  * @param[in] localSegAddress Starting address of the segment (e.g. Arena start address).
@@ -148,6 +170,13 @@ Status UrmaRead(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddres
  */
 Status UrmaGatherWrite(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos, bool blocking,
                        std::vector<uint64_t> &eventKeys);
+
+/**
+ * @brief Gather write using an already acquired Batch Get RPC send lane.
+ */
+Status UrmaGatherWriteWithLane(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
+                               bool blocking, std::vector<uint64_t> &eventKeys,
+                               const std::shared_ptr<UrmaSendLaneLease> &laneLease);
 
 /**
  * @brief Fill in ucp_info pb for UCP RDMA.
