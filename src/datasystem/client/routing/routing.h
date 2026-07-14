@@ -36,6 +36,12 @@
 namespace datasystem {
 namespace client {
 
+enum class DataPlacementPolicy {
+    PREFERRED_SAME_NODE,  // Prefer a same-node worker, then fall back to the metadata owner.
+    REQUIRED_SAME_NODE,   // Select only from same-node workers.
+    PREFERRED_META_OWNER,  // Prefer the metadata owner selected by the hash ring.
+};
+
 class Routing {
 public:
     Routing(std::shared_ptr<WorkerRouter> router, std::shared_ptr<HashRingRefresher> refresher,
