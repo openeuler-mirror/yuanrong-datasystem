@@ -68,6 +68,7 @@ cd tests/kvtest
     "connect_timeout_ms": 1000,
     "request_timeout_ms": 20,
     "enable_cross_node_connection": true,
+    "enable_local_cache": true,
     "fast_transport_mem_size": "512MB"
   },
   "data_sizes": ["1MB"],
@@ -96,6 +97,7 @@ cd tests/kvtest
 | `connect_options.connect_timeout_ms` | int | 1000 | KVClient 连接超时（毫秒） |
 | `connect_options.request_timeout_ms` | int | 20 | KVClient 请求超时（毫秒） |
 | `connect_options.enable_cross_node_connection` | bool | true | 允许跨节点连接 standby Worker |
+| `connect_options.enable_local_cache` | bool | true | 启用 SDK 客户端本地缓存，`false` 走 Transport 层 |
 | `connect_options.fast_transport_mem_size` | string | "512MB" | 快速传输内存大小，支持 KB/MB/GB 后缀 |
 | `data_sizes` | string[] | ["1MB"] | 数据大小列表，支持 KB/MB/GB 后缀，随机选取 |
 | `set_param.ttl_second` | uint | 0 | Set 操作 TTL（秒），0 = 永不过期。所有模式通用 |

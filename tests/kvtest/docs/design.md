@@ -774,6 +774,7 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `notify_interval_us` | int | 0 | ≥ 0（0=并行） | 通知间隔（微秒） |
 | `enable_jitter` | bool | true | - | 启用随机偏移避免请求同步 |
 | `enable_cross_node_connection` | bool | true | - | 允许跨节点 failover |
+| `enable_local_cache` | bool | true | - | 启用客户端本地缓存，false 走 Transport 层 |
 | `metrics_interval_ms` | int | 3000 | > 0 | 指标采集间隔 |
 | `metrics_file` | string | "metrics_{instance_id}.csv" | - | CSV 输出文件名 |
 | `role` | string | "writer" | "writer" / "reader" | 实例角色 |

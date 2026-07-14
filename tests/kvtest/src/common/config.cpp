@@ -237,6 +237,7 @@ bool LoadConfig(const std::string &path, Config &cfg) {
             if (co.contains("connect_timeout_ms")) cfg.connectTimeoutMs = co["connect_timeout_ms"];
             if (co.contains("request_timeout_ms")) cfg.requestTimeoutMs = co["request_timeout_ms"];
             if (co.contains("enable_cross_node_connection")) cfg.enableCrossNodeConnection = co["enable_cross_node_connection"];
+            if (co.contains("enable_local_cache")) cfg.enableLocalCache = co["enable_local_cache"];
             if (co.contains("fast_transport_mem_size")) {
                 const auto &ftm = co["fast_transport_mem_size"];
                 cfg.fastTransportMemSize = ftm.is_string() ? ParseSize(ftm.get<std::string>()) : ftm.get<uint64_t>();
