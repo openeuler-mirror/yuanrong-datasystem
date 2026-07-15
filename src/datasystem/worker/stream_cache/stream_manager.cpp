@@ -35,7 +35,10 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/rpc/rpc_stub_base.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
+#include "datasystem/protos/stream_posix.brpc.stub.pb.h"
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
@@ -1270,12 +1273,20 @@ Status StreamManager::SendBlockProducerReq(const std::string &remoteWorkerAddr)
                               << " sending to remote worker: " << remoteWorkerAddr;
     HostPort workerHostPort;
     RETURN_IF_NOT_OK(workerHostPort.ParseString(remoteWorkerAddr));
-    std::shared_ptr<ClientWorkerSCService_Stub> stub;
+    std::shared_ptr<RpcStubBase> stub;
     auto scSvc = scSvc_.lock();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
     RETURN_IF_NOT_OK(scSvc->GetWorkerStub(workerHostPort, stub));
     std::unique_ptr<ClientUnaryWriterReader<BlockProducerReqPb, BlockProducerRspPb>> clientApi;
-    RETURN_IF_NOT_OK(stub->BlockProducer(RpcOptions(), &clientApi));
+    if (FLAGS_use_brpc) {
+        auto brpcStub = std::dynamic_pointer_cast<ClientWorkerSCService_BrpcGenericStub>(stub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
+        RETURN_IF_NOT_OK(brpcStub->BlockProducer(RpcOptions(), &clientApi));
+    } else {
+        auto zmqStub = std::dynamic_pointer_cast<ClientWorkerSCService_Stub>(stub);
+        RETURN_RUNTIME_ERROR_IF_NULL(zmqStub);
+        RETURN_IF_NOT_OK(zmqStub->BlockProducer(RpcOptions(), &clientApi));
+    }
     BlockProducerReqPb req;
     req.set_stream_name(streamName_);
     req.set_worker_addr(workerAddr_);
@@ -1351,12 +1362,20 @@ Status StreamManager::SendUnBlockProducerReq(const std::string &remoteWorkerAddr
     ResetOOMState(remoteWorkerAddr);  // Producer is unblocked
     HostPort workerHostPort;
     RETURN_IF_NOT_OK(workerHostPort.ParseString(remoteWorkerAddr));
-    std::shared_ptr<ClientWorkerSCService_Stub> stub;
+    std::shared_ptr<RpcStubBase> stub;
     auto scSvc = scSvc_.lock();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(scSvc != nullptr, K_SHUTTING_DOWN, "worker shutting down.");
     RETURN_IF_NOT_OK(scSvc->GetWorkerStub(workerHostPort, stub));
     std::unique_ptr<ClientUnaryWriterReader<UnblockProducerReqPb, UnblockProducerRspPb>> clientApi;
-    RETURN_IF_NOT_OK(stub->UnblockProducer(RpcOptions(), &clientApi));
+    if (FLAGS_use_brpc) {
+        auto brpcStub = std::dynamic_pointer_cast<ClientWorkerSCService_BrpcGenericStub>(stub);
+        RETURN_RUNTIME_ERROR_IF_NULL(brpcStub);
+        RETURN_IF_NOT_OK(brpcStub->UnblockProducer(RpcOptions(), &clientApi));
+    } else {
+        auto zmqStub = std::dynamic_pointer_cast<ClientWorkerSCService_Stub>(stub);
+        RETURN_RUNTIME_ERROR_IF_NULL(zmqStub);
+        RETURN_IF_NOT_OK(zmqStub->UnblockProducer(RpcOptions(), &clientApi));
+    }
     UnblockProducerReqPb req;
     req.set_stream_name(streamName_);
     req.set_worker_addr(workerAddr_);

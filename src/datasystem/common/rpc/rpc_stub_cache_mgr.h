@@ -69,6 +69,7 @@ enum class StubType : int {
     WORKER_WORKER_TRANS_SVC = 7,
     TO_COORDINATOR_SVC = 8,
     COORDINATOR_WORKER_SVC = 9,
+    CLIENT_WORKER_SC_SVC = 10,
 #ifdef WITH_TESTS
     TEST_TYPE_1 = 1000,
     TEST_TYPE_2 = 1001,

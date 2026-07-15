@@ -411,10 +411,11 @@ public:
     /**
      * @brief Helper function to create a client stub for worker.
      * @param[in] workerHostPort worker Address.
-     * @param[out] stub creates a client stub.
+     * @param[out] stub creates a client stub (ZMQ ClientWorkerSCService_Stub or brpc
+     *                   ClientWorkerSCService_BrpcGenericStub, selected by FLAGS_use_brpc).
      * @return K_OK on success; the error code otherwise.
      */
-    Status GetWorkerStub(const HostPort &workerHostPort, std::shared_ptr<ClientWorkerSCService_Stub> &stub);
+    Status GetWorkerStub(const HostPort &workerHostPort, std::shared_ptr<RpcStubBase> &stub);
 
     /**
      * @brief Cleanup cached data and metadata for the requested streams.
@@ -1019,9 +1020,6 @@ private:
     std::shared_ptr<ThreadPool> threadPool_{ nullptr };
     std::shared_ptr<ThreadPool> memAllocPool_{ nullptr };
     std::shared_ptr<ThreadPool> ackPool_{ nullptr };
-    // For remote workers/producers
-    std::mutex remotePubStubMutex_;
-    std::unordered_map<std::string, std::shared_ptr<ClientWorkerSCService_Stub>> remotePubStubs_;
     std::atomic<bool> interrupt_;
     std::future<void> autoAck_;
     worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
