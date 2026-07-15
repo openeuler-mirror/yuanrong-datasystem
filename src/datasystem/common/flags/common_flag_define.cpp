@@ -154,6 +154,8 @@ DS_DEFINE_uint64_dynamic(slow_log_rpc_slower_than, 5000,
                  "RPC operation latency threshold (microseconds) for slow-log and latency summary. "
                  "Default 5000 (5ms). 0 means disabled. When enabled, requests whose RPC phases exceed this threshold "
                  "will include a latency summary in the access log.");
+DS_DEFINE_bool(enable_leaving_intercept, false,
+               "Reject object-cache write requests after the local worker starts topology scale-in draining.");
 DS_DEFINE_bool(use_brpc, GetBoolFromEnv("DATASYSTEM_USE_BRPC", false),
                "Use brpc instead of ZMQ for RPC communication.");
 DS_DEFINE_int32(brpc_server_num_threads, 64, "Number of brpc server worker threads.");
