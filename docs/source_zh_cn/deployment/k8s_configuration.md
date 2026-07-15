@@ -10,6 +10,7 @@
     - [资源相关配置](#资源相关配置)
     - [IPC/RPC相关配置](#ipcrpc相关配置)
     - [ETCD相关配置](#etcd相关配置)
+    - [Coordinator相关配置](#coordinator相关配置)
     - [Spill相关配置](#spill相关配置)
     - [Memory Rebalance相关配置](#memory-rebalance相关配置)
     - [日志与可观测相关配置](#日志与可观测相关配置)
@@ -200,6 +201,28 @@ global:
     etcdCertDir: ""
     passphraseValue: ""
     etcdMetaPoolSize: 8
+```
+
+### Coordinator相关配置
+
+Coordinator 是 ETCD 的替代协调后端。当配置了 `coordinatorAddress` 时，datasystem-worker 将连接 Coordinator 服务进行集群协调（如节点发现、心跳、拓扑管理等），而不再使用 ETCD。
+
+> **注意事项：**
+>
+> - Coordinator 与 ETCD（以及 metastore）互斥，同一时间只能选择一个协调后端。当 `coordinatorAddress` 非空时，worker 会优先使用 Coordinator，ETCD 相关配置将被忽略。
+> - Coordinator 服务需独立部署（可通过 dscli 启动，参考 [dscli](../deployment/dscli.md)），Kubernetes Helm Chart 当前不包含 Coordinator 服务的部署模板。
+> - 使用 Coordinator 时，建议将 [global.etcd.etcdAddress](#etcd相关配置) 留空，并保持 [global.etcd.enableEtcdAuth](#etcd相关配置) 为 `false`，以避免不必要的 ETCD 证书挂载。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.coordinator.coordinatorAddress | string | `""` | Coordinator 服务地址，格式为 `host:port`（例如 `127.0.0.1:31511`）。为空时使用 ETCD 作为协调后端（默认） |
+
+**样例**：
+配置 worker 连接地址为 `127.0.0.1:31511` 的 Coordinator 服务作为协调后端
+```yaml
+global:
+  coordinator:
+    coordinatorAddress: "127.0.0.1:31511"
 ```
 
 ### Spill相关配置
