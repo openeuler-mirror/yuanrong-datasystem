@@ -329,6 +329,9 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
   - start with `ds_device_llt`, `tests/st/device`, and Python device tests under `tests/python`.
 - Transport or RPC behavior:
   - start with `tests/ut/common/rpc`, `tests/st/common/rpc`, and `tests/perf/zmq` for performance-specific checks.
+  - `//tests/ut/common/rpc:fanout_collector_test` covers the deadline-bound fanout collector used by brpc
+    `AsyncRead(DONTWAIT)` migrations: partial completion, first-error aggregation, timeout cleanup, cleanup retry, late
+    completion, and concurrent completion.
 
 ## Build-System Facts That Affect Reproduction
 

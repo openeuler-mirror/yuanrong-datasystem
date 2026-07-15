@@ -217,6 +217,22 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "fanout_collector",
+    srcs = [
+        "fanout_collector.cpp",
+    ],
+    hdrs = [
+        "fanout_collector.h",
+    ],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
     name = "rpc_options",
     srcs = [
         "rpc_options.cpp",
