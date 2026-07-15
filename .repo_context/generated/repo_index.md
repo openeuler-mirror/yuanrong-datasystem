@@ -371,6 +371,8 @@ tests/
   - VERSION
   - build.sh
   - deploy_client.py
+  - deploy_common.py
+  - deploy_coordinator.py
   - deploy_pods.py
   - deploy_worker.py
 - perf/

@@ -1,250 +1,200 @@
 #!/usr/bin/env python3
-"""Tests for deploy_worker.py pure/logic functions."""
+"""Tests for deploy_worker.py role-specific layer.
+
+The shared kubectl / procmon / orchestration primitives are tested in
+test_deploy_common.py. This file focuses on what is unique to the worker
+role: start_worker delegation to deploy_common.start_service with the
+datasystem_worker binding, and cmd_start's per-pod worker_address
+injection, NUMA option construction, --set override application, and
+procmon dir resolution from the worker config.
+"""
 
 import json
 import os
-import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock, PropertyMock
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from deploy_worker import (
-    _resolve_procmon_dir,
-    check_worker,
-    cmd_restart,
-    do_for_all_pods,
-    find_default_whl,
-    kill_worker,
-    upload_procmon,
+    ADDRESS_KEY,
+    PROCESS_NAME,
+    cmd_install,
+    cmd_start,
+    start_worker,
 )
 
 
-class TestConfigOverrideParsing(unittest.TestCase):
-    """Test config override parsing logic from cmd_start."""
-
-    def _parse_override(self, value):
-        """Replicate the override parsing logic from cmd_start."""
-        value = value.strip()
-        if value.lower() == 'true':
-            return True
-        elif value.lower() == 'false':
-            return False
-        elif value.lower() in ('null', 'none'):
-            return None
-        else:
-            try:
-                if '.' in value:
-                    return float(value)
-                else:
-                    return int(value)
-            except ValueError:
-                return value
-
-    def test_string(self):
-        self.assertEqual(self._parse_override('hello'), 'hello')
-
-    def test_bool_true(self):
-        self.assertTrue(self._parse_override('true'))
-        self.assertTrue(self._parse_override('True'))
-
-    def test_bool_false(self):
-        self.assertFalse(self._parse_override('false'))
-        self.assertFalse(self._parse_override('False'))
-
-    def test_int(self):
-        self.assertEqual(self._parse_override('42'), 42)
-
-    def test_float(self):
-        self.assertEqual(self._parse_override('3.14'), 3.14)
-
-    def test_null(self):
-        self.assertIsNone(self._parse_override('null'))
-        self.assertIsNone(self._parse_override('none'))
-
-    def test_negative_int(self):
-        self.assertEqual(self._parse_override('-1'), -1)
-
-    def test_string_with_equals(self):
-        # Value after first '=' should be parsed as string
-        self.assertEqual(self._parse_override('key=value'), 'key=value')
+# Mock.call_args / call_args_list[i] are (args, kwargs) tuples in all
+# supported Pythons; the .args / .kwargs attributes are 3.8+. Use index
+# access (call[0] / call[1]) so the tests run on Python 3.7 too.
+def _pos(call):
+    return call[0]
 
 
-class TestProcmonDirDefault(unittest.TestCase):
-    """Test procmon_dir default logic from cmd_start."""
-
-    def _resolve_procmon_dir(self, config_template, remote_config):
-        """Replicate the procmon_dir resolution from cmd_start."""
-        procmon_dir = None
-        log_dir_entry = config_template.get('log_dir', {})
-        if isinstance(log_dir_entry, dict):
-            procmon_dir = log_dir_entry.get('value', None)
-        else:
-            procmon_dir = log_dir_entry or None
-        if not procmon_dir:
-            procmon_dir = os.path.dirname(remote_config)
-        return procmon_dir
-
-    def test_from_log_dir_dict(self):
-        cfg = {'log_dir': {'value': '/var/log/datasystem'}}
-        self.assertEqual(self._resolve_procmon_dir(cfg, '/tmp/worker.config'), '/var/log/datasystem')
-
-    def test_from_log_dir_string(self):
-        cfg = {'log_dir': '/data/logs'}
-        self.assertEqual(self._resolve_procmon_dir(cfg, '/tmp/worker.config'), '/data/logs')
-
-    def test_fallback_to_remote_config_dir(self):
-        cfg = {}
-        self.assertEqual(self._resolve_procmon_dir(cfg, '/data/workers/worker.config'), '/data/workers')
-
-    def test_empty_log_dir_falls_back(self):
-        cfg = {'log_dir': ''}
-        self.assertEqual(self._resolve_procmon_dir(cfg, '/opt/worker.config'), '/opt')
-
-    def test_log_dir_dict_empty_value(self):
-        cfg = {'log_dir': {'value': ''}}
-        self.assertEqual(self._resolve_procmon_dir(cfg, '/tmp/worker.config'), '/tmp')
+def _kw(call):
+    return call[1]
 
 
-class TestDoForAllPods(unittest.TestCase):
-    def test_all_succeed(self):
-        pods = [{'name': 'p1'}, {'name': 'p2'}]
-        result = do_for_all_pods(pods, lambda pod: True, 'test')
-        self.assertEqual(result, 0)
-
-    def test_partial_failure(self):
-        pods = [{'name': 'p1'}, {'name': 'p2'}]
-        call_count = [0]
-        def op(pod):
-            call_count[0] += 1
-            return call_count[0] == 1
-        result = do_for_all_pods(pods, op, 'test')
-        self.assertEqual(result, 1)
-
-    def test_all_fail(self):
-        pods = [{'name': 'p1'}]
-        result = do_for_all_pods(pods, lambda pod: False, 'test')
-        self.assertEqual(result, 1)
+def _write_config(cfg):
+    """Write a JSON config to a temp file and return its path."""
+    tf = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False)
+    json.dump(cfg, tf)
+    tf.close()
+    return tf.name
 
 
-class TestFindDefaultWhl(unittest.TestCase):
-    @patch('deploy_worker.glob.glob')
-    def test_found(self, mock_glob):
-        mock_glob.return_value = ['/some/path/openyuanrong_datasystem-0.8.2-cp311.whl']
-        result = find_default_whl()
-        self.assertIn('0.8.2', result)
+class TestStartWorker(unittest.TestCase):
+    """start_worker should delegate to deploy_common.start_service with the
+    worker role's binding (datasystem_worker binary) and forward numactl_opts.
+    """
 
-    @patch('deploy_worker.glob.glob')
-    def test_not_found(self, mock_glob):
-        mock_glob.return_value = []
-        result = find_default_whl()
-        self.assertEqual(result, '')
+    @patch('deploy_worker.start_service', return_value=True)
+    def test_delegates_with_worker_binding_and_numactl(self, mock_start):
+        pod = {'name': 'p1', 'ip': '10.0.0.1'}
+        cfg = {'worker_address': {'value': 'old'}}
+        ok = start_worker(pod, 'default', cfg, 31501, '/tmp/worker.config',
+                          enable_procmon=True, procmon_remote_dir='/tmp',
+                          numactl_opts='-N 0', timeout=10)
+        self.assertTrue(ok)
+        mock_start.assert_called_once_with(
+            pod, 'default', cfg, '/tmp/worker.config', 31501,
+            PROCESS_NAME, True, '/tmp',
+            numactl_opts='-N 0', timeout=10)
 
+    @patch('deploy_worker.start_service', return_value=True)
+    def test_no_numactl_by_default(self, mock_start):
+        pod = {'name': 'p1', 'ip': '10.0.0.1'}
+        start_worker(pod, 'default', {}, 31501, '/tmp/worker.config',
+                     enable_procmon=False, procmon_remote_dir='/tmp',
+                     numactl_opts=None, timeout=10)
+        self.assertIsNone(_kw(mock_start.call_args)['numactl_opts'])
 
-class TestUploadProcmon(unittest.TestCase):
-    @patch('deploy_worker.kubectl_cp_to')
-    @patch('deploy_worker.kubectl_exec')
-    @patch('os.path.exists', return_value=True)
-    def test_success(self, mock_exists, mock_exec, mock_cp):
-        mock_exec.return_value = MagicMock(returncode=0)
-        mock_cp.return_value = None
-        pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
-        result = upload_procmon(pod, 'default', '/tmp')
-        self.assertTrue(result)
-
-    @patch('os.path.exists', return_value=False)
-    def test_no_procmon_file(self, mock_exists):
-        pod = {'name': 'test-pod', 'ip': '10.0.0.1'}
-        result = upload_procmon(pod, 'default', '/tmp')
-        self.assertFalse(result)
-
-
-class TestResolveProcmonDir(unittest.TestCase):
-    """Test the real _resolve_procmon_dir helper extracted from cmd_start."""
-
-    def test_from_log_dir_dict(self):
-        cfg = {'log_dir': {'value': '/var/log/datasystem'}}
-        self.assertEqual(_resolve_procmon_dir(cfg, '/tmp/worker.config'), '/var/log/datasystem')
-
-    def test_from_log_dir_string(self):
-        cfg = {'log_dir': '/data/logs'}
-        self.assertEqual(_resolve_procmon_dir(cfg, '/tmp/worker.config'), '/data/logs')
-
-    def test_fallback_to_remote_config_dir(self):
-        cfg = {}
-        self.assertEqual(_resolve_procmon_dir(cfg, '/data/workers/worker.config'), '/data/workers')
-
-    def test_empty_log_dir_falls_back(self):
-        cfg = {'log_dir': ''}
-        self.assertEqual(_resolve_procmon_dir(cfg, '/opt/worker.config'), '/opt')
-
-    def test_log_dir_dict_empty_value(self):
-        cfg = {'log_dir': {'value': ''}}
-        self.assertEqual(_resolve_procmon_dir(cfg, '/tmp/worker.config'), '/tmp')
+    @patch('deploy_worker.start_service', return_value=True)
+    def test_uses_worker_process_name(self, mock_start):
+        pod = {'name': 'p1', 'ip': '10.0.0.1'}
+        start_worker(pod, 'default', {}, 31501, '/tmp/worker.config',
+                     timeout=10)
+        # positional arg index 5 is process_name
+        self.assertEqual(_pos(mock_start.call_args)[5], 'datasystem_worker')
 
 
-class TestCmdRestart(unittest.TestCase):
-    """Test cmd_restart in-place restart orchestration (leaf funcs mocked)."""
+class TestCmdStart(unittest.TestCase):
+    """cmd_start: per-pod worker_address injection, NUMA opts, overrides,
+    procmon dir resolution."""
 
     def _args(self, **overrides):
-        defaults = dict(namespace='default', remote_config='/tmp/worker.config',
-                        port=31501, timeout=10)
+        defaults = dict(namespace='default', port=31501,
+                        remote_config='/tmp/worker.config',
+                        set=[], enable_procmon=True, procmon_dir=None,
+                        numa_nodes=None, cpu_bind=None, timeout=10,
+                        config=None)
         defaults.update(overrides)
         return SimpleNamespace(**defaults)
 
-    @patch('deploy_worker.start_procmon', return_value=99)
-    @patch('deploy_worker.upload_procmon', return_value=True)
-    @patch('deploy_worker.find_worker_pid', return_value='1234')
-    @patch('deploy_worker.kubectl_exec')
-    def test_starts_worker_and_procmon_per_pod(self, mock_exec, mock_findpid,
-                                               mock_upload, mock_startproc):
-        pods = [{'name': 'p1', 'ip': '10.0.0.1'}, {'name': 'p2', 'ip': '10.0.0.2'}]
-        cat = MagicMock(stdout=json.dumps({'log_dir': {'value': '/var/log/ds'}}),
-                        returncode=0)
-        start = MagicMock(stdout='', returncode=0)
-        mock_exec.side_effect = [cat, start, start]
-        result = cmd_restart(self._args(), pods)
-        self.assertEqual(result, 0)
-        self.assertEqual(mock_exec.call_count, 3)
-        mock_findpid.assert_any_call(pods[0], 'default', 31501, timeout=10)
-        mock_upload.assert_any_call(pods[0], 'default', '/var/log/ds', timeout=10)
-        mock_startproc.assert_any_call(pods[0], 'default', '1234', '/var/log/ds', timeout=10)
+    @patch('deploy_worker.start_worker', return_value=True)
+    def test_injects_worker_address_per_pod(self, mock_start):
+        cfg_path = _write_config({
+            'worker_address': {'value': '0.0.0.0:0'},
+            'log_dir': {'value': '/var/log/ds'},
+        })
+        try:
+            args = self._args(config=cfg_path)
+            pods = [{'name': 'p1', 'ip': '10.0.0.1'},
+                    {'name': 'p2', 'ip': '10.0.0.2'}]
+            rc = cmd_start(args, pods)
+            self.assertEqual(rc, 0)
+            self.assertEqual(mock_start.call_count, 2)
+            c0 = mock_start.call_args_list[0]
+            c1 = mock_start.call_args_list[1]
+            # positional: pod, namespace, cfg, port, remote_config
+            self.assertEqual(_pos(c0)[2][ADDRESS_KEY]['value'],
+                             '10.0.0.1:31501')
+            self.assertEqual(_pos(c1)[2][ADDRESS_KEY]['value'],
+                             '10.0.0.2:31501')
+            # procmon_dir resolved from log_dir in the config
+            self.assertEqual(_kw(c0)['procmon_remote_dir'], '/var/log/ds')
+            # each pod gets a distinct deep-copied config
+            self.assertIsNot(_pos(c0)[2], _pos(c1)[2])
+        finally:
+            os.unlink(cfg_path)
 
-    @patch('deploy_worker.start_procmon')
-    @patch('deploy_worker.upload_procmon')
-    @patch('deploy_worker.find_worker_pid', return_value=None)
-    @patch('deploy_worker.kubectl_exec')
-    def test_no_pid_skips_procmon(self, mock_exec, mock_findpid,
-                                  mock_upload, mock_startproc):
+    @patch('deploy_worker.start_worker', return_value=True)
+    def test_numactl_opts_from_cpu_bind(self, mock_start):
+        cfg_path = _write_config({'worker_address': {'value': '0.0.0.0:0'}})
+        try:
+            args = self._args(config=cfg_path, cpu_bind='0-7')
+            cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
+            self.assertEqual(_kw(mock_start.call_args)['numactl_opts'],
+                             '-C 0-7')
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_worker.start_worker', return_value=True)
+    def test_numactl_opts_from_numa_nodes(self, mock_start):
+        cfg_path = _write_config({'worker_address': {'value': '0.0.0.0:0'}})
+        try:
+            args = self._args(config=cfg_path, numa_nodes='0,1')
+            cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
+            self.assertEqual(_kw(mock_start.call_args)['numactl_opts'],
+                             '-N 0,1')
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_worker.start_worker', return_value=True)
+    def test_cpu_bind_wins_over_numa_nodes(self, mock_start):
+        # Matches original precedence: cpu_bind is assigned after numa_nodes,
+        # so it overrides when both are set.
+        cfg_path = _write_config({'worker_address': {'value': '0.0.0.0:0'}})
+        try:
+            args = self._args(config=cfg_path, numa_nodes='0', cpu_bind='0-3')
+            cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
+            self.assertEqual(_kw(mock_start.call_args)['numactl_opts'],
+                             '-C 0-3')
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_worker.start_worker', return_value=True)
+    def test_set_overrides_applied(self, mock_start):
+        cfg_path = _write_config({'worker_address': {'value': '0.0.0.0:0'}})
+        try:
+            args = self._args(config=cfg_path, set=['rpc_thread_num=128'])
+            cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
+            cfg = _pos(mock_start.call_args)[2]
+            self.assertEqual(cfg['rpc_thread_num']['value'], 128)
+        finally:
+            os.unlink(cfg_path)
+
+    @patch('deploy_worker.start_worker', return_value=True)
+    def test_procmon_dir_falls_back_to_remote_config_dir(self, mock_start):
+        # No log_dir in config -> procmon_dir defaults to the remote-config
+        # directory (dirname of /tmp/worker.config == /tmp).
+        cfg_path = _write_config({'worker_address': {'value': '0.0.0.0:0'}})
+        try:
+            args = self._args(config=cfg_path)
+            cmd_start(args, [{'name': 'p1', 'ip': '10.0.0.1'}])
+            self.assertEqual(_kw(mock_start.call_args)['procmon_remote_dir'],
+                             '/tmp')
+        finally:
+            os.unlink(cfg_path)
+
+
+class TestCmdInstall(unittest.TestCase):
+    """cmd_install delegates to deploy_common.cmd_install_impl with the
+    whl path and timeout from args."""
+
+    @patch('deploy_worker.cmd_install_impl', return_value=0)
+    def test_delegates_with_whl(self, mock_impl):
+        args = SimpleNamespace(namespace='default',
+                               whl='/path/to/pkg.whl', timeout=10)
         pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
-        mock_exec.return_value = MagicMock(stdout=json.dumps({}), returncode=0)
-        result = cmd_restart(self._args(), pods)
-        self.assertEqual(result, 0)
-        mock_upload.assert_not_called()
-        mock_startproc.assert_not_called()
-
-    @patch('deploy_worker.start_procmon', return_value=99)
-    @patch('deploy_worker.upload_procmon', return_value=True)
-    @patch('deploy_worker.find_worker_pid', return_value='1234')
-    @patch('deploy_worker.kubectl_exec')
-    def test_cat_fail_falls_back_to_remote_config_dir(self, mock_exec, mock_findpid,
-                                                      mock_upload, mock_startproc):
-        pods = [{'name': 'p1', 'ip': '10.0.0.1'}]
-
-        def exec_side_effect(*a, **kw):
-            cmd = a[2]
-            if cmd.startswith('cat '):
-                raise subprocess.CalledProcessError(1, 'cat')
-            return MagicMock(stdout='', returncode=0)
-
-        mock_exec.side_effect = exec_side_effect
-        result = cmd_restart(self._args(), pods)
-        self.assertEqual(result, 0)
-        mock_upload.assert_any_call(pods[0], 'default', '/tmp', timeout=10)
-        mock_startproc.assert_any_call(pods[0], 'default', '1234', '/tmp', timeout=10)
+        rc = cmd_install(args, pods)
+        self.assertEqual(rc, 0)
+        mock_impl.assert_called_once_with(
+            pods, 'default', '/path/to/pkg.whl', 10)
 
 
 if __name__ == '__main__':

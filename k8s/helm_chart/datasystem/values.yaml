@@ -42,6 +42,15 @@ global:
     # Password for etcd authentication.
     etcdPassword: ""
 
+  # Coordinator configuration. The coordinator is an alternative coordination backend to ETCD.
+  # Only one coordination backend (coordinator, etcd, or metastore) can be active at a time.
+  # Leave coordinatorAddress empty (default) to use ETCD as the coordination backend.
+  coordinator:
+    # Address of datasystem coordinator service in 'host:port' format (e.g., "127.0.0.1:31511").
+    # When non-empty, the worker connects to the coordinator for cluster coordination instead of ETCD.
+    # The coordinator service can be started by dscli, see docs/source_zh_cn/deployment/dscli.md.
+    coordinatorAddress: ""
+
   # Port value (suggested range: 30000-32767).
   port:
     datasystemWorker: 31501

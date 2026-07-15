@@ -235,6 +235,7 @@ spec:
         - -etcd_address={{ $.Values.global.etcd.etcdAddress }}
         - -etcd_username={{ $.Values.global.etcd.etcdUsername }}
         - -etcd_password={{ $.Values.global.etcd.etcdPassword }}
+        - -coordinator_address={{ $.Values.global.coordinator.coordinatorAddress }}
         - -cluster_name={{ $.Values.global.clusterName }}
         - -async_delete={{ $.Values.global.performance.asyncDelete}}
         - -etcd_meta_pool_size={{ $.Values.global.etcd.etcdMetaPoolSize }}
