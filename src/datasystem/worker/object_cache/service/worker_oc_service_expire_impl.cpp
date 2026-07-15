@@ -21,10 +21,11 @@
 
 #include "datasystem/worker/worker_topology_references.h"
 
-#include "datasystem/common/log/access_recorder.h"
-#include "datasystem/common/log/log.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/access_recorder.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/meta_route_tool.h"
@@ -35,6 +36,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
+#include "datasystem/worker/object_cache/service/service_execution_policy.h"
 
 using namespace datasystem::master;
 namespace datasystem {
@@ -68,23 +70,36 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     std::vector<std::future<Status>> futures;
     std::string traceID = Trace::Instance().GetTraceID();
     Status rc;
-    size_t threadNum = std::min<size_t>(objKeysGrpByMaster.size(), FLAGS_rpc_thread_num);
-    auto batchExpireThreadPool_ = std::make_unique<ThreadPool>(1, threadNum, "BatchExpireMeta");
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
+    std::unique_ptr<ThreadPool> batchExpireThreadPool;
+    if (useThreadPoolFanout) {
+        size_t threadNum = std::min<size_t>(objKeysGrpByMaster.size(), FLAGS_rpc_thread_num);
+        batchExpireThreadPool = std::make_unique<ThreadPool>(1, threadNum, "BatchExpireMeta");
+    }
     futures.reserve(objKeysGrpByMaster.size());
-    for (auto &item : objKeysGrpByMaster) {
-        futures.emplace_back(batchExpireThreadPool_->Submit([&, item, timer]() {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
-            GetRequestContext()->reqTimeoutDuration.Init(realTimeoutMs - elapsed);
+    auto expire = [&, timer](const auto &item) {
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        int64_t elapsed = static_cast<int64_t>(timer.ElapsedMilliSecond());
+        GetRequestContext()->reqTimeoutDuration.Init(realTimeoutMs - elapsed);
 
-            HostPort workerAddr = item.first;
-            const std::vector<std::string> &currentIds = item.second;
-            rc = ExpireFromMaster(currentIds, workerAddr, ttlSeconds, absentObjectKeys, objKeysExpireFailed, rsp);
-            if (rc.IsError()) {
-                return rc;
-            }
-            return Status::OK();
-        }));
+        HostPort workerAddr = item.first;
+        const std::vector<std::string> &currentIds = item.second;
+        rc = ExpireFromMaster(currentIds, workerAddr, ttlSeconds, absentObjectKeys, objKeysExpireFailed, rsp);
+        if (rc.IsError()) {
+            return rc;
+        }
+        return Status::OK();
+    };
+    if (useThreadPoolFanout) {
+        for (auto &item : objKeysGrpByMaster) {
+            futures.emplace_back(batchExpireThreadPool->Submit([&, item]() { return expire(item); }));
+        }
+    } else {
+        Status serialRc = RunServiceTasksSerially(objKeysGrpByMaster.begin(), objKeysGrpByMaster.end(), expire);
+        if (serialRc.IsError()) {
+            access.Result(serialRc).Record();
+            return serialRc;
+        }
     }
 
     for (auto &func : futures) {

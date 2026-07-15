@@ -277,6 +277,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "service_execution_policy_test",
+    srcs = ["object_cache/service_execution_policy_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/object_cache/service:service_execution_policy",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "worker_worker_peer_state_codec_test",
     srcs = ["object_cache/worker_worker_peer_state_codec_test.cpp"],
     deps = [

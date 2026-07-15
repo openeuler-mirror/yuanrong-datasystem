@@ -21,14 +21,15 @@
 
 #include "datasystem/worker/worker_topology_references.h"
 
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
-#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/perf/perf_manager.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
@@ -40,6 +41,7 @@
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
+#include "datasystem/worker/object_cache/service/service_execution_policy.h"
 
 DS_DECLARE_bool(enable_distributed_master);
 
@@ -322,6 +324,7 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vecto
     auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<CreateMultiMetaResult>> futures;
     CreateMultiMetaResult lastRc;
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
     for (size_t i = 0; i < masterAddrs.size(); i++) {
         auto &masterAddr = masterAddrs[i];
         auto &req = reqs[i];
@@ -338,16 +341,24 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vecto
             }
             return BuildCreateMultiMetaResult(api, req, masterAddr);
         };
-        if (i == masterAddrs.size() - 1) {
-            // using current thread handle the last task.
+        auto runInline = [&func]() {
+            // Use the caller thread for brpc mode and for the last non-brpc task.
             ApiDeadline::Instance().Push();
             Raii deadlineRaii([]() { ApiDeadline::Instance().Pop(); });
-            lastRc = func();
+            return func();
+        };
+        if (!useThreadPoolFanout) {
+            respRes.emplace_back(runInline());
+        } else if (i == masterAddrs.size() - 1) {
+            lastRc = runInline();
         } else {
             futures.emplace_back(threadPool_->Submit(std::move(func)));
         }
     }
 
+    if (!useThreadPoolFanout) {
+        return Status::OK();
+    }
     for (auto &future : futures) {
         respRes.emplace_back(future.get());
     }

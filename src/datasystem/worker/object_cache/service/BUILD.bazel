@@ -2,6 +2,16 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+ds_cc_library(
+    name = "service_execution_policy",
+    hdrs = [
+        "service_execution_policy.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+    ],
+)
+
 # success
 ds_cc_library(
     name = "worker_oc_service_multi_publish_impl_header",
@@ -34,7 +44,9 @@ ds_cc_library(
         "//src/datasystem/worker:worker_topology_references",
         ":worker_oc_service_multi_publish_impl_header",
         "//include/datasystem/utils:utils_headers",
+        ":service_execution_policy",
         "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/parallel:common_parallel",
@@ -86,6 +98,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/worker:worker_topology_references",
         ":worker_oc_service_get_impl_header",
+        ":service_execution_policy",
         "//include/datasystem/object:object_headers",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/device:device_helper",
@@ -245,8 +258,10 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/worker:worker_topology_references",
+        ":service_execution_policy",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
@@ -291,6 +306,8 @@ ds_cc_library(
     deps = [
         "//src/datasystem/worker:worker_topology_references",
         ":worker_oc_service_delete_impl_header",
+        ":service_execution_policy",
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:container_util",
