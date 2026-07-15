@@ -189,15 +189,23 @@ public:
                     "BrpcClientStreamWriterReader::Write (embedded error)");
                 return embedded;
             }
+            // F-05 fix: capture errText AND errCode before StreamCloseAndDrain, because
+            // StreamCloseAndDrain may reset()/release() stream_cntl_ (kClosed/kTimeout path),
+            // leaving stream_cntl_ null — using stream_cntl_->ErrorCode() after that SEGVs.
             auto errText = stream_cntl_->ErrorText();
-            StreamCloseAndDrain(
+            auto errCode = stream_cntl_->ErrorCode();
+            bool drained = StreamCloseAndDrain(
                 {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
                 stream_cntl_,
                 "BrpcClientStreamWriterReader::Write (errText)");
+            if (!drained) {
+                LOG(WARNING) << "BrpcClientStreamWriterReader::Write: StreamCloseAndDrain timed out, "
+                             << "streamId=" << streamId_ << ", errCode=" << errCode;
+            }
             // Wrap with RETURN_STATUS to retain this adapter's call-site
             // (file/line) for on-call; the helper's Status carries the brpc
             // errno/name + ErrorText diagnostics in its message.
-            auto st = TryExtractStatusFromControllerError(errText, stream_cntl_->ErrorCode());
+            auto st = TryExtractStatusFromControllerError(errText, errCode);
             RETURN_STATUS(st.GetCode(), st.GetMsg());
         }
 
