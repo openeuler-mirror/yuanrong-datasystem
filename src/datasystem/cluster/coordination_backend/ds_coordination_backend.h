@@ -211,6 +211,10 @@ public:
 
 private:
     struct KeepAliveFailureState;
+    struct WatchedKey {
+        std::string key;
+        bool isPrefix{ false };
+    };
 
     /**
      * @brief Strip a physical table prefix from one returned key.
@@ -299,7 +303,7 @@ private:
     // Protects watchIds_ and watchedKeys_ while shutdown can race with watch delivery.
     std::mutex watchMutex_;
     std::vector<int64_t> watchIds_;
-    std::vector<std::string> watchedKeys_;
+    std::vector<WatchedKey> watchedKeys_;
 
     // Protects eventHandler_, checkStoreStateWhenNetworkFailedHandler_, and activeEventHandlers_.
     std::mutex eventHandlerMutex_;
