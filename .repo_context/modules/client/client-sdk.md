@@ -67,6 +67,9 @@
     depending on client transport or common object-cache implementation headers.
   - `ObjectClientImpl` owns the SDK routing lifecycle: after the initial worker is ready it creates `Routing`, performs a
     version-0 `GetHashRing` fetch, starts periodic versioned refresh, and stops routing before its transport resources.
+    Each changed topology is first validated into a versioned `WorkerSnapshot`. All topology members are retained
+    regardless of membership state; any malformed endpoint rejects the whole update, while an empty topology is a
+    valid cleanup-all snapshot. The transport admission set is published before the new route becomes visible.
   - Routing refresh always uses the transport layer's cached endpoint RPC client. It does not add HashRing methods to
     the legacy local/remote worker API or embedded C wrapper, and the GetHashRing control request carries AK/SK fields.
     Embedded configuration and `UpdateAkSk` keep the legacy and transport signature holders synchronized.
@@ -208,6 +211,11 @@
     the client to change credentials for that mode.
   - direct-read endpoint entries use a TBB concurrent map under a lifecycle shared mutex, while each entry has its own
     mutex; different endpoints can initialize connections concurrently and the same endpoint is initialized once.
+    After the first `WorkerSnapshot` is published, endpoints absent from the latest snapshot are rejected before cache
+    lookup so delayed requests cannot recreate removed entries. A dedicated transport reconcile thread coalesces
+    pending updates with latest-wins semantics, detaches absent entries under the lifecycle mutex, and closes their
+    data planes after releasing that mutex. Shutdown stops and joins this reconcile thread before closing the manager.
+    Worker incarnation changes that reuse the same endpoint are intentionally outside this mechanism.
   - transport RPC clients share a transport-owned `Signature` instance and sign each fully populated request immediately
     before sending it.
   - Set retries rebuild RPC or UB state once on the same worker inside `TransportLayer`. Cross-worker retry starts a

@@ -162,6 +162,84 @@ TEST_F(HashRingRefresherTest, TestSuccessfulRefreshUpdatesWorkerCandidates)
     EXPECT_TRUE(fetchedUpdatedWorker);
 }
 
+TEST_F(HashRingRefresherTest, TestRingUpdateHookRunsBeforeRoutePublication)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    auto fetch = [](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring, std::string &,
+                    uint64_t &newVersion, bool &changed,
+                    std::unordered_map<std::string, std::string> &hostIdMap) {
+        FillRing(ring, hostIdMap);
+        newVersion = 5;
+        changed = true;
+        return Status::OK();
+    };
+    uint64_t hookVersion = 0;
+    bool routeWasUnpublished = false;
+    auto hook = [router, &hookVersion, &routeWasUnpublished](uint64_t version,
+                                                             const ::datasystem::ClusterTopologyPb &ring) {
+        hookVersion = version;
+        EXPECT_EQ(ring.members_size(), 1);
+        HostPort selected;
+        routeWasUnpublished =
+            router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected).IsError();
+        return Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook);
+
+    DS_ASSERT_OK(refresher.InitialFetch(HostPort("127.0.0.1", 1000)));
+    EXPECT_EQ(hookVersion, 5u);
+    EXPECT_TRUE(routeWasUnpublished);
+    HostPort selected;
+    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+    EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
+}
+
+TEST_F(HashRingRefresherTest, TestFailedRingUpdateHookRetainsVersionAndRetries)
+{
+    auto router = std::make_shared<client::WorkerRouter>("host-a");
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<uint64_t> requestedVersions;
+    int hookCount = 0;
+    auto fetch = [&mutex, &requestedVersions](const HostPort &, uint64_t currentVersion,
+                                              ::datasystem::ClusterTopologyPb &ring, std::string &,
+                                              uint64_t &newVersion, bool &changed,
+                                              std::unordered_map<std::string, std::string> &hostIdMap) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            requestedVersions.push_back(currentVersion);
+        }
+        FillRing(ring, hostIdMap);
+        newVersion = 6;
+        changed = true;
+        return Status::OK();
+    };
+    auto hook = [&mutex, &cv, &hookCount](uint64_t, const ::datasystem::ClusterTopologyPb &) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++hookCount;
+        cv.notify_all();
+        return hookCount == 1 ? Status(K_RUNTIME_ERROR, "injected snapshot rejection") : Status::OK();
+    };
+    client::HashRingRefresher refresher(router, fetch, hook);
+
+    EXPECT_EQ(refresher.InitialFetch(HostPort("127.0.0.1", 1000)).GetCode(), K_RUNTIME_ERROR);
+    HostPort selected;
+    EXPECT_TRUE(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected).IsError());
+    DS_ASSERT_OK(refresher.StartPeriodicRefresh(60'000));
+    bool retried = false;
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        retried = cv.wait_for(lock, std::chrono::seconds(2), [&] { return hookCount >= 2; });
+    }
+    refresher.Stop();
+
+    ASSERT_TRUE(retried);
+    ASSERT_GE(requestedVersions.size(), 2u);
+    EXPECT_EQ(requestedVersions[0], 0u);
+    EXPECT_EQ(requestedVersions[1], 0u);
+    DS_ASSERT_OK(router->SelectWorker("key", client::SelectStrategy::HASH_RING_AFFINITY, selected));
+}
+
 TEST_F(HashRingRefresherTest, TestInvalidRefreshIntervalFails)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");

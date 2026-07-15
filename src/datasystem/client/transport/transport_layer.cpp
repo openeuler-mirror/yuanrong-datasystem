@@ -19,6 +19,7 @@
 #include "datasystem/client/transport/transport_layer.h"
 
 #include <cstdlib>
+#include <exception>
 #include <utility>
 
 #include "datasystem/client/transport/common/deadline_retry.h"
@@ -81,7 +82,20 @@ TransportLayer::~TransportLayer()
 Status TransportLayer::Init()
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
-    return manager_->Init();
+    RETURN_IF_NOT_OK(manager_->Init());
+    std::lock_guard<std::mutex> lock(reconcileMutex_);
+    if (reconcileStarted_) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(!reconcileStopping_, K_SHUTTING_DOWN, "TransportLayer is shutting down");
+    try {
+        reconcileThread_ = Thread(&TransportLayer::ReconcileLoop, this);
+        reconcileStarted_ = true;
+        reconcileThread_.set_name("transport-recon");
+    } catch (const std::exception &error) {
+        RETURN_STATUS(K_RUNTIME_ERROR, std::string("Start transport reconcile thread failed: ") + error.what());
+    }
+    return Status::OK();
 }
 
 Status TransportLayer::Get(const ObjectReadRequest &input, ObjectReadResult &output)
@@ -277,8 +291,55 @@ Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentV
     return rpcClient->InvokeGetHashRing(currentVersion, response);
 }
 
+Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    std::lock_guard<std::mutex> lock(reconcileMutex_);
+    CHECK_FAIL_RETURN_STATUS(reconcileStarted_, K_NOT_READY, "Transport reconcile thread is not initialized");
+    CHECK_FAIL_RETURN_STATUS(!reconcileStopping_, K_SHUTTING_DOWN, "TransportLayer is shutting down");
+    RETURN_IF_NOT_OK(manager_->UpdateWorkerSnapshot(snapshot));
+    pendingSnapshot_ = std::move(snapshot);
+    reconcileCv_.notify_one();
+    return Status::OK();
+}
+
+void TransportLayer::ReconcileLoop()
+{
+    bool keepRunning = true;
+    while (keepRunning) {
+        WorkerSnapshot snapshot;
+        {
+            std::unique_lock<std::mutex> lock(reconcileMutex_);
+            reconcileCv_.wait(lock, [this] { return reconcileStopping_ || pendingSnapshot_.has_value(); });
+            keepRunning = !reconcileStopping_;
+            if (keepRunning) {
+                snapshot = std::move(*pendingSnapshot_);
+                pendingSnapshot_.reset();
+            }
+        }
+        if (keepRunning) {
+            manager_->ReconcileWithSnapshot(snapshot);
+        }
+    }
+}
+
 void TransportLayer::Shutdown()
 {
+    std::lock_guard<std::mutex> shutdownLock(shutdownMutex_);
+    Thread reconcileThread;
+    {
+        std::lock_guard<std::mutex> lock(reconcileMutex_);
+        reconcileStopping_ = true;
+        pendingSnapshot_.reset();
+        reconcileCv_.notify_all();
+        if (reconcileStarted_) {
+            reconcileThread = std::move(reconcileThread_);
+            reconcileStarted_ = false;
+        }
+    }
+    if (reconcileThread.joinable()) {
+        reconcileThread.join();
+    }
     // Drain pending DecreaseReference tasks before closing their endpoint connections.
     releasePool_.reset();
     objectRead_.reset();

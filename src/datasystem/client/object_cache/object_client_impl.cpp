@@ -565,6 +565,15 @@ client::HashRingRefresher::FetchRpc ObjectClientImpl::BuildRoutingFetchRpc(
     };
 }
 
+Status ObjectClientImpl::ApplyRoutingWorkerSnapshot(uint64_t ringVersion,
+                                                    const ::datasystem::ClusterTopologyPb &ring)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    client::WorkerSnapshot snapshot;
+    RETURN_IF_NOT_OK(client::BuildWorkerSnapshot(ringVersion, ring, snapshot));
+    return transportLayer_->ApplyWorkerSnapshot(std::move(snapshot));
+}
+
 Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal)
 {
     if (routing_ != nullptr) {
@@ -574,7 +583,11 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
                              "Initial worker address is unavailable for routing initialization");
     auto router = std::make_shared<client::WorkerRouter>("");
     auto fetchRpc = BuildRoutingFetchRpc(router, initialWorker, initialWorkerIsLocal);
-    auto refresher = std::make_shared<client::HashRingRefresher>(router, std::move(fetchRpc));
+    auto ringUpdateHook = [this](uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring) {
+        return ApplyRoutingWorkerSnapshot(ringVersion, ring);
+    };
+    auto refresher =
+        std::make_shared<client::HashRingRefresher>(router, std::move(fetchRpc), std::move(ringUpdateHook));
     auto routing = std::make_shared<client::Routing>(router, std::move(refresher));
     RETURN_IF_NOT_OK(routing->Init("", initialWorker));
     routing_ = std::move(routing);

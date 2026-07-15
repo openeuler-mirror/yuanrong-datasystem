@@ -18,8 +18,11 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_LAYER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_LAYER_H
 
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +35,7 @@
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/object/object_buffer.h"
 #include "datasystem/protos/object_posix.pb.h"
@@ -93,6 +97,13 @@ public:
     /** @brief Fetch a versioned hash-ring snapshot through the cached worker channel. */
     Status GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response);
 
+    /**
+     * @brief Publish worker admission synchronously and schedule latest-wins connection cleanup asynchronously.
+     * @param[in] snapshot Validated worker snapshot associated with the pending route update.
+     * @return K_OK when admitted and queued; the error code otherwise.
+     */
+    Status ApplyWorkerSnapshot(WorkerSnapshot snapshot);
+
     void Shutdown();
 
 protected:
@@ -101,6 +112,8 @@ protected:
                    std::shared_ptr<TransportAdvisor> advisor);
 
 private:
+    void ReconcileLoop();
+
     void ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId,
                          const TransportRequestContext &context);
     void ScheduleReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
@@ -110,6 +123,15 @@ private:
     std::shared_ptr<TransportAdvisor> advisor_;
     std::shared_ptr<ThreadPool> releasePool_;
     std::unique_ptr<ObjectReadFlow> objectRead_;
+    // ApplyWorkerSnapshot serializes admission publication with shutdown through reconcileMutex_.
+    std::mutex reconcileMutex_;
+    std::condition_variable reconcileCv_;
+    std::optional<WorkerSnapshot> pendingSnapshot_;
+    Thread reconcileThread_;
+    bool reconcileStarted_{ false };
+    bool reconcileStopping_{ false };
+    // Serializes complete Shutdown calls while reconcileMutex_ remains available to the worker.
+    std::mutex shutdownMutex_;
 };
 
 }  // namespace client
