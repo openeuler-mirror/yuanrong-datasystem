@@ -2815,8 +2815,16 @@ Status ObjectClientImpl::SelectSetRoute(const std::string &objectKey,
         return Status::OK();
     }
     RETURN_RUNTIME_ERROR_IF_NULL(routing_);
-    RETURN_IF_NOT_OK(routing_->SelectWorker(objectKey, client::SelectStrategy::HASH_RING_AFFINITY,
-                                            selected.worker, excludedWorkers));
+    HostPort worker;
+    RETURN_IF_NOT_OK(
+        routing_->SelectWorker(objectKey, client::SelectStrategy::HASH_RING_AFFINITY, worker, excludedWorkers));
+    return BuildSetRouteContext(worker, routeContext);
+}
+
+Status ObjectClientImpl::BuildSetRouteContext(const HostPort &worker, SetRouteContext &routeContext)
+{
+    SetRouteContext selected;
+    selected.worker = worker;
     {
         std::lock_guard<std::mutex> lock(switchNodeMutex_);
         const auto node = currentNode_.load();
@@ -4677,6 +4685,223 @@ void ComputeDataSizes(const std::vector<StringView> &vals, std::vector<uint64_t>
 }
 }  // namespace
 
+Status ObjectClientImpl::BuildMSetRouteGroups(const std::vector<std::string> &keys,
+                                              const std::vector<StringView> &values,
+                                              std::vector<MSetRouteGroup> &groups)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(routing_);
+    std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
+    RETURN_IF_NOT_OK(routing_->SelectWorkers(keys, client::SelectStrategy::HASH_RING_AFFINITY, groupedKeys));
+    std::unordered_map<std::string, size_t> valueIndexes;
+    valueIndexes.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        valueIndexes.emplace(keys[i], i);
+    }
+    groups.reserve(groupedKeys.size());
+    size_t groupedKeyCount = 0;
+    for (auto &entry : groupedKeys) {
+        MSetRouteGroup group;
+        group.worker = entry.first;
+        group.keys = std::move(entry.second);
+        group.values.reserve(group.keys.size());
+        for (const auto &key : group.keys) {
+            auto iter = valueIndexes.find(key);
+            CHECK_FAIL_RETURN_STATUS(iter != valueIndexes.end(), K_RUNTIME_ERROR, "MSet route contains unknown key");
+            group.values.emplace_back(values[iter->second]);
+        }
+        groupedKeyCount += group.keys.size();
+        groups.emplace_back(std::move(group));
+    }
+    CHECK_FAIL_RETURN_STATUS(groupedKeyCount == keys.size(), K_RUNTIME_ERROR, "MSet route result is incomplete");
+    return Status::OK();
+}
+
+Status ObjectClientImpl::MemoryCopyTransportMSetBuffers(
+    const MSetRouteGroup &group, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers, uint64_t dataSizeSum)
+{
+    CHECK_FAIL_RETURN_STATUS(group.values.size() == buffers.size(), K_RUNTIME_ERROR,
+                             "MSet transport buffer count mismatch");
+    RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
+    auto memoryCopy = [&](size_t start, size_t end) {
+        for (size_t i = start; i < end; ++i) {
+            RETURN_IF_NOT_OK(buffers[i]->MemoryCopy(group.values[i].data(), group.values[i].size()));
+        }
+        return Status::OK();
+    };
+    static constexpr uint64_t MIN_PARALLEL_SIZE = 500 * KB;
+    static constexpr uint64_t PARALLEL_SIZE = 4 * MB_TO_BYTES;
+    static constexpr size_t PARALLEL_COUNT = 32;
+    const bool parallel = dataSizeSum > MIN_PARALLEL_SIZE
+                          && (dataSizeSum >= PARALLEL_SIZE || buffers.size() >= PARALLEL_COUNT);
+    Timer timer;
+    Status rc = (!parallel || parallismNum_ == 0)
+                    ? memoryCopy(0, buffers.size())
+                    : Parallel::ParallelFor<size_t>(0, buffers.size(), memoryCopy, 4, parallismNum_);
+    const int64_t elapsedUs = timer.ElapsedMicroSecond();
+    SLOW_LOG_IF_OR_VLOG(
+        INFO, elapsedUs >= TimeoutDuration::SLOW_PATH_LOG_THRESHOLD_US || rc.IsError(), 1,
+        FormatString("[MSet] phase=TransportMemoryCopy costUs=%lld size=%zu keys=%zu rc=%s",
+                     elapsedUs, dataSizeSum, group.keys.size(), rc.ToString()));
+    RETURN_IF_NOT_OK(rc);
+    return ApiDeadline::Instance().CheckApiDeadline();
+}
+
+Status ObjectClientImpl::ProcessTransportMSet(const MSetRouteGroup &group, const MSetParam &param,
+                                              const SetRouteContext &routeContext,
+                                              client::TransportMSetResult &result,
+                                              SetFailureStage &failureStage, PerfPoint &point)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    const auto requestContext = BuildTransportRequestContext(routeContext);
+    client::TransportCreateParam createParam;
+    createParam.requestContext = requestContext;
+    createParam.cacheType = param.cacheType;
+    createParam.consistencyType = ConsistencyType::CAUSAL;
+    createParam.writeMode = param.writeMode;
+    std::vector<uint64_t> sizes;
+    uint64_t dataSizeSum = 0;
+    ComputeDataSizes(group.values, sizes, dataSizeSum);
+    point.RecordAndReset(PerfKey::CLIENT_MSET_MULTICREATE);
+    failureStage = SetFailureStage::CREATE;
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    RETURN_IF_NOT_OK(transportLayer_->MCreate(routeContext.worker, group.keys, sizes, createParam, buffers));
+    point.RecordAndReset(PerfKey::CLIENT_MSET_MEMCOPY);
+    failureStage = SetFailureStage::TRANSFER;
+    Status copyRc = MemoryCopyTransportMSetBuffers(group, buffers, dataSizeSum);
+    if (copyRc.IsError()) {
+        for (const auto &buffer : buffers) {
+            LOG_IF_ERROR(transportLayer_->Release(*buffer, requestContext),
+                         "Release routed MSet allocation after MemoryCopy failure failed");
+        }
+        return copyRc;
+    }
+    client::TransportSetParam setParam;
+    setParam.requestContext = requestContext;
+    setParam.ttlSecond = param.ttlSecond;
+    setParam.existence = param.existence;
+    point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLISH);
+    failureStage = SetFailureStage::PUBLISH;
+    Status rc = transportLayer_->MSet(buffers, setParam, result);
+    if (rc.GetCode() == K_URMA_NEED_CONNECT) {
+        failureStage = SetFailureStage::TRANSFER;
+    }
+    return rc;
+}
+
+Status ObjectClientImpl::BuildMSetRetryRouteGroups(const MSetRouteGroup &group,
+                                                   const std::vector<HostPort> &excludedWorkers,
+                                                   std::vector<MSetRouteGroup> &groups)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(routing_);
+    std::unordered_map<HostPort, size_t> groupIndexes;
+    for (size_t i = 0; i < group.keys.size(); ++i) {
+        HostPort worker;
+        RETURN_IF_NOT_OK(routing_->SelectWorker(group.keys[i], client::SelectStrategy::HASH_RING_AFFINITY,
+                                                worker, excludedWorkers));
+        auto insertResult = groupIndexes.emplace(worker, groups.size());
+        if (insertResult.second) {
+            groups.emplace_back(MSetRouteGroup{ worker, {}, {} });
+        }
+        auto &retryGroup = groups[insertResult.first->second];
+        retryGroup.keys.emplace_back(group.keys[i]);
+        retryGroup.values.emplace_back(group.values[i]);
+    }
+    return Status::OK();
+}
+
+Status ObjectClientImpl::ExecuteTransportMSetRetryGroups(
+    const std::vector<MSetRouteGroup> &groups, const MSetParam &param,
+    const std::vector<HostPort> &excludedWorkers, size_t attempt,
+    std::vector<std::string> &outFailedKeys, PerfPoint &point)
+{
+    const size_t failedBefore = outFailedKeys.size();
+    size_t objectCount = 0;
+    Status lastRc;
+    for (const auto &retryGroup : groups) {
+        objectCount += retryGroup.keys.size();
+        Status rc = ExecuteTransportMSetGroupAttempt(retryGroup, param, excludedWorkers, attempt,
+                                                     outFailedKeys, point);
+        if (rc.IsError()) {
+            lastRc = rc;
+        }
+    }
+    if (outFailedKeys.size() - failedBefore < objectCount) {
+        return Status::OK();
+    }
+    return lastRc.IsError() ? lastRc : Status(K_RUNTIME_ERROR, "All rerouted MSet objects failed");
+}
+
+Status ObjectClientImpl::ExecuteTransportMSetGroupAttempt(
+    const MSetRouteGroup &group, const MSetParam &param, std::vector<HostPort> excludedWorkers,
+    size_t attempt, std::vector<std::string> &outFailedKeys, PerfPoint &point)
+{
+    Status rc = ApiDeadline::Instance().CheckApiDeadline();
+    if (rc.IsError()) {
+        outFailedKeys.insert(outFailedKeys.end(), group.keys.begin(), group.keys.end());
+        return rc;
+    }
+    SetRouteContext routeContext;
+    rc = BuildSetRouteContext(group.worker, routeContext);
+    if (rc.IsError()) {
+        outFailedKeys.insert(outFailedKeys.end(), group.keys.begin(), group.keys.end());
+        return rc;
+    }
+    client::TransportMSetResult result;
+    SetFailureStage failureStage = SetFailureStage::CREATE;
+    rc = ProcessTransportMSet(group, param, routeContext, result, failureStage, point);
+    if (rc.IsOk()) {
+        outFailedKeys.insert(outFailedKeys.end(), result.failedKeys.begin(), result.failedKeys.end());
+        return rc;
+    }
+    if (!HandleSetRouteFailure(rc, failureStage, routeContext.worker, excludedWorkers)
+        || attempt + 1 >= SET_ROUTE_MAX_ATTEMPTS) {
+        const auto &failedKeys = result.failedKeys.empty() ? group.keys : result.failedKeys;
+        outFailedKeys.insert(outFailedKeys.end(), failedKeys.begin(), failedKeys.end());
+        return rc;
+    }
+    if (std::find(excludedWorkers.begin(), excludedWorkers.end(), routeContext.worker) == excludedWorkers.end()) {
+        excludedWorkers.emplace_back(routeContext.worker);
+    }
+    std::vector<MSetRouteGroup> retryGroups;
+    rc = BuildMSetRetryRouteGroups(group, excludedWorkers, retryGroups);
+    if (rc.IsError()) {
+        outFailedKeys.insert(outFailedKeys.end(), group.keys.begin(), group.keys.end());
+        return rc;
+    }
+    return ExecuteTransportMSetRetryGroups(retryGroups, param, excludedWorkers, attempt + 1, outFailedKeys, point);
+}
+
+Status ObjectClientImpl::ExecuteTransportMSetGroup(const MSetRouteGroup &group, const MSetParam &param,
+                                                   std::vector<std::string> &outFailedKeys, PerfPoint &point)
+{
+    return ExecuteTransportMSetGroupAttempt(group, param, {}, 0, outFailedKeys, point);
+}
+
+Status ObjectClientImpl::MSetThroughTransport(const std::vector<std::string> &keys,
+                                              const std::vector<StringView> &values, const MSetParam &param,
+                                              std::vector<std::string> &outFailedKeys, PerfPoint &point)
+{
+    std::vector<MSetRouteGroup> groups;
+    RETURN_IF_NOT_OK(BuildMSetRouteGroups(keys, values, groups));
+    const size_t failedBeforeMSet = outFailedKeys.size();
+    Status lastRc;
+    for (const auto &group : groups) {
+        const size_t failedBeforeGroup = outFailedKeys.size();
+        Status rc = ExecuteTransportMSetGroup(group, param, outFailedKeys, point);
+        if (rc.IsError()) {
+            lastRc = rc;
+            if (outFailedKeys.size() == failedBeforeGroup) {
+                outFailedKeys.insert(outFailedKeys.end(), group.keys.begin(), group.keys.end());
+            }
+        }
+    }
+    point.RecordAndReset(PerfKey::CLIENT_MSET_POST_PROCESS);
+    if (outFailedKeys.size() - failedBeforeMSet < keys.size()) {
+        return Status::OK();
+    }
+    return lastRc.IsError() ? lastRc : Status(K_RUNTIME_ERROR, "All objects set failed in worker");
+}
+
 Status ObjectClientImpl::MSetCreateCopyAndPublish(const std::vector<std::string> &keys,
                                                   const std::vector<StringView> &vals,
                                                   const std::vector<std::string> &deduplicateKeys,
@@ -4735,9 +4960,15 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     std::vector<std::string> deduplicateKeys;
     std::vector<StringView> deduplicateVals;
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
+    RETURN_IF_NOT_OK(IsClientReady());
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    if (!enableLocalCache_) {
+        const auto &filteredKeys = deduplicateKeys.empty() ? keys : deduplicateKeys;
+        const auto &filteredValues = deduplicateVals.empty() ? vals : deduplicateVals;
+        return MSetThroughTransport(filteredKeys, filteredValues, param, outFailedKeys, point);
+    }
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
-    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     auto rc = MSetCreateCopyAndPublish(keys, vals, deduplicateKeys, deduplicateVals, param, workerApi, outFailedKeys,
                                        point);

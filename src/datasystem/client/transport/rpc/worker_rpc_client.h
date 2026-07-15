@@ -66,6 +66,15 @@ public:
                              const std::vector<MemView> &payloads, PublishRspPb &response,
                              uint32_t &workerVersion);
 
+    /** @brief Sign and invoke MultiCreate through the cached control connection. */
+    virtual Status InvokeMultiCreate(int64_t subTimeoutMs, MultiCreateReqPb &request,
+                                     MultiCreateRspPb &response, uint32_t &workerVersion);
+
+    /** @brief Sign and invoke MultiPublish with positional TCP payloads. */
+    virtual Status InvokeMultiSet(int64_t subTimeoutMs, MultiPublishReqPb &request,
+                                  const std::vector<MemView> &payloads, MultiPublishRspPb &response,
+                                  uint32_t &workerVersion);
+
     /** @brief Release a worker-side allocation created for a routed Set transaction. */
     virtual Status InvokeDecreaseReference(const TransportRequestContext &context, const ShmKey &shmId);
 
@@ -96,6 +105,12 @@ protected:
 
     virtual Status DoInvokeSet(const RpcOptions &options, const PublishReqPb &request,
                                PublishRspPb &response, const std::vector<MemView> &payloads);
+
+    virtual Status DoInvokeMultiCreate(const RpcOptions &options, const MultiCreateReqPb &request,
+                                       MultiCreateRspPb &response);
+
+    virtual Status DoInvokeMultiSet(const RpcOptions &options, const MultiPublishReqPb &request,
+                                    MultiPublishRspPb &response, const std::vector<MemView> &payloads);
 
     virtual Status DoInvokeDecreaseReference(const RpcOptions &options, const DecreaseReferenceRequest &request,
                                               DecreaseReferenceResponse &response);

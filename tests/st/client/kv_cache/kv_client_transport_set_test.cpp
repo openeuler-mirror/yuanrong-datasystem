@@ -37,6 +37,7 @@
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/kv_client.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 DS_DECLARE_bool(use_brpc);
@@ -220,6 +221,15 @@ protected:
         ASSERT_EQ(actual, expected);
     }
 
+    void AssertPrimaryWorker(const std::string &key, uint32_t workerIndex)
+    {
+        HostPort primaryWorker;
+        DS_ASSERT_OK(QueryPrimaryWorker(key, primaryWorker));
+        HostPort expectedWorker;
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, expectedWorker));
+        ASSERT_EQ(primaryWorker, expectedWorker);
+    }
+
     std::shared_ptr<KVClient> routedClient_;
     std::shared_ptr<KVClient> localClient_;
     std::shared_ptr<KVClient> readerClient_;
@@ -261,6 +271,46 @@ TEST_F(KVClientTransportSetTest, LocalCacheEnabledSetUsesConnectedWorker)
     HostPort expectedWorker;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(ROUTED_CLIENT_WORKER_INDEX, expectedWorker));
     ASSERT_EQ(primaryWorker, expectedWorker);
+}
+
+TEST_F(KVClientTransportSetTest, RoutedMSetGroupsObjectsByMetadataOwner)
+{
+    std::string worker0Key;
+    std::string worker1Key;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_worker0_", worker0Key));
+    DS_ASSERT_OK(FindRouteKeyToWorker(ROUTED_CLIENT_WORKER_INDEX, "transport_mset_worker1_", worker1Key));
+    const std::vector<std::string> keys{ worker0Key, worker1Key };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE, 'b') };
+    const std::vector<StringView> valueViews{ values[0], values[1] };
+    std::vector<std::string> failedKeys;
+
+    DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
+
+    ASSERT_TRUE(failedKeys.empty());
+    AssertValue(keys[0], values[0]);
+    AssertValue(keys[1], values[1]);
+    AssertPrimaryWorker(keys[0], READER_WORKER_INDEX);
+    AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
+}
+
+TEST_F(KVClientTransportSetTest, LocalCacheEnabledMSetUsesConnectedWorker)
+{
+    std::string firstKey;
+    std::string secondKey;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_local0_", firstKey));
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_local1_", secondKey));
+    const std::vector<std::string> keys{ firstKey, secondKey };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'c'), std::string(VALUE_SIZE, 'd') };
+    const std::vector<StringView> valueViews{ values[0], values[1] };
+    std::vector<std::string> failedKeys;
+
+    DS_ASSERT_OK(localClient_->MSet(keys, valueViews, failedKeys));
+
+    ASSERT_TRUE(failedKeys.empty());
+    AssertValue(keys[0], values[0]);
+    AssertValue(keys[1], values[1]);
+    AssertPrimaryWorker(keys[0], ROUTED_CLIENT_WORKER_INDEX);
+    AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
 }
 
 TEST_F(KVClientTransportSetTest, ScaleDownPublishReroutesWholeTransaction)

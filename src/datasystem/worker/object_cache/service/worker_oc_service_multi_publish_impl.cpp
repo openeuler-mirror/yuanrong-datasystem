@@ -96,7 +96,9 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_INPUT_CHECK);
     // Add namespace for objectKey.
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(akSkManager_, req, tenantId);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_info_size()),
                                          StatusCode::K_INVALID,
                                          "The objectKeys size exceed " + std::to_string(OBJECT_KEYS_MAX_SIZE_LIMIT));

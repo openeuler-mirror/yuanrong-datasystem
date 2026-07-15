@@ -864,10 +864,17 @@ TEST_F(MasterDfxTest, LEVEL1_TestMasterRecoveryAndClientExit)
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 2, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2));
 
-    // wait for async queue send message to master.
-    sleep(2);
-    std::vector<Optional<Buffer>> buffers;
-    DS_ASSERT_NOT_OK(objClient1_->Get({ objKey }, 1'000, buffers));
+    // Client reference cleanup retries asynchronously while the centralized master is recovering. Wait until the
+    // object is confirmed deleted instead of treating a transient routing failure as successful cleanup.
+    constexpr int waitCleanupTimeoutSec = 15;
+    auto waitObjectDeleted = [&]() {
+        std::vector<Optional<Buffer>> buffers;
+        auto rc = objClient1_->Get({ objKey }, 1'000, buffers);
+        CHECK_FAIL_RETURN_STATUS(rc.GetCode() == K_NOT_FOUND, K_NOT_READY,
+                                 "Object cleanup has not completed, status: " + rc.ToString());
+        return Status::OK();
+    };
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(waitObjectDeleted, waitCleanupTimeoutSec, K_OK));
 }
 
 TEST_F(MasterDfxTest, LEVEL1_TestMasterRecoveryAndClientExit2)

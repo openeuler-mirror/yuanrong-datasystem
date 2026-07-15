@@ -33,6 +33,13 @@
   - `worker_main.cpp` initializes the singleton worker, runs a signal-driven loop, performs periodic perf ticking and config monitoring, then runs `PreShutDown` and `ShutDown`.
   - `worker.cpp` owns top-level startup/shutdown orchestration, log initialization, THP handling, RocksDB pre-init, and embedded-worker entrypoints exported through C symbols.
   - `worker_service_impl.cpp` implements common worker service behavior such as client registration, client disconnect, shared-memory FD transfer, version checks, and auth-related request handling.
+  - object-cache Create, MultiCreate, Publish, and MultiPublish handlers select authentication by request origin:
+    routed requests with `is_routed=true` call `worker::AuthenticateRequest` using the signed request tenant, while
+    legacy gateway requests retain the registered-client authentication path. Deploy workers with this routed-request
+    branch before enabling routed Set or MSet in newer clients during rolling upgrades.
+  - global-reference decrease treats a missing worker-to-master API after a successful owner lookup as
+    `K_RPC_UNAVAILABLE`; affected ids enter the existing RPC-failure path instead of being silently skipped during a
+    connection rebuild window.
   - `worker_oc_server.cpp` assembles object-cache and stream-cache related worker-side services and declares many worker runtime flags.
   - worker CLI helpers can export/import the v3 topology ring state through ETCD or Metastore-backed metadata.
   - topology member ids remain binary, topology-internal identities. Worker business UUIDs and public object-location

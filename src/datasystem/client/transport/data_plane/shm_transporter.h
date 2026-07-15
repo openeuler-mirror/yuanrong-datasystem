@@ -51,6 +51,19 @@ public:
         return Status(K_NOT_SUPPORTED, "ShmTransporter::Set not implemented");
     }
 
+    Status MCreate(const HostPort & /* workerAddr */, const std::vector<std::string> & /* keys */,
+                   const std::vector<uint64_t> & /* sizes */, const TransportCreateParam & /* param */,
+                   std::vector<std::shared_ptr<ObjectBuffer>> & /* buffers */) override
+    {
+        return Status(K_NOT_SUPPORTED, "ShmTransporter::MCreate not implemented");
+    }
+
+    Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> & /* buffers */,
+                const TransportSetParam & /* param */, TransportMSetResult & /* result */) override
+    {
+        return Status(K_NOT_SUPPORTED, "ShmTransporter::MSet not implemented");
+    }
+
     Status Release(const ShmKey & /* shmId */, const TransportRequestContext & /* context */) override
     {
         return Status::OK();

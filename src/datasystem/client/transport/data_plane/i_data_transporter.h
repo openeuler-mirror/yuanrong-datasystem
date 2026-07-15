@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/transport_kind.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -89,6 +90,32 @@ public:
      * @return K_OK on success; rebuild-trigger errors (K_URMA_NEED_CONNECT, K_RPC_UNAVAILABLE) on failure.
      */
     virtual Status Set(ObjectBuffer &buffer, const TransportSetParam &param) = 0;
+
+    /**
+     * @brief Create caller-owned transport-native buffers for one same-worker MSet batch.
+     * @param[in] workerAddr Target worker to which every returned buffer is bound.
+     * @param[in] keys Unique object keys in the batch.
+     * @param[in] sizes Object sizes corresponding positionally to keys.
+     * @param[in] param Create parameters and client identity.
+     * @param[out] buffers Caller-owned buffers consumed by MSet; partial output is not returned on failure.
+     * @return K_OK on success. Ambiguous K_RPC_UNAVAILABLE is not replayed because MultiCreate has no idempotency
+     *         marker and the worker may already have allocated memory.
+     */
+    virtual Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
+                           const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
+                           std::vector<std::shared_ptr<ObjectBuffer>> &buffers) = 0;
+
+    /**
+     * @brief Commit one validated same-worker, same-mode MSet batch and report per-object failures.
+     * @param[in] buffers Buffers returned by one same-worker MCreate operation. The caller retains ownership.
+     * @param[in] param Publish parameters and client identity.
+     * @param[out] result Failed keys, worker status, and actual transport when at least one object succeeds.
+     * @return K_OK if at least one object succeeds; K_URMA_NEED_CONNECT requests one UB data-plane rebuild. A
+     *  pre-Publish K_RPC_UNAVAILABLE may be replayed once; an attempted publish is ambiguous and is not replayed.
+     *  TransportLayer schedules release of every worker allocation before returning.
+     */
+    virtual Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                        const TransportSetParam &param, TransportMSetResult &result) = 0;
 
     /**
      * @brief Release worker-side resources allocated for a transport buffer.

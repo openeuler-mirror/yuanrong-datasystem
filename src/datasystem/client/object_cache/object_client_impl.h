@@ -732,6 +732,14 @@ private:
         std::unique_ptr<Raii> invokeGuard;
     };
 
+    struct MSetRouteGroup {
+        HostPort worker;
+        std::vector<std::string> keys;
+        std::vector<StringView> values;
+    };
+
+    Status BuildSetRouteContext(const HostPort &worker, SetRouteContext &routeContext);
+
     Status SelectSetRoute(const std::string &objectKey, const std::vector<HostPort> &excludedWorkers,
                           SetRouteContext &routeContext);
 
@@ -1377,13 +1385,42 @@ private:
                                                 std::vector<StringView> &deduplicateVals);
 
     /**
-     * @brief Create buffers, copy values, and publish for MSet with outFailedKeys.
+     * @brief Legacy local-cache MSet path retained while SHM batch transport is not implemented in TransportLayer.
      */
     Status MSetCreateCopyAndPublish(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
                                     const std::vector<std::string> &deduplicateKeys,
                                     const std::vector<StringView> &deduplicateVals, const MSetParam &param,
                                     const std::shared_ptr<IClientWorkerApi> &workerApi,
                                     std::vector<std::string> &outFailedKeys, PerfPoint &point);
+
+    Status BuildMSetRouteGroups(const std::vector<std::string> &keys, const std::vector<StringView> &values,
+                                std::vector<MSetRouteGroup> &groups);
+
+    Status MemoryCopyTransportMSetBuffers(const MSetRouteGroup &group,
+                                          const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                                          uint64_t dataSizeSum);
+
+    Status ProcessTransportMSet(const MSetRouteGroup &group, const MSetParam &param,
+                                const SetRouteContext &routeContext, client::TransportMSetResult &result,
+                                SetFailureStage &failureStage, PerfPoint &point);
+
+    Status ExecuteTransportMSetGroup(const MSetRouteGroup &group, const MSetParam &param,
+                                     std::vector<std::string> &outFailedKeys, PerfPoint &point);
+
+    Status ExecuteTransportMSetGroupAttempt(const MSetRouteGroup &group, const MSetParam &param,
+                                            std::vector<HostPort> excludedWorkers, size_t attempt,
+                                            std::vector<std::string> &outFailedKeys, PerfPoint &point);
+
+    Status BuildMSetRetryRouteGroups(const MSetRouteGroup &group, const std::vector<HostPort> &excludedWorkers,
+                                     std::vector<MSetRouteGroup> &groups);
+
+    Status ExecuteTransportMSetRetryGroups(const std::vector<MSetRouteGroup> &groups, const MSetParam &param,
+                                           const std::vector<HostPort> &excludedWorkers, size_t attempt,
+                                           std::vector<std::string> &outFailedKeys, PerfPoint &point);
+
+    /** @brief Routed MSet path used when local cache is disabled; replaces the legacy path after SHM batch support. */
+    Status MSetThroughTransport(const std::vector<std::string> &keys, const std::vector<StringView> &values,
+                                const MSetParam &param, std::vector<std::string> &outFailedKeys, PerfPoint &point);
 
     /**
      * @brief Memory copy with deadline check and slow-path logging.

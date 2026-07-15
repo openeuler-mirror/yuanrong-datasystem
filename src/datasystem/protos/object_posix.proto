@@ -80,6 +80,8 @@ message MultiCreateReqPb {
   string tenant_id = 5;
   bool   skip_check_existence = 6;
   int64 request_timeout = 7;
+  // Routed SDK requests are authenticated by signature and do not require registration on every target worker.
+  bool is_routed = 8;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;
@@ -148,6 +150,8 @@ message MultiPublishReqPb {
   uint32 cache_type = 9;
   bool is_replica = 10;
   bool auto_release_memory_ref = 11;
+  // Routed SDK requests are authenticated by signature and do not require registration on every target worker.
+  bool is_routed = 12;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

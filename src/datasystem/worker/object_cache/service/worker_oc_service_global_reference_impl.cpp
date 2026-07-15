@@ -432,6 +432,9 @@ Status WorkerOcServiceGlobalReferenceImpl::GDecreaseMasterRef(const std::string 
         req.set_redirect(true);
         master::GDecreaseRspPb rsp;
         std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
+        if (res.IsOk() && workerMasterApi == nullptr) {
+            res = Status(K_RPC_UNAVAILABLE, "GetWorkerMasterApi failed for global reference decrease.");
+        }
         if (res.IsOk() && workerMasterApi != nullptr) {
             std::function<Status(master::GDecreaseReqPb &, master::GDecreaseRspPb &)> func =
                 [&workerMasterApi](master::GDecreaseReqPb &req, master::GDecreaseRspPb &rsp) {
@@ -701,8 +704,7 @@ Status WorkerOcServiceGlobalReferenceImpl::UpdateMasterForFinishedIds(const Clie
         if (res.IsError()) {
             rpcFailedIds = currentFinishDecIds;
         }
-        std::shared_ptr<WorkerMasterOCApi> workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-        if (res.IsOk() && workerMasterApi != nullptr) {
+        if (res.IsOk()) {
             res = GDecreaseMasterRef("", currentFinishDecIds, rpcUnAliveIds, rpcFailedIds);
         }
         if (!rpcUnAliveIds.empty()) {

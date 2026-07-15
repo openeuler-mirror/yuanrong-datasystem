@@ -114,6 +114,18 @@ Status WorkerRpcClient::DoInvokeSet(const RpcOptions &options, const PublishReqP
     return controlStub_->Publish(options, request, response, payloads);
 }
 
+Status WorkerRpcClient::DoInvokeMultiCreate(const RpcOptions &options, const MultiCreateReqPb &request,
+                                            MultiCreateRspPb &response)
+{
+    return controlStub_->MultiCreate(options, request, response);
+}
+
+Status WorkerRpcClient::DoInvokeMultiSet(const RpcOptions &options, const MultiPublishReqPb &request,
+                                         MultiPublishRspPb &response, const std::vector<MemView> &payloads)
+{
+    return controlStub_->MultiPublish(options, request, response, payloads);
+}
+
 Status WorkerRpcClient::DoInvokeDecreaseReference(const RpcOptions &options,
                                                   const DecreaseReferenceRequest &request,
                                                   DecreaseReferenceResponse &response)
@@ -198,6 +210,49 @@ Status WorkerRpcClient::InvokeSet(int64_t subTimeoutMs, PublishReqPb &request,
             return Status::OK();
         }
         return WithRpcDiag(rc, "Publish", workerAddress_);
+    }
+    workerVersion = connectionGeneration_;
+    perfPoint.Record();
+    return Status::OK();
+}
+
+Status WorkerRpcClient::InvokeMultiCreate(int64_t subTimeoutMs, MultiCreateReqPb &request,
+                                          MultiCreateRspPb &response, uint32_t &workerVersion)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker RPC client is not initialized");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    PerfPoint perfPoint(PerfKey::CLIENT_MULTI_CREATE_IPC);
+    INJECT_POINT("WorkerRpcClient.InvokeMultiCreate.beforeRpc");
+    Status rc = DoInvokeMultiCreate(options, request, response);
+    if (rc.IsError()) {
+        return WithRpcDiag(rc, "MultiCreate", workerAddress_);
+    }
+    workerVersion = connectionGeneration_;
+    perfPoint.Record();
+    return Status::OK();
+}
+
+Status WorkerRpcClient::InvokeMultiSet(int64_t subTimeoutMs, MultiPublishReqPb &request,
+                                       const std::vector<MemView> &payloads, MultiPublishRspPb &response,
+                                       uint32_t &workerVersion)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker RPC client is not initialized");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(std::max<int64_t>(subTimeoutMs, channelConfig_.timeout_ms), rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    PerfPoint perfPoint(PerfKey::RPC_CLIENT_MULTI_PUBLISH_OBJECT);
+    INJECT_POINT("WorkerRpcClient.InvokeMultiSet.beforeRpc");
+    Status rc = DoInvokeMultiSet(options, request, response, payloads);
+    if (rc.IsError()) {
+        return WithRpcDiag(rc, "MultiPublish", workerAddress_);
     }
     workerVersion = connectionGeneration_;
     perfPoint.Record();
