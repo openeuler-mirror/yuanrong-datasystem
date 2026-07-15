@@ -487,6 +487,31 @@ protected:
     std::shared_ptr<Consumer> consumer;
 };
 
+TEST_F(DeleteStreamTimingTest, TestDeleteStreamFanoutAsyncReadDeadline)
+{
+    constexpr int32_t REQUEST_TIMEOUT_MS = 1000;
+    constexpr int32_t REMOTE_DELETE_SLEEP_MS = 3000;
+    constexpr int32_t MAX_EXPECTED_ELAPSED_MS = 2500;
+    std::string streamName = "testDeleteStreamFanoutAsyncReadDeadline";
+    DS_ASSERT_OK(CreateClient(0, client1));
+    DS_ASSERT_OK(CreateClient(1, client2));
+    std::shared_ptr<Producer> producer2;
+    DS_ASSERT_OK(client1->CreateProducer(streamName, producer, prodCfg));
+    DS_ASSERT_OK(client2->CreateProducer(streamName, producer2, prodCfg));
+    DS_ASSERT_OK(producer->Close());
+    DS_ASSERT_OK(producer2->Close());
+    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, 0,
+                                           "ClientWorkerSCServiceImpl.DeleteStreamContext.sleep",
+                                           FormatString("1*sleep(%d)", REMOTE_DELETE_SLEEP_MS)));
+
+    std::shared_ptr<StreamClient> deleteClient;
+    DS_ASSERT_OK(CreateClient(1, REQUEST_TIMEOUT_MS, deleteClient));
+    Timer timer;
+    Status rc = deleteClient->DeleteStream(streamName);
+    ASSERT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_LT(timer.ElapsedMilliSecond(), MAX_EXPECTED_ELAPSED_MS);
+}
+
 TEST_F(DeleteStreamTimingTest, TestDeleteStreamTimingHole3)
 {
     // The purpose of the testcase is to test a timing hole in DeleteStream.

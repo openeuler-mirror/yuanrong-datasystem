@@ -16,13 +16,20 @@
  */
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 
+#include <chrono>
+#include <cstdint>
+#include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
 #include "datasystem/cluster/executor/key_filter.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/rpc/fanout_collector.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/container_util.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -43,8 +50,16 @@ DS_DECLARE_bool(log_monitor);
 namespace datasystem {
 namespace master {
 constexpr size_t THREAD_POOL_SIZE = 8;
+constexpr int64_t DELETE_STREAM_FANOUT_POLL_INTERVAL_US = 1000;
 const std::string SC_METADATA_MANAGER = "SCMetadataManager-";
 namespace {
+struct DeleteStreamFanoutCall {
+    std::shared_ptr<MasterWorkerSCApi> api;
+    int64_t rpcTagId = -1;
+};
+
+using DeleteStreamFanoutApis = std::unordered_map<int64_t, DeleteStreamFanoutCall>;
+
 inline void HostPb2Host(const HostPortPb &hostPb, HostPort &host) noexcept
 {
     host = HostPort(hostPb.host(), hostPb.port());
@@ -92,6 +107,49 @@ bool ExistingStreamCoversMigrationPayload(StreamMetadata &metadata, const MetaFo
            && CoversValues(producerNodes, streamMeta.producer_rel_nodes(), encodeString)
            && CoversValues(consumerNodes, streamMeta.consumer_rel_nodes(), encodeString)
            && metadata.GetConsumerLifeCount() >= meta.consumer_life_count();
+}
+
+Status ReadDeleteStreamFanoutResult(const DeleteStreamFanoutApis &pendingApis, int64_t tagId)
+{
+    auto iter = pendingApis.find(tagId);
+    CHECK_FAIL_RETURN_STATUS(iter != pendingApis.end(), K_RUNTIME_ERROR,
+                             FormatString("DeleteStream fanout tag %ld not found", tagId));
+    Status rc = iter->second.api->DelStreamContextBroadcastAsyncRead(iter->second.rpcTagId, RpcRecvFlags::DONTWAIT);
+    return rc.GetCode() == K_SC_STREAM_NOT_FOUND ? Status::OK() : rc;
+}
+
+Status ForgetDeleteStreamFanoutTag(const DeleteStreamFanoutApis &pendingApis, int64_t tagId)
+{
+    auto iter = pendingApis.find(tagId);
+    CHECK_FAIL_RETURN_STATUS(iter != pendingApis.end(), K_RUNTIME_ERROR,
+                             FormatString("DeleteStream fanout tag %ld not found for cleanup", tagId));
+    return iter->second.api->ForgetDelStreamContextBroadcastAsyncTag(iter->second.rpcTagId);
+}
+
+Status SleepForDeleteStreamFanout(std::chrono::microseconds duration)
+{
+    if (FLAGS_use_brpc) {
+        return FanoutCollector::BthreadSleepFor(duration);
+    }
+    if (duration > std::chrono::microseconds(0)) {
+        std::this_thread::sleep_for(duration);
+    }
+    return Status::OK();
+}
+
+Status WaitDeleteStreamFanout(FanoutCollector &collector, const DeleteStreamFanoutApis &pendingApis)
+{
+    int64_t remainingUs = GetRequestContext()->scTimeoutDuration.CalcRealRemainingTimeUs();
+    CHECK_FAIL_RETURN_STATUS(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             FormatString("DeleteStream fanout deadline exceeded, remaining %ld us", remainingUs));
+    auto deadline = FanoutCollector::Clock::now() + std::chrono::microseconds(remainingUs);
+    auto readFn = [&pendingApis](int64_t tagId) { return ReadDeleteStreamFanoutResult(pendingApis, tagId); };
+    Status rc = collector.PollUntil(readFn, deadline, SleepForDeleteStreamFanout);
+    if (rc.IsError()) {
+        auto cleanupFn = [&pendingApis](int64_t tagId) { return ForgetDeleteStreamFanoutTag(pendingApis, tagId); };
+        RETURN_IF_NOT_OK(collector.CleanupOutstanding(cleanupFn));
+    }
+    return rc;
 }
 }  // namespace
 
@@ -562,7 +620,18 @@ Status SCMetadataManager::SendDeleteStreamReq(const std::string &streamName, std
 {
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] Sending DelStreamContextBroadcast request to %d workers",
                                               LogPrefix(), streamName, relatedWorkerSet.size());
-    std::unordered_map<std::shared_ptr<MasterWorkerSCApi>, int64_t> tagIds;
+    FanoutCollector collector{ std::chrono::microseconds(DELETE_STREAM_FANOUT_POLL_INTERVAL_US) };
+    DeleteStreamFanoutApis pendingApis;
+    int64_t nextCollectorTag = 1;
+    bool fanoutDone = false;
+    Raii cleanupPending([&collector, &pendingApis, &fanoutDone]() {
+        if (fanoutDone || pendingApis.empty()) {
+            return;
+        }
+        auto cleanupFn = [&pendingApis](int64_t tagId) { return ForgetDeleteStreamFanoutTag(pendingApis, tagId); };
+        Status rc = collector.CleanupOutstanding(cleanupFn);
+        LOG_IF(WARNING, rc.IsError()) << "DeleteStream fanout cleanup failed during early return: " << rc.ToString();
+    });
     bool local = false;
     for (const auto &workerNode : relatedWorkerSet) {
         // Deal with local worker separately.
@@ -578,15 +647,22 @@ Status SCMetadataManager::SendDeleteStreamReq(const std::string &streamName, std
         std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
         RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerNode, masterWorkerApi, akSkManager_));
         RETURN_IF_NOT_OK(masterWorkerApi->DelStreamContextBroadcastAsyncWrite(streamName, false, tagId));
-        tagIds.emplace(masterWorkerApi, tagId);
+        int64_t collectorTag = nextCollectorTag++;
+        Status addRc = collector.AddPeer(workerNode, collectorTag);
+        if (addRc.IsError()) {
+            (void)masterWorkerApi->ForgetDelStreamContextBroadcastAsyncTag(tagId);
+            return addRc;
+        }
+        pendingApis.emplace(collectorTag, DeleteStreamFanoutCall{ masterWorkerApi, tagId });
     }
     // Process the local bypass request to local worker in between AsyncWrite and AsyncRead for better time utilization.
     if (local) {
         RETURN_IF_NOT_OK(SendDeleteStreamReqToWorker(streamName, masterAddress_));
     }
-    for (const auto &pair : tagIds) {
-        RETURN_IF_NOT_OK_EXCEPT(pair.first->DelStreamContextBroadcastAsyncRead(pair.second, RpcRecvFlags::NONE),
-                                StatusCode::K_SC_STREAM_NOT_FOUND);
+    if (!pendingApis.empty()) {
+        Status rc = WaitDeleteStreamFanout(collector, pendingApis);
+        fanoutDone = collector.OutstandingCount() == 0;
+        RETURN_IF_NOT_OK(rc);
     }
     VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[%s, S:%s] DelStreamContextBroadcast requests are done", LogPrefix(),
                                               streamName);

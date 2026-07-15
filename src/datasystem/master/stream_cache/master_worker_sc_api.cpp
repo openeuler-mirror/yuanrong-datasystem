@@ -172,6 +172,16 @@ Status MasterRemoteWorkerSCApi::DelStreamContextBroadcastAsyncRead(int64_t tagId
     return Status::OK();
 }
 
+Status MasterRemoteWorkerSCApi::ForgetDelStreamContextBroadcastAsyncTag(int64_t tagId)
+{
+    if (brpcSession_) {
+        brpcSession_->ForgetRequest(tagId);
+    } else {
+        rpcSession_->ForgetRequest(tagId);
+    }
+    return Status::OK();
+}
+
 Status MasterRemoteWorkerSCApi::SyncPubNode(const std::string &streamName, const std::set<HostPort> &pubNodeSet,
                                             bool isRecon)
 {
@@ -334,6 +344,12 @@ Status MasterLocalWorkerSCApi::DelStreamContextBroadcastAsyncRead(int64_t tagId,
     // AsyncWrite and AsynRead with local bypass is not supported.
     LOG(WARNING) << FormatString("[%s] Async DelStreamContextBroadcast not supported for MasterLocalWorkerSCApi",
                                  LogPrefix());
+    return Status::OK();
+}
+
+Status MasterLocalWorkerSCApi::ForgetDelStreamContextBroadcastAsyncTag(int64_t tagId)
+{
+    (void)tagId;
     return Status::OK();
 }
 

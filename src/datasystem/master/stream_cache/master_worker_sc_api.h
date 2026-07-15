@@ -90,6 +90,13 @@ public:
     virtual Status DelStreamContextBroadcastAsyncRead(int64_t tagId, RpcRecvFlags flags) = 0;
 
     /**
+     * @brief Forget an unread async delete-stream broadcast tag.
+     * @param[in] tagId The async RPC tag id.
+     * @return Status of the call.
+     */
+    virtual Status ForgetDelStreamContextBroadcastAsyncTag(int64_t tagId) = 0;
+
+    /**
      * @brief Sync all pub node(except src node) for target stream to src node.
      * @param[in] streamName Target stream name.
      * @param[in] pubNodeSet All pub node set.
@@ -212,6 +219,7 @@ public:
     Status DelStreamContextBroadcastAsyncWrite(const std::string &streamName, bool forceDelete,
                                                int64_t &tagId) override;
     Status DelStreamContextBroadcastAsyncRead(int64_t tagId, RpcRecvFlags flags) override;
+    Status ForgetDelStreamContextBroadcastAsyncTag(int64_t tagId) override;
     Status SyncPubNode(const std::string &streamName, const std::set<HostPort> &pubNodeSe, bool isRecon) override;
     Status SyncConsumerNode(const std::string &streamName, const std::vector<ConsumerMetaPb> &consumerMetas,
                             const RetainDataState::State retainData, bool isRecon) override;
@@ -259,6 +267,7 @@ public:
     Status DelStreamContextBroadcastAsyncWrite(const std::string &streamName, bool forceDelete,
                                                int64_t &tagId) override;
     Status DelStreamContextBroadcastAsyncRead(int64_t tagId, RpcRecvFlags flags) override;
+    Status ForgetDelStreamContextBroadcastAsyncTag(int64_t tagId) override;
     Status SyncPubNode(const std::string &streamName, const std::set<HostPort> &pubNodeSet, bool isRecon) override;
     Status SyncConsumerNode(const std::string &streamName, const std::vector<ConsumerMetaPb> &consumerMetas,
                             const RetainDataState::State retainData, bool isRecon) override;
