@@ -264,8 +264,8 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker_->GetShmQueueUnit(lockId, fd, mmapSize, offset, id),
                                          "worker process get ShmQ unit failed");
     }
-    PopulateRegisterClientResponse(rsp, clientId, tenantId, lockId, pipelineQueueId, supportMultiShmRefCount, fd,
-                                   mmapSize, offset, id);
+    PopulateRegisterClientResponse(rsp, clientId, tenantId, lockId, pipelineQueueId, supportMultiShmRefCount,
+                                   req.shm_enabled(), fd, mmapSize, offset, id);
     INJECT_POINT("worker.RegisterClient.end", [&rsp](int injectedFd) {
         rsp.set_store_fd(injectedFd);
         return Status::OK();
@@ -330,9 +330,10 @@ Status WorkerServiceImpl::AddRegisteringClient(
 
 void WorkerServiceImpl::PopulateRegisterClientResponse(
     RegisterClientRspPb &rsp, const ClientKey &clientId, const std::string &tenantId, uint32_t lockId,
-    uint32_t pipelineQueueId, bool supportMultiShmRefCount, int fd, uint64_t mmapSize, ptrdiff_t offset,
-    const ShmKey &id)
+    uint32_t pipelineQueueId, bool supportMultiShmRefCount, bool shmEnabled, int fd, uint64_t mmapSize,
+    ptrdiff_t offset, const ShmKey &id)
 {
+    (void)shmEnabled;
     rsp.set_page_size(FLAGS_page_size);
     rsp.set_quorum_timeout_mult(timeoutMultiplier_);
     rsp.set_client_id(clientId);

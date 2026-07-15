@@ -136,8 +136,8 @@ private:
                                 uint32_t &lockId, uint32_t &pipelineQueueId, bool &supportMultiShmRefCount);
     void PopulateRegisterClientResponse(RegisterClientRspPb &rsp, const ClientKey &clientId,
                                         const std::string &tenantId, uint32_t lockId, uint32_t pipelineQueueId,
-                                        bool supportMultiShmRefCount, int fd, uint64_t mmapSize, ptrdiff_t offset,
-                                        const ShmKey &id);
+                                        bool supportMultiShmRefCount, bool shmEnabled, int fd, uint64_t mmapSize,
+                                        ptrdiff_t offset, const ShmKey &id);
 
     /**
      * @brief Get the standby worker address.
