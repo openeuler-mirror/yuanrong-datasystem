@@ -21,6 +21,7 @@
 #include <memory>
 
 #include "datasystem/common/encrypt/secret_manager.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "oc_client_common.h"
@@ -39,6 +40,10 @@ public:
 
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
+        // This test exercises ZMQ CURVE/ZAP auth (enable_curve_zmq, plaintext kit).
+        // brpc has no equivalent auth path, so force ZMQ for the spawned workers
+        // (external_cluster propagates FLAGS_use_brpc to workers).
+        FLAGS_use_brpc = false;
         opts.numWorkers = workerCount;
         opts.numEtcd = 1;
 

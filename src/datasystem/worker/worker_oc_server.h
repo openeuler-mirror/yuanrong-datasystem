@@ -68,6 +68,9 @@
 #include "datasystem/protos/stream_posix.brpc.pb.h"
 #include "datasystem/protos/worker_stream.brpc.pb.h"
 #include "datasystem/protos/coordinator.brpc.pb.h"
+#ifdef WITH_TESTS
+#include "datasystem/protos/ut_object.brpc.pb.h"
+#endif
 // .brpc.pb.h headers above pull in <brpc/controller.h>/<brpc/stream.h> which
 // override LOG/VLOG/DLOG via butil/logging.h. Re-include log.h to restore
 // datasystem's spdlog-based macros.
@@ -785,6 +788,7 @@ private:
     std::unique_ptr<MetaStoreServer> metaStoreServer_;
 #ifdef WITH_TESTS
     std::unique_ptr<st::StOCServiceImpl> utSvc_{ nullptr };
+    std::unique_ptr<UtOCServiceBrpcAdapter> brpcUtOcAdapter_{ nullptr };  // brpc adapter for utSvc_.
 #endif
 #ifdef ENABLE_PERF
     std::unique_ptr<PerfServiceImpl> perfService_{ nullptr };

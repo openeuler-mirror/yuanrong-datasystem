@@ -31,9 +31,13 @@
 
 #include <securec.h>
 
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/protos/generic_service.brpc.stub.pb.h"
 #include "subprocess.h"
 
 #define ASSIGN_IF_NOT_OK(lastRc_, statement_)    \
@@ -148,16 +152,36 @@ private:
 
 class ServerProcess : public Subprocess {
 public:
-    ServerProcess(const std::string &cmd, const HostPort &addr)
-        : Subprocess(cmd),
-          addr_(addr),
-          rpcSession_(std::make_unique<GenericService_Stub>(std::make_shared<RpcChannel>(addr, RpcCredential())))
+    ServerProcess(const std::string &cmd, const HostPort &addr) : Subprocess(cmd), addr_(addr)
     {
         const int timeoutMs = 500;
         opts_.SetTimeout(timeoutMs);
+        InitRpcSession();
     }
 
     ~ServerProcess() override = default;
+
+    // Pick the GenericService stub matching the active transport so the test
+    // control-plane RPCs (SetInjectAction / ClearInjectAction /
+    // GetInjectActionExecuteCount / GcovFlush) reach a handler the server
+    // actually registered. brpc mode registers GenericServiceBrpcAdapter on the
+    // worker; ZMQ mode uses the ZMQ GenericService. kBrpcPortOffset is 0 so the
+    // same worker port is used for both.
+    void InitRpcSession(const RpcCredential &cred = RpcCredential())
+    {
+        if (FLAGS_use_brpc) {
+            BrpcChannelConfig cfg;
+            cfg.endpoint = HostPort(addr_.Host(), addr_.Port() + kBrpcPortOffset).ToString();
+            cfg.timeout_ms = 500;
+            cfg.connect_timeout_ms = 500;
+            brpcChannel_ = BrpcChannelFactory::Create(cfg);
+            if (brpcChannel_ != nullptr) {
+                brpcSession_ = std::make_unique<GenericService_BrpcGenericStub>(brpcChannel_.get(), 500);
+            }
+        } else {
+            rpcSession_ = std::make_unique<GenericService_Stub>(std::make_shared<RpcChannel>(addr_, cred));
+        }
+    }
 
     Status Shutdown() override
     {
@@ -180,7 +204,12 @@ public:
         LOG(INFO) << FormatString("Process %s start to send flush coverage request.", addr_.ToString());
         GcovFlushReqPb req;
         GcovFlushRspPb rsp;
-        RETURN_IF_NOT_OK(rpcSession_->GcovFlush(opts_, req, rsp));
+        if (FLAGS_use_brpc) {
+            RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+            RETURN_IF_NOT_OK(brpcSession_->GcovFlush(opts_, req, rsp));
+        } else {
+            RETURN_IF_NOT_OK(rpcSession_->GcovFlush(opts_, req, rsp));
+        }
         LOG(INFO) << FormatString("Process %s flush coverage request succeed.", addr_.ToString());
         return Status::OK();
     }
@@ -195,7 +224,12 @@ public:
         datasystem::SetInjectActionRspPb rsp;
         req.set_name(name);
         req.set_action(action);
-        RETURN_IF_NOT_OK(rpcSession_->SetInjectAction(opts_, req, rsp));
+        if (FLAGS_use_brpc) {
+            RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+            RETURN_IF_NOT_OK(brpcSession_->SetInjectAction(opts_, req, rsp));
+        } else {
+            RETURN_IF_NOT_OK(rpcSession_->SetInjectAction(opts_, req, rsp));
+        }
 
         return Status::OK();
     }
@@ -206,8 +240,12 @@ public:
         datasystem::ClearInjectActionReqPb req;
         datasystem::ClearInjectActionRspPb rsp;
         req.set_name(name);
-        RETURN_IF_NOT_OK(rpcSession_->ClearInjectAction(opts_, req, rsp));
-
+        if (FLAGS_use_brpc) {
+            RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+            RETURN_IF_NOT_OK(brpcSession_->ClearInjectAction(opts_, req, rsp));
+        } else {
+            RETURN_IF_NOT_OK(rpcSession_->ClearInjectAction(opts_, req, rsp));
+        }
         return Status::OK();
     }
 
@@ -216,19 +254,30 @@ public:
         datasystem::GetInjectActionExecuteCountReqPb req;
         datasystem::GetInjectActionExecuteCountRspPb rsp;
         req.set_name(name);
-        RETURN_IF_NOT_OK(rpcSession_->GetInjectActionExecuteCount(opts_, req, rsp));
+        if (FLAGS_use_brpc) {
+            RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
+            RETURN_IF_NOT_OK(brpcSession_->GetInjectActionExecuteCount(opts_, req, rsp));
+        } else {
+            RETURN_IF_NOT_OK(rpcSession_->GetInjectActionExecuteCount(opts_, req, rsp));
+        }
         executeCount = rsp.execute_count();
         return Status::OK();
     }
 
     void SetRpcSession(const RpcCredential &cred)
     {
-        rpcSession_ = std::make_unique<GenericService_Stub>(std::make_shared<RpcChannel>(addr_, cred));
+        // Recreate with the supplied credential (ZMQ path only; the brpc channel
+        // established in InitRpcSession is credential-agnostic here).
+        if (!FLAGS_use_brpc) {
+            rpcSession_ = std::make_unique<GenericService_Stub>(std::make_shared<RpcChannel>(addr_, cred));
+        }
     }
 
 protected:
     HostPort addr_;
     std::unique_ptr<GenericService_Stub> rpcSession_;
+    std::unique_ptr<brpc::Channel> brpcChannel_;
+    std::unique_ptr<GenericService_BrpcGenericStub> brpcSession_;
     RpcOptions opts_;
 };
 

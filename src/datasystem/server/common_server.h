@@ -129,11 +129,29 @@ protected:
      */
     Status CreateGenericService();
 
+    /**
+     * @brief Register GenericService as a brpc service.
+     *
+     * CreateGenericService() only wires GenericService into the ZMQ builder (via
+     * builder_.AddService). In brpc mode the ZMQ path is not started, so the test
+     * control-plane RPCs (SetInjectAction / ClearInjectAction / GetInjectActionExecuteCount
+     * / GcovFlush) have no brpc handler and time out. This registers the generated
+     * GenericServiceBrpcAdapter with the brpc server so those RPCs are reachable.
+     *
+     * Must be called after rpcServer_ is built and after CreateGenericService(),
+     * i.e. during the per-server InitializeAllServices phase (alongside the other
+     * AddBrpcService calls).
+     *
+     * @return Status of the call.
+     */
+    Status InitGenericBrpcService();
+
     HostPort hostPort_;      // The process ip address and port.
     HostPort bindHostPort_;  // The bind ip address and port.
     RpcServer::Builder builder_;
 #ifdef WITH_TESTS
     std::unique_ptr<GenericServiceImpl> genericSvc_{ nullptr };  // The generic rpc service.
+    std::unique_ptr<GenericServiceBrpcAdapter> brpcGenericAdapter_{ nullptr };  // brpc adapter for genericSvc_.
 #endif
     std::unique_ptr<RpcServer> rpcServer_{ nullptr };
     std::shared_ptr<SockEventLoop> eventLoop_{ nullptr };

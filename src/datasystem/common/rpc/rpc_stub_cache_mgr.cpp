@@ -98,8 +98,11 @@ Status RpcStubCacheMgr::Init(uint64_t maxStubCount, const HostPort &localAddress
         return Status::OK();
     }
 
-    // Pre-warm ZmqStubConnMgr singleton to avoid initialization delay on first use
-    (void)ZmqStubConnMgr::Instance();
+    // Pre-warm ZmqStubConnMgr singleton to avoid initialization delay on first use.
+    // In brpc mode ZMQ stubs are never created, so skip the ZMQ context init.
+    if (!FLAGS_use_brpc) {
+        (void)ZmqStubConnMgr::Instance();
+    }
 
     auto policy = std::make_unique<LruCountPolicy>();
     policy->SetCacheCount(maxStubCount);

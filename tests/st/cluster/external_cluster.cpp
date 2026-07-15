@@ -39,6 +39,7 @@
 DS_DECLARE_string(unix_domain_socket_dir);
 DS_DECLARE_bool(enable_etcd_auth);
 DS_DECLARE_string(cluster_name);
+DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 namespace st {
@@ -1129,6 +1130,11 @@ Status ExternalCluster::StartWorker(int index, const HostPort &address, std::str
     (void)DeleteFile(rootDir + "/health");
     AppendWorkerRuntimeFlags(index, rootDir, gFlag, cmd);
     RETURN_IF_NOT_OK(AppendWorkerBackendFlags(index, address, cmd));
+    // Explicitly propagate the test process's transport selection to the worker
+    // subprocess. ZMQ-scoped tests (e.g. CURVE auth, ZmqService fault injection)
+    // set FLAGS_use_brpc=false in their SetUp so the spawned worker runs ZMQ too,
+    // rather than inheriting the global brpc default.
+    cmd += " -use_brpc=" + std::string(FLAGS_use_brpc ? "true" : "false");
     LOG(INFO) << "Launch worker [" << index << "] command: " << cmd;
     auto workerProcess = std::make_unique<WorkerProcess>(cmd, opts_.workerConfigs[index]);
     std::string workerName = "worker_" + std::to_string(index);
