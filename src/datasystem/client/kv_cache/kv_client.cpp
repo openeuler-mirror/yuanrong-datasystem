@@ -116,6 +116,11 @@ Status KVClient::Create(const std::string &key, uint64_t size, const SetParam &p
     creatParam.cacheType = param.cacheType;
     creatParam.existence = param.existence;
     Status rc = impl_->Create(key, size, creatParam, buffer);
+    METRIC_INC(metrics::KvMetricId::CLIENT_CREATE_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_CREATE_ERROR_TOTAL);
+    if (rc.IsOk()) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_CREATE_ALLOCATED_BYTES, size);
+    }
     access.ObjectKeyRef(key).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
         .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
         .DataSize(size).Result(rc).Record();
@@ -135,6 +140,13 @@ const SetParam &param, std::vector<std::shared_ptr<Buffer>> &buffers)
     creatParam.cacheType = param.cacheType;
     creatParam.existence = param.existence;
     Status rc = impl_->MCreate(keys, sizes, creatParam, buffers);
+    METRIC_INC(metrics::KvMetricId::CLIENT_CREATE_REQUEST_TOTAL);
+    METRIC_ERROR_IF(rc.IsError(), metrics::KvMetricId::CLIENT_CREATE_ERROR_TOTAL);
+    if (rc.IsOk()) {
+        uint64_t totalSize = 0;
+        for (auto s : sizes) { totalSize += s; }
+        METRIC_ADD(metrics::KvMetricId::CLIENT_CREATE_ALLOCATED_BYTES, totalSize);
+    }
     access.ObjectKeysRef(keys).WriteMode(static_cast<int>(param.writeMode)).TtlSecond(param.ttlSecond)
         .Existence(static_cast<int>(param.existence)).CacheType(static_cast<int>(param.cacheType))
         .DataSize(sizes.size()).Result(rc).Record();

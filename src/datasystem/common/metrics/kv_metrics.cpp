@@ -119,13 +119,17 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 90, "worker_from_client_tcp_total_bytes", MetricType::COUNTER, "bytes" },
     { 91, "worker_from_client_urma_total_bytes", MetricType::COUNTER, "bytes" },
     { 92, "client_get_shm_read_total_bytes", MetricType::COUNTER, "bytes" },
-    {93, "client_exist_redirect_total", MetricType::COUNTER, "count" },
-    {94, "client_exist_connection_retry_total", MetricType::COUNTER, "count" },
+    { 93, "client_exist_redirect_total", MetricType::COUNTER, "count" },
+    { 94, "client_exist_connection_retry_total", MetricType::COUNTER, "count" },
     { 95, "client_direct_batch_get_rpc_total", MetricType::COUNTER, "count" },
     { 96, "client_direct_batch_get_object_total", MetricType::COUNTER, "count" },
     { 97, "client_direct_batch_get_replica_retry_total", MetricType::COUNTER, "count" },
     { 98, "client_direct_batch_get_ub_split_total", MetricType::COUNTER, "count" },
     { 99, "client_direct_batch_get_tcp_fallback_total", MetricType::COUNTER, "count" },
+    { 100, "client_create_request_total", MetricType::COUNTER, "count" },
+    { 101, "client_create_error_total", MetricType::COUNTER, "count" },
+    { 102, "client_create_allocated_bytes", MetricType::COUNTER, "bytes" },
+    { 103, "worker_create_allocated_bytes", MetricType::COUNTER, "bytes" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
