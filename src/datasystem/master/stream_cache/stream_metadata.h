@@ -477,6 +477,13 @@ private:
     Status ProcessClearAllRemotePub(const std::shared_ptr<MasterWorkerSCApi> &masterWorkerApi,
                                     const HostPort &subWorkerAddress);
 
+    Status ProcessRemoteClearAllRemotePub(MasterRemoteWorkerSCApi *masterRemoteWorkerApi,
+                                          const HostPort &subWorkerAddress, int32_t retryTimeoutMs);
+
+    Status PollRemoteClearAllRemotePub(MasterRemoteWorkerSCApi *masterRemoteWorkerApi,
+                                       const HostPort &subWorkerAddress, int64_t tagId, Timer &timer,
+                                       bool &asyncTagPending);
+
     /**
      * @brief Verify/Update the stream fields.
      * @param[in] streamFields New stream fields to update on.

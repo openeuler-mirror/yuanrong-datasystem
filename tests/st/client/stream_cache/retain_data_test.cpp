@@ -17,7 +17,9 @@
 /**
  * Description: Unit test for stream cache on retain data feature
  */
+#include <chrono>
 #include <vector>
+
 #include <gtest/gtest.h>
 
 #include "common.h"
@@ -1086,6 +1088,47 @@ TEST_F(RetainDataTest, TestCreateConsumerRollback)
     std::vector<Element> outElements;
     DS_ASSERT_OK(consumer1->Receive(DEFAULT_NUM_ELEMENT * K_TWO, DEFAULT_WAIT_TIME, outElements));
     ASSERT_EQ(outElements.size(), size_t(DEFAULT_NUM_ELEMENT) * K_TWO);
+}
+
+TEST_F(RetainDataTest, TestSubscribeRollbackClearRemotePubDeadline)
+{
+    constexpr int32_t SUBSCRIBE_TIMEOUT_MS = 1'000;
+    constexpr int32_t SLOW_CLEAR_REMOTE_PUB_MS = 3'000;
+    constexpr int32_t MAX_EXPECTED_ELAPSED_MS = 2'500;
+    std::shared_ptr<StreamClient> client1;
+    DS_ASSERT_OK(InitClient(0, client1));
+    std::shared_ptr<StreamClient> client2;
+    DS_ASSERT_OK(InitClient(1, client2));
+    std::shared_ptr<StreamClient> client3;
+    InitStreamClient(K_TWO, client3, SUBSCRIBE_TIMEOUT_MS);
+
+    std::string streamName = "Stream_" + RandomData().GetRandomString(K_TEN);
+    ProducerConf conf = GetDefaultConf();
+    conf.retainForNumConsumers = 1;
+
+    std::shared_ptr<Producer> producer1;
+    DS_ASSERT_OK(client1->CreateProducer(streamName, producer1, conf));
+    std::shared_ptr<Producer> producer2;
+    DS_ASSERT_OK(client2->CreateProducer(streamName, producer2, conf));
+
+    for (uint32_t i = 0; i < WORKER_COUNT; i++) {
+        DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, i,
+                                               "master.SubIncreaseNodeImpl.afterSendNotification",
+                                               "1*return(K_RUNTIME_ERROR)"));
+    }
+    DS_ASSERT_OK(cluster_->SetInjectAction(ClusterNodeType::WORKER, K_TWO,
+                                           "MasterWorkerSCServiceImpl.ClearAllRemotePub.sleep",
+                                           FormatString("1*sleep(%d)", SLOW_CLEAR_REMOTE_PUB_MS)));
+
+    std::shared_ptr<Consumer> consumer;
+    SubscriptionConfig config("sub1", SubscriptionType::STREAM);
+    auto start = std::chrono::steady_clock::now();
+    Status rc = client3->Subscribe(streamName, config, consumer);
+    auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED) << rc.ToString();
+    ASSERT_LT(elapsedMs, MAX_EXPECTED_ELAPSED_MS);
 }
 
 TEST_F(RetainDataTest, TestCreateProducerRollback)
