@@ -1716,6 +1716,7 @@ Status ClientWorkerSCServiceImpl::DeleteStreamContext(const std::string &streamN
         GetRequestContext()->scTimeoutDuration.Init(timeout);
         return Status::OK();
     });
+    INJECT_POINT("ClientWorkerSCServiceImpl.DeleteStreamContext.sleep");
     StreamManagerMap::const_accessor accessor;
     RETURN_IF_NOT_OK(GetStreamManager(streamName, accessor));
     streamManager = accessor->second;
