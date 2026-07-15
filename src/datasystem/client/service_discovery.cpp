@@ -32,8 +32,6 @@
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 
-#include "datasystem/common/kvstore/coordination_keys.h"
-
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
@@ -324,6 +322,7 @@ Status DefaultCoordinatorDiscovery::GetCoordinators(std::vector<std::string> &se
 
 CoordinatorServiceDiscovery::CoordinatorServiceDiscovery(const CoordinatorServiceDiscoveryOptions &opts)
     : serviceAddress_(opts.serviceAddress),
+      clusterName_(opts.clusterName),
       hostIdEnvName_(opts.hostIdEnvName),
       affinityPolicy_(opts.affinityPolicy),
       coordinatorDiscovery_(opts.coordinatorDiscovery)
@@ -336,11 +335,15 @@ CoordinatorServiceDiscovery::CoordinatorServiceDiscovery(const CoordinatorServic
 Status CoordinatorServiceDiscovery::Init()
 {
     Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
-    randomData_ = std::make_shared<RandomData>();
     CHECK_FAIL_RETURN_STATUS(coordinatorDiscovery_ != nullptr, K_INVALID,
                              "coordinatorDiscovery should not be null when serviceAddress is empty.");
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(cluster::TopologyKeyHelper::Create(clusterName_, keys),
+                                     "Invalid cluster name for coordinator service discovery.");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(COORDINATOR_SERVICE_DISCOVERY_RPC_STUB_CACHE_SIZE));
     ResolveHostId(hostIdEnvName_, hostId_);
+    membershipTable_ = keys->MembershipTable();
+    randomData_ = std::make_shared<RandomData>();
     return Status::OK();
 }
 
@@ -359,7 +362,7 @@ Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &same
     sameHost.clear();
     other.clear();
     std::unordered_map<std::string, uint32_t> workersStateCount;
-    const std::string clusterTablePrefix = "/" + std::string(COORDINATION_CLUSTER_TABLE) + "/";
+    const std::string clusterTablePrefix = membershipTable_ + "/";
     auto rangeEnd = PrefixRangeEnd(clusterTablePrefix);
     CHECK_FAIL_RETURN_STATUS(!rangeEnd.empty(), K_INVALID, "Failed to build coordinator cluster table range.");
 

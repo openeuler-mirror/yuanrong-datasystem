@@ -85,6 +85,7 @@ PybindDefineRegisterer g_pybind_define_f_CoordinatorServiceDiscoveryOptions(
         py::class_<CoordinatorServiceDiscoveryOptions>(*m, "CoordinatorServiceDiscoveryOptions")
             .def(py::init<>())
             .def_readwrite("service_address", &CoordinatorServiceDiscoveryOptions::serviceAddress)
+            .def_readwrite("cluster_name", &CoordinatorServiceDiscoveryOptions::clusterName)
             .def_readwrite("host_id_env_name", &CoordinatorServiceDiscoveryOptions::hostIdEnvName)
             .def_readwrite("affinity_policy", &CoordinatorServiceDiscoveryOptions::affinityPolicy)
             .def_readwrite("coordinator_discovery", &CoordinatorServiceDiscoveryOptions::coordinatorDiscovery);

@@ -232,6 +232,8 @@ private:
 
 struct CoordinatorServiceDiscoveryOptions {
     std::string serviceAddress;
+    // Optional cluster namespace. Empty selects the default /datasystem/cluster membership table.
+    std::string clusterName = "";
     std::string hostIdEnvName = "";
     ServiceAffinityPolicy affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery = nullptr;
@@ -271,6 +273,8 @@ private:
     Status ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other);
 
     std::string serviceAddress_;
+    std::string clusterName_;
+    std::string membershipTable_;
     std::string hostIdEnvName_;
     std::string hostId_;
     ServiceAffinityPolicy affinityPolicy_;

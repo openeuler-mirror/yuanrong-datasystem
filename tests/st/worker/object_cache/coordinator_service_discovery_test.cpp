@@ -36,6 +36,7 @@ constexpr char COORDINATOR_SD_HOST_ID_ENV_MISSING[] = "coordinator_sd_host_id_en
 constexpr char COORDINATOR_SD_HOST_ID_VALUE0[] = "coordinator_sd_host_id0";
 constexpr char COORDINATOR_SD_HOST_ID_VALUE1[] = "coordinator_sd_host_id1";
 constexpr char COORDINATOR_SD_HOST_ID_VALUE_MISSING[] = "coordinator_sd_host_id_missing";
+constexpr char COORDINATOR_SD_MISSING_CLUSTER[] = "coordinator_sd_missing_cluster";
 constexpr int COORDINATOR_SD_SELECT_LOOP_COUNT = 5;
 constexpr int COORDINATOR_SD_CONNECT_TIMEOUT_MS = 60000;
 }  // namespace
@@ -67,7 +68,8 @@ public:
 
 protected:
     void GetCoordinatorServiceDiscovery(const std::string &hostIdEnvName, ServiceAffinityPolicy policy,
-                                        std::shared_ptr<CoordinatorServiceDiscovery> &serviceDiscovery)
+                                        std::shared_ptr<CoordinatorServiceDiscovery> &serviceDiscovery,
+                                        const std::string &clusterNameOverride = "")
     {
         auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
         ASSERT_NE(externalCluster, nullptr);
@@ -75,6 +77,7 @@ protected:
         DS_ASSERT_OK(externalCluster->GetCoordinatorAddr(0, coordinatorAddr));
         CoordinatorServiceDiscoveryOptions opts;
         opts.serviceAddress = coordinatorAddr.ToString();
+        opts.clusterName = clusterNameOverride.empty() ? GetTestClusterName() : clusterNameOverride;
         opts.hostIdEnvName = hostIdEnvName;
         opts.affinityPolicy = policy;
         serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(opts);
@@ -170,6 +173,19 @@ TEST_F(CoordinatorServiceDiscoveryTest, RandomSelectsReadyWorker)
     AssertSelectedWorkerInCluster(COORDINATOR_SD_HOST_ID_ENV0, ServiceAffinityPolicy::RANDOM);
     AssertSelectedWorkerInCluster(COORDINATOR_SD_HOST_ID_ENV1, ServiceAffinityPolicy::RANDOM);
     AssertSelectedWorkerInCluster(COORDINATOR_SD_HOST_ID_ENV_MISSING, ServiceAffinityPolicy::RANDOM);
+}
+
+TEST_F(CoordinatorServiceDiscoveryTest, ClusterNameScopesMembership)
+{
+    std::shared_ptr<CoordinatorServiceDiscovery> serviceDiscovery;
+    GetCoordinatorServiceDiscovery(COORDINATOR_SD_HOST_ID_ENV0, ServiceAffinityPolicy::RANDOM, serviceDiscovery,
+                                   COORDINATOR_SD_MISSING_CLUSTER);
+
+    std::vector<std::string> sameHost;
+    std::vector<std::string> other;
+    DS_ASSERT_OK(serviceDiscovery->GetAllWorkers(sameHost, other));
+    EXPECT_TRUE(sameHost.empty());
+    EXPECT_TRUE(other.empty());
 }
 
 TEST_F(CoordinatorServiceDiscoveryTest, RequiredSameNodeSelectsMatchingHost)

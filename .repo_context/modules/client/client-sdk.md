@@ -102,7 +102,7 @@
 | `HeteroClient` | `src/datasystem/client/hetero_cache/hetero_client.cpp` plus object/device helpers | integrates D2H/H2D/D2D style operations |
 | `StreamClient` | `src/datasystem/client/stream_cache/stream_client.cpp` -> `client::stream_cache::StreamClientImpl` | separate stream cache implementation family |
 | `Context` | `src/datasystem/client/context/context.cpp` | thread-local trace and tenant context helpers |
-| `IServiceDiscovery` / `ServiceDiscovery` / `CoordinatorServiceDiscovery` | `src/datasystem/client/service_discovery.cpp` | SDK worker selection for C++ callers using `ConnectOptions.serviceDiscovery`; ETCD `ServiceDiscovery` requires `clusterName` and reads `/datasystem/{clusterName}/cluster`, while `CoordinatorServiceDiscovery` keeps its coordinator `Range` contract; `hostIdEnvName` is read from the process env first and then recovered from `<log_dir>/env` |
+| `IServiceDiscovery` / `ServiceDiscovery` / `CoordinatorServiceDiscovery` | `src/datasystem/client/service_discovery.cpp` | SDK worker selection for C++ callers using `ConnectOptions.serviceDiscovery`; both implementations accept an optional `clusterName` and read `/datasystem/{clusterName}/cluster`, while an empty name reads `/datasystem/cluster`; `hostIdEnvName` is read from the process env first and then recovered from `<log_dir>/env` |
 
 ## Connection And Auth Model
 

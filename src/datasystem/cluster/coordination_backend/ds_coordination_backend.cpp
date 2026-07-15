@@ -426,14 +426,7 @@ Status DsCoordinationBackend::UpdateNodeState(MemberLifecycleState state)
 Status DsCoordinationBackend::GetStorePrefix(const std::string &tableName, std::string &prefix)
 {
     CHECK_FAIL_RETURN_STATUS(!tableName.empty(), K_INVALID, "Coordinator table name is empty");
-    const std::string membershipSuffix = "/cluster";
-    const bool isNamespacedMembership =
-        tableName.size() > membershipSuffix.size()
-        && tableName.compare(tableName.size() - membershipSuffix.size(), membershipSuffix.size(), membershipSuffix)
-               == 0;
-    if (tableName == COORDINATION_CLUSTER_TABLE || isNamespacedMembership) {
-        // CoordinatorServiceDiscovery still consumes the original global membership table. Keep this physical mapping
-        // until that client contract becomes cluster-name aware; the logical topology key remains cluster-scoped.
+    if (tableName == COORDINATION_CLUSTER_TABLE) {
         prefix = "/" + std::string(COORDINATION_CLUSTER_TABLE);
         return Status::OK();
     }
