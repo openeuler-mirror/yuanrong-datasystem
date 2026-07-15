@@ -244,7 +244,10 @@ private:
                                         std::function<void(Rsp &, Rsp &)> mergeFun = [](Rsp &, Rsp &) {})
     {
         while (true) {
-            CHECK_FAIL_RETURN_STATUS(fun != nullptr && mergeFun !=nullptr, K_RUNTIME_ERROR, "function is nullptr");
+            CHECK_FAIL_RETURN_STATUS(fun != nullptr && mergeFun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
+            CHECK_FAIL_RETURN_STATUS(
+                GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             Timer timer;
             RETURN_IF_NOT_OK(fun(req, rsp));
             auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecondAndReset());
@@ -271,9 +274,11 @@ private:
                 GetWorkerTimeCost().Append("Redirect", elapsedMs);
                 return Status::OK();
             }
-            static const int sleepTimeMs = 200;
+            static const int64_t sleepTimeMs = 200;
             rsp.Clear();
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            SleepForMetaMovingRetry(std::min(sleepTimeMs, remainingTimeMs));
         }
     }
 

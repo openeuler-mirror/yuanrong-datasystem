@@ -18,10 +18,8 @@
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 
 #include <algorithm>
-#include <chrono>
 #include <future>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -156,7 +154,7 @@ public:
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            SleepForMetaMovingRetry(sleepTimeMs);
             sleepTimeMs = std::min(sleepTimeMs * 2, maxSleepTimeMs);
         }
     }
@@ -185,7 +183,7 @@ public:
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            SleepForMetaMovingRetry(sleepTimeMs);
             sleepTimeMs = std::min(sleepTimeMs * 2, maxSleepTimeMs);
         }
     }
@@ -215,7 +213,7 @@ public:
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
-            std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+            SleepForMetaMovingRetry(sleepTimeMs);
             sleepTimeMs = std::min(sleepTimeMs * 2, maxSleepTimeMs);
         }
     }
@@ -410,9 +408,11 @@ protected:
         }
         static const int sleepTimeMs = 200;
         rsp.Clear();
-        std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
+        SleepForMetaMovingRetry(sleepTimeMs);
         return false;
     }
+
+    static void SleepForMetaMovingRetry(int64_t sleepTimeMs);
 
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
 
