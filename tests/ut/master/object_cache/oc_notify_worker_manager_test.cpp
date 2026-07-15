@@ -19,34 +19,63 @@
  */
 #include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 
+#include <algorithm>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/signal/signal.h"
+#include "datasystem/common/util/format.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 
 DS_DECLARE_string(rocksdb_store_dir);
+DS_DECLARE_string(rocksdb_write_mode);
 
 using namespace ::testing;
 using namespace datasystem::master;
 namespace datasystem {
-namespace ut {
-class OCNotifyWorkerManagerTest : public CommonTest {
+namespace master {
+class OCNotifyWorkerManagerTest : public ut::CommonTest {
 public:
     void SetUp()
     {
-        rocksStore_ = RocksStore::GetInstance(GetTestCaseDataDir() + "/rocksdb");
+        rocksdbWriteMode_ = FLAGS_rocksdb_write_mode;
+        FLAGS_rocksdb_write_mode = "sync";
+        rocksStore_ = RocksStore::GetInstance(ut::GetTestCaseDataDir() + "/rocksdb");
         objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore_.get(), nullptr);
         objectStore_->Init();
         hostPort_.ParseString("127.0.0.1:30001");
         akSkManager_ = std::make_shared<AkSkManager>(0);
     }
+
+    void TearDown() override
+    {
+        (void)inject::Clear("master.rocksdb.put");
+        objectStore_.reset();
+        rocksStore_.reset();
+        FLAGS_rocksdb_write_mode = rocksdbWriteMode_;
+    }
+
     std::shared_ptr<RocksStore> rocksStore_;
     std::shared_ptr<ObjectMetaStore> objectStore_;
     HostPort hostPort_;
     std::shared_ptr<AkSkManager> akSkManager_;
+    std::string rocksdbWriteMode_;
+
+    std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> SnapshotWorkerOps(OCNotifyWorkerManager &manager,
+                                                                                const std::string &worker)
+    {
+        return manager.SnapshotAsyncWorkerOps(worker);
+    }
+
+    Status ClearSnapshotOps(OCNotifyWorkerManager &manager, const std::string &worker,
+                            const std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> &snapshots)
+    {
+        return manager.ClearAsyncWorkerOpSnapshots(worker, snapshots);
+    }
 };
 
 TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
@@ -102,10 +131,66 @@ TEST_F(OCNotifyWorkerManagerTest, DISABLED_TestAsyncSendUpdateObject)
     }
 }
 
+TEST_F(OCNotifyWorkerManagerTest, TestInsertAsyncWorkerOpReleasesTableLockBeforePersistence)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string objectKey = "test_insert_async_worker_op";
+    NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
+    constexpr int rocksPutSleepMs = 300;
+    constexpr int maxExpectedCheckMs = 100;
+    constexpr int pollIntervalMs = 5;
+    constexpr int maxPollMs = 1000;
+
+    DS_ASSERT_OK(inject::Set("master.rocksdb.put", FormatString("1*sleep(%d)", rocksPutSleepMs)));
+    Status insertRc;
+    std::thread insertThread([&] { insertRc = manager->InsertAsyncWorkerOp(worker, objectKey, op); });
+
+    bool observedPendingOp = false;
+    int64_t maxCheckMs = 0;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(maxPollMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        auto start = std::chrono::steady_clock::now();
+        bool exists = manager->CheckExistAsyncWorkerOp(worker, objectKey, NotifyWorkerOpType::CACHE_INVALID);
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start);
+        maxCheckMs = std::max(maxCheckMs, static_cast<int64_t>(elapsed.count()));
+        if (exists) {
+            observedPendingOp = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
+    }
+
+    insertThread.join();
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.put"));
+    DS_ASSERT_OK(insertRc);
+    ASSERT_TRUE(observedPendingOp);
+    EXPECT_LT(maxCheckMs, maxExpectedCheckMs);
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TestSnapshotClearKeepsNewerAsyncWorkerOp)
+{
+    auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, nullptr);
+    const std::string worker = "127.0.0.1:40001";
+    const std::string clearedObjectKey = "snapshot_clear_old_op";
+    const std::string newerObjectKey = "snapshot_clear_newer_op";
+    NotifyWorkerOp op = { .type = NotifyWorkerOpType::CACHE_INVALID };
+
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, clearedObjectKey, op));
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, newerObjectKey, op));
+    auto snapshots = SnapshotWorkerOps(*manager, worker);
+
+    DS_ASSERT_OK(manager->InsertAsyncWorkerOp(worker, newerObjectKey, op));
+    DS_ASSERT_OK(ClearSnapshotOps(*manager, worker, snapshots));
+
+    ASSERT_FALSE(manager->CheckExistAsyncWorkerOp(worker, clearedObjectKey, NotifyWorkerOpType::CACHE_INVALID));
+    ASSERT_TRUE(manager->CheckExistAsyncWorkerOp(worker, newerObjectKey, NotifyWorkerOpType::CACHE_INVALID));
+}
+
 TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
 {
-    auto ocMetaManager = std::make_shared<master::OCMetadataManager>(akSkManager_, nullptr, nullptr, nullptr,
-                                                                     "127.0.0.1:900", nullptr, "workerId");
+    auto ocMetaManager = std::make_shared<OCMetadataManager>(akSkManager_, nullptr, nullptr, nullptr,
+                                                             "127.0.0.1:900", nullptr, "workerId");
     auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, ocMetaManager.get());
 
     BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _)).WillRepeatedly(Return(Status::OK()));
@@ -127,5 +212,5 @@ TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
     t.join();
     RELEASE_STUBS
 }
-}  // namespace ut
+}  // namespace master
 }  // namespace datasystem
