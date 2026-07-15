@@ -844,6 +844,8 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
         { metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES, "worker_from_client_tcp_total_bytes" },
         { metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, "worker_from_client_urma_total_bytes" },
         { metrics::KvMetricId::CLIENT_GET_SHM_READ_TOTAL_BYTES, "client_get_shm_read_total_bytes" },
+        { metrics::KvMetricId::CLIENT_EXIST_REDIRECT_TOTAL, "client_exist_redirect_total" },
+        { metrics::KvMetricId::CLIENT_EXIST_CONNECTION_RETRY_TOTAL, "client_exist_connection_retry_total" },
         { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL, "client_direct_batch_get_rpc_total" },
         { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL, "client_direct_batch_get_object_total" },
         { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL,
@@ -852,11 +854,11 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
         { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL,
           "client_direct_batch_get_tcp_fallback_total" },
     };
-    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL), 93u);
-    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL), 94u);
-    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL), 95u);
-    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_UB_SPLIT_TOTAL), 96u);
-    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL), 97u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL), 95u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL), 96u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL), 97u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_UB_SPLIT_TOTAL), 98u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL), 99u);
     for (size_t k = 0; k < sizeof(kTailMetrics) / sizeof(kTailMetrics[0]); ++k) {
         const size_t i = static_cast<size_t>(kTailMetrics[k].id);
         ASSERT_LT(i, count);
