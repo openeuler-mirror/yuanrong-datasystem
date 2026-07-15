@@ -18,28 +18,49 @@
 
 #include "datasystem/client/transport/transport_layer.h"
 
+#include <cstdlib>
 #include <utility>
 
 #include "datasystem/client/transport/common/deadline_retry.h"
 #include "datasystem/client/transport/data_plane/data_plane_executor.h"
+#include "datasystem/client/transport/data_plane/ub_transporter.h"
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/object_read/replica_reader.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/uri.h"
 
 namespace datasystem {
 namespace client {
+namespace {
+uint64_t GetConfiguredUbInlineBufferSize()
+{
+    const char *value = std::getenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES");
+    if (value == nullptr || *value == '\0') {
+        return 0;
+    }
+    for (const char *cursor = value; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') {
+            return 0;
+        }
+    }
+    uint64_t size = 0;
+    return Uri::StrToUint64(value, size) ? size : 0;
+}
+}  // namespace
 
 TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
                                uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig,
                                std::shared_ptr<ThreadPool> releasePool)
     : advisor_(std::make_shared<TransportAdvisor>()), releasePool_(std::move(releasePool))
 {
-    manager_ =
-        std::make_shared<DataPlaneManager>(std::move(signature), fastTransportMemSize, std::move(channelConfig));
+    auto ubBufferProvider = CreateDefaultUbReceiveBufferProvider();
+    manager_ = std::make_shared<DataPlaneManager>(std::move(signature), fastTransportMemSize,
+                                                  std::move(channelConfig), ubBufferProvider);
     auto retry = std::make_shared<DeadlineRetry>();
-    auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry);
+    auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
+                                                           GetConfiguredUbInlineBufferSize());
     auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_);
     auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry));
     objectRead_ = std::make_unique<ObjectReadFlow>(std::move(metadata), std::move(replicas), std::move(taskPool));

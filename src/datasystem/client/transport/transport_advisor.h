@@ -26,14 +26,14 @@ namespace client {
 class TransportAdvisor {
 public:
     TransportAdvisor() = default;
-    ~TransportAdvisor() = default;
+    virtual ~TransportAdvisor() = default;
 
     /**
      * @brief Suggest a transport hint for the target worker.
      * @param[in] workerAddr Target worker address.
      * @return The suggested TransportHint.
      */
-    TransportHint GetTransportHint(const HostPort &workerAddr) const;
+    virtual TransportHint GetTransportHint(const HostPort &workerAddr) const;
 };
 }  // namespace client
 }  // namespace datasystem

@@ -19,8 +19,10 @@
 #define DATASYSTEM_CLIENT_TRANSPORT_UB_TRANSPORTER_H
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <shared_mutex>
+#include <string>
 
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_connection.h"
@@ -29,6 +31,16 @@
 
 namespace datasystem {
 namespace client {
+
+/** @brief Owner-backed UB receive buffer and its transport identity. */
+struct UbReceiveBuffer {
+    uint8_t *data = nullptr;
+    uint64_t size = 0;
+    UrmaRemoteAddrPb remoteAddr;
+    std::shared_ptr<IReceiveBufferOwner> owner;
+    std::string transportInstanceId;
+};
+
 class IUbReceiveBufferProvider {
 public:
     virtual ~IUbReceiveBufferProvider() = default;
@@ -39,15 +51,17 @@ public:
     /**
      * @brief Allocate and describe a UB receive buffer.
      * @param[in] requiredSize Required payload capacity.
-     * @param[out] data Receive-buffer address.
-     * @param[out] size Actual receive-buffer size.
-     * @param[out] remoteAddr Remote address sent to the worker.
-     * @param[out] owner Owner that keeps data alive.
+     * @param[out] buffer Prepared receive buffer and transport identity.
      * @return K_OK on success; the error code otherwise.
      */
-    virtual Status Allocate(uint64_t requiredSize, uint8_t *&data, uint64_t &size,
-                            UrmaRemoteAddrPb &remoteAddr, std::shared_ptr<IReceiveBufferOwner> &owner) = 0;
+    virtual Status Allocate(uint64_t requiredSize, UbReceiveBuffer &buffer) = 0;
 };
+
+/**
+ * @brief Create the default process-wide UB receive-buffer provider.
+ * @return Default UB receive-buffer provider implementation.
+ */
+std::shared_ptr<IUbReceiveBufferProvider> CreateDefaultUbReceiveBufferProvider();
 
 class UbTransporter : public IDataTransporter {
 public:

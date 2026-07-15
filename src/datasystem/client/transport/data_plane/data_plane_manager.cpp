@@ -80,8 +80,10 @@ void DataPlaneManager::WorkerTransportEntry::ResetDataPlane()
 }
 
 DataPlaneManager::DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
-                                   BrpcChannelConfig channelConfig)
+                                   BrpcChannelConfig channelConfig,
+                                   std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider)
     : signature_(std::move(signature)), channelConfig_(std::move(channelConfig)),
+      ubBufferProvider_(std::move(ubBufferProvider)),
       fastTransportMemSize_(fastTransportMemSize)
 {
 }
@@ -123,6 +125,28 @@ Status DataPlaneManager::GetOrCreate(const HostPort &workerAddr, TransportHint h
     std::shared_ptr<WorkerTransportEntry> entry;
     RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
     return GetOrBuildTransporter(workerAddr, hint, KindForHint(hint), entry, out);
+}
+
+Status DataPlaneManager::WithDataPlaneLease(
+    const HostPort &workerAddr, TransportHint hint,
+    const std::function<Status(const std::shared_ptr<IDataTransporter> &,
+                               const std::shared_ptr<WorkerRpcClient> &)> &operation)
+{
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(operation), K_INVALID, "Data-plane lease operation is empty");
+    const AccessTransportKind expectedKind = KindForHint(hint);
+    std::shared_ptr<WorkerTransportEntry> entry;
+    RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
+    std::shared_ptr<IDataTransporter> transporter;
+    RETURN_IF_NOT_OK(GetOrBuildTransporter(workerAddr, hint, expectedKind, entry, transporter));
+
+    std::shared_lock<std::shared_mutex> lock(entry->mutex);
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "DataPlaneManager is shutting down");
+    CHECK_FAIL_RETURN_STATUS(entry->transporter == transporter && entry->HasAliveTransporter(expectedKind),
+                             K_URMA_NEED_CONNECT, "Data-plane transporter changed before lease acquisition");
+    CHECK_FAIL_RETURN_STATUS(entry->rpcClient != nullptr && entry->rpcClient->IsAlive(), K_RPC_UNAVAILABLE,
+                             "RPC client is unavailable while the data-plane lease is held");
+    return operation(transporter, entry->rpcClient);
 }
 
 Status DataPlaneManager::GetOrCreateRpcClient(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out)
@@ -340,7 +364,7 @@ Status DataPlaneManager::BuildUbTransporter(const HostPort &workerAddr,
     auto ubConnection = std::make_shared<UbConnection>(rpcClient);
     Status rc = ubConnection->Establish(workerAddr);
     if (rc.IsOk() && ubConnection->IsAlive()) {
-        out = std::make_shared<UbTransporter>(rpcClient, ubConnection);
+        out = std::make_shared<UbTransporter>(rpcClient, ubConnection, ubBufferProvider_);
         return Status::OK();
     }
     if (rc.GetCode() == K_NOT_SUPPORTED) {

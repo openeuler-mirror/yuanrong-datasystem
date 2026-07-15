@@ -45,7 +45,6 @@ namespace master {
 static constexpr int ASYNC_MIN_THREAD_NUM = 1;
 static constexpr int ASYNC_MAX_THREAD_NUM = 4;
 
-
 static constexpr double US_PER_MS = 1000.0;
 
 MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
@@ -151,9 +150,9 @@ Status MasterOCServiceImpl::CreateMeta(const CreateMetaReqPb &req, CreateMetaRsp
     point.Record();
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     if (ShouldPrintLatencySummary(totalUs, config)) {
-        PhaseDurationResult result = ComputePhaseDurations(
-            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
-            Trace::Instance().GetLatencyTickDroppedCount());
+        PhaseDurationResult result =
+            ComputePhaseDurations(Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+                                  Trace::Instance().GetLatencyTickDroppedCount());
         bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
         MergeDownstreamPhases(result);
         bool gateHit = CheckPhaseGate(result, config);
@@ -223,8 +222,7 @@ Status MasterOCServiceImpl::CreateCopyMeta(const CreateCopyMetaReqPb &req, Creat
     auto totalMs = timer.ElapsedMilliSecond();
     GetMasterTimeCost().Append("Total CreateCopyMeta", totalMs);
     auto vlogLevel = (totalMs > 1 || status.IsError()) ? 0 : 1;
-    VLOG(vlogLevel) << FormatString("CreateCopyMeta done, cost: %.1fms, %s", totalMs,
-                                    GetMasterTimeCost().GetInfo());
+    VLOG(vlogLevel) << FormatString("CreateCopyMeta done, cost: %.1fms, %s", totalMs, GetMasterTimeCost().GetInfo());
     return status;
 }
 
@@ -287,9 +285,9 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     }
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     if (ShouldPrintLatencySummary(totalUs, config)) {
-        PhaseDurationResult result = ComputePhaseDurations(
-            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
-            Trace::Instance().GetLatencyTickDroppedCount());
+        PhaseDurationResult result =
+            ComputePhaseDurations(Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+                                  Trace::Instance().GetLatencyTickDroppedCount());
         bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
         MergeDownstreamPhases(result);
         bool gateHit = CheckPhaseGate(result, config);
@@ -300,8 +298,8 @@ Status MasterOCServiceImpl::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb 
     const double totalMs = static_cast<double>(totalUs) / US_PER_MS;
     GetMasterTimeCost().Append("Total QueryMeta", totalMs);
     SLOW_LOG_IF_OR_VLOG(INFO, config.processSlowerThanUs > 0 && totalUs >= config.processSlowerThanUs, 1,
-        FormatString("QueryMeta done, target num %d, success num %d, cost: %.3fms, %s", req.ids().size(),
-                     rsp.query_metas_size(), totalMs, GetMasterTimeCost().GetInfo()));
+                        FormatString("QueryMeta done, target num %d, success num %d, cost: %.3fms, %s",
+                                     req.ids().size(), rsp.query_metas_size(), totalMs, GetMasterTimeCost().GetInfo()));
     return Status::OK();
 }
 
@@ -380,9 +378,9 @@ Status MasterOCServiceImpl::UpdateMeta(const UpdateMetaReqPb &req, UpdateMetaRsp
     }
     const auto totalUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     if (ShouldPrintLatencySummary(totalUs, config)) {
-        PhaseDurationResult result = ComputePhaseDurations(
-            Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
-            Trace::Instance().GetLatencyTickDroppedCount());
+        PhaseDurationResult result =
+            ComputePhaseDurations(Trace::Instance().GetLatencyTicks(), Trace::Instance().GetLatencyTickCount(),
+                                  Trace::Instance().GetLatencyTickDroppedCount());
         bool hasDownstream = Trace::Instance().GetDownstreamPhases().count > 0;
         MergeDownstreamPhases(result);
         bool gateHit = CheckPhaseGate(result, config);
@@ -414,14 +412,15 @@ Status MasterOCServiceImpl::GetObjectLocations(const GetObjectLocationsReqPb &re
     return Status::OK();
 }
 
-Status MasterOCServiceImpl::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &resp)
+Status MasterOCServiceImpl::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &resp,
+                                        std::vector<RpcMessage> &payloads)
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
-    return ocMetadataManager->QueryAndGet(req, resp);
+    return ocMetadataManager->QueryAndGet(req, resp, payloads);
 }
 
 Status MasterOCServiceImpl::DeleteAllCopyMeta(
@@ -536,9 +535,8 @@ Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
         return Status::OK();
     }
     if (req.object_keys_size() > 0) {
-        std::unordered_map<std::string, QueryGlobalRefNumReqPb> queryTarget =
-            QueryWorkerGRefReqPbGen(
-                std::unordered_set<std::string>(objectKeys.begin(), objectKeys.end()), ocMetadataManager);
+        std::unordered_map<std::string, QueryGlobalRefNumReqPb> queryTarget = QueryWorkerGRefReqPbGen(
+            std::unordered_set<std::string>(objectKeys.begin(), objectKeys.end()), ocMetadataManager);
         for (const auto &targetWorker : queryTarget) {
             QueryGlobalRefNumRspPb rspWorker;
             HostPort addr;
@@ -726,12 +724,11 @@ Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const Reconciliation
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->ProcessWorkerRestart(workerAddr.ToString(),
-                                                                             req.event_timestamp(), true),
-                                     "Master process worker restart failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        ocMetadataManager->ProcessWorkerRestart(workerAddr.ToString(), req.event_timestamp(), true),
+        "Master process worker restart failed");
     GetMasterTimeCost().Append("Total ReconcileMembershipChange", timer.ElapsedMilliSecond());
-    LOG(INFO) << FormatString("The operations of master ReconcileMembershipChange %s",
-                              GetMasterTimeCost().GetInfo());
+    LOG(INFO) << FormatString("The operations of master ReconcileMembershipChange %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
 
@@ -784,9 +781,9 @@ Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, Mig
     ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    RETURN_IF_NOT_OK(worker::ValidateTopologyMigrationRequest(
-        topologyEngine_, req.topology_version(), req.batch_epoch(), req.source_member_id(),
-        req.target_member_id(), req.source_addr()));
+    RETURN_IF_NOT_OK(worker::ValidateTopologyMigrationRequest(topologyEngine_, req.topology_version(),
+                                                              req.batch_epoch(), req.source_member_id(),
+                                                              req.target_member_id(), req.source_addr()));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");

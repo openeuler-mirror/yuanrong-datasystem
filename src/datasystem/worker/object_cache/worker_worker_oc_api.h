@@ -97,6 +97,14 @@ public:
     Status GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                            std::vector<RpcMessage> &payload) override;
 
+    /**
+     * @brief Try to read resident data for a local QueryAndGet fast path.
+     * @param[in] req The object-read request.
+     * @param[out] payload The optional TCP payload.
+     * @return Status of the call.
+     */
+    Status GetObjectRemoteForQueryAndGet(GetObjectRemoteReqPb &req, std::vector<RpcMessage> &payload);
+
     Status GetObjectRemote(
         std::unique_ptr<ClientUnaryWriterReader<GetObjectRemoteReqPb, GetObjectRemoteRspPb>> *clientApi) override
     {

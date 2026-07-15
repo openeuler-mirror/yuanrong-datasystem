@@ -527,9 +527,11 @@ public:
      * @brief Query object locations for client direct reads.
      * @param[in] req The query request.
      * @param[out] rsp The object locations and redirect state.
+     * @param[out] payloads Optional object data returned with the metadata.
      * @return K_OK on success; the error code otherwise.
      */
-    Status QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &rsp);
+    Status QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &rsp,
+                       std::vector<RpcMessage> &payloads);
 
     /**
      * @brief Delete metadata and notify other workers to delete these objects synchronously.
@@ -1319,6 +1321,12 @@ protected:
 private:
     using PrimaryChangeMap = std::unordered_map<std::string, std::unordered_set<std::string>>;
 
+    struct QueryAndGetMetaSnapshot {
+        uint64_t dataSize = 0;
+        int64_t version = 0;
+        bool localCopyAvailable = false;
+    };
+
     friend class MasterOCServiceImpl;
     friend class OCNotifyWorkerManager;
     friend class OCGlobalCacheDeleteManager;
@@ -1829,6 +1837,50 @@ private:
      */
     void TryGetObjectData(const std::string &objectKey, const TbbMetaTable::accessor &accessor, uint64_t &payloadSize,
                           QueryMetaInfoPb &queryMeta, std::vector<RpcMessage> &payloads);
+
+    /**
+     * @brief Validate the optional QueryAndGet inline-data request.
+     * @param[in] req QueryAndGet request.
+     * @return K_OK when the transport request is valid; the error code otherwise.
+     */
+    Status ValidateQueryAndGetDataRequest(const QueryAndGetReqPb &req) const;
+
+    /**
+     * @brief Read one local object through the transport selected by QueryAndGet.
+     * @param[in] req QueryAndGet request.
+     * @param[in] requestIndex Object position in the original request.
+     * @param[in] objectKey Object key.
+     * @param[in] meta Metadata snapshot used to construct the local read.
+     * @param[out] payloads Optional TCP payloads.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status ReadLocalQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex,
+                                    const std::string &objectKey, const QueryAndGetMetaSnapshot &meta,
+                                    std::vector<RpcMessage> &payloads);
+
+    /**
+     * @brief Fill object locations and snapshot fields while holding the metadata accessor.
+     * @param[in] objectKey Object key.
+     * @param[out] location Object locations and size.
+     * @param[out] meta Metadata required after releasing the accessor.
+     * @return True when the object metadata exists.
+     */
+    bool FillQueryAndGetMetadata(const std::string &objectKey, ObjectLocationInfoPb &location,
+                                 QueryAndGetMetaSnapshot &meta);
+
+    /**
+     * @brief Try to return one QueryAndGet object's data through the selected transport.
+     * @param[in] req QueryAndGet request.
+     * @param[in] requestIndex Object position in the original request.
+     * @param[in] objectKey Object key.
+     * @param[in] meta Metadata snapshot captured before releasing the table accessor.
+     * @param[out] result Per-object QueryAndGet result.
+     * @param[in,out] payloadSize Accumulated TCP payload bytes.
+     * @param[out] payloads Response payloads.
+     */
+    void TryGetQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex, const std::string &objectKey,
+                               const QueryAndGetMetaSnapshot &meta, QueryAndGetResultPb &result,
+                               uint64_t &payloadSize, std::vector<RpcMessage> &payloads);
 
     /**
      * @brief Add heavy operation.

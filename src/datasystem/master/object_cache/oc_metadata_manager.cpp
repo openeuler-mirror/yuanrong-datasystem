@@ -95,6 +95,7 @@ static constexpr int MIN_TTL_SECOND = 0;
 static constexpr int ASYNC_MIN_THREAD_NUM = 2;
 static constexpr int ASYNC_MAX_THREAD_NUM = 5;
 static constexpr int QUERY_AND_GET_MAX_COPY_NUM = 5;
+static constexpr uint64_t QUERY_AND_GET_MAX_PAYLOAD_SIZE = 512 * 1024UL;
 static const std::string OC_METADATA_MANAGER = "OCMetadataManager-";
 static constexpr int MSET_PENDING_TTL_US = 60'000'000;  // 60s
 static constexpr auto CLIENT_ID_REF_RETRY_INTERVAL = std::chrono::milliseconds(200);
@@ -2529,35 +2530,71 @@ Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req,
     return Status::OK();
 }
 
-Status OCMetadataManager::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &rsp)
+Status OCMetadataManager::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &rsp,
+                                      std::vector<RpcMessage> &payloads)
 {
     INJECT_POINT("client.transport.query_and_get", []() { return Status::OK(); });
+    RETURN_IF_NOT_OK(ValidateQueryAndGetDataRequest(req));
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
     RETURN_OK_IF_TRUE(rsp.meta_is_moving());
-    for (const auto &objectKey : objectKeys) {
-        TbbMetaTable::const_accessor accessor;
-        ObjectLocationInfoPb *location = rsp.add_location_infos();
-        location->set_object_key(objectKey);
-        const size_t shardIdx = GetShardIndex(objectKey);
-        if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
+
+    std::unordered_map<std::string, bool> redirectedKeys;
+    for (const auto &redirectInfo : rsp.info()) {
+        for (const auto &objectKey : redirectInfo.change_meta_ids()) {
+            redirectedKeys.emplace(objectKey, true);
+        }
+    }
+
+    uint64_t payloadSize = 0;
+    for (int i = 0; i < req.object_keys_size(); ++i) {
+        const auto &objectKey = req.object_keys(i);
+        if (redirectedKeys.find(objectKey) != redirectedKeys.end()) {
             continue;
         }
-        const auto &primaryAddress = accessor->second.meta.primary_address();
-        if (!primaryAddress.empty()) {
-            location->add_object_locations(primaryAddress);
+
+        QueryAndGetResultPb *result = rsp.add_results();
+        ObjectLocationInfoPb *location = result->mutable_location();
+        location->set_object_key(objectKey);
+        QueryAndGetMetaSnapshot meta;
+        if (!FillQueryAndGetMetadata(objectKey, *location, meta)) {
+            continue;
         }
-        for (const auto &address : accessor->second.locations) {
-            if (location->object_locations_size() >= QUERY_AND_GET_MAX_COPY_NUM) {
-                break;
-            }
-            if (address.first != primaryAddress) {
-                location->add_object_locations(address.first);
-            }
+        if (req.has_data_request()) {
+            TryGetQueryAndGetData(req, static_cast<size_t>(i), objectKey, meta, *result, payloadSize, payloads);
         }
-        location->set_object_size(accessor->second.meta.data_size());
     }
     return Status::OK();
+}
+
+bool OCMetadataManager::FillQueryAndGetMetadata(const std::string &objectKey, ObjectLocationInfoPb &location,
+                                                QueryAndGetMetaSnapshot &meta)
+{
+    TbbMetaTable::const_accessor accessor;
+    const size_t shardIdx = GetShardIndex(objectKey);
+    if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
+        return false;
+    }
+
+    const auto &objectMeta = accessor->second;
+    const auto &primaryAddress = objectMeta.meta.primary_address();
+    if (!primaryAddress.empty()) {
+        location.add_object_locations(primaryAddress);
+    }
+    for (const auto &address : objectMeta.locations) {
+        if (location.object_locations_size() >= QUERY_AND_GET_MAX_COPY_NUM) {
+            break;
+        }
+        if (address.first != primaryAddress) {
+            location.add_object_locations(address.first);
+        }
+    }
+    meta.dataSize = objectMeta.meta.data_size();
+    meta.version = objectMeta.meta.version();
+    auto localCopy = objectMeta.locations.find(masterAddress_);
+    meta.localCopyAvailable = localCopy != objectMeta.locations.end() && localCopy->second == AckState::ACK;
+    location.set_object_size(meta.dataSize);
+    return true;
 }
 
 void OCMetadataManager::GetObjRefsMatch(const std::function<bool(const std::string &)> &matchFunc,
@@ -4300,6 +4337,89 @@ void OCMetadataManager::WaitInitializaiton()
     }
 }
 
+Status OCMetadataManager::ValidateQueryAndGetDataRequest(const QueryAndGetReqPb &req) const
+{
+    if (!req.has_data_request()) {
+        return Status::OK();
+    }
+    const auto &dataRequest = req.data_request();
+    CHECK_FAIL_RETURN_STATUS(dataRequest.has_tcp() || dataRequest.has_ub(), K_INVALID,
+                             "QueryAndGet data transport is not set");
+    if (dataRequest.has_ub()) {
+        const auto &ubRequest = dataRequest.ub();
+        CHECK_FAIL_RETURN_STATUS(ubRequest.buffer_size() > 0 && !ubRequest.urma_instance_id().empty(), K_INVALID,
+                                 "QueryAndGet UB buffer is invalid");
+        CHECK_FAIL_RETURN_STATUS(ubRequest.buffer_infos_size() == req.object_keys_size(), K_INVALID,
+                                 "QueryAndGet UB buffer count does not match object key count");
+    }
+    return Status::OK();
+}
+
+void OCMetadataManager::TryGetQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex,
+                                              const std::string &objectKey,
+                                              const QueryAndGetMetaSnapshot &meta,
+                                              QueryAndGetResultPb &result, uint64_t &payloadSize,
+                                              std::vector<RpcMessage> &payloads)
+{
+    if (localApi_ == nullptr || !meta.localCopyAvailable
+        || notifyWorkerManager_->CheckExistAsyncWorkerOp(
+            masterAddress_, objectKey,
+            NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
+        return;
+    }
+
+    const bool useUb = req.data_request().has_ub();
+    if (useUb && meta.dataSize > req.data_request().ub().buffer_size()) {
+        return;
+    }
+    if (!useUb
+        && (payloadSize > QUERY_AND_GET_MAX_PAYLOAD_SIZE
+            || meta.dataSize > QUERY_AND_GET_MAX_PAYLOAD_SIZE - payloadSize)) {
+        return;
+    }
+
+    std::vector<RpcMessage> tmpPayloads;
+    Status status = ReadLocalQueryAndGetData(req, requestIndex, objectKey, meta, tmpPayloads);
+    if (status.IsError()) {
+        VLOG(1) << FormatString("[ObjectKey %s] QueryAndGet local data miss: %s", objectKey, status.ToString());
+        return;
+    }
+
+    if (useUb) {
+        result.mutable_data_result();
+        return;
+    }
+    auto *dataResult = result.mutable_data_result();
+    for (auto &payload : tmpPayloads) {
+        dataResult->add_payload_indexes(static_cast<uint32_t>(payloads.size()));
+        payloads.emplace_back(std::move(payload));
+    }
+    payloadSize += meta.dataSize;
+}
+
+Status OCMetadataManager::ReadLocalQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex,
+                                                   const std::string &objectKey,
+                                                   const QueryAndGetMetaSnapshot &meta,
+                                                   std::vector<RpcMessage> &payloads)
+{
+    GetObjectRemoteReqPb localReq;
+    localReq.set_try_lock(true);
+    localReq.set_object_key(objectKey);
+    localReq.set_version(meta.version);
+    localReq.set_read_offset(0);
+    localReq.set_read_size(meta.dataSize);
+    localReq.set_data_size(meta.dataSize);
+    if (req.data_request().has_ub()) {
+        const auto &ubRequest = req.data_request().ub();
+        *localReq.mutable_urma_info() = ubRequest.buffer_infos(static_cast<int>(requestIndex));
+        localReq.set_urma_instance_id(ubRequest.urma_instance_id());
+    }
+
+    RETURN_RUNTIME_ERROR_IF_NULL(localApi_);
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(localReq));
+    return localApi_->GetObjectRemoteForQueryAndGet(localReq, payloads);
+}
+
 void OCMetadataManager::TryGetObjectData(const std::string &objectKey, const TbbMetaTable::accessor &accessor,
                                          uint64_t &payloadSize, QueryMetaInfoPb &queryMeta,
                                          std::vector<RpcMessage> &payloads)
@@ -4309,12 +4429,12 @@ void OCMetadataManager::TryGetObjectData(const std::string &objectKey, const Tbb
         return;
     }
     INJECT_POINT("ocMetaManager.noNeedGetFromLocal", []() { return; });
-    constexpr uint64_t maxPayloadSize = 512 * 1024ul;
     if (localApi_ == nullptr) {
         return;
     }
     uint64_t dataSize = accessor->second.meta.data_size();
-    if (payloadSize > maxPayloadSize || dataSize > maxPayloadSize - payloadSize) {
+    if (payloadSize > QUERY_AND_GET_MAX_PAYLOAD_SIZE
+        || dataSize > QUERY_AND_GET_MAX_PAYLOAD_SIZE - payloadSize) {
         return;
     }
     auto iter = accessor->second.locations.find(masterAddress_);
