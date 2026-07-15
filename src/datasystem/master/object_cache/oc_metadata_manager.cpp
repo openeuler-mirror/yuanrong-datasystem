@@ -42,6 +42,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/parallel/parallel_for.h"
+#include "datasystem/common/parallel/service_parallel_policy.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/timeout_duration.h"
@@ -1272,7 +1273,8 @@ Status OCMetadataManager::QueryMetaFromMetaTable(const QueryMetaReqPb &req, cons
 
     const size_t parallelLimit = 128;
     const size_t objectKeyCount = objectKeys.size();
-    if (objectKeyCount <= parallelLimit || !IsUrmaEnabled()) {
+    // Use serial lookup when URMA is disabled, the batch is small, or brpc mode must avoid ParallelFor sem_wait.
+    if (!IsUrmaEnabled() || !Parallel::ShouldUseServiceParallelFor(objectKeyCount, parallelLimit, FLAGS_use_brpc)) {
         for (const auto &objectKey : objectKeys) {
             func(objectKey, infos, notExistObjectKeys);
         }
