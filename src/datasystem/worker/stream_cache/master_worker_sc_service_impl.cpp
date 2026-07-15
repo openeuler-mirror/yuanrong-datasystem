@@ -165,6 +165,7 @@ Status MasterWorkerSCServiceImpl::ClearAllRemotePub(const ClearRemoteInfoReqPb &
     const std::string &streamName = req.stream_name();
     LOG(INFO) << FormatString("worker(%s) received ClearAllRemotePub request, streamname: %s",
                               localWorkerAddress_.ToString(), streamName);
+    INJECT_POINT("MasterWorkerSCServiceImpl.ClearAllRemotePub.sleep");
     StreamManagerMap::const_accessor accessor;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(clientWorkerSCSvc_->GetStreamManager(streamName, accessor),
                                      "worker get streamManager failed");

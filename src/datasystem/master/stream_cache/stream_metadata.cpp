@@ -16,12 +16,16 @@
  */
 #include "datasystem/master/stream_cache/stream_metadata.h"
 
+#include <algorithm>
+#include <chrono>
+#include <thread>
 #include <utility>
 
-#include "datasystem/worker/worker_topology_references.h"
-#include "datasystem/common/stream_cache/stream_fields.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
+#include "datasystem/common/rpc/fanout_collector.h"
+#include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/net_util.h"
@@ -33,9 +37,27 @@
 #include "datasystem/master/stream_cache/sc_notify_worker_manager.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
+namespace {
+constexpr int32_t CLEAR_REMOTE_PUB_RETRY_TIMEOUT_MS = 60'000;
+constexpr int32_t CLEAR_REMOTE_PUB_MAX_RPC_TIMEOUT_MS = 5'000;
+constexpr int32_t CLEAR_REMOTE_PUB_FAST_POLL_INTERVAL_MS = 10;
+constexpr int32_t CLEAR_REMOTE_PUB_SLOW_POLL_INTERVAL_MS = 1'000;
+constexpr int32_t CLEAR_REMOTE_PUB_FAST_POLL_COUNT = 10;
+
+Status SleepForClearRemotePub(std::chrono::milliseconds duration)
+{
+    if (FLAGS_use_brpc) {
+        return FanoutCollector::BthreadSleepFor(std::chrono::duration_cast<std::chrono::microseconds>(duration));
+    }
+    std::this_thread::sleep_for(duration);
+    return Status::OK();
+}
+}  // namespace
+
 StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &streamFields,
                                RocksStreamMetaStore *streamMetaStore, std::shared_ptr<AkSkManager> akSkManager,
                                std::shared_ptr<RpcSessionManager> rpcSessionManager,
@@ -368,7 +390,7 @@ Status StreamMetadata::SubIncreaseNodeUnlocked(const ConsumerMetaPb &consumerMet
     if (sendToSrcNode) {
         std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
         RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(subWorkerAddress, masterWorkerApi, akSkManager_));
-        RETURN_IF_NOT_OK_EXCEPT(masterWorkerApi->ClearAllRemotePub(streamName_), K_NOT_FOUND);
+        RETURN_IF_NOT_OK_EXCEPT(ProcessClearAllRemotePub(masterWorkerApi, subWorkerAddress), K_NOT_FOUND);
     }
 
     if (saveToRocksdb) {
@@ -779,7 +801,7 @@ Status StreamMetadata::CheckMetadata(const GetStreamMetadataRspPb &meta, const H
     if (!meta.is_remote_pub_empty() && isAllConsumerClosed && CheckWorkerStatus(workerAddr).IsOk()) {
         std::shared_ptr<MasterWorkerSCApi> masterWorkerApi = nullptr;
         RETURN_IF_NOT_OK(rpcSessionManager_->GetRpcSession(workerAddr, masterWorkerApi, akSkManager_));
-        RETURN_IF_NOT_OK(masterWorkerApi->ClearAllRemotePub(meta.stream_name()));
+        RETURN_IF_NOT_OK(ProcessClearAllRemotePub(masterWorkerApi, workerAddr));
     }
 
     VLOG(SC_INTERNAL_LOG_LEVEL) << "Check metadata for stream " << streamName_ << " finish.";
@@ -843,49 +865,85 @@ Status StreamMetadata::ProcessClearAllRemotePub(const std::shared_ptr<MasterWork
                                                 const HostPort &subWorkerAddress)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(masterWorkerApi);
-    static const int RETRY_TIMEOUT_MS = 60'000;  // 1 min
+    int64_t remainingTimeMs = GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime();
+    int32_t retryTimeoutMs =
+        static_cast<int32_t>(std::min<int64_t>(remainingTimeMs, CLEAR_REMOTE_PUB_RETRY_TIMEOUT_MS));
+    CHECK_FAIL_RETURN_STATUS(retryTimeoutMs > 0, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                             FormatString("[%s] ClearAllRemotePub request timeout.", LogPrefix()));
     const std::unordered_set<StatusCode> &retryOn = { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
                                                       StatusCode::K_RPC_DEADLINE_EXCEEDED,
                                                       StatusCode::K_RPC_UNAVAILABLE };
-    Status rc;
     switch (masterWorkerApi->TypeId()) {
         case MasterWorkerSCApiType::MasterLocalWorkerSCApi:
             RETURN_IF_NOT_OK(RetryOnError(
-                RETRY_TIMEOUT_MS,
+                retryTimeoutMs,
                 [&masterWorkerApi, this](int32_t) { return masterWorkerApi->ClearAllRemotePub(streamName_); },
                 []() { return Status::OK(); }, retryOn));
             break;
         case MasterWorkerSCApiType::MasterRemoteWorkerSCApi:
             auto masterRemoteWorkerOCApi = dynamic_cast<MasterRemoteWorkerSCApi *>(masterWorkerApi.get());
-            int32_t maxRpcTimeoutMs = 5'000;  // 5s
-            int64_t tagId;
-            auto timer = Timer(RETRY_TIMEOUT_MS);
-            RETURN_IF_NOT_OK(RetryOnError(
-                RETRY_TIMEOUT_MS,
-                [&masterRemoteWorkerOCApi, &subWorkerAddress, &tagId, this](int32_t timeoutMs) {
-                    RETURN_IF_NOT_OK(CheckWorkerStatus(subWorkerAddress));
-                    GetRequestContext()->scTimeoutDuration.Init(timeoutMs);
-                    return masterRemoteWorkerOCApi->ClearAllRemotePubAsynWrite(streamName_, tagId);
-                },
-                []() { return Status::OK(); }, retryOn, maxRpcTimeoutMs));
-            int waitIntervalMs1 = 10, waitIntervalMs2 = 1'000, fastReadingMaxNum = 10;
-            int retryNum = 0;
-            do {
-                RETURN_IF_NOT_OK(CheckWorkerStatus(subWorkerAddress));
-                rc = masterRemoteWorkerOCApi->ClearAllRemotePubAsynRead(tagId, RpcRecvFlags::DONTWAIT);
-                if (rc.IsOk()) {
-                    break;
-                }
-                auto waitIntervalMs = retryNum > fastReadingMaxNum ? waitIntervalMs2 : waitIntervalMs1;
-                std::this_thread::sleep_for(std::chrono::milliseconds(waitIntervalMs));
-                ++retryNum;
-            } while (timer.GetRemainingTimeMs() > 0);
-            if (rc.IsError()) {
-                (void)masterRemoteWorkerOCApi->ClearAllRemotePubAsynRead(tagId, RpcRecvFlags::NONE);
-            }
+            RETURN_RUNTIME_ERROR_IF_NULL(masterRemoteWorkerOCApi);
+            RETURN_IF_NOT_OK(ProcessRemoteClearAllRemotePub(masterRemoteWorkerOCApi, subWorkerAddress,
+                                                            retryTimeoutMs));
             break;
     }
-    return rc;
+    return Status::OK();
+}
+
+Status StreamMetadata::ProcessRemoteClearAllRemotePub(MasterRemoteWorkerSCApi *masterRemoteWorkerApi,
+                                                      const HostPort &subWorkerAddress, int32_t retryTimeoutMs)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(masterRemoteWorkerApi);
+    int64_t tagId = -1;
+    bool asyncTagPending = false;
+    Raii forgetPendingTag([&masterRemoteWorkerApi, &asyncTagPending, &tagId]() {
+        if (asyncTagPending) {
+            LOG_IF_ERROR(masterRemoteWorkerApi->ForgetClearAllRemotePubAsyncTag(tagId),
+                         "Forget ClearAllRemotePub async tag failed.");
+        }
+    });
+    auto timer = Timer(retryTimeoutMs);
+    const std::unordered_set<StatusCode> &retryOn = { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
+                                                      StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                                                      StatusCode::K_RPC_UNAVAILABLE };
+    RETURN_IF_NOT_OK(RetryOnError(
+        retryTimeoutMs,
+        [&masterRemoteWorkerApi, &subWorkerAddress, &tagId, &asyncTagPending, this](int32_t timeoutMs) {
+            RETURN_IF_NOT_OK(CheckWorkerStatus(subWorkerAddress));
+            GetRequestContext()->scTimeoutDuration.Init(timeoutMs);
+            Status writeRc = masterRemoteWorkerApi->ClearAllRemotePubAsynWrite(streamName_, tagId);
+            if (writeRc.IsOk()) {
+                asyncTagPending = true;
+            }
+            return writeRc;
+        },
+        []() { return Status::OK(); }, retryOn, CLEAR_REMOTE_PUB_MAX_RPC_TIMEOUT_MS));
+    return PollRemoteClearAllRemotePub(masterRemoteWorkerApi, subWorkerAddress, tagId, timer, asyncTagPending);
+}
+
+Status StreamMetadata::PollRemoteClearAllRemotePub(MasterRemoteWorkerSCApi *masterRemoteWorkerApi,
+                                                   const HostPort &subWorkerAddress, int64_t tagId, Timer &timer,
+                                                   bool &asyncTagPending)
+{
+    int retryNum = 0;
+    do {
+        RETURN_IF_NOT_OK(CheckWorkerStatus(subWorkerAddress));
+        Status rc = masterRemoteWorkerApi->ClearAllRemotePubAsynRead(tagId, RpcRecvFlags::DONTWAIT);
+        if (rc.GetCode() != StatusCode::K_TRY_AGAIN) {
+            if (rc.IsOk()) {
+                asyncTagPending = false;
+            }
+            return rc;
+        }
+        auto waitIntervalMs = retryNum > CLEAR_REMOTE_PUB_FAST_POLL_COUNT
+                                  ? CLEAR_REMOTE_PUB_SLOW_POLL_INTERVAL_MS
+                                  : CLEAR_REMOTE_PUB_FAST_POLL_INTERVAL_MS;
+        RETURN_IF_NOT_OK(SleepForClearRemotePub(std::chrono::milliseconds(waitIntervalMs)));
+        ++retryNum;
+    } while (timer.GetRemainingTimeMs() > 0);
+    RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                  FormatString("[%s] ClearAllRemotePub async read timeout for worker %s.", LogPrefix(),
+                               subWorkerAddress.ToString()));
 }
 
 Status StreamMetadata::InitStreamMetrics()

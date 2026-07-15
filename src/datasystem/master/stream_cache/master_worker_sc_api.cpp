@@ -276,6 +276,19 @@ Status MasterRemoteWorkerSCApi::ClearAllRemotePubAsynRead(int64_t tagId, RpcRecv
     return rc;
 }
 
+Status MasterRemoteWorkerSCApi::ForgetClearAllRemotePubAsyncTag(int64_t tagId)
+{
+    if (brpcSession_ != nullptr) {
+        brpcSession_->ForgetRequest(tagId);
+        return Status::OK();
+    }
+    if (rpcSession_ != nullptr) {
+        rpcSession_->ForgetRequest(tagId);
+        return Status::OK();
+    }
+    RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "ClearAllRemotePub async session is null.");
+}
+
 // MasterLocalWorkerSCApi methods
 MasterLocalWorkerSCApi::MasterLocalWorkerSCApi(worker::stream_cache::MasterWorkerSCServiceImpl *service,
                                                const HostPort &localAddress, std::shared_ptr<AkSkManager> akSkManager)

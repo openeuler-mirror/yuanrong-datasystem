@@ -222,6 +222,7 @@ public:
 
     Status ClearAllRemotePubAsynWrite(const std::string &streamName, int64_t &tagId);
     Status ClearAllRemotePubAsynRead(int64_t tagId, RpcRecvFlags flags);
+    Status ForgetClearAllRemotePubAsyncTag(int64_t tagId);
 
 private:
     /**
