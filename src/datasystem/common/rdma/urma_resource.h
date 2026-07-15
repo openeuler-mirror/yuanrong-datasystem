@@ -76,20 +76,30 @@ public:
      */
     UrmaEvent(uint64_t requestId, std::shared_ptr<UrmaSendLaneLease> laneLease, std::string remoteAddress,
               std::string remoteInstanceId, uint64_t dataSize, OperationType operationType,
+              std::atomic<int> *srcChipInflightCounter,
               std::shared_ptr<EventWaiter> waiter = nullptr)
         : Event(requestId, std::move(waiter)),
           laneLease_(std::move(laneLease)),
           remoteAddress_(std::move(remoteAddress)),
           remoteInstanceId_(std::move(remoteInstanceId)),
           dataSize_(dataSize),
-          operationType_(operationType)
+          operationType_(operationType),
+          srcChipInflightCounter_(srcChipInflightCounter)
     {
         if (laneLease_ != nullptr) {
             laneLease_->AddEvent();
         }
+        if (srcChipInflightCounter_ != nullptr) {
+            srcChipInflightCounter_->fetch_add(1, std::memory_order_relaxed);
+        }
     }
 
-    ~UrmaEvent() = default;
+    ~UrmaEvent() override
+    {
+        if (srcChipInflightCounter_ != nullptr) {
+            srcChipInflightCounter_->fetch_sub(1, std::memory_order_relaxed);
+        }
+    }
 
     /**
      * @brief Get the event creation timestamp used for end-to-end event lifetime timing.
@@ -98,6 +108,11 @@ public:
     uint64_t GetCreateTimeUs() const
     {
         return createTimeUs_;
+    }
+
+    uint64_t GetWakeSchedLatencyUs() const
+    {
+        return wakeSchedLatencyUs_.load(std::memory_order_relaxed);
     }
 
     /**
@@ -185,7 +200,48 @@ public:
         }
     }
 
+    Status WaitFor(std::chrono::milliseconds timeout) override
+    {
+        std::unique_lock<std::mutex> lock(eventMutex_);
+        bool gotNotification = cv_.wait_for(lock, timeout, [this] { return ready_; });
+        if (gotNotification || ready_) {
+            RecordWakeSchedLatencyLocked();
+            return Status::OK();
+        }
+        RecordWakeSchedLatencyLocked();
+        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId_));
+        RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
+                                FormatString("Timed out waiting for request: %s", requestIdStr.c_str()));
+    }
+
+    void NotifyAll() override
+    {
+        {
+            std::unique_lock<std::mutex> lock(eventMutex_);
+            notifyTimeUs_ = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+            ready_ = true;
+        }
+        if (waiter_) {
+            waiter_->Notify(shared_from_this());
+        }
+        cv_.notify_all();
+    }
+
 private:
+    void RecordWakeSchedLatencyLocked()
+    {
+        if (wakeSchedLatencyRecorded_) {
+            return;
+        }
+        wakeSchedLatencyRecorded_ = true;
+        if (notifyTimeUs_ == 0) {
+            wakeSchedLatencyUs_.store(0, std::memory_order_relaxed);
+            return;
+        }
+        const auto nowUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+        wakeSchedLatencyUs_.store(nowUs >= notifyTimeUs_ ? nowUs - notifyTimeUs_ : 0, std::memory_order_relaxed);
+    }
+
     UrmaSendLaneLease::SettleAction MarkLaneSettled(bool retire)
     {
         bool expected = false;
@@ -202,6 +258,10 @@ private:
     uint64_t dataSize_{ 0 };
     OperationType operationType_{ OperationType::UNKNOWN };
     uint64_t createTimeUs_{ static_cast<uint64_t>(GetSteadyClockTimeStampUs()) };
+    uint64_t notifyTimeUs_{ 0 };
+    bool wakeSchedLatencyRecorded_{ false };
+    std::atomic<uint64_t> wakeSchedLatencyUs_{ 0 };
+    std::atomic<int> *srcChipInflightCounter_{ nullptr };
     std::atomic<bool> laneEventSettled_{ false };
 };
 

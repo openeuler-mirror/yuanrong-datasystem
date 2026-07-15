@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 #include <unordered_map>
 #include <tbb/concurrent_hash_map.h>
 
@@ -661,6 +662,7 @@ private:
     Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
                        const std::shared_ptr<UrmaSendLaneLease> &laneLease, const std::string &remoteAddress,
                        uint64_t dataSize, UrmaEvent::OperationType operationType,
+                       std::atomic<int> *srcChipInflightCounter,
                        std::shared_ptr<EventWaiter> waiter = nullptr);
     void ReleaseEventLane(const std::shared_ptr<UrmaEvent> &event);
     void ReleaseAndDeleteEvent(uint64_t requestId);
@@ -705,6 +707,13 @@ private:
 
     Status InitLocalUrmaInfo(const HostPort &hostport);
     Status RemoveRemoteResources(const std::string &connectionKey);
+    std::atomic<int> *GetSrcChipInflightWrCounter(uint8_t chipId);
+    const char *GetSrcChipInflightWrCountsString() const;
+    void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
+                                    uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
+                                    uint64_t wakeSchedLatencyUs, const Status &waitRc) const;
+    uint64_t pollLastStartUs_{ 0 };
+    uint64_t pollLastEndUs_{ 0 };
 
     // Polling thread
     std::unique_ptr<Thread> serverEventThread_{ nullptr };
@@ -730,6 +739,7 @@ private:
     std::unordered_set<uint64_t> finishedRequests_;
     std::unordered_map<uint64_t, int> failedRequests_;
     std::atomic<bool> serverStop_{ false };
+    std::vector<std::atomic<int>> srcChipInflightWrCounts_;
     mutable std::mutex connectionKeyMutex_;
     std::unordered_map<UrmaConnection *, std::string> connectionKeys_;
     urma_log_cb_t urmaLogCallback_{};
