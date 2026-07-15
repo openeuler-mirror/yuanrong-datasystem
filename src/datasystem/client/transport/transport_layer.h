@@ -21,10 +21,12 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "datasystem/client/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/transport/object_read/object_read_flow.h"
 #include "datasystem/client/transport/object_read/object_read_types.h"
+#include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/transport_advisor.h"
 #include "datasystem/common/ak_sk/signature.h"
@@ -76,6 +78,15 @@ public:
      */
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param);
 
+    /** @brief Create transport-native buffers for a same-worker MSet batch. */
+    Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &objectKeys,
+                   const std::vector<uint64_t> &dataSizes, const TransportCreateParam &param,
+                   std::vector<std::shared_ptr<ObjectBuffer>> &buffers);
+
+    /** @brief Commit a same-worker MSet batch and return per-object failures. */
+    Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                const TransportSetParam &param, TransportMSetResult &result);
+
     /** @brief Release an unfinished worker allocation after a local copy failure. */
     Status Release(ObjectBuffer &buffer, const TransportRequestContext &context);
 
@@ -92,6 +103,8 @@ protected:
 private:
     void ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId,
                          const TransportRequestContext &context);
+    void ScheduleReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                          const TransportRequestContext &context);
 
     std::shared_ptr<DataPlaneManager> manager_;
     std::shared_ptr<TransportAdvisor> advisor_;

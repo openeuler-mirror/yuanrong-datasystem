@@ -61,6 +61,7 @@ enum class AccessTransportKind : uint8_t {
     SHM = 0,
     UB,
     TCP,
+    UNKNOWN,
 };
 
 /**

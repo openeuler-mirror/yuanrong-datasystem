@@ -48,9 +48,17 @@ public:
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                   const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;
+    Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
+                   const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
+                   std::vector<std::shared_ptr<ObjectBuffer>> &buffers) override;
+    Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                const TransportSetParam &param, TransportMSetResult &result) override;
     Status Release(const ShmKey &shmId, const TransportRequestContext &context) override;
 
 private:
+    Status CreateBuffer(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                        const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer);
+
     std::shared_ptr<WorkerRpcClient> rpcClient_;
 };
 }  // namespace client

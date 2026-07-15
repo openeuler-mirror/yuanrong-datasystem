@@ -137,6 +137,23 @@ protected:
         }
     }
 
+    Status WaitForCount(const std::shared_ptr<StreamClient> &client, const std::string &streamName,
+                        uint64_t expectedProducerCount, uint64_t expectedConsumerCount)
+    {
+        auto waitCount = [&client, &streamName, expectedProducerCount, expectedConsumerCount]() {
+            uint64_t producerCount = 0;
+            uint64_t consumerCount = 0;
+            RETURN_IF_NOT_OK(client->QueryGlobalProducersNum(streamName, producerCount));
+            RETURN_IF_NOT_OK(client->QueryGlobalConsumersNum(streamName, consumerCount));
+            CHECK_FAIL_RETURN_STATUS(
+                producerCount == expectedProducerCount && consumerCount == expectedConsumerCount, K_NOT_READY,
+                "Global stream metadata has not converged, producers: " + std::to_string(producerCount)
+                    + ", consumers: " + std::to_string(consumerCount));
+            return Status::OK();
+        };
+        return cluster_->WaitForExpectedResult(waitCount, waitNodeTimeout, K_OK);
+    }
+
     void CreateElement(size_t elementSize, Element &element, std::vector<uint8_t> &writeElement)
     {
         writeElement = RandomData().RandomBytes(elementSize);
@@ -747,13 +764,15 @@ TEST_F(StreamDfxWorkerCrashTest, DISABLED_LEVEL1_TestOneWorkerCrash)
         CreateProducerAndConsumer(client3, { { streamName, 1 } }, producers, { { streamName, "sub3" } }, consumers));
 
     CheckCount(client1, streamName, 3, 3);
-    cluster_->ShutdownNode(ClusterNodeType::WORKER, 0);
+    // Keep the old metadata until restart reconciliation by simulating an abrupt worker crash.
+    DS_ASSERT_OK(cluster_->KillWorker(0));
     CheckCount(client2, streamName, -1, 3);
     CheckCount(client3, streamName, -1, 3);
 
     DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
+    // The health probe may become ready before asynchronous stream metadata reconciliation finishes.
+    DS_ASSERT_OK(WaitForCount(client2, streamName, 2, 2));
     CheckCount(client2, streamName, 2, 2);
     CheckCount(client3, streamName, 2, 2);
 

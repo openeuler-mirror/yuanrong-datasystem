@@ -27,6 +27,7 @@
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/object_read/replica_reader.h"
+#include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uri.h"
@@ -153,6 +154,73 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     return rc;
 }
 
+Status TransportLayer::MCreate(const HostPort &workerAddr, const std::vector<std::string> &objectKeys,
+                               const std::vector<uint64_t> &dataSizes, const TransportCreateParam &param,
+                               std::vector<std::shared_ptr<ObjectBuffer>> &buffers)
+{
+    RETURN_IF_NOT_OK(ValidateMultiCreateRequest(objectKeys, dataSizes, param));
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
+    const TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    std::shared_ptr<IDataTransporter> transporter;
+    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    Status rc = transporter->MCreate(workerAddr, objectKeys, dataSizes, param, buffers);
+    if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+        // MultiCreate has no idempotency marker. The worker may have allocated memory even when the response is lost.
+        LOG(WARNING) << "Tear down RPC and data plane for worker " << workerAddr.ToString()
+                     << " after ambiguous MCreate failure without replay: " << rc;
+        manager_->Teardown(workerAddr);
+    }
+    return rc;
+}
+
+Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                            const TransportSetParam &param, TransportMSetResult &result)
+{
+    result.Clear();
+    RETURN_IF_NOT_OK(ValidateMSetRequest(buffers, param));
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
+    const HostPort workerAddr = ObjectBufferInternal::GetInfo(*buffers.front()).workerAddr;
+    const TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    std::shared_ptr<IDataTransporter> transporter;
+    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    Status rc = transporter->MSet(buffers, param, result);
+    const bool retryUbWrite = rc.GetCode() == K_URMA_NEED_CONNECT;
+    const bool retryUnsentPublish = rc.GetCode() == K_RPC_UNAVAILABLE && !result.publishAttempted;
+    if (!retryUbWrite && !retryUnsentPublish) {
+        if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+            LOG(WARNING) << "Tear down RPC and data plane for worker " << workerAddr.ToString()
+                         << " after ambiguous MSet failure without replay: " << rc;
+            manager_->Teardown(workerAddr);
+        }
+        ScheduleReleases(buffers, param.requestContext);
+        return rc;
+    }
+    if (retryUbWrite) {
+        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString()
+                     << " after MSet failed: " << rc;
+        manager_->ResetDataPlane(workerAddr);
+    } else {
+        LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
+                     << " after MSet failed before publish: " << rc;
+        manager_->Teardown(workerAddr);
+    }
+    Status rebuildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
+    if (rebuildRc.IsOk()) {
+        result.Clear();
+        rc = transporter->MSet(buffers, param, result);
+        if (rc.IsError()) {
+            LOG(WARNING) << "MSet still failed after rebuilding transport for worker " << workerAddr.ToString()
+                         << ": " << rc;
+        }
+    } else {
+        rc = rebuildRc;
+    }
+    ScheduleReleases(buffers, param.requestContext);
+    return rc;
+}
+
 Status TransportLayer::Release(ObjectBuffer &buffer, const TransportRequestContext &context)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
@@ -189,6 +257,15 @@ void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &s
         }
         LOG_IF_ERROR(rc, "Async release of routed Set allocation failed");
     });
+}
+
+void TransportLayer::ScheduleReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                                      const TransportRequestContext &context)
+{
+    for (const auto &buffer : buffers) {
+        const auto &info = ObjectBufferInternal::GetInfo(*buffer);
+        ScheduleRelease(info.workerAddr, info.shmId, context);
+    }
 }
 
 Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response)

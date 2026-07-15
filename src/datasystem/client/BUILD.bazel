@@ -234,6 +234,7 @@ ds_cc_library(
         "transport/data_plane/tcp_transporter.cpp",
         "transport/data_plane/ub_connection.cpp",
         "transport/data_plane/ub_transporter.cpp",
+        "transport/rpc/mset_request_builder.cpp",
         "transport/rpc/set_request_builder.cpp",
         "transport/rpc/worker_rpc_client.cpp",
     ],
@@ -257,6 +258,7 @@ ds_cc_library(
         "transport/data_plane/tcp_transporter.h",
         "transport/data_plane/ub_connection.h",
         "transport/data_plane/ub_transporter.h",
+        "transport/rpc/mset_request_builder.h",
         "transport/rpc/set_request_builder.h",
         "transport/rpc/worker_rpc_client.h",
     ],
@@ -264,6 +266,7 @@ ds_cc_library(
     deps = [
         "//include/datasystem:headers",
         "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:access_recorder_header",
         "//src/datasystem/common/metrics:common_metrics",

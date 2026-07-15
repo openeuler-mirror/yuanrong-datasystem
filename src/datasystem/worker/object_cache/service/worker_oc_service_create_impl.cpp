@@ -296,7 +296,9 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
     std::string tenantId;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(akSkManager_, req, tenantId);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(authRc, "Authenticate failed.");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(req.object_key_size()), StatusCode::K_INVALID,
                                          "invalid object size");
     CHECK_FAIL_RETURN_STATUS(req.object_key_size() == req.data_size_size(), K_INVALID,

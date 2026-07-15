@@ -60,11 +60,20 @@ Status ValidateSetRequest(const ObjectBufferInfo &info, const TransportSetParam 
                              "Set sub-timeout must fit a non-negative int32");
     CHECK_FAIL_RETURN_STATUS(!info.objectKey.empty(), K_INVALID, "Set object key must not be empty");
     CHECK_FAIL_RETURN_STATUS(!param.requestContext.clientId.empty(), K_INVALID, "Set client ID must not be empty");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(UINT64_MAX - info.dataSize >= info.metadataSize,
+                                         StatusCode::K_RUNTIME_ERROR,
+                                         FormatString("Data size[%llu] + meta size[%llu] > UINT64_MAX",
+                                                      info.dataSize, info.metadataSize));
+    const uint64_t bufferSize = info.dataSize + info.metadataSize;
+    CHECK_FAIL_RETURN_STATUS(
+        bufferSize < MAX_PUB_SIZE, K_INVALID,
+        FormatString("Buffer size should not be too large, curr: %llu, max: %llu", bufferSize, MAX_PUB_SIZE));
     return Status::OK();
 }
 
 Status BuildSetRequest(const ObjectBufferInfo &info, const TransportSetParam &param, PublishReqPb &request)
 {
+    RETURN_IF_NOT_OK(ValidateSetRequest(info, param));
     request.Clear();
     *request.mutable_nested_keys() = { param.nestedKeys.begin(), param.nestedKeys.end() };
     request.set_client_id(param.requestContext.clientId);
@@ -74,15 +83,6 @@ Status BuildSetRequest(const ObjectBufferInfo &info, const TransportSetParam &pa
     // WorkerRpcClient adds the AK/SK signature after all request fields are finalized.
     request.set_ttl_second(param.ttlSecond);
     request.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
-
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(UINT64_MAX - info.dataSize >= info.metadataSize,
-                                         StatusCode::K_RUNTIME_ERROR,
-                                         FormatString("Data size[%llu] + meta size[%llu] > UINT64_MAX",
-                                                      info.dataSize, info.metadataSize));
-    auto bufferSize = info.dataSize + info.metadataSize;
-    CHECK_FAIL_RETURN_STATUS(
-        bufferSize < MAX_PUB_SIZE, K_INVALID,
-        FormatString("Buffer size should not be too large, curr: %llu, max: %llu", bufferSize, MAX_PUB_SIZE));
 
     request.set_data_size(info.dataSize);
     request.set_write_mode(static_cast<uint32_t>(info.objectMode.GetWriteMode()));

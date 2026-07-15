@@ -18,18 +18,24 @@
 
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <utility>
 
 #include "datasystem/client/transport/object_buffer_internal.h"
+#include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/mem_view.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/numa_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/object/object_buffer.h"
@@ -220,7 +226,124 @@ Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key,
     return Status(K_NOT_SUPPORTED, "UB Create: worker returned no URMA info; SHM-in-UB not yet supported");
 }
 
+void UbTransporter::ReleaseMCreateAllocations(const MultiCreateRspPb &response,
+                                              const TransportRequestContext &context)
+{
+    if (rpcClient_ == nullptr) {
+        return;
+    }
+    for (const auto &item : response.results()) {
+        if (item.shm_id().empty()) {
+            continue;
+        }
+        Status rc = rpcClient_->InvokeDecreaseReference(context, ShmKey::Intern(item.shm_id()));
+        if (rc.IsError()) {
+            LOG(WARNING) << "Failed to release MCreate allocation after local setup failure: " << rc;
+        }
+    }
+}
+
+Status UbTransporter::BuildMCreateBuffer(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                                         const TransportCreateParam &param, const CreateRspPb &response,
+                                         uint32_t workerVersion, std::shared_ptr<ObjectBuffer> &buffer)
+{
+#ifdef USE_URMA
+    CHECK_FAIL_RETURN_STATUS(response.has_urma_info() && !response.shm_id().empty(), K_NOT_SUPPORTED,
+                             "UB MCreate response has no URMA allocation");
+    std::shared_ptr<UrmaManager::BufferHandle> handle;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(handle, size));
+    CHECK_FAIL_RETURN_STATUS(handle != nullptr && handle->GetPointer() != nullptr, K_RUNTIME_ERROR,
+                             "UB MCreate buffer handle is invalid");
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = key;
+    info->dataSize = size;
+    info->metadataSize = 0;
+    info->workerAddr = workerAddr;
+    info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+    info->ubUrmaDataInfo = std::make_shared<UrmaRemoteAddrPb>(response.urma_info());
+    info->ubDataSentByMemoryCopy = false;
+    info->pointer = static_cast<uint8_t *>(handle->GetPointer());
+    info->ubGetBufferHandle = std::static_pointer_cast<void>(handle);
+    info->shmId = ShmKey::Intern(response.shm_id());
+    info->version = workerVersion;
+    return ObjectBufferInternal::Create(std::move(info), buffer);
+#else
+    (void)workerAddr;
+    (void)key;
+    (void)size;
+    (void)param;
+    (void)response;
+    (void)workerVersion;
+    (void)buffer;
+    return Status(K_NOT_SUPPORTED, "UB MCreate: USE_URMA not compiled");
+#endif
+}
+
+Status UbTransporter::BuildMCreateBuffers(const HostPort &workerAddr, const std::vector<std::string> &keys,
+                                          const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
+                                          const MultiCreateRspPb &response, uint32_t workerVersion,
+                                          std::vector<std::shared_ptr<ObjectBuffer>> &buffers)
+{
+    std::vector<std::shared_ptr<ObjectBuffer>> created;
+    created.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        std::shared_ptr<ObjectBuffer> buffer;
+        RETURN_IF_NOT_OK(BuildMCreateBuffer(workerAddr, keys[i], sizes[i], param,
+                                            response.results(static_cast<int>(i)), workerVersion, buffer));
+        created.emplace_back(std::move(buffer));
+    }
+    buffers = std::move(created);
+    return Status::OK();
+}
+
+Status UbTransporter::MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
+                              const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
+                              std::vector<std::shared_ptr<ObjectBuffer>> &buffers)
+{
+    std::shared_lock<std::shared_mutex> lifecycleLock(lifecycleMutex_);
+    if (rpcClient_ == nullptr || !rpcClient_->IsAlive()) {
+        return Status(K_RPC_UNAVAILABLE, "UB MCreate: RPC client not alive");
+    }
+    MultiCreateReqPb request;
+    RETURN_IF_NOT_OK(BuildMultiCreateRequest(keys, sizes, param, request));
+    MultiCreateRspPb response;
+    uint32_t workerVersion = 0;
+    RETURN_IF_NOT_OK(rpcClient_->InvokeMultiCreate(param.subTimeoutMs, request, response, workerVersion));
+    if (response.results_size() != static_cast<int>(keys.size())) {
+        ReleaseMCreateAllocations(response, param.requestContext);
+        return Status(K_RUNTIME_ERROR, "UB MCreate response count does not match request count");
+    }
+
+    Status rc = BuildMCreateBuffers(workerAddr, keys, sizes, param, response, workerVersion, buffers);
+    if (rc.IsError()) {
+        ReleaseMCreateAllocations(response, param.requestContext);
+    }
+    return rc;
+}
+
 Status UbTransporter::WritePayload(ObjectBufferInfo &info)
+{
+    std::vector<uint64_t> eventKeys;
+    return SubmitPayload(info, true, eventKeys);
+}
+
+Status UbTransporter::WaitPayloadEvents(std::vector<uint64_t> &eventKeys)
+{
+    auto remainingTime = []() {
+        return TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs());
+    };
+    auto preserveError = [](Status &rc) { return rc; };
+    return WaitFastTransportEvent(eventKeys, remainingTime, preserveError);
+}
+
+size_t UbTransporter::GetMSetPipelineDepth()
+{
+    static constexpr size_t MSET_URMA_MAX_PIPELINE_DEPTH = 32;
+    const auto lanePoolSize = static_cast<size_t>(FLAGS_urma_send_jetty_lane_pool_size);
+    return std::max<size_t>(1, std::min(MSET_URMA_MAX_PIPELINE_DEPTH, lanePoolSize));
+}
+
+Status UbTransporter::SubmitPayload(ObjectBufferInfo &info, bool blocking, std::vector<uint64_t> &eventKeys)
 {
 #ifdef USE_URMA
     auto handle = std::static_pointer_cast<UrmaManager::BufferHandle>(info.ubGetBufferHandle);
@@ -233,14 +356,46 @@ Status UbTransporter::WritePayload(ObjectBufferInfo &info)
     const uint8_t dstChipId = info.ubUrmaDataInfo->has_chip_id()
                                   ? static_cast<uint8_t>(info.ubUrmaDataInfo->chip_id())
                                   : INVALID_CHIP_ID;
-    std::vector<uint64_t> eventKeys;
     return UrmaWritePayload(*(info.ubUrmaDataInfo), segment.first, segment.second,
                             reinterpret_cast<uint64_t>(info.pointer), 0, info.dataSize, info.metadataSize,
-                            srcChipId, dstChipId, true, eventKeys);
+                            srcChipId, dstChipId, blocking, eventKeys);
 #else
     (void)info;
+    (void)blocking;
+    (void)eventKeys;
     return Status(K_NOT_SUPPORTED, "UB Set: USE_URMA not compiled");
 #endif
+}
+
+Status UbTransporter::WritePayloads(const std::vector<ObjectBufferInfo *> &infos, std::vector<Status> &statuses)
+{
+    statuses.assign(infos.size(), Status::OK());
+    std::vector<std::vector<uint64_t>> eventKeys(infos.size());
+    const size_t pipelineDepth = GetMSetPipelineDepth();
+    size_t completedPayloads = 0;
+    for (size_t begin = 0; begin < infos.size(); begin += pipelineDepth) {
+        const size_t end = std::min(begin + pipelineDepth, infos.size());
+        std::shared_lock<std::shared_mutex> lifecycleLock(lifecycleMutex_);
+        if (conn_ == nullptr || !conn_->IsAlive()) {
+            return Status(K_URMA_NEED_CONNECT,
+                          FormatString("UB MSet: connection not alive before batch [%zu, %zu), completed=%zu/%zu",
+                                       begin, end, completedPayloads, infos.size()));
+        }
+        for (size_t i = begin; i < end; ++i) {
+            statuses[i] = SubmitPayload(*infos[i], false, eventKeys[i]);
+        }
+        for (size_t i = begin; i < end; ++i) {
+            if (statuses[i].IsOk()) {
+                statuses[i] = WaitPayloadEvents(eventKeys[i]);
+            }
+            if (statuses[i].IsOk()) {
+                infos[i]->ubDataSentByMemoryCopy = true;
+                METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, infos[i]->dataSize);
+                ++completedPayloads;
+            }
+        }
+    }
+    return Status::OK();
 }
 
 Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
@@ -257,8 +412,8 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     auto rpcClient = rpcClient_;
 
     ObjectBufferInfo &info = ObjectBufferInternal::GetMutableInfo(buffer);
-    RETURN_IF_NOT_OK(ValidateSetRequest(info, param));
-
+    PublishReqPb pubReq;
+    RETURN_IF_NOT_OK(BuildSetRequest(info, param, pubReq));
     // URMA write path: data already in pool buffer via user MemoryCopy.
     Status writeRc(K_URMA_ERROR, "URMA transport is unavailable");
     if (!info.ubDataSentByMemoryCopy && info.ubUrmaDataInfo != nullptr) {
@@ -268,9 +423,6 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
             METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, info.dataSize);
         }
     }
-
-    PublishReqPb pubReq;
-    RETURN_IF_NOT_OK(BuildSetRequest(info, param, pubReq));
 
     PublishRspPb rsp;
     uint32_t workerVersion = 0;
@@ -293,6 +445,151 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
 
     const auto kind = info.ubDataSentByMemoryCopy ? AccessTransportKind::UB : AccessTransportKind::TCP;
     return SetTransportResponseStatus(rsp, kind, param.isSeal, param.isRetry);
+}
+
+void UbTransporter::ClassifyMSetPayload(
+    const std::shared_ptr<ObjectBuffer> &buffer, const Status &writeRc,
+    std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers, std::vector<bool> &tcpPayload,
+    std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets, uint64_t &fallbackBytes,
+    TransportMSetResult &result)
+{
+    auto &info = ObjectBufferInternal::GetMutableInfo(*buffer);
+    if (writeRc.IsOk()) {
+        info.ubDataSentByMemoryCopy = true;
+        METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, info.dataSize);
+        publishBuffers.emplace_back(buffer);
+        tcpPayload.emplace_back(false);
+        return;
+    }
+    info.ubDataSentByMemoryCopy = false;
+    UrmaFallbackTcpLimiter::Ticket ticket;
+    Status acquireRc = UrmaFallbackTcpLimiter::TryAcquire(
+        urmaFallbackTcpPendingBytes_, info.dataSize, writeRc, "client->worker", ticket);
+    if (acquireRc.IsError()) {
+        result.failedKeys.emplace_back(info.objectKey);
+        result.lastRc = acquireRc;
+        return;
+    }
+    fallbackBytes += info.dataSize;
+    fallbackTickets.emplace_back(std::move(ticket));
+    publishBuffers.emplace_back(buffer);
+    tcpPayload.emplace_back(true);
+}
+
+Status UbTransporter::PrepareMSetPayloads(
+    const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+    std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers, std::vector<bool> &tcpPayload,
+    std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets, uint64_t &fallbackBytes,
+    TransportMSetResult &result)
+{
+    std::vector<ObjectBufferInfo *> pendingInfos;
+    std::vector<size_t> pendingIndexes;
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        auto &info = ObjectBufferInternal::GetMutableInfo(*buffers[i]);
+        if (!info.ubDataSentByMemoryCopy) {
+            pendingInfos.emplace_back(&info);
+            pendingIndexes.emplace_back(i);
+        }
+    }
+    std::vector<Status> writeStatuses;
+    RETURN_IF_NOT_OK(WritePayloads(pendingInfos, writeStatuses));
+    CHECK_FAIL_RETURN_STATUS(writeStatuses.size() == pendingInfos.size(), K_RUNTIME_ERROR,
+                             "UB MSet write status count does not match pending payload count");
+
+    publishBuffers.reserve(buffers.size());
+    tcpPayload.reserve(buffers.size());
+    fallbackTickets.reserve(buffers.size());
+    size_t pending = 0;
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        auto &info = ObjectBufferInternal::GetMutableInfo(*buffers[i]);
+        const bool wasPending = pending < pendingIndexes.size() && pendingIndexes[pending] == i;
+        if (info.ubDataSentByMemoryCopy) {
+            publishBuffers.emplace_back(buffers[i]);
+            tcpPayload.emplace_back(false);
+            pending += static_cast<size_t>(wasPending);
+            continue;
+        }
+        CHECK_FAIL_RETURN_STATUS(wasPending, K_RUNTIME_ERROR,
+                                 "UB MSet pending payload index mismatch");
+        ClassifyMSetPayload(buffers[i], writeStatuses[pending++], publishBuffers, tcpPayload, fallbackTickets,
+                            fallbackBytes, result);
+    }
+    CHECK_FAIL_RETURN_STATUS(pending == pendingIndexes.size(), K_RUNTIME_ERROR,
+                             "UB MSet pending payloads were not fully classified");
+    return Status::OK();
+}
+
+Status UbTransporter::PublishMSet(const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                                  const std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
+                                  const std::vector<bool> &tcpPayload, const TransportSetParam &param,
+                                  uint64_t fallbackBytes, TransportMSetResult &result)
+{
+    if (publishBuffers.empty()) {
+        return result.lastRc.IsError() ? result.lastRc : Status(K_RUNTIME_ERROR, "All UB MSet payloads failed");
+    }
+    MultiPublishReqPb request;
+    std::vector<MemView> payloads;
+    RETURN_IF_NOT_OK(BuildMultiPublishRequest(publishBuffers, tcpPayload, param, request, payloads));
+    MultiPublishRspPb response;
+    uint32_t workerVersion = 0;
+    Status invokeRc;
+    {
+        std::shared_lock<std::shared_mutex> lifecycleLock(lifecycleMutex_);
+        if (rpcClient_ != rpcClient || !rpcClient_->IsAlive()) {
+            return Status(K_RPC_UNAVAILABLE, "UB MSet: RPC client changed before publish");
+        }
+        result.publishAttempted = true;
+        invokeRc = rpcClient->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion);
+    }
+    if (invokeRc.IsError()) {
+        for (const auto &buffer : publishBuffers) {
+            result.failedKeys.emplace_back(ObjectBufferInternal::GetInfo(*buffer).objectKey);
+        }
+        result.lastRc = invokeRc;
+        return invokeRc;
+    }
+    const bool hasFallback = std::any_of(tcpPayload.begin(), tcpPayload.end(), [](bool value) { return value; });
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, fallbackBytes);
+    const auto kind = hasFallback ? AccessTransportKind::TCP : AccessTransportKind::UB;
+    TransportMSetResult publishedResult;
+    Status publishRc = SetMSetResponseResult(response, publishBuffers.size(), kind, publishedResult);
+    result.failedKeys.insert(result.failedKeys.end(), publishedResult.failedKeys.begin(),
+                             publishedResult.failedKeys.end());
+    if (publishRc.IsError() && publishedResult.failedKeys.empty()) {
+        for (const auto &buffer : publishBuffers) {
+            result.failedKeys.emplace_back(ObjectBufferInternal::GetInfo(*buffer).objectKey);
+        }
+    }
+    // Keep the first failure so a local fallback rejection is not hidden by a later worker-side partial failure.
+    if (result.lastRc.IsOk() && publishedResult.lastRc.IsError()) {
+        result.lastRc = publishedResult.lastRc;
+    }
+    result.actualKind = publishedResult.actualKind;
+    return publishRc;
+}
+
+Status UbTransporter::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                           const TransportSetParam &param, TransportMSetResult &result)
+{
+    result.Clear();
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    std::vector<std::shared_ptr<ObjectBuffer>> publishBuffers;
+    std::vector<bool> tcpPayload;
+    std::vector<UrmaFallbackTcpLimiter::Ticket> fallbackTickets;
+    uint64_t fallbackBytes = 0;
+    {
+        std::shared_lock<std::shared_mutex> lifecycleLock(lifecycleMutex_);
+        if (rpcClient_ == nullptr || !rpcClient_->IsAlive()) {
+            return Status(K_RPC_UNAVAILABLE, "UB MSet: RPC client not alive");
+        }
+        if (conn_ == nullptr || !conn_->IsAlive()) {
+            return Status(K_URMA_NEED_CONNECT, "UB MSet: UB connection not alive");
+        }
+        rpcClient = rpcClient_;
+    }
+    RETURN_IF_NOT_OK(PrepareMSetPayloads(buffers, publishBuffers, tcpPayload, fallbackTickets, fallbackBytes,
+                                         result));
+    return PublishMSet(rpcClient, publishBuffers, tcpPayload, param, fallbackBytes, result);
 }
 
 Status UbTransporter::Release(const ShmKey &shmId, const TransportRequestContext &context)

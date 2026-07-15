@@ -22,7 +22,9 @@
 #include <utility>
 
 #include "datasystem/client/transport/object_buffer_internal.h"
+#include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/util/status_helper.h"
@@ -57,7 +59,12 @@ Status TcpTransporter::Create(const HostPort &workerAddr, const std::string &key
 {
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
     RETURN_IF_NOT_OK(ValidateCreateRequest(key, size, param));
+    return CreateBuffer(workerAddr, key, size, param, buffer);
+}
 
+Status TcpTransporter::CreateBuffer(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                                    const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer)
+{
     auto info = std::make_shared<ObjectBufferInfo>();
     info->objectKey = key;
     info->dataSize = size;
@@ -76,8 +83,6 @@ Status TcpTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
 
     const ObjectBufferInfo &info = ObjectBufferInternal::GetInfo(buffer);
-    RETURN_IF_NOT_OK(ValidateSetRequest(info, param));
-
     PublishReqPb pubReq;
     RETURN_IF_NOT_OK(BuildSetRequest(info, param, pubReq));
 
@@ -89,6 +94,49 @@ Status TcpTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     uint32_t workerVersion = 0;
     RETURN_IF_NOT_OK(rpcClient_->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
     return SetTransportResponseStatus(rsp, AccessTransportKind::TCP, param.isSeal, param.isRetry);
+}
+
+Status TcpTransporter::MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
+                               const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
+                               std::vector<std::shared_ptr<ObjectBuffer>> &buffers)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+    RETURN_IF_NOT_OK(ValidateMultiCreateRequest(keys, sizes, param));
+    std::vector<std::shared_ptr<ObjectBuffer>> created;
+    created.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        std::shared_ptr<ObjectBuffer> buffer;
+        RETURN_IF_NOT_OK(CreateBuffer(workerAddr, keys[i], sizes[i], param, buffer));
+        created.emplace_back(std::move(buffer));
+    }
+    buffers = std::move(created);
+    return Status::OK();
+}
+
+Status TcpTransporter::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                            const TransportSetParam &param, TransportMSetResult &result)
+{
+    result.Clear();
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+    std::vector<bool> tcpPayload(buffers.size(), true);
+    MultiPublishReqPb request;
+    std::vector<MemView> payloads;
+    RETURN_IF_NOT_OK(BuildMultiPublishRequest(buffers, tcpPayload, param, request, payloads));
+    MultiPublishRspPb response;
+    uint32_t workerVersion = 0;
+    if (!rpcClient_->IsAlive()) {
+        return Status(K_RPC_UNAVAILABLE, "TCP MSet: RPC client not alive before publish");
+    }
+    result.publishAttempted = true;
+    RETURN_IF_NOT_OK(rpcClient_->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion));
+    const uint64_t payloadBytes = std::accumulate(
+        buffers.begin(), buffers.end(), uint64_t{ 0 }, [](uint64_t total, const auto &buffer) {
+            return total + ObjectBufferInternal::GetInfo(*buffer).dataSize;
+        });
+    METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_TCP_WRITE_TOTAL_BYTES, payloadBytes);
+    Status rc = SetMSetResponseResult(response, buffers.size(), AccessTransportKind::TCP, result);
+    result.publishAttempted = true;
+    return rc;
 }
 
 Status TcpTransporter::Release(const ShmKey &shmId, const TransportRequestContext &context)

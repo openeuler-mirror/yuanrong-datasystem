@@ -1267,6 +1267,8 @@ const char* AccessTransportTracker::KindToName(AccessTransportKind kind)
             return "UB";
         case AccessTransportKind::TCP:
             return "TCP";
+        case AccessTransportKind::UNKNOWN:
+            return "UNKNOWN";
         case AccessTransportKind::SHM:
         default:
             return "SHM";

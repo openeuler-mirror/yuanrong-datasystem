@@ -23,11 +23,13 @@
 #include <memory>
 #include <shared_mutex>
 #include <string>
+#include <vector>
 
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 
 namespace datasystem {
 namespace client {
@@ -81,6 +83,11 @@ public:
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                   const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;
+    Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
+                   const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
+                   std::vector<std::shared_ptr<ObjectBuffer>> &buffers) override;
+    Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                const TransportSetParam &param, TransportMSetResult &result) override;
     Status Release(const ShmKey &shmId, const TransportRequestContext &context) override;
 
     void CloseDataPlane() override;
@@ -88,9 +95,40 @@ public:
 protected:
     /** @brief Write one ObjectBuffer payload through UB. Overridable for deterministic transport tests. */
     virtual Status WritePayload(ObjectBufferInfo &info);
+    /** @brief Submit one non-blocking payload write. Overridable for deterministic transport tests. */
+    virtual Status SubmitPayload(ObjectBufferInfo &info, bool blocking, std::vector<uint64_t> &eventKeys);
+    /** @brief Wait for one payload's submitted events. Overridable for deterministic transport tests. */
+    virtual Status WaitPayloadEvents(std::vector<uint64_t> &eventKeys);
+    /** @brief Submit a batch of UB writes before waiting for their completions. */
+    virtual Status WritePayloads(const std::vector<ObjectBufferInfo *> &infos, std::vector<Status> &statuses);
+    /** @brief Return a bounded batch depth that does not exceed the configured process-level send-lane pool. */
+    static size_t GetMSetPipelineDepth();
+    /** @brief Build one UB-backed buffer from MultiCreate output. */
+    virtual Status BuildMCreateBuffer(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                                      const TransportCreateParam &param, const CreateRspPb &response,
+                                      uint32_t workerVersion, std::shared_ptr<ObjectBuffer> &buffer);
 
 private:
+    Status PrepareMSetPayloads(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                               std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
+                               std::vector<bool> &tcpPayload,
+                               std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,
+                               uint64_t &fallbackBytes, TransportMSetResult &result);
+    void ClassifyMSetPayload(const std::shared_ptr<ObjectBuffer> &buffer, const Status &writeRc,
+                             std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
+                             std::vector<bool> &tcpPayload,
+                             std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,
+                             uint64_t &fallbackBytes, TransportMSetResult &result);
+    Status PublishMSet(const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                       const std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
+                       const std::vector<bool> &tcpPayload, const TransportSetParam &param,
+                       uint64_t fallbackBytes, TransportMSetResult &result);
     Status GetOnce(const DataGetRequest &input, uint64_t expectedSize, DataGetResult &output, uint64_t &actualSize);
+    Status BuildMCreateBuffers(const HostPort &workerAddr, const std::vector<std::string> &keys,
+                               const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
+                               const MultiCreateRspPb &response, uint32_t workerVersion,
+                               std::vector<std::shared_ptr<ObjectBuffer>> &buffers);
+    void ReleaseMCreateAllocations(const MultiCreateRspPb &response, const TransportRequestContext &context);
 
     std::shared_ptr<WorkerRpcClient> rpcClient_;
     std::shared_ptr<UbConnection> conn_;

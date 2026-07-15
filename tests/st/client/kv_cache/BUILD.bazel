@@ -212,7 +212,7 @@ ds_cc_test(
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/common/util:request_context",
-        "//src/datasystem/protos:hash_ring_cc_proto",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
     ],
 )

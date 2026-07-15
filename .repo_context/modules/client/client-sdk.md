@@ -47,9 +47,16 @@
     TCP Set path publishes an RPC payload, while its UB Set path writes the payload through URMA and publishes an empty
     payload, with bounded TCP fallback on UB write failure. `ObjectClientImpl::Put` uses these primitives for the
     non-SHM routed Set path and keeps one worker address fixed across Create, payload transfer, and Publish.
-  - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing` and Set selects the key's metadata
-    owner with `HASH_RING_AFFINITY`; unavailable workers are excluded during bounded pre-Publish retries. With local
-    cache enabled, Set preserves the legacy current-worker path and does not initialize the direct transport runtime.
+  - `client::TransportLayer` also provides internal same-worker `MCreate`/`MSet` primitives. TCP MCreate allocates local
+    buffers and MSet sends one positional MultiPublish payload; UB MCreate uses one MultiCreate RPC, MSet pipelines
+    non-blocking per-object URMA writes in bounded groups, and failed writes use bounded TCP payload fallback in the
+    same MultiPublish RPC. With local
+    cache disabled, public key/value `ObjectClientImpl::MSet` groups keys by metadata owner and sends each same-worker
+    group through these primitives; with local cache enabled it preserves the legacy client-worker batch path.
+  - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing`; Set selects the key's metadata
+    owner and key/value MSet groups keys by metadata owner with `HASH_RING_AFFINITY`. Unavailable workers are excluded
+    during bounded pre-Publish retries. With local cache enabled, both APIs preserve the legacy current-worker path and
+    do not initialize the direct transport runtime.
   - Routed transport requests carry the gateway client id, token snapshot, thread tenant context, and shared transport
     `Signature`. Target workers authenticate routed Create, Publish, and cleanup requests by signature without requiring
     endpoint-local client registration. UB allocations are released asynchronously after the final Publish attempt, or
@@ -207,6 +214,25 @@
     new Create transaction, excludes `K_SCALE_DOWN` workers without poisoning their global health, and reports
     connection failures through `Routing::UpdateState`. A Publish connection failure is treated as ambiguous and is
     never replayed on another worker.
+  - Transport MSet preserves worker-reported partial failures and performs at most one same-worker UB recovery attempt.
+    Routed `MultiCreateReqPb` and `MultiPublishReqPb` requests carry `is_routed=true`; target workers authenticate their
+    signatures and tenant IDs without requiring the client to register separately on every metadata-owner worker.
+    MultiCreate has no idempotency marker, so `K_RPC_UNAVAILABLE` is treated as an ambiguous allocation result: the
+    transport state is torn down for the next request, but the current MultiCreate is not replayed. For MSet,
+    `K_URMA_NEED_CONNECT` resets only the cached UB data plane and reuses the RPC client. A pre-Publish
+    `K_RPC_UNAVAILABLE` may rebuild both RPC and data-plane state and retry once; after `InvokeMultiSet` starts, the same
+    code is ambiguous and is not replayed. A dead UB connection is never converted into whole-batch TCP fallback. If the
+    same-worker retry still returns `K_URMA_NEED_CONNECT`, `ObjectClientImpl` maps it to
+    `SetFailureStage::TRANSFER`, allowing the routing layer to exclude that worker and reroute the group. Only
+    per-object failures returned after `WritePayload` may use bounded TCP fallback: limiter admission sends that object
+    as a TCP payload, while limiter rejection marks only that key failed and allows other objects to publish.
+    `MultiPublishReqPb` has no retry marker, so ambiguous RPC failures are not replayed on the same or another worker.
+    Pre-Publish rerouting recomputes a worker for every key and regroups the remaining batch instead of moving the whole
+    group to the first key's fallback worker. UB writes are submitted and completed under lifecycle lock windows bounded
+    by the smaller of 32 objects and the configured process send-lane pool; the MultiPublish RPC uses a separate lock
+    window, allowing teardown to proceed between large-batch write groups without permitting the active connection to
+    be closed during a write or publish operation. During rolling upgrade, workers must support routed MultiCreate and
+    MultiPublish authentication before clients enable routed MSet traffic.
   - transport-layer Get keeps flow-stage summaries plus endpoint, retry, redirect, and replica details in
     `[TransportGet]` debug logs. Like the gateway Get path, it does not remap existing status codes; when every key
     fails, it returns the first failure in input order without logging that user-visible error again. Transport-specific
