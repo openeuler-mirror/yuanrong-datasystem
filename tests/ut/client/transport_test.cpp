@@ -18,6 +18,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <functional>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,6 +34,10 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#define private public
+#include "datasystem/client/object_cache/object_client_impl.h"
+#undef private
 
 #include "datasystem/client/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/transport/data_plane/shm_transporter.h"
@@ -49,6 +55,9 @@
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/rpc/api_deadline.h"
@@ -67,6 +76,27 @@ namespace {
 HostPort MakeAddress(int port)
 {
     return HostPort("127.0.0.1", port);
+}
+
+void InitBatchGetMetrics()
+{
+    const bool jsonLogMonitor = FLAGS_json_log_monitor;
+    Raii restoreJsonLogMonitor([jsonLogMonitor]() { FLAGS_json_log_monitor = jsonLogMonitor; });
+    FLAGS_json_log_monitor = false;
+    metrics::ResetKvMetricsForTest();
+    ASSERT_TRUE(metrics::InitKvMetrics().IsOk());
+}
+
+void ExpectMetricTotal(const std::string &name, uint64_t total)
+{
+    const std::string expected = "\"name\":\"" + name + "\",\"total\":" + std::to_string(total) + ",";
+    EXPECT_NE(metrics::DumpSummaryForTest().find(expected), std::string::npos) << name;
+}
+
+void ExpectMetricAbsent(const std::string &name)
+{
+    const std::string expected = "\"name\":\"" + name + "\"";
+    EXPECT_EQ(metrics::DumpSummaryForTest().find(expected), std::string::npos) << name;
 }
 
 std::shared_ptr<Signature> MakeSignature()
@@ -141,6 +171,18 @@ master::QueryAndGetResultPb *AddLocation(master::QueryAndGetRspPb &response, con
     return result;
 }
 
+master::ObjectLocationInfoPb MakeReplicaLocation(const std::string &key, uint64_t size,
+                                                 const std::vector<HostPort> &addresses)
+{
+    master::ObjectLocationInfoPb location;
+    location.set_object_key(key);
+    location.set_object_size(size);
+    for (const auto &address : addresses) {
+        location.add_object_locations(address.ToString());
+    }
+    return location;
+}
+
 std::vector<ObjectMetadataItem> MakeMetadataItems(const std::vector<ObjectReadItem> &inputs)
 {
     std::vector<ObjectMetadataItem> items;
@@ -202,6 +244,35 @@ public:
             afterInvoke();
         }
         return Status::OK();
+    }
+
+    Status InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                std::vector<RpcMessage> &rpcPayloads) override
+    {
+        ++batchGetObjectCount;
+        batchGetObjectRequests.push_back(request);
+        if (onBatchInvoke) {
+            onBatchInvoke();
+        }
+        if (batchGetHandler) {
+            Status rc = batchGetHandler(request, response, rpcPayloads);
+            if (afterBatchInvoke) {
+                afterBatchInvoke();
+            }
+            return rc;
+        }
+        for (const auto &itemResponse : batchGetObjectResponses) {
+            *response.add_responses() = itemResponse;
+        }
+        for (const auto &payloadValue : batchGetObjectPayloadValues) {
+            RpcMessage payload;
+            RETURN_IF_NOT_OK(payload.CopyString(payloadValue));
+            rpcPayloads.emplace_back(std::move(payload));
+        }
+        if (afterBatchInvoke) {
+            afterBatchInvoke();
+        }
+        return batchGetObjectStatus;
     }
 
     Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
@@ -346,6 +417,13 @@ public:
     int64_t getObjectDataSize = 4;
     std::vector<GetObjectRemoteReqPb> getObjectRequests;
     std::vector<ExistReqPb> invokedExistRequests;
+    int batchGetObjectCount = 0;
+    Status batchGetObjectStatus = Status::OK();
+    std::vector<BatchGetObjectRemoteReqPb> batchGetObjectRequests;
+    std::vector<GetObjectRemoteRspPb> batchGetObjectResponses;
+    std::vector<std::string> batchGetObjectPayloadValues;
+    std::function<Status(BatchGetObjectRemoteReqPb &, BatchGetObjectRemoteRspPb &, std::vector<RpcMessage> &)>
+        batchGetHandler;
     Status queryAndGetStatus = Status::OK();
     std::vector<master::QueryAndGetReqPb> queryAndGetRequests;
     std::function<Status(const HostPort &, const master::QueryAndGetReqPb &, master::QueryAndGetRspPb &,
@@ -353,6 +431,8 @@ public:
         queryAndGetHandler;
     std::function<void()> onInvoke;
     std::function<void()> afterInvoke;
+    std::function<void()> onBatchInvoke;
+    std::function<void()> afterBatchInvoke;
 
     // Create/Set fake state
     int createInvokeCount = 0;
@@ -406,16 +486,19 @@ public:
     }
 
     int getObjectInvokeCount = 0;
+    int batchGetObjectInvokeCount = 0;
     int metadataInvokeCount = 0;
     int existInvokeCount = 0;
     int hashRingInvokeCount = 0;
     int hashRingCount = 0;
     int dataRpcTimeout = 0;
+    int batchGetRpcTimeout = 0;
     int metadataRpcTimeout = 0;
     int existRpcTimeout = 0;
     int hashRingRpcTimeout = 0;
     uint64_t hashRingVersion = 0;
     GetObjectRemoteReqPb invokedDataRequest;
+    BatchGetObjectRemoteReqPb invokedBatchGetRequest;
     master::QueryAndGetReqPb invokedMetadataRequest;
     ExistReqPb invokedExistRequest;
     GetHashRingReqPb invokedHashRingRequest;
@@ -431,6 +514,8 @@ public:
     int decreaseReferenceInvokeCount = 0;
     Status createInvokeStatus = Status::OK();
     Status setInvokeStatus = Status::OK();
+    Status batchGetInvokeStatus = Status::OK();
+    std::vector<std::string> batchGetPayloadValues;
 
 protected:
     Status DoInvokeGetObject(const RpcOptions &options, const GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &,
@@ -440,6 +525,26 @@ protected:
         dataRpcTimeout = options.GetTimeout();
         invokedDataRequest = request;
         return Status::OK();
+    }
+
+    Status DoInvokeBatchGetObject(const RpcOptions &options, const BatchGetObjectRemoteReqPb &request,
+                                  BatchGetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads) override
+    {
+        ++batchGetObjectInvokeCount;
+        batchGetRpcTimeout = options.GetTimeout();
+        invokedBatchGetRequest = request;
+        for (int i = 0; i < request.requests_size(); ++i) {
+            auto *itemResponse = response.add_responses();
+            itemResponse->mutable_error()->set_error_code(K_OK);
+            itemResponse->set_data_size(request.requests(i).data_size());
+            itemResponse->set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
+        }
+        for (const auto &value : batchGetPayloadValues) {
+            RpcMessage payload;
+            RETURN_IF_NOT_OK(payload.CopyString(value));
+            payloads.emplace_back(std::move(payload));
+        }
+        return batchGetInvokeStatus;
     }
 
     Status DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
@@ -532,12 +637,37 @@ public:
         return alive && rpcClient != nullptr && rpcClient->IsAlive();
     }
 
-    Status Get(const DataGetRequest &, DataGetResult &) override
+    Status Get(const DataGetRequest &input, DataGetResult &output) override
     {
+        ++getCount;
+        getRequests.push_back(input);
+        if (getHandler) {
+            return getHandler(input, output);
+        }
         if (!getStatuses.empty()) {
             Status rc = getStatuses.front();
             getStatuses.erase(getStatuses.begin());
             return rc;
+        }
+        return Status::OK();
+    }
+
+    Status BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) override
+    {
+        ++batchGetCount;
+        batchGetRequests.push_back(inputs);
+        outputs.clear();
+        if (batchGetHandler) {
+            return batchGetHandler(inputs, outputs);
+        }
+        if (!batchGetStatuses.empty()) {
+            Status rc = batchGetStatuses.front();
+            batchGetStatuses.erase(batchGetStatuses.begin());
+            return rc;
+        }
+        outputs.resize(inputs.size());
+        for (auto &output : outputs) {
+            output.status = Status::OK();
         }
         return Status::OK();
     }
@@ -633,7 +763,14 @@ public:
     bool alive = true;
     bool mSetPublishAttempted = true;
     int closeCount = 0;
+    int getCount = 0;
+    std::vector<DataGetRequest> getRequests;
+    std::function<Status(const DataGetRequest &, DataGetResult &)> getHandler;
     std::vector<Status> getStatuses;
+    int batchGetCount = 0;
+    std::vector<DataGetBatchRequest> batchGetRequests;
+    std::vector<Status> batchGetStatuses;
+    std::function<Status(const DataGetBatchRequest &, DataGetBatchResult &)> batchGetHandler;
     std::function<void()> onClose;
 
     // Create/Set fake state
@@ -661,6 +798,7 @@ public:
 
     Status CreateWorkerRpcClient(const HostPort &address, std::shared_ptr<WorkerRpcClient> &output) override
     {
+        std::lock_guard<std::mutex> lock(mutex);
         ++rpcBuildCount;
         auto client = std::make_shared<FakeWorkerRpcClient>(address);
         client->queryAndGetHandler = queryAndGetHandler;
@@ -674,10 +812,11 @@ public:
         return Status::OK();
     }
 
-    Status BuildTransporter(const HostPort &, TransportHint hint,
+    Status BuildTransporter(const HostPort &address, TransportHint hint,
                             const std::shared_ptr<WorkerRpcClient> &rpcClient,
                             std::shared_ptr<IDataTransporter> &output) override
     {
+        std::lock_guard<std::mutex> lock(mutex);
         ++transportBuildCount;
         rpcClientsSeen.push_back(rpcClient);
         if (!transportBuildStatuses.empty()) {
@@ -690,6 +829,9 @@ public:
         auto transporter = std::make_shared<FakeTransporter>();
         transporter->kind = hint == TransportHint::TCP_ONLY ? AccessTransportKind::TCP : AccessTransportKind::UB;
         transporter->rpcClient = rpcClient;
+        if (configureTransporter) {
+            configureTransporter(address, *transporter);
+        }
         if (!transporterGetStatuses.empty()) {
             transporter->getStatuses = std::move(transporterGetStatuses.front());
             transporterGetStatuses.erase(transporterGetStatuses.begin());
@@ -732,6 +874,8 @@ public:
     std::function<Status(const HostPort &, const master::QueryAndGetReqPb &, master::QueryAndGetRspPb &,
                          std::vector<RpcMessage> &)>
         queryAndGetHandler;
+    std::function<void(const HostPort &, FakeTransporter &)> configureTransporter;
+    std::mutex mutex;
 };
 
 class FakeObjectMetadataClient : public ObjectMetadataClient {
@@ -789,7 +933,7 @@ public:
 
 class FakeReplicaReader : public ReplicaReader {
 public:
-    FakeReplicaReader() : ReplicaReader(nullptr, nullptr)
+    FakeReplicaReader() : ReplicaReader(nullptr, nullptr, nullptr)
     {
     }
 
@@ -797,26 +941,99 @@ public:
     {
         {
             std::lock_guard<std::mutex> lock(mutex);
-            keys.push_back(location.object_key());
+            unaryKeys.push_back(location.object_key());
             threadIds.push_back(std::this_thread::get_id());
         }
+        return FillResult(location, result);
+    }
+
+    Status ReadBatch(const ReplicaReadBatch &requests) override
+    {
+        std::vector<std::string> batch;
+        batch.reserve(requests.size());
+        for (const auto &request : requests) {
+            batch.push_back(request.location->object_key());
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            batchKeys.emplace_back(std::move(batch));
+            threadIds.push_back(std::this_thread::get_id());
+        }
+
+        Status firstError(K_NOT_FOUND, "Cannot get objects from worker");
+        bool hasSuccess = false;
+        for (const auto &request : requests) {
+            Status status = FillResult(*request.location, *request.result);
+            request.result->status = status;
+            if (status.IsOk()) {
+                hasSuccess = true;
+            } else if (firstError.GetCode() == K_NOT_FOUND
+                       && firstError.GetMsg() == "Cannot get objects from worker") {
+                firstError = status;
+            }
+        }
+        return hasSuccess ? Status::OK() : firstError;
+    }
+
+    Status FillResult(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result)
+    {
         auto status = itemStatuses.find(location.object_key());
         if (status != itemStatuses.end() && status->second.IsError()) {
             return status->second;
         }
         result.objectKey = location.object_key();
         result.data.kind = location.object_key() == "tcp" ? AccessTransportKind::TCP : AccessTransportKind::UB;
+        if (resultHandler) {
+            resultHandler(location.object_key(), result);
+        }
         return Status::OK();
     }
 
     std::mutex mutex;
-    std::vector<std::string> keys;
+    std::vector<std::string> unaryKeys;
+    std::vector<std::vector<std::string>> batchKeys;
     std::vector<std::thread::id> threadIds;
     std::unordered_map<std::string, Status> itemStatuses;
+    std::function<void(const std::string &, ObjectReadItemResult &)> resultHandler;
+};
+
+class ControlledReplicaReader : public ReplicaReader {
+public:
+    ControlledReplicaReader(std::shared_ptr<DataPlaneExecutor> executor, std::shared_ptr<ThreadPool> taskPool)
+        : ReplicaReader(std::move(executor), std::make_shared<DeadlineRetry>(), std::move(taskPool))
+    {
+    }
+
+    Status CheckDeadline() const override
+    {
+        ++deadlineCheckCount;
+        if (!deadlineStatuses.empty()) {
+            Status status = deadlineStatuses.front();
+            deadlineStatuses.erase(deadlineStatuses.begin());
+            return status;
+        }
+        return Status::OK();
+    }
+
+    Status Backoff(int64_t &) const override
+    {
+        ++backoffCount;
+        return backoffStatus;
+    }
+
+    mutable int deadlineCheckCount = 0;
+    mutable int backoffCount = 0;
+    mutable std::vector<Status> deadlineStatuses;
+    Status backoffStatus = Status::OK();
 };
 
 class FakeUbConnection : public UbConnection {
 public:
+    explicit FakeUbConnection(bool supportsPayloadOnlyClientBatchGet = true)
+        : supportsPayloadOnlyClientBatchGet(supportsPayloadOnlyClientBatchGet)
+    {
+    }
+
     Status Establish(const HostPort &) override
     {
         alive = true;
@@ -828,6 +1045,11 @@ public:
         return alive.load();
     }
 
+    bool SupportsPayloadOnlyClientBatchGet() const override
+    {
+        return supportsPayloadOnlyClientBatchGet;
+    }
+
     void Teardown() override
     {
         if (invokeFinished != nullptr && !invokeFinished->load()) {
@@ -837,6 +1059,7 @@ public:
     }
 
     std::atomic<bool> alive{ true };
+    bool supportsPayloadOnlyClientBatchGet;
     std::atomic<bool> teardownDuringInvoke{ false };
     std::atomic<bool> *invokeFinished = nullptr;
 };
@@ -913,6 +1136,15 @@ protected:
     }
 };
 
+TEST(UbConnectionTest, PayloadOnlyClientBatchGetCapabilityDefaultsToFalse)
+{
+    UbConnection connection;
+
+    EXPECT_FALSE(connection.SupportsPayloadOnlyClientBatchGet());
+    connection.Teardown();
+    EXPECT_FALSE(connection.SupportsPayloadOnlyClientBatchGet());
+}
+
 class TestTransportLayer : public TransportLayer {
 public:
     explicit TestTransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager)
@@ -956,22 +1188,30 @@ public:
     {
         ++allocateCount;
         buffer = UbReceiveBuffer{};
-        if (allocateStatus.IsError()) {
-            return allocateStatus;
+        allocationAttempts.emplace_back(requiredSize);
+        Status status = allocateHandler == nullptr ? allocateStatus : allocateHandler(requiredSize);
+        if (status.IsError()) {
+            return status;
         }
         auto fakeOwner = std::make_shared<FakeBufferOwner>(requiredSize);
         buffer.data = fakeOwner->data.data();
         buffer.size = fakeOwner->data.size();
         buffer.remoteAddr.set_seg_va(reinterpret_cast<uint64_t>(buffer.data));
+        buffer.remoteAddr.set_seg_data_offset(baseSegDataOffset);
         buffer.owner = fakeOwner;
         buffer.transportInstanceId = "test-instance";
         lastOwner = fakeOwner;
+        allocationSizes.emplace_back(requiredSize);
         return Status::OK();
     }
 
     uint64_t maxGetSize = 16;
     Status allocateStatus = Status::OK();
+    std::function<Status(uint64_t)> allocateHandler;
     int allocateCount = 0;
+    uint64_t baseSegDataOffset = 0;
+    std::vector<uint64_t> allocationAttempts;
+    std::vector<uint64_t> allocationSizes;
     std::weak_ptr<FakeBufferOwner> lastOwner;
 };
 
@@ -1027,6 +1267,70 @@ TEST(WorkerRpcClientTest, ExistUsesSubTimeoutBelowChannelTimeout)
     ASSERT_TRUE(client.InvokeExist(1000, request, response).IsOk());
 
     EXPECT_EQ(client.existRpcTimeout, 1000);
+}
+
+TEST(WorkerRpcClientTest, BatchGetSignsAggregateRequestAndPreservesInputOrder)
+{
+    auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
+    AuthBoundaryWorkerRpcClient client(signature);
+    client.batchGetPayloadValues = { "first", "second" };
+    BatchGetObjectRemoteReqPb request;
+    request.add_requests()->set_object_key("first-key");
+    request.mutable_requests(0)->set_data_size(3);
+    request.add_requests()->set_object_key("second-key");
+    request.mutable_requests(1)->set_data_size(5);
+    BatchGetObjectRemoteRspPb response;
+    std::vector<RpcMessage> payloads;
+
+    ASSERT_TRUE(client.InvokeBatchGetObject(request, response, payloads).IsOk());
+
+    EXPECT_EQ(client.batchGetObjectInvokeCount, 1);
+    EXPECT_GT(client.batchGetRpcTimeout, 0);
+    EXPECT_EQ(client.invokedBatchGetRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedBatchGetRequest.signature().empty());
+    ASSERT_EQ(client.invokedBatchGetRequest.requests_size(), 2);
+    EXPECT_EQ(client.invokedBatchGetRequest.requests(0).object_key(), "first-key");
+    EXPECT_EQ(client.invokedBatchGetRequest.requests(1).object_key(), "second-key");
+    EXPECT_TRUE(client.invokedBatchGetRequest.requests(0).access_key().empty());
+    EXPECT_TRUE(client.invokedBatchGetRequest.requests(1).access_key().empty());
+    ASSERT_EQ(response.responses_size(), 2);
+    EXPECT_EQ(response.responses(0).data_size(), 3);
+    EXPECT_EQ(response.responses(1).data_size(), 5);
+    ASSERT_EQ(payloads.size(), 2u);
+    EXPECT_EQ(std::string(static_cast<const char *>(payloads[0].Data()), payloads[0].Size()), "first");
+    EXPECT_EQ(std::string(static_cast<const char *>(payloads[1].Data()), payloads[1].Size()), "second");
+}
+
+TEST(WorkerRpcClientTest, BatchGetPropagatesRpcErrorsAndPreservesResponsePayloads)
+{
+    AuthBoundaryWorkerRpcClient client(MakeSignature());
+    client.batchGetInvokeStatus = Status(K_RPC_UNAVAILABLE, "batch RPC unavailable");
+    client.batchGetPayloadValues = { "response-payload" };
+    BatchGetObjectRemoteReqPb request;
+    request.add_requests()->set_object_key("key");
+    request.mutable_requests(0)->set_data_size(16);
+    BatchGetObjectRemoteRspPb response;
+    std::vector<RpcMessage> payloads;
+
+    Status status = client.InvokeBatchGetObject(request, response, payloads);
+
+    EXPECT_EQ(status.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(client.batchGetObjectInvokeCount, 1);
+    ASSERT_EQ(response.responses_size(), 1);
+    EXPECT_EQ(response.responses(0).data_size(), 16);
+    ASSERT_EQ(payloads.size(), 1u);
+    EXPECT_EQ(std::string(static_cast<const char *>(payloads[0].Data()), payloads[0].Size()), "response-payload");
+}
+
+TEST(WorkerRpcClientTest, BatchGetRejectsEmptyRequestBeforeRpc)
+{
+    AuthBoundaryWorkerRpcClient client(MakeSignature());
+    BatchGetObjectRemoteReqPb request;
+    BatchGetObjectRemoteRspPb response;
+    std::vector<RpcMessage> payloads;
+
+    EXPECT_EQ(client.InvokeBatchGetObject(request, response, payloads).GetCode(), K_INVALID);
+    EXPECT_EQ(client.batchGetObjectInvokeCount, 0);
 }
 
 TEST(WorkerRpcClientTest, SignsCreateAndSetBeforeRpc)
@@ -1896,7 +2200,7 @@ TEST(ObjectMetadataClientTest, UbConnectionFailureQueriesMetadataOnly)
     EXPECT_TRUE(bufferProvider->lastOwner.expired());
 }
 
-TEST(ObjectReadFlowTest, BatchesOneOwnerOnCallerAndReadsKeysInParallel)
+TEST(ObjectReadFlowTest, BatchReadyItemsOnceOnCallerAndPreservesMetadataErrorPosition)
 {
     ApiDeadlineGuard deadline(1000);
     auto metadata = std::make_shared<FakeObjectMetadataClient>();
@@ -1914,9 +2218,11 @@ TEST(ObjectReadFlowTest, BatchesOneOwnerOnCallerAndReadsKeysInParallel)
     ASSERT_EQ(metadata->keyGroups.size(), 1u);
     EXPECT_EQ(metadata->keyGroups[0], std::vector<std::string>({ "ub", "missing", "tcp" }));
     EXPECT_EQ(metadata->threadIds[0], callerThread);
-    ASSERT_EQ(replicas->threadIds.size(), 2u);
-    EXPECT_NE(replicas->threadIds[0], callerThread);
-    EXPECT_NE(replicas->threadIds[1], callerThread);
+    EXPECT_TRUE(replicas->unaryKeys.empty());
+    ASSERT_EQ(replicas->batchKeys.size(), 1u);
+    EXPECT_EQ(replicas->batchKeys[0], std::vector<std::string>({ "ub", "tcp" }));
+    ASSERT_EQ(replicas->threadIds.size(), 1u);
+    EXPECT_EQ(replicas->threadIds[0], callerThread);
     ASSERT_EQ(result.items.size(), 3u);
     EXPECT_TRUE(result.items[0].status.IsOk());
     EXPECT_EQ(result.items[1].status.GetCode(), K_NOT_FOUND);
@@ -1937,8 +2243,9 @@ TEST(ObjectReadFlowTest, InlineDataSkipsReplicaReaderWhileMissesUseSecondPhase)
     ObjectReadResult result;
 
     ASSERT_TRUE(flow.Run(request, result).IsOk());
-    ASSERT_EQ(replicas->keys.size(), 1u);
-    EXPECT_EQ(replicas->keys[0], "fallback");
+    ASSERT_EQ(replicas->unaryKeys.size(), 1u);
+    EXPECT_EQ(replicas->unaryKeys[0], "fallback");
+    EXPECT_TRUE(replicas->batchKeys.empty());
     ASSERT_EQ(result.items.size(), 2u);
     EXPECT_TRUE(result.items[0].status.IsOk());
     EXPECT_EQ(result.items[0].data.kind, AccessTransportKind::TCP);
@@ -1947,6 +2254,114 @@ TEST(ObjectReadFlowTest, InlineDataSkipsReplicaReaderWhileMissesUseSecondPhase)
                           result.items[0].data.rpcPayloads[0].Size()),
               "data");
     EXPECT_TRUE(result.items[1].status.IsOk());
+}
+
+TEST(ObjectReadFlowTest, BatchZeroReadyItemsSkipsDataRead)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    metadata->itemStatuses.emplace("first", Status(K_NOT_FOUND, "first"));
+    metadata->itemStatuses.emplace("second", Status(K_INVALID, "second"));
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
+    ObjectReadRequest request;
+    request.items = { { 4, "first", MakeAddress(41) }, { 2, "second", MakeAddress(41) } };
+    ObjectReadResult result;
+
+    EXPECT_EQ(flow.Run(request, result).GetCode(), K_NOT_FOUND);
+    EXPECT_TRUE(replicas->unaryKeys.empty());
+    EXPECT_TRUE(replicas->batchKeys.empty());
+    ASSERT_EQ(result.items.size(), 2u);
+    EXPECT_EQ(result.items[0].requestIndex, 4u);
+    EXPECT_EQ(result.items[0].status.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(result.items[1].requestIndex, 2u);
+    EXPECT_EQ(result.items[1].status.GetCode(), K_INVALID);
+}
+
+TEST(ObjectReadFlowTest, BatchOneReadyItemUsesUnaryReadOnCaller)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
+    ObjectReadRequest request;
+    request.items = { { 9, "only", MakeAddress(41) } };
+    ObjectReadResult result;
+    const auto callerThread = std::this_thread::get_id();
+
+    ASSERT_TRUE(flow.Run(request, result).IsOk());
+    EXPECT_EQ(replicas->unaryKeys, std::vector<std::string>({ "only" }));
+    EXPECT_TRUE(replicas->batchKeys.empty());
+    ASSERT_EQ(replicas->threadIds.size(), 1u);
+    EXPECT_EQ(replicas->threadIds[0], callerThread);
+}
+
+TEST(ObjectReadFlowTest, BatchMixedDataOutcomesKeepInputOrderAndPartialSuccess)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    replicas->itemStatuses.emplace("retry", Status(K_NOT_FOUND, "retry"));
+    replicas->itemStatuses.emplace("terminal", Status(K_INVALID, "terminal"));
+    ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
+    ObjectReadRequest request;
+    request.items = { { 5, "retry", MakeAddress(41) }, { 1, "ok", MakeAddress(41) },
+                      { 8, "terminal", MakeAddress(41) } };
+    ObjectReadResult result;
+
+    ASSERT_TRUE(flow.Run(request, result).IsOk());
+    ASSERT_EQ(result.items.size(), 3u);
+    EXPECT_EQ(result.items[0].requestIndex, 5u);
+    EXPECT_EQ(result.items[0].status.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(result.items[1].requestIndex, 1u);
+    EXPECT_TRUE(result.items[1].status.IsOk());
+    EXPECT_EQ(result.items[2].requestIndex, 8u);
+    EXPECT_EQ(result.items[2].status.GetCode(), K_INVALID);
+}
+
+TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdkBuffers)
+{
+    auto owner = std::make_shared<FakeBufferOwner>(8);
+    std::memcpy(owner->data.data(), "one!two?", owner->data.size());
+    std::weak_ptr<IReceiveBufferOwner> weakOwner = owner;
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "materialization-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    ObjectReadItemResult first;
+    first.objectKey = "one";
+    first.data.response.set_data_size(4);
+    first.data.externalData = owner->data.data();
+    first.data.externalSize = 4;
+    first.data.externalOwner = owner;
+    ObjectReadItemResult second;
+    second.objectKey = "two";
+    second.data.response.set_data_size(4);
+    second.data.externalData = owner->data.data() + 4;
+    second.data.externalSize = 4;
+    second.data.externalOwner = owner;
+    std::shared_ptr<Buffer> firstBuffer;
+    std::shared_ptr<Buffer> secondBuffer;
+
+    ASSERT_TRUE(client->MaterializeTransportItem("one", first, firstBuffer).IsOk());
+    ASSERT_TRUE(client->MaterializeTransportItem("two", second, secondBuffer).IsOk());
+    first = ObjectReadItemResult{};
+    second = ObjectReadItemResult{};
+    owner.reset();
+
+    ASSERT_FALSE(weakOwner.expired());
+    ASSERT_NE(firstBuffer, nullptr);
+    ASSERT_NE(secondBuffer, nullptr);
+    EXPECT_EQ(std::string(static_cast<const char *>(firstBuffer->ImmutableData()), firstBuffer->GetSize()), "one!");
+    EXPECT_EQ(std::string(static_cast<const char *>(secondBuffer->ImmutableData()), secondBuffer->GetSize()), "two?");
+    firstBuffer.reset();
+    EXPECT_FALSE(weakOwner.expired());
+    EXPECT_EQ(std::string(static_cast<const char *>(secondBuffer->ImmutableData()), secondBuffer->GetSize()), "two?");
+    secondBuffer.reset();
+    EXPECT_TRUE(weakOwner.expired());
 }
 
 TEST(ObjectReadFlowTest, QueriesMultipleOwnersInParallelAndPreservesPartialSuccess)
@@ -1990,6 +2405,8 @@ TEST(ObjectReadFlowTest, ReturnsFirstInputErrorWhenAllKeysFail)
     EXPECT_EQ(flow.Run(request, result).GetCode(), K_NOT_FOUND);
 }
 
+GetObjectRemoteRspPb MakeBatchGetResponse(StatusCode status, int64_t dataSize, DataTransferSource source);
+
 TEST(TcpTransporterTest, GetUsesGetObjectRemoteAndPreservesPayload)
 {
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
@@ -2007,6 +2424,26 @@ TEST(TcpTransporterTest, GetUsesGetObjectRemoteAndPreservesPayload)
     EXPECT_EQ(result.kind, AccessTransportKind::TCP);
 }
 
+TEST(TcpTransporterTest, BatchGetMetricsCountOnlyMultiObjectRpc)
+{
+    InitBatchGetMetrics();
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 1;
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 1, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OK, 1, DataTransferSource::DATA_IN_PAYLOAD)
+    };
+    rpcClient->batchGetObjectPayloadValues = { "a", "b" };
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "unary", 1 } }, results).IsOk());
+    ASSERT_TRUE(transporter.BatchGet({ { "first", 1 }, { "second", 1 } }, results).IsOk());
+
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 2);
+}
+
 TEST(TcpTransporterTest, GetPropagatesRpcAndBusinessErrors)
 {
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
@@ -2019,6 +2456,145 @@ TEST(TcpTransporterTest, GetPropagatesRpcAndBusinessErrors)
     rpcClient->getObjectStatus = Status::OK();
     rpcClient->getObjectResponseCode = K_NOT_FOUND;
     EXPECT_EQ(transporter.Get({ "key", 1 }, result).GetCode(), K_NOT_FOUND);
+    EXPECT_TRUE(result.rpcPayloads.empty());
+}
+
+GetObjectRemoteRspPb MakeBatchGetResponse(StatusCode status, int64_t dataSize,
+                                          DataTransferSource source = DataTransferSource::DATA_IN_PAYLOAD)
+{
+    GetObjectRemoteRspPb response;
+    response.mutable_error()->set_error_code(status);
+    response.set_data_size(dataSize);
+    response.set_data_source(source);
+    return response;
+}
+
+TEST(TcpTransporterTest, BatchGetPreservesRequestOrderAndPayloadOwnership)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = { MakeBatchGetResponse(K_OK, 5), MakeBatchGetResponse(K_OK, 6) };
+    rpcClient->batchGetObjectPayloadValues = { "first", "second" };
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "first-key", 5 }, { "second-key", 6 } }, results).IsOk());
+    ASSERT_EQ(rpcClient->batchGetObjectCount, 1);
+    ASSERT_EQ(rpcClient->batchGetObjectRequests.size(), 1u);
+    ASSERT_EQ(rpcClient->batchGetObjectRequests[0].requests_size(), 2);
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[0].requests(0).object_key(), "first-key");
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[0].requests(1).object_key(), "second-key");
+    EXPECT_TRUE(rpcClient->batchGetObjectRequests[0].requests(0).try_lock());
+    EXPECT_TRUE(rpcClient->batchGetObjectRequests[0].requests(1).try_lock());
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_TRUE(results[1].status.IsOk());
+    EXPECT_EQ(results[0].data.kind, AccessTransportKind::TCP);
+    EXPECT_EQ(results[1].data.kind, AccessTransportKind::TCP);
+    ASSERT_EQ(results[0].data.rpcPayloads.size(), 1u);
+    ASSERT_EQ(results[1].data.rpcPayloads.size(), 1u);
+    EXPECT_EQ(std::string(static_cast<const char *>(results[0].data.rpcPayloads[0].Data()),
+                          results[0].data.rpcPayloads[0].Size()),
+              "first");
+    EXPECT_EQ(std::string(static_cast<const char *>(results[1].data.rpcPayloads[0].Data()),
+                          results[1].data.rpcPayloads[0].Size()),
+              "second");
+}
+
+TEST(TcpTransporterTest, BatchGetReturnsBusinessErrorsPerItemWithoutConsumingPayload)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = { MakeBatchGetResponse(K_OK, 4),
+                                           MakeBatchGetResponse(K_NOT_FOUND, 0),
+                                           MakeBatchGetResponse(K_OUT_OF_MEMORY, 0) };
+    rpcClient->batchGetObjectPayloadValues = { "data" };
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "present", 4 }, { "missing", 4 }, { "full", 4 } }, results).IsOk());
+    ASSERT_EQ(results.size(), 3u);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_EQ(results[1].status.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(results[2].status.GetCode(), K_OUT_OF_MEMORY);
+    ASSERT_EQ(results[0].data.rpcPayloads.size(), 1u);
+    EXPECT_TRUE(results[1].data.rpcPayloads.empty());
+    EXPECT_TRUE(results[2].data.rpcPayloads.empty());
+}
+
+TEST(TcpTransporterTest, BatchGetReturnsRpcFailureWithoutStaleOutputs)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectStatus = Status(K_RPC_UNAVAILABLE, "worker unavailable");
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results(1);
+    results[0].data.rpcPayloads.emplace_back();
+
+    EXPECT_EQ(transporter.BatchGet({ { "key", 4 }, { "other", 4 } }, results).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(TcpTransporterTest, BatchGetRejectsResponseCountMismatch)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = { MakeBatchGetResponse(K_OK, 4) };
+    rpcClient->batchGetObjectPayloadValues = { "data" };
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results;
+
+    EXPECT_EQ(transporter.BatchGet({ { "first", 4 }, { "second", 4 } }, results).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(TcpTransporterTest, BatchGetRejectsPayloadUnderflow)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = { MakeBatchGetResponse(K_OK, 4), MakeBatchGetResponse(K_OK, 5) };
+    rpcClient->batchGetObjectPayloadValues = { "first" };
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results;
+
+    EXPECT_EQ(transporter.BatchGet({ { "first", 4 }, { "second", 5 } }, results).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(TcpTransporterTest, BatchGetRejectsUnexpectedPayload)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = { MakeBatchGetResponse(K_OK, 4), MakeBatchGetResponse(K_NOT_FOUND, 0) };
+    rpcClient->batchGetObjectPayloadValues = { "first", "unexpected" };
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results;
+
+    EXPECT_EQ(transporter.BatchGet({ { "first", 4 }, { "second", 4 } }, results).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(TcpTransporterTest, BatchGetDelegatesOneItemToUnaryGet)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 4;
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "key", 4 } }, results).IsOk());
+    EXPECT_EQ(rpcClient->getObjectCount, 1);
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 0);
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_TRUE(results[0].status.IsOk());
+    ASSERT_EQ(results[0].data.rpcPayloads.size(), 1u);
+}
+
+TEST(TcpTransporterTest, BatchGetDelegatedUnaryBusinessErrorDoesNotOwnPayload)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 4;
+    rpcClient->getObjectResponseCode = K_NOT_FOUND;
+    TcpTransporter transporter(rpcClient);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "missing", 4 } }, results).IsOk());
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].status.GetCode(), K_NOT_FOUND);
+    EXPECT_TRUE(results[0].data.rpcPayloads.empty());
 }
 
 TEST(UbTransporterTest, GetReturnsOwnerBackedExternalBuffer)
@@ -2119,6 +2695,727 @@ TEST(UbTransporterTest, CloseDataPlaneWaitsForInflightGet)
     EXPECT_FALSE(connection->teardownDuringInvoke.load());
 }
 
+TEST(UbTransporterTest, BatchGetAggregateOneItemPreservesUnaryGetBehaviorAndClearsOutput)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 8;
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results(2);
+
+    ASSERT_TRUE(transporter.BatchGet({ { "key", 8 } }, results).IsOk());
+
+    EXPECT_EQ(rpcClient->getObjectCount, 1);
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 0);
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_EQ(results[0].data.kind, AccessTransportKind::UB);
+    EXPECT_NE(results[0].data.externalOwner, nullptr);
+}
+
+TEST(UbTransporterTest, BatchGetAggregateUsesOneAlignedAllocationAndOneRpc)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 1, DataTransferSource::DATA_ALREADY_TRANSFERRED),
+        MakeBatchGetResponse(K_OK, 17, DataTransferSource::DATA_ALREADY_TRANSFERRED),
+        MakeBatchGetResponse(K_OK, 16, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 64;
+    bufferProvider->baseSegDataOffset = 64;
+    auto connection = std::make_shared<FakeUbConnection>(true);
+    UbTransporter transporter(rpcClient, connection, bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "one", 1 }, { "two", 17 }, { "three", 16 } }, results).IsOk());
+
+    ASSERT_EQ(bufferProvider->allocationSizes, std::vector<uint64_t>({ 64 }));
+    ASSERT_EQ(rpcClient->batchGetObjectRequests.size(), 1u);
+    const auto &request = rpcClient->batchGetObjectRequests[0];
+    ASSERT_EQ(request.requests_size(), 3);
+    EXPECT_EQ(request.urma_instance_id(), "test-instance");
+    const std::vector<uint64_t> expectedOffsets{ 0, 16, 48 };
+    for (size_t i = 0; i < expectedOffsets.size(); ++i) {
+        EXPECT_TRUE(request.requests(static_cast<int>(i)).has_urma_info());
+        EXPECT_EQ(request.requests(static_cast<int>(i)).read_offset(), 0u);
+        EXPECT_EQ(request.requests(static_cast<int>(i)).read_size(),
+                  i == 0 ? 1u : (i == 1 ? 17u : 16u));
+        EXPECT_EQ(request.requests(static_cast<int>(i)).urma_info().seg_data_offset(), 64 + expectedOffsets[i]);
+        EXPECT_EQ(expectedOffsets[i] % 16, 0u);
+    }
+
+    ASSERT_EQ(results.size(), 3u);
+    auto owner = results[0].data.externalOwner;
+    ASSERT_NE(owner, nullptr);
+    auto *base = results[0].data.externalData;
+    EXPECT_EQ(results[1].data.externalData, base + 16);
+    EXPECT_EQ(results[2].data.externalData, base + 48);
+    EXPECT_EQ(results[0].data.externalSize, 1u);
+    EXPECT_EQ(results[1].data.externalSize, 17u);
+    EXPECT_EQ(results[2].data.externalSize, 16u);
+    EXPECT_EQ(results[1].data.externalOwner, owner);
+    EXPECT_EQ(results[2].data.externalOwner, owner);
+
+}
+
+TEST(UbTransporterTest, BatchGetMetricsCountNormalMultiObjectRpc)
+{
+    InitBatchGetMetrics();
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED),
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "one", 8 }, { "two", 8 } }, results).IsOk());
+
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 1);
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 2);
+}
+
+TEST(UbTransporterTest, BatchGetUsesOneTcpBatchWhenWorkerLacksPayloadOnlyCapability)
+{
+    InitBatchGetMetrics();
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 3, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OK, 4, DataTransferSource::DATA_IN_PAYLOAD)
+    };
+    rpcClient->batchGetObjectPayloadValues = { "one", "two2" };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    UrmaHandshakeRspPb oldWorkerHandshake;
+    ASSERT_FALSE(oldWorkerHandshake.supports_payload_only_client_batch_get());
+    auto connection = std::make_shared<FakeUbConnection>(oldWorkerHandshake.supports_payload_only_client_batch_get());
+    UbTransporter transporter(rpcClient, connection, bufferProvider);
+    DataGetBatchResult results(1);
+
+    ASSERT_TRUE(transporter.BatchGet({ { "first", 3 }, { "second", 4 } }, results).IsOk());
+
+    EXPECT_EQ(bufferProvider->allocateCount, 0);
+    ASSERT_EQ(rpcClient->batchGetObjectRequests.size(), 1u);
+    const auto &request = rpcClient->batchGetObjectRequests.front();
+    ASSERT_EQ(request.requests_size(), 2);
+    EXPECT_EQ(request.requests(0).object_key(), "first");
+    EXPECT_EQ(request.requests(1).object_key(), "second");
+    EXPECT_FALSE(request.requests(0).has_urma_info());
+    EXPECT_FALSE(request.requests(1).has_urma_info());
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_EQ(results[0].data.kind, AccessTransportKind::TCP);
+    EXPECT_EQ(results[1].data.kind, AccessTransportKind::TCP);
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 2);
+}
+
+TEST(UbTransporterTest, BatchGetMetricsExcludePressureCreatedSingletonRpcs)
+{
+    InitBatchGetMetrics();
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetHandler = [](BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                    std::vector<RpcMessage> &) {
+        for (const auto &itemRequest : request.requests()) {
+            *response.add_responses() = MakeBatchGetResponse(
+                K_OK, static_cast<int64_t>(itemRequest.data_size()), DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        }
+        return Status::OK();
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 64;
+    int allocationAttempt = 0;
+    bufferProvider->allocateHandler = [&allocationAttempt](uint64_t size) {
+        ++allocationAttempt;
+        return allocationAttempt == 1 || allocationAttempt == 3
+                   ? Status(K_OUT_OF_MEMORY, "deterministic pressure at " + std::to_string(size))
+                   : Status::OK();
+    };
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet(
+        { { "one", 8 }, { "two", 8 }, { "three", 8 }, { "four", 8 } }, results).IsOk());
+
+    ASSERT_EQ(rpcClient->batchGetObjectRequests.size(), 3u);
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[0].requests_size(), 2);
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[1].requests_size(), 1);
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[2].requests_size(), 1);
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 2);
+    ExpectMetricTotal("client_direct_batch_get_ub_split_total", 2);
+}
+
+TEST(BatchGetMetricsTest, FailedTcpAndUbRpcsCountAttemptsAndObjects)
+{
+    InitBatchGetMetrics();
+    auto tcpRpcClient = std::make_shared<FakeWorkerRpcClient>();
+    tcpRpcClient->batchGetObjectStatus = Status(K_RPC_UNAVAILABLE, "tcp unavailable");
+    TcpTransporter tcp(tcpRpcClient);
+    DataGetBatchResult results;
+
+    EXPECT_EQ(tcp.BatchGet({ { "one", 1 }, { "two", 1 } }, results).GetCode(), K_RPC_UNAVAILABLE);
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 2);
+
+    InitBatchGetMetrics();
+    auto ubRpcClient = std::make_shared<FakeWorkerRpcClient>();
+    ubRpcClient->batchGetObjectStatus = Status(K_RPC_UNAVAILABLE, "ub unavailable");
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    UbTransporter ub(ubRpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+
+    EXPECT_EQ(ub.BatchGet({ { "one", 8 }, { "two", 8 } }, results).GetCode(), K_RPC_UNAVAILABLE);
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 2);
+}
+
+TEST(UbTransporterTest, BatchGetFailedAllocationFallbackCountsSubmittedObjects)
+{
+    InitBatchGetMetrics();
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectStatus = Status(K_RPC_UNAVAILABLE, "fallback unavailable");
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    bufferProvider->allocateStatus = Status(K_OUT_OF_MEMORY, "pool exhausted");
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "one", 8 }, { "two", 8 } }, results).IsOk());
+
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_EQ(results[0].status.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(results[1].status.GetCode(), K_RPC_UNAVAILABLE);
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 2);
+    ExpectMetricTotal("client_direct_batch_get_ub_split_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_tcp_fallback_total", 2);
+}
+
+TEST(UbTransporterTest, BatchGetAggregateOwnerOutlivesTransporterAndSiblingResults)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED),
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    DataGetResult survivor;
+    {
+        auto transporter = std::make_unique<UbTransporter>(rpcClient, std::make_shared<FakeUbConnection>(),
+                                                           bufferProvider);
+        DataGetBatchResult results;
+        ASSERT_TRUE(transporter->BatchGet({ { "one", 8 }, { "two", 8 } }, results).IsOk());
+        ASSERT_EQ(results.size(), 2u);
+        survivor = std::move(results[1].data);
+        results.clear();
+        transporter.reset();
+    }
+
+    EXPECT_FALSE(bufferProvider->lastOwner.expired());
+    EXPECT_NE(survivor.externalData, nullptr);
+    survivor.externalOwner.reset();
+    EXPECT_TRUE(bufferProvider->lastOwner.expired());
+}
+
+TEST(UbTransporterTest, BatchGetAggregateSplitsByAlignedMaxGetSizeBeforeAllocation)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetHandler = [](BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                    std::vector<RpcMessage> &) {
+        for (const auto &itemRequest : request.requests()) {
+            *response.add_responses() = MakeBatchGetResponse(
+                K_OK, static_cast<int64_t>(itemRequest.data_size()), DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        }
+        return Status::OK();
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 64;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+    DataGetBatchRequest request{ { "one", 8 }, { "two", 8 }, { "three", 8 },
+                                 { "four", 8 }, { "five", 8 }, { "six", 8 } };
+
+    ASSERT_TRUE(transporter.BatchGet(request, results).IsOk());
+
+    EXPECT_EQ(bufferProvider->allocationSizes, std::vector<uint64_t>({ 64, 32 }));
+    ASSERT_EQ(rpcClient->batchGetObjectRequests.size(), 2u);
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[0].requests_size(), 4);
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[1].requests_size(), 2);
+    ASSERT_EQ(results.size(), request.size());
+    for (const auto &result : results) {
+        EXPECT_TRUE(result.status.IsOk());
+        EXPECT_EQ(result.data.kind, AccessTransportKind::UB);
+    }
+}
+
+TEST(UbTransporterTest, BatchGetAggregateHandlesZeroSizeInsideMixedBatch)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 0;
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED),
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results(1);
+
+    ASSERT_TRUE(transporter.BatchGet(
+        { { "one", 8 }, { "two", 8 }, { "zero", 0 }, { "three", 8 }, { "four", 8 } }, results).IsOk());
+
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 2);
+    ASSERT_EQ(rpcClient->getObjectRequests.size(), 1u);
+    EXPECT_EQ(rpcClient->getObjectRequests[0].object_key(), "zero");
+    EXPECT_FALSE(rpcClient->getObjectRequests[0].has_urma_info());
+    ASSERT_EQ(results.size(), 5u);
+    EXPECT_EQ(results[2].data.kind, AccessTransportKind::TCP);
+}
+
+TEST(UbTransporterTest, BatchGetAggregateHandlesOverMaxSizeInsideMixedBatch)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 8;
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED),
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet(
+        { { "one", 8 }, { "two", 8 }, { "large", 64 }, { "three", 8 }, { "four", 8 } }, results).IsOk());
+
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 2);
+    ASSERT_EQ(rpcClient->getObjectRequests.size(), 1u);
+    EXPECT_EQ(rpcClient->getObjectRequests[0].object_key(), "large");
+    EXPECT_FALSE(rpcClient->getObjectRequests[0].has_urma_info());
+    EXPECT_EQ(results.size(), 5u);
+}
+
+TEST(UbTransporterTest, BatchGetAggregateClearsStaleOutputBeforeEarlyValidationError)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results(2);
+
+    EXPECT_EQ(transporter.BatchGet({ { "valid", 8 }, { "", 8 } }, results).GetCode(), K_INVALID);
+    EXPECT_TRUE(results.empty());
+    EXPECT_EQ(bufferProvider->allocateCount, 0);
+    EXPECT_EQ(rpcClient->getObjectCount, 0);
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 0);
+}
+
+TEST(UbTransporterTest, BatchGetAggregateRejectsAlignmentAndTotalSizeOverflowBeforeIo)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = std::numeric_limits<uint64_t>::max();
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results(1);
+
+    EXPECT_EQ(transporter.BatchGet({ { "overflow", std::numeric_limits<uint64_t>::max() }, { "other", 1 } },
+                                   results).GetCode(),
+              K_INVALID);
+    EXPECT_TRUE(results.empty());
+    EXPECT_EQ(bufferProvider->allocateCount, 0);
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 0);
+
+    const uint64_t largestAligned = std::numeric_limits<uint64_t>::max() - 15;
+    EXPECT_EQ(transporter.BatchGet({ { "large", largestAligned }, { "overflow", 16 } }, results).GetCode(),
+              K_INVALID);
+    EXPECT_TRUE(results.empty());
+    EXPECT_EQ(bufferProvider->allocateCount, 0);
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 0);
+}
+
+TEST(UbTransporterTest, BatchGetAggregateRejectsRemoteOffsetOverflowBeforeRpc)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    bufferProvider->baseSegDataOffset = std::numeric_limits<uint64_t>::max() - 8;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    EXPECT_EQ(transporter.BatchGet({ { "one", 8 }, { "two", 8 } }, results).GetCode(), K_INVALID);
+    EXPECT_TRUE(results.empty());
+    EXPECT_EQ(bufferProvider->allocateCount, 1);
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 0);
+}
+
+TEST(UbTransporterTest, BatchGetAggregateParsesDirectPayloadAndSizeChangeInOrder)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED),
+        MakeBatchGetResponse(K_OK, 7, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OC_REMOTE_GET_NOT_ENOUGH, 12, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    rpcClient->batchGetObjectPayloadValues = { "payload" };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 48;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "direct", 8 }, { "fallback", 8 }, { "changed", 8 } }, results).IsOk());
+
+    ASSERT_EQ(results.size(), 3u);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_EQ(results[0].data.kind, AccessTransportKind::UB);
+    EXPECT_NE(results[0].data.externalOwner, nullptr);
+    EXPECT_TRUE(results[1].status.IsOk());
+    EXPECT_EQ(results[1].data.kind, AccessTransportKind::TCP);
+    ASSERT_EQ(results[1].data.rpcPayloads.size(), 1u);
+    EXPECT_EQ(std::string(static_cast<const char *>(results[1].data.rpcPayloads[0].Data()),
+                          results[1].data.rpcPayloads[0].Size()),
+              "payload");
+    EXPECT_EQ(results[2].status.GetCode(), K_OC_REMOTE_GET_NOT_ENOUGH);
+    EXPECT_EQ(results[2].data.response.data_size(), 12);
+    EXPECT_EQ(results[2].data.externalOwner, nullptr);
+}
+
+TEST(UbTransporterTest, BatchGetAggregateRejectsResponseCountMismatch)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    EXPECT_EQ(transporter.BatchGet({ { "one", 8 }, { "two", 8 } }, results).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(UbTransporterTest, BatchGetAggregateRejectsPayloadCountMismatchAndInvalidSource)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    EXPECT_EQ(transporter.BatchGet({ { "one", 8 }, { "two", 8 } }, results).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(results.empty());
+
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_DELAY_TRANSFER),
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+    rpcClient->batchGetObjectPayloadValues = { "unexpected" };
+    EXPECT_EQ(transporter.BatchGet({ { "one", 8 }, { "two", 8 } }, results).GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(UbTransporterTest, BatchGetAllocationPressureBisectsByAlignedBytesAndPreservesOrder)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetHandler = [](BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                    std::vector<RpcMessage> &) {
+        for (const auto &itemRequest : request.requests()) {
+            *response.add_responses() = MakeBatchGetResponse(
+                K_OK, static_cast<int64_t>(itemRequest.data_size()), DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        }
+        return Status::OK();
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 128;
+    bufferProvider->allocateHandler = [](uint64_t size) {
+        return size == 128 ? Status(K_OUT_OF_MEMORY, "aggregate allocation pressure") : Status::OK();
+    };
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "one", 1 }, { "two", 1 }, { "three", 1 }, { "four", 80 } },
+                                     results).IsOk());
+
+    EXPECT_EQ(bufferProvider->allocationAttempts, std::vector<uint64_t>({ 128, 80, 48 }));
+    ASSERT_EQ(rpcClient->batchGetObjectRequests.size(), 2u);
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[0].requests_size(), 1);
+    EXPECT_EQ(rpcClient->batchGetObjectRequests[1].requests_size(), 3);
+    ASSERT_EQ(results.size(), 4u);
+    for (size_t i = 0; i < results.size(); ++i) {
+        EXPECT_TRUE(results[i].status.IsOk());
+        EXPECT_EQ(results[i].data.kind, AccessTransportKind::UB);
+        EXPECT_EQ(results[i].data.response.data_size(), i == 3 ? 80 : 1);
+    }
+}
+
+TEST(UbTransporterTest, BatchGetAllocationPressureKeepsSuccessfulHalfWhileOtherHalfSplitsAgain)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetHandler = [](BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                    std::vector<RpcMessage> &) {
+        for (const auto &itemRequest : request.requests()) {
+            *response.add_responses() = MakeBatchGetResponse(
+                K_OK, static_cast<int64_t>(itemRequest.data_size()), DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        }
+        return Status::OK();
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 160;
+    bufferProvider->allocateHandler = [](uint64_t size) {
+        return size > 64 ? Status(K_OUT_OF_MEMORY, "aggregate allocation pressure") : Status::OK();
+    };
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet(
+        { { "zero", 1 }, { "one", 1 }, { "two", 1 }, { "three", 1 }, { "four", 48 }, { "five", 48 } },
+        results).IsOk());
+
+    EXPECT_EQ(bufferProvider->allocationAttempts, std::vector<uint64_t>({ 160, 96, 64, 48, 48 }));
+    ASSERT_EQ(results.size(), 6u);
+    std::vector<std::string> observedKeys;
+    for (const auto &request : rpcClient->batchGetObjectRequests) {
+        for (const auto &item : request.requests()) {
+            observedKeys.emplace_back(item.object_key());
+        }
+    }
+    EXPECT_EQ(observedKeys, std::vector<std::string>({ "zero", "one", "two", "three", "four", "five" }));
+    for (const auto &result : results) {
+        EXPECT_TRUE(result.status.IsOk());
+        EXPECT_EQ(result.data.kind, AccessTransportKind::UB);
+    }
+}
+
+TEST(UbTransporterTest, BatchGetAllocationPressureKeepsAttemptsNonIncreasingAcrossInitialChunks)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetHandler = [](BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                    std::vector<RpcMessage> &) {
+        for (const auto &itemRequest : request.requests()) {
+            *response.add_responses() = MakeBatchGetResponse(
+                K_OK, static_cast<int64_t>(itemRequest.data_size()), DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        }
+        return Status::OK();
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 128;
+    bufferProvider->allocateHandler = [](uint64_t size) {
+        return size == 128 ? Status(K_OUT_OF_MEMORY, "aggregate allocation pressure") : Status::OK();
+    };
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet(
+        { { "first", 64 }, { "second", 64 }, { "third", 48 }, { "fourth", 48 } }, results).IsOk());
+
+    EXPECT_EQ(bufferProvider->allocationAttempts, std::vector<uint64_t>({ 128, 64, 64, 48, 48 }));
+    EXPECT_TRUE(std::is_sorted(bufferProvider->allocationAttempts.begin(), bufferProvider->allocationAttempts.end(),
+                               std::greater<uint64_t>()));
+    ASSERT_EQ(results.size(), 4u);
+    for (const auto &result : results) {
+        EXPECT_TRUE(result.status.IsOk());
+        EXPECT_EQ(result.data.kind, AccessTransportKind::UB);
+    }
+}
+
+TEST(UbTransporterTest, BatchGetAllocationPressureCoalescesOrdinarySingletonChunksWithoutUnaryRpc)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 48, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OK, 48, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OK, 48, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OK, 48, DataTransferSource::DATA_IN_PAYLOAD)
+    };
+    rpcClient->batchGetObjectPayloadValues = { "first", "second", "third", "fourth" };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 64;
+    bufferProvider->allocateStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet(
+        { { "first", 48 }, { "second", 48 }, { "third", 48 }, { "fourth", 48 } }, results).IsOk());
+
+    EXPECT_EQ(bufferProvider->allocationAttempts, std::vector<uint64_t>({ 48, 48, 48, 48 }));
+    EXPECT_EQ(rpcClient->getObjectCount, 0);
+    ASSERT_EQ(rpcClient->batchGetObjectRequests.size(), 1u);
+    const auto &fallbackRequest = rpcClient->batchGetObjectRequests.front();
+    ASSERT_EQ(fallbackRequest.requests_size(), 4);
+    for (const auto &request : fallbackRequest.requests()) {
+        EXPECT_FALSE(request.has_urma_info());
+    }
+    ASSERT_EQ(results.size(), 4u);
+    for (const auto &result : results) {
+        EXPECT_TRUE(result.status.IsOk());
+        EXPECT_EQ(result.data.kind, AccessTransportKind::TCP);
+    }
+}
+
+TEST(UbTransporterTest, BatchGetAllocationPressureBatchesSingletonTcpFallbackAndMapsOriginalIndexes)
+{
+    InitBatchGetMetrics();
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 1, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_NOT_FOUND, 0, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OK, 1, DataTransferSource::DATA_IN_PAYLOAD),
+        MakeBatchGetResponse(K_OK, 1, DataTransferSource::DATA_IN_PAYLOAD)
+    };
+    rpcClient->batchGetObjectPayloadValues = { "a", "c", "d" };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 64;
+    bufferProvider->allocateStatus = Status(K_OUT_OF_MEMORY, "UB pool exhausted");
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "first", 1 }, { "second", 1 }, { "third", 1 }, { "fourth", 1 } },
+                                     results).IsOk());
+
+    EXPECT_EQ(bufferProvider->allocationAttempts, std::vector<uint64_t>({ 64, 32, 32, 16, 16, 16, 16 }));
+    EXPECT_TRUE(std::is_sorted(bufferProvider->allocationAttempts.begin(), bufferProvider->allocationAttempts.end(),
+                               std::greater<uint64_t>()));
+    ASSERT_EQ(rpcClient->batchGetObjectRequests.size(), 1u);
+    const auto &fallbackRequest = rpcClient->batchGetObjectRequests.front();
+    ASSERT_EQ(fallbackRequest.requests_size(), 4);
+    for (int i = 0; i < fallbackRequest.requests_size(); ++i) {
+        EXPECT_FALSE(fallbackRequest.requests(i).has_urma_info());
+    }
+    ASSERT_EQ(results.size(), 4u);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_EQ(results[1].status.GetCode(), K_NOT_FOUND);
+    EXPECT_TRUE(results[2].status.IsOk());
+    EXPECT_TRUE(results[3].status.IsOk());
+    EXPECT_EQ(results[0].data.kind, AccessTransportKind::TCP);
+    EXPECT_EQ(results[2].data.kind, AccessTransportKind::TCP);
+    EXPECT_EQ(results[3].data.kind, AccessTransportKind::TCP);
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 1);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 4);
+    ExpectMetricTotal("client_direct_batch_get_ub_split_total", 3);
+    ExpectMetricTotal("client_direct_batch_get_tcp_fallback_total", 4);
+}
+
+TEST(UbTransporterTest, BatchGetAllocationPressureScopesTcpRpcFailureToFallbackItems)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->batchGetHandler = [](BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                    std::vector<RpcMessage> &) {
+        if (!request.requests(0).has_urma_info()) {
+            return Status(K_RPC_UNAVAILABLE, "TCP fallback unavailable");
+        }
+        for (const auto &itemRequest : request.requests()) {
+            *response.add_responses() = MakeBatchGetResponse(
+                K_OK, static_cast<int64_t>(itemRequest.data_size()), DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        }
+        return Status::OK();
+    };
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 128;
+    bufferProvider->allocateHandler = [](uint64_t size) {
+        return size == 16 || size == 32 || size == 80 || size == 128
+                   ? Status(K_OUT_OF_MEMORY, "aggregate allocation pressure")
+                   : Status::OK();
+    };
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "fallback-0", 1 }, { "fallback-1", 1 }, { "ub-2", 48 }, { "ub-3", 48 } },
+                                     results).IsOk());
+
+    ASSERT_EQ(results.size(), 4u);
+    EXPECT_EQ(results[0].status.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(results[1].status.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_TRUE(results[2].status.IsOk());
+    EXPECT_TRUE(results[3].status.IsOk());
+    EXPECT_EQ(results[2].data.kind, AccessTransportKind::UB);
+    EXPECT_EQ(results[3].data.kind, AccessTransportKind::UB);
+    ASSERT_GE(rpcClient->batchGetObjectRequests.size(), 3u);
+    const auto &fallbackRequest = rpcClient->batchGetObjectRequests.back();
+    ASSERT_EQ(fallbackRequest.requests_size(), 2);
+    EXPECT_FALSE(fallbackRequest.requests(0).has_urma_info());
+    EXPECT_FALSE(fallbackRequest.requests(1).has_urma_info());
+}
+
+TEST(UbTransporterTest, BatchGetAllocationPressurePreservesUnarySizeRetryAndMaxPreSplit)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 24;
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetBatchResult results;
+
+    ASSERT_TRUE(transporter.BatchGet({ { "sentinel", 16 } }, results).IsOk());
+    EXPECT_EQ(bufferProvider->allocationAttempts, std::vector<uint64_t>({ 16, 24 }));
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_TRUE(results[0].status.IsOk());
+
+    bufferProvider->allocationAttempts.clear();
+    rpcClient->getObjectDataSize = 48;
+    rpcClient->batchGetHandler = [](BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                    std::vector<RpcMessage> &) {
+        for (const auto &itemRequest : request.requests()) {
+            *response.add_responses() = MakeBatchGetResponse(
+                K_OK, static_cast<int64_t>(itemRequest.data_size()), DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        }
+        return Status::OK();
+    };
+    ASSERT_TRUE(transporter.BatchGet({ { "oversize", 48 }, { "small-a", 16 }, { "small-b", 16 } }, results).IsOk());
+    ASSERT_FALSE(bufferProvider->allocationAttempts.empty());
+    EXPECT_TRUE(std::all_of(bufferProvider->allocationAttempts.begin(), bufferProvider->allocationAttempts.end(),
+                            [&](uint64_t size) { return size <= bufferProvider->maxGetSize; }));
+}
+
+TEST(UbTransporterTest, BatchGetAggregateCloseWaitsForRpcAndResultSetup)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto connection = std::make_shared<FakeUbConnection>();
+    std::atomic<bool> invokeFinished{ false };
+    connection->invokeFinished = &invokeFinished;
+    std::promise<void> invokeStarted;
+    auto invokeStartedFuture = invokeStarted.get_future();
+    std::promise<void> allowInvoke;
+    auto allowInvokeFuture = allowInvoke.get_future().share();
+    rpcClient->onBatchInvoke = [&invokeStarted, allowInvokeFuture]() {
+        invokeStarted.set_value();
+        allowInvokeFuture.wait();
+    };
+    rpcClient->afterBatchInvoke = [&invokeFinished]() { invokeFinished.store(true); };
+    rpcClient->batchGetObjectResponses = {
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED),
+        MakeBatchGetResponse(K_OK, 8, DataTransferSource::DATA_ALREADY_TRANSFERRED)
+    };
+
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    bufferProvider->maxGetSize = 32;
+    UbTransporter transporter(rpcClient, connection, bufferProvider);
+    DataGetBatchResult results;
+    Status batchStatus;
+    std::thread batchThread([&]() { batchStatus = transporter.BatchGet({ { "one", 8 }, { "two", 8 } }, results); });
+    if (invokeStartedFuture.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+        batchThread.join();
+        FAIL() << "BatchGet did not invoke the batch RPC";
+        return;
+    }
+    std::thread closeThread([&]() { transporter.CloseDataPlane(); });
+    allowInvoke.set_value();
+    batchThread.join();
+    closeThread.join();
+
+    EXPECT_TRUE(batchStatus.IsOk());
+    EXPECT_FALSE(connection->teardownDuringInvoke.load());
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_NE(results[0].data.externalOwner, nullptr);
+    EXPECT_NE(results[1].data.externalOwner, nullptr);
+}
+
 TEST(ShmTransporterTest, RemainsExplicitPlaceholder)
 {
     ShmTransporter transporter;
@@ -2158,6 +3455,44 @@ TEST(DataPlaneExecutorTest, RpcUnavailableRebuildsCompleteEntryAndRetriesOnce)
     EXPECT_EQ(manager->transportBuildCount, 2);
 }
 
+TEST(DataPlaneExecutorTest, BatchGetConnectionRetryMetricsCountBothActualRpcAttempts)
+{
+    InitBatchGetMetrics();
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    int configured = 0;
+    manager->configureTransporter = [&configured](const HostPort &, FakeTransporter &transporter) {
+        auto rpcClient = std::static_pointer_cast<FakeWorkerRpcClient>(transporter.rpcClient);
+        if (++configured == 1) {
+            rpcClient->batchGetObjectStatus = Status(K_RPC_UNAVAILABLE, "first attempt unavailable");
+        } else {
+            rpcClient->batchGetObjectResponses = {
+                MakeBatchGetResponse(K_OK, 1, DataTransferSource::DATA_IN_PAYLOAD),
+                MakeBatchGetResponse(K_OK, 1, DataTransferSource::DATA_IN_PAYLOAD)
+            };
+            rpcClient->batchGetObjectPayloadValues = { "a", "b" };
+        }
+        transporter.batchGetHandler = [rpcClient](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+            TcpTransporter tcp(rpcClient);
+            return tcp.BatchGet(inputs, outputs);
+        };
+    };
+    DataPlaneExecutor executor(manager, std::make_shared<TransportAdvisor>());
+    DataGetBatchRequest request{ { "one", 1 }, { "two", 1 } };
+    DataGetBatchResult results;
+    int operationCount = 0;
+
+    ASSERT_TRUE(executor.Execute(MakeAddress(78), [&](IDataTransporter &transporter) {
+        ++operationCount;
+        return transporter.BatchGet(request, results);
+    }).IsOk());
+
+    EXPECT_EQ(operationCount, 2);
+    EXPECT_EQ(manager->rpcBuildCount, 2);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+    ExpectMetricTotal("client_direct_batch_get_rpc_total", 2);
+    ExpectMetricTotal("client_direct_batch_get_object_total", 4);
+}
+
 TEST(DataPlaneExecutorTest, DoesNotRetrySecondTransportFailure)
 {
     auto manager = std::make_shared<FakeDataPlaneManager>();
@@ -2181,7 +3516,7 @@ TEST(ReplicaReaderTest, TriesNextLocationWithoutRefreshingMetadata)
     auto manager = std::make_shared<FakeDataPlaneManager>();
     manager->transporterGetStatuses = { { Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "missing") }, { Status::OK() } };
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
-    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
     master::ObjectLocationInfoPb location;
     location.set_object_key("key");
     location.set_object_size(4);
@@ -2202,7 +3537,7 @@ TEST(ReplicaReaderTest, StopsOnNonRetryableLocationError)
     auto manager = std::make_shared<FakeDataPlaneManager>();
     manager->transporterGetStatuses = { { Status(K_INVALID, "invalid") } };
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
-    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
     master::ObjectLocationInfoPb location;
     location.set_object_key("key");
     location.set_object_size(4);
@@ -2221,7 +3556,7 @@ TEST(ReplicaReaderTest, StartsAnotherRoundWithoutRefreshingMetadata)
     manager->transporterGetStatuses = { { Status(K_NOT_FOUND, "first") },
                                         { Status(K_RPC_CANCELLED, "second") } };
     auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
-    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
     master::ObjectLocationInfoPb location;
     location.set_object_key("key");
     location.set_object_size(4);
@@ -2232,6 +3567,583 @@ TEST(ReplicaReaderTest, StartsAnotherRoundWithoutRefreshingMetadata)
     ASSERT_TRUE(reader.Read(location, result).IsOk());
     EXPECT_EQ(result.objectKey, "key");
     EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ReplicaReaderTest, BatchSameAddressUsesOneBatchAndPreservesCallerOrder)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    std::vector<master::ObjectLocationInfoPb> locations(3);
+    std::vector<ObjectReadItemResult> results(3);
+    ReplicaReadBatch requests;
+    for (size_t i = 0; i < locations.size(); ++i) {
+        locations[i].set_object_key("key-" + std::to_string(i));
+        locations[i].set_object_size(i + 1);
+        locations[i].add_object_locations(MakeAddress(40).ToString());
+        requests.push_back({ &locations[i], &results[i] });
+    }
+
+    ASSERT_TRUE(reader.ReadBatch(requests).IsOk());
+    ASSERT_EQ(manager->builtTransporters.size(), 1u);
+    const auto &transporter = manager->builtTransporters.front();
+    ASSERT_EQ(transporter->batchGetRequests.size(), 1u);
+    ASSERT_EQ(transporter->batchGetRequests.front().size(), 3u);
+    for (size_t i = 0; i < results.size(); ++i) {
+        EXPECT_EQ(transporter->batchGetRequests.front()[i].objectKey, "key-" + std::to_string(i));
+        EXPECT_TRUE(results[i].status.IsOk());
+        EXPECT_EQ(results[i].objectKey, "key-" + std::to_string(i));
+    }
+}
+
+TEST(ReplicaReaderTest, BatchDifferentAddressesExecuteConcurrentlyWithDisjointResults)
+{
+    ApiDeadlineGuard deadline(2000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    std::promise<void> bothStarted;
+    auto bothStartedFuture = bothStarted.get_future();
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+    std::atomic<int> started{ 0 };
+    manager->configureTransporter = [&](const HostPort &, FakeTransporter &transporter) {
+        transporter.batchGetHandler = [&](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+            if (started.fetch_add(1) + 1 == 2) {
+                bothStarted.set_value();
+            }
+            releaseFuture.wait();
+            outputs.resize(inputs.size());
+            for (auto &output : outputs) {
+                output.status = Status::OK();
+            }
+            return Status::OK();
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("a0", 1, { MakeAddress(41) }), MakeReplicaLocation("a1", 1, { MakeAddress(41) }),
+        MakeReplicaLocation("b0", 1, { MakeAddress(42) }), MakeReplicaLocation("b1", 1, { MakeAddress(42) })
+    };
+    std::vector<ObjectReadItemResult> results(locations.size());
+    ReplicaReadBatch requests;
+    for (size_t i = 0; i < locations.size(); ++i) {
+        requests.push_back({ &locations[i], &results[i] });
+    }
+
+    auto readFuture = std::async(std::launch::async, [&]() { return reader.ReadBatch(requests); });
+    const bool concurrent = bothStartedFuture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    release.set_value();
+    ASSERT_TRUE(concurrent);
+    ASSERT_TRUE(readFuture.get().IsOk());
+    EXPECT_EQ(started.load(), 2);
+    for (const auto &result : results) {
+        EXPECT_TRUE(result.status.IsOk());
+    }
+}
+
+TEST(ReplicaReaderTest, BatchEndpointFailureDoesNotDiscardPeerSuccess)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        transporter.batchGetHandler = [address](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+            if (address.ToString() == MakeAddress(43).ToString()) {
+                return Status(K_INVALID, "endpoint rejected request");
+            }
+            outputs.resize(inputs.size());
+            for (auto &output : outputs) {
+                output.status = Status::OK();
+            }
+            return Status::OK();
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("bad-0", 1, { MakeAddress(43) }), MakeReplicaLocation("bad-1", 1, { MakeAddress(43) }),
+        MakeReplicaLocation("good-0", 1, { MakeAddress(44) }), MakeReplicaLocation("good-1", 1, { MakeAddress(44) })
+    };
+    std::vector<ObjectReadItemResult> results(locations.size());
+    ReplicaReadBatch requests;
+    for (size_t i = 0; i < locations.size(); ++i) {
+        requests.push_back({ &locations[i], &results[i] });
+    }
+
+    EXPECT_TRUE(reader.ReadBatch(requests).IsOk());
+    EXPECT_EQ(results[0].status.GetCode(), K_INVALID);
+    EXPECT_EQ(results[1].status.GetCode(), K_INVALID);
+    EXPECT_TRUE(results[2].status.IsOk());
+    EXPECT_TRUE(results[3].status.IsOk());
+}
+
+TEST(ReplicaReaderTest, BatchRetryableItemsRegroupAtNextReplicaAndSuccessfulPeerLeaves)
+{
+    InitBatchGetMetrics();
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(45).ToString()
+            || address.ToString() == MakeAddress(46).ToString()) {
+            transporter.getStatuses = { Status(K_NOT_FOUND, "first replica missing") };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(3));
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("retry-a", 1, { MakeAddress(45), MakeAddress(48) }),
+        MakeReplicaLocation("retry-b", 1, { MakeAddress(46), MakeAddress(48) }),
+        MakeReplicaLocation("done", 1, { MakeAddress(47) })
+    };
+    std::vector<ObjectReadItemResult> results(locations.size());
+    ReplicaReadBatch requests;
+    for (size_t i = 0; i < locations.size(); ++i) {
+        requests.push_back({ &locations[i], &results[i] });
+    }
+
+    ASSERT_TRUE(reader.ReadBatch(requests).IsOk());
+    std::shared_ptr<FakeTransporter> regrouped;
+    for (const auto &transporter : manager->builtTransporters) {
+        if (!transporter->batchGetRequests.empty()) {
+            regrouped = transporter;
+        }
+    }
+    ASSERT_NE(regrouped, nullptr);
+    ASSERT_EQ(regrouped->batchGetRequests.size(), 1u);
+    ASSERT_EQ(regrouped->batchGetRequests.front().size(), 2u);
+    EXPECT_EQ(regrouped->batchGetRequests.front()[0].objectKey, "retry-a");
+    EXPECT_EQ(regrouped->batchGetRequests.front()[1].objectKey, "retry-b");
+    for (const auto &result : results) {
+        EXPECT_TRUE(result.status.IsOk());
+    }
+    ExpectMetricTotal("client_direct_batch_get_replica_retry_total", 2);
+}
+
+TEST(ReplicaReaderTest, BatchSizeChangeRetriesSameReplicaWithUpdatedExpectedSize)
+{
+    InitBatchGetMetrics();
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    std::atomic<int> attempts{ 0 };
+    manager->configureTransporter = [&](const HostPort &, FakeTransporter &transporter) {
+        transporter.batchGetHandler = [&](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+            outputs.resize(inputs.size());
+            for (auto &output : outputs) {
+                output.status = Status::OK();
+            }
+            outputs[0].status = Status(K_OC_REMOTE_GET_NOT_ENOUGH, "size changed");
+            outputs[0].data.response.set_data_size(8);
+            ++attempts;
+            return Status::OK();
+        };
+        transporter.getHandler = [&](const DataGetRequest &input, DataGetResult &) {
+            ++attempts;
+            EXPECT_EQ(input.expectedSize, 8u);
+            return Status::OK();
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("changed", 4, { MakeAddress(49) }),
+        MakeReplicaLocation("peer", 4, { MakeAddress(49) })
+    };
+    std::vector<ObjectReadItemResult> results(locations.size());
+
+    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] }, { &locations[1], &results[1] } }).IsOk());
+    EXPECT_EQ(attempts.load(), 2);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_TRUE(results[1].status.IsOk());
+    ExpectMetricAbsent("client_direct_batch_get_replica_retry_total");
+}
+
+TEST(ReplicaReaderTest, BatchUnarySizeChangeRetriesSameReplicaWithUpdatedExpectedSize)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    std::atomic<int> attempts{ 0 };
+    manager->configureTransporter = [&](const HostPort &, FakeTransporter &transporter) {
+        transporter.getHandler = [&](const DataGetRequest &input, DataGetResult &output) {
+            const int attempt = attempts.fetch_add(1);
+            if (attempt == 0) {
+                EXPECT_EQ(input.expectedSize, 4u);
+                output.response.set_data_size(8);
+                return Status(K_OC_REMOTE_GET_NOT_ENOUGH, "size changed");
+            }
+            EXPECT_EQ(input.expectedSize, 8u);
+            return Status::OK();
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("changed", 4, { MakeAddress(70) });
+    ObjectReadItemResult result;
+
+    ASSERT_TRUE(reader.ReadBatch({ { &location, &result } }).IsOk());
+    EXPECT_EQ(attempts.load(), 2);
+    EXPECT_EQ(reader.backoffCount, 0);
+    EXPECT_TRUE(result.status.IsOk());
+}
+
+TEST(ReplicaReaderTest, BatchUnchangedSizeErrorAdvancesReplicaInsteadOfSpinning)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(50).ToString()) {
+            transporter.getHandler = [](const DataGetRequest &input, DataGetResult &output) {
+                output.response.set_data_size(input.expectedSize);
+                return Status(K_OC_REMOTE_GET_NOT_ENOUGH, "unchanged size");
+            };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    auto location = MakeReplicaLocation("key", 4, { MakeAddress(50), MakeAddress(51) });
+    ObjectReadItemResult result;
+
+    ASSERT_TRUE(reader.ReadBatch({ { &location, &result } }).IsOk());
+    EXPECT_TRUE(result.status.IsOk());
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ReplicaReaderTest, BatchChunksByObjectCountAndExpectedBytesAndUsesUnaryForSingletons)
+{
+    ApiDeadlineGuard deadline(2000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    std::vector<master::ObjectLocationInfoPb> countLocations;
+    std::vector<ObjectReadItemResult> countResults(1025);
+    ReplicaReadBatch countRequests;
+    countLocations.reserve(1025);
+    for (size_t i = 0; i < 1025; ++i) {
+        countLocations.emplace_back(MakeReplicaLocation("count-" + std::to_string(i), 1, { MakeAddress(52) }));
+        countRequests.push_back({ &countLocations.back(), &countResults[i] });
+    }
+    ASSERT_TRUE(reader.ReadBatch(countRequests).IsOk());
+    ASSERT_EQ(manager->builtTransporters.size(), 1u);
+    EXPECT_EQ(manager->builtTransporters[0]->batchGetRequests.size(), 1u);
+    EXPECT_EQ(manager->builtTransporters[0]->batchGetRequests[0].size(), 1024u);
+    EXPECT_EQ(manager->builtTransporters[0]->getCount, 1);
+
+    auto byteManager = std::make_shared<FakeDataPlaneManager>();
+    auto byteExecutor = std::make_shared<DataPlaneExecutor>(byteManager, std::make_shared<TransportAdvisor>());
+    ReplicaReader byteReader(byteExecutor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    const uint64_t mib = 1024ULL * 1024ULL;
+    std::vector<master::ObjectLocationInfoPb> byteLocations = {
+        MakeReplicaLocation("large", 60 * mib, { MakeAddress(53) }),
+        MakeReplicaLocation("medium", 50 * mib, { MakeAddress(53) }),
+        MakeReplicaLocation("small", 1, { MakeAddress(53) })
+    };
+    std::vector<ObjectReadItemResult> byteResults(3);
+    ASSERT_TRUE(byteReader.ReadBatch({ { &byteLocations[0], &byteResults[0] },
+                                       { &byteLocations[1], &byteResults[1] },
+                                       { &byteLocations[2], &byteResults[2] } }).IsOk());
+    ASSERT_EQ(byteManager->builtTransporters.size(), 1u);
+    EXPECT_EQ(byteManager->builtTransporters[0]->getCount, 1);
+    ASSERT_EQ(byteManager->builtTransporters[0]->batchGetRequests.size(), 1u);
+    EXPECT_EQ(byteManager->builtTransporters[0]->batchGetRequests[0].size(), 2u);
+}
+
+TEST(ReplicaReaderTest, BatchObjectLargerThanByteCapFormsUnaryChunk)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    const uint64_t mib = 1024ULL * 1024ULL;
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("oversized", 101 * mib, { MakeAddress(71) }),
+        MakeReplicaLocation("small-a", 1, { MakeAddress(71) }),
+        MakeReplicaLocation("small-b", 1, { MakeAddress(71) })
+    };
+    std::vector<ObjectReadItemResult> results(3);
+
+    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] },
+                                   { &locations[1], &results[1] },
+                                   { &locations[2], &results[2] } }).IsOk());
+    ASSERT_EQ(manager->builtTransporters.size(), 1u);
+    const auto &transporter = manager->builtTransporters[0];
+    ASSERT_EQ(transporter->getRequests.size(), 1u);
+    EXPECT_EQ(transporter->getRequests[0].objectKey, "oversized");
+    ASSERT_EQ(transporter->batchGetRequests.size(), 1u);
+    ASSERT_EQ(transporter->batchGetRequests[0].size(), 2u);
+    EXPECT_EQ(transporter->batchGetRequests[0][0].objectKey, "small-a");
+    EXPECT_EQ(transporter->batchGetRequests[0][1].objectKey, "small-b");
+}
+
+TEST(ReplicaReaderTest, BatchMixedItemStatusesTransitionIndependently)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(72).ToString()) {
+            transporter.batchGetHandler = [](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+                EXPECT_EQ(inputs.size(), 3u);
+                outputs.resize(3);
+                outputs[0].status = Status::OK();
+                outputs[1].status = Status(K_NOT_FOUND, "retry next replica");
+                outputs[2].status = Status(K_INVALID, "terminal");
+                return Status::OK();
+            };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("success", 1, { MakeAddress(72) }),
+        MakeReplicaLocation("retry", 1, { MakeAddress(72), MakeAddress(73) }),
+        MakeReplicaLocation("terminal", 1, { MakeAddress(72), MakeAddress(74) })
+    };
+    std::vector<ObjectReadItemResult> results(3);
+
+    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] },
+                                   { &locations[1], &results[1] },
+                                   { &locations[2], &results[2] } }).IsOk());
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_TRUE(results[1].status.IsOk());
+    EXPECT_EQ(results[2].status.GetCode(), K_INVALID);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(ReplicaReaderTest, BatchInvalidItemsDoNotCorruptValidPeer)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    master::ObjectLocationInfoPb emptyLocation;
+    auto validLocation = MakeReplicaLocation("valid", 1, { MakeAddress(54) });
+    ObjectReadItemResult emptyResult;
+    ObjectReadItemResult validResult;
+
+    EXPECT_TRUE(reader.ReadBatch({ { &emptyLocation, &emptyResult }, { nullptr, nullptr },
+                                   { &validLocation, &validResult } }).IsOk());
+    EXPECT_EQ(emptyResult.status.GetCode(), K_NOT_FOUND);
+    EXPECT_TRUE(validResult.status.IsOk());
+}
+
+TEST(ReplicaReaderTest, BatchNonRetryableItemTerminatesWithoutTryingNextReplica)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(59).ToString()) {
+            transporter.getStatuses = { Status(K_INVALID, "terminal") };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(59), MakeAddress(60) });
+    ObjectReadItemResult result;
+
+    EXPECT_EQ(reader.ReadBatch({ { &location, &result } }).GetCode(), K_INVALID);
+    EXPECT_EQ(result.status.GetCode(), K_INVALID);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+}
+
+TEST(ReplicaReaderTest, BatchBacksOffOnceAfterAllUnresolvedItemsCompleteReplicaRound)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    std::unordered_map<std::string, std::shared_ptr<std::atomic<int>>> calls;
+    for (int port : { 61, 62, 63, 64 }) {
+        calls.emplace(MakeAddress(port).ToString(), std::make_shared<std::atomic<int>>(0));
+    }
+    manager->configureTransporter = [&](const HostPort &address, FakeTransporter &transporter) {
+        auto count = calls.at(address.ToString());
+        const bool firstReplica = address.ToString() == MakeAddress(61).ToString()
+                                  || address.ToString() == MakeAddress(63).ToString();
+        transporter.getHandler = [count, firstReplica](const DataGetRequest &, DataGetResult &) {
+            const int invocation = count->fetch_add(1);
+            return firstReplica && invocation > 0 ? Status::OK() : Status(K_NOT_FOUND, "round miss");
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(4));
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("a", 1, { MakeAddress(61), MakeAddress(62) }),
+        MakeReplicaLocation("b", 1, { MakeAddress(63), MakeAddress(64) })
+    };
+    std::vector<ObjectReadItemResult> results(2);
+
+    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] }, { &locations[1], &results[1] } }).IsOk());
+    EXPECT_EQ(reader.backoffCount, 1);
+    EXPECT_EQ(calls.at(MakeAddress(61).ToString())->load(), 2);
+    EXPECT_EQ(calls.at(MakeAddress(63).ToString())->load(), 2);
+}
+
+TEST(ReplicaReaderTest, BatchDifferingReplicaCountsShareBackoffAfterLongestRoundCompletes)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto shortCalls = std::make_shared<std::atomic<int>>(0);
+    auto firstLongCalls = std::make_shared<std::atomic<int>>(0);
+    auto secondLongCalls = std::make_shared<std::atomic<int>>(0);
+    manager->configureTransporter = [=](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(75).ToString()) {
+            transporter.getHandler = [shortCalls](const DataGetRequest &, DataGetResult &) {
+                return shortCalls->fetch_add(1) == 0 ? Status(K_NOT_FOUND, "short round miss") : Status::OK();
+            };
+        } else if (address.ToString() == MakeAddress(76).ToString()) {
+            transporter.getHandler = [firstLongCalls](const DataGetRequest &, DataGetResult &) {
+                return firstLongCalls->fetch_add(1) == 0 ? Status(K_NOT_FOUND, "first long miss") : Status::OK();
+            };
+        } else {
+            transporter.getHandler = [secondLongCalls](const DataGetRequest &, DataGetResult &) {
+                ++(*secondLongCalls);
+                return Status(K_NOT_FOUND, "second long miss");
+            };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(3));
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("short", 1, { MakeAddress(75) }),
+        MakeReplicaLocation("long", 1, { MakeAddress(76), MakeAddress(77) })
+    };
+    std::vector<ObjectReadItemResult> results(2);
+
+    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] }, { &locations[1], &results[1] } }).IsOk());
+    EXPECT_EQ(reader.backoffCount, 1);
+    EXPECT_EQ(shortCalls->load(), 2);
+    EXPECT_EQ(firstLongCalls->load(), 2);
+    EXPECT_EQ(secondLongCalls->load(), 1);
+}
+
+TEST(ReplicaReaderTest, BatchDeadlineReturnsLastMeaningfulItemError)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &, FakeTransporter &transporter) {
+        transporter.getStatuses = { Status(K_NOT_FOUND, "meaningful miss") };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(1));
+    reader.deadlineStatuses = { Status::OK(), Status(K_RPC_DEADLINE_EXCEEDED, "deadline") };
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(65) });
+    ObjectReadItemResult result;
+
+    Status status = reader.ReadBatch({ { &location, &result } });
+    EXPECT_EQ(status.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(result.status.GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(result.status.GetMsg(), "meaningful miss");
+    EXPECT_EQ(reader.backoffCount, 1);
+}
+
+TEST(ReplicaReaderTest, BatchDeadlineBeforeFirstAttemptReturnsDeadlineNotSyntheticError)
+{
+    InitBatchGetMetrics();
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(1));
+    reader.deadlineStatuses = { Status(K_RPC_DEADLINE_EXCEEDED, "deadline before data") };
+    auto location = MakeReplicaLocation("key", 1, { MakeAddress(66) });
+    ObjectReadItemResult result;
+
+    Status status = reader.ReadBatch({ { &location, &result } });
+    EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(result.status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(manager->transportBuildCount, 0);
+    ExpectMetricAbsent("client_direct_batch_get_replica_retry_total");
+}
+
+TEST(ReplicaReaderTest, BatchSingleReplicaBackoffDoesNotCountReplicaRetry)
+{
+    InitBatchGetMetrics();
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = { { Status(K_NOT_FOUND, "round exhausted") } };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ControlledReplicaReader reader(executor, std::make_shared<ThreadPool>(1));
+    reader.backoffStatus = Status(K_RPC_DEADLINE_EXCEEDED, "deadline during backoff");
+    auto location = MakeReplicaLocation("single", 1, { MakeAddress(79) });
+    ObjectReadItemResult result;
+
+    EXPECT_EQ(reader.ReadBatch({ { &location, &result } }).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(reader.backoffCount, 1);
+    ExpectMetricAbsent("client_direct_batch_get_replica_retry_total");
+}
+
+TEST(ReplicaReaderTest, BatchNonPositiveSizeChangeAdvancesWithoutUnsignedConversion)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &address, FakeTransporter &transporter) {
+        if (address.ToString() == MakeAddress(67).ToString()) {
+            transporter.batchGetHandler = [](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+                outputs.resize(inputs.size());
+                outputs[0].status = Status(K_OC_REMOTE_GET_NOT_ENOUGH, "zero size");
+                outputs[0].data.response.set_data_size(0);
+                outputs[1].status = Status(K_OC_REMOTE_GET_NOT_ENOUGH, "negative size");
+                outputs[1].data.response.set_data_size(-1);
+                return Status::OK();
+            };
+        } else {
+            transporter.batchGetHandler = [](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+                EXPECT_EQ(inputs[0].expectedSize, 4u);
+                EXPECT_EQ(inputs[1].expectedSize, 4u);
+                outputs.resize(inputs.size());
+                for (auto &output : outputs) {
+                    output.status = Status::OK();
+                }
+                return Status::OK();
+            };
+        }
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2));
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("zero", 4, { MakeAddress(67), MakeAddress(68) }),
+        MakeReplicaLocation("negative", 4, { MakeAddress(67), MakeAddress(68) })
+    };
+    std::vector<ObjectReadItemResult> results(2);
+
+    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] }, { &locations[1], &results[1] } }).IsOk());
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_TRUE(results[1].status.IsOk());
+}
+
+TEST(ReplicaReaderTest, BatchSameEndpointChunksRunSequentiallyInOneTask)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    std::mutex callsMutex;
+    std::vector<std::pair<std::string, std::thread::id>> calls;
+    manager->configureTransporter = [&](const HostPort &, FakeTransporter &transporter) {
+        transporter.batchGetHandler = [&](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+            std::lock_guard<std::mutex> lock(callsMutex);
+            calls.emplace_back("batch", std::this_thread::get_id());
+            outputs.resize(inputs.size());
+            for (auto &output : outputs) {
+                output.status = Status::OK();
+            }
+            return Status::OK();
+        };
+        transporter.getHandler = [&](const DataGetRequest &, DataGetResult &) {
+            std::lock_guard<std::mutex> lock(callsMutex);
+            calls.emplace_back("get", std::this_thread::get_id());
+            return Status::OK();
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(4));
+    std::vector<master::ObjectLocationInfoPb> locations;
+    std::vector<ObjectReadItemResult> results(1025);
+    ReplicaReadBatch requests;
+    locations.reserve(1025);
+    for (size_t i = 0; i < 1025; ++i) {
+        locations.emplace_back(MakeReplicaLocation("key-" + std::to_string(i), 1, { MakeAddress(69) }));
+        requests.push_back({ &locations.back(), &results[i] });
+    }
+
+    ASSERT_TRUE(reader.ReadBatch(requests).IsOk());
+    ASSERT_EQ(calls.size(), 2u);
+    EXPECT_EQ(calls[0].first, "batch");
+    EXPECT_EQ(calls[1].first, "get");
+    EXPECT_EQ(calls[0].second, calls[1].second);
 }
 
 // --- ObjectBuffer tests ---

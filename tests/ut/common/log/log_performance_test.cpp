@@ -200,17 +200,16 @@ public:
         return latencies[index];
     }
 
-    double CalculatePercentile(std::vector<double> latencies, double percentile)
+    double CalculatePercentile(const std::vector<double> &sortedLatencies, double percentile)
     {
-        if (latencies.empty()) {
+        if (sortedLatencies.empty()) {
             return 0.0;
         }
-        std::sort(latencies.begin(), latencies.end());
-        size_t index = static_cast<size_t>(latencies.size() * percentile);
-        if (index >= latencies.size()) {
-            index = latencies.size() - 1;
+        size_t index = static_cast<size_t>(sortedLatencies.size() * percentile);
+        if (index >= sortedLatencies.size()) {
+            index = sortedLatencies.size() - 1;
         }
-        return latencies[index];
+        return sortedLatencies[index];
     }
 
     /**
@@ -384,6 +383,7 @@ public:
         result.totalRequests = totalRequests;
         result.elapsedSec = std::chrono::duration<double>(finish - scheduledStart).count();
         result.achievedQps = totalRequests / result.elapsedSec;
+        std::sort(allLatencies.begin(), allLatencies.end());
         result.p50Us = CalculatePercentile(allLatencies, 0.50);
         result.p95Us = CalculatePercentile(allLatencies, 0.95);
         result.p99Us = CalculatePercentile(allLatencies, 0.99);
@@ -467,6 +467,7 @@ public:
         result.totalRequests = totalRequests;
         result.elapsedSec = std::chrono::duration<double>(finish - scheduledStart).count();
         result.achievedQps = totalRequests / result.elapsedSec;
+        std::sort(allLatencies.begin(), allLatencies.end());
         result.p50Us = CalculatePercentile(allLatencies, 0.50);
         result.p95Us = CalculatePercentile(allLatencies, 0.95);
         result.p99Us = CalculatePercentile(allLatencies, 0.99);
@@ -548,6 +549,7 @@ public:
         result.totalRequests = totalRequests;
         result.elapsedSec = std::chrono::duration<double>(finish - scheduledStart).count();
         result.achievedQps = totalRequests / result.elapsedSec;
+        std::sort(allLatencies.begin(), allLatencies.end());
         result.p50Us = CalculatePercentile(allLatencies, 0.50);
         result.p95Us = CalculatePercentile(allLatencies, 0.95);
         result.p99Us = CalculatePercentile(allLatencies, 0.99);

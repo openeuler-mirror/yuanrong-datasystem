@@ -5,6 +5,7 @@ set(WORKER_OC_SRCS
         worker_oc_service_impl.cpp
         object_cache_worker_flags.cpp
         worker_request_manager.cpp
+        worker_worker_oc_gather_layout.cpp
         worker_worker_oc_service_impl.cpp
         worker_worker_transport_service_impl.cpp
         master_worker_oc_service_impl.cpp

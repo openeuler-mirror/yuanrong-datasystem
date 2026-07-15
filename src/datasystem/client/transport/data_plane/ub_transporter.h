@@ -80,6 +80,8 @@ public:
 
     Status Get(const DataGetRequest &input, DataGetResult &output) override;
 
+    Status BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) override;
+
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                   const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;
@@ -123,12 +125,20 @@ private:
                        const std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
                        const std::vector<bool> &tcpPayload, const TransportSetParam &param,
                        uint64_t fallbackBytes, TransportMSetResult &result);
+    Status GetLocked(const DataGetRequest &input, DataGetResult &output);
     Status GetOnce(const DataGetRequest &input, uint64_t expectedSize, DataGetResult &output, uint64_t &actualSize);
     Status BuildMCreateBuffers(const HostPort &workerAddr, const std::vector<std::string> &keys,
                                const std::vector<uint64_t> &sizes, const TransportCreateParam &param,
                                const MultiCreateRspPb &response, uint32_t workerVersion,
                                std::vector<std::shared_ptr<ObjectBuffer>> &buffers);
     void ReleaseMCreateAllocations(const MultiCreateRspPb &response, const TransportRequestContext &context);
+    Status BatchGetAggregateAdaptive(const DataGetBatchRequest &inputs, const std::vector<uint64_t> &alignedSizes,
+                                     size_t begin, size_t end, uint64_t rangeSize, DataGetBatchResult &outputs,
+                                     std::vector<size_t> &tcpFallbackIndexes, bool &allocationPressureObserved,
+                                     uint64_t &allocationCeiling);
+    Status BatchGetAggregateOnce(const DataGetBatchRequest &inputs, const std::vector<uint64_t> &alignedSizes,
+                                 size_t begin, size_t end, uint64_t aggregateSize, DataGetBatchResult &outputs,
+                                 bool &allocationFailed);
 
     std::shared_ptr<WorkerRpcClient> rpcClient_;
     std::shared_ptr<UbConnection> conn_;

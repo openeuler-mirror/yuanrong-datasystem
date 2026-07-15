@@ -136,9 +136,9 @@ public:
 private:
     struct AggregateInfo {
         bool canBatchHandler = false;
-        std::vector<int64_t> batchReqSize;
-        std::vector<int64_t> batchSizes;
-        std::vector<int64_t> batchStartIndex;
+        std::vector<uint64_t> batchReqSize;
+        std::vector<uint64_t> batchSizes;
+        std::vector<uint64_t> batchStartIndex;
     };
 
     struct AggregateMemory {

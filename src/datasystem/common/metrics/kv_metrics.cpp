@@ -121,6 +121,11 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 92, "client_get_shm_read_total_bytes", MetricType::COUNTER, "bytes" },
     {93, "client_exist_redirect_total", MetricType::COUNTER, "count" },
     {94, "client_exist_connection_retry_total", MetricType::COUNTER, "count" },
+    { 95, "client_direct_batch_get_rpc_total", MetricType::COUNTER, "count" },
+    { 96, "client_direct_batch_get_object_total", MetricType::COUNTER, "count" },
+    { 97, "client_direct_batch_get_replica_retry_total", MetricType::COUNTER, "count" },
+    { 98, "client_direct_batch_get_ub_split_total", MetricType::COUNTER, "count" },
+    { 99, "client_direct_batch_get_tcp_fallback_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

@@ -47,10 +47,77 @@ Status TcpTransporter::Get(const DataGetRequest &input, DataGetResult &output)
     RETURN_IF_NOT_OK(rpcClient_->InvokeGetObject(request, output.response, output.rpcPayloads));
     Status responseStatus(static_cast<StatusCode>(output.response.error().error_code()),
                           output.response.error().error_msg());
-    RETURN_IF_NOT_OK(responseStatus);
+    if (responseStatus.IsError()) {
+        output.rpcPayloads.clear();
+        return responseStatus;
+    }
     CHECK_FAIL_RETURN_STATUS(output.response.data_source() == DataTransferSource::DATA_IN_PAYLOAD, K_RUNTIME_ERROR,
                              "TCP GetObjectRemote returned an invalid data source");
     output.kind = AccessTransportKind::TCP;
+    return Status::OK();
+}
+
+Status TcpTransporter::BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs)
+{
+    outputs.clear();
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+    CHECK_FAIL_RETURN_STATUS(!inputs.empty(), K_INVALID, "Batch get request is empty");
+    if (inputs.size() == 1) {
+        DataGetItemResult item;
+        Status status = Get(inputs.front(), item.data);
+        if (status.IsError()
+            && static_cast<StatusCode>(item.data.response.error().error_code()) == K_OK) {
+            return status;
+        }
+        item.status = status;
+        outputs.emplace_back(std::move(item));
+        return Status::OK();
+    }
+
+    BatchGetObjectRemoteReqPb request;
+    for (const auto &input : inputs) {
+        CHECK_FAIL_RETURN_STATUS(!input.objectKey.empty(), K_INVALID, "Object key is empty");
+        auto *itemRequest = request.add_requests();
+        itemRequest->set_object_key(input.objectKey);
+        itemRequest->set_data_size(input.expectedSize);
+        itemRequest->set_try_lock(true);
+    }
+
+    BatchGetObjectRemoteRspPb response;
+    std::vector<RpcMessage> payloads;
+    METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL);
+    METRIC_ADD(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL, inputs.size());
+    RETURN_IF_NOT_OK(rpcClient_->InvokeBatchGetObject(request, response, payloads));
+    CHECK_FAIL_RETURN_STATUS(response.responses_size() == static_cast<int>(inputs.size()), K_RUNTIME_ERROR,
+                             "BatchGetObjectRemote response count does not match request count");
+
+    size_t expectedPayloadCount = 0;
+    for (const auto &itemResponse : response.responses()) {
+        Status itemStatus(static_cast<StatusCode>(itemResponse.error().error_code()),
+                          itemResponse.error().error_msg());
+        if (!itemStatus.IsOk()) {
+            continue;
+        }
+        CHECK_FAIL_RETURN_STATUS(itemResponse.data_source() == DataTransferSource::DATA_IN_PAYLOAD, K_RUNTIME_ERROR,
+                                 "TCP BatchGetObjectRemote returned an invalid data source");
+        ++expectedPayloadCount;
+    }
+    CHECK_FAIL_RETURN_STATUS(payloads.size() == expectedPayloadCount, K_RUNTIME_ERROR,
+                             "BatchGetObjectRemote payload count does not match successful responses");
+
+    outputs.reserve(inputs.size());
+    size_t payloadIndex = 0;
+    for (const auto &itemResponse : response.responses()) {
+        DataGetItemResult item;
+        item.status = Status(static_cast<StatusCode>(itemResponse.error().error_code()),
+                             itemResponse.error().error_msg());
+        item.data.response = itemResponse;
+        item.data.kind = AccessTransportKind::TCP;
+        if (item.status.IsOk()) {
+            item.data.rpcPayloads.emplace_back(std::move(payloads[payloadIndex++]));
+        }
+        outputs.emplace_back(std::move(item));
+    }
     return Status::OK();
 }
 

@@ -39,6 +39,12 @@ public:
         return Status(K_NOT_SUPPORTED, "ShmTransporter::Get not implemented");
     }
 
+    Status BatchGet(const DataGetBatchRequest & /* inputs */, DataGetBatchResult &outputs) override
+    {
+        outputs.clear();
+        return Status(K_NOT_SUPPORTED, "ShmTransporter::BatchGet not implemented");
+    }
+
     // SHM Create and Set remain explicit unsupported placeholders until transport integration is available.
     Status Create(const HostPort & /* workerAddr */, const std::string & /* key */, uint64_t /* size */,
                   const TransportCreateParam & /* param */, std::shared_ptr<ObjectBuffer> & /* buffer */) override

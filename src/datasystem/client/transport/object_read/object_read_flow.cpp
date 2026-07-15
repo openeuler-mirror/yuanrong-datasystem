@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-/** Description: Implements grouped metadata lookup and parallel per-key object reads. */
+/** Description: Implements grouped metadata lookup and batched replica reads. */
 
 #include "datasystem/client/transport/object_read/object_read_flow.h"
 
@@ -158,10 +158,22 @@ void QueryMetadata(ObjectMetadataClient &metadata, ThreadPool &taskPool, std::ve
             << ", failed: " << items.size() - resolved;
 }
 
-void ReadObjects(ReplicaReader &replicas, ThreadPool &taskPool, std::vector<ReadItem> &items)
+void PropagateUnassignedBatchError(const ReplicaReadBatch &requests, const Status &status)
 {
-    std::vector<ReadItem *> tasks;
-    tasks.reserve(items.size());
+    if (status.IsOk()) {
+        return;
+    }
+    for (const auto &request : requests) {
+        if (request.result->status.GetCode() == K_NOT_READY) {
+            request.result->status = status;
+        }
+    }
+}
+
+void ReadObjects(ReplicaReader &replicas, std::vector<ReadItem> &items)
+{
+    ReplicaReadBatch ready;
+    ready.reserve(items.size());
     for (auto &item : items) {
         if (item.metadata.status.IsError()) {
             item.result.status = item.metadata.status;
@@ -170,17 +182,19 @@ void ReadObjects(ReplicaReader &replicas, ThreadPool &taskPool, std::vector<Read
             item.result.data = std::move(*item.metadata.inlineData);
             item.result.status = Status::OK();
         } else {
-            tasks.emplace_back(&item);
+            ready.push_back({ &item.metadata.location, &item.result });
         }
     }
-    VLOG(1) << "[TransportGet][Flow] Read data, key count: " << tasks.size()
-            << ", skipped: " << items.size() - tasks.size() << ", parallel: " << (tasks.size() > 1);
-    RunTasks(taskPool, tasks, [&replicas](ReadItem &item, const Status &dispatchStatus) {
-        item.result.status = dispatchStatus;
-        if (dispatchStatus.IsOk()) {
-            item.result.status = replicas.Read(item.metadata.location, item.result);
-        }
-    });
+    VLOG(1) << "[TransportGet][Flow] Read data, key count: " << ready.size()
+            << ", skipped: " << items.size() - ready.size() << ", batch: " << (ready.size() > 1);
+    Status readStatus = Status::OK();
+    if (ready.size() == 1) {
+        readStatus = replicas.Read(*ready.front().location, *ready.front().result);
+        ready.front().result->status = readStatus;
+    } else if (ready.size() > 1) {
+        readStatus = replicas.ReadBatch(ready);
+        PropagateUnassignedBatchError(ready, readStatus);
+    }
     const auto succeeded = std::count_if(items.begin(), items.end(), [](const ReadItem &item) {
         return item.result.status.IsOk();
     });
@@ -231,7 +245,7 @@ Status ObjectReadFlow::Run(const ObjectReadRequest &request, ObjectReadResult &r
     std::vector<ReadItem> items;
     RETURN_IF_NOT_OK(InitializeItems(request, items));
     QueryMetadata(*metadata_, *taskPool_, items);
-    ReadObjects(*replicas_, *taskPool_, items);
+    ReadObjects(*replicas_, items);
     Status status = BuildResult(items, result);
     VLOG(1) << "[TransportGet][Flow] Finish, result count: " << result.items.size();
     return status;

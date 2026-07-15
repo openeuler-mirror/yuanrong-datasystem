@@ -45,6 +45,8 @@ public:
 
     Status Get(const DataGetRequest &input, DataGetResult &output) override;
 
+    Status BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) override;
+
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
                   const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer) override;
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override;

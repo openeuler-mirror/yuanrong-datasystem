@@ -49,6 +49,7 @@ Status UbConnection::Establish(const HostPort &workerAddr)
 
 Status UbConnection::EstablishUrma()
 {
+    supportsPayloadOnlyClientBatchGet_.store(false, std::memory_order_release);
 #ifdef USE_URMA
     if (!UrmaManager::IsUrmaEnabled()) {
         return Status(K_URMA_CONNECT_FAILED, "Urma not enabled");
@@ -57,6 +58,8 @@ Status UbConnection::EstablishUrma()
     UrmaHandshakeRspPb response;
     RETURN_IF_NOT_OK(rpcClient_->ExchangeUrmaConnectInfo(response));
     RETURN_IF_NOT_OK(FinalizeOutboundConnection(response));
+    supportsPayloadOnlyClientBatchGet_.store(response.supports_payload_only_client_batch_get(),
+                                             std::memory_order_release);
     urmaReady_.store(true, std::memory_order_release);
     return Status::OK();
 #else
@@ -69,8 +72,14 @@ bool UbConnection::IsAlive() const
     return urmaReady_.load(std::memory_order_acquire);
 }
 
+bool UbConnection::SupportsPayloadOnlyClientBatchGet() const
+{
+    return supportsPayloadOnlyClientBatchGet_.load(std::memory_order_acquire);
+}
+
 void UbConnection::Teardown()
 {
+    supportsPayloadOnlyClientBatchGet_.store(false, std::memory_order_release);
 #ifdef USE_URMA
     if (urmaReady_.exchange(false, std::memory_order_acq_rel)) {
         (void)datasystem::RemoveRemoteFastTransportNode(workerAddr_);

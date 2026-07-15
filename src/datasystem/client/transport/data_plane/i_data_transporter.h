@@ -91,6 +91,15 @@ struct TransportExistResult {
     std::vector<bool> exists;
 };
 
+/** @brief One ordered result from a data-worker batch read. */
+struct DataGetItemResult {
+    Status status = Status(K_NOT_READY, "Object data is not read");
+    DataGetResult data;
+};
+
+using DataGetBatchRequest = std::vector<DataGetRequest>;
+using DataGetBatchResult = std::vector<DataGetItemResult>;
+
 class IDataTransporter {
 public:
     virtual ~IDataTransporter() = default;
@@ -102,6 +111,14 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     virtual Status Get(const DataGetRequest &input, DataGetResult &output) = 0;
+
+    /**
+     * @brief Read ordered objects from this transporter's data-worker endpoint.
+     * @param[in] inputs Object identities and expected sizes in request order.
+     * @param[out] outputs Cleared before work; on a parsed response, one result per input in request order.
+     * @return Endpoint, RPC, or protocol status affecting the whole batch.
+     */
+    virtual Status BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) = 0;
 
     /**
      * @brief Allocate transport-native memory and create an ObjectBuffer.

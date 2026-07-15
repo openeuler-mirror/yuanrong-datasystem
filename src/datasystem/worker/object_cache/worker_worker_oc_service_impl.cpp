@@ -53,6 +53,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+#include "datasystem/worker/object_cache/worker_worker_oc_gather_layout.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 
 DS_DECLARE_string(worker_address);
@@ -323,54 +324,24 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteBatchWrite(uint32_t paraIndex, 
 
 Status WorkerWorkerOCServiceImpl::PrepareAggregateMemory(BatchGetObjectRemoteReqPb &req, AggregateInfo &info)
 {
-    uint64_t reqSize = req.requests_size();
-
-    info.canBatchHandler = true;
-    // ceil data;
+    info.canBatchHandler = false;
     info.batchReqSize.clear();
     info.batchStartIndex.clear();
     info.batchSizes.clear();
 
-    uint64_t batchReqSize = 0;
-    uint64_t batchCap = 0;
-    uint64_t batchStartIndex = 0;
     const uint64_t batchLimitKeys = 1024;  // must same as obj_cache_shm_unit in req side.
-    uint64_t metadataSize = ocClientWorkerSvc_->GetMetadataSize();
-
-    if (OsXprtPipln::IsPiplnH2DRequest(req)) {
-        // pipeline rh2d doesn't support aggregate memory now
-        info.canBatchHandler = false;
+    std::vector<object_cache::AggregateGatherSubgroup> subgroups;
+    if (!object_cache::ShouldUseAggregateGather(
+            req, OsXprtPipln::IsPiplnH2DRequest(req), ocClientWorkerSvc_->GetMetadataSize(),
+            FLAGS_oc_worker_aggregate_single_max, FLAGS_oc_worker_aggregate_merge_size, batchLimitKeys, subgroups)) {
         return Status::OK();
     }
-
-    for (uint64_t i = 0; i < reqSize; i++) {
-        uint64_t dataSize = req.requests(i).data_size();
-        if (dataSize > FLAGS_oc_worker_aggregate_single_max) {
-            info.canBatchHandler = false;
-            return Status::OK();
-        }
-        uint64_t needSize = dataSize + metadataSize;
-        uint64_t ceilingSize = Align4BitsCeiling(needSize);
-        if (batchCap + ceilingSize > FLAGS_oc_worker_aggregate_merge_size || batchReqSize >= batchLimitKeys) {
-            info.batchStartIndex.emplace_back(batchStartIndex);
-            info.batchSizes.emplace_back(batchCap);
-            info.batchReqSize.emplace_back(batchReqSize);
-
-            batchCap = 0;
-            batchReqSize = 0;
-            batchStartIndex = i;
-        }
-
-        batchReqSize++;
-        batchCap += ceilingSize;
+    for (const auto &subgroup : subgroups) {
+        info.batchStartIndex.emplace_back(subgroup.startIndex);
+        info.batchSizes.emplace_back(subgroup.byteSize);
+        info.batchReqSize.emplace_back(subgroup.requestCount);
     }
-
-    if (batchReqSize > 0) {
-        info.batchStartIndex.emplace_back(batchStartIndex);
-        info.batchSizes.emplace_back(batchCap);
-        info.batchReqSize.emplace_back(batchReqSize);
-    }
-
+    info.canBatchHandler = true;
     return Status::OK();
 }
 
@@ -389,6 +360,8 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
     Status rc = Status::OK();
     if (IsUrmaEnabled() && subReq->has_urma_info()) {
         auto &urmaInfo = subReq->urma_info();
+        CHECK_FAIL_RETURN_STATUS(urmaInfo.seg_data_offset() >= ocClientWorkerSvc_->GetMetadataSize(), K_RUNTIME_ERROR,
+                                 "Aggregate URMA target has no metadata headroom");
         RemoteSegInfo remoteSegInfo{
             .segAddr = urmaInfo.seg_va(),
             .segOffset = urmaInfo.seg_data_offset() - ocClientWorkerSvc_->GetMetadataSize(),
@@ -403,6 +376,8 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
             rc = UrmaGatherWrite(remoteSegInfo, aggregatedMem->localSgeInfos, false, loc.eventKeys);
         }
     } else if (IsUcpEnabled() && subReq->has_ucp_info()) {
+        CHECK_FAIL_RETURN_STATUS(subReq->ucp_info().remote_buf() >= ocClientWorkerSvc_->GetMetadataSize(),
+                                 K_RUNTIME_ERROR, "Aggregate UCP target has no metadata headroom");
         rc = UcpGatherPut(subReq->ucp_info(), ocClientWorkerSvc_->GetMetadataSize(), aggregatedMem->localSgeInfos,
                           false, loc.eventKeys);
     }
@@ -415,7 +390,7 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
         LOG_IF_ERROR(rc, "GatherWrite failed, all objects will fallback to payload");
         // Set empty subkeys and empty payload, and get failed payload in objectFallbackPayload
         loc.kps.emplace_back(loc.subIndex, std::make_pair(std::move(subKeys), std::vector<RpcMessage>()));
-        for (int64_t i = startPos; i < startPos + info.batchReqSize[subIndex]; ++i) {
+        for (uint64_t i = startPos; i < startPos + info.batchReqSize[subIndex]; ++i) {
             loc.respPbs[i].set_data_source(datasystem::DataTransferSource::DATA_IN_PAYLOAD);
             if (!FLAGS_enable_transport_fallback) {
                 loc.respPbs[i].mutable_error()->set_error_code(rc.GetCode());

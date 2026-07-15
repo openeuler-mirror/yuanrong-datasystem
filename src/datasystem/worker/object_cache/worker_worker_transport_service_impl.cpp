@@ -58,6 +58,9 @@ Status WorkerWorkerTransportServiceImpl::WorkerWorkerExchangeUrmaConnectInfo(con
         req.has_address() ? req.address().host() + ":" + std::to_string(req.address().port()) : "UNKNOWN";
     LOG(INFO) << "[URMA_NEED_CONNECT] WorkerWorkerExchangeUrmaConnectInfo start, peerAddress=" << peerAddress;
     auto rc = ExchangeJfr(req, rsp);
+    if (rc.IsOk()) {
+        rsp.set_supports_payload_only_client_batch_get(true);
+    }
     LOG(INFO) << "[URMA_NEED_CONNECT] WorkerWorkerExchangeUrmaConnectInfo finish, elapsed ms: "
               << timer.ElapsedMilliSecond() << ", status=" << rc.ToString();
     return rc;
