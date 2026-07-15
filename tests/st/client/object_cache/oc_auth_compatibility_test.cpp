@@ -23,6 +23,7 @@
 #include <memory>
 
 #include "common.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
@@ -54,6 +55,14 @@ public:
     void SetUp() override
     {
         ExternalClusterTest::SetUp();
+        // These tests exercise ZMQ CURVE/ZAP auth compatibility between client and
+        // worker versions. brpc has no equivalent auth wired in yet (known gap),
+        // and the client uses a ZMQ RpcChannel with RpcCredential. Skip under
+        // brpc until the brpc auth path is added.
+        if (FLAGS_use_brpc) {
+            GTEST_SKIP() << "OcAuthCompatibilityTest is ZMQ-CURVE auth scoped; "
+                            "brpc auth is not yet implemented (skipped under brpc).";
+        }
         akSkManager_ = std::make_shared<AkSkManager>();
         DS_ASSERT_OK(akSkManager_->SetClientAkSk(accessKey_, secretKey_));
 

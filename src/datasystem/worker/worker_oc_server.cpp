@@ -678,10 +678,18 @@ Status WorkerOCServer::InitMasterSCService()
 Status WorkerOCServer::InitUtOCService()
 {
     RETURN_OK_IF_TRUE(!EnableOCService());
-    RpcServiceCfg cfg;
-    cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
-    cfg.numStreamSockets_ = 1;  // test stream function, set thread num as 1.
-    builder_.AddService(utSvc_.get(), cfg);
+    if (rpcServer_ && rpcServer_->IsBrpc()) {
+        // brpc mode: register the generated UtOCServiceBrpcAdapter so the test
+        // UtOCService RPCs reach a brpc handler. StOCServiceImpl multi-inherits
+        // IUtOCService for this. Mirrors the GenericService fix.
+        brpcUtOcAdapter_ = std::make_unique<UtOCServiceBrpcAdapter>(*utSvc_);
+        RETURN_IF_NOT_OK(rpcServer_->AddBrpcService(brpcUtOcAdapter_.get()));
+    } else {
+        RpcServiceCfg cfg;
+        cfg.numRegularSockets_ = LIGHTWEIGHT_SERVICE_THREAD_NUM;
+        cfg.numStreamSockets_ = 1;  // test stream function, set thread num as 1.
+        builder_.AddService(utSvc_.get(), cfg);
+    }
     return Status::OK();
 }
 #endif
@@ -886,6 +894,9 @@ Status WorkerOCServer::InitializeWorkerServices()
         RETURN_STATUS_LOG_ERROR(
             K_INVALID, "enable_lossless_data_exit_mode can be set to true only when enable_distributed_master is true");
     }
+    // Register GenericService (test control-plane: SetInjectAction / GcovFlush / ...)
+    // as a brpc service. No-op in ZMQ mode or non-test builds.
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitGenericBrpcService(), "InitGenericBrpcService failed");
     // Init the services and hook them up to the RPC server.
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitWorkerOCService(), "InitWorkerOCService failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitWorkerWorkerOCService(), "InitWorkerWorkerOCService failed");

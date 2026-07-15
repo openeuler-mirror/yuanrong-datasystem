@@ -19,12 +19,16 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/master/metadata_manager_holder.h"
+#include "datasystem/protos/ut_object.irpc.pb.h"
 #include "datasystem/protos/ut_object.service.rpc.pb.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
 namespace datasystem {
 namespace st {
-class StOCServiceImpl : public UtOCService {
+// Multi-inherit IUtOCService so the generated UtOCServiceBrpcAdapter (which
+// takes IUtOCService&) can wrap this impl in brpc mode. All method signatures
+// match IUtOCService's pure-virtuals (already implemented via UtOCService).
+class StOCServiceImpl : public UtOCService, public IUtOCService {
 public:
     explicit StOCServiceImpl(object_cache::WorkerOCServiceImpl *workerOc,
                              worker::WorkerTopologyReferences *topologyEngine,

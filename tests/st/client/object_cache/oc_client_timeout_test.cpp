@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/api_deadline.h"
@@ -46,6 +47,11 @@ class OCClientTimeoutTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
+        // AdmissionReject* tests inject "ZmqService::RouteToRegBackend.elapsedUs" to
+        // exercise the ZMQ admission-reject path (deadline check before dispatch).
+        // brpc has no equivalent dispatch-path inject, so force ZMQ for workers
+        // (external_cluster propagates FLAGS_use_brpc to spawned workers).
+        FLAGS_use_brpc = false;
         opts.numWorkers = 2;
         opts.numEtcd = 1;
         opts.enableDistributedMaster = "true";

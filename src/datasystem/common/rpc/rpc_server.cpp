@@ -24,6 +24,7 @@
 // Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
 
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/rpc/zmq/zmq_server_impl.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -107,6 +108,13 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
     // disable the limit (brpc treats 0 as unlimited). When exceeded, brpc returns
     // ELIMIT to the client immediately, which the caller can retry on another worker.
     options.max_concurrency = FLAGS_brpc_max_concurrency;
+    // NOTE: brpc's built-in max_body_size (brpc::FLAGS_max_body_size, default
+    // 64MB) rejects large object payloads (>64MB). It is a global gflag read by
+    // input_messenger at socket-init time. There is no datasystem flag wired to
+    // it yet — raising it requires either setting -max_body_size on the worker
+    // command line (brpc's own gflag) or assigning brpc::FLAGS_max_body_size
+    // before the first brpc socket is created. Wiring a datasystem flag for
+    // this is deferred (the big-buffer ST is skipped under brpc meanwhile).
     butil::EndPoint ep;
     if (!addr.empty()) {
         butil::str2ip(addr.c_str(), &ep.ip);
