@@ -214,6 +214,8 @@ private:
      * @param[in] objectKeys Object keys that need to be lock.
      * @param[in] insertable Insert if object key does not exist.
      * @param[out] lockedEntries Locked entries map.
+     * @note Locks are acquired in sorted object-key order. If an object WLock is also required,
+     *       callers must acquire WLock before GRefLock and release GRefLock before WUnlock.
      */
     void BatchGRefLock(const std::vector<std::string> &objectKeys, bool insertable,
                        std::map<std::string, std::shared_ptr<SafeObjType>> &lockedEntries);
@@ -221,6 +223,8 @@ private:
     /**
      * @brief Batch lock global reference lock for objects via objectKeys.
      * @param[in] lockedEntries Locked entries map that has been holds object locks.
+     * @note This overload is for entries already protected by WLock from BatchLockWithInsert.
+     *       Do not acquire WLock while holding GRefLock; that would invert the ref/delete order.
      */
     static void BatchGRefLock(std::map<std::string, std::shared_ptr<SafeObjType>> &lockedEntries);
 
@@ -245,9 +249,9 @@ private:
     {
         while (true) {
             CHECK_FAIL_RETURN_STATUS(fun != nullptr && mergeFun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
-            CHECK_FAIL_RETURN_STATUS(
-                GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
-                K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+            int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                                     "GRef redirect wait timeout while ref is moving.");
             Timer timer;
             RETURN_IF_NOT_OK(fun(req, rsp));
             auto elapsedMs = static_cast<uint64_t>(timer.ElapsedMilliSecondAndReset());
@@ -276,8 +280,6 @@ private:
             }
             static const int64_t sleepTimeMs = 200;
             rsp.Clear();
-            int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
-            CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             SleepForMetaMovingRetry(std::min(sleepTimeMs, remainingTimeMs));
         }
     }

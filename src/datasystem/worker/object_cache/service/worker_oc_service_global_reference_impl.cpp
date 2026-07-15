@@ -22,6 +22,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/util/deadlock_util.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -731,6 +732,12 @@ void WorkerOcServiceGlobalReferenceImpl::BatchGRefLock(
     const std::vector<std::string> &objectKeys, bool insertable,
     std::map<std::string, std::shared_ptr<SafeObjType>> &lockedEntries)
 {
+    std::vector<std::shared_ptr<SafeObjType>> acquiredEntries;
+    RaiiPlus rollback([&acquiredEntries]() {
+        for (auto it = acquiredEntries.rbegin(); it != acquiredEntries.rend(); ++it) {
+            (*it)->GRefUnlock();
+        }
+    });
     std::set<std::string> needLock{ objectKeys.begin(), objectKeys.end() };
     for (const auto &objectKey : needLock) {
         std::shared_ptr<SafeObjType> entry;
@@ -744,19 +751,51 @@ void WorkerOcServiceGlobalReferenceImpl::BatchGRefLock(
             continue;
         }
         entry->GRefLock();
-        lockedEntries.emplace(objectKey, std::move(entry));
+        bool tracked = false;
+        try {
+            acquiredEntries.emplace_back(entry);
+            tracked = true;
+            bool inserted = lockedEntries.emplace(objectKey, entry).second;
+            if (!inserted) {
+                acquiredEntries.pop_back();
+                entry->GRefUnlock();
+            }
+        } catch (...) {
+            if (!tracked) {
+                entry->GRefUnlock();
+            }
+            throw;
+        }
     }
+    rollback.ClearAllTask();
 }
 
 void WorkerOcServiceGlobalReferenceImpl::BatchGRefLock(
     std::map<std::string, std::shared_ptr<SafeObjType>> &lockedEntries)
 {
+    std::vector<std::shared_ptr<SafeObjType>> acquiredEntries;
+    RaiiPlus rollback([&acquiredEntries]() {
+        for (auto it = acquiredEntries.rbegin(); it != acquiredEntries.rend(); ++it) {
+            (*it)->GRefUnlock();
+        }
+    });
     for (auto &entry : lockedEntries) {
         const auto &safeObj = entry.second;
         if (safeObj != nullptr) {
             safeObj->GRefLock();
+            bool tracked = false;
+            try {
+                acquiredEntries.emplace_back(safeObj);
+                tracked = true;
+            } catch (...) {
+                if (!tracked) {
+                    safeObj->GRefUnlock();
+                }
+                throw;
+            }
         }
     }
+    rollback.ClearAllTask();
 }
 
 void WorkerOcServiceGlobalReferenceImpl::BatchGRefUnlock(

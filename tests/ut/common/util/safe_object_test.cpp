@@ -13,9 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <thread>
-#include <chrono>
+
+#include <bthread/bthread.h>
 
 #include "ut/common.h"
 #include "datasystem/common/object_cache/safe_object.h"
@@ -132,6 +135,53 @@ public:
 private:
     int derivedVal_;
 };
+
+namespace {
+struct GRefLockWaiterArg {
+    SafeObject<std::string> &safeObj;
+    std::atomic<bool> &started;
+    std::atomic<bool> &acquired;
+};
+
+struct GRefLockHolderArg {
+    SafeObject<std::string> &safeObj;
+    std::atomic<bool> &started;
+    std::atomic<bool> &release;
+};
+
+void *WaitForGRefLock(void *raw)
+{
+    auto *arg = static_cast<GRefLockWaiterArg *>(raw);
+    arg->started.store(true, std::memory_order_release);
+    arg->safeObj.GRefLock();
+    arg->acquired.store(true, std::memory_order_release);
+    arg->safeObj.GRefUnlock();
+    return nullptr;
+}
+
+void *HoldGRefLockUntilReleased(void *raw)
+{
+    auto *arg = static_cast<GRefLockHolderArg *>(raw);
+    arg->safeObj.GRefLock();
+    arg->started.store(true, std::memory_order_release);
+    while (!arg->release.load(std::memory_order_acquire)) {
+        (void)bthread_usleep(1000);
+    }
+    arg->safeObj.GRefUnlock();
+    return nullptr;
+}
+
+bool WaitForFlag(const std::atomic<bool> &flag)
+{
+    // The gtest body runs on a pthread, not a brpc handler bthread, so this sleep does not pin a brpc worker.
+    constexpr int maxWaitRounds = 100;
+    constexpr auto waitInterval = std::chrono::milliseconds(1);
+    for (int i = 0; i < maxWaitRounds && !flag.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(waitInterval);
+    }
+    return flag.load(std::memory_order_acquire);
+}
+}  // namespace
 
 // Test basic construction and data extraction
 TEST_F(SafeObjectTest, TestConstruct1)
@@ -689,6 +739,69 @@ TEST_F(SafeObjectTest, TestIsWLockedByCurrentThread)
 
     fut.get();
     fut2.get();
+}
+
+TEST_F(SafeObjectTest, GRefLockAllowsBthreadWaiterAfterPthreadUnlock)
+{
+    using SafeString = SafeObject<std::string>;
+    SafeString safeString("abc");
+    std::atomic<bool> waiterStarted{ false };
+    std::atomic<bool> waiterAcquired{ false };
+
+    safeString.GRefLock();
+    GRefLockWaiterArg arg{ safeString, waiterStarted, waiterAcquired };
+    bthread_t bid;
+    int rc = bthread_start_background(&bid, nullptr, WaitForGRefLock, &arg);
+    if (rc != 0) {
+        safeString.GRefUnlock();
+        GTEST_SKIP() << "bthread runtime is unavailable, rc=" << rc;
+    }
+
+    if (!WaitForFlag(waiterStarted)) {
+        safeString.GRefUnlock();
+        ASSERT_EQ(bthread_join(bid, nullptr), 0);
+        FAIL() << "bthread waiter did not start before timeout";
+    }
+    EXPECT_FALSE(waiterAcquired.load(std::memory_order_acquire));
+
+    safeString.GRefUnlock();
+    ASSERT_EQ(bthread_join(bid, nullptr), 0);
+    EXPECT_TRUE(waiterAcquired.load(std::memory_order_acquire));
+}
+
+TEST_F(SafeObjectTest, GRefLockAllowsBthreadWaiterAfterBthreadUnlock)
+{
+    using SafeString = SafeObject<std::string>;
+    SafeString safeString("abc");
+    std::atomic<bool> holderStarted{ false };
+    std::atomic<bool> releaseHolder{ false };
+    std::atomic<bool> waiterStarted{ false };
+    std::atomic<bool> waiterAcquired{ false };
+
+    GRefLockHolderArg holderArg{ safeString, holderStarted, releaseHolder };
+    bthread_t holderBid;
+    int rc = bthread_start_background(&holderBid, nullptr, HoldGRefLockUntilReleased, &holderArg);
+    if (rc != 0) {
+        GTEST_SKIP() << "bthread runtime is unavailable, rc=" << rc;
+    }
+    ASSERT_TRUE(WaitForFlag(holderStarted));
+
+    GRefLockWaiterArg waiterArg{ safeString, waiterStarted, waiterAcquired };
+    bthread_t waiterBid;
+    rc = bthread_start_background(&waiterBid, nullptr, WaitForGRefLock, &waiterArg);
+    if (rc != 0) {
+        releaseHolder.store(true, std::memory_order_release);
+        ASSERT_EQ(bthread_join(holderBid, nullptr), 0);
+        GTEST_SKIP() << "bthread runtime is unavailable, rc=" << rc;
+    }
+
+    ASSERT_TRUE(WaitForFlag(waiterStarted));
+    EXPECT_FALSE(waiterAcquired.load(std::memory_order_acquire));
+
+    releaseHolder.store(true, std::memory_order_release);
+    ASSERT_EQ(bthread_join(holderBid, nullptr), 0);
+    ASSERT_EQ(bthread_join(waiterBid, nullptr), 0);
+    EXPECT_TRUE(waiterAcquired.load(std::memory_order_acquire));
 }
 
 TEST_F(SafeObjectTest, TestReadWriteLock)
