@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -53,6 +54,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_pool.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/utils/connection.h"
 #include "datasystem/object/object_buffer.h"
 
@@ -843,6 +845,51 @@ TEST(WorkerRpcClientTest, HashRingRefreshSignsRequestAndUsesControlTimeoutOutsid
     EXPECT_EQ(response.version(), 18u);
 }
 
+TEST(WorkerSnapshotTest, BuildsFromEveryTopologyMembershipState)
+{
+    ::datasystem::ClusterTopologyPb ring;
+    const std::vector<::datasystem::MembershipPb::StatePb> states = {
+        ::datasystem::MembershipPb::INITIAL,     ::datasystem::MembershipPb::JOINING,
+        ::datasystem::MembershipPb::ACTIVE,      ::datasystem::MembershipPb::PRE_LEAVING,
+        ::datasystem::MembershipPb::LEAVING,     ::datasystem::MembershipPb::FAILED,
+    };
+    for (size_t i = 0; i < states.size(); ++i) {
+        const auto address = MakeAddress(100 + static_cast<int>(i));
+        (*ring.mutable_members())[address.ToString()].set_state(states[i]);
+    }
+
+    WorkerSnapshot snapshot;
+    ASSERT_TRUE(BuildWorkerSnapshot(42, ring, snapshot).IsOk());
+    EXPECT_EQ(snapshot.ringVersion, 42u);
+    EXPECT_TRUE(snapshot.sameHostAddrs.empty());
+    EXPECT_EQ(snapshot.otherAddrs.size(), states.size());
+}
+
+TEST(WorkerSnapshotTest, RejectsMalformedTopologyWithoutChangingOutput)
+{
+    ::datasystem::ClusterTopologyPb ring;
+    (*ring.mutable_members())["malformed-endpoint"].set_state(::datasystem::MembershipPb::ACTIVE);
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 7;
+    snapshot.sameHostAddrs.push_back(MakeAddress(110));
+
+    EXPECT_EQ(BuildWorkerSnapshot(8, ring, snapshot).GetCode(), K_INVALID);
+    EXPECT_EQ(snapshot.ringVersion, 7u);
+    ASSERT_EQ(snapshot.sameHostAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.sameHostAddrs.front(), MakeAddress(110));
+}
+
+TEST(WorkerSnapshotTest, AcceptsEmptyTopologyAsCleanupAll)
+{
+    ::datasystem::ClusterTopologyPb ring;
+    WorkerSnapshot snapshot;
+    snapshot.otherAddrs.push_back(MakeAddress(111));
+
+    ASSERT_TRUE(BuildWorkerSnapshot(9, ring, snapshot).IsOk());
+    EXPECT_EQ(snapshot.ringVersion, 9u);
+    EXPECT_TRUE(snapshot.Empty());
+}
+
 TEST(DataPlaneManagerTest, ReusesRpcClientAndTransporterForSameAddress)
 {
     FakeDataPlaneManager manager;
@@ -1006,6 +1053,54 @@ TEST(DataPlaneManagerTest, ReconcileRemovesOnlyWorkersAbsentFromSnapshot)
     EXPECT_EQ(removedTransporter->closeCount, 1);
     EXPECT_EQ(manager.rpcBuildCount, 4);
     EXPECT_EQ(manager.transportBuildCount, 4);
+}
+
+TEST(DataPlaneManagerTest, PublishedSnapshotRejectsAbsentWorkersBeforeCleanup)
+{
+    FakeDataPlaneManager manager;
+    const HostPort live = MakeAddress(22);
+    const HostPort removed = MakeAddress(23);
+    std::shared_ptr<IDataTransporter> transporter;
+    ASSERT_TRUE(manager.GetOrCreate(live, TransportHint::TCP_ONLY, transporter).IsOk());
+    auto liveTransporter = transporter;
+    ASSERT_TRUE(manager.GetOrCreate(removed, TransportHint::TCP_ONLY, transporter).IsOk());
+    auto removedTransporter = std::dynamic_pointer_cast<FakeTransporter>(transporter);
+    ASSERT_NE(removedTransporter, nullptr);
+
+    WorkerSnapshot snapshot;
+    snapshot.ringVersion = 10;
+    snapshot.otherAddrs.push_back(live);
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
+    EXPECT_EQ(manager.GetOrCreate(removed, TransportHint::TCP_ONLY, transporter).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(removedTransporter->closeCount, 0);
+
+    manager.ReconcileWithSnapshot(snapshot);
+    EXPECT_EQ(removedTransporter->closeCount, 1);
+    ASSERT_TRUE(manager.GetOrCreate(live, TransportHint::TCP_ONLY, transporter).IsOk());
+    EXPECT_EQ(transporter, liveTransporter);
+}
+
+TEST(DataPlaneManagerTest, SupersededSnapshotCannotRemoveCurrentWorkers)
+{
+    FakeDataPlaneManager manager;
+    const HostPort live = MakeAddress(24);
+    std::shared_ptr<IDataTransporter> transporter;
+    ASSERT_TRUE(manager.GetOrCreate(live, TransportHint::TCP_ONLY, transporter).IsOk());
+    auto liveTransporter = std::dynamic_pointer_cast<FakeTransporter>(transporter);
+    ASSERT_NE(liveTransporter, nullptr);
+
+    WorkerSnapshot latest;
+    latest.ringVersion = 12;
+    latest.otherAddrs.push_back(live);
+    ASSERT_TRUE(manager.UpdateWorkerSnapshot(latest).IsOk());
+    WorkerSnapshot superseded;
+    superseded.ringVersion = 11;
+    manager.ReconcileWithSnapshot(superseded);
+
+    EXPECT_EQ(liveTransporter->closeCount, 0);
+    ASSERT_TRUE(manager.GetOrCreate(live, TransportHint::TCP_ONLY, transporter).IsOk());
+    EXPECT_EQ(transporter, liveTransporter);
+    EXPECT_EQ(manager.UpdateWorkerSnapshot(superseded).GetCode(), K_INVALID);
 }
 
 TEST(DataPlaneManagerTest, ShutdownPublishesStateBeforeSlowDataPlaneCloseCompletes)
@@ -2093,6 +2188,67 @@ TEST(UbTransporterTest, CloseDataPlaneWaitsForInflightSet)
 }
 
 // --- TransportLayer Create/Set tests ---
+
+TEST(TransportLayerTest, WorkerSnapshotCleanupIsAsyncAndCoalescesToLatest)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    TestTransportLayer layer(manager);
+    ASSERT_TRUE(layer.Init().IsOk());
+
+    const HostPort blocker = MakeAddress(27);
+    const HostPort survivor = MakeAddress(28);
+    const HostPort marker = MakeAddress(29);
+    std::shared_ptr<IDataTransporter> transporter;
+    ASSERT_TRUE(manager->GetOrCreate(blocker, TransportHint::TCP_ONLY, transporter).IsOk());
+    auto blockerTransporter = std::dynamic_pointer_cast<FakeTransporter>(transporter);
+    ASSERT_TRUE(manager->GetOrCreate(survivor, TransportHint::TCP_ONLY, transporter).IsOk());
+    auto survivorTransporter = std::dynamic_pointer_cast<FakeTransporter>(transporter);
+    ASSERT_TRUE(manager->GetOrCreate(marker, TransportHint::TCP_ONLY, transporter).IsOk());
+    auto markerTransporter = std::dynamic_pointer_cast<FakeTransporter>(transporter);
+    ASSERT_NE(blockerTransporter, nullptr);
+    ASSERT_NE(survivorTransporter, nullptr);
+    ASSERT_NE(markerTransporter, nullptr);
+
+    std::promise<void> blockerCloseStarted;
+    auto blockerCloseStartedFuture = blockerCloseStarted.get_future();
+    std::promise<void> allowBlockerClose;
+    auto allowBlockerCloseFuture = allowBlockerClose.get_future().share();
+    blockerTransporter->onClose = [&blockerCloseStarted, allowBlockerCloseFuture]() {
+        blockerCloseStarted.set_value();
+        allowBlockerCloseFuture.wait();
+    };
+    std::promise<void> markerClosed;
+    auto markerClosedFuture = markerClosed.get_future();
+    markerTransporter->onClose = [&markerClosed]() { markerClosed.set_value(); };
+
+    WorkerSnapshot first;
+    first.ringVersion = 1;
+    first.otherAddrs = { survivor, marker };
+    ASSERT_TRUE(layer.ApplyWorkerSnapshot(first).IsOk());
+    if (blockerCloseStartedFuture.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+        allowBlockerClose.set_value();
+        layer.Shutdown();
+        FAIL() << "First asynchronous transport reconciliation did not start";
+    }
+
+    WorkerSnapshot superseded;
+    superseded.ringVersion = 2;
+    ASSERT_TRUE(layer.ApplyWorkerSnapshot(superseded).IsOk());
+    WorkerSnapshot latest;
+    latest.ringVersion = 3;
+    latest.otherAddrs = { survivor };
+    ASSERT_TRUE(layer.ApplyWorkerSnapshot(latest).IsOk());
+    allowBlockerClose.set_value();
+    ASSERT_EQ(markerClosedFuture.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+
+    EXPECT_EQ(blockerTransporter->closeCount, 1);
+    EXPECT_EQ(markerTransporter->closeCount, 1);
+    EXPECT_EQ(survivorTransporter->closeCount, 0);
+    ASSERT_TRUE(manager->GetOrCreate(survivor, TransportHint::TCP_ONLY, transporter).IsOk());
+    EXPECT_EQ(transporter, survivorTransporter);
+    layer.Shutdown();
+    EXPECT_EQ(layer.ApplyWorkerSnapshot(latest).GetCode(), K_NOT_READY);
+}
 
 TEST(TransportLayerTest, CreateDelegatesToTransporter)
 {

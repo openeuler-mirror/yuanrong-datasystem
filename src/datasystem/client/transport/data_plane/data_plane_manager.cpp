@@ -58,6 +58,19 @@ Status InitClientUbRuntime(uint64_t fastTransportMemSize)
 #endif
 }
 
+std::unordered_set<std::string> BuildLiveWorkerSet(const WorkerSnapshot &snapshot)
+{
+    std::unordered_set<std::string> liveWorkers;
+    liveWorkers.reserve(snapshot.sameHostAddrs.size() + snapshot.otherAddrs.size());
+    for (const auto &worker : snapshot.sameHostAddrs) {
+        liveWorkers.insert(worker.ToString());
+    }
+    for (const auto &worker : snapshot.otherAddrs) {
+        liveWorkers.insert(worker.ToString());
+    }
+    return liveWorkers;
+}
+
 }  // namespace
 
 bool DataPlaneManager::WorkerTransportEntry::HasAliveTransporter(AccessTransportKind expectedKind) const
@@ -177,6 +190,8 @@ Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
     std::shared_lock<std::shared_mutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
+    CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_ || liveWorkers_.find(workerKey) != liveWorkers_.end(), K_NOT_FOUND,
+                             "Worker endpoint is absent from latest transport snapshot: " + workerKey);
     EntryMap::const_accessor constAccessor;
     if (entries_.find(constAccessor, workerKey)) {
         entry = constAccessor->second;
@@ -292,20 +307,37 @@ void DataPlaneManager::Teardown(const HostPort &workerAddr)
     }
 }
 
+Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
+{
+    auto liveWorkers = BuildLiveWorkerSet(snapshot);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "DataPlaneManager is shutting down");
+    CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_ || snapshot.ringVersion >= workerSnapshotVersion_, K_INVALID,
+                             "Transport worker snapshot version regressed from "
+                                 + std::to_string(workerSnapshotVersion_) + " to "
+                                 + std::to_string(snapshot.ringVersion));
+    liveWorkers_ = std::move(liveWorkers);
+    workerSnapshotVersion_ = snapshot.ringVersion;
+    hasWorkerSnapshot_ = true;
+    VLOG(1) << "[TransportGet][Reconcile] Published worker snapshot, version: " << workerSnapshotVersion_
+            << ", worker count: " << liveWorkers_.size();
+    return Status::OK();
+}
+
 void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
 {
-    std::unordered_set<std::string> liveWorkers;
-    for (const auto &worker : snapshot.sameHostAddrs) {
-        liveWorkers.insert(worker.ToString());
-    }
-    for (const auto &worker : snapshot.otherAddrs) {
-        liveWorkers.insert(worker.ToString());
-    }
+    auto liveWorkers = BuildLiveWorkerSet(snapshot);
 
     std::vector<std::shared_ptr<WorkerTransportEntry>> goneEntries;
     {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (shutdown_.load(std::memory_order_acquire)) {
+            return;
+        }
+        if (hasWorkerSnapshot_ && snapshot.ringVersion != workerSnapshotVersion_) {
+            VLOG(1) << "[TransportGet][Reconcile] Skip superseded worker snapshot, version: "
+                    << snapshot.ringVersion << ", latest version: " << workerSnapshotVersion_;
             return;
         }
 
@@ -326,6 +358,8 @@ void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
                 entries_.erase(accessor);
             }
         }
+        VLOG(1) << "[TransportGet][Reconcile] Detached absent worker entries, version: "
+                << snapshot.ringVersion << ", removed count: " << goneEntries.size();
     }
     for (auto &entry : goneEntries) {
         entry->ResetDataPlane();

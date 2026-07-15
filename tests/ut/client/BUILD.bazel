@@ -58,6 +58,7 @@ ds_cc_test(
         "//src/datasystem/common/rpc:mem_view",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
         "//src/datasystem/protos:object_posix_brpc",
         "//tests/ut:ut_common",
     ],

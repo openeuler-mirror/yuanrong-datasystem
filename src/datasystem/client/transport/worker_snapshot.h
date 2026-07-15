@@ -18,9 +18,12 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_WORKER_SNAPSHOT_H
 #define DATASYSTEM_CLIENT_TRANSPORT_WORKER_SNAPSHOT_H
 
+#include <cstdint>
 #include <vector>
 
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/protos/cluster_topology.pb.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem {
 namespace client {
@@ -31,9 +34,20 @@ struct WorkerSnapshot {
         return sameHostAddrs.empty() && otherAddrs.empty();
     }
 
+    uint64_t ringVersion = 0;
     std::vector<HostPort> sameHostAddrs;
     std::vector<HostPort> otherAddrs;
 };
+
+/**
+ * @brief Build an all-or-nothing transport snapshot from the complete topology membership.
+ * @param[in] ringVersion Version returned with the topology update.
+ * @param[in] ring Complete cluster topology; every member state remains transport-admissible.
+ * @param[out] snapshot Validated snapshot, left unchanged when any endpoint is malformed.
+ * @return K_OK on success; K_INVALID when a member endpoint cannot be parsed.
+ */
+Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
+                           WorkerSnapshot &snapshot);
 
 }  // namespace client
 }  // namespace datasystem

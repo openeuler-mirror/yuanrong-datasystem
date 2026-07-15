@@ -1446,6 +1446,8 @@ private:
     client::HashRingRefresher::FetchRpc BuildRoutingFetchRpc(
         const std::shared_ptr<client::WorkerRouter> &router, const HostPort &initialWorker, bool initialWorkerIsLocal);
 
+    Status ApplyRoutingWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring);
+
     Status InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal);
 
     Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs = -1);

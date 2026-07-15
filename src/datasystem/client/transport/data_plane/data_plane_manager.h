@@ -24,6 +24,7 @@
 #include <memory>
 #include <shared_mutex>
 #include <string>
+#include <unordered_set>
 
 #include <tbb/concurrent_hash_map.h>
 
@@ -83,6 +84,13 @@ public:
     void Teardown(const HostPort &workerAddr);
 
     /**
+     * @brief Atomically publish the latest worker admission set before route publication.
+     * @param[in] snapshot Validated current worker snapshot.
+     * @return K_OK on success; K_INVALID for a regressing version; K_SHUTTING_DOWN during shutdown.
+     */
+    Status UpdateWorkerSnapshot(const WorkerSnapshot &snapshot);
+
+    /**
      * @brief Remove cached worker entries that are absent from the current snapshot.
      * @param[in] snapshot Current reachable-worker snapshot.
      */
@@ -126,7 +134,11 @@ private:
                               std::shared_ptr<IDataTransporter> &out);
 
     EntryMap entries_;
+    // Protects entries_, the published worker admission set, and its version.
     std::shared_mutex mutex_;
+    std::unordered_set<std::string> liveWorkers_;
+    uint64_t workerSnapshotVersion_{ 0 };
+    bool hasWorkerSnapshot_{ false };
     std::atomic<bool> shutdown_{ false };
     std::shared_ptr<Signature> signature_;
     BrpcChannelConfig channelConfig_;

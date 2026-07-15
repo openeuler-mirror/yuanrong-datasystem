@@ -24,8 +24,11 @@
 namespace datasystem {
 namespace client {
 
-HashRingRefresher::HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc)
-    : router_(std::move(router)), fetchRpc_(std::move(fetchRpc)) {}
+HashRingRefresher::HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc,
+                                     RingUpdateHook ringUpdateHook)
+    : router_(std::move(router)), fetchRpc_(std::move(fetchRpc)), ringUpdateHook_(std::move(ringUpdateHook))
+{
+}
 
 HashRingRefresher::~HashRingRefresher()
 {
@@ -96,6 +99,9 @@ Status HashRingRefresher::DoRefresh()
         }
 
         if (changed) {
+            if (ringUpdateHook_) {
+                RETURN_IF_NOT_OK(ringUpdateHook_(newVersion, ring));
+            }
             currentVersion_.store(newVersion);
             UpdateWorkerList(ring);
             auto ringPtr = std::make_shared<::datasystem::ClusterTopologyPb>(std::move(ring));

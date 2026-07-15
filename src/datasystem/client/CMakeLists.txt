@@ -42,6 +42,7 @@ list(APPEND CLIENT_SRCS
         transport/object_read/object_read_flow.cpp
         transport/object_read/replica_reader.cpp
         transport/transport_layer.cpp
+        transport/worker_snapshot.cpp
         transport/data_plane/data_plane_executor.cpp
         transport/data_plane/data_plane_manager.cpp
         transport/data_plane/tcp_transporter.cpp
