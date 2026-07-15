@@ -3929,15 +3929,7 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
                 failedObjectKey.emplace_back(objectKey);
                 continue;
             }
-            // Special case for Remote H2D scenario.
-            if (info.has_host_info()) {
-                status = SetRemoteHostObjectBuffer(objectKey, info, version, bufferPtr);
-            } else if (readParams.empty()) {
-                status = SetShmObjectBuffer(objectKey, info, version, bufferPtr);
-            } else {
-                status = SetOffsetReadObjectBuffer(objectKey, info, version, readParams[index].offset,
-                                                   readParams[index].size, bufferPtr);
-            }
+            status = SetShmObjectBufferWithMetric(objectKey, info, version, readParams, index, bufferPtr);
         } else if (isNoShm) {
             status = SetNoShmObjectBufferWithMetric(objectKey, rsp.payload_info(j), version, payloads,
                                                     ubBufferInfos, bufferPtr);
@@ -3953,6 +3945,30 @@ Status ObjectClientImpl::GetObjectBuffers(const std::vector<std::string> &object
         }
     }
     return Status::OK();
+}
+
+Status ObjectClientImpl::SetShmObjectBufferWithMetric(const std::string &objectKey,
+                                                      const GetRspPb::ObjectInfoPb &info, uint32_t version,
+                                                      const std::vector<ReadParam> &readParams, size_t index,
+                                                      std::shared_ptr<Buffer> &bufferPtr)
+{
+    // Special case for Remote H2D scenario.
+    if (info.has_host_info()) {
+        return SetRemoteHostObjectBuffer(objectKey, info, version, bufferPtr);
+    }
+    if (readParams.empty()) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_GET_SHM_READ_TOTAL_BYTES,
+                   static_cast<uint64_t>(info.data_size()));
+        return SetShmObjectBuffer(objectKey, info, version, bufferPtr);
+    }
+    uint64_t dataSize = static_cast<uint64_t>(info.data_size());
+    OffsetInfo offsetInfo(readParams[index].offset, readParams[index].size);
+    offsetInfo.AdjustReadSize(dataSize);
+    if (offsetInfo.readSize > 0) {
+        METRIC_ADD(metrics::KvMetricId::CLIENT_GET_SHM_READ_TOTAL_BYTES, offsetInfo.readSize);
+    }
+    return SetOffsetReadObjectBuffer(objectKey, info, version, readParams[index].offset,
+                                     readParams[index].size, bufferPtr);
 }
 
 Status ObjectClientImpl::SetNoShmObjectBufferWithMetric(const std::string &objectKey,

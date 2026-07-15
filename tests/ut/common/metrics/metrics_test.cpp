@@ -1327,5 +1327,13 @@ TEST_F(MetricsTest, worker_from_client_urma_bytes_counter_test)
     EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_from_client_urma_total_bytes", 100, 100)),
               std::string::npos);
 }
+
+TEST_F(MetricsTest, client_get_shm_read_bytes_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ADD(metrics::KvMetricId::CLIENT_GET_SHM_READ_TOTAL_BYTES, 100);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_get_shm_read_total_bytes", 100, 100)),
+              std::string::npos);
+}
 }  // namespace ut
 }  // namespace datasystem

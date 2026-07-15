@@ -1641,6 +1641,10 @@ private:
      */
     Status PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp);
 
+    Status SetShmObjectBufferWithMetric(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
+                                        uint32_t version, const std::vector<ReadParam> &readParams, size_t index,
+                                        std::shared_ptr<Buffer> &bufferPtr);
+
     HostPort ipAddress_;
     RpcAuthKeys authKeys_;
     RpcCredential cred_;
