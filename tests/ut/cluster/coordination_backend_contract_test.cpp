@@ -137,12 +137,14 @@ TEST(CoordinationBackendContractTest, NullStoreFailsOperationsAndShutsDownIdempo
     EXPECT_TRUE(backend.Shutdown().IsOk());
 }
 
-TEST(CoordinationBackendContractTest, DsBackendPreservesLegacyMembershipTable)
+TEST(CoordinationBackendContractTest, DsBackendPreservesClusterScopedMembershipTable)
 {
     DsCoordinationBackend backend(nullptr, "127.0.0.1:1");
     std::string prefix;
 
     EXPECT_TRUE(backend.GetStorePrefix("/datasystem/cluster-a/cluster", prefix).IsOk());
+    EXPECT_EQ(prefix, "/datasystem/cluster-a/cluster");
+    EXPECT_TRUE(backend.GetStorePrefix("/datasystem/cluster", prefix).IsOk());
     EXPECT_EQ(prefix, "/datasystem/cluster");
     EXPECT_TRUE(backend.GetStorePrefix("/datasystem/cluster-a/topology", prefix).IsOk());
     EXPECT_EQ(prefix, "/datasystem/cluster-a/topology");
