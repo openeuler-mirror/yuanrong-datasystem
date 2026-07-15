@@ -516,6 +516,9 @@ private:
                                      std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
                                      const std::map<std::string, uint64_t> &deletingObjectsWithVersion);
 
+    Status QueryExistMetadataViaPureQueryMeta(const std::vector<std::string> &objectKeys,
+                                              std::vector<master::QueryMetaInfoPb> &queryMetas);
+
     /**
      * @brief Query the metadata of the specified objects in the redirect master.
      * @param[in] rsp Response of redirect.

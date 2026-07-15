@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <shared_mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -1428,8 +1429,7 @@ Status ClientWorkerRemoteApi::QuerySize(const std::vector<std::string> &objectKe
 Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists,
                                     const bool queryL2Cache, const bool isLocal)
 {
-    auto config = GetClientLatencyTraceConfig();
-    const bool traceEnabled = ShouldCollectLatencyTrace(config);
+    const bool traceEnabled = ShouldCollectLatencyTrace(GetClientLatencyTraceConfig());
     ExistReqPb req;
     *req.mutable_object_keys() = { keys.begin(), keys.end() };
     req.set_client_id(clientId_);
@@ -1458,16 +1458,16 @@ Status ClientWorkerRemoteApi::Exist(const std::vector<std::string> &keys, std::v
         []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
     if (status.IsError()) {
         status = WithRpcDiag(status, "Exist", hostPort_);
+        if (!rsp.redirect_extra().empty()) {
+            status = status.WithExtra(rsp.redirect_extra());
+        }
     }
-    LogClientWorkerRpcDone("Exist", keys.size(), "RPC", static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond()), status);
     if (traceEnabled && rsp.latency_phase_us_size() > 0) {
-        std::vector<uint32_t> phases(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end());
-        MergeDecodedPhasesToTrace(phases, rsp.latency_tick_dropped_count());
+        MergeDecodedPhasesToTrace(
+            std::vector<uint32_t>(rsp.latency_phase_us().begin(), rsp.latency_phase_us().end()),
+            rsp.latency_tick_dropped_count());
     }
-    if (status.IsError()) {
-        LOG(ERROR) << "Exist resp error, msg:" << status.ToString();
-        return status;
-    }
+    if (status.IsError()) { return status; }
     if (keys.size() != static_cast<size_t>(rsp.exists().size())) {
         LOG(ERROR) << "Exist response size " << rsp.exists().size() << " is not equal to key size " << keys.size();
         exists.assign(keys.size(), false);

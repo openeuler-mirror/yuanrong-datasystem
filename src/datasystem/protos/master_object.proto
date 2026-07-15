@@ -675,6 +675,7 @@ message ReplacePrimaryRspPb {
 message PureQueryMetaReqPb {
   repeated bytes object_keys = 1;
   bool redirect = 2;
+  string address = 3; // source worker address for selecting readable location
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

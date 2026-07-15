@@ -583,6 +583,7 @@ message ExistRspPb {
   repeated bool exists = 1;
   repeated uint32 latency_phase_us = 20;
   uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
+  string redirect_extra = 22;
 }
 
 message ExpireReqPb {

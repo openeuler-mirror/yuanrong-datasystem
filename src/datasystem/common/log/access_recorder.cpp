@@ -579,6 +579,11 @@ ObjectAccessRecorder &ObjectAccessRecorder::LatencySummary(std::string summary)
     return *this;
 }
 
+void ObjectAccessRecorder::Discard()
+{
+    core_.MarkRecorded();
+}
+
 void ObjectAccessRecorder::Record()
 {
     if (!core_.ShouldRecordInternal()) {

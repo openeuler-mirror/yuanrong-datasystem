@@ -40,9 +40,10 @@
 #include "datasystem/client/transport/common/deadline_retry.h"
 #include "datasystem/client/transport/data_plane/data_plane_executor.h"
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
+#include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/object_read/object_read_flow.h"
 #include "datasystem/client/transport/object_read/replica_reader.h"
-#include "datasystem/client/transport/object_buffer_internal.h"
+#include "datasystem/client/transport/rpc/exist_request_builder.h"
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
@@ -214,6 +215,19 @@ public:
         return queryAndGetStatus;
     }
 
+    Status InvokeExist(int64_t, ExistReqPb &request, ExistRspPb &response) override
+    {
+        ++existInvokeCount;
+        invokedExistRequests.push_back(request);
+        if (existInvokeStatus.IsError()) {
+            return existInvokeStatus;
+        }
+        for (int i = 0; i < request.object_keys_size(); ++i) {
+            response.add_exists(true);
+        }
+        return Status::OK();
+    }
+
     Status InvokeCreate(int64_t, CreateReqPb &request, CreateRspPb &response, uint32_t &workerVersion) override
     {
         ++createInvokeCount;
@@ -325,10 +339,13 @@ public:
     Status initStatus = Status::OK();
     int getObjectCount = 0;
     int queryAndGetCount = 0;
+    int existInvokeCount = 0;
     Status getObjectStatus = Status::OK();
+    Status existInvokeStatus = Status::OK();
     StatusCode getObjectResponseCode = K_OK;
     int64_t getObjectDataSize = 4;
     std::vector<GetObjectRemoteReqPb> getObjectRequests;
+    std::vector<ExistReqPb> invokedExistRequests;
     Status queryAndGetStatus = Status::OK();
     std::vector<master::QueryAndGetReqPb> queryAndGetRequests;
     std::function<Status(const HostPort &, const master::QueryAndGetReqPb &, master::QueryAndGetRspPb &,
@@ -378,6 +395,11 @@ public:
     {
     }
 
+    AuthBoundaryWorkerRpcClient(std::shared_ptr<Signature> signature, BrpcChannelConfig channelConfig)
+        : WorkerRpcClient(MakeAddress(9001), std::move(signature), std::move(channelConfig))
+    {
+    }
+
     bool IsAlive() const override
     {
         return true;
@@ -385,13 +407,17 @@ public:
 
     int getObjectInvokeCount = 0;
     int metadataInvokeCount = 0;
+    int existInvokeCount = 0;
+    int hashRingInvokeCount = 0;
     int hashRingCount = 0;
     int dataRpcTimeout = 0;
     int metadataRpcTimeout = 0;
+    int existRpcTimeout = 0;
     int hashRingRpcTimeout = 0;
     uint64_t hashRingVersion = 0;
     GetObjectRemoteReqPb invokedDataRequest;
     master::QueryAndGetReqPb invokedMetadataRequest;
+    ExistReqPb invokedExistRequest;
     GetHashRingReqPb invokedHashRingRequest;
     CreateReqPb invokedCreateRequest;
     PublishReqPb invokedSetRequest;
@@ -422,6 +448,35 @@ protected:
         ++metadataInvokeCount;
         metadataRpcTimeout = options.GetTimeout();
         invokedMetadataRequest = request;
+        return Status::OK();
+    }
+
+    Status DoInvokeExist(const RpcOptions &options, const ExistReqPb &request, ExistRspPb &response) override
+    {
+        ++existInvokeCount;
+        existRpcTimeout = options.GetTimeout();
+        invokedExistRequest = request;
+        for (int i = 0; i < request.object_keys_size(); ++i) {
+            response.add_exists(true);
+        }
+        return Status::OK();
+    }
+
+    Status DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
+                               GetHashRingRspPb &response) override
+    {
+        ++hashRingInvokeCount;
+        ++hashRingCount;
+        hashRingRpcTimeout = options.GetTimeout();
+        hashRingVersion = request.version();
+        invokedHashRingRequest = request;
+        response.set_version(request.version() + 1);
+        response.set_master_address("127.0.0.1:18888");
+        response.set_hash_ring_changed(true);
+        auto &worker = (*response.mutable_hash_ring()->mutable_members())["127.0.0.1:18481"];
+        worker.set_state(MembershipPb_StatePb_ACTIVE);
+        worker.add_tokens(1);
+        (*response.mutable_host_id_map())["127.0.0.1:18481"] = "host-a";
         return Status::OK();
     }
 
@@ -461,17 +516,6 @@ protected:
     {
         ++decreaseReferenceInvokeCount;
         invokedDecreaseReferenceRequest = request;
-        return Status::OK();
-    }
-
-    Status DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
-                               GetHashRingRspPb &response) override
-    {
-        ++hashRingCount;
-        hashRingRpcTimeout = options.GetTimeout();
-        hashRingVersion = request.version();
-        invokedHashRingRequest = request;
-        response.set_version(request.version() + 1);
         return Status::OK();
     }
 };
@@ -620,6 +664,10 @@ public:
         ++rpcBuildCount;
         auto client = std::make_shared<FakeWorkerRpcClient>(address);
         client->queryAndGetHandler = queryAndGetHandler;
+        if (!existInvokeStatuses.empty()) {
+            client->existInvokeStatus = existInvokeStatuses.front();
+            existInvokeStatuses.erase(existInvokeStatuses.begin());
+        }
         RETURN_IF_NOT_OK(client->Init());
         lastRpcClient = client;
         output = std::move(client);
@@ -674,6 +722,7 @@ public:
     std::shared_ptr<FakeTransporter> lastTransporter;
     std::vector<std::shared_ptr<WorkerRpcClient>> rpcClientsSeen;
     std::vector<Status> transportBuildStatuses;
+    std::vector<Status> existInvokeStatuses;
     std::vector<std::vector<Status>> transporterGetStatuses;
     std::vector<std::vector<Status>> transporterSetStatuses;
     std::vector<std::vector<Status>> transporterMCreateStatuses;
@@ -953,6 +1002,31 @@ TEST(WorkerRpcClientTest, SignsFinalReadRequestsBeforeRpc)
     EXPECT_FALSE(client.invokedMetadataRequest.signature().empty());
     EXPECT_TRUE(client.invokedMetadataRequest.redirect());
 
+    ExistReqPb existRequest;
+    existRequest.add_object_keys("key");
+    existRequest.set_client_id("client-1");
+    existRequest.set_tenant_id("tenant-1");
+    ExistRspPb existResponse;
+    ASSERT_TRUE(client.InvokeExist(800, existRequest, existResponse).IsOk());
+    EXPECT_EQ(client.existInvokeCount, 1);
+    EXPECT_EQ(client.existRpcTimeout, 800);
+    EXPECT_EQ(client.invokedExistRequest.client_id(), "client-1");
+    EXPECT_EQ(client.invokedExistRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedExistRequest.signature().empty());
+}
+
+TEST(WorkerRpcClientTest, ExistUsesSubTimeoutBelowChannelTimeout)
+{
+    BrpcChannelConfig channelConfig;
+    channelConfig.timeout_ms = 9000;
+    AuthBoundaryWorkerRpcClient client(MakeSignature(), channelConfig);
+    ExistReqPb request;
+    request.add_object_keys("key");
+    ExistRspPb response;
+
+    ASSERT_TRUE(client.InvokeExist(1000, request, response).IsOk());
+
+    EXPECT_EQ(client.existRpcTimeout, 1000);
 }
 
 TEST(WorkerRpcClientTest, SignsCreateAndSetBeforeRpc)
@@ -1026,7 +1100,7 @@ TEST(WorkerRpcClientTest, RetrySealAlreadySealedIsSuccess)
 TEST(WorkerRpcClientTest, BoundsRpcTimeoutByApiDeadline)
 {
     ApiDeadlineGuard deadline(100);
-    auto signature = std::make_shared<Signature>();
+    auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
     AuthBoundaryWorkerRpcClient client(signature);
     GetObjectRemoteReqPb dataRequest;
     GetObjectRemoteRspPb dataResponse;
@@ -1044,7 +1118,15 @@ TEST(WorkerRpcClientTest, BoundsRpcTimeoutByApiDeadline)
     EXPECT_EQ(client.metadataInvokeCount, 1);
     EXPECT_GT(client.metadataRpcTimeout, 0);
     EXPECT_LE(client.metadataRpcTimeout, 100);
-    EXPECT_EQ(client.invokedMetadataRequest.access_key(), "");
+    EXPECT_EQ(client.invokedMetadataRequest.access_key(), "access-1");
+
+    ExistReqPb existRequest;
+    existRequest.add_object_keys("key");
+    ExistRspPb existResponse;
+    ASSERT_TRUE(client.InvokeExist(1000, existRequest, existResponse).IsOk());
+    EXPECT_EQ(client.existInvokeCount, 1);
+    EXPECT_GT(client.existRpcTimeout, 0);
+    EXPECT_LE(client.existRpcTimeout, 100);
 }
 
 TEST(WorkerRpcClientTest, ExpiredApiDeadlineDoesNotSendRpc)
@@ -1065,6 +1147,55 @@ TEST(WorkerRpcClientTest, ExpiredApiDeadlineDoesNotSendRpc)
     EXPECT_EQ(client.InvokeQueryAndGet(metadataRequest, metadataResponse, metadataPayloads).GetCode(),
               K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(client.metadataInvokeCount, 0);
+
+    ExistReqPb existRequest;
+    ExistRspPb existResponse;
+    EXPECT_EQ(client.InvokeExist(100, existRequest, existResponse).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_EQ(client.existInvokeCount, 0);
+}
+
+TEST(WorkerRpcClientTest, InvokesGetHashRingWithVersionAndTimeout)
+{
+    auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
+    AuthBoundaryWorkerRpcClient client(signature);
+    GetHashRingRspPb ring;
+
+    ASSERT_TRUE(client.InvokeGetHashRing(42, ring).IsOk());
+    EXPECT_EQ(client.hashRingInvokeCount, 1);
+    EXPECT_EQ(client.invokedHashRingRequest.version(), 42ul);
+    EXPECT_FALSE(client.invokedHashRingRequest.signature().empty());
+}
+
+TEST(ExistRequestBuilderTest, RejectsEmptyKeys)
+{
+    std::vector<std::string> keys;
+    TransportExistRequest input(keys, false, false, 100, "client", "tenant", SensitiveValue());
+    ExistReqPb request;
+    EXPECT_EQ(BuildExistRequest(input, request).GetCode(), K_INVALID);
+}
+
+TEST(ExistRequestBuilderTest, RejectsQueryL2CacheWithIsLocal)
+{
+    std::vector<std::string> keys{ "k1" };
+    TransportExistRequest input(keys, true, true, 100, "client", "tenant", SensitiveValue());
+    ExistReqPb request;
+    EXPECT_EQ(BuildExistRequest(input, request).GetCode(), K_INVALID);
+}
+
+TEST(ExistRequestBuilderTest, BuildsRequestWithAuthFields)
+{
+    std::vector<std::string> keys{ "k1", "k2" };
+    TransportExistRequest input(keys, true, false, 200, "client-1", "tenant-1", SensitiveValue("token-1"));
+    ExistReqPb request;
+    ASSERT_TRUE(BuildExistRequest(input, request).IsOk());
+    ASSERT_EQ(request.object_keys_size(), 2);
+    EXPECT_EQ(request.object_keys(0), "k1");
+    EXPECT_EQ(request.object_keys(1), "k2");
+    EXPECT_TRUE(request.query_l2cache());
+    EXPECT_FALSE(request.is_local());
+    EXPECT_EQ(request.client_id(), "client-1");
+    EXPECT_EQ(request.tenant_id(), "tenant-1");
+    EXPECT_EQ(request.token(), "token-1");
 }
 
 TEST(WorkerRpcClientTest, HashRingRefreshSignsRequestAndUsesControlTimeoutOutsideApiDeadline)

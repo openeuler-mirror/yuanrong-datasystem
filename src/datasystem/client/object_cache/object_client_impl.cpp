@@ -23,7 +23,8 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <map>
+#include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -37,7 +38,6 @@
 #include <vector>
 
 #include <tbb/concurrent_hash_map.h>
-#include <nlohmann/json.hpp>
 
 #include "datasystem/client/client_flags_monitor.h"
 #include "datasystem/client/mmap/immap_table_entry.h"
@@ -45,9 +45,14 @@
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
+#include "datasystem/client/object_cache/exist_handler.h"
+#include "datasystem/client/routing/broken_filter.h"
+#include "datasystem/client/routing/hash_ring_refresher.h"
+#include "datasystem/client/routing/worker_router.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/metrics.h"
@@ -321,6 +326,143 @@ void NotifySwitchToExpectedWorker(const HostPort &target)
 static constexpr int32_t INIT_SELECT_WORKER_RETRY_INTERVAL_MS = 100;
 static constexpr int32_t INIT_SELECT_WORKER_NO_WORKER_RETRY_INTERVAL_MS = 500;
 static constexpr int32_t INIT_SELECT_WORKER_TRIES = 6;
+class ObjectClientExistRouting final : public IExistRouting {
+public:
+    explicit ObjectClientExistRouting(std::shared_ptr<client::Routing> routing) : routing_(std::move(routing)) {}
+
+    ~ObjectClientExistRouting() override = default;
+
+    Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups) override
+    {
+        RETURN_RUNTIME_ERROR_IF_NULL(routing_);
+        return routing_->SelectWorkers(keys, strategy, groups);
+    }
+
+    void UpdateState(const HostPort &addr, StatusCode status) override
+    {
+        if (routing_ != nullptr) {
+            routing_->UpdateState(addr, status);
+        }
+    }
+
+private:
+    std::shared_ptr<client::Routing> routing_;
+};
+
+class ObjectClientExistTransport final : public IExistTransport {
+public:
+    explicit ObjectClientExistTransport(client::TransportLayer *transport) : transport_(transport)
+    {
+    }
+
+    ~ObjectClientExistTransport() override = default;
+
+    Status Exist(const HostPort &workerAddr, const client::TransportExistRequest &input,
+                 client::TransportExistResult &output) override
+    {
+        RETURN_RUNTIME_ERROR_IF_NULL(transport_);
+        return transport_->Exist(workerAddr, input, output);
+    }
+
+private:
+    client::TransportLayer *transport_;
+};
+
+class ObjectClientSingleWorkerExistRouting final : public IExistRouting {
+public:
+    explicit ObjectClientSingleWorkerExistRouting(std::function<Status(HostPort &)> workerProvider)
+        : workerProvider_(std::move(workerProvider))
+    {
+    }
+
+    ~ObjectClientSingleWorkerExistRouting() override = default;
+
+    Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups) override
+    {
+        (void)strategy;
+        RETURN_RUNTIME_ERROR_IF_NULL(workerProvider_);
+        HostPort worker;
+        RETURN_IF_NOT_OK(workerProvider_(worker));
+        CHECK_FAIL_RETURN_STATUS(!worker.Empty(), K_NOT_READY, "Exist worker address is unavailable");
+        groups.clear();
+        groups.emplace(worker, keys);
+        return Status::OK();
+    }
+
+    void UpdateState(const HostPort &, StatusCode) override
+    {
+    }
+
+private:
+    std::function<Status(HostPort &)> workerProvider_;
+};
+
+/** @brief Bundles connection and timeout settings shared by Exist transport worker APIs. */
+struct ExistTransportConfig {
+    std::string tenantId;
+    bool enableCrossNodeConnection = false;
+    int32_t requestTimeoutMs = 0;
+    int32_t connectTimeoutMs = 0;
+    uint64_t fastTransportMemSize = 0;
+};
+
+class ObjectClientWorkerApiExistTransport final : public IExistTransport {
+public:
+    ObjectClientWorkerApiExistTransport(std::shared_ptr<IClientWorkerApi> baseApi, RpcCredential cred,
+                                        SensitiveValue token, Signature *signature, ExistTransportConfig config)
+        : baseApi_(std::move(baseApi)),
+          cred_(std::move(cred)),
+          token_(std::move(token)),
+          signature_(signature),
+          config_(std::move(config))
+    {
+    }
+
+    ~ObjectClientWorkerApiExistTransport() override = default;
+
+    Status Exist(const HostPort &workerAddr, const client::TransportExistRequest &input,
+                 client::TransportExistResult &output) override
+    {
+        std::shared_ptr<IClientWorkerApi> api;
+        RETURN_IF_NOT_OK(GetOrCreateWorkerApi(workerAddr, api));
+        RETURN_IF_NOT_OK(api->Exist(input.objectKeys, output.exists, input.queryL2Cache, input.isLocal));
+        return Status::OK();
+    }
+
+private:
+    Status GetOrCreateWorkerApi(const HostPort &workerAddr, std::shared_ptr<IClientWorkerApi> &api)
+    {
+        RETURN_RUNTIME_ERROR_IF_NULL(baseApi_);
+        if (workerAddr == baseApi_->hostPort_) {
+            api = baseApi_;
+            return Status::OK();
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = workerApis_.find(workerAddr);
+        if (it != workerApis_.end()) {
+            api = it->second;
+            return Status::OK();
+        }
+        auto newApi = baseApi_->CloneWith(workerAddr, cred_, HeartbeatType::NO_HEARTBEAT, token_, signature_,
+                                          config_.tenantId, config_.enableCrossNodeConnection);
+        RETURN_RUNTIME_ERROR_IF_NULL(newApi);
+        RETURN_IF_NOT_OK(newApi->Init(config_.requestTimeoutMs, config_.connectTimeoutMs,
+                                      config_.fastTransportMemSize, config_.connectTimeoutMs));
+        api = newApi;
+        workerApis_.emplace(workerAddr, std::move(newApi));
+        return Status::OK();
+    }
+
+    std::shared_ptr<IClientWorkerApi> baseApi_;
+    RpcCredential cred_;
+    SensitiveValue token_;
+    Signature *signature_;  // Non-owning; lifetime tied to ObjectClientImpl::signature_
+    ExistTransportConfig config_;
+    std::mutex mutex_;
+    std::unordered_map<HostPort, std::shared_ptr<IClientWorkerApi>> workerApis_;
+};
 }  // namespace
 
 ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
@@ -850,6 +992,15 @@ Status ObjectClientImpl::InitWorkerClientAtCurrentAddress(bool enableHeartbeat, 
     }
     RETURN_IF_NOT_OK(rc);
     LogClientConfigInitSnapshot();
+    return Status::OK();
+}
+
+Status ObjectClientImpl::GetCurrentWorkerHostPort(HostPort &addr) const
+{
+    std::lock_guard<std::mutex> lock(switchNodeMutex_);
+    auto workerApi = workerApi_[currentNode_];
+    CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_NOT_READY, "Current worker API is not initialized");
+    addr = workerApi->hostPort_;
     return Status::OK();
 }
 
@@ -5567,7 +5718,7 @@ void ObjectClientImpl::ShutdownMetricsThread(bool dumpSummary)
     }
 }
 
-Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryEtcd,
+Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
                                const bool isLocal)
 {
     PerfPoint perfPoint(PerfKey::CLIENT_EXIST);
@@ -5581,14 +5732,17 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_START);
     }
-    std::shared_ptr<IClientWorkerApi> workerApi;
-    std::unique_ptr<Raii> raii;
-    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
     Timer timer;
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_RPC_START);
     }
-    auto rc = workerApi->Exist(keys, exists, queryEtcd, isLocal);
+    std::shared_ptr<IClientWorkerApi> workerApi;
+    std::unique_ptr<Raii> raii;
+    RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
+    CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_RUNTIME_ERROR, "No available worker API for Exist");
+    const auto tokenPtr = std::atomic_load(&transportToken_);
+    SensitiveValue token = (tokenPtr != nullptr) ? *tokenPtr : SensitiveValue();
+    Status rc = RunExist(routing_, transportLayer_, workerApi, keys, exists, queryL2Cache, isLocal, token);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_RPC_END);
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_END);
@@ -5600,7 +5754,26 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     SLOW_LOG_IF_OR_VLOG(INFO, config.rpcSlowerThanUs > 0 && elapsedUs >= config.rpcSlowerThanUs, 1,
         FormatString("Finished check exist from worker, first object_key: %s, cost: %.3fms, rc: %s",
                      firstKey, elapsedMs, rc.ToString()));
+    perfPoint.Record();
     return rc;
+}
+
+Status ObjectClientImpl::RunExist(std::shared_ptr<client::Routing> routing,
+    std::unique_ptr<client::TransportLayer> &transportLayer, std::shared_ptr<IClientWorkerApi> &workerApi,
+    const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache, const bool isLocal,
+    const SensitiveValue &token)
+{
+    if (routing != nullptr && transportLayer != nullptr) {
+        ExistHandlerRequest request{ keys, queryL2Cache, isLocal, requestTimeoutMs_, GetClientId(),
+            GetRequestContext()->tenantId.empty() ? tenantId_ : GetRequestContext()->tenantId, token };
+        auto existTransport = std::make_shared<ObjectClientWorkerApiExistTransport>(
+            workerApi, cred_, token, signature_.get(),
+            ExistTransportConfig{ tenantId_, enableCrossNodeConnection_, requestTimeoutMs_, connectTimeoutMs_,
+                                  fastTransportMemSize_ });
+        ExistHandler flow(std::make_shared<ObjectClientExistRouting>(routing), existTransport, asyncGetRPCPool_);
+        return flow.Run(request, exists);
+    }
+    return workerApi->Exist(keys, exists, queryL2Cache, isLocal);
 }
 
 Status ObjectClientImpl::Expire(const std::vector<std::string> &keys, uint32_t ttlSeconds,

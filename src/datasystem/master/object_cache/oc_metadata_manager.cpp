@@ -4670,6 +4670,11 @@ Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQuery
             auto *queryMeta = rsp.add_query_metas();
             queryMeta->mutable_meta()->CopyFrom(accessor->second.meta);
             queryMeta->mutable_meta()->set_object_key(objectKey);
+            if (!req.address().empty()) {
+                queryMeta->set_address(SelectObjectLocation(objectKey, req.address(), accessor->second.locations));
+                queryMeta->set_single_copy(
+                    accessor->second.IsPrimaryWithoutCopy(accessor->second.meta.primary_address()));
+            }
         } else {
             LOG(WARNING) << FormatString("QueryMeta and not found: %s", objectKey);
         }

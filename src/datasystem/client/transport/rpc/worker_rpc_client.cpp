@@ -102,6 +102,17 @@ Status WorkerRpcClient::DoInvokeQueryAndGet(const RpcOptions &options, const mas
     return masterStub_->QueryAndGet(options, request, response, payloads);
 }
 
+Status WorkerRpcClient::DoInvokeExist(const RpcOptions &options, const ExistReqPb &request, ExistRspPb &response)
+{
+    return controlStub_->Exist(options, request, response);
+}
+
+Status WorkerRpcClient::DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
+                                            GetHashRingRspPb &response)
+{
+    return controlStub_->GetHashRing(options, request, response);
+}
+
 Status WorkerRpcClient::DoInvokeCreate(const RpcOptions &options, const CreateReqPb &request,
                                        CreateRspPb &response)
 {
@@ -133,12 +144,6 @@ Status WorkerRpcClient::DoInvokeDecreaseReference(const RpcOptions &options,
     return controlStub_->DecreaseReference(options, request, response);
 }
 
-Status WorkerRpcClient::DoInvokeGetHashRing(const RpcOptions &options, const GetHashRingReqPb &request,
-                                            GetHashRingRspPb &response)
-{
-    return controlStub_->GetHashRing(options, request, response);
-}
-
 Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &response,
                                         std::vector<RpcMessage> &payloads)
 {
@@ -167,6 +172,41 @@ Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, mas
     INJECT_POINT("client.transport.query_and_get", []() { return Status::OK(); });
     Status rc = DoInvokeQueryAndGet(options, request, response, payloads);
     return rc.IsError() ? WithRpcDiag(rc, "QueryAndGet", workerAddress_) : Status::OK();
+}
+
+Status WorkerRpcClient::InvokeExist(int64_t subTimeoutMs, ExistReqPb &request, ExistRspPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker RPC client is not initialized");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(subTimeoutMs, rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    PerfPoint perfPoint(PerfKey::RPC_CLIENT_EXIST);
+    Status rc = DoInvokeExist(options, request, response);
+    perfPoint.Record();
+    if (rc.IsError()) {
+        return WithRpcDiag(rc, "Exist", workerAddress_);
+    }
+    if (!response.redirect_extra().empty()) {
+        return Status(K_NOT_OWNER, "Exist keys redirected to new owners").WithExtra(response.redirect_extra());
+    }
+    return Status::OK();
+}
+
+Status WorkerRpcClient::InvokeGetHashRing(uint64_t currentVersion, GetHashRingRspPb &response)
+{
+    if (!IsAlive()) {
+        return Status(K_RPC_UNAVAILABLE, "Routed worker RPC client is not initialized");
+    }
+    CHECK_FAIL_RETURN_STATUS(channelConfig_.timeout_ms > 0, K_INVALID, "RPC timeout must be positive");
+    GetHashRingReqPb request;
+    request.set_version(currentVersion);
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(channelConfig_.timeout_ms);
+    return WithRpcDiag(DoInvokeGetHashRing(options, request, response), "GetHashRing", workerAddress_);
 }
 
 Status WorkerRpcClient::InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request, CreateRspPb &response,
@@ -298,22 +338,6 @@ Status WorkerRpcClient::ExchangeUrmaConnectInfo(UrmaHandshakeRspPb &response)
     return rc.IsError() ? WithRpcDiag(rc, "WorkerWorkerExchangeUrmaConnectInfo", workerAddress_) : Status::OK();
 }
 
-Status WorkerRpcClient::InvokeGetHashRing(uint64_t currentVersion, GetHashRingRspPb &response)
-{
-    if (!IsAlive()) {
-        return Status(K_RPC_UNAVAILABLE, "Routed worker RPC client is not initialized");
-    }
-    CHECK_FAIL_RETURN_STATUS(channelConfig_.timeout_ms > 0, K_INVALID, "RPC timeout must be positive");
-    GetHashRingReqPb request;
-    request.set_version(currentVersion);
-    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
-    RpcOptions options;
-    options.SetTimeout(static_cast<int32_t>(
-        std::min<int64_t>(channelConfig_.timeout_ms, static_cast<int64_t>(MAX_RPC_TIMEOUT_MS))));
-    Status rc = DoInvokeGetHashRing(options, request, response);
-    return rc.IsError() ? WithRpcDiag(rc, "GetHashRing", workerAddress_) : Status::OK();
-}
-
 bool WorkerRpcClient::IsAlive() const
 {
     return alive_.load(std::memory_order_acquire) && channel_ != nullptr && controlStub_ != nullptr
@@ -325,8 +349,8 @@ void WorkerRpcClient::Close()
     alive_.store(false, std::memory_order_release);
     masterStub_.reset();
     dataStub_.reset();
-    transportStub_.reset();
     controlStub_.reset();
+    transportStub_.reset();
     channel_.reset();
 }
 

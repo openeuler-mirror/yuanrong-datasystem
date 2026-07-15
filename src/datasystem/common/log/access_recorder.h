@@ -413,6 +413,7 @@ public:
 
     ObjectAccessRecorder &LatencySummary(std::string summary);
 
+    void Discard();
     void Record();
 
 private:

@@ -14,6 +14,7 @@ list(APPEND CLIENT_SRCS
         object_cache/client_worker_api/client_worker_base_api.cpp
         object_cache/client_worker_api/client_worker_local_api.cpp
         object_cache/client_worker_api/client_worker_remote_api.cpp
+        object_cache/exist_handler.cpp
         object_cache/object_client.cpp
         object_cache/object_client_impl.cpp
         object_cache/client_memory_ref_table.cpp
@@ -48,6 +49,7 @@ list(APPEND CLIENT_SRCS
         transport/data_plane/tcp_transporter.cpp
         transport/data_plane/ub_connection.cpp
         transport/data_plane/ub_transporter.cpp
+        transport/rpc/exist_request_builder.cpp
         transport/rpc/mset_request_builder.cpp
         transport/rpc/set_request_builder.cpp
         transport/rpc/worker_rpc_client.cpp
