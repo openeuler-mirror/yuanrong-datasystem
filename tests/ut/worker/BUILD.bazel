@@ -268,6 +268,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "worker_worker_oc_gather_layout_test",
+    srcs = ["object_cache/worker_worker_oc_gather_layout_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/object_cache:worker_worker_oc_gather_layout",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "worker_worker_peer_state_codec_test",
     srcs = ["object_cache/worker_worker_peer_state_codec_test.cpp"],
     deps = [
@@ -430,6 +439,7 @@ test_suite(
         "worker_oc_spill_eviction_test",
         "worker_oc_spill_test",
         "worker_worker_peer_state_codec_test",
+        "worker_worker_oc_gather_layout_test",
         "worker_worker_oc_api_test",
     ],
 )

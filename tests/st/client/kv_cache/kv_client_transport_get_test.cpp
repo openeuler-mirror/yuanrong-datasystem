@@ -16,23 +16,32 @@
 
 /** Description: Tests KVClient reads through the transport layer (enableLocalCache=false). */
 
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <future>
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
 #include "client/object_cache/oc_client_common.h"
+#include "common_distributed_ext.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/util/hash_algorithm.h"
+#include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/thread_pool.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/protos/cluster_topology.pb.h"
 
@@ -53,6 +62,7 @@ constexpr char UB_GET_SIZE_ENV[] = "DATASYSTEM_UB_GET_DATA_SIZE_BYTES";
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 constexpr char QUERY_AND_GET_INJECT[] = "client.transport.query_and_get";
 constexpr char GET_OBJECT_REMOTE_INJECT[] = "client.transport.get_object_remote";
+constexpr char BATCH_GET_OBJECT_REMOTE_INJECT[] = "client.transport.batch_get_object_remote";
 constexpr char INLINE_READ_FAILURE_INJECT[] = "worker.worker_worker_remote_get_failure";
 
 struct TransportRpcCounts {
@@ -70,7 +80,7 @@ const char *ExpectedTransport()
 }
 }  // namespace
 
-class KVClientTransportGetTest : public OCClientCommon {
+class KVClientTransportGetTest : public OCClientCommon, public CommonDistributedExt {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
@@ -101,8 +111,9 @@ public:
         DS_ASSERT_OK(inject::Set(QUERY_AND_GET_INJECT, "call()"));
         DS_ASSERT_OK(inject::Set(GET_OBJECT_REMOTE_INJECT, "call()"));
         ExternalClusterTest::SetUp();
+        CommonDistributedExt::InitTestEtcdInstance();
 
-        etcd_ = InitTestEtcdInstance();
+        etcd_ = OCClientCommon::InitTestEtcdInstance();
         ASSERT_NE(etcd_, nullptr);
         InitTestKVClient(META_OWNER_INDEX, writer_, CLIENT_TIMEOUT_MS);
 #ifdef USE_URMA
@@ -116,6 +127,7 @@ public:
         reader_.reset();
         writer_.reset();
         etcd_.reset();
+        CommonDistributedExt::etcd_.reset();
         RestoreUbGetSize();
         (void)inject::Clear(SKIP_WARMUP_INJECT);
         (void)inject::Clear(QUERY_AND_GET_INJECT);
@@ -125,6 +137,12 @@ public:
     }
 
 protected:
+    BaseCluster *GetCluster() override
+    {
+        return cluster_.get();
+    }
+
+    // enableLocalCache=false reader: the client under test, exercising TransportLayer::Get.
     void InitTransportClient()
     {
         ConnectOptions options;
@@ -186,6 +204,51 @@ protected:
     {
         counts.queryAndGet = inject::GetExecuteCount(QUERY_AND_GET_INJECT);
         counts.getObjectRemote = inject::GetExecuteCount(GET_OBJECT_REMOTE_INJECT);
+    }
+
+    // Generate N distinct keys without making placement assumptions.
+    std::vector<std::string> MakeRandomKeys(size_t count)
+    {
+        std::vector<std::string> keys;
+        keys.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            keys.emplace_back("transport_get_" + std::to_string(i) + "_" + GetStringUuid());
+        }
+        return keys;
+    }
+
+    std::vector<std::string> MakeKeysAcrossMetaOwners(size_t countPerOwner)
+    {
+        constexpr size_t MAX_CANDIDATES = 10'000;
+        const size_t workerCount = cluster_->GetWorkerNum();
+        std::vector<std::vector<std::string>> keysByOwner(workerCount);
+        size_t selected = 0;
+        for (size_t i = 0; i < MAX_CANDIDATES && selected < workerCount * countPerOwner; ++i) {
+            std::string key = "transport_get_owner_" + std::to_string(i) + "_" + GetStringUuid();
+            WorkerEntry owner;
+            GetMetaLocationById(key, { 0, 1, 2 }, owner);
+            if (owner.index < 0 || static_cast<size_t>(owner.index) >= workerCount) {
+                ADD_FAILURE() << "invalid metadata owner index " << owner.index;
+                return {};
+            }
+            auto &ownerKeys = keysByOwner[owner.index];
+            if (ownerKeys.size() < countPerOwner) {
+                ownerKeys.emplace_back(std::move(key));
+                ++selected;
+            }
+        }
+        EXPECT_EQ(selected, workerCount * countPerOwner);
+
+        std::vector<std::string> keys;
+        keys.reserve(selected);
+        for (size_t position = 0; position < countPerOwner; ++position) {
+            for (auto &ownerKeys : keysByOwner) {
+                if (position < ownerKeys.size()) {
+                    keys.emplace_back(std::move(ownerKeys[position]));
+                }
+            }
+        }
+        return keys;
     }
 
     std::unique_ptr<EtcdStore> etcd_;
@@ -429,6 +492,358 @@ TEST_F(KVClientTransportGetTest, InlineCapacityLimitFallsBack)
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
     ASSERT_EQ(after.queryAndGet, before.queryAndGet + 1);
     ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 1);
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetRoundTrips32Keys)
+{
+    const auto keys = MakeRandomKeys(32);
+    std::vector<std::string> values;
+    values.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        values.emplace_back(VALUE_SIZE + i, 'a' + static_cast<char>(i % 26));
+        DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
+    }
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
+
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        ASSERT_TRUE(buffers[i]) << "missing buffer at position " << i;
+        AssertBufferEqual(*buffers[i], values[i]);
+    }
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetPreservesOrderAcrossMetadataOwners)
+{
+    const auto keys = MakeKeysAcrossMetaOwners(4);
+    ASSERT_EQ(keys.size(), cluster_->GetWorkerNum() * 4);
+    std::vector<std::string> values;
+    values.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        values.emplace_back(VALUE_SIZE + i * 17, 'A' + static_cast<char>(i % 26));
+        DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
+    }
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
+
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        ASSERT_TRUE(buffers[i]) << "missing buffer at position " << i;
+        AssertBufferEqual(*buffers[i], values[i]);
+    }
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetReturnsExistingValuesWithMissingSlots)
+{
+    auto existingKeys = MakeRandomKeys(3);
+    const std::vector<std::string> values = { std::string(VALUE_SIZE, 'x'), std::string(VALUE_SIZE + 1, 'y'),
+                                              std::string(VALUE_SIZE + 2, 'z') };
+    for (size_t i = 0; i < existingKeys.size(); ++i) {
+        DS_ASSERT_OK(writer_->Set(existingKeys[i], values[i]));
+    }
+    const std::vector<std::string> keys = { existingKeys[0], "missing_" + GetStringUuid(), existingKeys[1],
+                                            "missing_" + GetStringUuid(), existingKeys[2] };
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
+
+    ASSERT_EQ(buffers.size(), keys.size());
+    ASSERT_TRUE(buffers[0]);
+    AssertBufferEqual(*buffers[0], values[0]);
+    ASSERT_FALSE(buffers[1]);
+    ASSERT_TRUE(buffers[2]);
+    AssertBufferEqual(*buffers[2], values[1]);
+    ASSERT_FALSE(buffers[3]);
+    ASSERT_TRUE(buffers[4]);
+    AssertBufferEqual(*buffers[4], values[2]);
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetAllMissingReturnsNotFound)
+{
+    const std::vector<std::string> keys = { "missing_first_" + GetStringUuid(),
+                                            "missing_second_" + GetStringUuid(),
+                                            "missing_third_" + GetStringUuid() };
+    std::vector<Optional<Buffer>> buffers;
+
+    ASSERT_EQ(reader_->Get(keys, buffers).GetCode(), StatusCode::K_NOT_FOUND);
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (const auto &buffer : buffers) {
+        ASSERT_FALSE(buffer);
+    }
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetAllUnavailableReturnsFirstInputError)
+{
+    const std::vector<std::string> keys = { "key3", "key2" };
+    DS_ASSERT_OK(writer_->Set(keys[0], std::string(VALUE_SIZE, 'n')));
+    DS_ASSERT_OK(writer_->Set(keys[1], std::string(VALUE_SIZE, 'r')));
+    std::vector<Optional<Buffer>> buffers;
+
+    ASSERT_EQ(reader_->Get(keys, buffers).GetCode(), StatusCode::K_WORKER_PULL_OBJECT_NOT_FOUND);
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (const auto &buffer : buffers) {
+        ASSERT_FALSE(buffer);
+    }
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetRetriesChangedSizesWithoutCorruptingNeighbors)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Direct Batch Get size-change ST requires USE_URMA.";
+#else
+    constexpr auto WAIT_TIMEOUT = std::chrono::seconds(5);
+    constexpr auto POLL_INTERVAL = std::chrono::milliseconds(50);
+    const auto keys = MakeRandomKeys(2);
+    const std::vector<std::string> initialValues = { std::string(VALUE_SIZE, 'a'),
+                                                     std::string(VALUE_SIZE + 1024, 'b') };
+    const std::vector<std::string> updatedValues = { std::string(VALUE_SIZE + 8192, 'A'),
+                                                     std::string(VALUE_SIZE + 16 * 1024, 'B') };
+    for (size_t i = 0; i < keys.size(); ++i) {
+        DS_ASSERT_OK(writer_->Set(keys[i], initialValues[i]));
+    }
+
+    std::vector<Optional<Buffer>> buffers;
+    std::string actualTransport;
+    std::promise<Status> getPromise;
+    auto getFuture = getPromise.get_future();
+    std::thread getThread;
+    bool pauseCleared = false;
+    Raii cleanup([&]() {
+        if (!pauseCleared) {
+            (void)inject::Clear(BATCH_GET_OBJECT_REMOTE_INJECT);
+        }
+        if (getThread.joinable()) {
+            getThread.join();
+        }
+    });
+
+    DS_ASSERT_OK(inject::Set(BATCH_GET_OBJECT_REMOTE_INJECT, "pause()"));
+    const uint64_t baselineCount = inject::GetExecuteCount(BATCH_GET_OBJECT_REMOTE_INJECT);
+
+    getThread = std::thread([&]() {
+        auto rc = reader_->Get(keys, buffers);
+        actualTransport = AccessTransportTracker::ToString();
+        getPromise.set_value(std::move(rc));
+    });
+
+    bool dataRequestPaused = false;
+    const auto deadline = std::chrono::steady_clock::now() + WAIT_TIMEOUT;
+    while (std::chrono::steady_clock::now() < deadline) {
+        dataRequestPaused = inject::GetExecuteCount(BATCH_GET_OBJECT_REMOTE_INJECT) > baselineCount;
+        if (dataRequestPaused || getFuture.wait_for(POLL_INTERVAL) == std::future_status::ready) {
+            break;
+        }
+    }
+    ASSERT_TRUE(dataRequestPaused) << "direct Batch Get did not reach the paused client data request";
+
+    for (size_t i = 0; i < keys.size(); ++i) {
+        DS_ASSERT_OK(writer_->Set(keys[i], updatedValues[i]));
+    }
+
+    const Status clearStatus = inject::Clear(BATCH_GET_OBJECT_REMOTE_INJECT);
+    ASSERT_TRUE(clearStatus.IsOk()) << clearStatus.ToString();
+    pauseCleared = true;
+    getThread.join();
+    const Status getStatus = getFuture.get();
+    DS_ASSERT_OK(getStatus);
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        ASSERT_TRUE(buffers[i]) << "missing buffer at position " << i;
+        AssertBufferEqual(*buffers[i], updatedValues[i]);
+    }
+    ASSERT_EQ(actualTransport, ExpectedTransport());
+#endif
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetConcurrentOverlappingRequests)
+{
+    constexpr size_t KEY_COUNT = 32;
+    constexpr size_t THREAD_COUNT = 4;
+    constexpr size_t KEYS_PER_REQUEST = 16;
+    constexpr size_t KEY_STRIDE = 4;
+    const auto keys = MakeRandomKeys(KEY_COUNT);
+    std::unordered_map<std::string, std::string> expected;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        auto inserted = expected.emplace(keys[i], std::string(VALUE_SIZE + i, 'a' + static_cast<char>(i % 26)));
+        DS_ASSERT_OK(writer_->Set(inserted.first->first, inserted.first->second));
+    }
+
+    struct GetResult {
+        Status status;
+        std::vector<std::string> keys;
+        std::vector<Optional<Buffer>> buffers;
+        std::string transport;
+    };
+    std::promise<void> ready;
+    std::shared_future<void> start(ready.get_future());
+    ThreadPool pool(THREAD_COUNT);
+    std::vector<std::future<GetResult>> futures;
+    for (size_t thread = 0; thread < THREAD_COUNT; ++thread) {
+        futures.emplace_back(pool.Submit([&, thread]() {
+            GetResult result;
+            result.keys.reserve(KEYS_PER_REQUEST);
+            for (size_t i = 0; i < KEYS_PER_REQUEST; ++i) {
+                result.keys.emplace_back(keys[(thread * KEY_STRIDE + i) % keys.size()]);
+            }
+            start.wait();
+            result.status = reader_->Get(result.keys, result.buffers);
+            result.transport = AccessTransportTracker::ToString();
+            return result;
+        }));
+    }
+    ready.set_value();
+
+    for (auto &future : futures) {
+        auto result = future.get();
+        DS_ASSERT_OK(result.status);
+        ASSERT_EQ(result.buffers.size(), result.keys.size());
+        for (size_t i = 0; i < result.keys.size(); ++i) {
+            ASSERT_TRUE(result.buffers[i]) << "missing buffer at position " << i;
+            AssertBufferEqual(*result.buffers[i], expected.at(result.keys[i]));
+        }
+        ASSERT_EQ(result.transport, ExpectedTransport());
+    }
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetUbBufferSurvivesSiblingReset)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Direct Batch Get UB owner-lifetime ST requires USE_URMA.";
+#else
+    constexpr size_t KEY_COUNT = 8;
+    constexpr size_t SURVIVOR_INDEX = 3;
+    const auto keys = MakeRandomKeys(KEY_COUNT);
+    std::vector<std::string> values;
+    values.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        values.emplace_back(VALUE_SIZE + i * 4096, 'A' + static_cast<char>(i));
+        DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
+    }
+
+    std::vector<Optional<Buffer>> buffers;
+    const Status getStatus = reader_->Get(keys, buffers);
+    const std::string actualTransport = AccessTransportTracker::ToString();
+    DS_ASSERT_OK(getStatus);
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        ASSERT_TRUE(buffers[i]) << "missing buffer at position " << i;
+        AssertBufferEqual(*buffers[i], values[i]);
+    }
+
+    Optional<Buffer> survivor = std::move(buffers[SURVIVOR_INDEX]);
+    const std::string survivorValue = values[SURVIVOR_INDEX];
+    buffers.clear();
+    buffers.shrink_to_fit();
+
+    ASSERT_TRUE(survivor);
+    AssertBufferEqual(*survivor, survivorValue);
+    if (actualTransport != "UB") {
+        GTEST_SKIP() << "URMA runtime did not execute UB direct read: " << actualTransport;
+    }
+#endif
+}
+
+TEST_F(KVClientTransportGetTest, DirectBatchGetUbConcurrentOverlappingBatches)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Direct Batch Get UB concurrency ST requires USE_URMA.";
+#else
+    constexpr size_t KEY_COUNT = 24;
+    constexpr size_t THREAD_COUNT = 4;
+    constexpr size_t ITERATION_COUNT = 4;
+    constexpr size_t KEYS_PER_REQUEST = 12;
+    constexpr size_t KEY_STRIDE = 3;
+    const auto keys = MakeRandomKeys(KEY_COUNT);
+    std::unordered_map<std::string, std::string> expected;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        auto inserted = expected.emplace(keys[i], std::string(VALUE_SIZE + i * 257, 'a' + static_cast<char>(i % 26)));
+        DS_ASSERT_OK(writer_->Set(inserted.first->first, inserted.first->second));
+    }
+
+    struct ConcurrentGetResult {
+        std::vector<Status> statuses;
+        bool contentsMatch = true;
+        std::string mismatch;
+        std::vector<std::string> transports;
+    };
+    std::promise<void> ready;
+    std::shared_future<void> start(ready.get_future());
+    ThreadPool pool(THREAD_COUNT);
+    std::vector<std::future<ConcurrentGetResult>> futures;
+    for (size_t thread = 0; thread < THREAD_COUNT; ++thread) {
+        futures.emplace_back(pool.Submit([&, thread]() {
+            ConcurrentGetResult result;
+            result.statuses.reserve(ITERATION_COUNT);
+            result.transports.reserve(ITERATION_COUNT);
+            start.wait();
+            for (size_t iteration = 0; iteration < ITERATION_COUNT; ++iteration) {
+                std::vector<std::string> requestKeys;
+                requestKeys.reserve(KEYS_PER_REQUEST);
+                for (size_t i = 0; i < KEYS_PER_REQUEST; ++i) {
+                    requestKeys.emplace_back(keys[(thread * KEY_STRIDE + iteration + i) % keys.size()]);
+                }
+                std::vector<Optional<Buffer>> buffers;
+                const Status rc = reader_->Get(requestKeys, buffers);
+                result.statuses.emplace_back(rc);
+                result.transports.emplace_back(AccessTransportTracker::ToString());
+                if (rc.IsError()) {
+                    break;
+                }
+                if (buffers.size() != requestKeys.size()) {
+                    result.contentsMatch = false;
+                    result.mismatch = "result count does not match request count";
+                    break;
+                }
+                for (size_t i = 0; i < requestKeys.size(); ++i) {
+                    const auto &value = expected.at(requestKeys[i]);
+                    const void *data = buffers[i] ? buffers[i]->ImmutableData() : nullptr;
+                    if (!buffers[i] || buffers[i]->GetSize() != static_cast<int64_t>(value.size())
+                        || data == nullptr || std::memcmp(data, value.data(), value.size()) != 0) {
+                        result.contentsMatch = false;
+                        result.mismatch = "value mismatch at thread " + std::to_string(thread) + ", iteration "
+                                          + std::to_string(iteration) + ", position " + std::to_string(i);
+                        break;
+                    }
+                }
+                if (!result.contentsMatch) {
+                    break;
+                }
+            }
+            return result;
+        }));
+    }
+    ready.set_value();
+
+    std::vector<ConcurrentGetResult> results;
+    results.reserve(futures.size());
+    size_t ubObservationCount = 0;
+    for (auto &future : futures) {
+        results.emplace_back(future.get());
+        ubObservationCount += static_cast<size_t>(
+            std::count(results.back().transports.begin(), results.back().transports.end(), "UB"));
+    }
+    for (const auto &result : results) {
+        for (const auto &status : result.statuses) {
+            DS_ASSERT_OK(status);
+        }
+        ASSERT_EQ(result.statuses.size(), ITERATION_COUNT);
+        ASSERT_TRUE(result.contentsMatch) << result.mismatch;
+        ASSERT_EQ(result.transports.size(), ITERATION_COUNT);
+    }
+    if (ubObservationCount == 0) {
+        GTEST_SKIP() << "URMA runtime did not execute UB in any concurrent direct-read context.";
+    }
+    for (const auto &result : results) {
+        for (const auto &transport : result.transports) {
+            ASSERT_EQ(transport, "UB") << "every concurrent Get context must exercise UB";
+        }
+    }
+#endif
 }
 
 }  // namespace st

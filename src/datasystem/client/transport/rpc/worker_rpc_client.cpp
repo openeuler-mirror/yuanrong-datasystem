@@ -96,6 +96,12 @@ Status WorkerRpcClient::DoInvokeGetObject(const RpcOptions &options, const GetOb
     return dataStub_->GetObjectRemote(options, request, response, payloads);
 }
 
+Status WorkerRpcClient::DoInvokeBatchGetObject(const RpcOptions &options, const BatchGetObjectRemoteReqPb &request,
+                                               BatchGetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads)
+{
+    return dataStub_->BatchGetObjectRemote(options, request, response, payloads);
+}
+
 Status WorkerRpcClient::DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
                                             master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads)
 {
@@ -157,6 +163,22 @@ Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObject
     INJECT_POINT("client.transport.get_object_remote", []() { return Status::OK(); });
     Status rc = DoInvokeGetObject(options, request, response, payloads);
     return rc.IsError() ? WithRpcDiag(rc, "GetObjectRemote", workerAddress_) : Status::OK();
+}
+
+Status WorkerRpcClient::InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                             std::vector<RpcMessage> &payloads)
+{
+    CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
+                             "Routed worker data client is not initialized");
+    CHECK_FAIL_RETURN_STATUS(request.requests_size() > 0, K_INVALID, "BatchGetObjectRemote request is empty");
+    int32_t rpcTimeout;
+    RETURN_IF_NOT_OK(GetRpcTimeout(channelConfig_.timeout_ms, rpcTimeout));
+    RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
+    RpcOptions options;
+    options.SetTimeout(rpcTimeout);
+    INJECT_POINT("client.transport.batch_get_object_remote", []() { return Status::OK(); });
+    Status rc = DoInvokeBatchGetObject(options, request, response, payloads);
+    return rc.IsError() ? WithRpcDiag(rc, "BatchGetObjectRemote", workerAddress_) : Status::OK();
 }
 
 Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,

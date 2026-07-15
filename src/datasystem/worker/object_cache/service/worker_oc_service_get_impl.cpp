@@ -71,6 +71,7 @@
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/worker_topology_references.h"
+#include "datasystem/worker/object_cache/worker_worker_oc_gather_layout.h"
 
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -1327,6 +1328,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         (*reqPb.mutable_urma_instance_id()) = transportInstanceId;
     }
     bool requestReady = false;
+    bool allRequestsUseAggregateMemory = true;
     uint32_t objectIndex = 0;
     for (auto infoIter = infos.begin(); infoIter != infos.end(); objectIndex++) {
         const auto &meta = infoIter->queryMeta->meta();
@@ -1383,6 +1385,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
         }
 
         reqPb.mutable_requests()->Add(std::move(subReq));
+        allRequestsUseAggregateMemory = allRequestsUseAggregateMemory && shmOwner != nullptr && shmUnitAllocated;
         if (objectKV.IsOffsetRead()) {
             objectKV.GetObjEntry()->stateInfo.SetIncompleted(true);
         }
@@ -1392,6 +1395,7 @@ Status WorkerOcServiceGetImpl::ConstructBatchGetRequest(const std::string &addre
     CHECK_FAIL_RETURN_STATUS(
         requestReady, lastRc.GetCode(),
         FormatString("Request not ready for the remote get request to addr: %s, due to %s", address, lastRc.GetMsg()));
+    SetAggregateGatherAttestation(allRequestsUseAggregateMemory, GetMetadataSize(), reqPb);
     return lastRc;
 }
 

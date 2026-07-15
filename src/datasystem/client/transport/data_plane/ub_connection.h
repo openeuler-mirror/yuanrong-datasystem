@@ -36,6 +36,7 @@ public:
 
     Status Establish(const HostPort &workerAddr) override;
     bool IsAlive() const override;
+    virtual bool SupportsPayloadOnlyClientBatchGet() const;
     AccessTransportKind Kind() const override
     {
         return AccessTransportKind::UB;
@@ -48,6 +49,7 @@ private:
     HostPort workerAddr_;
     std::shared_ptr<WorkerRpcClient> rpcClient_;
     std::atomic<bool> urmaReady_{ false };
+    std::atomic<bool> supportsPayloadOnlyClientBatchGet_{ false };
 };
 }  // namespace client
 }  // namespace datasystem

@@ -21,9 +21,13 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <mutex>
+#include <tuple>
 #include <utility>
+#include <vector>
 
+#include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
@@ -47,6 +51,26 @@
 namespace datasystem {
 namespace client {
 namespace {
+constexpr uint64_t UB_BATCH_SLICE_ALIGNMENT = 16;
+constexpr size_t UB_BATCH_MAX_OBJECT_COUNT = 1024;
+
+Status AlignUbBatchSlice(uint64_t size, uint64_t &alignedSize)
+{
+    constexpr uint64_t mask = UB_BATCH_SLICE_ALIGNMENT - 1;
+    CHECK_FAIL_RETURN_STATUS(size <= std::numeric_limits<uint64_t>::max() - mask, K_INVALID,
+                             "UB batch slice alignment overflows uint64");
+    alignedSize = (size + mask) & ~mask;
+    return Status::OK();
+}
+
+Status AddUbBatchSize(uint64_t lhs, uint64_t rhs, uint64_t &sum)
+{
+    CHECK_FAIL_RETURN_STATUS(lhs <= std::numeric_limits<uint64_t>::max() - rhs, K_INVALID,
+                             "UB batch aggregate size overflows uint64");
+    sum = lhs + rhs;
+    return Status::OK();
+}
+
 #ifdef USE_URMA
 class UbReceiveBufferOwner final : public IReceiveBufferOwner {
 public:
@@ -108,6 +132,11 @@ UbTransporter::UbTransporter(std::shared_ptr<WorkerRpcClient> rpcClient, std::sh
 Status UbTransporter::Get(const DataGetRequest &input, DataGetResult &output)
 {
     std::shared_lock<std::shared_mutex> lock(lifecycleMutex_);
+    return GetLocked(input, output);
+}
+
+Status UbTransporter::GetLocked(const DataGetRequest &input, DataGetResult &output)
+{
     CHECK_FAIL_RETURN_STATUS(!input.objectKey.empty(), K_INVALID, "Object key is empty");
     RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
     if (conn_ == nullptr || !conn_->IsAlive()) {
@@ -119,6 +148,322 @@ Status UbTransporter::Get(const DataGetRequest &input, DataGetResult &output)
         return rc;
     }
     return GetOnce(input, actualSize, output, actualSize);
+}
+
+Status UbTransporter::BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs)
+{
+    outputs.clear();
+    std::shared_lock<std::shared_mutex> lock(lifecycleMutex_);
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+    CHECK_FAIL_RETURN_STATUS(!inputs.empty(), K_INVALID, "Batch get request is empty");
+    if (inputs.size() == 1) {
+        DataGetItemResult item;
+        Status status = GetLocked(inputs.front(), item.data);
+        if (status.IsError() && static_cast<StatusCode>(item.data.response.error().error_code()) == K_OK) {
+            return status;
+        }
+        item.status = status;
+        outputs.emplace_back(std::move(item));
+        return Status::OK();
+    }
+    if (conn_ == nullptr || !conn_->IsAlive()) {
+        return Status(K_URMA_NEED_CONNECT, "UB connection not alive");
+    }
+    if (!conn_->SupportsPayloadOnlyClientBatchGet()) {
+        TcpTransporter tcpTransporter(rpcClient_);
+        return tcpTransporter.BatchGet(inputs, outputs);
+    }
+
+    std::vector<uint64_t> alignedSizes;
+    alignedSizes.reserve(inputs.size());
+    uint64_t totalSize = 0;
+    for (const auto &input : inputs) {
+        CHECK_FAIL_RETURN_STATUS(!input.objectKey.empty(), K_INVALID, "Object key is empty");
+        uint64_t alignedSize = 0;
+        RETURN_IF_NOT_OK(AlignUbBatchSlice(input.expectedSize, alignedSize));
+        RETURN_IF_NOT_OK(AddUbBatchSize(totalSize, alignedSize, totalSize));
+        alignedSizes.emplace_back(alignedSize);
+    }
+
+    const uint64_t maxGetSize = bufferProvider_->MaxGetSize();
+    DataGetBatchResult pendingOutputs(inputs.size());
+    std::vector<size_t> tcpFallbackIndexes;
+    bool allocationPressureObserved = false;
+    uint64_t allocationCeiling = maxGetSize;
+    size_t begin = 0;
+    while (begin < inputs.size()) {
+        size_t end = begin;
+        uint64_t chunkSize = 0;
+        while (end < inputs.size() && end - begin < UB_BATCH_MAX_OBJECT_COUNT) {
+            const uint64_t alignedSize = alignedSizes[end];
+            if (alignedSize == 0 || alignedSize > maxGetSize) {
+                if (end == begin) {
+                    ++end;
+                }
+                break;
+            }
+            if (chunkSize > maxGetSize - alignedSize) {
+                break;
+            }
+            chunkSize += alignedSize;
+            ++end;
+        }
+
+        const bool preserveUnary = alignedSizes[begin] == 0 || alignedSizes[begin] > maxGetSize;
+        if (end - begin == 1 && preserveUnary) {
+            DataGetItemResult item;
+            Status status = GetLocked(inputs[begin], item.data);
+            if (status.IsError() && static_cast<StatusCode>(item.data.response.error().error_code()) == K_OK) {
+                return status;
+            }
+            item.status = status;
+            pendingOutputs[begin] = std::move(item);
+        } else {
+            RETURN_IF_NOT_OK(BatchGetAggregateAdaptive(inputs, alignedSizes, begin, end, chunkSize, pendingOutputs,
+                                                       tcpFallbackIndexes, allocationPressureObserved,
+                                                       allocationCeiling));
+        }
+        begin = end;
+    }
+
+    if (!tcpFallbackIndexes.empty()) {
+        std::sort(tcpFallbackIndexes.begin(), tcpFallbackIndexes.end());
+        DataGetBatchRequest fallbackInputs;
+        fallbackInputs.reserve(tcpFallbackIndexes.size());
+        for (size_t index : tcpFallbackIndexes) {
+            fallbackInputs.emplace_back(inputs[index]);
+        }
+
+        METRIC_ADD(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL,
+                   tcpFallbackIndexes.size());
+        TcpTransporter tcpTransporter(rpcClient_);
+        DataGetBatchResult fallbackOutputs;
+        Status fallbackStatus = tcpTransporter.BatchGet(fallbackInputs, fallbackOutputs);
+        if (fallbackStatus.IsError()) {
+            for (size_t index : tcpFallbackIndexes) {
+                pendingOutputs[index] = DataGetItemResult{};
+                pendingOutputs[index].status = fallbackStatus;
+            }
+        } else {
+            CHECK_FAIL_RETURN_STATUS(fallbackOutputs.size() == tcpFallbackIndexes.size(), K_RUNTIME_ERROR,
+                                     "TCP fallback result count does not match request count");
+            for (size_t i = 0; i < tcpFallbackIndexes.size(); ++i) {
+                pendingOutputs[tcpFallbackIndexes[i]] = std::move(fallbackOutputs[i]);
+            }
+        }
+    }
+
+    outputs = std::move(pendingOutputs);
+    return Status::OK();
+}
+
+Status UbTransporter::BatchGetAggregateAdaptive(const DataGetBatchRequest &inputs,
+                                                const std::vector<uint64_t> &alignedSizes, size_t begin, size_t end,
+                                                uint64_t rangeSize, DataGetBatchResult &outputs,
+                                                std::vector<size_t> &tcpFallbackIndexes,
+                                                bool &allocationPressureObserved, uint64_t &allocationCeiling)
+{
+    bool allocationFailed = rangeSize > allocationCeiling;
+    if (!allocationFailed) {
+        DataGetBatchResult rangeOutputs;
+        Status rc = BatchGetAggregateOnce(inputs, alignedSizes, begin, end, rangeSize, rangeOutputs, allocationFailed);
+        if (allocationPressureObserved) {
+            allocationCeiling = std::min(allocationCeiling, rangeSize);
+        }
+        if (rc.IsOk()) {
+            CHECK_FAIL_RETURN_STATUS(rangeOutputs.size() == end - begin, K_RUNTIME_ERROR,
+                                     "UB batch result count does not match request range");
+            for (size_t i = 0; i < rangeOutputs.size(); ++i) {
+                outputs[begin + i] = std::move(rangeOutputs[i]);
+            }
+            return Status::OK();
+        }
+        if (!allocationFailed) {
+            return rc;
+        }
+        allocationPressureObserved = true;
+        allocationCeiling = std::min(allocationCeiling, rangeSize);
+    }
+    if (end - begin == 1) {
+        tcpFallbackIndexes.emplace_back(begin);
+        return Status::OK();
+    }
+
+    using AggregateRange = std::tuple<uint64_t, size_t, size_t>;
+    std::vector<AggregateRange> pendingRanges;
+    auto enqueueChildren = [&alignedSizes, &pendingRanges](uint64_t rangeSize, size_t rangeBegin,
+                                                          size_t rangeEnd) -> Status {
+        size_t split = rangeBegin + 1;
+        uint64_t bestLeftSize = alignedSizes[rangeBegin];
+        uint64_t rightSize = rangeSize - bestLeftSize;
+        uint64_t bestDifference =
+            bestLeftSize > rightSize ? bestLeftSize - rightSize : rightSize - bestLeftSize;
+        uint64_t cumulativeSize = bestLeftSize;
+        for (size_t candidate = rangeBegin + 2; candidate < rangeEnd; ++candidate) {
+            RETURN_IF_NOT_OK(AddUbBatchSize(cumulativeSize, alignedSizes[candidate - 1], cumulativeSize));
+            rightSize = rangeSize - cumulativeSize;
+            const uint64_t difference =
+                cumulativeSize > rightSize ? cumulativeSize - rightSize : rightSize - cumulativeSize;
+            if (difference < bestDifference) {
+                bestDifference = difference;
+                bestLeftSize = cumulativeSize;
+                split = candidate;
+            }
+        }
+        pendingRanges.emplace_back(bestLeftSize, rangeBegin, split);
+        pendingRanges.emplace_back(rangeSize - bestLeftSize, split, rangeEnd);
+        METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_UB_SPLIT_TOTAL);
+        return Status::OK();
+    };
+    RETURN_IF_NOT_OK(enqueueChildren(rangeSize, begin, end));
+    while (!pendingRanges.empty()) {
+        auto largest = std::max_element(pendingRanges.begin(), pendingRanges.end(),
+                                        [](const AggregateRange &lhs, const AggregateRange &rhs) {
+                                            if (std::get<0>(lhs) != std::get<0>(rhs)) {
+                                                return std::get<0>(lhs) < std::get<0>(rhs);
+                                            }
+                                            return std::get<1>(lhs) > std::get<1>(rhs);
+                                        });
+        const auto [rangeSize, rangeBegin, rangeEnd] = *largest;
+        pendingRanges.erase(largest);
+
+        allocationFailed = rangeSize > allocationCeiling;
+        if (!allocationFailed) {
+            DataGetBatchResult rangeOutputs;
+            Status rc = BatchGetAggregateOnce(inputs, alignedSizes, rangeBegin, rangeEnd, rangeSize, rangeOutputs,
+                                              allocationFailed);
+            if (allocationPressureObserved) {
+                allocationCeiling = std::min(allocationCeiling, rangeSize);
+            }
+            if (rc.IsOk()) {
+                CHECK_FAIL_RETURN_STATUS(rangeOutputs.size() == rangeEnd - rangeBegin, K_RUNTIME_ERROR,
+                                         "UB batch result count does not match request range");
+                for (size_t i = 0; i < rangeOutputs.size(); ++i) {
+                    outputs[rangeBegin + i] = std::move(rangeOutputs[i]);
+                }
+                continue;
+            }
+            if (!allocationFailed) {
+                return rc;
+            }
+            allocationPressureObserved = true;
+            allocationCeiling = std::min(allocationCeiling, rangeSize);
+        }
+        if (rangeEnd - rangeBegin == 1) {
+            tcpFallbackIndexes.emplace_back(rangeBegin);
+            continue;
+        }
+
+        RETURN_IF_NOT_OK(enqueueChildren(rangeSize, rangeBegin, rangeEnd));
+    }
+    return Status::OK();
+}
+
+Status UbTransporter::BatchGetAggregateOnce(const DataGetBatchRequest &inputs,
+                                            const std::vector<uint64_t> &alignedSizes, size_t begin, size_t end,
+                                            uint64_t aggregateSize, DataGetBatchResult &outputs,
+                                            bool &allocationFailed)
+{
+    outputs.clear();
+    allocationFailed = false;
+
+    UbReceiveBuffer buffer;
+    Status allocationStatus = bufferProvider_->Allocate(aggregateSize, buffer);
+    if (allocationStatus.IsError()) {
+        allocationFailed = true;
+        return allocationStatus;
+    }
+    CHECK_FAIL_RETURN_STATUS(buffer.data != nullptr, K_RUNTIME_ERROR, "UB aggregate receive buffer is null");
+    CHECK_FAIL_RETURN_STATUS(buffer.owner != nullptr, K_RUNTIME_ERROR, "UB aggregate receive buffer owner is null");
+    CHECK_FAIL_RETURN_STATUS(buffer.size >= aggregateSize, K_RUNTIME_ERROR,
+                             "UB aggregate receive buffer is smaller than requested");
+    CHECK_FAIL_RETURN_STATUS(!buffer.transportInstanceId.empty(), K_RUNTIME_ERROR,
+                             "UB aggregate receive buffer transport instance id is empty");
+
+    BatchGetObjectRemoteReqPb request;
+    std::vector<uint64_t> sliceOffsets;
+    sliceOffsets.reserve(end - begin);
+    uint64_t sliceOffset = 0;
+    for (size_t i = begin; i < end; ++i) {
+        auto *itemRequest = request.add_requests();
+        itemRequest->set_object_key(inputs[i].objectKey);
+        itemRequest->set_data_size(inputs[i].expectedSize);
+        itemRequest->set_try_lock(true);
+        itemRequest->set_read_offset(0);
+        itemRequest->set_read_size(inputs[i].expectedSize);
+
+        UrmaRemoteAddrPb itemRemoteAddr = buffer.remoteAddr;
+        uint64_t itemRemoteOffset = 0;
+        RETURN_IF_NOT_OK(AddUbBatchSize(buffer.remoteAddr.seg_data_offset(), sliceOffset, itemRemoteOffset));
+        itemRemoteAddr.set_seg_data_offset(itemRemoteOffset);
+        *itemRequest->mutable_urma_info() = std::move(itemRemoteAddr);
+        sliceOffsets.emplace_back(sliceOffset);
+        RETURN_IF_NOT_OK(AddUbBatchSize(sliceOffset, alignedSizes[i], sliceOffset));
+    }
+    request.set_urma_instance_id(buffer.transportInstanceId);
+
+    BatchGetObjectRemoteRspPb response;
+    std::vector<RpcMessage> payloads;
+    if (end - begin > 1) {
+        METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL);
+        METRIC_ADD(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL, end - begin);
+    }
+    RETURN_IF_NOT_OK(rpcClient_->InvokeBatchGetObject(request, response, payloads));
+    CHECK_FAIL_RETURN_STATUS(response.responses_size() == static_cast<int>(end - begin), K_RUNTIME_ERROR,
+                             "BatchGetObjectRemote response count does not match request count");
+
+    size_t expectedPayloadCount = 0;
+    for (size_t i = 0; i < end - begin; ++i) {
+        const auto &itemResponse = response.responses(static_cast<int>(i));
+        Status itemStatus(static_cast<StatusCode>(itemResponse.error().error_code()),
+                          itemResponse.error().error_msg());
+        if (!itemStatus.IsOk()) {
+            continue;
+        }
+        CHECK_FAIL_RETURN_STATUS(itemResponse.data_size() >= 0, K_RUNTIME_ERROR,
+                                 "UB BatchGetObjectRemote returned a negative data size");
+        if (itemResponse.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
+            ++expectedPayloadCount;
+            continue;
+        }
+        CHECK_FAIL_RETURN_STATUS(itemResponse.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED,
+                                 K_RUNTIME_ERROR, "UB BatchGetObjectRemote returned an invalid data source");
+        const uint64_t actualSize = static_cast<uint64_t>(itemResponse.data_size());
+        CHECK_FAIL_RETURN_STATUS(actualSize <= inputs[begin + i].expectedSize, K_RUNTIME_ERROR,
+                                 "UB batch response exceeds its receive slice");
+    }
+    CHECK_FAIL_RETURN_STATUS(payloads.size() == expectedPayloadCount, K_RUNTIME_ERROR,
+                             "BatchGetObjectRemote payload count does not match payload responses");
+
+    DataGetBatchResult pendingOutputs;
+    pendingOutputs.reserve(end - begin);
+    size_t payloadIndex = 0;
+    for (size_t i = 0; i < end - begin; ++i) {
+        const auto &itemResponse = response.responses(static_cast<int>(i));
+        DataGetItemResult item;
+        item.status = Status(static_cast<StatusCode>(itemResponse.error().error_code()),
+                             itemResponse.error().error_msg());
+        item.data.response = itemResponse;
+        if (item.status.IsOk() && itemResponse.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
+            item.data.kind = AccessTransportKind::TCP;
+            item.data.rpcPayloads.emplace_back(std::move(payloads[payloadIndex++]));
+        } else if (item.status.IsOk()) {
+            const uint64_t actualSize = static_cast<uint64_t>(itemResponse.data_size());
+            const uint64_t offset = sliceOffsets[i];
+            CHECK_FAIL_RETURN_STATUS(offset <= buffer.size && actualSize <= buffer.size - offset, K_RUNTIME_ERROR,
+                                     "UB batch response exceeds aggregate receive buffer");
+            CHECK_FAIL_RETURN_STATUS(offset <= std::numeric_limits<size_t>::max(), K_RUNTIME_ERROR,
+                                     "UB batch slice offset exceeds addressable memory");
+            item.data.externalData = buffer.data + static_cast<size_t>(offset);
+            item.data.externalSize = actualSize;
+            item.data.externalOwner = buffer.owner;
+            item.data.kind = AccessTransportKind::UB;
+        }
+        pendingOutputs.emplace_back(std::move(item));
+    }
+
+    outputs = std::move(pendingOutputs);
+    return Status::OK();
 }
 
 Status UbTransporter::GetOnce(const DataGetRequest &input, uint64_t expectedSize, DataGetResult &output,

@@ -67,7 +67,7 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
     auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
                                                            GetConfiguredUbInlineBufferSize());
     auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_);
-    auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry));
+    auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry), taskPool);
     objectRead_ = std::make_unique<ObjectReadFlow>(std::move(metadata), std::move(replicas), std::move(taskPool));
 }
 

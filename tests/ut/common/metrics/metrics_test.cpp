@@ -822,12 +822,50 @@ TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
         { metrics::KvMetricId::WORKER_GET_META_ADDR_HASHRING_LATENCY, "worker_get_meta_addr_hashring_latency" },
         { metrics::KvMetricId::WORKER_GET_POST_QUERY_META_PHASE_LATENCY, "worker_get_post_query_meta_phase_latency" },
         { metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST, "worker_inflight_remote_get_request" },
+        { metrics::KvMetricId::ZMQ_SERVER_POLL_HANDLE_LATENCY, "zmq_server_poll_handle_latency" },
+        { metrics::KvMetricId::URMA_CONNECTION_SETUP_LATENCY, "urma_connection_setup_latency" },
+        { metrics::KvMetricId::URMA_JETTY_CREATE_LATENCY, "urma_jetty_create_latency" },
+        { metrics::KvMetricId::URMA_JETTY_RECREATE_LATENCY, "urma_jetty_recreate_latency" },
+        { metrics::KvMetricId::CLIENT_EXIST_REQUEST_TOTAL, "client_exist_request_total" },
+        { metrics::KvMetricId::CLIENT_EXIST_ERROR_TOTAL, "client_exist_error_total" },
+        { metrics::KvMetricId::WORKER_PROCESS_EXIST_LATENCY, "worker_process_exist_latency" },
+        { metrics::KvMetricId::CLIENT_PUT_SHM_WRITE_TOTAL_BYTES, "client_put_shm_write_total_bytes" },
+        { metrics::KvMetricId::CLIENT_PUT_LOCAL_WRITE_TOTAL_BYTES, "client_put_local_write_total_bytes" },
+        { metrics::KvMetricId::BRPC_CLIENT_REQ_FRAMEWORK_LATENCY, "brpc_client_req_framework_latency" },
+        { metrics::KvMetricId::BRPC_REMOTE_PROCESSING_LATENCY, "brpc_remote_processing_latency" },
+        { metrics::KvMetricId::BRPC_CLIENT_RSP_FRAMEWORK_LATENCY, "brpc_client_rsp_framework_latency" },
+        { metrics::KvMetricId::BRPC_SERVER_REQ_QUEUE_LATENCY, "brpc_server_req_queue_latency" },
+        { metrics::KvMetricId::BRPC_SERVER_EXEC_LATENCY, "brpc_server_exec_latency" },
+        { metrics::KvMetricId::BRPC_SERVER_RSP_QUEUE_LATENCY, "brpc_server_rsp_queue_latency" },
+        { metrics::KvMetricId::BRPC_RPC_E2E_LATENCY, "brpc_rpc_e2e_latency" },
+        { metrics::KvMetricId::BRPC_RPC_NETWORK_RESIDUAL_LATENCY, "brpc_rpc_network_residual_latency" },
+        { metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES, "worker_from_client_shm_total_bytes" },
+        { metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES, "worker_from_client_local_total_bytes" },
+        { metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES, "worker_from_client_tcp_total_bytes" },
+        { metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, "worker_from_client_urma_total_bytes" },
+        { metrics::KvMetricId::CLIENT_GET_SHM_READ_TOTAL_BYTES, "client_get_shm_read_total_bytes" },
+        { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL, "client_direct_batch_get_rpc_total" },
+        { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL, "client_direct_batch_get_object_total" },
+        { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL,
+          "client_direct_batch_get_replica_retry_total" },
+        { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_UB_SPLIT_TOTAL, "client_direct_batch_get_ub_split_total" },
+        { metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL,
+          "client_direct_batch_get_tcp_fallback_total" },
     };
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL), 93u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_OBJECT_TOTAL), 94u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL), 95u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_UB_SPLIT_TOTAL), 96u);
+    EXPECT_EQ(static_cast<uint16_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL), 97u);
     for (size_t k = 0; k < sizeof(kTailMetrics) / sizeof(kTailMetrics[0]); ++k) {
         const size_t i = static_cast<size_t>(kTailMetrics[k].id);
         ASSERT_LT(i, count);
         EXPECT_EQ(descs[i].id, i);
         EXPECT_STREQ(descs[i].name, kTailMetrics[k].name);
+        if (i >= static_cast<size_t>(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_RPC_TOTAL)) {
+            EXPECT_EQ(descs[i].type, metrics::MetricType::COUNTER);
+            EXPECT_STREQ(descs[i].unit, "count");
+        }
         if (k > 0) {
             EXPECT_EQ(static_cast<uint16_t>(kTailMetrics[k].id),
                       static_cast<uint16_t>(kTailMetrics[k - 1].id) + 1)

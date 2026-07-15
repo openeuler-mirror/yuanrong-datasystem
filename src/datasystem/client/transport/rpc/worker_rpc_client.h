@@ -53,6 +53,10 @@ public:
     virtual Status InvokeGetObject(GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &response,
                                    std::vector<RpcMessage> &payloads);
 
+    /** @brief Sign and invoke an ordered direct object batch read on this worker. */
+    virtual Status InvokeBatchGetObject(BatchGetObjectRemoteReqPb &request, BatchGetObjectRemoteRspPb &response,
+                                        std::vector<RpcMessage> &payloads);
+
     /** @brief Sign and query object locations and optional inline data from the master service at this endpoint. */
     virtual Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
                                      std::vector<RpcMessage> &payloads);
@@ -99,6 +103,9 @@ public:
 protected:
     virtual Status DoInvokeGetObject(const RpcOptions &options, const GetObjectRemoteReqPb &request,
                                      GetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads);
+
+    virtual Status DoInvokeBatchGetObject(const RpcOptions &options, const BatchGetObjectRemoteReqPb &request,
+                                          BatchGetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads);
 
     virtual Status DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
                                        master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads);

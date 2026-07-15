@@ -81,6 +81,8 @@ message UrmaHandshakeReqPb {
 
 message UrmaHandshakeRspPb {
     UrmaHandshakeReqPb hand_shake = 1;
+    // The receiver safely keeps payload-only client Batch Get requests out of aggregate gather.
+    bool supports_payload_only_client_batch_get = 2;
 }
 
 enum FastTransportMode {

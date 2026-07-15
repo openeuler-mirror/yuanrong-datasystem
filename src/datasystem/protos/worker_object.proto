@@ -60,6 +60,11 @@ message BatchGetObjectRemoteReqPb {
   repeated GetObjectRemoteReqPb requests = 1;
   string comm_id = 2;
   string urma_instance_id = 3;
+  // Explicit producer attestation that every target owns metadata headroom and follows the aggregate gather layout.
+  // Receivers must also validate the layout. The default false keeps requests from unknown producers on per-object IO.
+  bool allow_aggregate_gather = 4;
+  // Metadata headroom included by the attesting producer. Zero is a valid attested size.
+  uint64 aggregate_gather_metadata_size = 5;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

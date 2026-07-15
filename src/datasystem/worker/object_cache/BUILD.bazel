@@ -49,6 +49,20 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "worker_worker_oc_gather_layout",
+    srcs = [
+        "worker_worker_oc_gather_layout.cpp",
+    ],
+    hdrs = [
+        "worker_worker_oc_gather_layout.h",
+    ],
+    deps = [
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/protos:worker_object_cc_proto",
+    ],
+)
+
+ds_cc_library(
     name = "worker_worker_peer_state_codec",
     srcs = [
         "worker_worker_peer_state_codec.cpp",
@@ -608,6 +622,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/worker:worker_topology_references",
         ":worker_oc_service_impl",
+        ":worker_worker_oc_gather_layout",
         ":worker_worker_oc_service_impl_header",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/metrics:common_metrics",
