@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_MASTER_OBJECT_CACHE_OC_NOTIFY_WORKER_MANAGER_H
 #define DATASYSTEM_MASTER_OBJECT_CACHE_OC_NOTIFY_WORKER_MANAGER_H
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <shared_mutex>
@@ -43,7 +44,14 @@ namespace object_cache {
 class MasterWorkerOCServiceImpl;
 }  // namespace object_cache
 namespace master {
-using TbbNotifyWorkerOpTable = tbb::concurrent_hash_map<std::string, std::unordered_map<std::string, NotifyWorkerOp>>;
+struct NotifyWorkerOpEntry {
+    NotifyWorkerOp op;
+    uint64_t epoch = 0;
+    ObjectMetaStore::WriteType writeType = ObjectMetaStore::WriteType::ROCKS_ONLY;
+};
+
+using TbbNotifyWorkerOpTable =
+    tbb::concurrent_hash_map<std::string, std::unordered_map<std::string, NotifyWorkerOpEntry>>;
 
 struct DeleteApiInfo {
     std::int64_t apiTag;
@@ -346,6 +354,26 @@ public:
     Status ProcessAsyncDeleteNotifyOpImpl();
 
 private:
+    friend class OCNotifyWorkerManagerTest;
+
+    struct NotifyWorkerOpPersistenceState;
+
+    enum class AsyncWorkerOpPersistAction { ADD, REMOVE };
+
+    struct AsyncWorkerOpPersistRequest {
+        AsyncWorkerOpPersistAction action;
+        std::string workerId;
+        std::string objectKey;
+        NotifyWorkerOp op;
+        ObjectMetaStore::WriteType writeType = ObjectMetaStore::WriteType::ROCKS_ONLY;
+        bool needRemoveEtcdData = true;
+    };
+
+    struct AsyncWorkerOpSnapshot {
+        std::string objectKey;
+        NotifyWorkerOp op;
+        uint64_t epoch = 0;
+    };
 
     /**
      * @brief Process async notify operation.
@@ -464,12 +492,17 @@ private:
         return static_cast<NotifyWorkerOpType>(ClearUint32OddBits(static_cast<uint32_t>(notifyWorkerOp)));
     }
 
-    /**
-     * @brief Get WriteType of object.
-     * @param[in] objKey Object key.
-     * @return The WriteType of object.
-     */
-    ObjectMetaStore::WriteType GetWriteType(const std::string &objKey);
+    void PersistAsyncWorkerOpRequests(const std::vector<AsyncWorkerOpPersistRequest> &requests);
+
+    Status ClearAsyncWorkerOpSnapshots(const std::string &workerAddr,
+                                       const std::vector<AsyncWorkerOpSnapshot> &snapshots);
+
+    std::vector<AsyncWorkerOpSnapshot> SnapshotAsyncWorkerOps(const std::string &workerAddr);
+
+    uint64_t NextNotifyWorkerOpEpoch();
+
+    static NotifyWorkerOp MergeAsyncWorkerOpEntry(NotifyWorkerOpEntry &entry, const NotifyWorkerOp &op,
+                                                  const std::string &objectKey, const std::string &workerId);
 
     const size_t minDeleteThreadSize = 1;
     const size_t maxDeleteThreadSize = 8;
@@ -478,6 +511,8 @@ private:
     std::shared_ptr<ObjectMetaStore> objectStore_;  // Metadata store for object.
     std::shared_timed_mutex notifyWorkerOpMutex_;
     TbbNotifyWorkerOpTable notifyWorkerOpTable_;  // Key is worker address, value is object keys.
+    std::unique_ptr<NotifyWorkerOpPersistenceState> notifyWorkerOpPersistence_;
+    std::atomic<uint64_t> notifyWorkerOpEpoch_{ 0 };
 
     const int ASYNC_SEND_UPDATE_TIME_MS = 100;  // Time interval between two async update object.
     std::unique_ptr<Thread> thread_{ nullptr };
