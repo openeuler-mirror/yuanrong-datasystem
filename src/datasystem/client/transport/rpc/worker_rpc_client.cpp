@@ -97,9 +97,9 @@ Status WorkerRpcClient::DoInvokeGetObject(const RpcOptions &options, const GetOb
 }
 
 Status WorkerRpcClient::DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
-                                            master::QueryAndGetRspPb &response)
+                                            master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads)
 {
-    return masterStub_->QueryAndGet(options, request, response);
+    return masterStub_->QueryAndGet(options, request, response, payloads);
 }
 
 Status WorkerRpcClient::DoInvokeCreate(const RpcOptions &options, const CreateReqPb &request,
@@ -137,11 +137,13 @@ Status WorkerRpcClient::InvokeGetObject(GetObjectRemoteReqPb &request, GetObject
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
+    INJECT_POINT("client.transport.get_object_remote", []() { return Status::OK(); });
     Status rc = DoInvokeGetObject(options, request, response, payloads);
     return rc.IsError() ? WithRpcDiag(rc, "GetObjectRemote", workerAddress_) : Status::OK();
 }
 
-Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response)
+Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
+                                          std::vector<RpcMessage> &payloads)
 {
     CHECK_FAIL_RETURN_STATUS(IsAlive(), K_RPC_UNAVAILABLE,
                              "Routed master RPC client is not initialized");
@@ -150,7 +152,8 @@ Status WorkerRpcClient::InvokeQueryAndGet(master::QueryAndGetReqPb &request, mas
     RETURN_IF_NOT_OK(signature_->GenerateSignature(request));
     RpcOptions options;
     options.SetTimeout(rpcTimeout);
-    Status rc = DoInvokeQueryAndGet(options, request, response);
+    INJECT_POINT("client.transport.query_and_get", []() { return Status::OK(); });
+    Status rc = DoInvokeQueryAndGet(options, request, response, payloads);
     return rc.IsError() ? WithRpcDiag(rc, "QueryAndGet", workerAddress_) : Status::OK();
 }
 

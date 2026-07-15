@@ -64,22 +64,20 @@ public:
 #endif
     }
 
-    Status Allocate(uint64_t requiredSize, uint8_t *&data, uint64_t &size, UrmaRemoteAddrPb &remoteAddr,
-                    std::shared_ptr<IReceiveBufferOwner> &owner) override
+    Status Allocate(uint64_t requiredSize, UbReceiveBuffer &buffer) override
     {
-        data = nullptr;
-        size = 0;
-        owner.reset();
+        buffer = UbReceiveBuffer{};
 #ifdef USE_URMA
+        RETURN_IF_NOT_OK(GetLocalTransportInstanceId(buffer.transportInstanceId));
         std::shared_ptr<UrmaManager::BufferHandle> handle;
         RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(handle, requiredSize));
         CHECK_FAIL_RETURN_STATUS(handle != nullptr, K_RUNTIME_ERROR, "UB receive buffer handle is null");
-        RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferInfo(handle, data, size, remoteAddr));
-        owner = std::make_shared<UbReceiveBufferOwner>(std::move(handle));
+        RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferInfo(
+            handle, buffer.data, buffer.size, buffer.remoteAddr));
+        buffer.owner = std::make_shared<UbReceiveBufferOwner>(std::move(handle));
         return Status::OK();
 #else
         (void)requiredSize;
-        (void)remoteAddr;
         return Status(K_NOT_SUPPORTED, "USE_URMA not compiled");
 #endif
     }
@@ -87,12 +85,17 @@ public:
 
 }  // namespace
 
+std::shared_ptr<IUbReceiveBufferProvider> CreateDefaultUbReceiveBufferProvider()
+{
+    return std::make_shared<DefaultUbReceiveBufferProvider>();
+}
+
 UbTransporter::UbTransporter(std::shared_ptr<WorkerRpcClient> rpcClient, std::shared_ptr<UbConnection> conn,
                              std::shared_ptr<IUbReceiveBufferProvider> bufferProvider)
     : rpcClient_(std::move(rpcClient)), conn_(std::move(conn)), bufferProvider_(std::move(bufferProvider))
 {
     if (bufferProvider_ == nullptr) {
-        bufferProvider_ = std::make_shared<DefaultUbReceiveBufferProvider>();
+        bufferProvider_ = CreateDefaultUbReceiveBufferProvider();
     }
 }
 
@@ -121,23 +124,18 @@ Status UbTransporter::GetOnce(const DataGetRequest &input, uint64_t expectedSize
     request.set_data_size(expectedSize);
     request.set_try_lock(true);
 
-    uint8_t *buffer = nullptr;
-    uint64_t bufferSize = 0;
-    std::shared_ptr<IReceiveBufferOwner> owner;
-    UrmaRemoteAddrPb remoteAddr;
+    UbReceiveBuffer buffer;
     bool useUb = expectedSize > 0 && expectedSize <= bufferProvider_->MaxGetSize();
     if (useUb) {
-        Status allocRc = bufferProvider_->Allocate(expectedSize, buffer, bufferSize, remoteAddr, owner);
-        useUb = allocRc.IsOk() && buffer != nullptr && owner != nullptr && bufferSize >= expectedSize;
+        Status allocRc = bufferProvider_->Allocate(expectedSize, buffer);
+        useUb = allocRc.IsOk() && buffer.data != nullptr && buffer.owner != nullptr && buffer.size >= expectedSize
+                && !buffer.transportInstanceId.empty();
     }
     if (useUb) {
         request.set_read_offset(0);
         request.set_read_size(expectedSize);
-        *request.mutable_urma_info() = remoteAddr;
-        std::string transportInstanceId;
-        if (GetLocalTransportInstanceId(transportInstanceId).IsOk()) {
-            request.set_urma_instance_id(transportInstanceId);
-        }
+        *request.mutable_urma_info() = buffer.remoteAddr;
+        request.set_urma_instance_id(buffer.transportInstanceId);
     }
 
     Status rpcRc = rpcClient_->InvokeGetObject(request, output.response, output.rpcPayloads);
@@ -154,10 +152,10 @@ Status UbTransporter::GetOnce(const DataGetRequest &input, uint64_t expectedSize
     }
     CHECK_FAIL_RETURN_STATUS(output.response.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED,
                              K_RUNTIME_ERROR, "UB GetObjectRemote returned an invalid data source");
-    CHECK_FAIL_RETURN_STATUS(actualSize <= bufferSize, K_RUNTIME_ERROR, "UB response exceeds receive buffer");
-    output.externalData = buffer;
+    CHECK_FAIL_RETURN_STATUS(actualSize <= buffer.size, K_RUNTIME_ERROR, "UB response exceeds receive buffer");
+    output.externalData = buffer.data;
     output.externalSize = actualSize;
-    output.externalOwner = std::move(owner);
+    output.externalOwner = std::move(buffer.owner);
     output.kind = AccessTransportKind::UB;
     return Status::OK();
 }

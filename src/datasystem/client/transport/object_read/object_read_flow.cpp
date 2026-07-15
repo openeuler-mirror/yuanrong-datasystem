@@ -165,6 +165,10 @@ void ReadObjects(ReplicaReader &replicas, ThreadPool &taskPool, std::vector<Read
     for (auto &item : items) {
         if (item.metadata.status.IsError()) {
             item.result.status = item.metadata.status;
+        } else if (item.metadata.inlineData.has_value()) {
+            item.result.objectKey = item.metadata.objectKey;
+            item.result.data = std::move(*item.metadata.inlineData);
+            item.result.status = Status::OK();
         } else {
             tasks.emplace_back(&item);
         }

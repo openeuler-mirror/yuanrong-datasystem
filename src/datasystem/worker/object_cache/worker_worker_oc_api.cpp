@@ -58,6 +58,13 @@ Status WorkerLocalWorkerOCApi::GetObjectRemote(GetObjectRemoteReqPb &req, GetObj
     return service_->GetObjectRemote(req, rsp, payload);
 }
 
+Status WorkerLocalWorkerOCApi::GetObjectRemoteForQueryAndGet(GetObjectRemoteReqPb &req,
+                                                             std::vector<RpcMessage> &payload)
+{
+    GetObjectRemoteRspPb rsp;
+    return service_->GetObjectRemote(req, rsp, payload, true);
+}
+
 WorkerRemoteWorkerOCApi::WorkerRemoteWorkerOCApi(HostPort hostPort, HostPort localHostPort,
                                                  std::shared_ptr<AkSkManager> akSkManager)
     : hostPort_(std::move(hostPort)), localHostPort_(std::move(localHostPort)), akSkManager_(std::move(akSkManager))

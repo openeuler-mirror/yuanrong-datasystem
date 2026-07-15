@@ -53,8 +53,9 @@ public:
     virtual Status InvokeGetObject(GetObjectRemoteReqPb &request, GetObjectRemoteRspPb &response,
                                    std::vector<RpcMessage> &payloads);
 
-    /** @brief Sign and query object locations from the master service at this endpoint. */
-    virtual Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response);
+    /** @brief Sign and query object locations and optional inline data from the master service at this endpoint. */
+    virtual Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
+                                     std::vector<RpcMessage> &payloads);
 
     /** @brief Sign and invoke Create through the cached control connection. */
     virtual Status InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request, CreateRspPb &response,
@@ -88,7 +89,7 @@ protected:
                                      GetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads);
 
     virtual Status DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
-                                       master::QueryAndGetRspPb &response);
+                                       master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads);
 
     virtual Status DoInvokeCreate(const RpcOptions &options, const CreateReqPb &request,
                                   CreateRspPb &response);

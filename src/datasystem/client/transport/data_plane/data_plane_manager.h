@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <shared_mutex>
 #include <string>
@@ -27,6 +28,7 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
+#include "datasystem/client/transport/data_plane/ub_transporter.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/transport_kind.h"
 #include "datasystem/client/transport/worker_snapshot.h"
@@ -39,7 +41,8 @@ namespace client {
 class DataPlaneManager {
 public:
     explicit DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
-                              BrpcChannelConfig channelConfig = {});
+                              BrpcChannelConfig channelConfig = {},
+                              std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider = nullptr);
     virtual ~DataPlaneManager();
 
     /** @brief Initialize process-level resources required by UB data-plane transport. */
@@ -53,6 +56,17 @@ public:
      * @return K_OK when out is ready, or the error code.
      */
     Status GetOrCreate(const HostPort &workerAddr, TransportHint hint, std::shared_ptr<IDataTransporter> &out);
+
+    /**
+     * @brief Run an operation while the selected data plane cannot be torn down.
+     * @param[in] workerAddr Target worker address.
+     * @param[in] hint Transport suggestion from the advisor.
+     * @param[in] operation Operation executed with the endpoint data-plane lease held.
+     * @return K_OK when the operation succeeds; the connection or operation error otherwise.
+     */
+    Status WithDataPlaneLease(const HostPort &workerAddr, TransportHint hint,
+                              const std::function<Status(const std::shared_ptr<IDataTransporter> &,
+                                                         const std::shared_ptr<WorkerRpcClient> &)> &operation);
 
     /**
      * @brief Get or lazily create the shared RPC client for an endpoint without creating a data transporter.
@@ -116,6 +130,7 @@ private:
     std::atomic<bool> shutdown_{ false };
     std::shared_ptr<Signature> signature_;
     BrpcChannelConfig channelConfig_;
+    std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider_;
     uint64_t fastTransportMemSize_ = 0;
     std::atomic<bool> initialized_{ false };
 };
