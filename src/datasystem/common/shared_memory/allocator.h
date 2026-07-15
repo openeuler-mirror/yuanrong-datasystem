@@ -178,6 +178,16 @@ public:
     uint64_t GetMaxMemoryLimit(CacheType cacheType = CacheType::MEMORY) const;
 
     /**
+     * @brief Query the real allocated size (sallocx) of a jemalloc base pointer.
+     * @param[in] pointer A pointer returned by AllocateMemory (standalone allocation base). May be null.
+     * @return The allocated size in bytes (sallocx); 0 if pointer is null.
+     * @warning Only valid for standalone jemalloc base pointers. Passing an interior/aggregated
+     *          (ShmOwner-distributed slice) pointer is undefined behavior -- use ShmUnit::GetMigratableSize
+     *          which distinguishes the two allocation kinds.
+     */
+    uint64_t GetAllocatedSize(void *pointer) const;
+
+    /**
      * @brief Obtains the allocated memory size.
      * @param[in] tenantId The Id of the tenant which to get the allocated size.
      * @param[in] cacheType The cache type.

@@ -114,8 +114,9 @@ TEST_F(RebalanceCandidateProviderTest, SelectCandidatesFromOldestUntilTargetByte
     DS_ASSERT_OK(provider.Select(25 * MB, 10, candidates));
 
     ASSERT_EQ(candidates.size(), size_t(2));
-    EXPECT_EQ(candidates["oldest"], 10 * MB);
-    EXPECT_EQ(candidates["middle"], 20 * MB);
+    // Candidate sizing uses sallocx real size (>= dataSize), so assert >= rather than == dataSize exactly.
+    EXPECT_GE(candidates["oldest"], 10 * MB);
+    EXPECT_GE(candidates["middle"], 20 * MB);
     EXPECT_EQ(candidates.count("newest"), size_t(0));
     EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("oldest"));
     EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("middle"));
@@ -136,7 +137,7 @@ TEST_F(RebalanceCandidateProviderTest, SkipNonPrimaryAndAlreadyRebalancingObject
     DS_ASSERT_OK(provider.Select(10 * MB, 10, candidates));
 
     ASSERT_EQ(candidates.size(), size_t(1));
-    EXPECT_EQ(candidates["candidate"], 30 * MB);
+    EXPECT_GE(candidates["candidate"], 30 * MB);
     EXPECT_FALSE(evictionManager_->IsObjectBeingRebalanced("non_primary"));
     EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("already_rebalancing"));
     EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("candidate"));
@@ -160,6 +161,54 @@ TEST_F(RebalanceCandidateProviderTest, EvictionSkipsRebalancingObjectAndReaddsIt
     EXPECT_EQ(readdNodes[0].objectKey, "rebalancing_object");
     EXPECT_EQ(readdNodes[0].curCounter, READD_COUNTER);
     EXPECT_TRUE(evictionManager_->IsObjectBeingRebalanced("rebalancing_object"));
+}
+
+// Verifies candidate sizing uses the real allocated size (sallocx) rather than the payload (GetDataSize), so
+// migrated_bytes shares the same unit as task.max_bytes (RealUsage). With a standalone 1MiB object plus a non-zero
+// metadata header, sallocx rounds beyond the payload, so the candidate size must exceed GetDataSize and equal
+// Allocator::GetAllocatedSize on the object's base pointer.
+TEST_F(RebalanceCandidateProviderTest, TryGetObjectSizeUsesRealSizeNotPayload)
+{
+    CreateAndAdd("real_size_obj", 1 * MB);
+
+    RebalanceCandidateProvider provider(evictionManager_, objectTable_);
+    std::unordered_map<std::string, uint64_t> candidates;
+    DS_ASSERT_OK(provider.Select(2 * MB, 10, candidates));
+
+    ASSERT_EQ(candidates.count("real_size_obj"), size_t(1));
+    // sallocx rounds the allocation up beyond the payload, so the accounting size must be greater than dataSize.
+    EXPECT_GT(candidates["real_size_obj"], 1 * MB);
+    // The accounting size must equal the sallocx real size of the object's base pointer.
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get("real_size_obj", entry));
+    ASSERT_TRUE(entry->RLock(true));
+    auto shmUnit = entry->Get()->GetShmUnit();
+    ASSERT_NE(shmUnit, nullptr);
+    void *ptr = shmUnit->GetPointer();
+    entry->RUnlock();
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(candidates["real_size_obj"], allocator->GetAllocatedSize(ptr));
+}
+
+// Verifies GetMigratableSize directly: a standalone ShmUnit (no ShmOwner) returns the sallocx real size, while an
+// aggregated slice distributed from a ShmOwner returns the distributed slice size (needSize proxy) because sallocx
+// is invalid on an interior pointer. Covers the shmOwner_ != nullptr branch that the candidate-provider path does
+// not exercise (CreateAndAdd only produces standalone allocations).
+TEST_F(RebalanceCandidateProviderTest, GetMigratableSizeDistinguishesStandaloneAndAggregated)
+{
+    // Standalone: no ShmOwner -> sallocx real size of the base pointer.
+    auto standalone = std::make_shared<ShmUnit>();
+    DS_ASSERT_OK(standalone->AllocateMemory("", 1 * MB, false));
+    EXPECT_EQ(standalone->GetMigratableSize(), allocator->GetAllocatedSize(standalone->GetPointer()));
+    EXPECT_GE(standalone->GetMigratableSize(), 1 * MB);  // sallocx >= needSize
+
+    // Aggregated: distribute a slice from a ShmOwner chunk -> returns the slice size, not sallocx.
+    auto owner = std::make_shared<ShmOwner>();
+    DS_ASSERT_OK(owner->AllocateMemory("", 4 * MB, false));  // backing chunk
+    ShmUnit slice;
+    constexpr uint64_t sliceSize = 256 * 1024;  // < 1MB, the aggregation threshold
+    DS_ASSERT_OK(owner->DistributeMemory(sliceSize, slice));
+    EXPECT_EQ(slice.GetMigratableSize(), sliceSize);  // aggregated branch returns the distributed slice size
 }
 
 class RebalanceExecutorTest : public CommonTest {

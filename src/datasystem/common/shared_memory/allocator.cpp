@@ -226,6 +226,16 @@ uint64_t Allocator::GetMaxMemoryLimit(CacheType cacheType) const
     }
 }
 
+uint64_t Allocator::GetAllocatedSize(void *pointer) const
+{
+    if (pointer == nullptr) {
+        return 0;
+    }
+    // sallocx returns the usable size of the allocation ptr belongs to. The flags argument is ignored for size
+    // queries, so passing 0 is sufficient regardless of the arena/alignment used at allocation time.
+    return static_cast<uint64_t>(datasystem_sallocx(pointer, 0));
+}
+
 ResourcePool *Allocator::GetResourcePoolByType(ServiceType serviceType, CacheType cacheType) const
 {
     if (serviceType == ServiceType::STREAM) {

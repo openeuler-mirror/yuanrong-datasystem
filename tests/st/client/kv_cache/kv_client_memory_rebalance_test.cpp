@@ -18,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <string>
@@ -33,6 +34,8 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/protos/cluster_topology.pb.h"
+
+DS_DECLARE_string(log_dir);
 
 namespace datasystem {
 namespace st {
@@ -325,6 +328,61 @@ protected:
        }
    }
 
+   // Reads the worker resource.log and returns the shared-memory usage rate as a percent
+   // (memoryUsage / FootprintLimit * 100). Returns negative on transient error (partial line, file rotation);
+   // WaitForWorkerMemRate retries silently so a transient read failure does not mark the test failed.
+   // resource.log updates every ~10s, so use WaitForWorkerMemRate to poll until a fresh post-event sample is
+   // observed instead of reading a stale startup line.
+   double GetWorkerMemRatePercent(uint32_t workerIndex)
+   {
+       const std::string fullName =
+           FormatString("%s/../worker%u/log/resource.log", FLAGS_log_dir.c_str(), workerIndex);
+       std::ifstream ifs(fullName);
+       if (!ifs.is_open()) {
+           return -1.0;
+       }
+       std::string line;
+       std::string lastLine;
+       while (std::getline(ifs, line)) {
+           lastLine = line;
+       }
+       auto tokens = Split(lastLine, " | ");
+       const size_t ignoreCount = 7;
+       if (tokens.size() <= ignoreCount) {
+           return -1.0;  // partial line -- worker may be mid-write; caller retries
+       }
+       // tokens[ignoreCount] is SHARED_MEMORY = "memUsage/physUsage/totalLimit/rate/streamUsage/streamLimit";
+       // field [3] is the usage rate as a fraction (memoryUsage / FootprintLimit).
+       auto memFields = Split(tokens[ignoreCount], "/");
+       if (memFields.size() < 4) {
+           return -1.0;
+       }
+       try {
+           return std::stod(memFields[3]) * 100.0;
+       } catch (const std::exception &) {
+           return -1.0;
+       }
+   }
+
+   // Polls the worker resource.log until the sampled rate falls into [loPercent, hiPercent] (i.e. the monitor has
+   // written a fresh post-event sample matching the expected post-rebalance band), or until timeoutMs elapses.
+   // resource.log updates every ~10s, so the timeout must exceed that. Source drains from ~74% to ~37% (exits the
+   // write-time high); target rises from ~0% to ~37% (enters the band). Returns the rate on success, or the last
+   // sample (possibly stale/out-of-band) on timeout for the caller to assert against.
+   double WaitForWorkerMemRate(uint32_t workerIndex, double loPercent, double hiPercent, int timeoutMs = 25'000)
+   {
+       auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+       double rate = -1.0;
+       do {
+           rate = GetWorkerMemRatePercent(workerIndex);
+           if (rate >= 0.0 && rate >= loPercent && rate <= hiPercent) {
+               return rate;
+           }
+           SleepMs(500);
+       } while (std::chrono::steady_clock::now() < deadline);
+       return rate;
+   }
+
    std::shared_ptr<KVClient> client0_;
    std::shared_ptr<KVClient> client1_;
    std::shared_ptr<KVClient> client2_;
@@ -541,6 +599,45 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, BusyGuardSelfHealProbesAfterBudgetEla
     WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
     WaitForTotalInjectCount(PROBE_POINT, probeBaseline + 1, AllWorkers(), 15000);
     AssertReadable(client0_, sourceBatch);
+}
+
+// Verifies the rebalance accounting-unit fix end-to-end. Standalone 1MiB objects carry a 64B metadata header
+// (default oc_metadata_header=true, max_client_num=200), so needSize=1MiB+64B and sallocx=1.25MiB (next jemalloc
+// size class). Before the fix, migrated_bytes counted payload (GetDataSize) while max_bytes used RealUsage
+// (salcx=1.25MiB), so the guard overshot: source undershot the midpoint and target overshot it (a ~16% gap).
+// After the fix, source and target must converge near the usage midpoint.
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceConvergesToMidpointWithRealSizeAccounting)
+{
+    constexpr size_t ONE_MB = 1024UL * 1024UL;
+    WaitAllNodesActiveInHashRing(3);
+    auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    // Pre-load worker2 so worker1 is the unambiguous lowest-usage target.
+    auto pressureBatch = WriteObjects(client2_, "rebalance_midpoint_pressure", 1, 'p', ONE_MB);
+    SleepMs(WORKER_RECEIVE_RING_DELAY_MS);
+    // shared_memory_size_mb=64, 70% source threshold -> ~44.8MiB real. 38 * 1.25MiB = 47.5MiB (~74.2%).
+    auto sourceBatch = WriteObjects(client0_, "rebalance_midpoint_source", 38, 'm', ONE_MB);
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 1);
+    // resource.log updates every ~10s, so poll until a fresh post-rebalance sample lands in the expected band
+    // [25%, 50%] (both source and target converge near the midpoint ~37%). Source exits the write-time ~74%;
+    // target enters from ~0%.
+    double sourceRate = WaitForWorkerMemRate(WORKER0, 25.0, 50.0);
+    double targetRate = WaitForWorkerMemRate(WORKER1, 25.0, 50.0);
+    ASSERT_GE(sourceRate, 0.0);
+    ASSERT_GE(targetRate, 0.0);
+    // Convergence: the fix lands source and target both near the midpoint (~37%); the pre-fix payload-vs-realSize
+    // mismatch left a ~16% gap (source ~29%, target ~45%). One sallocx object ~= 2% of 64MiB, so 5% is robust.
+    EXPECT_NEAR(sourceRate, targetRate, 5.0);
+    // Sanity bounds: neither worker should drain to nothing or overshoot past half the cache.
+    EXPECT_GE(sourceRate, 25.0);
+    EXPECT_LE(sourceRate, 50.0);
+    EXPECT_GE(targetRate, 25.0);
+    EXPECT_LE(targetRate, 50.0);
+    AssertReadable(client1_, sourceBatch);
+    AssertReadable(client2_, pressureBatch);
 }
 
 class LEVEL1_KVClientMemoryRebalanceEvictSpillRegressionTest : public KVClientCommon {

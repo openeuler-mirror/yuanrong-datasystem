@@ -293,11 +293,13 @@ void RebalanceExecutor::Execute(master::RebalanceTaskPb task)
     } while (false);
 
     LOG(INFO) << FormatString(
-        "Finish rebalance task %s, status: %d, migratedBytes: %llu, migratedObjects: %llu, failedObjects: %llu, "
-        "costMs: %llu, reason: %s",
-        task.task_id(), static_cast<int>(stats.status), static_cast<unsigned long long>(stats.migratedBytes),
-        static_cast<unsigned long long>(stats.migratedObjects), static_cast<unsigned long long>(stats.failedObjects),
-        static_cast<unsigned long long>(timer.ElapsedMilliSecond()), stats.failedReason);
+        "Finish rebalance task %s, status: %d, maxBytes: %llu, migratedBytes: %llu, migratedObjects: %llu, "
+        "failedObjects: %llu, costMs: %llu, reason: %s",
+        task.task_id(), static_cast<int>(stats.status), static_cast<unsigned long long>(task.max_bytes()),
+        static_cast<unsigned long long>(stats.migratedBytes), static_cast<unsigned long long>(stats.migratedObjects),
+        static_cast<unsigned long long>(stats.failedObjects),
+            static_cast<unsigned long long>(timer.ElapsedMilliSecond()),
+        stats.failedReason);
     ReportResult(task, stats.status, stats.migratedBytes, stats.migratedObjects, stats.failedObjects,
                  stats.failedReason);
     MarkTaskDone();
