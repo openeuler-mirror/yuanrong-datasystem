@@ -57,6 +57,9 @@ public:
     virtual Status InvokeQueryAndGet(master::QueryAndGetReqPb &request, master::QueryAndGetRspPb &response,
                                      std::vector<RpcMessage> &payloads);
 
+    /** @brief Sign and invoke Exist through the cached control connection. */
+    virtual Status InvokeExist(int64_t subTimeoutMs, ExistReqPb &request, ExistRspPb &response);
+
     /** @brief Sign and invoke Create through the cached control connection. */
     virtual Status InvokeCreate(int64_t subTimeoutMs, CreateReqPb &request, CreateRspPb &response,
                                 uint32_t &workerVersion);
@@ -99,6 +102,8 @@ protected:
 
     virtual Status DoInvokeQueryAndGet(const RpcOptions &options, const master::QueryAndGetReqPb &request,
                                        master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads);
+
+    virtual Status DoInvokeExist(const RpcOptions &options, const ExistReqPb &request, ExistRspPb &response);
 
     virtual Status DoInvokeCreate(const RpcOptions &options, const CreateReqPb &request,
                                   CreateRspPb &response);

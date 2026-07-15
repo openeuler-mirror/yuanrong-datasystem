@@ -24,11 +24,14 @@
 
 #include "datasystem/client/transport/common/deadline_retry.h"
 #include "datasystem/client/transport/data_plane/data_plane_executor.h"
+#include "datasystem/client/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/object_read/replica_reader.h"
+#include "datasystem/client/transport/rpc/exist_request_builder.h"
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
+#include "datasystem/client/transport/transport_advisor.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uri.h"
@@ -102,6 +105,55 @@ Status TransportLayer::Get(const ObjectReadRequest &input, ObjectReadResult &out
 {
     RETURN_RUNTIME_ERROR_IF_NULL(objectRead_);
     return objectRead_->Run(input, output);
+}
+
+Status TransportLayer::Exist(const HostPort &workerAddr, const TransportExistRequest &input,
+                             TransportExistResult &output)
+{
+    ExistReqPb request;
+    RETURN_IF_NOT_OK(BuildExistRequest(input, request));
+
+    auto runExist = [&](ExistRspPb &rsp) -> Status {
+        std::shared_ptr<WorkerRpcClient> rpcClient;
+        RETURN_IF_NOT_OK(manager_->GetOrCreateRpcClient(workerAddr, rpcClient));
+        return rpcClient->InvokeExist(input.subTimeoutMs, request, rsp);
+    };
+
+    ExistRspPb response;
+    Status rc = runExist(response);
+    if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+        LOG(WARNING) << "Rebuild RPC client for worker " << workerAddr.ToString() << " after Exist failed: " << rc;
+        manager_->Teardown(workerAddr);
+        rc = runExist(response);
+        if (rc.IsError()) {
+            LOG(WARNING) << "Exist still failed after rebuilding RPC client for worker " << workerAddr.ToString()
+                         << ": " << rc;
+            return rc;
+        }
+    } else if (rc.IsError()) {
+        return rc;
+    }
+
+    if (!response.redirect_extra().empty()) {
+        return Status(K_NOT_OWNER, "Exist keys redirected to new owners").WithExtra(response.redirect_extra());
+    }
+
+    if (static_cast<size_t>(response.exists_size()) != input.objectKeys.size()) {
+        return Status(K_RUNTIME_ERROR,
+                      FormatString("Exist response size mismatch: expected %zu keys, got %d results",
+                                   input.objectKeys.size(), response.exists_size()));
+    }
+    output.exists.assign(response.exists().begin(), response.exists().end());
+    return Status::OK();
+}
+
+Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    RETURN_IF_NOT_OK(manager_->GetOrCreateRpcClient(workerAddr, rpcClient));
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient);
+    return rpcClient->InvokeGetHashRing(currentVersion, response);
 }
 
 Status TransportLayer::Create(const HostPort &workerAddr, const std::string &objectKey, uint64_t dataSize,
@@ -280,15 +332,6 @@ void TransportLayer::ScheduleReleases(const std::vector<std::shared_ptr<ObjectBu
         const auto &info = ObjectBufferInternal::GetInfo(*buffer);
         ScheduleRelease(info.workerAddr, info.shmId, context);
     }
-}
-
-Status TransportLayer::GetHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response)
-{
-    RETURN_RUNTIME_ERROR_IF_NULL(manager_);
-    std::shared_ptr<WorkerRpcClient> rpcClient;
-    RETURN_IF_NOT_OK(manager_->GetOrCreateRpcClient(workerAddr, rpcClient));
-    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient);
-    return rpcClient->InvokeGetHashRing(currentVersion, response);
 }
 
 Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)

@@ -45,9 +45,12 @@
 #include "datasystem/client/object_cache/client_worker_api/client_worker_remote_api.h"
 #include "datasystem/client/object_cache/device/client_device_object_manager.h"
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
+#include "datasystem/client/object_cache/exist_handler.h"
 #include "datasystem/client/routing/routing.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/client/routing/worker_router.h"
+#include "datasystem/client/transport/data_plane/i_data_transporter.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase_types.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -689,6 +692,12 @@ public:
      */
     Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists, const bool queryL2Cache,
                  const bool isLocal);
+
+    Status RunExist(std::shared_ptr<client::Routing> routing,
+                    std::unique_ptr<client::TransportLayer> &transportLayer,
+                    std::shared_ptr<IClientWorkerApi> &workerApi, const std::vector<std::string> &keys,
+                    std::vector<bool> &exists, const bool queryL2Cache, const bool isLocal,
+                    const SensitiveValue &token);
     /**
      * @brief Sets expiration time for key list (in seconds)
      * @param[in] key The keys to set expiration for.
@@ -1493,6 +1502,8 @@ private:
                                      bool initWithWorker, int32_t connectTimeoutMs);
 
     Status InitClientRuntimeAt(WorkerNode node, bool initWithWorker, bool isLocalWorker);
+
+    Status GetCurrentWorkerHostPort(HostPort &addr) const;
 
     /**
      * @brief Configure the URMA data-plane failover callback on a worker API instance.

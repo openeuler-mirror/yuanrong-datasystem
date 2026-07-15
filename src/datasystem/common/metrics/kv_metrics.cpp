@@ -119,6 +119,8 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 90, "worker_from_client_tcp_total_bytes", MetricType::COUNTER, "bytes" },
     { 91, "worker_from_client_urma_total_bytes", MetricType::COUNTER, "bytes" },
     { 92, "client_get_shm_read_total_bytes", MetricType::COUNTER, "bytes" },
+    {93, "client_exist_redirect_total", MetricType::COUNTER, "count" },
+    {94, "client_exist_connection_retry_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

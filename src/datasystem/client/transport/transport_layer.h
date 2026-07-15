@@ -63,6 +63,15 @@ public:
     Status Get(const ObjectReadRequest &input, ObjectReadResult &output);
 
     /**
+     * @brief Execute Exist and rebuild the RPC connection once when the channel is unavailable.
+     * @param[in] workerAddr Address returned by the routing layer.
+     * @param[in] input Logical Exist request.
+     * @param[out] output Exist results.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status Exist(const HostPort &workerAddr, const TransportExistRequest &input, TransportExistResult &output);
+
+    /**
      * @brief Create an ObjectBuffer with transport-native memory.
      * @param[in] workerAddr Address returned by the routing layer.
      * @param[in] objectKey Object key.

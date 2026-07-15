@@ -21,10 +21,11 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 #include <tuple>
 #include <utility>
 
-#include "datasystem/worker/worker_topology_references.h"
+#include <nlohmann/json.hpp>
 
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/flags/flags.h"
@@ -69,6 +70,7 @@
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
+#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -87,6 +89,9 @@ namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
+static const char *const EXIST_REDIRECTS_FIELD = "exist_redirects";
+static const char *const EXIST_REDIRECT_ADDRESS_FIELD = "address";
+static const char *const EXIST_REDIRECT_KEYS_FIELD = "keys";
 
 static constexpr double US_PER_MS = 1000.0;
 
@@ -129,6 +134,40 @@ std::string GetTopologyMemberDiagnosticId(const cluster::MembershipEndpointView 
     return endpoint.identity.id.size() == UUID_SIZE ? BytesUuidToString(endpoint.identity.id) : endpoint.identity.id;
 }
 }  // namespace
+
+std::string BuildExistRedirectExtra(const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos)
+{
+    nlohmann::json redirects = nlohmann::json::array();
+    std::unordered_set<std::string> seen;
+    std::string addressExtra;
+    for (const auto &info : infos) {
+        const auto &address = info.redirect_meta_address();
+        if (address.empty()) {
+            continue;
+        }
+        if (seen.emplace(address).second) {
+            if (!addressExtra.empty()) {
+                addressExtra.append(",");
+            }
+            addressExtra.append(address);
+        }
+        if (info.change_meta_ids().empty()) {
+            continue;
+        }
+        nlohmann::json keys = nlohmann::json::array();
+        for (const auto &key : info.change_meta_ids()) {
+            keys.emplace_back(key);
+        }
+        redirects.emplace_back(nlohmann::json{
+            { EXIST_REDIRECT_ADDRESS_FIELD, address },
+            { EXIST_REDIRECT_KEYS_FIELD, std::move(keys) },
+        });
+    }
+    if (redirects.empty()) {
+        return addressExtra;
+    }
+    return nlohmann::json{ { EXIST_REDIRECTS_FIELD, std::move(redirects) } }.dump();
+}
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam,
                                                worker::WorkerTopologyReferences *topologyEngine, EtcdStore *etcdStore,
@@ -2831,6 +2870,40 @@ Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRsp
     return Status::OK();
 }
 
+Status WorkerOcServiceGetImpl::QueryExistMetadataViaPureQueryMeta(const std::vector<std::string> &objectKeys,
+                                                                  std::vector<master::QueryMetaInfoPb> &queryMetas)
+{
+    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_,
+                                                                       topologyRouteOptions_);
+    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Get masterApi failed, cannot query Exist");
+    master::PureQueryMetaReqPb req;
+    req.set_redirect(true);
+    req.set_address(localAddress_.ToString());
+    req.mutable_object_keys()->Add(objectKeys.begin(), objectKeys.end());
+    master::PureQueryMetaRspPb rsp;
+    RETURN_IF_NOT_OK(workerMasterApi->PureQueryMeta(req, rsp));
+    queryMetas.insert(queryMetas.end(), rsp.mutable_query_metas()->begin(), rsp.mutable_query_metas()->end());
+    for (const auto &redirectInfo : rsp.info()) {
+        HostPort redirectMasterAddr;
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()),
+                                         "Parse Exist redirect master address failed");
+        auto redirectWorkerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
+        CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
+                                 FormatString("Get redirect master api failed, address: %s",
+                                              redirectMasterAddr.ToString()));
+        master::PureQueryMetaReqPb redirectReq;
+        master::PureQueryMetaRspPb redirectRsp;
+        redirectReq.set_redirect(false);
+        redirectReq.set_address(localAddress_.ToString());
+        redirectReq.mutable_object_keys()->Add(redirectInfo.change_meta_ids().begin(),
+                                               redirectInfo.change_meta_ids().end());
+        RETURN_IF_NOT_OK(redirectWorkerMasterApi->PureQueryMeta(redirectReq, redirectRsp));
+        queryMetas.insert(queryMetas.end(), redirectRsp.mutable_query_metas()->begin(),
+                          redirectRsp.mutable_query_metas()->end());
+    }
+    return Status::OK();
+}
+
 bool WorkerOcServiceGetImpl::IsLocalObject(const std::string &key)
 {
     std::shared_ptr<SafeObjType> entry;
@@ -2898,17 +2971,23 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
         if (traceEnabled) {
             Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_EXIST_QUERYMETA_START);
         }
-        QueryMetadataFromMasterResult queryResult;
-        std::vector<master::QueryMetaInfoPb> &queryMetas = queryResult.queryMetas;
-        std::vector<RpcMessage> payloads;
-        std::map<std::string, uint64_t> absentObjectKeys;
-        rc = QueryMetadataFromMaster(nonLocalKeys, 0, queryResult, req.query_l2cache());
+        std::vector<master::QueryMetaInfoPb> queryMetas;
+        INJECT_POINT("worker.before_query_meta");
+        rc = QueryExistMetadataViaPureQueryMeta(nonLocalKeys, queryMetas);
         if (traceEnabled) {
             Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_EXIST_QUERYMETA_END);
         }
+        if (rc.IsError()) {
+            if (rc.GetCode() == K_NOT_OWNER) {
+                rsp.set_redirect_extra(rc.GetExtra());
+                access.Discard();
+            } else {
+                access.Result(rc).Record();
+            }
+            return rc;
+        }
         const auto localAddress = localAddress_.ToString();
         for (const auto &meta : queryMetas) {
-            // Master skips returning the source worker as a remote address; a single local primary copy still exists.
             const bool isLocalPrimaryCopy = meta.single_copy() && meta.meta().primary_address() == localAddress;
             if (!meta.address().empty() || isLocalPrimaryCopy) {
                 existKeys.emplace(meta.meta().object_key());

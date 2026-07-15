@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
@@ -32,6 +33,7 @@
 #include "datasystem/object/object_buffer.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
+#include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -57,6 +59,36 @@ struct DataGetResult {
     uint64_t externalSize = 0;
     std::shared_ptr<IReceiveBufferOwner> externalOwner;
     AccessTransportKind kind = AccessTransportKind::TCP;
+};
+
+struct TransportExistRequest {
+    // objectKeys is a const reference; the caller's vector must outlive all uses of this struct.
+    // The rvalue constructor is deleted to prevent binding to temporaries.
+    TransportExistRequest(const std::vector<std::string> &keys, bool queryL2, bool isLocal, int64_t timeoutMs,
+                          std::string clientId, std::string tenantId, SensitiveValue token)
+        : objectKeys(keys),
+          queryL2Cache(queryL2),
+          isLocal(isLocal),
+          subTimeoutMs(timeoutMs),
+          clientId(std::move(clientId)),
+          tenantId(std::move(tenantId)),
+          token(std::move(token))
+    {
+    }
+    TransportExistRequest(std::vector<std::string> &&keys, bool, bool, int64_t, std::string, std::string,
+                          SensitiveValue) = delete;
+
+    const std::vector<std::string> &objectKeys;
+    bool queryL2Cache;
+    bool isLocal;
+    int64_t subTimeoutMs;
+    std::string clientId;
+    std::string tenantId;
+    SensitiveValue token;
+};
+
+struct TransportExistResult {
+    std::vector<bool> exists;
 };
 
 class IDataTransporter {
