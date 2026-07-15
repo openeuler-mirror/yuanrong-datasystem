@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -92,17 +93,23 @@ Status HashRingRefresher::DoRefresh()
         bool changed = false;
         std::unordered_map<std::string, std::string> hostIdMap;
 
-        Status st = fetchRpc_(worker, currentVersion_.load(), ring, masterAddress,
-                              newVersion, changed, hostIdMap);
+        const uint64_t requestedVersion = currentVersion_.load(std::memory_order_acquire);
+        Status st = fetchRpc_(worker, requestedVersion, ring, masterAddress, newVersion, changed, hostIdMap);
         if (st.IsError()) {
             continue;
         }
 
         if (changed) {
+            if (newVersion < requestedVersion) {
+                LOG(WARNING) << "Ignore stale hash ring response from " << worker.ToString()
+                             << ", requested version: " << requestedVersion
+                             << ", response version: " << newVersion;
+                continue;
+            }
             if (ringUpdateHook_) {
                 RETURN_IF_NOT_OK(ringUpdateHook_(newVersion, ring));
             }
-            currentVersion_.store(newVersion);
+            currentVersion_.store(newVersion, std::memory_order_release);
             UpdateWorkerList(ring);
             auto ringPtr = std::make_shared<::datasystem::ClusterTopologyPb>(std::move(ring));
             auto hostIdMapPtr = std::make_shared<const std::unordered_map<std::string, std::string>>(
