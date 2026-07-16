@@ -79,7 +79,8 @@ bool LibLoaderBase::TryLoad(const std::string &path)
     std::string filePath = path + libName_;
     handle_ = dlopen(filePath.c_str(), RTLD_LAZY | RTLD_GLOBAL);
     if (!handle_) {
-        LOG(WARNING) << "try dlopen " << libName_ << " from " << path << " failed -> " << GetDlErrorMsg();
+        LOG(WARNING) << PIPLN_LOG_PREFIX "try dlopen " << libName_ << " from \"" << path << "\" failed -> "
+                     << GetDlErrorMsg();
         return false;
     }
     return true;
@@ -87,6 +88,8 @@ bool LibLoaderBase::TryLoad(const std::string &path)
 
 void LibLoaderBase::Load()
 {
+    if (Inited())
+        return;
     std::vector<std::string> searchPaths;
     searchPaths.insert(searchPaths.end(), libpaths_.begin(), libpaths_.end());
     searchPaths.insert(searchPaths.end(), g_defaultLibPaths.begin(), g_defaultLibPaths.end());
@@ -95,12 +98,14 @@ void LibLoaderBase::Load()
         if (TryLoad(path))
             break;
     }
-    if (!handle_)
+    if (!handle_) {
+        LOG(WARNING) << PIPLN_LOG_PREFIX "tried all path for " << libName_ << " but could not find one.";
         return;
+    }
 
     char origin[PATH_MAX] = {};
     const bool hasOrigin = (dlinfo(handle_, RTLD_DI_ORIGIN, origin) == 0 && origin[0] != '\0');
-    LOG(INFO) << "dlopen " << libName_ << " succeeded for: " << libName_
+    LOG(INFO) << PIPLN_LOG_PREFIX "dlopen " << libName_ << " succeeded for: " << libName_
               << (hasOrigin ? std::string(", origin path: ") + origin : "");
 }
 
@@ -112,7 +117,6 @@ void LibLoaderBase::UnLoad()
     handle_ = nullptr;
 }
 
-
 #ifndef PIPLN_USE_MOCK
 CudaRTLibLoader *CudaRTLibLoader::Instance()
 {
@@ -121,8 +125,9 @@ CudaRTLibLoader *CudaRTLibLoader::Instance()
 }
 void CudaRTLibLoader::Load()
 {
+    if (Inited())
+        return;
     LibLoaderBase::Load();
-    DLSYM_FUNC_OBJ(cudaIpcOpenMemHandle, handle_);
     DLSYM_FUNC_OBJ(cudaStreamCreateWithFlags, handle_);
     DLSYM_FUNC_OBJ(cudaEventCreate, handle_);
     DLSYM_FUNC_OBJ(cudaStreamDestroy, handle_);
@@ -130,8 +135,6 @@ void CudaRTLibLoader::Load()
     DLSYM_FUNC_OBJ(cudaEventRecord, handle_);
     DLSYM_FUNC_OBJ(cudaEventSynchronize, handle_);
     DLSYM_FUNC_OBJ(cudaEventDestroy, handle_);
-    DLSYM_FUNC_OBJ(cudaIpcCloseMemHandle, handle_);
-    DLSYM_FUNC_OBJ(cudaIpcGetMemHandle, handle_);
     DLSYM_FUNC_OBJ(cudaGetErrorString, handle_);
     DLSYM_FUNC_OBJ(cudaHostRegister, handle_);
     DLSYM_FUNC_OBJ(cudaHostUnregister, handle_);
@@ -139,8 +142,9 @@ void CudaRTLibLoader::Load()
 
 void CudaRTLibLoader::UnLoad()
 {
+    if (!Inited())
+        return;
     LibLoaderBase::UnLoad();
-    DLSYM_FUNC_OBJ_DESTROY(cudaIpcOpenMemHandle);
     DLSYM_FUNC_OBJ_DESTROY(cudaStreamCreateWithFlags);
     DLSYM_FUNC_OBJ_DESTROY(cudaStreamDestroy);
     DLSYM_FUNC_OBJ_DESTROY(cudaEventCreate);
@@ -148,8 +152,6 @@ void CudaRTLibLoader::UnLoad()
     DLSYM_FUNC_OBJ_DESTROY(cudaEventRecord);
     DLSYM_FUNC_OBJ_DESTROY(cudaEventSynchronize);
     DLSYM_FUNC_OBJ_DESTROY(cudaEventDestroy);
-    DLSYM_FUNC_OBJ_DESTROY(cudaIpcCloseMemHandle);
-    DLSYM_FUNC_OBJ_DESTROY(cudaIpcGetMemHandle);
     DLSYM_FUNC_OBJ_DESTROY(cudaGetErrorString);
     DLSYM_FUNC_OBJ_DESTROY(cudaHostRegister);
     DLSYM_FUNC_OBJ_DESTROY(cudaHostUnregister);

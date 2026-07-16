@@ -105,6 +105,7 @@ struct PiplnRh2dParam {
     std::vector<OsXprtPipln::DevShmInfo> devInfos;
     std::shared_ptr<H2DChunkManager> chunkManager;
     uint32_t version;
+    std::vector<std::shared_ptr<Buffer>> buffers;
     std::vector<RpcMessage> payloads;
 };
 

@@ -262,11 +262,26 @@ Status KVClient::UpdateAkSk(const std::string accesskey, SensitiveValue secretke
 }
 
 Status KVClient::MGetH2D(const std::vector<std::string> &keys, const std::vector<Blob> &devBlob,
-                         std::vector<std::string> &outFailedKeys, void *h2dStream)
+                         std::vector<std::string> &outFailedKeys, void *h2dStream,
+                         std::vector<Optional<ReadOnlyBuffer>> *readOnlyBuffers)
 {
-    std::shared_future<AsyncResult> future = impl_->GetWithOsTransportPipeline(keys, devBlob, h2dStream);
+    if (h2dStream && !readOnlyBuffers) {
+        return Status(K_INVALID, "readOnlyBuffers should not be null when h2dStream is not null");
+    }
+    std::vector<std::shared_ptr<Buffer>> buffers;
+    std::shared_future<AsyncResult> future = impl_->GetWithOsTransportPipeline(keys, devBlob, buffers, h2dStream);
     auto result = future.get();
     outFailedKeys = std::move(result.failedList);
+    if (readOnlyBuffers) {
+        readOnlyBuffers->clear();
+        for (auto &buffer : buffers) {
+            if (buffer) {
+                readOnlyBuffers->emplace_back(ReadOnlyBuffer(buffer));
+            } else {
+                readOnlyBuffers->emplace_back();
+            }
+        }
+    }
     return result.status;
 }
 

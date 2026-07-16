@@ -1162,9 +1162,9 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
 Status WorkerWorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    LOG(INFO) << PIPLN_LOG_PREFIX" NotifyRemoteGet request: object_count=" << req.object_keys_size();
+    LOG(INFO) << PIPLN_LOG_PREFIX "NotifyRemoteGet request: object_count=" << req.object_keys_size();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocClientWorkerSvc_->NotifyRemoteGet(req, rsp), "NotifyRemoteGet failed");
-    LOG(INFO) << PIPLN_LOG_PREFIX" NotifyRemoteGet success";
+    LOG(INFO) << PIPLN_LOG_PREFIX "NotifyRemoteGet success";
     return Status::OK();
 }
 }  // namespace object_cache

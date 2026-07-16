@@ -226,6 +226,8 @@ public:
     ///  If h2dStream is nullptr, MGetH2D creates an internal CUDA stream and waits until H2D copy finishes
     ///  before returning. If h2dStream is not nullptr, MGetH2D only submits cudaMemcpyAsync to this stream;
     ///  caller must synchronize the stream or use CUDA event dependencies before reading/reusing/freeing device memory.
+    /// \param[out] readOnlyBuffers The buffer list of values. This should not be null when h2dStream is not null. 
+    /// This could be released after h2dStream is synchronized
     ///
     /// \return K_OK on success; the error code otherwise.
     ///         K_INVALID: the key is empty.
@@ -233,7 +235,8 @@ public:
     ///         K_RUNTIME_ERROR: Cannot get value from worker.
     ///         K_NOT_SUPPORT: client or worker don't support MGetH2D
     Status MGetH2D(const std::vector<std::string> &keys, const std::vector<Blob> &devBlob,
-                   std::vector<std::string> &outFailedKeys, void *h2dStream = nullptr);
+                   std::vector<std::string> &outFailedKeys, void *h2dStream = nullptr,
+                   std::vector<Optional<ReadOnlyBuffer>> *readOnlyBuffers = nullptr);
 
     /// \brief Invoke worker client to get the value of a key.
     ///
