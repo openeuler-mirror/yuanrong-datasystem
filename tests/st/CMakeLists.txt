@@ -54,6 +54,8 @@ file(GLOB_RECURSE DS_ST_OBJECT_CACHE_SRCS CONFIGURE_DEPENDS
 
 file(GLOB_RECURSE DS_ST_KV_CACHE_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/**/kv_cache/*.cpp")
+list(FILTER DS_ST_KV_CACHE_SRCS EXCLUDE REGEX .*kv_client_brpc_local_cache_verify_test\\.cpp)
+list(FILTER DS_ST_KV_CACHE_SRCS EXCLUDE REGEX .*kv_client_brpc_remote_get_test\\.cpp)
 
 file(GLOB_RECURSE DS_ST_EMBEDDED_CLIENT_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/embedded_client/*.cpp")
