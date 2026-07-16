@@ -371,8 +371,10 @@ bool ListenWorker::TryAcquireAsyncSwitchPool(std::shared_ptr<Raii> &raii)
         VLOG(1) << "[Switch] Async switch worker pool has task executing";
         return false;
     }
-    raii = std::make_shared<Raii>([this]() {
-        isInAsyncSwitchWorkerPool_.store(false, std::memory_order_relaxed);
+    raii = std::make_shared<Raii>([weak = weak_from_this()]() {
+        if (auto self = weak.lock()) {
+            self->isInAsyncSwitchWorkerPool_.store(false, std::memory_order_relaxed);
+        }
     });
     return true;
 }
@@ -390,7 +392,7 @@ void ListenWorker::SwitchToRemoteWorker(SwitchTriggerReason reason)
         return;
     }
     auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, traceId, raii, reason]() {
+    asyncSwitchWorkerPool_->Execute([this, self = shared_from_this(), traceId, raii, reason]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
         LOG(INFO) << "[Switch] Worker " << clientCommonWorker_->workerId_
@@ -412,7 +414,7 @@ void ListenWorker::TrySwitchBackToLocalWorker()
         return;
     }
     auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, traceId, raii]() {
+    asyncSwitchWorkerPool_->Execute([this, self = shared_from_this(), traceId, raii]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         std::shared_lock<std::shared_timed_mutex> l(switchWorkerHandleMutex_);
         LOG(INFO) << "[Switch] Local worker " << clientCommonWorker_->workerId_ << " is recovering";
@@ -440,7 +442,7 @@ void ListenWorker::TryRecoverLocalWorker()
         return;
     }
     auto traceId = Trace::Instance().GetTraceID();
-    asyncSwitchWorkerPool_->Execute([this, traceId, raii]() {
+    asyncSwitchWorkerPool_->Execute([this, self = shared_from_this(), traceId, raii]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
         if (recoverLocalWorkerHandle_()) {
             LOG(INFO) << "[Switch] Preferred same-node worker recovered, remote fallback will drain.";
