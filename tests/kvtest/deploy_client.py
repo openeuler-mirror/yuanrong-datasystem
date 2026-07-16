@@ -854,6 +854,19 @@ def _parse_manual_nodes(nodes_str):
     return result
 
 
+def _parse_bool(value):
+    """Parse a boolean CLI value: true/false/yes/no/1/0/on/off (case-insensitive)."""
+    import argparse
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if s in ('true', 'yes', '1', 'on'):
+        return True
+    if s in ('false', 'no', '0', 'off'):
+        return False
+    raise argparse.ArgumentTypeError(f"invalid boolean value: '{value}' (expected true/false)")
+
+
 def cmd_gen_config(args):
     mode = args.mode
 
@@ -959,7 +972,6 @@ def cmd_gen_config(args):
     # --- Build config.json ---
     cfg = {
         'mode': mode,
-        'etcd_address': args.etcd_address or '127.0.0.1:2379',
         'cluster_name': args.cluster_name or '',
         'num_threads': args.num_threads,
         'data_sizes': [s.strip() for s in args.data_sizes.split(',')],
@@ -967,10 +979,16 @@ def cmd_gen_config(args):
             'connect_timeout_ms': 1000,
             'request_timeout_ms': 20,
             'enable_cross_node_connection': True,
-            'enable_local_cache': True,
+            'enable_local_cache': args.enable_local_cache,
             'fast_transport_mem_size': '512MB',
         },
     }
+    # Service discovery address: --coordinator-address takes priority and
+    # suppresses etcd_address; otherwise default to etcd_address.
+    if args.coordinator_address:
+        cfg['coordinator_address'] = args.coordinator_address
+    else:
+        cfg['etcd_address'] = args.etcd_address or '127.0.0.1:2379'
 
     # CPU / NUMA affinity (all modes)
     if args.cpu_affinity:
@@ -1033,6 +1051,14 @@ def cmd_gen_config(args):
             if args.inference_delay > 0:
                 cfg['inference_delay_ms'] = args.inference_delay
 
+    # Runtime environment variables (applied to ./kvtest launch via the env block).
+    # Only emit when non-empty to keep generated configs minimal.
+    env = {}
+    if args.use_brpc:
+        env['DATASYSTEM_USE_BRPC'] = 'true'
+    if env:
+        cfg['env'] = env
+
     # --- Write files ---
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -1069,7 +1095,12 @@ def _add_gen_config_args(p):
     p.add_argument('-o', '--output-dir', default='config',
                    help='Output directory (default: config)')
     p.add_argument('-e', '--etcd-address',
-                   help='Override etcd_address in generated config.json')
+                   help='Override etcd_address in generated config.json '
+                        '(ignored when --coordinator-address is set)')
+    p.add_argument('--coordinator-address',
+                   help='Use coordinator-backed service discovery instead of etcd: '
+                        'sets coordinator_address in config.json and suppresses '
+                        'etcd_address. Takes priority over --etcd-address.')
     p.add_argument('-c', '--cluster-name',
                    help='Set cluster_name in generated config.json')
     p.add_argument('--remote-sdk-dir',
@@ -1140,6 +1171,16 @@ def _add_gen_config_args(p):
                    help='Benchmark total rounds (0 = infinite)')
     p.add_argument('--ttl', type=int, default=0,
                    help='TTL in seconds via set_param.ttl_second (default: 0, no expiry)')
+    # Connect options (applies to all modes)
+    p.add_argument('--enable-local-cache', type=_parse_bool, default=True,
+                   nargs='?', const=True, dest='enable_local_cache',
+                   metavar='BOOL',
+                   help='Enable SDK client local cache (default: true; bare flag = true). '
+                        'Pass false to make Get go through the Transport layer.')
+    # Runtime environment (applies to all modes)
+    p.add_argument('--use-brpc', action='store_true', dest='use_brpc',
+                   help='Use brpc RPC backend: sets DATASYSTEM_USE_BRPC=true env var '
+                        'when running kvtest (default: off, ZMQ backend)')
     # CPU / NUMA affinity
     p.add_argument('--cpu-affinity', default='',
                    help='CPU affinity, e.g. "0-7" or "0,2,4,6" (default: auto-detect)')

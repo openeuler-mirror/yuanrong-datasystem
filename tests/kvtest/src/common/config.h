@@ -50,6 +50,7 @@ struct Config {
     int instanceId = 0;
     int listenPort = 9000;
     std::string etcdAddress;
+    std::string coordinatorAddress; // when set, use CoordinatorServiceDiscovery instead of etcd
     std::string clusterName = "";
     std::string hostIdEnvName = "JD_HOST_IP";
     int32_t connectTimeoutMs = 1000;

@@ -365,6 +365,23 @@ global:
     ioThreadNice: -15
     # Parallel payload split chunk size. Default to 1048756 bytes.
     zmqChunkSz: 1048576
+
+    # brpc is an alternative RPC transport to ZMQ. When useBrpc is true, brpc owns the
+    # worker TCP port exclusively (the same port as worker_address, no port offset) and
+    # the ZMQ TCP endpoint is skipped. ZMQ-specific options above (zmqServerIoContext,
+    # zmqClientIoContext, zmqClientIoThread, zmqChunkSz) do not take effect in brpc mode.
+    # Per-service thread pools (rpcThreadNum, ocThreadNum, scThreadNum, etc.) still apply.
+    brpc:
+      # Whether to use brpc instead of ZMQ for RPC communication. Default false.
+      useBrpc: false
+      # Number of brpc server worker threads (bthread worker pool size).
+      brpcServerNumThreads: 64
+      # Max concurrent in-flight RPCs per brpc server. 0 means unlimited.
+      # Recommended: brpcServerNumThreads * 2 (e.g. 128 for 64 threads). When exceeded,
+      # brpc returns ELIMIT immediately so a slow handler cannot exhaust bthreads and
+      # cause OOM. Must not be smaller than brpcServerNumThreads.
+      brpcMaxConcurrency: 128
+
     # Maximum number of sessions that can be cached, must be within [512, 10'000]
     maxRpcSessionNum: 2048
     # The num of threads used to scan new elements in shared memory.
@@ -505,6 +522,12 @@ global:
     urmaFailoverSuccessRateRatio: 0.5
     # Minimum URMA data-plane samples per client_dead_timeout_s window before failover evaluation.
     urmaFailoverMinSampleCount: 5
+    # Enable pipeline Host-to-Device (H2D) transfer to overlap host-side data preparation
+    # with device-side copies. Only effective when enableUrma is true; otherwise ignored.
+    enablePipelineH2d: false
+    # Number of pipeline H2D worker threads. Valid range [8, 128], default 64.
+    # Values outside the range fall back to the default (64) at runtime.
+    pipelineH2dThreadNum: 64
     # Disk cache data placement directory, default value is empty, indicating that disk cache is not enabled.
     sharedDiskDirectory: ""
     # Upper limit of the shared disk, the unit is mb.

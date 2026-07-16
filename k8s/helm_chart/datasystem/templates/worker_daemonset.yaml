@@ -237,6 +237,9 @@ spec:
         - -zmq_client_io_thread={{ $.Values.global.rpc.zmqClientIoThread }}
         - -io_thread_nice={{ $.Values.global.rpc.ioThreadNice }}
         - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
+        - -use_brpc={{ $.Values.global.rpc.brpc.useBrpc }}
+        - -brpc_server_num_threads={{ $.Values.global.rpc.brpc.brpcServerNumThreads }}
+        - -brpc_max_concurrency={{ $.Values.global.rpc.brpc.brpcMaxConcurrency }}
         - -etcd_address={{ $.Values.global.etcd.etcdAddress }}
         - -etcd_username={{ $.Values.global.etcd.etcdUsername }}
         - -etcd_password={{ $.Values.global.etcd.etcdPassword }}
@@ -256,6 +259,8 @@ spec:
         - -check_async_queue_empty_time_s={{ $.Values.global.gracefulShutdown.checkAsyncQueueEmptyTimeS }}
         - -enable_lossless_data_exit_mode={{ $.Values.global.gracefulShutdown.enableLosslessDataExitMode }}
         - -enable_urma={{ $.Values.global.performance.enableUrma }}
+        - -enable_pipeline_h2d={{ $.Values.global.performance.enablePipelineH2d }}
+        - -pipeline_h2d_thread_num={{ $.Values.global.performance.pipelineH2dThreadNum }}
         - -shared_memory_distribution_policy={{ $.Values.global.performance.sharedMemoryDistributionPolicy }}
         - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
         - -urma_max_write_size_mb={{ $.Values.global.performance.urmaMaxWriteSizeMb }}
