@@ -38,6 +38,12 @@
 #include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
+#ifdef WITH_TESTS
+namespace ut {
+class OCMigrateMetadataManagerTest;
+}
+#endif
+
 namespace master {
 using TbbFutureThreadTable = tbb::concurrent_hash_map<std::pair<std::string, std::string>,
                                                       std::future<std::pair<Status, std::vector<std::string>>>>;
@@ -320,9 +326,14 @@ private:
      * @param[in] ocMetadataManager The OCMetadataManager instance.
      * @param[in] api Rpc channel for send data
      * @param[in] info range and objkeys.
+     * @return Status of the call.
      */
-    void MigrateDeviceMetaForScaleout(const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
-                                      std::unique_ptr<MasterMasterOCApi> &api, MigrateMetaInfo &info);
+    Status MigrateDeviceMetaForScaleout(const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
+                                        std::unique_ptr<MasterMasterOCApi> &api, MigrateMetaInfo &info);
+
+#ifdef WITH_TESTS
+    friend class ::datasystem::ut::OCMigrateMetadataManagerTest;
+#endif
 
     HostPort localHostPort_;
     std::shared_ptr<AkSkManager> akSkManager_;

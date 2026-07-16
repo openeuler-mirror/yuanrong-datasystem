@@ -50,7 +50,7 @@ public:
     Status LocateOwner(const TopologySnapshot &snapshot, uint32_t token, const Member *&owner) const override;
 
     /**
-     * @brief Locate the owner including JOINING members during ScaleOut.
+     * @brief Locate the owner after the active ScaleOut or ScaleIn batch commits.
      * @param[in] snapshot Snapshot.
      * @param[in] token Token.
      * @param[out] owner Snapshot-lifetime prospective member pointer.

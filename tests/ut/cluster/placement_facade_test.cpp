@@ -68,6 +68,44 @@ TEST(PlacementFacadeTest, WaitsConcurrentWritesOnScaleOutTransferRanges)
     DS_ASSERT_OK(facade.EvaluateRedirect("key", "127.0.0.1:1", decision));
     EXPECT_EQ(decision.action, RedirectAction::WAIT);
     EXPECT_EQ(decision.committedOwnerAddress, "127.0.0.1:1");
+    EXPECT_TRUE(decision.redirectTargetAddress.empty());
+    EXPECT_EQ(decision.GetRedirectTargetAddress(), "127.0.0.1:1");
+}
+
+TEST(PlacementFacadeTest, RedirectsMissingScaleInMetadataToProspectiveOwner)
+{
+    TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_IN, 2 };
+    topology.members = {
+        Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::LEAVING,
+                { std::numeric_limits<uint32_t>::max() } },
+        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 0 } },
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    TopologySnapshotState snapshots;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    HashAlgorithm algorithm;
+    PlacementFacade facade(snapshots, algorithm);
+
+    const Member *prospective = nullptr;
+    DS_ASSERT_OK(algorithm.LocateProspectiveOwner(*snapshot, algorithm.Hash("key"), prospective));
+    ASSERT_NE(prospective, nullptr);
+    EXPECT_EQ(prospective->identity.address, "127.0.0.1:2");
+
+    RedirectDecision decision;
+    DS_ASSERT_OK(facade.EvaluateRedirect("key", "127.0.0.1:1", decision));
+    EXPECT_EQ(decision.action, RedirectAction::REDIRECT);
+    EXPECT_EQ(decision.committedOwnerAddress, "127.0.0.1:1");
+    EXPECT_EQ(decision.redirectTargetAddress, "127.0.0.1:2");
+    EXPECT_EQ(decision.GetRedirectTargetAddress(), "127.0.0.1:2");
+
+    bool isLocal = false;
+    DS_ASSERT_OK(facade.IsLocalOwner("key", "127.0.0.1:1", isLocal));
+    EXPECT_TRUE(isLocal);
 }
 
 }  // namespace

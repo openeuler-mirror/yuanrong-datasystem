@@ -28,6 +28,13 @@ struct RedirectDecision {
     uint64_t topologyVersion{ 0 };
     RedirectAction action{ RedirectAction::LOCAL };
     std::string committedOwnerAddress;
+    // Empty when the committed owner is also the redirect target, avoiding a steady-state address copy.
+    std::string redirectTargetAddress;
+
+    const std::string &GetRedirectTargetAddress() const noexcept
+    {
+        return redirectTargetAddress.empty() ? committedOwnerAddress : redirectTargetAddress;
+    }
 };
 
 }  // namespace datasystem::cluster

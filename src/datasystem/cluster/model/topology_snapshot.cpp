@@ -35,6 +35,20 @@ bool IsCommitted(MemberState state)
     return state == MemberState::ACTIVE || state == MemberState::PRE_LEAVING || state == MemberState::LEAVING;
 }
 
+bool IsProspective(MemberState state, const std::optional<ActiveBatch> &batch)
+{
+    if (!batch.has_value()) {
+        return false;
+    }
+    if (batch->type == TopologyChangeType::SCALE_OUT) {
+        return IsCommitted(state) || state == MemberState::JOINING;
+    }
+    if (batch->type == TopologyChangeType::SCALE_IN) {
+        return IsCommitted(state) && state != MemberState::LEAVING;
+    }
+    return false;
+}
+
 bool MatchesBatch(MemberState state, TopologyChangeType type)
 {
     if (type == TopologyChangeType::SCALE_OUT) {
@@ -121,9 +135,8 @@ TopologySnapshot::TopologySnapshot(TopologyState state, int64_t authorityRevisio
 
 Status TopologySnapshot::BuildIndexes()
 {
-    const bool scaleOut = state_.activeBatch.has_value() && state_.activeBatch->type == TopologyChangeType::SCALE_OUT;
-    ReserveIndexes(scaleOut);
-    RETURN_IF_NOT_OK(BuildIndexEntries(scaleOut));
+    ReserveIndexes();
+    RETURN_IF_NOT_OK(BuildIndexEntries());
     CHECK_FAIL_RETURN_STATUS(committedMembers_.empty() || !committedTokenOwners_.empty(), K_INVALID,
                              "committed topology members have no token owner");
     std::sort(committedTokenOwners_.begin(), committedTokenOwners_.end(),
@@ -133,7 +146,7 @@ Status TopologySnapshot::BuildIndexes()
     return Status::OK();
 }
 
-void TopologySnapshot::ReserveIndexes(bool scaleOut)
+void TopologySnapshot::ReserveIndexes()
 {
     size_t committedMemberCount = 0;
     size_t committedTokenCount = 0;
@@ -143,7 +156,7 @@ void TopologySnapshot::ReserveIndexes(bool scaleOut)
             ++committedMemberCount;
             committedTokenCount += member.tokens.size();
         }
-        if (scaleOut && (IsCommitted(member.state) || member.state == MemberState::JOINING)) {
+        if (IsProspective(member.state, state_.activeBatch)) {
             prospectiveTokenCount += member.tokens.size();
         }
     }
@@ -154,7 +167,7 @@ void TopologySnapshot::ReserveIndexes(bool scaleOut)
     prospectiveTokenOwners_.reserve(prospectiveTokenCount);
 }
 
-Status TopologySnapshot::BuildIndexEntries(bool scaleOut)
+Status TopologySnapshot::BuildIndexEntries()
 {
     std::unordered_set<uint32_t> tokens;
     size_t tokenCount = 0;
@@ -178,7 +191,7 @@ Status TopologySnapshot::BuildIndexEntries(bool scaleOut)
                 committedTokenOwners_.emplace_back(token, &member);
             }
         }
-        if (scaleOut && (IsCommitted(member.state) || member.state == MemberState::JOINING)) {
+        if (IsProspective(member.state, state_.activeBatch)) {
             for (uint32_t token : member.tokens) {
                 prospectiveTokenOwners_.emplace_back(token, &member);
             }

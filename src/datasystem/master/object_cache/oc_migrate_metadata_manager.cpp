@@ -166,7 +166,10 @@ Status OCMigrateMetadataManager::RunTopologyMigration(
             try {
                 auto result = accessor->second.get();
                 futureThread_.erase(accessor);
-                return result.first;
+                RETURN_IF_NOT_OK(result.first);
+                CHECK_FAIL_RETURN_STATUS(result.second.empty(), K_TRY_AGAIN,
+                                         "topology object migration has failed items");
+                return Status::OK();
             } catch (const std::exception &error) {
                 futureThread_.erase(accessor);
                 RETURN_STATUS(K_RUNTIME_ERROR, std::string("topology object migration exception: ") + error.what());
@@ -338,18 +341,26 @@ Status OCMigrateMetadataManager::BatchMigrateMetadata(
     };
 
     Status s = streamSendData();
+    auto handleFailed = [&ocMetadataManager, &failedObjectKeys, &asyncMap](const MetaForMigrationPb &meta) {
+        ocMetadataManager->HandleMetaDataMigrationFailed(meta, asyncMap);
+        if (std::find(failedObjectKeys.begin(), failedObjectKeys.end(), meta.object_key()) == failedObjectKeys.end()) {
+            failedObjectKeys.emplace_back(meta.object_key());
+        }
+    };
     if (s.IsError()) {
         LOG(WARNING) << "Fill metadata for migration failed. s=" << s.ToString();
         INJECT_POINT("BatchMigrateMetadata.HandleFailed.before");
         for (const auto &meta : req.object_metas()) {
-            ocMetadataManager->HandleMetaDataMigrationFailed(meta, asyncMap);
-            if (std::find(failedObjectKeys.begin(), failedObjectKeys.end(), meta.object_key())
-                == failedObjectKeys.end()) {
-                failedObjectKeys.emplace_back(meta.object_key());
-            }
+            handleFailed(meta);
         }
         INJECT_POINT("BatchMigrateMetadata.HandleFailed.after");
         return s;
+    }
+    if (rsp.results_size() != req.object_metas_size()) {
+        for (const auto &meta : req.object_metas()) {
+            handleFailed(meta);
+        }
+        RETURN_STATUS(K_TRY_AGAIN, "object metadata migration response size mismatch");
     }
     int num = 0;
     for (auto &result : rsp.results()) {
@@ -360,11 +371,7 @@ Status OCMigrateMetadataManager::BatchMigrateMetadata(
             ocMetadataManager->HandleObjRefDataMigrationOnSuccess(meta.object_key(), remoteClientIds);
             ocMetadataManager->HandleNestedRefMigrateSuccess(meta.object_key());
         } else {
-            ocMetadataManager->HandleMetaDataMigrationFailed(meta, asyncMap);
-            if (std::find(failedObjectKeys.begin(), failedObjectKeys.end(), meta.object_key())
-                == failedObjectKeys.end()) {
-                failedObjectKeys.emplace_back(meta.object_key());
-            }
+            handleFailed(meta);
         }
         ++num;
     }
@@ -490,6 +497,9 @@ Status OCMigrateMetadataManager::MigrateMetadataForScaleout(
             // if status is error, not add meta to req.
             LOG(WARNING) << "Fill metadata for migration failed. s=" << s.ToString();
             ocMetadataManager->CleanMigratingItems({ objectKey });
+            if (std::find(failedIds.begin(), failedIds.end(), objectKey) == failedIds.end()) {
+                failedIds.emplace_back(objectKey);
+            }
             continue;
         }
         req.mutable_object_metas()->Add(std::move(meta));
@@ -507,8 +517,8 @@ Status OCMigrateMetadataManager::MigrateMetadataForScaleout(
         RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, asyncMap));
     }
 
-    MigrateNoMetaInfoForScaleout(ocMetadataManager, api, info, failedIds);
-    MigrateDeviceMetaForScaleout(ocMetadataManager, api, info);
+    RETURN_IF_NOT_OK(MigrateNoMetaInfoForScaleout(ocMetadataManager, api, info, failedIds));
+    RETURN_IF_NOT_OK(MigrateDeviceMetaForScaleout(ocMetadataManager, api, info));
     return Status::OK();
 }
 
@@ -525,7 +535,7 @@ void OCMigrateMetadataManager::InitializeMigrationRequest(const MigrateMetaInfo 
     req.set_target_member_id(info.targetMemberId);
 }
 
-void OCMigrateMetadataManager::MigrateDeviceMetaForScaleout(
+Status OCMigrateMetadataManager::MigrateDeviceMetaForScaleout(
     const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, std::unique_ptr<MasterMasterOCApi> &api,
     MigrateMetaInfo &info)
 {
@@ -535,8 +545,9 @@ void OCMigrateMetadataManager::MigrateDeviceMetaForScaleout(
     std::vector<std::string> failedIds;
     if (!ocMetadataManager->GetDeviceOcManager()->CheckDeviceMetasMigrateInfoIsEmpty(req)) {
         LOG(INFO) << "Device metas are not empty, start to migrate device meta.";
-        BatchMigrateMetadata(api, req, ocMetadataManager, failedIds);
+        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds));
     }
+    return Status::OK();
 }
 
 void OCMigrateMetadataManager::GetAndFillMigrateDeviceMetaInfo(

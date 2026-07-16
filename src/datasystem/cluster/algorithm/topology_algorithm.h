@@ -69,10 +69,10 @@ public:
     virtual Status LocateOwner(const TopologySnapshot &snapshot, uint32_t token, const Member *&owner) const = 0;
 
     /**
-     * @brief Locate the owner after the current ScaleOut batch commits.
+     * @brief Locate the owner after the current ordinary topology batch commits.
      * @param[in] snapshot Immutable Snapshot.
      * @param[in] token Placement token.
-     * @param[out] owner Snapshot-lifetime prospective member pointer, or the committed owner outside ScaleOut.
+     * @param[out] owner Snapshot-lifetime prospective member pointer, or the committed owner outside ScaleOut/ScaleIn.
      * @return K_OK, K_NOT_READY, or K_INVALID.
      */
     virtual Status LocateProspectiveOwner(const TopologySnapshot &snapshot, uint32_t token,

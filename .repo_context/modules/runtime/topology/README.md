@@ -30,7 +30,9 @@
 - Foreground routing uses `PlacementFacade` and one immutable snapshot per decision. It never performs backend IO and
   never exposes protobuf or raw token ranges to business code. `TopologySnapshotState` uses a publication generation
   plus a thread-local weak cache so unchanged reads avoid repeatedly loading the atomically published shared pointer
-  without retaining old 10K-member snapshots on long-lived request threads.
+  without retaining old 10K-member snapshots on long-lived request threads. During an ordinary batch, the Snapshot
+  also derives the post-commit owner ring: ScaleOut transfer ranges wait on the committed source, while a ScaleIn
+  source whose metadata handoff has completed redirects missing metadata to the prospective owner.
 - Business migration/recovery is invoked through one opaque task callback. `IKeyFilter` and `StorageScanPlan` keep token
   representation internal, while callbacks receive stable operation identity, deadline, and cooperative cancellation.
 - Scale-in cleanup preparation only materializes the task scope. The final no-IO authorization runs under the same
@@ -67,6 +69,8 @@
   coordinator crash before final topology CAS may repeat it.
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
+  Object and stream callbacks treat per-item migration failures as retryable task failures, so a successful RPC status
+  alone cannot advance the batch while selected metadata is still missing at the target.
 - Failure preempts an ordinary batch by fencing its old execution round, preserving `JOINING`/`LEAVING` facts, completing
   the Failure batch first, and replanning ordinary work from the latest topology.
 
