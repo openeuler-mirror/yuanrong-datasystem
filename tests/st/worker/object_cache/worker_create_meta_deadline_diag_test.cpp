@@ -37,6 +37,7 @@
 
 #include "common.h"
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/utils/status.h"

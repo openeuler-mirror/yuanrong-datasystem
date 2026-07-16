@@ -27,6 +27,7 @@
 #include "common.h"
 #include "cluster/external_cluster.h"
 #include "oc_client_common.h"
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/utils/service_discovery.h"
 
 namespace datasystem {

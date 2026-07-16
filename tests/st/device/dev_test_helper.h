@@ -34,6 +34,7 @@
 #include <unistd.h>
 
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/device/device_manager_base.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/ascend/acl_device_manager.h"
@@ -328,6 +329,16 @@ public:
 
     static pid_t ForkForTest(std::function<void()> func)
     {
+        if (FLAGS_use_brpc) {
+            // brpc: don't fork — brpc channel/bthread global state is not fork-safe
+            // (deadlock/SIGSEGV in child). ZMQ needed fork to isolate its per-process
+            // frontend context; brpc channels are safe to use from the parent thread.
+            // Run func on a separate thread (matching the original fork-child's thread
+            // wrapper) and join, then return 0 so WaitForChildFork treats it as success.
+            std::thread thread(func);
+            thread.join();
+            return 0;
+        }
         pid_t child = fork();
         if (child == 0) {
             // avoid zmq problem when fork.
