@@ -31,6 +31,12 @@
 #include "datasystem/protos/master_object.pb.h"
 
 namespace datasystem {
+#ifdef WITH_TESTS
+namespace ut {
+class MemoryRebalanceSchedulerTest;
+}
+#endif
+
 namespace master {
 class MemoryRebalanceScheduler {
 public:
@@ -75,11 +81,18 @@ private:
     static uint64_t CalculateUsageRate(const NodeInfo &node);
 
     void ExpireTimeoutTasksLocked(uint64_t nowMs, const std::string &activeWorker);
+    void GcHeldInflightLocked(uint64_t nowMs);
     bool IsInCooldownLocked(const std::string &worker, uint64_t nowMs) const;
     void AddCooldownLocked(const std::string &worker, uint64_t nowMs);
-    void RemoveTaskLocked(const std::string &sourceWorker, uint64_t nowMs, bool addCooldown);
+    void RemoveTaskLocked(const std::string &sourceWorker, uint64_t nowMs, bool success);
     void MarkTaskDispatchedLocked(RunningTask &runningTask);
     uint64_t GetTargetInflightBytesLocked(const std::string &targetWorker) const;
+    // Release the reporting worker's held in-flight: its own report timestamp proves its
+    // snapshot now reflects post-receive memory, so the held charge can drop (issue #685).
+    void ReleaseReporterHoldsLocked(const std::string &worker, uint64_t reportTimestamp);
+    // Release held in-flight for every target whose snapshot timestamp advanced since its
+    // latest completion (swap-lagged backup for non-reporting targets).
+    void ReleaseSnapshotHoldsLocked(const std::unordered_map<std::string, NodeInfo> &snapshot);
     bool IsSourceCandidateLocked(const NodeInfo &node, uint64_t nowMs) const;
     void CollectWorkerCandidatesLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                                        const std::string &sourceWorker, uint64_t nowMs,
@@ -100,6 +113,15 @@ private:
     std::unordered_map<std::string, RunningTask> activeTasksBySource_;
     std::unordered_map<std::string, uint64_t> targetInflightBytes_;
     std::unordered_map<std::string, uint64_t> cooldownUntilMs_;
+    // issue #685: in-flight bytes held past completion until the target reports its real
+    // post-receive memory. pendingReleaseBytes_[T] = bytes still charged & waiting to drop;
+    // holdSinceMs_[T] = latest completion time of a held charge on T (steady-clock ms).
+    std::unordered_map<std::string, uint64_t> pendingReleaseBytes_;
+    std::unordered_map<std::string, uint64_t> holdSinceMs_;
+
+#ifdef WITH_TESTS
+    friend class ::datasystem::ut::MemoryRebalanceSchedulerTest;
+#endif
 };
 }  // namespace master
 }  // namespace datasystem
