@@ -246,8 +246,10 @@ ds_cc_test(
     name = "status_test",
     srcs = ["status_test.cpp"],
     deps = [
+        "//src/datasystem/common/rdma:rdma_util",
         "//src/datasystem/common/util:status_helper",
         "//tests/ut:ut_common",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
 
