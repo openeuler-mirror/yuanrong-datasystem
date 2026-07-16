@@ -211,6 +211,26 @@
         "value": "false",
         "description": "Enable master-scheduled object cache memory rebalance. When a worker exceeds the rebalance source usage threshold, the master schedules migration of old primary copies to less-loaded workers, reducing hotspot memory pressure."
     },
+    "rebalance_source_usage_percent": {
+        "value": "70",
+        "description": "Memory usage percent at or above which a ready worker can be selected as a memory rebalance source. Valid range: 1-100."
+    },
+    "rebalance_usage_gap_percent": {
+        "value": "20",
+        "description": "Minimum memory usage percent gap between source and target worker for memory rebalance to be scheduled. Valid range: 1-100."
+    },
+    "rebalance_cooldown_s": {
+        "value": "60",
+        "description": "Cooldown seconds for a worker after a failed or expired rebalance task, during which it will not be selected as a rebalance source."
+    },
+    "rebalance_task_report_grace_ms": {
+        "value": "60000",
+        "description": "Grace time in milliseconds for a rebalance task to report back before it is considered expired and a retry is scheduled."
+    },
+    "rebalance_max_migrate_bytes_per_round": {
+        "value": "1073741824",
+        "description": "Maximum bytes assigned to a single memory rebalance task. Must be greater than 0. Default is 1GB (1073741824)."
+    },
     "log_monitor": {
         "value": "true",
         "description": "Record performance and resource logs."

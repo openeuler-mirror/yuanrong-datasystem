@@ -130,6 +130,17 @@ global:
   memoryRebalance:
     # Enable master-scheduled object cache memory rebalance.
     enabled: false
+    # Memory usage percent at or above which a ready worker can be selected as a rebalance source. Valid range: 1-100.
+    rebalanceSourceUsagePercent: 70
+    # Minimum memory usage percent gap between source and target worker for rebalance to be scheduled. Valid range: 1-100.
+    rebalanceUsageGapPercent: 20
+    # Cooldown seconds for a worker after a failed or expired rebalance task, during which it will not be selected as a source.
+    rebalanceCooldownS: 60
+    # Grace time in milliseconds for a rebalance task to report back before it is considered expired.
+    rebalanceTaskReportGraceMs: 60000
+    # Maximum bytes assigned to a single rebalance task. Must be greater than 0. Default is 1GB.
+    # Numbers with more than 5 digits should be configured as strings to avoid scientific notation rendering by helm.
+    rebalanceMaxMigrateBytesPerRound: "1073741824"
 
   log:
     # Log config.
