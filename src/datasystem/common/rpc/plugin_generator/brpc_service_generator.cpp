@@ -657,6 +657,9 @@ std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
 {
     return
         "$indent$// Init per-request timeout from brpc deadline, survives bthread migration.\n"
+        "$indent$// Mirrors zmq_service.cpp: both reqTimeoutDuration and scTimeoutDuration are\n"
+        "$indent$// initialized from the RPC deadline so worker-side retry loops (e.g.\n"
+        "$indent$// TryGetObjectFromRemote) use the client deadline, not the 60s default.\n"
         "$indent${\n"
         "$indent$    int64_t deadlineUs = cntl->deadline_us();\n"
         "$indent$    if (deadlineUs > 0) {\n"
@@ -667,11 +670,14 @@ std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
         "$indent$        // causing GetRequestContext()->scTimeoutDuration.Init() with default (infinite) timeout.\n"
         "$indent$        int64_t remainingMs = (deadlineUs - nowUs + 999) / 1000;\n"
         "$indent$        if (remainingMs > 0) {\n"
+        "$indent$            GetRequestContext()->reqTimeoutDuration.Init(remainingMs);\n"
         "$indent$            GetRequestContext()->scTimeoutDuration.Init(remainingMs);\n"
         "$indent$        } else {\n"
+        "$indent$            GetRequestContext()->reqTimeoutDuration.Init();\n"
         "$indent$            GetRequestContext()->scTimeoutDuration.Init();\n"
         "$indent$        }\n"
         "$indent$    } else {\n"
+        "$indent$        GetRequestContext()->reqTimeoutDuration.Init();\n"
         "$indent$        GetRequestContext()->scTimeoutDuration.Init();\n"
         "$indent$    }\n"
         "$indent$}\n";
