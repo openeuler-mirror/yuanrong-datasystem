@@ -87,9 +87,9 @@ public:
         : requestId_(requestId), waiter_(waiter)
     {
     }
-    ~Event() = default;
+    virtual ~Event() = default;
 
-    Status WaitFor(std::chrono::milliseconds timeout)
+    virtual Status WaitFor(std::chrono::milliseconds timeout)
     {
         std::unique_lock<std::mutex> lock(eventMutex_);
         bool gotNotification = cv_.wait_for(lock, timeout, [this] { return ready_; });
@@ -101,7 +101,7 @@ public:
         return Status::OK();
     }
 
-    void NotifyAll()
+    virtual void NotifyAll()
     {
         {
             std::unique_lock<std::mutex> lock(eventMutex_);
