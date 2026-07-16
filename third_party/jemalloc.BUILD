@@ -18,7 +18,7 @@ genrule(
         # environment sets `nounset` for genrule shells.
         "if [ -n \"$${DS_JEMALLOC_LG_PAGE-}\" ]; then EXTRA_CONF_OPTS=\"$$EXTRA_CONF_OPTS --with-lg-page=$${DS_JEMALLOC_LG_PAGE}\"; fi",
         "mkdir -p jemalloc_output",
-        "cp -rL external/jemalloc_kvc/* jemalloc_output",
+        "cp -rL $$(dirname $(location autogen.sh))/* jemalloc_output",
         "cd jemalloc_output",
         "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./autogen.sh &>/dev/null",
         "CFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" CXXFLAGS=\"-fPIC -fdebug-prefix-map=$$BASE_DIR=.\" ./configure $$EXTRA_CONF_OPTS --with-pic --with-malloc-conf=narenas:1,background_thread:true,max_background_threads:100,oversize_threshold:107374182400,lg_extent_max_active_fit:63"

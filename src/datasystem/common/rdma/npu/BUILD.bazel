@@ -51,7 +51,6 @@ ds_cc_library(
         "rh2d_transport_strategy.h",
         "roce_transport.h",
     ] + ASCEND_HIXL_HDRS,
-    copts = ["-isystem external/re2"],
     defines = ASCEND_HIXL_DEFINES,
     deps = [
         "//src/datasystem/client/hetero_cache:hetero_cache_headers",

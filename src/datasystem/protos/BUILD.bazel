@@ -1,4 +1,4 @@
-load("@com_google_protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("//bazel:cc_proto_library.bzl", "cc_proto_library")
 load("@rules_proto//proto:defs.bzl", "proto_library")
 load("//bazel:zmq_proto.bzl", "zmq_cc_proto_library")
 
@@ -221,6 +221,8 @@ genrule(
     name = "coordinator_brpc_gen",
     srcs = ["coordinator.proto"],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -236,8 +238,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location coordinator.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location coordinator.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/coordinator.proto
         cp $$TMPD/datasystem/protos/coordinator.brpc.pb.h $$TMPD/datasystem/protos/coordinator.brpc.pb.cc $$TMPD/datasystem/protos/coordinator.brpc.stub.pb.h $$TMPD/datasystem/protos/coordinator.brpc.stub.pb.cc $$TMPD/datasystem/protos/coordinator.irpc.pb.h $$OUT_DIR/
@@ -385,6 +386,8 @@ genrule(
     name = "ut_object_brpc_gen",
     srcs = ["ut_object.proto"],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -398,8 +401,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location ut_object.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location ut_object.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/ut_object.proto
         cp $$TMPD/datasystem/protos/ut_object.brpc.pb.h $$TMPD/datasystem/protos/ut_object.brpc.pb.cc $$TMPD/datasystem/protos/ut_object.brpc.stub.pb.h $$TMPD/datasystem/protos/ut_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/ut_object.irpc.pb.h $$OUT_DIR/
@@ -699,6 +701,8 @@ genrule(
     name = "master_heartbeat_brpc_gen",
     srcs = ["master_heartbeat.proto"],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -714,8 +718,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location master_heartbeat.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location master_heartbeat.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_heartbeat.proto
         cp $$TMPD/datasystem/protos/master_heartbeat.brpc.pb.h $$TMPD/datasystem/protos/master_heartbeat.brpc.pb.cc $$TMPD/datasystem/protos/master_heartbeat.brpc.stub.pb.h $$TMPD/datasystem/protos/master_heartbeat.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_heartbeat.irpc.pb.h $$OUT_DIR/
@@ -749,6 +752,8 @@ genrule(
     name = "share_memory_brpc_gen",
     srcs = ["share_memory.proto", "meta_transport.proto", "utils.proto"],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -762,8 +767,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location share_memory.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location share_memory.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/share_memory.proto
         cp $$TMPD/datasystem/protos/share_memory.brpc.pb.h $$TMPD/datasystem/protos/share_memory.brpc.pb.cc $$TMPD/datasystem/protos/share_memory.brpc.stub.pb.h $$TMPD/datasystem/protos/share_memory.brpc.stub.pb.cc $$TMPD/datasystem/protos/share_memory.irpc.pb.h $$OUT_DIR/
@@ -804,6 +808,8 @@ genrule(
         "worker_object.proto",
     ],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -817,8 +823,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location worker_object.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location worker_object.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/worker_object.proto
         cp $$TMPD/datasystem/protos/worker_object.brpc.pb.h $$TMPD/datasystem/protos/worker_object.brpc.pb.cc $$TMPD/datasystem/protos/worker_object.brpc.stub.pb.h $$TMPD/datasystem/protos/worker_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/worker_object.irpc.pb.h $$OUT_DIR/
@@ -861,6 +866,8 @@ genrule(
         "worker_object.proto",
     ],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -874,8 +881,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location master_object.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location master_object.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_object.proto
         cp $$TMPD/datasystem/protos/master_object.brpc.pb.h $$TMPD/datasystem/protos/master_object.brpc.pb.cc $$TMPD/datasystem/protos/master_object.brpc.stub.pb.h $$TMPD/datasystem/protos/master_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_object.irpc.pb.h $$OUT_DIR/
@@ -910,6 +916,8 @@ genrule(
     name = "stream_posix_brpc_gen",
     srcs = ["stream_posix.proto", "rpc_option.proto", "utils.proto"],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -923,8 +931,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location stream_posix.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location stream_posix.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/stream_posix.proto
         cp $$TMPD/datasystem/protos/stream_posix.brpc.pb.h $$TMPD/datasystem/protos/stream_posix.brpc.pb.cc $$TMPD/datasystem/protos/stream_posix.brpc.stub.pb.h $$TMPD/datasystem/protos/stream_posix.brpc.stub.pb.cc $$TMPD/datasystem/protos/stream_posix.irpc.pb.h $$OUT_DIR/
@@ -957,6 +964,8 @@ genrule(
     name = "master_stream_brpc_gen",
     srcs = ["master_stream.proto", "rpc_option.proto", "utils.proto", "worker_stream.proto", "stream_posix.proto"],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -970,8 +979,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location master_stream.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location master_stream.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/master_stream.proto
         cp $$TMPD/datasystem/protos/master_stream.brpc.pb.h $$TMPD/datasystem/protos/master_stream.brpc.pb.cc $$TMPD/datasystem/protos/master_stream.brpc.stub.pb.h $$TMPD/datasystem/protos/master_stream.brpc.stub.pb.cc $$TMPD/datasystem/protos/master_stream.irpc.pb.h $$OUT_DIR/
@@ -1005,6 +1013,8 @@ genrule(
     name = "worker_stream_brpc_gen",
     srcs = ["worker_stream.proto", "stream_posix.proto", "rpc_option.proto", "utils.proto"],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -1018,8 +1028,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location worker_stream.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location worker_stream.proto))/../../.. && pwd)
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/worker_stream.proto
         cp $$TMPD/datasystem/protos/worker_stream.brpc.pb.h $$TMPD/datasystem/protos/worker_stream.brpc.pb.cc $$TMPD/datasystem/protos/worker_stream.brpc.stub.pb.h $$TMPD/datasystem/protos/worker_stream.brpc.stub.pb.cc $$TMPD/datasystem/protos/worker_stream.irpc.pb.h $$OUT_DIR/
@@ -1059,6 +1068,8 @@ genrule(
         "meta_transport.proto",
     ],
     tools = [
+        "@com_google_protobuf//:well_known_protos",
+        "@com_google_protobuf//:descriptor_proto_srcs",
         "@com_google_protobuf//:protoc",
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
@@ -1074,12 +1085,7 @@ genrule(
         PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
         OUT_DIR=$$(dirname $(location object_posix.brpc.pb.h))
         PROTO_ROOT=$$(cd $$(dirname $(location object_posix.proto))/../../.. && pwd)
-        # PROTO_ROOT is execroot/yuanrong-datasystem. The google protobuf well-known
-        # types live at external/com_google_protobuf/src relative to execroot.
-        # However, in the sandbox, external/ may only contain bazel_tools.
-        # Use readlink to resolve protoc's real path and derive the include.
-        PROTOC_REAL=$$(readlink -f $$PROTOC)
-        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        GOOGLE_PROTOBUF_SRC=$$(dirname $(location @com_google_protobuf//:descriptor_proto_srcs))/../..
         TMPD=$$(mktemp -d)
         $$PROTOC \\
             -I$$PROTO_ROOT/src \\

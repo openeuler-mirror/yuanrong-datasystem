@@ -1,0 +1,24 @@
+package(default_visibility = ["//visibility:public"])
+
+config_setting(
+    name = "enable_urma",
+    define_values = {"enable_urma": "true"},
+)
+
+config_setting(
+    name = "enable_urma_mock",
+    define_values = {"enable_urma_mock": "true"},
+)
+
+config_setting(
+    name = "enable_pipeline_h2d",
+    define_values = {
+        "enable_pipeline_h2d": "true",
+        "enable_urma": "true",
+    },
+)
+
+config_setting(
+    name = "with_tests",
+    define_values = {"with_tests": "true"},
+)

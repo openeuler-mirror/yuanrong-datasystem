@@ -8,6 +8,18 @@ ds_deps()
 
 ascend_configure(name = "local_ascend")
 
+load("//bazel/sdk:workspace.bzl", "datasystem_source_sdk")
+
+# Validate the public source SDK through the same build graph used by the
+# wheel. This repository is private to the build and does not change package
+# contents or add a separate CI entrypoint.
+datasystem_source_sdk(
+    name = "datasystem_sdk_validation",
+    path = ".",
+    enabled = True,
+    re2_repository = "re2",
+)
+
 load("@com_google_googleapis//:repository_rules.bzl", "switched_rules_by_language")
 
 switched_rules_by_language(
