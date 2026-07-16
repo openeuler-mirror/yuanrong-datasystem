@@ -191,6 +191,38 @@ class HeteroClient:
 
         return out_blob_lists
 
+    @staticmethod
+    def _validate_multi_buffer_args(keys: list, addrs: list, sizes: list) -> None:
+        """Validate the shape of a multi-buffer request without visiting every buffer."""
+        validator.check_args_types([
+            ["keys", keys, list],
+            ["addrs", addrs, list],
+            ["sizes", sizes, list],
+        ])
+        if not keys or not addrs or not sizes:
+            raise ValueError("keys, addrs and sizes must not be empty")
+        if len(keys) != len(addrs) or len(keys) != len(sizes):
+            raise ValueError("keys, addrs and sizes must have the same outer size")
+        for i, (key_addrs, key_sizes) in enumerate(zip(addrs, sizes)):
+            validator.check_args_types([
+                ["addrs[{}]".format(i), key_addrs, list],
+                ["sizes[{}]".format(i), key_sizes, list],
+            ])
+            if not key_addrs:
+                raise ValueError("addrs[{}] must not be empty".format(i))
+            if len(key_addrs) != len(key_sizes):
+                raise ValueError("addrs[{}] and sizes[{}] must have the same size".format(i, i))
+
+    @staticmethod
+    def _change_set_param_from_py_to_cpp(set_param: SetParam):
+        """Convert the public Python SetParam into its pybind representation."""
+        ds_set_param = ds.SetParam()
+        ds_set_param.write_mode = ds.WriteMode(set_param.write_mode.value)
+        ds_set_param.existence = ds.ExistenceOpt(set_param.existence.value)
+        ds_set_param.ttl_second = set_param.ttl_second
+        ds_set_param.cache_type = ds.CacheType(set_param.cache_type.value)
+        return ds_set_param
+
     def init(self):
         """
         Init a client to connect to a worker.
@@ -230,6 +262,39 @@ class HeteroClient:
             raise RuntimeError(r"The input of keys and data_blob_list should not be empty")
         cpp_list = self._change_blob_list_from_py_to_cpp(data_blob_list)
         status, failed_keys = self._client.mget_h2d(keys, cpp_list, sub_timeout_ms)
+        if status.is_error():
+            raise RuntimeError(status.to_string())
+        return failed_keys
+
+    def mget_h2d_from_multi_buffers(
+        self, keys: list, addrs: list, sizes: list, sub_timeout_ms: int = 0
+    ) -> list:
+        """Get host objects directly into multiple device buffers per key.
+
+        The device holding every destination address is discovered from the calling thread's
+        current device context (the ACL context the caller, e.g. a vLLM rank worker, binds
+        beforehand), so it does not need to be passed in. All addresses in one call must still
+        reside on the same device.
+
+        Args:
+            keys(list): Keys in the host. The number of keys cannot exceed 30,000.
+            addrs(list): Two-dimensional destination device-address list. ``addrs[i]`` belongs to ``keys[i]``.
+            sizes(list): Two-dimensional buffer-size list corresponding one-to-one with ``addrs``.
+            sub_timeout_ms(int): Maximum wait time for each subrequest, in milliseconds.
+
+        Returns:
+            list: Keys that failed to get.
+
+        Raises:
+            TypeError: If an input has an invalid type.
+            ValueError: If the input arrays have an invalid shape.
+            RuntimeError: If the current device cannot be queried or the native MGetH2D request fails.
+        """
+        self._validate_multi_buffer_args(keys, addrs, sizes)
+        validator.check_args_types([["sub_timeout_ms", sub_timeout_ms, int]])
+        status, failed_keys = self._client.mget_h2d_from_multi_buffers(
+            keys, addrs, sizes, sub_timeout_ms
+        )
         if status.is_error():
             raise RuntimeError(status.to_string())
         return failed_keys
@@ -291,12 +356,35 @@ class HeteroClient:
         if (not keys) or (not data_blob_list):
             raise RuntimeError(r"The input of keys and data_blob_list should not be empty")
         cpp_list = self._change_blob_list_from_py_to_cpp(data_blob_list)
-        ds_set_param = ds.SetParam()
-        ds_set_param.write_mode = ds.WriteMode(set_param.write_mode.value)
-        ds_set_param.existence = ds.ExistenceOpt(set_param.existence.value)
-        ds_set_param.ttl_second = set_param.ttl_second
-        ds_set_param.cache_type = ds.CacheType(set_param.cache_type.value)
+        ds_set_param = self._change_set_param_from_py_to_cpp(set_param)
         status = self._client.mset_d2h(keys, cpp_list, ds_set_param)
+        if status.is_error():
+            raise RuntimeError(status.to_string())
+
+    def mset_d2h_from_multi_buffers(
+        self, keys: list, addrs: list, sizes: list, set_param: SetParam = SetParam()
+    ) -> None:
+        """Write multiple device buffers per key directly into host objects.
+
+        The device holding every source address is discovered from the calling thread's
+        current device context (the ACL context the caller, e.g. a vLLM rank worker, binds
+        beforehand), so it does not need to be passed in. All addresses in one call must still
+        reside on the same device.
+
+        Args:
+            keys(list): Keys to store in the host. The number of keys cannot exceed 30,000.
+            addrs(list): Two-dimensional source device-address list. ``addrs[i]`` belongs to ``keys[i]``.
+            sizes(list): Two-dimensional buffer-size list corresponding one-to-one with ``addrs``.
+            set_param(SetParam): The same write options accepted by ``mset_d2h``.
+
+        Raises:
+            TypeError: If an input has an invalid type.
+            ValueError: If the input arrays have an invalid shape.
+            RuntimeError: If the current device cannot be queried or the native MSetD2H request fails.
+        """
+        self._validate_multi_buffer_args(keys, addrs, sizes)
+        ds_set_param = self._change_set_param_from_py_to_cpp(set_param)
+        status = self._client.mset_d2h_from_multi_buffers(keys, addrs, sizes, ds_set_param)
         if status.is_error():
             raise RuntimeError(status.to_string())
 
@@ -327,11 +415,7 @@ class HeteroClient:
         if (not keys) or (not data_blob_list):
             raise RuntimeError(r"The input of keys and data_blob_list should not be empty")
         cpp_list = self._change_blob_list_from_py_to_cpp(data_blob_list)
-        ds_set_param = ds.SetParam()
-        ds_set_param.write_mode = ds.WriteMode(set_param.write_mode.value)
-        ds_set_param.existence = ds.ExistenceOpt(set_param.existence.value)
-        ds_set_param.ttl_second = set_param.ttl_second
-        ds_set_param.cache_type = ds.CacheType(set_param.cache_type.value)
+        ds_set_param = self._change_set_param_from_py_to_cpp(set_param)
         async_result_future = self._client.async_mset_d2h(keys, cpp_list, ds_set_param)
         return Future(async_result_future)
 
@@ -640,6 +724,29 @@ class HeteroClient:
         args = [["keys", keys, list]]
         validator.check_args_types(args)
         status, exists = self._client.exist(keys)
+        if status.is_error():
+            raise RuntimeError(status.to_string())
+        return exists
+
+    def batch_is_exist(self, keys: list) -> list:
+        """Check key existence and return integer indicators for batch consumers.
+
+        Unlike :meth:`exist`, this method returns ``1`` for an existing key and
+        ``0`` for a missing key. The native binding constructs the integer list
+        directly, avoiding an additional Python bool-to-int list conversion.
+
+        Args:
+            keys(list): Keys to check. The number of keys cannot exceed 30,000.
+
+        Returns:
+            list: Integer existence indicators corresponding one-to-one with ``keys``.
+
+        Raises:
+            TypeError: If ``keys`` has an invalid type.
+            RuntimeError: If the native existence query fails.
+        """
+        validator.check_args_types([["keys", keys, list]])
+        status, exists = self._client.batch_is_exist(keys)
         if status.is_error():
             raise RuntimeError(status.to_string())
         return exists
