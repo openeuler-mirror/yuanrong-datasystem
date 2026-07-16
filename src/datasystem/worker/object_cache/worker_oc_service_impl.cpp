@@ -1227,6 +1227,8 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
     Status rc = createProc_->Create(req, resp);
     if (rc.IsOk()) {
         UpdateWorkerObjectGauge(objectTable_);
+        METRIC_ADD(metrics::KvMetricId::WORKER_CREATE_ALLOCATED_BYTES,
+                   static_cast<uint64_t>(req.data_size()) + resp.metadata_size());
     }
     return rc;
 }
@@ -1248,6 +1250,18 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
     returnStatus = createProc_->MultiCreate(req, resp);
     if (returnStatus.IsOk()) {
         UpdateWorkerObjectGauge(objectTable_);
+        uint64_t totalBytes = 0;
+        const int resultCount = resp.results_size();
+        for (int i = 0; i < resultCount; ++i) {
+            const auto &result = resp.results(i);
+            if (result.shm_id().empty()) {
+                // existence/NX skip: no memory allocated for this object
+                continue;
+            }
+            const uint64_t dataSize = (i < req.data_size_size()) ? static_cast<uint64_t>(req.data_size(i)) : 0;
+            totalBytes += dataSize + static_cast<uint64_t>(result.metadata_size());
+        }
+        METRIC_ADD(metrics::KvMetricId::WORKER_CREATE_ALLOCATED_BYTES, totalBytes);
     }
     return returnStatus;
 }

@@ -1375,5 +1375,39 @@ TEST_F(MetricsTest, client_get_shm_read_bytes_counter_test)
     EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_get_shm_read_total_bytes", 100, 100)),
               std::string::npos);
 }
+
+TEST_F(MetricsTest, client_create_request_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_INC(metrics::KvMetricId::CLIENT_CREATE_REQUEST_TOTAL);
+    METRIC_INC(metrics::KvMetricId::CLIENT_CREATE_REQUEST_TOTAL);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_create_request_total", 2, 2)),
+              std::string::npos);
+}
+
+TEST_F(MetricsTest, client_create_error_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ERROR_IF(false, metrics::KvMetricId::CLIENT_CREATE_ERROR_TOTAL);
+    METRIC_ERROR_IF(true, metrics::KvMetricId::CLIENT_CREATE_ERROR_TOTAL);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_create_error_total", 1, 1)),
+              std::string::npos);
+}
+
+TEST_F(MetricsTest, client_create_allocated_bytes_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ADD(metrics::KvMetricId::CLIENT_CREATE_ALLOCATED_BYTES, 1024);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("client_create_allocated_bytes", 1024, 1024)),
+              std::string::npos);
+}
+
+TEST_F(MetricsTest, worker_create_allocated_bytes_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ADD(metrics::KvMetricId::WORKER_CREATE_ALLOCATED_BYTES, 2048);
+    EXPECT_NE(metrics::DumpSummaryForTest().find(ScalarMetricJson("worker_create_allocated_bytes", 2048, 2048)),
+              std::string::npos);
+}
 }  // namespace ut
 }  // namespace datasystem
