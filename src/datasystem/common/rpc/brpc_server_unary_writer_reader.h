@@ -362,12 +362,41 @@ public:
     }
 
     /**
-     * @brief Mark done as consumed so the destructor will not call it.
-     * Used by the generated CallMethod error path to prevent double-close.
+     * @brief Run the done closure exactly once, only if no prior Write()/SendStatus()
+     * already ran it.
+     *
+     * brpc's NewCallback closure self-deletes after Run(). The generated CallMethod
+     * error path used to call the raw `asyncDone->Run()` unconditionally after the
+     * service returned an error — but if the service impl already called
+     * SendStatus()/Write() (which Run() and self-delete the closure), the raw
+     * pointer is dangling and a second Run() is a use-after-free (SIGSEGV).
+     *
+     * Concurrency model (this fixes the single-threaded sequential UAF that the
+     * Get.Retry inject path hits: SendStatus runs done -> service returns error ->
+     * generated error path runs asyncDone again):
+     * - This method, the destructor, and TryCompleteDeferred() CAS-gate on
+     *   doneConsumed_ — only the first caller wins and touches the raw done_ ptr.
+     * - Write() and SendStatus() currently use a plain store on doneConsumed_
+     *   (not CAS); they rely on writeOnce_ to exclude each other, but do NOT
+     *   participate in the doneConsumed_ CAS mutual exclusion with this method.
+     *   A concurrent Write/SendStatus could therefore still race the CAS winner
+     *   on the non-atomic done_ pointer. That is a pre-existing latent risk, not
+     *   introduced here, and not on the ClientGetRetry trigger path (which is
+     *   single-threaded sequential). Unifying Write/SendStatus onto doneConsumed_
+     *   CAS is left as follow-up.
+     * The generated error path wins only when the service returned an error
+     * WITHOUT calling Write/SendStatus — the exact case where done still needs to
+     * Run to send the error response.
      */
-    void MarkDoneConsumed()
+    void RunDoneIfNotConsumed()
     {
-        doneConsumed_.store(true, std::memory_order_release);
+        bool expected = false;
+        if (doneConsumed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)
+            && done_ != nullptr) {
+            auto *done = done_;
+            done_ = nullptr;
+            done->Run();
+        }
     }
 
     /**
