@@ -457,7 +457,7 @@ bool FlagManager::ParseCommandLineFlagsFromArgsLocked(const std::unordered_map<s
     errorFlags_.clear();
     unknownFlags_.clear();
     for (const auto &flagKv : args) {
-        if (flagKv.first == "connectTimeoutMs") {
+        if (flagKv.first == "connectTimeoutMs" || flagKv.first == "requestTimeoutMs") {
             continue;
         }
         auto it = flagMap_.find(flagKv.first);

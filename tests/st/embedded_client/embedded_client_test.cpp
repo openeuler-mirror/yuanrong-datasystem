@@ -50,6 +50,7 @@ DS_DECLARE_string(etcd_address);
 namespace datasystem {
 namespace st {
 namespace {
+constexpr int EMBEDDED_CLIENT_REQUEST_TIMEOUT_MS = 90'000;
 constexpr int EMBEDDED_CHILD_GET_TIMEOUT_MS = 30'000;
 constexpr int EMBEDDED_CHILD_GET_ATTEMPT_TIMEOUT_MS = 5'000;
 constexpr auto EMBEDDED_CHILD_WAIT_TIMEOUT = std::chrono::seconds(45);
@@ -103,6 +104,8 @@ bool WaitForChildrenSuccess(const std::vector<pid_t> &children)
                 continue;
             }
             if (result < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
+                LOG(ERROR) << "Embedded child failed, pid: " << *iter << ", waitpid result: " << result
+                           << ", status: " << status << ", errno: " << errno;
                 KillAndReapChildren(remaining);
                 return false;
             }
@@ -111,6 +114,9 @@ bool WaitForChildrenSuccess(const std::vector<pid_t> &children)
         std::this_thread::sleep_for(EMBEDDED_CHILD_POLL_INTERVAL);
     }
     if (!remaining.empty()) {
+        for (const auto pid : remaining) {
+            LOG(ERROR) << "Embedded child timed out, pid: " << pid;
+        }
         KillAndReapChildren(remaining);
         return false;
     }
@@ -239,6 +245,7 @@ public:
         auto configArgs = configArgs_;
         configArgs.emplace("log_monitor", "true");
         configArgs.emplace("health_check_path", healthPath);
+        configArgs.emplace("requestTimeoutMs", std::to_string(EMBEDDED_CLIENT_REQUEST_TIMEOUT_MS));
         auto config =
             EmbeddedConfig()
                 .Address(workerAdds_[index].ToString())

@@ -44,6 +44,7 @@
 #include "datasystem/common/parallel/service_parallel_policy.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -82,6 +83,7 @@ DS_DEFINE_bool(enable_redirect, "true",
 DS_DECLARE_string(etcd_address);
 DS_DECLARE_bool(async_delete);
 DS_DECLARE_int32(rpc_thread_num);
+DS_DECLARE_bool(use_brpc);
 
 DS_DECLARE_bool(oc_io_from_l2cache_need_metadata);
 DS_DECLARE_bool(enable_reconciliation);
@@ -98,7 +100,26 @@ static constexpr int QUERY_AND_GET_MAX_COPY_NUM = 5;
 static constexpr uint64_t QUERY_AND_GET_MAX_PAYLOAD_SIZE = 512 * 1024UL;
 static const std::string OC_METADATA_MANAGER = "OCMetadataManager-";
 static constexpr int MSET_PENDING_TTL_US = 60'000'000;  // 60s
-static constexpr auto CLIENT_ID_REF_RETRY_INTERVAL = std::chrono::milliseconds(200);
+static constexpr int64_t CLIENT_ID_REF_RETRY_INTERVAL_MS = 200;
+static constexpr int64_t CLIENT_ID_REF_RETRY_JITTER_MAX_MS = 50;
+static constexpr int64_t CLIENT_ID_REF_RETRY_JITTER_BOUND_MS = CLIENT_ID_REF_RETRY_JITTER_MAX_MS + 1;
+
+static std::chrono::milliseconds GetClientIdRefMigrationRetryDelay(std::chrono::milliseconds remainingTime)
+{
+    static thread_local RandomData randomData;
+    auto jitterMs = static_cast<int64_t>(randomData.GetRandomUint64(0, CLIENT_ID_REF_RETRY_JITTER_BOUND_MS));
+    auto retryDelayMs = std::min(CLIENT_ID_REF_RETRY_INTERVAL_MS + jitterMs, remainingTime.count());
+    return std::chrono::milliseconds(retryDelayMs);
+}
+
+static void SleepForClientIdRefMigration(std::chrono::milliseconds sleepTime)
+{
+    if (FLAGS_use_brpc) {
+        SleepCurrentFor(sleepTime);
+        return;
+    }
+    std::this_thread::sleep_for(sleepTime);
+}
 
 // A WAIT decision has no redirect destination yet. Keep the operation on its committed owner until the final CAS.
 static Status WaitForClientIdRefMigration(MasterMasterOCApi &api, const GIncreaseReqPb &req, GIncreaseRspPb &rsp)
@@ -111,8 +132,8 @@ static Status WaitForClientIdRefMigration(MasterMasterOCApi &api, const GIncreas
         const auto remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
                                  "remote client reference wait exceeded its request deadline");
-        const auto retryDelay = std::min(CLIENT_ID_REF_RETRY_INTERVAL, std::chrono::milliseconds(remainingMs));
-        std::this_thread::sleep_for(retryDelay);
+        const auto retryDelay = GetClientIdRefMigrationRetryDelay(std::chrono::milliseconds(remainingMs));
+        SleepForClientIdRefMigration(retryDelay);
         rsp.Clear();
     }
 }

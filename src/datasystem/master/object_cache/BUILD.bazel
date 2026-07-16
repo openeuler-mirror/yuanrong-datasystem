@@ -159,6 +159,7 @@ ds_cc_library(
         "//src/datasystem/common/object_cache:object_ref_info",
         "//src/datasystem/common/parallel:common_parallel",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
+        "//src/datasystem/common/rpc:bthread_utils",
         "//src/datasystem/common/rpc:rpc_server_stream_base",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/master:metadata_redirect_helper",
