@@ -433,7 +433,9 @@ void RpcGenerator::ImplementBrpcCallMethodPlain(io::Printer &printer,
         "$indent$if (req == nullptr || rsp == nullptr) {\n"
         "$indent$    cntl->SetFailed(\"Request/response type mismatch for $methodName$\");\n"
         "$indent$    return;\n"
-        "$indent$}\n"
+        "$indent$}\n";
+    impl += BuildScTimeoutDurationInitSnippet();
+    impl +=
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp);\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
@@ -484,7 +486,9 @@ void RpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
         "{ break; }\n"
         "$indent$        attachment.pop_front(static_cast<size_t>(sz));\n"
         "$indent$    }\n"
-        "$indent$} while (false);\n"
+        "$indent$} while (false);\n";
+    impl += BuildScTimeoutDurationInitSnippet();
+    impl +=
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp, std::move(payload));\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
@@ -516,7 +520,9 @@ void RpcGenerator::ImplementBrpcCallMethodRecvPayload(io::Printer &printer,
         "$indent$    cntl->SetFailed(\"Request/response type mismatch for $methodName$\");\n"
         "$indent$    return;\n"
         "$indent$}\n"
-        "$indent$std::vector<::datasystem::RpcMessage> outPayload;\n"
+        "$indent$std::vector<::datasystem::RpcMessage> outPayload;\n";
+    impl += BuildScTimeoutDurationInitSnippet();
+    impl +=
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp, outPayload);\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
@@ -556,7 +562,7 @@ void RpcGenerator::ImplementBrpcCallMethodSendRecvPayload(io::Printer &printer,
 
 std::string RpcGenerator::BuildSendRecvPayloadImpl()
 {
-    return
+    return BuildScTimeoutDurationInitSnippet() +
         "$indent$auto* req = dynamic_cast<const $inputTypeName$*>(request);\n"
         "$indent$auto* rsp = dynamic_cast<$outputTypeName$*>(response);\n"
         "$indent$if (req == nullptr || rsp == nullptr) {\n"
