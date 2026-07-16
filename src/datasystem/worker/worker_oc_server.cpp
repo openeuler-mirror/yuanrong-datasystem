@@ -221,7 +221,7 @@ Status RegisterTopologyTables(EtcdStore &store, const cluster::TopologyKeyHelper
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.MigrateTaskTable(), keys.MigrateTaskTable()));
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.DeleteTaskTable(), keys.DeleteTaskTable()));
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.NotifyTable(), keys.NotifyTable()));
-    return store.CreateTableWithExactPrefix(keys.MembershipTable(), keys.MembershipTable());
+    return store.CreateTableWithExactPrefix(keys.MembershipTable(), EtcdMembershipTable(keys.ClusterName()));
 }
 
 struct PendingControlBackendProbe {
@@ -946,7 +946,7 @@ Status WorkerOCServer::InitializeAllServices()
 void WorkerOCServer::UpdateClusterInfoInRocksDb(const mvccpb::Event &event)
 {
     const auto &key = event.kv().key();
-    if (controllerKeys_ == nullptr || !IsCoordinationKeyUnderPrefix(key, controllerKeys_->MembershipTable())) {
+    if (controllerMembershipPrefix_.empty() || !IsCoordinationKeyUnderPrefix(key, controllerMembershipPrefix_)) {
         return;
     }
     LOG_IF_ERROR(clusterStore_->Put(ROCKS_CLUSTER_TABLE, key, event.kv().value()), "UpdateClusterInfoInRocksDb failed");
@@ -1035,6 +1035,7 @@ Status WorkerOCServer::ConstructTopologyControllerBackend(bool &isRestart)
             std::make_unique<cluster::DsCoordinationBackend>(coordinatorServiceProxy_.get(), hostPort_.ToString());
     } else {
         controllerEtcdStore_ = std::make_unique<EtcdStore>(backendAddress_);
+        controllerMembershipPrefix_ = EtcdMembershipTable(controllerKeys_->ClusterName());
         RETURN_IF_NOT_OK(controllerEtcdStore_->Init());
         RETURN_IF_NOT_OK(controllerEtcdStore_->Authenticate(
             FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
@@ -1932,7 +1933,7 @@ void WorkerOCServer::TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event 
         return;
     }
     const auto &key = event.kv().key();
-    if (controllerKeys_ == nullptr || !IsCoordinationKeyUnderPrefix(key, controllerKeys_->MembershipTable())) {
+    if (controllerMembershipPrefix_.empty() || !IsCoordinationKeyUnderPrefix(key, controllerMembershipPrefix_)) {
         return;
     }
     cluster::MembershipValue workerNodeInfo;
@@ -1940,7 +1941,7 @@ void WorkerOCServer::TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event 
     if (parseRc.IsError() || workerNodeInfo.lifecycleState != cluster::MemberLifecycleState::READY) {
         return;
     }
-    auto masterAddr = RemoveCoordinationTablePrefix(key, controllerKeys_->MembershipTable());
+    auto masterAddr = RemoveCoordinationTablePrefix(key, controllerMembershipPrefix_);
     // In centralized mode, only warmup the actual master; see comment in
     // ScheduleWorkerMasterRpcWarmupTasks for rationale.
     if (topologyReferences_ != nullptr && topologyReferences_->centralizedMetadata

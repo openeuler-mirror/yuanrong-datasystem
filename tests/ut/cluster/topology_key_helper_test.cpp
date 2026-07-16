@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "gtest/gtest.h"
 
 #include "ut/common.h"
@@ -72,6 +73,12 @@ TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
     EXPECT_EQ(ExactPath(keys->NotifyTable(), key), "/datasystem/notify/" + address);
     DS_ASSERT_OK(TopologyKeyHelper::MembershipKey(address, key));
     EXPECT_EQ(ExactPath(keys->MembershipTable(), key), "/datasystem/cluster/" + address);
+}
+
+TEST(TopologyKeyHelperTest, BuildsLegacyEtcdMembershipTable)
+{
+    EXPECT_EQ(EtcdMembershipTable(""), "/datasystem/cluster");
+    EXPECT_EQ(EtcdMembershipTable("cluster_a-1.0"), "/cluster_a-1.0/datasystem/cluster");
 }
 
 TEST(TopologyKeyHelperTest, EnforcesClusterNameContractWithoutNormalization)

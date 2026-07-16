@@ -462,7 +462,7 @@ Status EtcdStore::AutoCreate()
     // set timestamp before each put
     int64_t timeStamp = std::chrono::system_clock::now().time_since_epoch().count();
     keepAliveValue_.timestamp = timeStamp;
-    std::string valueStr = keepAliveValue_.ToProto();
+    std::string valueStr = keepAliveValue_.ToString();
     CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_INVALID, "Node state should not be empty.");
     RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_));
     // Only use "start" and "restart" tag the first time doing Put()
@@ -516,7 +516,7 @@ Status EtcdStore::UpdateNodeState(cluster::MemberLifecycleState state)
                              "The key written to the cluster table must be bound to a lease");
     cluster::MemberServiceInfo value = keepAliveValue_;
     value.state = state;
-    auto valueStr = value.ToProto();
+    auto valueStr = value.ToString();
     CHECK_FAIL_RETURN_STATUS(!valueStr.empty(), K_INVALID, "Node state should not be empty.");
     RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, keepAliveKey_, valueStr, leaseId_));
     return Status::OK();
@@ -1072,12 +1072,12 @@ Status EtcdStore::InformReconciliationDone(const HostPort &workerAddr)
     std::string valueStr;
     RETURN_IF_NOT_OK(Get(keepAliveTableName_, workerAddr.ToString(), valueStr));
     cluster::MemberServiceInfo value;
-    RETURN_IF_NOT_OK(cluster::MemberServiceInfo::FromProto(valueStr, value));
+    RETURN_IF_NOT_OK(cluster::MemberServiceInfo::FromString(valueStr, value));
     INJECT_POINT("recover.toReady.delay");
     if (value.state == cluster::MemberLifecycleState::RESTARTING
         || value.state == cluster::MemberLifecycleState::RECOVERING) {
         value.state = cluster::MemberLifecycleState::READY;
-        auto readyValue = value.ToProto();
+        auto readyValue = value.ToString();
         CHECK_FAIL_RETURN_STATUS(!readyValue.empty(), K_INVALID, "Node state should not be empty.");
         RETURN_IF_NOT_OK(PutWithLeaseId(keepAliveTableName_, workerAddr.ToString(), readyValue, CheckLeaseId()));
     }

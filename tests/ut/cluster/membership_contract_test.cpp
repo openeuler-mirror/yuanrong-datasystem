@@ -19,6 +19,7 @@
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 
 #include <array>
+#include <utility>
 
 #include "datasystem/protos/coordinator.pb.h"
 #include "gtest/gtest.h"
@@ -67,6 +68,26 @@ TEST(MembershipContractTest, PreservesMasterGoldenPayloadForEveryWireState)
     }
 }
 
+TEST(MembershipContractTest, DecodesLegacyEtcdPayload)
+{
+    const std::array<std::pair<const char *, MemberLifecycleState>, 6> legacyCases = {
+        std::pair{ "start", MemberLifecycleState::STARTING },
+        std::pair{ "restart", MemberLifecycleState::RESTARTING },
+        std::pair{ "recover", MemberLifecycleState::RECOVERING },
+        std::pair{ "ready", MemberLifecycleState::READY },
+        std::pair{ "exiting", MemberLifecycleState::EXITING },
+        std::pair{ "d_rst", MemberLifecycleState::DOWNGRADE_RESTARTING },
+    };
+    for (const auto &[stateBytes, expectedState] : legacyCases) {
+        MembershipValue output;
+        DS_ASSERT_OK(MembershipValueCodec::Decode("123456;" + std::string(stateBytes) + ";host-a;v1", output));
+        EXPECT_EQ(output.timestamp, 123456);
+        EXPECT_EQ(output.lifecycleState, expectedState);
+        EXPECT_EQ(output.hostId, "host-a");
+        EXPECT_EQ(output.compatibilityVersion, "v1");
+    }
+}
+
 TEST(MembershipContractTest, RejectsNonWireLifecycleStates)
 {
     std::string bytes;
@@ -78,6 +99,10 @@ TEST(MembershipContractTest, RejectsMalformedAndUnspecifiedPayload)
 {
     MembershipValue output{ 1, MemberLifecycleState::READY, "old-host", "old-version" };
     EXPECT_EQ(MembershipValueCodec::Decode("malformed", output).GetCode(), K_INVALID);
+    EXPECT_EQ(output.lifecycleState, MemberLifecycleState::UNKNOWN);
+
+    output = { 1, MemberLifecycleState::READY, "old-host", "old-version" };
+    EXPECT_EQ(MembershipValueCodec::Decode("123;invalid", output).GetCode(), K_INVALID);
     EXPECT_EQ(output.lifecycleState, MemberLifecycleState::UNKNOWN);
 
     coordinator::WorkerServiceInfoPb wire;
