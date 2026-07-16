@@ -19,6 +19,7 @@
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -256,7 +257,7 @@ Status ServiceDiscovery::Init()
                                      "Invalid cluster name for service discovery.");
     membershipTable_ = keys->MembershipTable();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        etcdStore_->CreateTableWithExactPrefix(membershipTable_, membershipTable_),
+        etcdStore_->CreateTableWithExactPrefix(membershipTable_, EtcdMembershipTable(keys->ClusterName())),
         "The membership table already exists. tableName: " + membershipTable_);
     return Status::OK();
 }

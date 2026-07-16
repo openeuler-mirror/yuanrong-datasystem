@@ -12,7 +12,7 @@
  */
 
 /**
- * Description: PB codec for cluster membership lease values.
+ * Description: Codec for cluster membership lease values.
  */
 #ifndef DATASYSTEM_CLUSTER_MEMBERSHIP_MEMBERSHIP_VALUE_CODEC_H
 #define DATASYSTEM_CLUSTER_MEMBERSHIP_MEMBERSHIP_VALUE_CODEC_H
@@ -25,7 +25,7 @@
 namespace datasystem::cluster {
 
 /**
- * @brief Master-compatible codec for the existing membership lease payload.
+ * @brief Backend-neutral codec for membership lease payloads.
  */
 class MembershipValueCodec {
 public:
@@ -48,8 +48,8 @@ public:
     static Status Encode(const MembershipValue &value, std::string &bytes);
 
     /**
-     * @brief Decode one backend PB payload into a neutral membership value.
-     * @param[in] bytes Serialized PB bytes.
+     * @brief Decode one backend payload into a neutral membership value.
+     * @param[in] bytes Serialized Coordinator PB bytes or an ETCD text value.
      * @param[out] value Decoded neutral membership value.
      * @return K_OK on success; K_INVALID for malformed or unsupported input.
      */

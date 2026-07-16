@@ -128,8 +128,10 @@ Important nuance:
 
 1. `EtcdStore::CreateTable(tableName, tablePrefix)` records an in-memory mapping from table name to ETCD prefix.
 2. When `cluster_name` is configured, normal table prefixes become `/<cluster_name><tablePrefix>`.
-3. `CreateTableWithExactPrefix` registers already validated absolute topology/membership prefixes without applying the
-   legacy `cluster_name` rewrite a second time.
+3. `CreateTableWithExactPrefix` registers already validated absolute prefixes without applying the legacy
+   `cluster_name` rewrite a second time. Runtime topology tables use their logical absolute prefixes, while the
+   membership logical table maps to the legacy ETCD physical prefix: `/datasystem/cluster` without a cluster name and
+   `/<cluster_name>/datasystem/cluster` with one.
 4. `Put`, `Get`, `Delete`, `PrefixSearch`, and `RangeSearch` compose `realKey = tablePrefix + "/" + key`.
 5. `GetAll` and prefix/range queries strip table prefixes before returning caller-facing keys.
 
@@ -155,7 +157,10 @@ Important nuance:
 
 ### Lease Keepalive And Worker Liveness
 
-1. `EtcdStore::InitKeepAlive(table, key, isRestart, isEtcdAvailableWhenStart)` prepares a `MembershipValue` with timestamp, service state, optional host id, and the local member compatibility version.
+1. `EtcdStore::InitKeepAlive(table, key, isRestart, isEtcdAvailableWhenStart)` prepares a `MembershipValue` with
+   timestamp, service state, optional host id, and the local member compatibility version. ETCD persists it in the
+   legacy semicolon-delimited text format; Coordinator persists the same neutral value as protobuf, and
+   `MembershipValueCodec` decodes both backend formats.
 2. Initial states are `start`, `restart`, or `d_rst`; after the first successful write, later automatic writes use `recover`.
 3. `RunKeepAliveTask` creates an ETCD lease with TTL `node_timeout_s`, creates `EtcdKeepAlive`, writes the cluster table key with that lease, then runs the keepalive loop.
 4. `EtcdKeepAlive::Run` periodically sends `LeaseKeepAlive` requests after `LivenessHealthCheckEvent` notifications.

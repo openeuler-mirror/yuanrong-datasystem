@@ -156,7 +156,7 @@ protected:
 void ExpectKeepAliveState(const std::string &value, cluster::MemberLifecycleState expected)
 {
     cluster::MemberServiceInfo info;
-    DS_ASSERT_OK(cluster::MemberServiceInfo::FromProto(value, info));
+    DS_ASSERT_OK(cluster::MemberServiceInfo::FromString(value, info));
     EXPECT_EQ(info.state, expected);
 }
 

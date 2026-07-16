@@ -708,6 +708,7 @@ private:
     std::unique_ptr<EtcdStore> controllerEtcdStore_{ nullptr };
     std::unique_ptr<cluster::ICoordinationBackend> controllerBackend_{ nullptr };
     std::unique_ptr<cluster::TopologyKeyHelper> controllerKeys_{ nullptr };
+    std::string controllerMembershipPrefix_;
     std::unique_ptr<cluster::TopologyRepository> controllerRepository_{ nullptr };
     std::unique_ptr<cluster::CoordinationEventDispatcher> controllerDispatcher_{ nullptr };
     std::unique_ptr<cluster::TopologyController> topologyController_{ nullptr };
