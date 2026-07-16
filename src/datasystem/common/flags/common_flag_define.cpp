@@ -156,6 +156,10 @@ DS_DEFINE_uint64_dynamic(slow_log_rpc_slower_than, 5000,
                  "will include a latency summary in the access log.");
 DS_DEFINE_bool(enable_leaving_intercept, false,
                "Reject object-cache write requests after the local worker starts topology scale-in draining.");
+DS_DEFINE_string(sdk_data_placement_policy, "PREFERRED_SAME_NODE",
+                 "SDK write placement policy, read once during routing initialization: PREFERRED_SAME_NODE, "
+                 "REQUIRED_SAME_NODE, or PREFERRED_META_OWNER. Use PREFERRED_META_OWNER to preserve legacy "
+                 "metadata-owner placement.");
 DS_DEFINE_bool(use_brpc, GetBoolFromEnv("DATASYSTEM_USE_BRPC", false),
                "Use brpc instead of ZMQ for RPC communication.");
 DS_DEFINE_int32(brpc_server_num_threads, 64, "Number of brpc server worker threads.");

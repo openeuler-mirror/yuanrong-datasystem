@@ -44,6 +44,7 @@
 #include "datasystem/client/routing/routing.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/transport_layer.h"
+#include "datasystem/client/transport/worker_snapshot.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/object_cache/exist_handler.h"
 #include "datasystem/client/routing/broken_filter.h"
@@ -51,6 +52,7 @@
 #include "datasystem/client/routing/worker_router.h"
 #include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/device/device_helper.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -534,9 +536,9 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
         asyncReleasePool_ = nullptr;
     }
     asyncReleasePool = nullptr;
-    if (routing_ != nullptr) {
-        routing_->Shutdown();
-        routing_.reset();
+    auto routing = std::atomic_exchange(&routing_, std::shared_ptr<client::Routing>{});
+    if (routing != nullptr) {
+        routing->Shutdown();
     }
     if (transportLayer_ != nullptr) {
         transportLayer_->Shutdown();
@@ -663,50 +665,6 @@ Status ObjectClientImpl::InitTransportLayer()
     return Status::OK();
 }
 
-Status ObjectClientImpl::FetchRoutingHashRing(const HostPort &workerAddr, uint64_t currentVersion,
-    GetHashRingRspPb &response)
-{
-    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
-    return transportLayer_->GetHashRing(workerAddr, currentVersion, response);
-}
-
-client::HashRingRefresher::FetchRpc ObjectClientImpl::BuildRoutingFetchRpc(
-    const std::shared_ptr<client::WorkerRouter> &router, const HostPort &initialWorker, bool initialWorkerIsLocal)
-{
-    auto hostIdResolutionAttempted = std::make_shared<bool>(false);
-    return [this, router, initialWorker, initialWorkerIsLocal, hostIdResolutionAttempted](
-               const HostPort &workerAddr, uint64_t currentVersion, ::datasystem::ClusterTopologyPb &ring,
-               std::string &masterAddress, uint64_t &newVersion, bool &changed,
-               std::unordered_map<std::string, std::string> &hostIdMap) -> Status {
-        GetHashRingRspPb response;
-        RETURN_IF_NOT_OK(FetchRoutingHashRing(workerAddr, currentVersion, response));
-        newVersion = response.version();
-        changed = response.hash_ring_changed();
-        masterAddress = response.master_address();
-        const bool shouldResolveHostId = initialWorkerIsLocal && !*hostIdResolutionAttempted;
-        if (shouldResolveHostId) {
-            *hostIdResolutionAttempted = true;
-        }
-        if (!changed) {
-            return Status::OK();
-        }
-        CHECK_FAIL_RETURN_STATUS(response.has_hash_ring(), K_RUNTIME_ERROR,
-                                 "GetHashRing response is missing the changed hash ring");
-        ring = response.hash_ring();
-        hostIdMap.clear();
-        for (const auto &entry : response.host_id_map()) {
-            hostIdMap.emplace(entry.first, entry.second);
-        }
-        if (shouldResolveHostId) {
-            auto iter = hostIdMap.find(initialWorker.ToString());
-            if (iter != hostIdMap.end() && !iter->second.empty()) {
-                router->SetHostId(iter->second);
-            }
-        }
-        return Status::OK();
-    };
-}
-
 Status ObjectClientImpl::ApplyRoutingWorkerSnapshot(uint64_t ringVersion,
                                                     const ::datasystem::ClusterTopologyPb &ring)
 {
@@ -718,21 +676,25 @@ Status ObjectClientImpl::ApplyRoutingWorkerSnapshot(uint64_t ringVersion,
 
 Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal)
 {
-    if (routing_ != nullptr) {
+    if (std::atomic_load(&routing_) != nullptr) {
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS(!initialWorker.Empty(), K_NOT_READY,
                              "Initial worker address is unavailable for routing initialization");
-    auto router = std::make_shared<client::WorkerRouter>("");
-    auto fetchRpc = BuildRoutingFetchRpc(router, initialWorker, initialWorkerIsLocal);
+    RETURN_IF_NOT_OK(client::ParseDataPlacementPolicy(FLAGS_sdk_data_placement_policy, dataPlacementPolicy_));
     auto ringUpdateHook = [this](uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring) {
         return ApplyRoutingWorkerSnapshot(ringVersion, ring);
     };
-    auto refresher =
-        std::make_shared<client::HashRingRefresher>(router, std::move(fetchRpc), std::move(ringUpdateHook));
-    auto routing = std::make_shared<client::Routing>(router, std::move(refresher));
-    RETURN_IF_NOT_OK(routing->Init("", initialWorker));
-    routing_ = std::move(routing);
+    RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
+    BrpcChannelConfig channelConfig;
+    channelConfig.timeout_ms = requestTimeoutMs_;
+    channelConfig.connect_timeout_ms = connectTimeoutMs_;
+    channelConfig.max_retry = 0;
+    channelConfig.enable_circuit_breaker = false;
+    auto routing = std::make_shared<client::Routing>(std::move(channelConfig), transportSignature_,
+                                                     std::move(ringUpdateHook));
+    RETURN_IF_NOT_OK(routing->Init("", initialWorker, initialWorkerIsLocal));
+    std::atomic_store(&routing_, std::move(routing));
     LOG(INFO) << "[Routing] Object client routing initialized from worker " << initialWorker.ToString();
     return Status::OK();
 }
@@ -916,9 +878,9 @@ void ObjectClientImpl::ClearFailedInitAttempt()
     ShutdownPerfThread();
     ShutdownShmRefReconcileThread();
     asyncReleasePool_ = nullptr;
-    if (routing_ != nullptr) {
-        routing_->Shutdown();
-        routing_.reset();
+    auto routing = std::atomic_exchange(&routing_, std::shared_ptr<client::Routing>{});
+    if (routing != nullptr) {
+        routing->Shutdown();
     }
     if (transportLayer_ != nullptr) {
         transportLayer_->Shutdown();
@@ -2978,10 +2940,10 @@ Status ObjectClientImpl::SelectSetRoute(const std::string &objectKey,
         routeContext = std::move(selected);
         return Status::OK();
     }
-    RETURN_RUNTIME_ERROR_IF_NULL(routing_);
+    auto routing = std::atomic_load(&routing_);
+    RETURN_RUNTIME_ERROR_IF_NULL(routing);
     HostPort worker;
-    RETURN_IF_NOT_OK(
-        routing_->SelectWorker(objectKey, client::SelectStrategy::HASH_RING_AFFINITY, worker, excludedWorkers));
+    RETURN_IF_NOT_OK(routing->SelectWorker(objectKey, dataPlacementPolicy_, worker, excludedWorkers));
     return BuildSetRouteContext(worker, routeContext);
 }
 
@@ -3060,7 +3022,8 @@ Status ObjectClientImpl::ProcessTransportPut(
 bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureStage failureStage,
                                              const HostPort &worker, std::vector<HostPort> &excludedWorkers)
 {
-    if (routing_ == nullptr) {
+    auto routing = std::atomic_load(&routing_);
+    if (routing == nullptr) {
         return false;
     }
     if (status.GetCode() == K_SCALE_DOWN) {
@@ -3073,7 +3036,7 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
                                    || status.GetCode() == K_RPC_UNAVAILABLE;
     const bool transferFailure = status.GetCode() == K_URMA_NEED_CONNECT;
     if (connectionFailure || transferFailure) {
-        routing_->UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
+        routing->UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
     }
     // A Publish connection error is ambiguous. It must not be replayed on another worker.
     return (failureStage == SetFailureStage::CREATE && connectionFailure)
@@ -3445,22 +3408,37 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
     return rc;
 }
 
-Status ObjectClientImpl::ResolveTransportMetaOwner(const std::string &objectKey, HostPort &metaOwner) const
-{
-    CHECK_FAIL_RETURN_STATUS(routing_ != nullptr, K_NOT_READY, "Object route is not ready");
-    return routing_->SelectWorker(objectKey, client::SelectStrategy::HASH_RING_AFFINITY, metaOwner);
-}
-
 void ObjectClientImpl::BuildTransportReadRequest(const std::vector<std::string> &objectKeys,
                                                  client::ObjectReadRequest &request,
                                                  std::vector<Status> &itemStatuses) const
 {
-    for (size_t i = 0; i < objectKeys.size(); ++i) {
-        HostPort metaOwner;
-        itemStatuses[i] = ResolveTransportMetaOwner(objectKeys[i], metaOwner);
-        if (itemStatuses[i].IsOk()) {
-            request.items.push_back({ i, objectKeys[i], metaOwner });
+    auto routing = std::atomic_load(&routing_);
+    if (routing == nullptr) {
+        std::fill(itemStatuses.begin(), itemStatuses.end(), Status(K_NOT_READY, "Object route is not ready"));
+        return;
+    }
+    std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
+    Status routeStatus =
+        routing->SelectWorkers(objectKeys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groupedKeys);
+    if (routeStatus.IsError()) {
+        std::fill(itemStatuses.begin(), itemStatuses.end(), routeStatus);
+        return;
+    }
+    std::unordered_map<std::string, HostPort> metaOwners;
+    metaOwners.reserve(objectKeys.size());
+    for (const auto &group : groupedKeys) {
+        for (const auto &key : group.second) {
+            metaOwners.emplace(key, group.first);
         }
+    }
+    for (size_t i = 0; i < objectKeys.size(); ++i) {
+        auto owner = metaOwners.find(objectKeys[i]);
+        if (owner == metaOwners.end()) {
+            itemStatuses[i] = Status(K_RUNTIME_ERROR, "Batch route result is incomplete");
+            continue;
+        }
+        itemStatuses[i] = Status::OK();
+        request.items.push_back({ i, objectKeys[i], owner->second });
     }
 }
 
@@ -4971,9 +4949,10 @@ Status ObjectClientImpl::BuildMSetRouteGroups(const std::vector<std::string> &ke
                                               const std::vector<StringView> &values,
                                               std::vector<MSetRouteGroup> &groups)
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(routing_);
+    auto routing = std::atomic_load(&routing_);
+    RETURN_RUNTIME_ERROR_IF_NULL(routing);
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing_->SelectWorkers(keys, client::SelectStrategy::HASH_RING_AFFINITY, groupedKeys));
+    RETURN_IF_NOT_OK(routing->SelectWorkers(keys, dataPlacementPolicy_, groupedKeys));
     std::unordered_map<std::string, size_t> valueIndexes;
     valueIndexes.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -5074,19 +5053,28 @@ Status ObjectClientImpl::BuildMSetRetryRouteGroups(const MSetRouteGroup &group,
                                                    const std::vector<HostPort> &excludedWorkers,
                                                    std::vector<MSetRouteGroup> &groups)
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(routing_);
-    std::unordered_map<HostPort, size_t> groupIndexes;
+    auto routing = std::atomic_load(&routing_);
+    RETURN_RUNTIME_ERROR_IF_NULL(routing);
+    std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
+    RETURN_IF_NOT_OK(routing->SelectWorkers(group.keys, dataPlacementPolicy_, groupedKeys, excludedWorkers));
+    std::unordered_map<std::string, size_t> valueIndexes;
+    valueIndexes.reserve(group.keys.size());
     for (size_t i = 0; i < group.keys.size(); ++i) {
-        HostPort worker;
-        RETURN_IF_NOT_OK(routing_->SelectWorker(group.keys[i], client::SelectStrategy::HASH_RING_AFFINITY,
-                                                worker, excludedWorkers));
-        auto insertResult = groupIndexes.emplace(worker, groups.size());
-        if (insertResult.second) {
-            groups.emplace_back(MSetRouteGroup{ worker, {}, {} });
+        valueIndexes.emplace(group.keys[i], i);
+    }
+    groups.reserve(groupedKeys.size());
+    for (auto &entry : groupedKeys) {
+        MSetRouteGroup retryGroup;
+        retryGroup.worker = entry.first;
+        retryGroup.keys = std::move(entry.second);
+        retryGroup.values.reserve(retryGroup.keys.size());
+        for (const auto &key : retryGroup.keys) {
+            auto value = valueIndexes.find(key);
+            CHECK_FAIL_RETURN_STATUS(value != valueIndexes.end(), K_RUNTIME_ERROR,
+                                     "MSet retry route contains unknown key");
+            retryGroup.values.emplace_back(group.values[value->second]);
         }
-        auto &retryGroup = groups[insertResult.first->second];
-        retryGroup.keys.emplace_back(group.keys[i]);
-        retryGroup.values.emplace_back(group.values[i]);
+        groups.emplace_back(std::move(retryGroup));
     }
     return Status::OK();
 }
@@ -5860,7 +5848,8 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_RUNTIME_ERROR, "No available worker API for Exist");
     const auto tokenPtr = std::atomic_load(&transportToken_);
     SensitiveValue token = (tokenPtr != nullptr) ? *tokenPtr : SensitiveValue();
-    Status rc = RunExist(routing_, transportLayer_, workerApi, keys, exists, queryL2Cache, isLocal, token);
+    Status rc =
+        RunExist(std::atomic_load(&routing_), transportLayer_, workerApi, keys, exists, queryL2Cache, isLocal, token);
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_RPC_END);
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_EXIST_END);

@@ -86,6 +86,7 @@ DS_DECLARE_uint64(slow_log_rpc_slower_than);
 DS_DECLARE_uint64(client_slow_log_process_slower_than);
 DS_DECLARE_uint64(client_slow_log_rpc_slower_than);
 DS_DECLARE_bool(enable_leaving_intercept);
+DS_DECLARE_string(sdk_data_placement_policy);
 DS_DECLARE_bool(use_brpc);
 DS_DECLARE_int32(brpc_server_num_threads);
 DS_DECLARE_int32(brpc_max_concurrency);

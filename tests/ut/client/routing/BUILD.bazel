@@ -18,6 +18,7 @@ ds_cc_test(
     srcs = ["routing_test.cpp"],
     deps = [
         "//src/datasystem/client/routing:routing",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/protos:cluster_topology_cc_proto",
         "//tests/ut:ut_common",

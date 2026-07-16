@@ -20,6 +20,7 @@
 #include <sstream>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/validator.h"
 
 DS_DECLARE_uint64(urma_max_write_size_mb);
@@ -47,6 +48,20 @@ bool ValidateSharedMemoryDistributionPolicy(const char *flagName, const std::str
     }
     LOG(ERROR) << FormatString(
         "Invalid %s value: %s. Optional values are 'none', 'interleave_all_numa', 'interleave_affinity_numa'.",
+        flagName, value);
+    return false;
+}
+
+bool ValidateDataPlacementPolicy(const char *flagName, const std::string &value)
+{
+    const std::string normalized = StringToUpper(Trim(value));
+    if (normalized == "PREFERRED_SAME_NODE" ||
+        normalized == "REQUIRED_SAME_NODE" ||
+        normalized == "PREFERRED_META_OWNER") {
+        return true;
+    }
+    LOG(ERROR) << FormatString(
+        "Invalid %s value: '%s'. Valid values are PREFERRED_SAME_NODE, REQUIRED_SAME_NODE, PREFERRED_META_OWNER.",
         flagName, value);
     return false;
 }
@@ -195,6 +210,7 @@ bool ValidateSampleRateRange(const char *flagName, double value)
 }  // namespace
 
 DS_DEFINE_validator(l2_cache_type, &Validator::ValidateL2CacheType);
+DS_DEFINE_validator(sdk_data_placement_policy, &ValidateDataPlacementPolicy);
 DS_DEFINE_validator(io_thread_nice, &ValidateIoThreadNice);
 DS_DEFINE_validator(zmq_client_io_thread, &ValidateZmqClientIoThread);
 DS_DEFINE_validator(zmq_chunk_sz, &Validator::ValidateInt32);

@@ -51,12 +51,15 @@
     buffers and MSet sends one positional MultiPublish payload; UB MCreate uses one MultiCreate RPC, MSet pipelines
     non-blocking per-object URMA writes in bounded groups, and failed writes use bounded TCP payload fallback in the
     same MultiPublish RPC. With local
-    cache disabled, public key/value `ObjectClientImpl::MSet` groups keys by metadata owner and sends each same-worker
-    group through these primitives; with local cache enabled it preserves the legacy client-worker batch path.
-  - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing`; Set selects the key's metadata
-    owner and key/value MSet groups keys by metadata owner with `HASH_RING_AFFINITY`. Unavailable workers are excluded
-    during bounded pre-Publish retries. With local cache enabled, both APIs preserve the legacy current-worker path and
-    do not initialize the direct transport runtime.
+    cache disabled, public key/value `ObjectClientImpl::MSet` groups keys with the configured data-placement policy
+    and sends each same-worker group through these primitives; with local cache enabled it preserves the legacy
+    client-worker batch path.
+  - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing`; Set selects a worker through
+    `sdk_data_placement_policy` (`PREFERRED_SAME_NODE` by default), while transport Get always resolves the metadata
+    owner. The policy is read once at routing initialization. This default changes non-local-cache Set/MSet placement
+    from legacy metadata-owner routing to same-node preference; set `PREFERRED_META_OWNER` to preserve the old behavior.
+    Unavailable workers are excluded during bounded pre-Publish retries. With local cache enabled, both APIs preserve
+    the legacy current-worker path and do not initialize the direct transport runtime.
   - Routed transport requests carry the gateway client id, token snapshot, thread tenant context, and shared transport
     `Signature`. Target workers authenticate routed Create, Publish, and cleanup requests by signature without requiring
     endpoint-local client registration. UB allocations are released asynchronously after the final Publish attempt, or
@@ -70,9 +73,14 @@
     Each changed topology is first validated into a versioned `WorkerSnapshot`. All topology members are retained
     regardless of membership state; any malformed endpoint rejects the whole update, while an empty topology is a
     valid cleanup-all snapshot. The transport admission set is published before the new route becomes visible.
-  - Routing refresh always uses the transport layer's cached endpoint RPC client. It does not add HashRing methods to
-    the legacy local/remote worker API or embedded C wrapper, and the GetHashRing control request carries AK/SK fields.
-    Embedded configuration and `UpdateAkSk` keep the legacy and transport signature holders synchronized.
+  - Routing owns lazy, endpoint-cached brpc channels only for versioned `GetHashRing` control requests. The channels use
+    the SDK request/connect timeouts, disable brpc built-in retry and circuit breaking, and share the transport
+    signature holder. Business Create/Get/Set RPCs remain owned by Transport. A later channel-unification change may
+    share connection resources, but must preserve this ownership boundary and retry contract.
+  - Routing uses closed token ranges (`lower_bound`) so a key hash exactly equal to a token selects that token owner,
+    matching the server topology snapshot. Same-node worker addresses are sorted before hash-index selection, making
+    placement deterministic across protobuf map iteration orders; this may redistribute same-node-preferred keys once
+    at upgrade without changing the policy contract.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
   - Python package `yr.datasystem` lazily exposes public SDK symbols, `DsTensorClient`, and optional transfer-engine
@@ -121,8 +129,8 @@
   - connection and request timeout controls
   - token auth, curve key fields, AK/SK fields, tenant id
   - cross-node and exclusive connection toggles
-  - local-cache routing toggle; `enableLocalCache=false` routes Set to the key's metadata owner and supports single-
-    and multi-key full-object `Get`, with per-key partial results and without L2 loading or RH2D
+  - local-cache routing toggle; `enableLocalCache=false` routes Set according to `sdk_data_placement_policy`
+    and supports single- and multi-key full-object `Get`, with per-key partial results and without L2 loading or RH2D
   - remote H2D toggle
   - optional `IServiceDiscovery`; the public implementations are ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`
   - fast transport shared-memory size

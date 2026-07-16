@@ -22,6 +22,7 @@
 #include <utility>
 
 #include "datasystem/client/routing/broken_filter.h"
+#include "datasystem/client/routing/routing.h"
 #include "datasystem/client/routing/state_filter.h"
 
 namespace datasystem {
@@ -94,18 +95,26 @@ bool WorkerRouter::IsExcluded(const HostPort &addr, const std::vector<HostPort> 
 Status WorkerRouter::SelectWorker(const std::string &key, SelectStrategy strategy,
                                   HostPort &worker, const std::vector<HostPort> &exclude) const
 {
-    auto view = std::atomic_load(&ringView_);
-    return SelectWorkerFromView(key, strategy, worker, exclude, view);
+    auto policy = strategy == SelectStrategy::SAME_NODE_PREFERRED ? DataPlacementPolicy::PREFERRED_SAME_NODE
+                                                                  : DataPlacementPolicy::PREFERRED_META_OWNER;
+    return SelectWorker(key, policy, worker, exclude);
 }
 
-Status WorkerRouter::SelectWorkerFromView(const std::string &key, SelectStrategy strategy, HostPort &worker,
+Status WorkerRouter::SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
+                                  const std::vector<HostPort> &exclude) const
+{
+    auto view = std::atomic_load(&ringView_);
+    return SelectWorkerFromView(key, policy, worker, exclude, view);
+}
+
+Status WorkerRouter::SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
                                           const std::vector<HostPort> &exclude,
                                           const std::shared_ptr<const RingView> &view) const
 {
     const auto &idx = view->tokenIndex;
     uint32_t keyHash = MurmurHash3_32(key);
 
-    if (strategy == SelectStrategy::SAME_NODE_PREFERRED) {
+    if (policy != DataPlacementPolicy::PREFERRED_META_OWNER) {
         const auto &sameNodeWorkers = *view->sameNodeWorkers;
         const size_t sameNodeCount = sameNodeWorkers.size();
         const size_t start = sameNodeCount == 0 ? 0 : keyHash % sameNodeCount;
@@ -119,16 +128,19 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, SelectStrategy
                 return Status::OK();
             }
         }
-        // Fallback to hash ring affinity
+        if (policy == DataPlacementPolicy::REQUIRED_SAME_NODE) {
+            return Status(K_NO_AVAILABLE_WORKER, "No same-node worker is available");
+        }
     }
 
-    // HASH_RING_AFFINITY (or SAME_NODE_PREFERRED fallback)
+    // PREFERRED_META_OWNER, or the fallback for PREFERRED_SAME_NODE.
     if (idx->tokenToWorker.empty()) {
         return Status(K_NOT_FOUND, "Hash ring is empty, no routable workers");
     }
 
-    auto iter = std::upper_bound(idx->tokenToWorker.begin(), idx->tokenToWorker.end(), keyHash,
-        [](uint32_t val, const std::pair<uint32_t, int> &token) { return val < token.first; });
+    // RoutingSnapshot owns closed token ranges, so an exact token hash belongs to that token's worker.
+    auto iter = std::lower_bound(idx->tokenToWorker.begin(), idx->tokenToWorker.end(), keyHash,
+        [](const std::pair<uint32_t, int> &token, uint32_t val) { return token.first < val; });
     int start = (iter == idx->tokenToWorker.end()) ? 0 : static_cast<int>(iter - idx->tokenToWorker.begin());
 
     int total = static_cast<int>(idx->tokenToWorker.size());
@@ -151,19 +163,24 @@ Status WorkerRouter::SelectWorkerFromView(const std::string &key, SelectStrategy
 Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
                                    std::unordered_map<HostPort, std::vector<std::string>> &groups) const
 {
+    auto policy = strategy == SelectStrategy::SAME_NODE_PREFERRED ? DataPlacementPolicy::PREFERRED_SAME_NODE
+                                                                  : DataPlacementPolicy::PREFERRED_META_OWNER;
+    return SelectWorkers(keys, policy, groups);
+}
+
+Status WorkerRouter::SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
+                                   std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                                   const std::vector<HostPort> &exclude) const
+{
     auto view = std::atomic_load(&ringView_);
     if (keys.empty()) {
         groups.clear();
         return Status::OK();
     }
-    if (view->tokenIndex->tokenToWorker.empty()) {
-        return Status(K_NOT_FOUND, "Hash ring is empty");
-    }
-
     std::unordered_map<HostPort, std::vector<std::string>> newGroups;
     for (const auto &key : keys) {
         HostPort owner;
-        Status s = SelectWorkerFromView(key, strategy, owner, {}, view);
+        Status s = SelectWorkerFromView(key, policy, owner, exclude, view);
         if (s.IsError()) {
             return s;
         }
@@ -206,6 +223,8 @@ void WorkerRouter::UpdateHashRing(std::shared_ptr<const ::datasystem::ClusterTop
             }
         }
     }
+    // Stable ordering makes same-node placement deterministic across protobuf map iteration orders.
+    std::sort(sameNode->begin(), sameNode->end());
 
     // Build new view (all-or-nothing: readers see consistent ring + index + sameNode)
     auto newView = std::make_shared<RingView>();

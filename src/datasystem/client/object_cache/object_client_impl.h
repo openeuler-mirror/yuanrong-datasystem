@@ -936,8 +936,6 @@ private:
 
     Status InitTransportLayer();
 
-    Status ResolveTransportMetaOwner(const std::string &objectKey, HostPort &metaOwner) const;
-
     void BuildTransportReadRequest(const std::vector<std::string> &objectKeys, client::ObjectReadRequest &request,
                                    std::vector<Status> &itemStatuses) const;
 
@@ -1534,11 +1532,6 @@ private:
 
     void ConstructTreadPool();
 
-    Status FetchRoutingHashRing(const HostPort &workerAddr, uint64_t currentVersion, GetHashRingRspPb &response);
-
-    client::HashRingRefresher::FetchRpc BuildRoutingFetchRpc(
-        const std::shared_ptr<client::WorkerRouter> &router, const HostPort &initialWorker, bool initialWorkerIsLocal);
-
     Status ApplyRoutingWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring);
 
     Status InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal);
@@ -1752,6 +1745,7 @@ private:
     std::string tenantId_;
     bool enableCrossNodeConnection_ = false;
     bool enableLocalCache_ = true;
+    client::DataPlacementPolicy dataPlacementPolicy_ = client::DataPlacementPolicy::PREFERRED_SAME_NODE;
     std::unique_ptr<Signature> signature_{ nullptr };
     std::vector<std::shared_ptr<IClientWorkerApi>> workerApi_;
     std::atomic<WorkerNode> currentNode_{ LOCAL_WORKER };

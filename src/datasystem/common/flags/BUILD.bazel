@@ -80,6 +80,7 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/log:operation_logger",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
+        "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:validator",
         "@nlohmann_json//:json",
         "@securec",
