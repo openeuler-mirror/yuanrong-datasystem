@@ -33,6 +33,12 @@ config_setting(
 )
 
 config_setting(
+    name = "enable_urma_mock",
+    define_values = {"enable_urma_mock": "true"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
     name = "enable_pipeline_h2d",
     define_values = {
         "enable_pipeline_h2d": "true",

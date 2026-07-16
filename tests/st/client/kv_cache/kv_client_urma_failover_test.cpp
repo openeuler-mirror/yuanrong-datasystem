@@ -49,7 +49,7 @@ constexpr int CONNECT_TIMEOUT_MS = 2'000;
 constexpr int REQUEST_TIMEOUT_MS = 10'000;
 constexpr int SWITCH_TIMEOUT_S = 15;
 constexpr int WINDOW_SETTLE_MS = 1'200;
-constexpr int NODE_DEAD_TIMEOUT_S = 2;
+constexpr int NODE_DEAD_TIMEOUT_S = 5;
 constexpr int FAILURE_ISOLATION_WAIT_S = NODE_DEAD_TIMEOUT_S + 1;
 constexpr uint64_t VALUE_SIZE = 512 * 1024;
 constexpr uint32_t MIN_SAMPLE_COUNT = 2;
@@ -750,9 +750,9 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_LocalFailRemoteFailThenSwitchBack)
     ASSERT_TRUE(WaitSwitchCountAtLeast(2));
     ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 1, "chain_worker2_after");
-    RestartWorkerAndWaitReady(0);
     ClearSwitchWorkerExpectedInjects();
     SetSwitchWorkerExpected(1, 0);
+    RestartWorkerAndWaitReady(0);
     // Once the same-host worker is ready again, service discovery recovery should prefer it automatically.
     WaitClientTrafficReady(client, 0);
     ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));

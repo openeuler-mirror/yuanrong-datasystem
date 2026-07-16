@@ -969,6 +969,53 @@ private:
                                        std::vector<std::shared_ptr<Buffer>> &buffers,
                                        const std::vector<ObjMetaInfo> &objMetas, uint64_t ubMaxGetSize,
                                        AccessTransportKind *requestTransportKind);
+
+    /**
+     * @brief Get one oversized object from worker in UB-sized chunks.
+     * @param[in] workerApi The worker that handles get request.
+     * @param[in] getParam The parameters of get request.
+     * @param[in] objectIndex Index of the oversized object.
+     * @param[in] objectSize Full object size.
+     * @param[in] ubMaxGetSize Maximum UB buffer size per Get RPC.
+     * @param[out] buffer The merged object buffer.
+     * @param[out] requestTransportKind The merged transport kind.
+     * @return Status of the result.
+     */
+    Status GetOversizedBufferFromWorkerByChunks(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
+                                                size_t objectIndex, uint64_t objectSize, uint64_t ubMaxGetSize,
+                                                std::shared_ptr<Buffer> &buffer,
+                                                AccessTransportKind *requestTransportKind);
+
+    /**
+     * @brief Get one chunk of an oversized object.
+     * @param[in] workerApi The worker that handles get request.
+     * @param[in] getParam The parameters of get request.
+     * @param[in] objectKey Object key to get.
+     * @param[in] offset Chunk offset in the object.
+     * @param[in] chunkSize Chunk size in bytes.
+     * @param[out] chunkBuffer The chunk buffer returned by worker.
+     * @param[out] version Object version returned by worker.
+     * @param[out] requestTransportKind The merged transport kind.
+     * @return Status of the result.
+     */
+    Status GetOversizedBufferChunk(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
+                                   const std::string &objectKey, uint64_t offset, uint64_t chunkSize,
+                                   std::shared_ptr<Buffer> &chunkBuffer, uint32_t &version,
+                                   AccessTransportKind *requestTransportKind);
+
+    /**
+     * @brief Copy one chunk into the merged oversized object buffer.
+     * @param[in] objectKey Object key to get.
+     * @param[in] objectSize Full object size.
+     * @param[in] offset Chunk offset in the object.
+     * @param[in] chunkBuffer The chunk buffer returned by worker.
+     * @param[out] buffer The merged object buffer.
+     * @param[out] copiedSize Number of bytes copied from the chunk.
+     * @return Status of the result.
+     */
+    Status CopyOversizedBufferChunk(const std::string &objectKey, uint64_t objectSize, uint64_t offset,
+                                    const std::shared_ptr<Buffer> &chunkBuffer, std::shared_ptr<Buffer> &buffer,
+                                    uint64_t &copiedSize);
 #endif
 
     /**

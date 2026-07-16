@@ -47,6 +47,7 @@ set(DS_UT_HEAVY_LINK_END -Wl,--end-group)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${PROJECT_DIR}/src)
 include_directories(${PROJECT_DIR}/tests)  # For #include "ut/common.h"
+include_directories(${PROJECT_DIR}/tests/support)
 
 # fetch ut test files and remove the files we don't care about.
 file(GLOB_RECURSE DS_TEST_UT_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp")
@@ -110,6 +111,9 @@ if (NOT BUILD_WITH_RDMA)
 endif()
 if (NOT BUILD_WITH_URMA)
     list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/client/urma_send_lane_test\\.cpp$")
+endif()
+if (NOT BUILD_WITH_URMA_MOCK)
+    list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX ".*/common/urma_mock/.*\\.cpp$")
 endif()
 
 list(APPEND DS_UT_STREAM_SRCS)
@@ -185,6 +189,10 @@ add_executable(cluster_topology_contract_ut
         cluster/topology_key_helper_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
 
+if (BUILD_WITH_URMA_MOCK)
+        target_compile_definitions(ds_ut PRIVATE USE_URMA USE_URMA_MOCK)
+        target_link_libraries(ds_ut PRIVATE common_urma_mock_obj)
+endif()
 
 target_link_libraries(ds_ut PRIVATE
         ${DS_UT_HEAVY_LINK_START}

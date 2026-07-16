@@ -358,6 +358,14 @@ private:
                                   BatchRh2dContext *batchRh2dContext = nullptr, bool isQueryAndGet = false);
 
     /**
+     * @brief Complete a URMA warmup request when the target warmup object is not ready locally.
+     * @param[in] req Remote get request.
+     * @param[out] rsp Remote get response.
+     * @return True if the request has been completed.
+     */
+    bool TryCompleteMissingUrmaWarmup(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp);
+
+    /**
      * @brief Get the safe object entry.
      * @param[in] objectKey The object key.
      * @param[in] tryLock Try lock object or not.

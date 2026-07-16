@@ -107,6 +107,15 @@ add_dependencies(datasystem_worker_shared
         share_memory_protos
         posix_protos)
 
+if (BUILD_WITH_URMA)
+    target_compile_definitions(datasystem_worker_static PRIVATE USE_URMA)
+    target_compile_definitions(datasystem_worker_shared PRIVATE USE_URMA)
+endif ()
+if (BUILD_WITH_URMA_MOCK)
+    target_compile_definitions(datasystem_worker_static PRIVATE USE_URMA USE_URMA_MOCK)
+    target_compile_definitions(datasystem_worker_shared PRIVATE USE_URMA USE_URMA_MOCK)
+endif ()
+
 if (WITH_TESTS)
     target_include_directories(datasystem_worker_static PUBLIC ${PROJECT_SOURCE_DIR}/tests/st)
     target_include_directories(datasystem_worker_shared PUBLIC ${PROJECT_SOURCE_DIR}/tests/st)

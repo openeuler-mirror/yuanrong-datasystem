@@ -1,0 +1,10 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["abi/urma_abi_compat.h"])
+
+ds_cc_library(
+    name = "urma_abi_compat",
+    hdrs = ["abi/urma_abi_compat.h"],
+)

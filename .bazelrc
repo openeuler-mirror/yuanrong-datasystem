@@ -33,6 +33,11 @@ build:urma --define=enable_urma=true
 build:urma --copt=-DUSE_URMA
 build:urma --copt=-DURMA_OVER_UB
 
+# URMA mock backend: dev/CI without liburma.so / RDMA hardware
+# Provides a local shm+TCP transport so urma_manager.cpp can be unit-tested.
+# Mutually exclusive with build:urma (the actual SDK backend).
+build:urma_mock --define=enable_urma_mock=true
+
 build:pipeline_h2d --config=urma
 build:pipeline_h2d --define=enable_pipeline_h2d=true
 build:pipeline_h2d --copt=-DBUILD_PIPLN_H2D

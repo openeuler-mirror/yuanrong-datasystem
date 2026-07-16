@@ -39,6 +39,7 @@ set(DS_ST_DEPEND_LIBS
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/client/object_cache)
 include_directories(${PROJECT_DIR}/src)
+include_directories(${PROJECT_DIR}/tests/support)
 
 add_subdirectory(cluster)
 
@@ -99,6 +100,11 @@ target_link_libraries(_ds_st_object_cache_obj nlohmann_json::nlohmann_json gener
 target_link_libraries(_ds_st_kv_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_other_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_compile_definitions(_ds_st_other_obj PRIVATE LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/.")
+if (BUILD_WITH_URMA_MOCK)
+    target_compile_definitions(_ds_st_object_cache_obj PRIVATE USE_URMA USE_URMA_MOCK)
+    target_compile_definitions(_ds_st_kv_cache_obj PRIVATE USE_URMA USE_URMA_MOCK)
+    target_compile_definitions(_ds_st_other_obj PRIVATE USE_URMA USE_URMA_MOCK)
+endif()
 
 function(add_ds_st_grouped_executable TARGET_NAME OBJECT_TARGET)
     add_executable(${TARGET_NAME}
@@ -123,6 +129,11 @@ target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock -W
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_embedded_client GTest::gtest GTest::gmock common_etcd nlohmann_json::nlohmann_json
         generic_service_protos datasystem cluster cluster_topology_protos_client)
+if (BUILD_WITH_URMA_MOCK)
+    target_link_libraries(ds_st PRIVATE common_urma_mock_obj)
+    target_link_libraries(ds_st_object_cache PRIVATE common_urma_mock_obj)
+    target_link_libraries(ds_st_kv_cache PRIVATE common_urma_mock_obj)
+endif()
 
 find_package(absl PATHS absl_PKG_PATH)
 

@@ -53,10 +53,33 @@ class SensitiveScanTests(unittest.TestCase):
         matches = scan_text("PR body", credential_key + "=" + secret_value)
 
         self.assertEqual([match.category for match in matches], ["credential or account assignment"])
+        self.assertEqual(scan_text("source", credential_key + " = 0"), [])
+        self.assertEqual(scan_text("source", credential_key + " = 0xC0FFEE01ULL"), [])
+        self.assertEqual(scan_text("source", credential_key + " = kToken"), [])
         self.assertEqual(scan_text("source", credential_key + " = load_token(settings)"), [])
         self.assertEqual(scan_text("source", "client = ApiClient(" + credential_key + "=" + credential_key + ")"), [])
         self.assertEqual(scan_text("source", credential_key + " = os.environ.get(name, '').strip()"), [])
         self.assertEqual(scan_text("source", credential_key + ": str"), [])
+        self.assertEqual(scan_text("source", 'LOG(INFO) << "token=" << token'), [])
+
+    def test_allows_repo_safe_test_endpoints_and_blocks_private_endpoint(self) -> None:
+        self.assertEqual(scan_text("test", "127.0.0.1:8080"), [])
+        self.assertEqual(scan_text("test", "urma-mock-peer-a:9090"), [])
+        self.assertEqual(scan_text("test", "example-peer:9090"), [])
+
+        private_endpoint = "10." + "1.2.3:8080"
+        self.assertEqual([match.category for match in scan_text("source", private_endpoint)], ["server IP or endpoint"])
+
+    def test_allows_tmp_test_paths_but_blocks_sensitive_filesystem_paths(self) -> None:
+        self.assertEqual(scan_text("test", "/tmp/datasystem_urma_mock_1000/uds.sock"), [])
+
+        sensitive_root = "/" + "home/test"
+        sensitive_file = "." + "ssh/id_rsa"
+        sensitive_path = sensitive_root + "/" + sensitive_file
+        self.assertEqual(
+            [match.category for match in scan_text("source", sensitive_path)],
+            ["local filesystem path with sensitive content"],
+        )
 
     def test_scans_every_changed_file_patch_line(self) -> None:
         private_endpoint = "10." + "20.30.40"

@@ -95,12 +95,12 @@ function run_compile() {
         exit 0
         ;;
     yr-ut-build-only)
-        bash build.sh -t build -c on -j ${tmp_cpus} -X off && exit 0
+        bash build.sh -t build -c on -j ${tmp_cpus} -X off -M on && exit 0
         ;;
     esac
 
     else
-    bash build.sh -t build -P ${PY_SWITCH} -c on -j ${tmp_cpus} -X off
+    bash build.sh -t build -P ${PY_SWITCH} -c on -j ${tmp_cpus} -X off -M on
     fi
 
     cd ${datasystem_dir}
@@ -293,7 +293,7 @@ function run_test() {
     fi
 
     cd ${datasystem_dir}
-    bash build.sh -t run_cpp -l '.*level0' -u 16   || handle_fail_tests
+    bash build.sh -t run_cpp -l '.*level0' -u 16 -M on || handle_fail_tests
     if [[ "$label" != *"yr-ut-coverage-skip"* ]]; then
     collect_coverage
     fi
@@ -312,7 +312,7 @@ function run_test() {
     fi
 
     cd ${datasystem_dir}
-    bash build.sh -t run_cpp -l ".*level1" -u 16 || handle_fail_tests
+    bash build.sh -t run_cpp -l ".*level1" -u 16 -M on || handle_fail_tests
 
     if [[ "$label" != *"yr-ut-coverage-skip"* ]]; then
     collect_coverage

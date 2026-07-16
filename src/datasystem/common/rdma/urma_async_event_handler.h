@@ -24,7 +24,11 @@
 #include <memory>
 #include <thread>
 
+#ifdef USE_URMA_MOCK
+#include "datasystem/common/urma_mock/abi/urma_abi_compat.h"
+#else
 #include <ub/umdk/urma/urma_api.h>
+#endif
 
 #include "datasystem/common/rdma/urma_resource.h"
 #include "datasystem/utils/status.h"

@@ -29,8 +29,10 @@
 
 #include "securec.h"
 
+#ifndef USE_URMA_MOCK
 #include <ub/umdk/urma/urma_opcode.h>
 #include <ub/umdk/urma/urma_ubagg.h>
+#endif
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
