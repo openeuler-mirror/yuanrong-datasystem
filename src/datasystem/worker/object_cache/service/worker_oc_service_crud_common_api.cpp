@@ -17,7 +17,9 @@
 
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
+#include <chrono>
 #include <cstddef>
+#include <thread>
 #include <utility>
 
 #include "datasystem/common/log/log.h"
@@ -25,6 +27,7 @@
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
@@ -36,11 +39,25 @@
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 DS_DECLARE_bool(ipc_through_shared_memory);
+DS_DECLARE_bool(use_brpc);
 DS_DECLARE_uint64(oc_shm_transfer_threshold_kb);
 namespace datasystem {
 namespace object_cache {
 
 static constexpr int DEBUG_LOG_LEVEL = 2;
+
+void WorkerOcServiceCrudCommonApi::SleepForMetaMovingRetry(int64_t sleepTimeMs)
+{
+    if (sleepTimeMs <= 0) {
+        return;
+    }
+    auto sleepDuration = std::chrono::milliseconds(sleepTimeMs);
+    if (FLAGS_use_brpc) {
+        SleepCurrentFor(sleepDuration);
+        return;
+    }
+    std::this_thread::sleep_for(sleepDuration);
+}
 
 namespace {
 /**

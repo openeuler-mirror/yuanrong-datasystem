@@ -16,6 +16,7 @@
  */
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <utility>
 
@@ -359,13 +360,17 @@ Status WorkerOcServiceMultiPublishImpl::RetryCreateMultiMeta(std::shared_ptr<Wor
                                                              CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
 {
     while (true) {
+        CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
         RETURN_IF_NOT_OK(api->CreateMultiMeta(req, rsp, true));
         if (rsp.info().empty()) {
             return Status::OK();
         }
         if (rsp.meta_is_moving()) {
+            int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+            CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             rsp.Clear();
-            std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_INTERNAL_MS_META_MOVING));
+            SleepForMetaMovingRetry(std::min<int64_t>(RETRY_INTERNAL_MS_META_MOVING, remainingTimeMs));
             continue;
         }
         return Status(K_SCALING, "The cluster is scaling, please try again.");

@@ -1037,8 +1037,7 @@ Status WorkerOcServiceGetImpl::QueryReferencedRequestKeys(
         }
         auto remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(std::min<int64_t>(kRefMovingRetrySleepMs, remainingTimeMs)));
+        SleepForMetaMovingRetry(std::min<int64_t>(kRefMovingRetrySleepMs, remainingTimeMs));
     }
 }
 

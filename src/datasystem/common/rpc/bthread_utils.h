@@ -22,6 +22,7 @@
  * bthread_yield() is scattered and hard to audit. This header provides
  * searchable, self-documenting wrappers:
  *   - YieldCurrent()     replaces bthread_yield()
+ *   - SleepCurrentFor()  replaces sleep_for() in brpc handler retry loops
  *   - StartBackgroundTask() replaces std::thread(...).detach()
  */
 
@@ -29,6 +30,8 @@
 
 #include <bthread/bthread.h>
 
+#include <chrono>
+#include <cstdint>
 #include <type_traits>
 #include <utility>
 
@@ -39,6 +42,23 @@ namespace datasystem {
 inline void YieldCurrent()
 {
     bthread_yield();
+}
+
+template <typename Rep, typename Period>
+inline void SleepCurrentFor(std::chrono::duration<Rep, Period> duration)
+{
+    static constexpr int64_t minSleepUs = 1;
+    if (duration <= std::chrono::duration<Rep, Period>::zero()) {
+        return;
+    }
+    auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(duration);
+    if (durationUs < duration) {
+        durationUs += std::chrono::microseconds(minSleepUs);
+    }
+    if (durationUs <= std::chrono::microseconds::zero()) {
+        durationUs = std::chrono::microseconds(minSleepUs);
+    }
+    (void)bthread_usleep(durationUs.count());
 }
 
 // Start a background bthread to execute fn. Returns 0 on success,
