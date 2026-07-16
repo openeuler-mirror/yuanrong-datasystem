@@ -1,12 +1,14 @@
 # brpc 健康探针与诊断接口
 
-适用启用 brpc 模式（`FLAGS_use_brpc=true`）的 worker。brpc server 内置一组 HTTP 服务，无需额外组件即可用于 K8s 探针与线上诊断。
+适用启用 brpc 模式（`FLAGS_use_brpc=true`）的 worker。brpc server 内置一组 HTTP 服务，可用于线上诊断与可选的 K8s 探针。**内置服务默认关闭**（由 `FLAGS_brpc_enable_builtin_services` 控制，见下文注意事项）；开启后无需额外组件即可用于诊断与探针。
 
 ## 端口说明
 
 brpc server 监听 worker 的对外端口（与业务 RPC 同端口，brpc 内置 HTTP 服务复用该端口）。下文示例用 `31501`，实际填 `worker_address` 中的端口；单机默认常为 `127.0.0.1:31501`，跨机部署用各节点 `worker_address` 的真实 IP:Port。
 
 ## K8s 探针
+
+> 本仓默认 K8s 部署使用 `exec` 文件检查探针（不依赖 brpc 内置服务，见注意事项）。下文 `httpGet` 方式为**可选**方案，仅当设 `FLAGS_brpc_enable_builtin_services=true` 开启内置服务时可用。
 
 ### livenessProbe
 
@@ -74,6 +76,8 @@ curl -s http://127.0.0.1:31501/bthreads | head -50
 
 ## 注意事项
 
-- brpc 内置服务默认开启。如需关闭（生产环境安全加固），设 `ServerOptions.has_builtin_services = false`，但**关闭后 K8s 探针将失效**，需另行实现 HTTP 健康端点，不推荐。
-- `/health` 与 `/status` 是只读 GET，不鉴权、不产生业务负载，可放心用作探针。
+- **brpc 内置服务默认关闭**，对齐 ZMQ 模式的安全基线（无 HTTP 管理端点）。`/flags` 可 POST 翻转任意 gflag，`/pprof/heap` 可 dump 内存，默认关闭可防止经业务 RPC 端口越权操作。
+- 由 gflag `FLAGS_brpc_enable_builtin_services` 控制（默认 `false`）。仅在受信网络调试时设为 `true` 开启 `/flags`、`/pprof`、`/vars` 等诊断接口，无需改代码重新编译。
+- K8s 健康探针**不依赖** brpc 内置服务。本仓 K8s 部署（`worker_daemonset.yaml`）的 startup/readiness/liveness probe 均为 `exec` 文件检查（`file_check.sh` / `liveness_check.sh -f $(LIVENESS_CHECK_PATH)`，检查 `/home/yuanrong/datasystem/health/{healthy,ready,liveness}` 文件），与 `has_builtin_services` 是否开启无关。
+- 仅当希望用 brpc HTTP `/health`、`/status` 作为探针时，才需设 `FLAGS_brpc_enable_builtin_services=true` 并参考上文 `httpGet` 示例；此时 `/health` 与 `/status` 是只读 GET，不鉴权、不产生业务负载。
 - 探针端口若与业务端口相同，注意 NetworkPolicy / 端口策略放行 K8s node→Pod 的 31501。

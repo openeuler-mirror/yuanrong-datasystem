@@ -164,6 +164,11 @@ DS_DEFINE_int32(brpc_max_concurrency, 128,
                 "Recommended: num_threads * 2 (e.g. 128 for 64 threads). When exceeded, "
                 "brpc returns ELIMIT immediately so a slow handler cannot exhaust bthreads "
                 "and cause OOM. Must not be smaller than brpc_server_num_threads.");
+DS_DEFINE_bool(brpc_enable_builtin_services, false,
+               "Expose brpc built-in HTTP services (/flags, /pprof, /vars, /status) on the RPC port. "
+               "Default false to match the ZMQ security baseline (no HTTP endpoint); the /flags and "
+               "/pprof endpoints allow gflag mutation and memory dumps. Set true only for debugging "
+               "on a trusted network.");
 DS_DEFINE_uint64_dynamic(client_slow_log_process_slower_than, 2000,
                  "Client-side in-process processing latency threshold (microseconds) for slow-log and latency "
                  "summary. Default 2000 (2ms). 0 means disabled. When enabled, requests whose in-process phases "
