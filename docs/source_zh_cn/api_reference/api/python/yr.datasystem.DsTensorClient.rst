@@ -55,14 +55,6 @@ yr.datasystem.DsTensorClient
          -  从数据系统删除此 key 的元数据，不再管理此 key 对应的 device 内存。
        * - :doc:`async_dev_delete <yr.datasystem.DsTensorClient.async_dev_delete>`
          -  从数据系统删除此 key 的元数据的异步接口，删除成功后不再管理此 key 对应的 device 内存。
-       * - :doc:`put_page_attn_layerwise_d2d <yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d>`
-         - 将 PagedAttention 的层级 Tensor 发布为数据系统的异构对象。发布后的异构对象可通过 get_page_attn_layerwise_d2d 获取。
-       * - :doc:`get_page_attn_layerwise_d2d <yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d>`
-         - 根据 key 获取缓存在数据系统的 PagedAttention 的层级 Tensor。
-       * - :doc:`mset_page_attn_blockwise_d2h <yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h>`
-         - 将 PagedAttention 的层级 Tensor 异步写入 host 中。
-       * - :doc:`mget_page_attn_blockwise_h2d <yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d>`
-         - 从 host 中获取 PagedAttention 的层级 Tensor 并写入 device 中。
 
 .. toctree::
     :maxdepth: 1
@@ -83,7 +75,3 @@ yr.datasystem.DsTensorClient
     yr.datasystem.DsTensorClient.dev_local_delete
     yr.datasystem.DsTensorClient.dev_delete
     yr.datasystem.DsTensorClient.async_dev_delete
-    yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d
-    yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d
-    yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h
-    yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d

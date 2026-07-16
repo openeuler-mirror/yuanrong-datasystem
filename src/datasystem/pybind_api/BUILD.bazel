@@ -37,7 +37,6 @@ pybind_library(
     deps = [
         "//src/datasystem/client:datasystem",
         "//src/datasystem/client/perf_client:perf_client_lib",
-        "//src/datasystem/client/object_cache/device:page_attn_utils",
         "//src/datasystem/client/stream_cache:consumer",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/util:status_helper",

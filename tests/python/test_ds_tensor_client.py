@@ -362,93 +362,6 @@ class TestDsTensorClient(unittest.TestCase):
                 os.waitpid(child1, 0)
                 os.waitpid(child2, 0)
 
-    def run_put_page_attn_layerwise_d2d(self, device_id, keys, send_tensors_cpu, block_ids):
-        """Function to run put_page_attn_layerwise_d2d."""
-        acl.init()
-        acl.rt.set_device(device_id)
-        client = self.init_test_tensor_client(device_id)
-        client.dev_delete(keys)
-
-        torch_npu.npu.set_device(f'npu:{device_id}')
-        send_tensors_npu = [tensor.to('npu') for tensor in send_tensors_cpu]
-        futures = client.put_page_attn_layerwise_d2d(keys, send_tensors_npu, block_ids)
-        timeout_ms = 10 * 1000
-        for future in futures:
-            future.get(timeout_ms)
-        acl.finalize()
-
-    def run_get_page_attn_layerwise_d2d(self, device_id, keys, expect_tensors, block_ids):
-        """Function to run get_page_attn_layerwise_d2d."""
-        acl.init()
-        acl.rt.set_device(device_id)
-        client = self.init_test_tensor_client(device_id)
-
-        torch_npu.npu.set_device(f'npu:{device_id}')
-        recv_tensors = [
-            torch.empty_like(expect_tensors[0], device=f'npu:{device_id}')
-            for _ in expect_tensors
-        ]
-        futures = client.get_page_attn_layerwise_d2d(keys, recv_tensors, block_ids)
-        timeout_ms = 10 * 1000
-        for future in futures:
-            future.get(timeout_ms)
-        self.batch_tensors_check(recv_tensors, expect_tensors)
-        acl.finalize()
-
-    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
-    def test_put_page_attn_layerwise_d2d_and_get_page_attn_layerwise_d2d(self):
-        """Test put_page_attn_layerwise_d2d and get_page_attn_layerwise_d2d."""
-        src_device_id, dest_device_id = 6, 7
-        key_num = 1
-        keys = [self.random_str(10) for _ in range(key_num)]
-        send_tensors_cpu = [torch.rand(4, 32, 128, 16, dtype=torch.float32) for _ in range(key_num)]
-        block_ids = [0, 1, 2, 3]
-        child1 = os.fork()
-        if child1 == 0:
-            self.run_put_page_attn_layerwise_d2d(src_device_id, keys, send_tensors_cpu, block_ids)
-        else:
-            child2 = os.fork()
-            if child2 == 0:
-                self.run_get_page_attn_layerwise_d2d(dest_device_id, keys, send_tensors_cpu, block_ids)
-            else:
-                os.waitpid(child1, 0)
-                os.waitpid(child2, 0)
-
-    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
-    def test_mset_page_attn_blockwise_d2h_and_mget_page_attn_blockwise_h2d(self):
-        """Test mset_page_attn_blockwise_d2h and mget_page_attn_blockwise_h2d."""
-        device_id = 7
-        acl.init()
-        acl.rt.set_device(device_id)
-        client = self.init_test_tensor_client(device_id)
-        key_num = 4
-        keys = [self.random_str(10) for _ in range(key_num)]
-
-        torch_npu.npu.set_device(f'npu:{device_id}')
-        swap_out_tensors = [
-            torch.rand((4, 32, 128, 16), dtype=torch.float16, device=f'npu:{device_id}')
-            for _ in range(key_num)
-        ]
-        swap_in_tensors = [
-            torch.zeros((4, 32, 128, 16), dtype=torch.float16, device=f'npu:{device_id}')
-            for _ in range(key_num)
-        ]
-        block_ids = [0, 1, 2, 3]
-
-        timeout_ms = 10 * 1000
-
-        mset_future = client.mset_page_attn_blockwise_d2h(keys, swap_out_tensors, block_ids)
-        failed_keys = mset_future.get(timeout_ms)
-        self.assertEqual(len(failed_keys), 0)
-
-        mget_future = client.mget_page_attn_blockwise_h2d(keys, swap_in_tensors, block_ids)
-        failed_keys = mget_future.get(timeout_ms)
-        self.assertEqual(len(failed_keys), 0)
-
-        client.delete(keys)
-
-        self.batch_tensors_check(swap_in_tensors, swap_out_tensors)
-
     @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_async_dev_delete(self):
         """Test async_dev_delete device object."""
@@ -512,42 +425,6 @@ class TestDsTensorClient(unittest.TestCase):
         with self.assertRaises(TypeError):
             client.dev_mset(["key"], [y])
         acl.finalize()
-
-    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
-    def test_page_attn_layerwise_dbls(self):
-        """Test page_attn_layerwise_dbls."""
-        device_id = 7
-        acl.init()
-        acl.rt.set_device(device_id)
-        client = self.init_test_tensor_client(device_id)
-
-        t0 = torch.randn((20, 3, 4), dtype=torch.float16, device=f"npu:{device_id}")
-        t1 = torch.randn((20, 3, 4), dtype=torch.float16, device=f"npu:{device_id}")
-
-        dbls = client.page_attn_layerwise_dbls([t0, t1], [0, 1, 2])
-        for dbl in dbls:
-            blobs_list = dbl.get_blobs()
-            for blob in blobs_list:
-                size = blob.get_size()
-                self.assertEqual(size, 24)
-
-    @unittest.skipUnless(is_npu_torch_test_ready, "Run when NPU torch dependency is exist")
-    def test_page_attn_blockwise_dbls(self):
-        """Test page_attn_blockwise_dbls."""
-        device_id = 7
-        acl.init()
-        acl.rt.set_device(device_id)
-        client = self.init_test_tensor_client(device_id)
-
-        t0 = torch.randn((20, 3, 4), dtype=torch.float16, device=f"npu:{device_id}")
-        t1 = torch.randn((20, 3, 4), dtype=torch.float16, device=f"npu:{device_id}")
-
-        dbls = client.page_attn_blockwise_dbls([t0, t1], [0, 1, 2], device_id)
-        for dbl in dbls:
-            blobs_list = dbl.get_blobs()
-            for blob in blobs_list:
-                size = blob.get_size()
-                self.assertEqual(size, 24)
 
     @unittest.skipUnless(is_npu_mindspore_test_ready, "Run when NPU MindSpore dependency is exist")
     def test_dev_mget_single_tensor_about_different_rank(self):
