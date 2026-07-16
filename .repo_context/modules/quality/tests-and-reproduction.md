@@ -318,6 +318,9 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
     `tests/st/worker/object_cache`.
 - KV cache behavior:
   - check `ds_st_kv_cache` and ST paths under `tests/st/client/kv_cache`.
+  - `KVCacheClientExistTest.TestBatchSizeLimit` verifies the 100,000-key `Exist` boundary while other batch APIs
+    remain capped at 10,000; `KVCacheClientExistTest.TestConcurrentLargeBatch` runs three clients concurrently with
+    32,768 missing keys each and logs the aggregate wall-clock latency.
 - Stream behavior:
   - check `ds_ut_stream`, `ds_st_stream_cache`, and ST paths under `tests/st/client/stream_cache`.
 - Worker embedding or in-process worker startup:

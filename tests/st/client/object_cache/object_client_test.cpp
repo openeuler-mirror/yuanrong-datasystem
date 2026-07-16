@@ -1674,7 +1674,7 @@ TEST_F(ObjectClientTest, TestInvalidKey)
     std::shared_ptr<ObjectClient> client1;
     InitTestClient(0, client1);
     std::string data = GenRandomString(size);
-    std::string objectKey = "192.168.0.0";
+    std::string objectKey = "invalid/key";
 
     auto rc = client1->Put(objectKey, reinterpret_cast<const uint8_t *>(data.data()), data.size(), CreateParam{});
     DS_ASSERT_NOT_OK(rc);

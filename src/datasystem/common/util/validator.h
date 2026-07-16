@@ -41,6 +41,7 @@
 
 constexpr int32_t THREAD_POOL_SIZE_LIMIT = 4096;
 constexpr int32_t OBJECT_KEYS_MAX_SIZE_LIMIT = 10000;
+constexpr int32_t EXIST_KEYS_MAX_SIZE_LIMIT = 100000;
 constexpr int32_t NODE_TIMEOUT_LIMIT = 1;
 constexpr int32_t MS_PER_SECOND = 1000;
 constexpr int32_t URMA_CONNECTION_LIMIT = 16384;
@@ -65,7 +66,7 @@ public:
     static constexpr uint64_t MB_TO_BYTES = 1024 * 1024;  // mb to bytes;
     static constexpr uint64_t MB_LIMIT = std::numeric_limits<uint64_t>::max() / MB_TO_BYTES;
     inline static const std::string idFormat = "^[a-zA-Z0-9\\~\\.\\-\\/_!@#%\\^\\&\\*\\(\\)\\+\\=\\:;]*$";
-    inline static const std::string objKeyFormat = "^[a-zA-Z0-9\\-_!@#%\\^\\*\\(\\)\\+\\=\\:;]*$";
+    inline static const std::string objKeyFormat = "^[a-zA-Z0-9\\.\\-_!@#%\\^\\*\\(\\)\\+\\=\\:;]*$";
     /**
      * @brief Validate a int32 is greater than 0.
      * @param[in] flagName The positive int flag.
@@ -1014,6 +1015,11 @@ public:
     static bool IsBatchSizeUnderLimit(size_t objectSize)
     {
         return objectSize <= OBJECT_KEYS_MAX_SIZE_LIMIT;
+    }
+
+    static bool IsExistBatchSizeUnderLimit(size_t objectSize)
+    {
+        return objectSize <= EXIST_KEYS_MAX_SIZE_LIMIT;
     }
 
     /**

@@ -18,6 +18,9 @@
  * Description: State client exist tests.
  */
 #include <unistd.h>
+#include <algorithm>
+#include <array>
+#include <future>
 #include <memory>
 #include <cstdint>
 #include <string>
@@ -36,6 +39,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
+#include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
@@ -102,6 +106,66 @@ TEST_F(KVCacheClientExistTest, TestEmptyKeys)
 {
     std::vector<bool> exists;
     ASSERT_EQ(client_->Exist({}, exists).GetCode(), StatusCode::K_INVALID);
+}
+
+TEST_F(KVCacheClientExistTest, TestBatchSizeLimit)
+{
+    constexpr size_t kExistKeysLimit = 100000;
+    constexpr size_t kBatchKeysOverLimit = 10001;
+    std::vector<std::string> keys;
+    keys.reserve(kExistKeysLimit + 1);
+    for (size_t i = 0; i < kExistKeysLimit; ++i) {
+        keys.emplace_back("exist_batch_key_" + std::to_string(i));
+    }
+
+    std::vector<bool> exists;
+    DS_ASSERT_OK(client_->Exist(keys, exists));
+    ASSERT_EQ(exists.size(), kExistKeysLimit);
+    ASSERT_TRUE(std::none_of(exists.begin(), exists.end(), [](bool value) { return value; }));
+
+    keys.emplace_back("exist_batch_key_over_limit");
+    ASSERT_EQ(client_->Exist(keys, exists).GetCode(), StatusCode::K_INVALID);
+
+    keys.resize(kBatchKeysOverLimit);
+    std::vector<std::string> failedKeys;
+    ASSERT_EQ(client_->Expire(keys, 60, failedKeys).GetCode(), StatusCode::K_INVALID);
+}
+
+TEST_F(KVCacheClientExistTest, LEVEL1_TestConcurrentLargeBatch)
+{
+    constexpr size_t kContextKeys = 32768;  // 1M-token context with one key per 32 tokens.
+    constexpr size_t kConcurrentClients = 3;
+    std::vector<std::string> keys;
+    keys.reserve(kContextKeys);
+    for (size_t i = 0; i < kContextKeys; ++i) {
+        keys.emplace_back("concurrent_exist_key_" + std::to_string(i));
+    }
+
+    std::array<std::shared_ptr<KVClient>, kConcurrentClients> clients{ client_, client1_, client2_ };
+    std::array<std::vector<bool>, kConcurrentClients> results;
+    std::promise<void> ready;
+    std::shared_future<void> start(ready.get_future());
+    ThreadPool pool(kConcurrentClients);
+    std::vector<std::future<Status>> futures;
+    futures.reserve(kConcurrentClients);
+    for (size_t i = 0; i < kConcurrentClients; ++i) {
+        futures.emplace_back(pool.Submit([&, i]() {
+            start.wait();
+            return clients[i]->Exist(keys, results[i]);
+        }));
+    }
+
+    Timer timer;
+    ready.set_value();
+    for (auto &future : futures) {
+        DS_ASSERT_OK(future.get());
+    }
+    LOG(INFO) << kConcurrentClients << " concurrent Exist requests with " << kContextKeys << " keys completed in "
+              << timer.ElapsedMilliSecond() << " ms";
+    for (const auto &exists : results) {
+        ASSERT_EQ(exists.size(), kContextKeys);
+        ASSERT_TRUE(std::none_of(exists.begin(), exists.end(), [](bool value) { return value; }));
+    }
 }
 
 TEST_F(KVCacheClientExistTest, TestNotExistKeys)

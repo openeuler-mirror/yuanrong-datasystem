@@ -376,10 +376,10 @@ KVClient
 
     .. cpp:function:: Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 
-        批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多10000个键的查询。
+        批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多100000个键的查询。
 
         参数：
-            - **keys** - 待查询的键列表，最大支持10000个键。
+            - **keys** - 待查询的键列表，最大支持100000个键。
             - **exists** - 传出参数，返回每个键的存在性状态。
 
         返回：

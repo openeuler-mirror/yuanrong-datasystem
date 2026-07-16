@@ -558,9 +558,9 @@ class TestKVClientMethods(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, r"Invalid parameter"):
             client.exist([])
 
-        max_keys = 10000
+        max_keys = 100000
         keys_exceed = [self.random_str() for _ in range(max_keys + 1)]
-        with self.assertRaisesRegex(RuntimeError, r"The objectKeys size exceed 10000"):
+        with self.assertRaisesRegex(RuntimeError, r"The objectKeys size exceed 100000"):
             client.exist(keys_exceed)
 
     def test_expire(self):
