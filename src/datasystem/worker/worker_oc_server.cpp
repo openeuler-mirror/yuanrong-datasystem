@@ -993,6 +993,9 @@ Status WorkerOCServer::InitCoordinationBackend()
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
+    RETURN_IF_NOT_OK_EXCEPT(etcdStore_->CreateTable(COORDINATION_MASTER_ADDRESS_TABLE,
+                                                    COORDINATION_MASTER_ADDRESS_TABLE),
+                            K_DUPLICATED);
     coordinationBackend_ = std::make_unique<cluster::EtcdCoordinationBackend>(etcdStore_.get());
     return Status::OK();
 }
@@ -1123,6 +1126,22 @@ Status WorkerOCServer::HandleMembershipRestart(const std::string &address, int64
 Status WorkerOCServer::ResolveLocalMetadataAddress()
 {
     if (!FLAGS_enable_distributed_master) {
+        if (masterAddr_.Empty()) {
+            CHECK_FAIL_RETURN_STATUS(coordinationBackend_ != nullptr, K_NOT_READY,
+                                     "coordination backend is not initialized");
+            auto rc = coordinationBackend_->CAS(COORDINATION_MASTER_ADDRESS_TABLE,
+                                                COORDINATION_MASTER_ADDRESS_KEY, "", hostPort_.ToString());
+            if (rc.IsError()) {
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                    coordinationBackend_->Get(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_KEY,
+                                              FLAGS_master_address),
+                    "Failed to get master address from coordination store, and cas error: " + rc.ToString());
+            } else {
+                FLAGS_master_address = hostPort_.ToString();
+            }
+            RETURN_IF_NOT_OK(masterAddr_.ParseString(FLAGS_master_address));
+            LOG(INFO) << "Use centralized metadata endpoint: " << masterAddr_.ToString();
+        }
         CHECK_FAIL_RETURN_STATUS(!masterAddr_.Empty(), K_INVALID, "master_address is required in centralized mode");
         return Status::OK();
     }

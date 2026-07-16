@@ -59,7 +59,7 @@ public:
     void StartWorkerAndWaitReady(std::vector<uint32_t> indexes, std::string gFlag = "")
     {
         for (auto i : indexes) {
-            ASSERT_TRUE(externalCluster_->StartWorker(i, workerHost_[0], gFlag).IsOk());
+            ASSERT_TRUE(externalCluster_->StartWorker(i, HostPort(), gFlag).IsOk());
         }
         WaitWorkerReady(indexes);
     }
