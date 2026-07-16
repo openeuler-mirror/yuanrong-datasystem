@@ -18,9 +18,11 @@
 
 #include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/parallel/parallel_for.h"
+#include "datasystem/common/parallel/service_parallel_policy.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
@@ -252,7 +254,7 @@ Status WorkerOcServiceCreateImpl::MultiCreateImpl(const MultiCreateReqPb &req, c
 
     static const int parallelThreshold = 128;
     static const int parallism = 4;
-    if (objectSize > parallelThreshold) {
+    if (Parallel::ShouldUseServiceParallelFor(objectSize, parallelThreshold, FLAGS_use_brpc)) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Parallel::ParallelFor<int>(0, objectSize, createMeta, 0, parallism),
                                          "ParallelFor failed");
     } else {

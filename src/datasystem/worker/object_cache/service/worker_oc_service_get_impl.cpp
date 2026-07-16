@@ -41,6 +41,7 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/parallel/parallel_for.h"
+#include "datasystem/common/parallel/service_parallel_policy.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/string_intern/string_ref.h"
 #include "datasystem/object/object_enum.h"
@@ -516,7 +517,7 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromLocal(std::shared_ptr<GetRequest>
     };
     const size_t parallelLimit = 128;
     const size_t objectKeyCount = uniqueObjectMap.size();
-    if (objectKeyCount <= parallelLimit) {
+    if (!Parallel::ShouldUseServiceParallelFor(objectKeyCount, parallelLimit, FLAGS_use_brpc)) {
         for (auto &[objectKey, objectInfo] : uniqueObjectMap) {
             auto rc = func(objectKey, objectInfo, remoteObjectKeys, needEvictKeys);
             lastRc = rc.IsError() ? rc : lastRc;

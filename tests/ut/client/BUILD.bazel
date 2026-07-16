@@ -35,6 +35,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "service_parallel_policy_test",
+    srcs = ["service_parallel_policy_test.cpp"],
+    deps = [
+        "//src/datasystem/common/parallel:common_parallel",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "urma_success_rate_tracker_test",
     srcs = ["urma_success_rate_tracker_test.cpp"],
     deps = [

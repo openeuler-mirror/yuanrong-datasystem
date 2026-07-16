@@ -13,6 +13,7 @@ ds_cc_library(
         "detail/native_sem.h",
         "detail/parallel_for_local.h",
         "parallel_for.h",
+        "service_parallel_policy.h",
     ],
     deps = [
         "//src/datasystem/common/log:common_log",
