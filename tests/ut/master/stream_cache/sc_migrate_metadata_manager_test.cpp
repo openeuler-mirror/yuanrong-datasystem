@@ -95,6 +95,25 @@ public:
         EXPECT_TRUE(migrateManager_.futureThread_.empty());
     }
 
+    void VerifyTopologyMigrationRejectsPartialItemFailure()
+    {
+        SCMigrateMetadataManager::MigrateMetaInfo info;
+        info.destAddr = "127.0.0.1:1";
+        info.operationId = "task-operation-partial-failure";
+        const auto key = std::make_pair(info.destAddr, info.operationId);
+        std::promise<std::pair<Status, std::vector<std::string>>> result;
+        TbbFutureThreadTable::accessor accessor;
+        migrateManager_.futureThread_.emplace(accessor, key, result.get_future());
+        accessor.release();
+        result.set_value({ Status::OK(), { "stream1" } });
+
+        cluster::CancellationToken cancellation;
+        auto rc = migrateManager_.RunTopologyMigration(
+            nullptr, info, std::chrono::steady_clock::now() + std::chrono::seconds(1), cancellation);
+        EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
+        EXPECT_TRUE(migrateManager_.futureThread_.empty());
+    }
+
 protected:
     SCMigrateMetadataManager migrateManager_;
 };
@@ -122,6 +141,11 @@ TEST_F(SCMigrateMetadataManagerTest, MigrateMeetError)
 TEST_F(SCMigrateMetadataManagerTest, TopologyMigrationDeadlineKeepsOwnedFutureForReplay)
 {
     VerifyTopologyMigrationDeadlineReplay();
+}
+
+TEST_F(SCMigrateMetadataManagerTest, TopologyMigrationRejectsPartialItemFailure)
+{
+    VerifyTopologyMigrationRejectsPartialItemFailure();
 }
 
 }  // namespace ut

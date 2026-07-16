@@ -236,7 +236,7 @@ Status EvaluateTopologyRedirect(const WorkerTopologyReferences *references, std:
     RETURN_IF_NOT_OK(references->placement->EvaluateRedirect(key, references->localAddress, decision));
     redirect = decision.action == cluster::RedirectAction::REDIRECT;
     moving = decision.action == cluster::RedirectAction::WAIT;
-    targetAddress = decision.committedOwnerAddress;
+    targetAddress = decision.GetRedirectTargetAddress();
     if (topologyVersion != nullptr) {
         *topologyVersion = decision.topologyVersion;
     }

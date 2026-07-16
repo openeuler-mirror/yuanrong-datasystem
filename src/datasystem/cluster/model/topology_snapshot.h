@@ -136,16 +136,14 @@ private:
 
     /**
      * @brief Reserve immutable index storage before inserting entries.
-     * @param[in] scaleOut Whether a prospective SCALE_OUT ring is required.
      */
-    void ReserveIndexes(bool scaleOut);
+    void ReserveIndexes();
 
     /**
      * @brief Validate members and insert immutable index entries.
-     * @param[in] scaleOut Whether to index JOINING members in the prospective ring.
      * @return K_OK or K_INVALID.
      */
-    Status BuildIndexEntries(bool scaleOut);
+    Status BuildIndexEntries();
 
     TopologyState state_;
     int64_t authorityRevision_{ 0 };

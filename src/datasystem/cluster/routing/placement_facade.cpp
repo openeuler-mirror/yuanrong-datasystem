@@ -74,15 +74,24 @@ Status PlacementFacade::EvaluateRedirect(std::string_view placementKey, const st
     RETURN_IF_NOT_OK(LocateInSnapshot(*snapshot, token, placement));
     decision.topologyVersion = placement.topologyVersion;
     decision.committedOwnerAddress = std::move(placement.committedOwnerAddress);
+    decision.redirectTargetAddress.clear();
     decision.action = decision.committedOwnerAddress == localAddress ? RedirectAction::LOCAL : RedirectAction::REDIRECT;
     const auto &batch = snapshot->GetActiveBatch();
-    if (batch.has_value() && batch->type == TopologyChangeType::SCALE_OUT && decision.action == RedirectAction::LOCAL) {
+    const bool isOrdinaryBatch =
+        batch.has_value()
+        && (batch->type == TopologyChangeType::SCALE_OUT || batch->type == TopologyChangeType::SCALE_IN);
+    if (isOrdinaryBatch && decision.action == RedirectAction::LOCAL) {
         const Member *prospective = nullptr;
         RETURN_IF_NOT_OK(algorithm_.LocateProspectiveOwner(*snapshot, token, prospective));
         CHECK_FAIL_RETURN_STATUS(prospective != nullptr, K_RUNTIME_ERROR,
                                  "routing algorithm returned a null prospective owner");
         if (prospective->identity.address != decision.committedOwnerAddress) {
-            decision.action = RedirectAction::WAIT;
+            if (batch->type == TopologyChangeType::SCALE_OUT) {
+                decision.action = RedirectAction::WAIT;
+            } else {
+                decision.redirectTargetAddress = prospective->identity.address;
+                decision.action = RedirectAction::REDIRECT;
+            }
         }
     }
     return Status::OK();
@@ -93,7 +102,7 @@ Status PlacementFacade::IsLocalOwner(std::string_view placementKey, const std::s
 {
     RedirectDecision decision;
     RETURN_IF_NOT_OK(EvaluateRedirect(placementKey, localAddress, decision));
-    isLocal = decision.action != RedirectAction::REDIRECT;
+    isLocal = decision.committedOwnerAddress == localAddress;
     return Status::OK();
 }
 

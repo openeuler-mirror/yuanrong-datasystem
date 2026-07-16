@@ -137,7 +137,10 @@ Status SCMigrateMetadataManager::RunTopologyMigration(
             try {
                 auto result = accessor->second.get();
                 futureThread_.erase(accessor);
-                return result.first;
+                RETURN_IF_NOT_OK(result.first);
+                CHECK_FAIL_RETURN_STATUS(result.second.empty(), K_TRY_AGAIN,
+                                         "topology stream migration has failed items");
+                return Status::OK();
             } catch (const std::exception &error) {
                 futureThread_.erase(accessor);
                 RETURN_STATUS(K_RUNTIME_ERROR, std::string("topology stream migration exception: ") + error.what());
@@ -329,6 +332,13 @@ Status SCMigrateMetadataManager::BatchMigrateMetadata(
         }
         return s;
     } else {
+        if (rsp.results_size() != req.stream_metas_size()) {
+            for (const auto &meta : req.stream_metas()) {
+                scMetadataManager->HandleMetaDataMigrationFailed(meta);
+                failedStreams.emplace_back(meta.meta().stream_name());
+            }
+            RETURN_STATUS(K_TRY_AGAIN, "stream metadata migration response size mismatch");
+        }
         int num = 0;
         for (auto &result : rsp.results()) {
             auto &meta = req.stream_metas()[num];
