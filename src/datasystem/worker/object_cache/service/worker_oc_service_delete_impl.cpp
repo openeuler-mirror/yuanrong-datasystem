@@ -30,6 +30,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
+#include "datasystem/worker/object_cache/service/service_execution_policy.h"
 
 using namespace datasystem::worker;
 using namespace datasystem::master;
@@ -112,11 +113,22 @@ Status WorkerOcServiceDeleteImpl::DeletePersistenceObject(const DeletePersistenc
 {
     (void)rsp;
     VLOG(1) << "DeletePersistenceObject begin, request: " << LogHelper::IgnoreSensitive(req);
-    CHECK_FAIL_RETURN_STATUS(persistenceDeleteThreadPool_ != nullptr, StatusCode::K_RUNTIME_ERROR,
-                             "Persistence delete thread pool is not initialized");
     int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, StatusCode::K_RPC_DEADLINE_EXCEEDED,
                              "DeletePersistenceObject rpc timeout before scheduling task");
+    if (!ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc)) {
+        // Avoid std::future::wait_for in a brpc bthread handler.
+        auto rc = DeletePersistenceObjectImpl(req);
+        if (GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() <= 0) {
+            RETURN_STATUS_LOG_ERROR(
+                StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                FormatString("DeletePersistenceObject finished after rpc deadline, objectKey=%s", req.object_key()));
+        }
+        VLOG(1) << "DeletePersistenceObject end, rc: " << rc.ToString();
+        return rc;
+    }
+    CHECK_FAIL_RETURN_STATUS(persistenceDeleteThreadPool_ != nullptr, StatusCode::K_RUNTIME_ERROR,
+                             "Persistence delete thread pool is not initialized");
     auto traceID = Trace::Instance().GetTraceID();
     auto future = persistenceDeleteThreadPool_->Submit([this, req, traceID]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);

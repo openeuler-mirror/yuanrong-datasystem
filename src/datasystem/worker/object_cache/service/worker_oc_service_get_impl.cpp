@@ -69,6 +69,7 @@
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/common/util/meta_route_tool.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/worker_topology_references.h"
@@ -1763,6 +1764,7 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
     auto dispatchTime = std::chrono::steady_clock::now();
     Status lastRc;
     size_t idx = 0;
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
     for (auto &item : objectKeysByMaster) {
         BatchQueryMetaResult &result = batchQueryResults[idx++];
         auto *itemPtr = &item;
@@ -1780,7 +1782,7 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
             }
             return rc;
         };
-        if (idx == objectKeysByMaster.size()) {
+        if (!useThreadPoolFanout || idx == objectKeysByMaster.size()) {
             auto rc = query();
             lastRc = rc.IsError() ? rc : lastRc;
         } else {
@@ -1967,7 +1969,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereParallelly(const std::vecto
                                                                 std::set<ReadKey> &needRetryIds)
 {
     const size_t kMinParallelRequests = 2;
-    if (queryMetas.size() < kMinParallelRequests) {
+    if (queryMetas.size() < kMinParallelRequests || !ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc)) {
         return GetObjectsFromAnywhereSerially(queryMetas, request, payloads, lockedEntries, failedIds, needRetryIds);
     }
     Status lastRc = Status::OK();
@@ -3183,6 +3185,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     std::shared_ptr<GetRequest> fakeRequest = nullptr;
     auto dispatchTime = std::chrono::steady_clock::now();
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
     for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
@@ -3203,7 +3206,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
             }
             return lastRc;
         };
-        if (index + 1 == groupedQueryMetas.size()) {
+        if (!useThreadPoolFanout || index + 1 == groupedQueryMetas.size()) {
             auto rc = func();
             if (rc.IsError()) {
                 LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << rc.ToString();

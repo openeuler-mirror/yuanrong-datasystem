@@ -23,6 +23,7 @@
 #include <vector>
 #include <numeric>
 
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/latency_phase.h"
@@ -43,6 +44,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/util/validator.h"
@@ -300,6 +302,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED, "RPC deadline exceeded");
     auto dispatchTime = std::chrono::steady_clock::now();
+    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
     for (size_t index = 0; index < tasks.size(); ++index) {
         auto *infos = tasks[index].infos;
         const auto address = *tasks[index].address;
@@ -310,7 +313,7 @@ Status WorkerOcServiceGetImpl::GetObjectsFromAnywhereBatched(std::vector<master:
             return BatchGetObjectFromRemoteOnLock(address, *infos, request, tempSuccessIds[index],
                                                  tempNeedRetryIds[index], tempFailedIds[index], tempFailedMetas[index]);
         };
-        if (index + 1 == tasks.size()) {
+        if (!useThreadPoolFanout || index + 1 == tasks.size()) {
             auto rc = func();
             LOG_IF_ERROR(rc, "BatchGetObjectFromRemoteOnLock failed");
             mergeLastRc(rc);
