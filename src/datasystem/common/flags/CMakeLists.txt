@@ -14,6 +14,9 @@ set(DYNAMIC_FLAG_CONFIG_LIBS
         nlohmann_json::nlohmann_json)
 
 add_library(dynamic_flag_config STATIC ${DYNAMIC_FLAG_CONFIG_SRCS})
+if (BUILD_WITH_URMA_MOCK)
+    target_compile_definitions(dynamic_flag_config PRIVATE USE_URMA USE_URMA_MOCK)
+endif()
 target_link_libraries(dynamic_flag_config PRIVATE ${DYNAMIC_FLAG_CONFIG_LIBS})
 target_link_libraries(dynamic_flag_config PRIVATE ds_flags)
 

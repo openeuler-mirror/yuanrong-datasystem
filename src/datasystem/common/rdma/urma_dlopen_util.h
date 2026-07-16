@@ -19,9 +19,13 @@
 #ifndef DATASYSTEM_COMMON_RDMA_URMA_DLOPEN_UTIL_H
 #define DATASYSTEM_COMMON_RDMA_URMA_DLOPEN_UTIL_H
 
+#ifdef USE_URMA_MOCK
+#include "datasystem/common/urma_mock/abi/urma_abi_compat.h"
+#else
 #include <ub/umdk/urma/urma_api.h>
 #include <ub/umdk/urma/urma_perf.h>
 #include <ub/umdk/urma/urma_ubagg.h>
+#endif
 
 // Init API - must call before using any URMA functions via dlopen
 namespace datasystem {

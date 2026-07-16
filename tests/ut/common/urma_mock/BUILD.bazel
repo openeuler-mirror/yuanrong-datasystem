@@ -1,0 +1,107 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+URMA_MOCK_COMPATIBLE_WITH = select({
+    "//:enable_urma_mock": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+ds_cc_test(
+    name = "urma_mock_structure_test",
+    srcs = ["urma_mock_structure_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    data = [
+        "//tests/support/datasystem/common/urma_mock:structure_sources",
+    ],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_mock_backend_test",
+    srcs = ["urma_mock_backend_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_mock_thread_pool_test",
+    srcs = ["urma_mock_thread_pool_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_mock_uds_transport_test",
+    srcs = ["urma_mock_uds_transport_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_mock_uds_memfd_transport_test",
+    srcs = ["urma_mock_uds_memfd_transport_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_mock_dispatch_test",
+    srcs = ["urma_mock_dispatch_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rdma:urma_dlopen_util",
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_mock_inject_cqe_test",
+    srcs = ["urma_mock_inject_cqe_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_mock_inject_event_test",
+    srcs = ["urma_mock_inject_event_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)
+
+ds_cc_test(
+    name = "urma_mock_inject_handshake_test",
+    srcs = ["urma_mock_inject_handshake_test.cpp"],
+    copts = ["-DUSE_URMA_MOCK"],
+    target_compatible_with = URMA_MOCK_COMPATIBLE_WITH,
+    deps = [
+        "//tests/support/datasystem/common/urma_mock:urma_mock_backend",
+    ],
+)

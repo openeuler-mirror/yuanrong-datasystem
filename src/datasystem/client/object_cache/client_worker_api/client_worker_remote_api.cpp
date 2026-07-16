@@ -102,7 +102,9 @@ void FillMultiPublishObjectInfo(const std::shared_ptr<ObjectBufferInfo> &bufferI
     }
     objectInfoPb.set_object_key(bufferInfo->objectKey);
     objectInfoPb.set_data_size(bufferInfo->dataSize);
-    objectInfoPb.set_shm_id(bufferInfo->shmId);
+    if (!IsUrmaFallbackPayload(bufferInfo)) {
+        objectInfoPb.set_shm_id(bufferInfo->shmId);
+    }
     req.mutable_object_info()->Add(std::move(objectInfoPb));
 }
 

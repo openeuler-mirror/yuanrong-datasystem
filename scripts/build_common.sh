@@ -30,6 +30,7 @@ function init_default_opts() {
 
   # For communication layer
   export BUILD_WITH_URMA="off"
+  export BUILD_WITH_URMA_MOCK="off"
   export DOWNLOAD_UB="off"
   export BUILD_WITH_RDMA="off"
 
@@ -107,10 +108,31 @@ function is_on() {
   fi
 }
 
+function has_urma_runtime_lib() {
+  if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -Eq 'liburma\.so' \
+    && ldconfig -p 2>/dev/null | grep -Eq 'liburma_ubagg\.so'; then
+    return 0
+  fi
+  [[ -e /usr/lib64/liburma.so || -e /usr/lib64/liburma.so.0 || -e /usr/lib/liburma.so || -e /usr/lib/liburma.so.0 ]] \
+    && [[ -e /usr/lib64/urma/liburma_ubagg.so || -e /usr/lib64/urma/liburma_ubagg.so.0 ]]
+}
+
 function normalize_build_options() {
   if is_on "${BUILD_PIPLN_H2D}" && [[ "${BUILD_SYSTEM}" == "cmake" ]] && ! is_on "${BUILD_WITH_URMA}"; then
     echo -e "-- [INFO] Pipeline H2D requires URMA. Enabling BUILD_WITH_URMA because -T on was specified."
     BUILD_WITH_URMA="on"
+  fi
+  if [[ "${BUILD_SYSTEM}" == "cmake" && "${RUN_TESTS}" != "off" ]] && is_on "${BUILD_WITH_URMA}" \
+    && ! is_on "${BUILD_WITH_URMA_MOCK}" && ! has_urma_runtime_lib; then
+    echo -e "-- [INFO] URMA runtime libraries are not available for tests. Enabling BUILD_WITH_URMA_MOCK instead."
+    BUILD_WITH_URMA="off"
+    BUILD_WITH_URMA_MOCK="on"
+  fi
+  # BUILD_WITH_URMA_MOCK and BUILD_WITH_URMA are mutually exclusive.
+  if is_on "${BUILD_WITH_URMA_MOCK}" && is_on "${BUILD_WITH_URMA}"; then
+    echo -e "-- [Error] -U (BUILD_WITH_URMA_MOCK) and -M (BUILD_WITH_URMA) are mutually exclusive."
+    echo -e "${USAGE}"
+    exit 1
   fi
 }
 

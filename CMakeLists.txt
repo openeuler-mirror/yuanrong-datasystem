@@ -173,6 +173,9 @@ add_subdirectory(dsbench)
 
 if (WITH_TESTS)
     enable_testing()
+    if (BUILD_WITH_URMA_MOCK)
+        add_subdirectory(tests/support)
+    endif()
     add_subdirectory(tests)
 endif ()
 

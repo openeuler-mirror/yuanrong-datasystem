@@ -20,7 +20,9 @@
 #include "datasystem/common/rdma/urma_manager.h"
 
 #include <sys/mman.h>
+#ifndef USE_URMA_MOCK
 #include <ub/umdk/urma/urma_opcode.h>
+#endif
 #include <algorithm>
 #include <chrono>
 #include <cstdint>

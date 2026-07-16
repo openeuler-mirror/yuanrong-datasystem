@@ -27,14 +27,15 @@ CREDENTIAL_KEY_RE = re.compile(
     r"(?i)\b(?P<key>password|passwd|pwd|secret|token|access[_ -]?key|secret[_ -]?key|"
     r"system[_ -]?access[_ -]?key|system[_ -]?secret[_ -]?key|"
     r"tenant[_ -]?access[_ -]?key|tenant[_ -]?secret[_ -]?key|ak|sk|"
-    r"username|user|account|login|tenant|namespace)\s*[:=]"
+    r"username|user|account|login|tenant|namespace)\s*(?::|=(?!=))"
 )
 SAFE_CREDENTIAL_RHS_RE = re.compile(
     r"(?x)"
     r"(?:"
-    r"None|null|''|\"\"|"
+    r"None|null|''|\"\"|0[xX][0-9A-Fa-f]+(?:ULL|UL|U|LL|L)?|\d+(?:ULL|UL|U|LL|L)?|"
     r"<[^>]+>|"
     r"[A-Z][A-Z0-9_]+|"
+    r"k[A-Z][A-Za-z0-9_]*|"
     r"[A-Za-z_][A-Za-z0-9_]*(?:\s*\([^)]*\)|\[[^\]]+\]|\.[A-Za-z_][A-Za-z0-9_]*)+"
     r")"
 )
@@ -70,6 +71,12 @@ SAFE_IP_RE = re.compile(
     r"255\.255\.255\.255"  # broadcast
     r")$"
 )
+SAFE_ENDPOINT_HOST_RE = re.compile(
+    r"(?i)^(?:localhost|(?:[a-z0-9-]*)(?:mock|test|example|peer|dummy|fake)(?:[a-z0-9-]*))$"
+)
+HOST_PORT_RE = re.compile(
+    r"\b(?P<host>(?=[a-z0-9.-]*[a-z])[a-z0-9][a-z0-9.-]{1,253}):(?P<port>\d{2,5})\b", re.IGNORECASE
+)
 
 
 def _is_safe_ip_or_endpoint(text: str) -> bool:
@@ -77,6 +84,9 @@ def _is_safe_ip_or_endpoint(text: str) -> bool:
     for token in re.findall(r"[\w.]+(?::\d+)?", text):
         ip_only = token.split(":")[0]
         if SAFE_IP_RE.match(ip_only):
+            return True
+    for match in HOST_PORT_RE.finditer(text):
+        if SAFE_ENDPOINT_HOST_RE.match(match.group("host")):
             return True
     return False
 
@@ -87,7 +97,7 @@ SENSITIVE_LINE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(
             r"\b(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}"
             r"(?::\d{1,5})?\b|"
-            r"\b[a-z0-9][a-z0-9.-]{1,253}:\d{2,5}\b",
+            r"\b(?=[a-z0-9.-]*[a-z])[a-z0-9][a-z0-9.-]{1,253}:\d{2,5}\b",
             re.IGNORECASE,
         ),
     ),
@@ -147,14 +157,40 @@ def _normalize_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
+def _index_inside_quoted_string(line: str, index: int) -> bool:
+    quote: str | None = None
+    escaped = False
+    for i, ch in enumerate(line):
+        if i >= index:
+            return quote is not None
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if quote is None and ch in {"'", '"'}:
+            quote = ch
+        elif quote == ch:
+            quote = None
+    return False
+
+
 def _credential_assignment_is_sensitive(line: str) -> bool:
+    stripped_line = line.strip()
     for match in CREDENTIAL_KEY_RE.finditer(line):
+        if _index_inside_quoted_string(line, match.start()):
+            continue
         raw_value = line[match.end():].strip()
         if not raw_value:
             continue
+        if stripped_line.startswith(("//", "/*", "*")) and "=" not in line[match.start():match.end()]:
+            continue
+        if stripped_line.startswith(("//", "/*", "*")) and re.match(r"0[xX][0-9A-Fa-f]+|\d+", raw_value):
+            continue
 
         value = raw_value.split(",", maxsplit=1)[0].strip()
-        trimmed_value = value.rstrip(")]}")
+        trimmed_value = value.rstrip(")]};")
         if not value:
             continue
 

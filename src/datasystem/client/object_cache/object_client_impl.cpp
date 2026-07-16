@@ -3926,8 +3926,6 @@ static std::vector<UBGetBatch> BuildUBGetBatches(const std::vector<ObjMetaInfo> 
                 batches.push_back(std::move(currentBatch));
                 currentBatch = UBGetBatch{};
             }
-            // Oversized key gets its own TCP-only batch.
-            // Pass actual size so PrepareUrmaBuffer rejects it without a redundant GetObjMetaInfo RPC.
             UBGetBatch tcpBatch;
             tcpBatch.indices.push_back(i);
             tcpBatch.totalSize = objSize;
@@ -3967,6 +3965,19 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
     Status lastError;
 
     for (const auto &batch : batches) {
+        if (batch.indices.size() == 1 && objMetas[batch.indices[0]].objSize > ubMaxGetSize) {
+            const size_t idx = batch.indices[0];
+            Status rc = GetOversizedBufferFromWorkerByChunks(workerApi, getParam, idx, objMetas[idx].objSize,
+                                                             ubMaxGetSize, buffers[idx], requestTransportKind);
+            if (rc.IsError()) {
+                LOG(WARNING) << "Chunked Get failed for " << objectKeys[idx] << ": " << rc.ToString();
+                lastError = rc;
+                continue;
+            }
+            totalSuccessCount++;
+            continue;
+        }
+
         std::vector<std::string> subKeys;
         subKeys.reserve(batch.indices.size());
         for (size_t idx : batch.indices) {
@@ -4031,6 +4042,113 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
     }
     totalPoint.Record();
     return lastError.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker") : lastError;
+}
+
+Status ObjectClientImpl::GetOversizedBufferFromWorkerByChunks(std::shared_ptr<IClientWorkerApi> workerApi,
+                                                              const GetParam &getParam, size_t objectIndex,
+                                                              uint64_t objectSize, uint64_t ubMaxGetSize,
+                                                              std::shared_ptr<Buffer> &buffer,
+                                                              AccessTransportKind *requestTransportKind)
+{
+    CHECK_FAIL_RETURN_STATUS(ubMaxGetSize > 0, K_INVALID, "UB max get size is 0");
+    const auto &objectKey = getParam.objectKeys[objectIndex];
+    OffsetInfo offsetInfo;
+    if (!getParam.readParams.empty()) {
+        CHECK_FAIL_RETURN_STATUS(
+            objectIndex < getParam.readParams.size(), K_INVALID,
+            FormatString("Read parameter index %zu is out of range %zu", objectIndex, getParam.readParams.size()));
+        offsetInfo = OffsetInfo(getParam.readParams[objectIndex].offset, getParam.readParams[objectIndex].size);
+    } else {
+        offsetInfo = OffsetInfo(0, objectSize);
+    }
+    offsetInfo.AdjustReadSize(objectSize);
+    FullParam param;
+    auto bufferInfo = MakeObjectBufferInfo(objectKey, nullptr, offsetInfo.readSize, 0, param, false, 0);
+    std::shared_ptr<Buffer> mergedBuffer;
+    RETURN_IF_NOT_OK(Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), mergedBuffer));
+
+    uint64_t copiedSize = 0;
+    uint32_t firstVersion = 0;
+    bool hasVersion = false;
+    while (copiedSize < offsetInfo.readSize) {
+        uint64_t chunkSize = std::min(ubMaxGetSize, offsetInfo.readSize - copiedSize);
+        std::shared_ptr<Buffer> chunkBuffer;
+        uint32_t chunkVersion = 0;
+        RETURN_IF_NOT_OK(GetOversizedBufferChunk(workerApi, getParam, objectKey, offsetInfo.readOffset + copiedSize,
+                                                 chunkSize, chunkBuffer, chunkVersion, requestTransportKind));
+        if (!hasVersion) {
+            firstVersion = chunkVersion;
+            hasVersion = true;
+        } else {
+            CHECK_FAIL_RETURN_STATUS(firstVersion == chunkVersion, K_RUNTIME_ERROR,
+                                     FormatString("Object %s version changed during chunked Get, first %u, current %u",
+                                                  objectKey, firstVersion, chunkVersion));
+        }
+        uint64_t realChunkSize = 0;
+        RETURN_IF_NOT_OK(CopyOversizedBufferChunk(objectKey, offsetInfo.readSize, copiedSize, chunkBuffer, mergedBuffer,
+                                                  realChunkSize));
+        copiedSize += realChunkSize;
+    }
+    GetBufferInfo(mergedBuffer)->version = firstVersion;
+    buffer = std::move(mergedBuffer);
+    return Status::OK();
+}
+
+Status ObjectClientImpl::GetOversizedBufferChunk(std::shared_ptr<IClientWorkerApi> workerApi, const GetParam &getParam,
+                                                 const std::string &objectKey, uint64_t offset, uint64_t chunkSize,
+                                                 std::shared_ptr<Buffer> &chunkBuffer, uint32_t &version,
+                                                 AccessTransportKind *requestTransportKind)
+{
+    ReadParam readParam{ objectKey, offset, chunkSize };
+    std::vector<std::string> subKeys{ objectKey };
+    std::vector<ReadParam> subReadParams{ readParam };
+    AccessTransportKind chunkTransportKind = AccessTransportKind::SHM;
+    GetParam subGetParam{ .objectKeys = subKeys,
+                          .subTimeoutMs = getParam.subTimeoutMs,
+                          .readParams = subReadParams,
+                          .queryL2Cache = getParam.queryL2Cache,
+                          .isRH2DSupported = getParam.isRH2DSupported,
+                          .ubTotalSize = chunkSize,
+                          .ubMetaResolved = true,
+                          .ubGetObjMetaElapsedMs = getParam.ubGetObjMetaElapsedMs,
+                          .actualTransportKind = &chunkTransportKind };
+    GetRspPb rsp;
+    std::vector<RpcMessage> payloads;
+    RETURN_IF_NOT_OK(workerApi->Get(subGetParam, version, rsp, payloads));
+    if (requestTransportKind != nullptr) {
+        *requestTransportKind = MergeTransportKind(*requestTransportKind, chunkTransportKind);
+    }
+
+    std::vector<std::shared_ptr<Buffer>> chunkBuffers(1);
+    std::vector<std::string> failedObjectKey;
+    RETURN_IF_NOT_OK(ProcessGetResponse(subKeys, subReadParams, rsp, version, payloads, chunkBuffers,
+                                        failedObjectKey));
+    CHECK_FAIL_RETURN_STATUS(failedObjectKey.empty() && chunkBuffers[0] != nullptr, K_NOT_FOUND,
+                             FormatString("Cannot get chunk of object %s, offset %zu, size %zu", objectKey, offset,
+                                          chunkSize));
+    chunkBuffer = std::move(chunkBuffers[0]);
+    return Status::OK();
+}
+
+Status ObjectClientImpl::CopyOversizedBufferChunk(const std::string &objectKey, uint64_t objectSize, uint64_t offset,
+                                                  const std::shared_ptr<Buffer> &chunkBuffer,
+                                                  std::shared_ptr<Buffer> &buffer, uint64_t &copiedSize)
+{
+    auto chunkBufferSize = chunkBuffer->GetSize();
+    CHECK_FAIL_RETURN_STATUS(chunkBufferSize >= 0, K_RUNTIME_ERROR,
+                             FormatString("Chunk size is negative for object %s", objectKey));
+    uint64_t realChunkSize = static_cast<uint64_t>(chunkBufferSize);
+    CHECK_FAIL_RETURN_STATUS(realChunkSize > 0, K_RUNTIME_ERROR,
+                             FormatString("Chunk size is zero for object %s, offset %zu", objectKey, offset));
+    CHECK_FAIL_RETURN_STATUS(realChunkSize <= objectSize - offset, K_RUNTIME_ERROR,
+                             FormatString("Chunk size %zu overflows object %s remaining size %zu", realChunkSize,
+                                          objectKey, objectSize - offset));
+    RETURN_IF_NOT_OK(::datasystem::MemoryCopy(static_cast<uint8_t *>(buffer->MutableData()) + offset,
+                                              objectSize - offset,
+                                              static_cast<const uint8_t *>(chunkBuffer->ImmutableData()),
+                                              realChunkSize, memoryCopyThreadPool_));
+    copiedSize = realChunkSize;
+    return Status::OK();
 }
 #endif
 

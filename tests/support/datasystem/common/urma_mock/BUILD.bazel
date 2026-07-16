@@ -1,0 +1,89 @@
+package(
+    default_visibility=[
+        "//src/datasystem:__subpackages__",
+        "//tests:__subpackages__",
+    ]
+)
+
+filegroup(
+    name = "structure_sources",
+    srcs = glob([
+        "**/*.cpp",
+        "**/*.h",
+    ]),
+    visibility = ["//tests:__subpackages__"],
+)
+
+# URMA ABI-compatible backend for dev/CI without liburma.so.
+cc_library(
+    name = "urma_mock_backend",
+    srcs = [
+        "abi/mock_abi.cpp",
+        "abi/mock_dlopen_resolver.cpp",
+        "transport/uds_endpoint_service.cpp",
+        "registry/import_endpoint_registry.cpp",
+        "segment/memfd_resolver.cpp",
+        "segment/segment_identity.cpp",
+        "segment/segment_memory.cpp",
+        "segment/segment_endpoint_registry.cpp",
+        "segment/segment_view.cpp",
+        "transport/uds_transport.cpp",
+        "inject/fault_inject.cpp",
+        "mock_registry.cpp",
+        "urma_mock_backend.cpp",
+        "urma_mock_backend_ops.cpp",
+        "objects/mock_context.cpp",
+        "objects/mock_device.cpp",
+        "objects/mock_jfc.cpp",
+        "objects/mock_jetty.cpp",
+        "objects/mock_seg.cpp",
+        "objects/mock_tjetty.cpp",
+        "post_send/mock_thread_pool.cpp",
+        "post_send/post_send_wr.cpp",
+    ],
+    hdrs = [
+        "mock_registry.h",
+        "urma_mock_backend.h",
+        "abi/mock_abi.h",
+        "abi/mock_dlopen_resolver.h",
+        "transport/uds_endpoint_service.h",
+        "registry/import_endpoint_registry.h",
+        "segment/memfd_resolver.h",
+        "segment/segment_identity.h",
+        "segment/segment_memory.h",
+        "segment/segment_endpoint_registry.h",
+        "segment/segment_view.h",
+        "transport/uds_transport.h",
+        "inject/fault_inject.h",
+        "objects/mock_context.h",
+        "objects/mock_device.h",
+        "objects/mock_jfc.h",
+        "objects/mock_jetty.h",
+        "objects/mock_seg.h",
+        "objects/mock_tjetty.h",
+        "post_send/mock_thread_pool.h",
+        "post_send/post_send_wr.h",
+    ],
+    includes = [
+        "../../..",
+        "../../../../../src",
+    ],
+    copts = ["-DUSE_URMA_MOCK"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/urma_mock:urma_abi_compat",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:numa_util",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:meta_transport_cc_proto",
+        "@securec",
+    ],
+    target_compatible_with = select({
+        "//:enable_urma_mock": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    alwayslink = True,
+)

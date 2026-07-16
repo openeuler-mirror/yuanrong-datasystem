@@ -69,6 +69,11 @@ function _bazel_build_configs() {
     echo "--config=urma"
   fi
 
+  # URMA mock backend (mutually exclusive with BUILD_WITH_URMA, enforced in cmake path)
+  if is_on "${BUILD_WITH_URMA_MOCK}"; then
+    echo "--config=urma_mock"
+  fi
+
   # Test config
   if [[ "${test_included}" != "no" && "${RUN_TESTS}" != "off" ]]; then
     echo "--config=test"

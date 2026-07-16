@@ -93,6 +93,7 @@ static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
 static const char *const EXIST_REDIRECTS_FIELD = "exist_redirects";
 static const char *const EXIST_REDIRECT_ADDRESS_FIELD = "address";
 static const char *const EXIST_REDIRECT_KEYS_FIELD = "keys";
+static constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 
 static constexpr double US_PER_MS = 1000.0;
 
@@ -1218,13 +1219,15 @@ Status WorkerOcServiceGetImpl::PrepareGetRequestHelper(const std::string &srcIpA
         return Status::OK();
     }
     reqPb.set_data_size(dataSize);
-    INJECT_POINT("WorkerOcServiceGetImpl.PrepareGetRequestHelper.changeSize", [&reqPb](uint64_t testDataSize) {
-        reqPb.set_data_size(testDataSize);
-        return Status::OK();
-    });
     // Allocate the memory for the remote worker to urma_write.
     // Or early distribute memory for general code path.
     const auto &objectKey = objectKV.GetObjKey();
+    if (objectKey.rfind(URMA_WARMUP_KEY_PREFIX, 0) != 0) {
+        INJECT_POINT("WorkerOcServiceGetImpl.PrepareGetRequestHelper.changeSize", [&reqPb](uint64_t testDataSize) {
+            reqPb.set_data_size(testDataSize);
+            return Status::OK();
+        });
+    }
     auto &entry = objectKV.GetObjEntry();
     auto metaSz = entry->GetMetadataSize();
     auto shmUnit = entry->GetShmUnit();

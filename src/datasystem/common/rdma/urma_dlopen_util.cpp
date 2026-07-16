@@ -24,15 +24,66 @@
 
 #include "datasystem/common/log/log.h"
 
+#ifdef USE_URMA_MOCK
+struct UrmaMockDlopenOps {
+    void *(*handle)();
+    bool (*init)();
+    void (*cleanup)();
+    void *(*symbol)(const char *name);
+};
+
+extern "C" const UrmaMockDlopenOps *ds_urma_mock_dlopen_ops() __attribute__((weak));
+#endif
+
 namespace {
 bool g_init = false;
 void *g_urma = nullptr;
 void *g_urmaUbAgg = nullptr;
 
+#ifdef USE_URMA_MOCK
+const UrmaMockDlopenOps *GetMockOps()
+{
+    if (ds_urma_mock_dlopen_ops == nullptr) {
+        LOG(ERROR) << "[UrmaDlopen] URMA_MOCK provider is not linked";
+        return nullptr;
+    }
+    auto *ops = ds_urma_mock_dlopen_ops();
+    if (ops == nullptr || ops->handle == nullptr || ops->init == nullptr || ops->cleanup == nullptr
+        || ops->symbol == nullptr) {
+        LOG(ERROR) << "[UrmaDlopen] URMA_MOCK provider ops are incomplete";
+        return nullptr;
+    }
+    return ops;
+}
+
+bool EnsureMockUrmaDlopenInitialized()
+{
+    if (g_init) {
+        return true;
+    }
+    auto *ops = GetMockOps();
+    if (ops == nullptr) {
+        return false;
+    }
+    LOG(INFO) << "[UrmaDlopen] URMA_MOCK mode: using mock dispatch table";
+    g_urma = ops->handle();
+    g_urmaUbAgg = g_urma;
+    if (!ops->init()) {
+        LOG(ERROR) << "[UrmaDlopen] URMA_MOCK provider init failed";
+        g_urma = nullptr;
+        g_urmaUbAgg = nullptr;
+        return false;
+    }
+    g_init = true;
+    return true;
+}
+#else
 const char *urmaLibs[] = { "liburma.so.0", "liburma.so" };
 const char *urmaUbAggLibs[] = { "/usr/lib64/urma/liburma_ubagg.so.0", "/usr/lib64/urma/liburma_ubagg.so" };
+#endif
 enum class UrmaLibType { URMA, UB_AGG };
 
+#ifndef USE_URMA_MOCK
 template <size_t N>
 void *TryLoadLib(const char *const (&candidates)[N])
 {
@@ -52,10 +103,26 @@ void *TryLoadLib(const char *const (&candidates)[N])
     }
     return handle;
 }
+#endif
 
 template <UrmaLibType LibType>
 void *LoadUrmaSymbol(const char *name)
 {
+#ifdef USE_URMA_MOCK
+    (void)LibType;
+    if (!EnsureMockUrmaDlopenInitialized()) {
+        return nullptr;
+    }
+    auto *ops = GetMockOps();
+    if (ops == nullptr) {
+        return nullptr;
+    }
+    auto *mockSym = ops->symbol(name);
+    if (mockSym == nullptr) {
+        LOG(ERROR) << "[UrmaDlopen] mock symbol not found: " << name;
+    }
+    return mockSym;
+#else
     void *handle = (LibType == UrmaLibType::URMA) ? g_urma : g_urmaUbAgg;
     if (!handle) {
         const char *libName = (LibType == UrmaLibType::URMA) ? "liburma" : "liburma_ubagg";
@@ -67,6 +134,7 @@ void *LoadUrmaSymbol(const char *name)
         LOG(ERROR) << "[UrmaDlopen] dlsym failed for " << name << ": " << dlerror();
     }
     return sym;
+#endif
 }
 
 template <typename Fn, UrmaLibType LibType = UrmaLibType::URMA>
@@ -124,6 +192,9 @@ bool Init()
     if (g_init) {
         return true;
     }
+#ifdef USE_URMA_MOCK
+    return EnsureMockUrmaDlopenInitialized();
+#else
     g_urma = TryLoadLib(urmaLibs);
     if (!g_urma) {
         LOG(ERROR) << "[UrmaDlopen] Failed to load liburma: " << dlerror();
@@ -138,6 +209,7 @@ bool Init()
     }
     g_init = true;
     return true;
+#endif
 }
 
 bool IsAvailable()
@@ -147,6 +219,14 @@ bool IsAvailable()
 
 void Cleanup()
 {
+#ifdef USE_URMA_MOCK
+    auto *ops = GetMockOps();
+    if (ops != nullptr) {
+        ops->cleanup();
+    }
+    g_urma = nullptr;
+    g_urmaUbAgg = nullptr;
+#else
     if (g_urma) {
         dlclose(g_urma);
         g_urma = nullptr;
@@ -155,6 +235,7 @@ void Cleanup()
         dlclose(g_urmaUbAgg);
         g_urmaUbAgg = nullptr;
     }
+#endif
     g_init = false;
 }
 

@@ -15,7 +15,7 @@ set(URMA_DEPEND_LIBS
 set(RDMA_DEPEND_LIBS
     common_rdma_util)
 set(HCCS_EXTRA_LIBS)
-if (BUILD_WITH_URMA) 
+if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
     list(APPEND URMA_SRCS
         urma_manager.cpp
         urma_async_event_handler.cpp
@@ -26,10 +26,6 @@ if (BUILD_WITH_URMA)
     list(APPEND URMA_DEPEND_LIBS dl)
     list(APPEND URMA_DEPEND_LIBS ${TBB_LIBRARY})
     list(APPEND URMA_DEPEND_LIBS string_ref)
-endif()
-
-if (BUILD_WITH_URMA OR BUILD_HETERO)
-    list(APPEND URMA_DEPEND_LIBS common_shared_memory)
 endif()
 
 if (BUILD_WITH_URMA OR BUILD_HETERO)
@@ -69,6 +65,12 @@ if (BUILD_WITH_RDMA)
 endif()
 
 add_library(common_rdma STATIC ${FAST_TRANSPORT_SRCS} ${URMA_SRCS} ${RDMA_SRCS})
+if (BUILD_WITH_URMA)
+    target_compile_definitions(common_rdma PUBLIC USE_URMA)
+endif()
+if (BUILD_WITH_URMA_MOCK)
+    target_compile_definitions(common_rdma PUBLIC USE_URMA USE_URMA_MOCK)
+endif()
 target_link_libraries(common_rdma
     PRIVATE ${URMA_DEPEND_LIBS} ${RDMA_DEPEND_LIBS} meta_transport_protos_client share_memory_protos_client
     PUBLIC ${HCCS_EXTRA_LIBS})

@@ -21,7 +21,7 @@ Usage: bash build.sh [-h] [-r] [-d] [-b cmake|bazel] [-c off/on/html] [-t off|bu
                      [-p on|off] [-S address|thread|undefined|off] [-o <install dir>] [-u <thread_num>]
                      [-B <build_dir>] [-J on|off] [-P on/off] [-G on/off] [-v <version>] [-X on/off|gpu|npu|all] [-e on/off]
                      [-R on/off] [-O on/off] [-I <observability install dir>] [-M off/on] [-T on/off]
-                     [-A on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
+                     [-A on/off] [-U on/off] [-C on/off] [-l <llt_label>] [-i on/off] [-n on/off] [-x on/off]
 
 Options:
     -h Output this help and exit.
@@ -71,6 +71,8 @@ Options:
        Notes for compiling and running with RDMA support:
        1. An RDMA-capable NIC and its driver must be installed and properly configured.
        2. The RDMA userspace libraries (libibverbs, librdmacm) from rdma-core must be installed.
+    -U Build with a local shm+UDS mock URMA backend (no SDK / hardware needed, for dev/CI/coverage).
+       Mutually exclusive with -M. Default: off. Adds the USE_URMA_MOCK compile definition.
 
     For debug code:
     -p Generate perf point logs, choose from: on/off, default: off.
@@ -150,7 +152,7 @@ function main() {
     echo "Can't get logical cpu count, set to default 16"
     logical_cpu_cout=16
   fi
-  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:v:X:R:D:C:M:x:m:T:b:' OPT; do
+  while getopts 'hdro:j:t:u:c:e:p:s:l:i:n:A:B:F:S:J:G:P:v:X:R:D:C:M:U:x:m:T:b:' OPT; do
     case "${OPT}" in
     d)
       BUILD_TYPE="Debug"
@@ -253,6 +255,11 @@ function main() {
     M)
       check_on_off "${OPTARG}" M
       BUILD_WITH_URMA="${OPTARG}"
+      ;;
+
+    U)
+      check_on_off "${OPTARG}" U
+      BUILD_WITH_URMA_MOCK="${OPTARG}"
       ;;
 
     D)

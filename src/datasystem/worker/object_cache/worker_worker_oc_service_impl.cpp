@@ -73,9 +73,8 @@ constexpr double US_PER_MS = 1000.0;
 
 bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
 {
-    return req.has_urma_info() && req.object_key().rfind(URMA_WARMUP_KEY_PREFIX, 0) == 0 && !req.try_lock()
-           && req.version() == 0 && req.read_offset() == 0 && req.read_size() == URMA_WARMUP_OBJECT_SIZE
-           && req.data_size() == URMA_WARMUP_OBJECT_SIZE && req.comm_id().empty();
+    return req.has_urma_info() && req.object_key().rfind(URMA_WARMUP_KEY_PREFIX, 0) == 0 && req.read_offset() == 0
+           && req.read_size() == URMA_WARMUP_OBJECT_SIZE && req.data_size() == URMA_WARMUP_OBJECT_SIZE;
 }
 
 bool IsCoordinationBackendAvailable(EtcdStore *etcdStore, cluster::ICoordinationBackend *coordinationBackend)
@@ -390,7 +389,7 @@ Status WorkerWorkerOCServiceImpl::GatherWrite(uint64_t subIndex, AggregateInfo &
         LOG_IF_ERROR(rc, "GatherWrite failed, all objects will fallback to payload");
         // Set empty subkeys and empty payload, and get failed payload in objectFallbackPayload
         loc.kps.emplace_back(loc.subIndex, std::make_pair(std::move(subKeys), std::vector<RpcMessage>()));
-        for (uint64_t i = startPos; i < startPos + info.batchReqSize[subIndex]; ++i) {
+        for (uint64_t i = 0; i < info.batchReqSize[subIndex]; ++i) {
             loc.respPbs[i].set_data_source(datasystem::DataTransferSource::DATA_IN_PAYLOAD);
             if (!FLAGS_enable_transport_fallback) {
                 loc.respPbs[i].mutable_error()->set_error_code(rc.GetCode());
@@ -423,6 +422,21 @@ Status WorkerWorkerOCServiceImpl::PrepareBatchRh2dContext(const GetObjectRemoteR
     return Status::OK();
 }
 
+bool WorkerWorkerOCServiceImpl::TryCompleteMissingUrmaWarmup(const GetObjectRemoteReqPb &req,
+                                                             GetObjectRemoteRspPb &rsp)
+{
+    if (!IsUrmaWarmupRequest(req)) {
+        return false;
+    }
+    auto status = ocClientWorkerSvc_->objectTable_->Contains(req.object_key());
+    if (status.GetCode() != StatusCode::K_NOT_FOUND) {
+        return false;
+    }
+    rsp.mutable_error()->set_error_code(K_OK);
+    rsp.set_data_source(DataTransferSource::DATA_ALREADY_TRANSFERRED);
+    return true;
+}
+
 Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                          std::vector<RpcMessage> &payload, bool blocking,
                                                          std::vector<uint64_t> &eventKeys,
@@ -433,9 +447,14 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(const GetObjectRemoteRe
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_HANDLER);
     const std::string &objectKey = req.object_key();
     const std::string &requestId = req.request_id();
-    INJECT_POINT("worker.worker_worker_remote_get_sleep");
-    INJECT_POINT("worker.worker_worker_remote_get_failure");
     CHECK_FAIL_RETURN_STATUS(!objectKey.empty(), K_INVALID, "objectKey is empty.");
+    if (TryCompleteMissingUrmaWarmup(req, rsp)) {
+        return Status::OK();
+    }
+    if (!IsUrmaWarmupRequest(req)) {
+        INJECT_POINT("worker.worker_worker_remote_get_sleep");
+        INJECT_POINT("worker.worker_worker_remote_get_failure");
+    }
     Status status = GetObjectRemoteImpl(req, rsp, payload, blocking, eventKeys, batchPtr, batchRootInfo,
                                         fallbackStatus, batchRh2dContext, isQueryAndGet);
     if (status.GetCode() == K_INVALID || status.GetCode() == K_NOT_FOUND) {

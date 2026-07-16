@@ -65,6 +65,10 @@ ds_cc_library(
         "dynamic_config_updater.cpp",
         "dynamic_flag_config.cpp",
     ],
+    copts = select({
+        "//:enable_urma_mock": ["-DUSE_URMA", "-DUSE_URMA_MOCK"],
+        "//conditions:default": [],
+    }),
     visibility = [
         "//src/datasystem:__subpackages__",
         "//tests:__subpackages__",

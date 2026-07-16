@@ -34,8 +34,12 @@
 #include <vector>
 #include <tbb/concurrent_hash_map.h>
 
+#ifdef USE_URMA_MOCK
+#include "datasystem/common/urma_mock/abi/urma_abi_compat.h"
+#else
 #include <ub/umdk/urma/urma_api.h>
 #include <ub/umdk/urma/urma_ubagg.h>
+#endif
 
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_info.h"

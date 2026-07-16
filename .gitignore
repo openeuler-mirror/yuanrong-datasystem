@@ -86,6 +86,8 @@ false
 
 # ai context
 docs/agent
+docs/superpowers/
+.bazelversion
 .claude
 plan.md
 
