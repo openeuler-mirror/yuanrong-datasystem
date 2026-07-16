@@ -91,7 +91,8 @@ cd tests/kvtest
 | `mode` | string | 自动推断 | 运行模式：`"pipeline"` / `"cache"` / `"benchmark"`，不设置时根据其他参数自动推断 |
 | `instance_id` | int | 0 | 实例唯一标识，同一测试中不可重复 |
 | `listen_port` | int | 9000 | HTTP 服务端口（接收通知） |
-| `etcd_address` | string | **必填** | etcd 地址，格式 `ip:port` |
+| `etcd_address` | string | **必填** | etcd 地址，格式 `ip:port`。与 `coordinator_address` 二选一 |
+| `coordinator_address` | string | "" | coordinator 服务发现地址，格式 `ip:port`。设置后使用 `CoordinatorServiceDiscovery` 替代 etcd，此时 `etcd_address` 留空 |
 | `cluster_name` | string | "" | 集群名，多集群环境区分 |
 | `host_id_env_name` | string | "JD_HOST_IP" | Worker IP 环境变量名 |
 | `connect_options.connect_timeout_ms` | int | 1000 | KVClient 连接超时（毫秒） |
@@ -112,6 +113,7 @@ cd tests/kvtest
 | `verify.sample_bytes` | string/int | "4KB" | `level=sample` 时每个采样段长度，支持 KB/MB 后缀 |
 | `verify.sample_step` | string/int | "1MB" | `level=sample` 时采样段起始间隔，支持 KB/MB 后缀 |
 | `verify.fail_op` | bool | false | 校验失败是否让操作计为失败（true=计入 Fail，false=仅记 verify_fail + 日志） |
+| `env` | object | {} | 运行 kvtest 时注入的环境变量，部署时作为 `KEY=value` 前缀加到启动命令前。如 `{"DATASYSTEM_USE_BRPC": "true"}` |
 
 #### Pipeline 模式参数
 
@@ -242,6 +244,9 @@ python3 deploy_client.py gen-config -p ds-worker -n datasystem \
 | `--verify-sample-bytes` | Pipeline/Cache | `level=sample` 时每段长度（默认 `4KB`，支持 KB/MB/GB） |
 | `--verify-sample-step` | Pipeline/Cache | `level=sample` 时采样段间隔（默认 `1MB`，支持 KB/MB/GB） |
 | `--verify-fail-op` | Pipeline/Cache | 校验失败让操作计入 Fail（默认关，仅 `verify_fail`+1 + 告警） |
+| `--enable-local-cache` | 全部 | 启用 SDK 客户端本地缓存（默认 `true`，裸 flag = `true`）。传 `false` 时 Get 走 Transport 层 |
+| `--use-brpc` | 全部 | 使用 brpc RPC 后端：运行 kvtest 时注入 `DATASYSTEM_USE_BRPC=true` 环境变量（默认关，走 ZMQ 后端） |
+| `--coordinator-address` | 全部 | 使用 coordinator 服务发现替代 etcd：写入 `coordinator_address` 并省略 `etcd_address`。优先级高于 `--etcd-address` |
 
 ### 3.4 收集结果
 

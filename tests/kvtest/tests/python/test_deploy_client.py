@@ -410,6 +410,116 @@ class TestGenConfig(unittest.TestCase):
         with self.assertRaises(SystemExit):
             parser.parse_args(['--verify-level', 'strict'])
 
+    # --- Connect options: enable_local_cache ---
+
+    def test_enable_local_cache_default_true(self):
+        """gen-config should emit enable_local_cache=true by default (flag omitted)."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertIsNotNone(config)
+        self.assertIn('connect_options', config)
+        self.assertTrue(config['connect_options']['enable_local_cache'])
+
+    def test_enable_local_cache_bare_flag_true(self):
+        """Bare --enable-local-cache (no value) should emit enable_local_cache=true."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--enable-local-cache',
+        ])
+        self.assertIsNotNone(config)
+        self.assertTrue(config['connect_options']['enable_local_cache'])
+
+    def test_enable_local_cache_explicit_true(self):
+        """--enable-local-cache true should emit enable_local_cache=true."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--enable-local-cache', 'true',
+        ])
+        self.assertIsNotNone(config)
+        self.assertTrue(config['connect_options']['enable_local_cache'])
+
+    def test_enable_local_cache_false(self):
+        """--enable-local-cache false should emit enable_local_cache=false."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--enable-local-cache', 'false',
+        ])
+        self.assertIsNotNone(config)
+        self.assertIn('connect_options', config)
+        self.assertFalse(config['connect_options']['enable_local_cache'])
+
+    def test_enable_local_cache_invalid_rejected(self):
+        """argparse must reject an unknown boolean value for --enable-local-cache."""
+        import argparse
+        from deploy_client import _add_gen_config_args
+        parser = argparse.ArgumentParser()
+        _add_gen_config_args(parser)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(['--enable-local-cache', 'maybe'])
+
+    # --- Runtime environment: --use-brpc ---
+
+    def test_use_brpc_default_no_env(self):
+        """Without --use-brpc, config must NOT contain an env block."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertIsNotNone(config)
+        self.assertNotIn('env', config)
+
+    def test_use_brpc_emits_env(self):
+        """--use-brpc should emit env.DATASYSTEM_USE_BRPC=true in config."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--use-brpc',
+        ])
+        self.assertIsNotNone(config)
+        self.assertIn('env', config)
+        self.assertEqual(config['env'].get('DATASYSTEM_USE_BRPC'), 'true')
+
+    # --- Service discovery address: --coordinator-address vs --etcd-address ---
+
+    def test_default_etcd_address(self):
+        """Without --coordinator-address, config should contain the default etcd_address."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertIsNotNone(config)
+        self.assertEqual(config.get('etcd_address'), '127.0.0.1:2379')
+        self.assertNotIn('coordinator_address', config)
+
+    def test_etcd_address_override(self):
+        """--etcd-address (without coordinator) overrides etcd_address."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--etcd-address', '10.0.0.1:2379',
+        ])
+        self.assertIsNotNone(config)
+        self.assertEqual(config.get('etcd_address'), '10.0.0.1:2379')
+        self.assertNotIn('coordinator_address', config)
+
+    def test_coordinator_address_emits_coordinator_only(self):
+        """--coordinator-address should emit coordinator_address and omit etcd_address."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--coordinator-address', '127.0.0.1:31511',
+        ])
+        self.assertIsNotNone(config)
+        self.assertEqual(config.get('coordinator_address'), '127.0.0.1:31511')
+        self.assertNotIn('etcd_address', config)
+
+    def test_coordinator_address_overrides_etcd(self):
+        """--coordinator-address takes priority: --etcd-address is ignored entirely."""
+        deploy, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--etcd-address', '10.0.0.1:2379',
+            '--coordinator-address', '127.0.0.1:31511',
+        ])
+        self.assertIsNotNone(config)
+        self.assertEqual(config.get('coordinator_address'), '127.0.0.1:31511')
+        self.assertNotIn('etcd_address', config)
+
 
 if __name__ == '__main__':
     unittest.main()

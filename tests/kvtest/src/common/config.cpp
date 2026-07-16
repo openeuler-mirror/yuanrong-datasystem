@@ -115,6 +115,7 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("instance_id")) cfg.instanceId = j["instance_id"];
         if (j.contains("listen_port")) cfg.listenPort = j["listen_port"];
         if (j.contains("etcd_address")) cfg.etcdAddress = j["etcd_address"];
+        if (j.contains("coordinator_address")) cfg.coordinatorAddress = j["coordinator_address"];
         if (j.contains("cluster_name")) cfg.clusterName = j["cluster_name"];
         if (j.contains("host_id_env_name")) cfg.hostIdEnvName = j["host_id_env_name"];
         if (j.contains("connect_timeout_ms")) cfg.connectTimeoutMs = j["connect_timeout_ms"];
@@ -281,7 +282,7 @@ bool LoadConfig(const std::string &path, Config &cfg) {
 
         // Generate output directory: metrics_{ip}_{timestamp}
         if (cfg.outputDir.empty()) {
-            std::string ip = cfg.etcdAddress;
+            std::string ip = cfg.etcdAddress.empty() ? cfg.coordinatorAddress : cfg.etcdAddress;
             auto colonPos = ip.find(':');
             if (colonPos != std::string::npos) ip = ip.substr(0, colonPos);
             auto now = std::chrono::system_clock::now();
@@ -335,8 +336,8 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         return false;
     }
 
-    if (cfg.etcdAddress.empty()) {
-        SLOG_ERROR("etcd_address is required");
+    if (cfg.etcdAddress.empty() && cfg.coordinatorAddress.empty()) {
+        SLOG_ERROR("either etcd_address or coordinator_address is required");
         return false;
     }
     if (cfg.listenPort <= 0 || cfg.listenPort > 65535) {
@@ -491,7 +492,8 @@ bool LoadConfig(const std::string &path, Config &cfg) {
     log << "Config loaded: mode=" << runModeNames[static_cast<int>(cfg.runMode)]
         << ", instance_id=" << cfg.instanceId
         << ", port=" << cfg.listenPort
-        << ", etcd=" << cfg.etcdAddress;
+        << ", etcd=" << cfg.etcdAddress
+        << ", coordinator=" << cfg.coordinatorAddress;
     if (cfg.testMode != TestMode::NONE) {
         const char *modeNames[] = {
             "none", "set_local", "set_remote", "get_local",

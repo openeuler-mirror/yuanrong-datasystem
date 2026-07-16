@@ -374,6 +374,19 @@ TEST(LoadConfig_ConnectOptions) {
     std::remove(path.c_str());
 }
 
+TEST(LoadConfig_CoordinatorAddress) {
+    // coordinator_address alone (no etcd_address) must parse and pass the
+    // relaxed "either etcd_address or coordinator_address" validation.
+    auto path = WriteTempConfig(
+        R"({"coordinator_address":"127.0.0.1:31511","listen_port":9000})");
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg));
+    ASSERT_EQ(cfg.coordinatorAddress, "127.0.0.1:31511");
+    ASSERT_EQ(cfg.etcdAddress, "");
+    CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
 // --- RunMode tests ---
 
 TEST(ParseRunMode_Valid) {

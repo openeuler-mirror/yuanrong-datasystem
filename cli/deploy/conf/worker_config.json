@@ -511,6 +511,18 @@
         "value": "1048576",
         "description": "Parallel payload split chunk size. Default to 1048756 bytes."
     },
+    "use_brpc": {
+        "value": "false",
+        "description": "Use brpc instead of ZMQ for RPC communication. When enabled, brpc owns the worker TCP port exclusively (same port as worker_address, no offset) and the ZMQ TCP endpoint is skipped. ZMQ-specific options (zmq_server_io_context, zmq_client_io_context, zmq_client_io_thread, zmq_chunk_sz) do not take effect in brpc mode. Per-service thread pools (rpc_thread_num, oc_thread_num, etc.) still apply. Default is false (also reads the DATASYSTEM_USE_BRPC env var)."
+    },
+    "brpc_server_num_threads": {
+        "value": "64",
+        "description": "Number of brpc server worker threads (bthread worker pool size). Default is 64."
+    },
+    "brpc_max_concurrency": {
+        "value": "128",
+        "description": "Max concurrent in-flight RPCs per brpc server. 0 means unlimited. Recommended: brpc_server_num_threads * 2 (e.g. 128 for 64 threads). When exceeded, brpc returns ELIMIT immediately so a slow handler cannot exhaust bthreads and cause OOM. Must not be smaller than brpc_server_num_threads. Default is 128."
+    },
     "curve_key_dir": {
         "value": "",
         "description": "The directory to find ZMQ curve key files. This path must be specified when zmq authentication is enabled."
@@ -598,6 +610,14 @@
     "urma_register_whole_arena": {
         "value": "true",
         "description": "Register the whole arena as segment during init, otherwise, register each object as a segment."
+    },
+    "enable_pipeline_h2d": {
+        "value": "false",
+        "description": "Enable pipeline Host-to-Device (H2D) transfer to overlap host-side data preparation with device-side copies. Only effective when enable_urma is true; otherwise ignored. Default is false."
+    },
+    "pipeline_h2d_thread_num": {
+        "value": "64",
+        "description": "Number of pipeline H2D worker threads. Valid range [8, 128]. Values outside the range fall back to the default (64) at runtime. Default is 64."
     },
     "enable_transport_fallback": {
         "value": "true",

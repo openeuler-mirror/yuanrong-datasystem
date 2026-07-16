@@ -759,7 +759,8 @@ JSON 配置文件，使用 nlohmann/json 解析。
 |------|------|--------|------|------|
 | `instance_id` | int | 0 | ≥ 0 | 实例唯一标识 |
 | `listen_port` | int | 9000 | (0, 65535] | HTTP 监听端口 |
-| `etcd_address` | string | **必填** | 非空 | etcd 地址（host:port） |
+| `etcd_address` | string | 二选一 | 非空 | etcd 地址（host:port）。与 `coordinator_address` 二选一 |
+| `coordinator_address` | string | "" | 非空（启用时） | coordinator 服务发现地址（host:port）。设置后走 `CoordinatorServiceDiscovery`，`etcd_address` 留空 |
 | `cluster_name` | string | "" | - | 集群名称，本地测试留空 |
 | `host_id_env_name` | string | "JD_HOST_IP" | - | 主机 IP 环境变量名 |
 | `connect_timeout_ms` | int | 1000 | > 0 | SDK 连接超时 |

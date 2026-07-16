@@ -67,6 +67,18 @@
     "value": "true",
     "description": "The INFO log file always receives all severities. When true, do not create additional WARNING/ERROR log files."
   },
+  "use_brpc": {
+    "value": "false",
+    "description": "Use brpc instead of ZMQ for RPC communication. When enabled, brpc owns the worker TCP port exclusively (same port as worker_address, no offset) and the ZMQ TCP endpoint is skipped. ZMQ-specific options (zmq_server_io_context, zmq_client_io_context, zmq_client_io_thread, zmq_chunk_sz) do not take effect in brpc mode. Per-service thread pools (rpc_thread_num, oc_thread_num, etc.) still apply. Default is false (also reads the DATASYSTEM_USE_BRPC env var)."
+  },
+  "brpc_server_num_threads": {
+    "value": "64",
+    "description": "Number of brpc server worker threads (bthread worker pool size). Default is 64."
+  },
+  "brpc_max_concurrency": {
+    "value": "128",
+    "description": "Max concurrent in-flight RPCs per brpc server. 0 means unlimited. Recommended: brpc_server_num_threads * 2 (e.g. 128 for 64 threads). When exceeded, brpc returns ELIMIT immediately so a slow handler cannot exhaust bthreads and cause OOM. Must not be smaller than brpc_server_num_threads. Default is 128."
+  },
   "request_sample_rate": {
     "value": "1.0",
     "description": "Sample rate for request logs (0.0-1.0). Default 1.0 means all request logs are sampled."

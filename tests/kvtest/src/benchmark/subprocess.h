@@ -143,11 +143,20 @@ inline std::shared_ptr<datasystem::KVClient> CreateClientForRole(
     }
 
     if (useSD) {
-        ServiceDiscoveryOptions sdOpts;
-        sdOpts.etcdAddress = cfg.etcdAddress;
-        sdOpts.clusterName = cfg.clusterName;
-        sdOpts.hostIdEnvName = cfg.hostIdEnvName;
-        auto sd = std::make_shared<ServiceDiscovery>(sdOpts);
+        std::shared_ptr<IServiceDiscovery> sd;
+        if (!cfg.coordinatorAddress.empty()) {
+            CoordinatorServiceDiscoveryOptions cdOpts;
+            cdOpts.serviceAddress = cfg.coordinatorAddress;
+            cdOpts.clusterName = cfg.clusterName;
+            cdOpts.hostIdEnvName = cfg.hostIdEnvName;
+            sd = std::make_shared<CoordinatorServiceDiscovery>(cdOpts);
+        } else {
+            ServiceDiscoveryOptions sdOpts;
+            sdOpts.etcdAddress = cfg.etcdAddress;
+            sdOpts.clusterName = cfg.clusterName;
+            sdOpts.hostIdEnvName = cfg.hostIdEnvName;
+            sd = std::make_shared<ServiceDiscovery>(sdOpts);
+        }
         Status rc = sd->Init();
         if (!rc.IsOk()) {
             SLOG_ERROR("Child ServiceDiscovery init failed: " << rc.GetMsg());
