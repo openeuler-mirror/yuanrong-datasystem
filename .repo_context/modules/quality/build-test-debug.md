@@ -118,8 +118,9 @@ Backed by `CMakeLists.txt`:
 Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
 
 - `//bazel:datasystem_sdk` emits both `bazel-bin/bazel/datasystem_sdk` and `bazel-bin/bazel/datasystem_sdk.tar`;
-- the SDK directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and `cpp/lib/libdatasystem.so`.
-- `//bazel:datasystem_wheel` includes the `yr/datasystem/datasystem_worker` binary in the wheel payload alongside the Python package, CLI/config assets, and `yr/datasystem/lib/` shared libraries.
+- the SDK directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and the client, worker, and coordinator shared libraries under `cpp/lib/`;
+- `//bazel:datasystem_wheel` includes `yr/datasystem/datasystem_worker`, `yr/datasystem/datasystem_coordinator`, root worker/cluster/coordinator configs, the Python package, CLI assets, and `yr/datasystem/lib/` shared libraries;
+- `scripts/build_bazel.sh` stages the coordinator executable, config, and shared library under `datasystem/service` before creating the deployment tar, matching the CMake service package layout.
 
 Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and `src/datasystem/common/util/BUILD.bazel`:
 

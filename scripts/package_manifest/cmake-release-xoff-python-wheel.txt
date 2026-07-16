@@ -32,6 +32,7 @@ yr/datasystem/cli/cpp_template/README.md
 yr/datasystem/cli/cpp_template/kv_cache_example.cpp
 yr/datasystem/cli/cpp_template/run.sh
 yr/datasystem/cli/deploy/conf/cluster_config.json
+yr/datasystem/cli/deploy/conf/coordinator_config.json
 yr/datasystem/cli/deploy/conf/worker_config.json
 yr/datasystem/cli/down.py
 yr/datasystem/cli/generate_config.py
@@ -43,10 +44,12 @@ yr/datasystem/cli/start.py
 yr/datasystem/cli/stop.py
 yr/datasystem/cli/up.py
 yr/datasystem/cluster_config.json
+yr/datasystem/coordinator_config.json
 yr/datasystem/cpp_template/CMakeLists.txt
 yr/datasystem/cpp_template/README.md
 yr/datasystem/cpp_template/kv_cache_example.cpp
 yr/datasystem/cpp_template/run.sh
+yr/datasystem/datasystem_coordinator
 yr/datasystem/datasystem_worker
 yr/datasystem/docker_entryfile/daemonset/check_taint.sh
 yr/datasystem/docker_entryfile/daemonset/file_check.sh
@@ -79,6 +82,7 @@ yr/datasystem/helm_chart/datasystem/values.yaml
 yr/datasystem/hetero_client.py
 yr/datasystem/include/datasystem/BUILD.bazel
 yr/datasystem/include/datasystem/context/context.h
+yr/datasystem/include/datasystem/coordinator_server.h
 yr/datasystem/include/datasystem/datasystem.h
 yr/datasystem/include/datasystem/hetero/BUILD.bazel
 yr/datasystem/include/datasystem/hetero/device_common.h
@@ -120,6 +124,7 @@ yr/datasystem/lib/libcommon_metastore_service.so
 yr/datasystem/lib/libcrypto.so.1.1
 yr/datasystem/lib/libcurl.so.4
 yr/datasystem/lib/libdatasystem.so
+yr/datasystem/lib/libdatasystem_coordinator.so
 yr/datasystem/lib/libdatasystem_worker.so
 yr/datasystem/lib/libds-spdlog.so.1.12
 yr/datasystem/lib/libds_client_py.so

@@ -163,6 +163,7 @@ def get_all_dependencies():
     """
     all_dependencies = {
         "libdatasystem.so",
+        "libdatasystem_coordinator.so",
         "libds_client_py.so",
         "libacl_plugin.so",
         "libcuda_plugin.so",

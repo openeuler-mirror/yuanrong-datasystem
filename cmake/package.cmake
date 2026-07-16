@@ -276,6 +276,8 @@ set(datasystem_worker_bin_INSTALL_BINPATH ${DATASYSTEM_SERVICE_BINPATH})
 install_datasystem_target(datasystem_worker_bin)
 set(datasystem_coordinator_INSTALL_BINPATH ${DATASYSTEM_SERVICE_BINPATH})
 install_datasystem_target(datasystem_coordinator)
+install(FILES ${CMAKE_SOURCE_DIR}/cli/deploy/conf/coordinator_config.json
+        DESTINATION ${DATASYSTEM_SERVICE_BINPATH})
 
 set(rpc_option_protos_INSTALL_LIBPATH ${DATASYSTEM_SDK_USER_LIBPATH})
 install_datasystem_target(rpc_option_protos)

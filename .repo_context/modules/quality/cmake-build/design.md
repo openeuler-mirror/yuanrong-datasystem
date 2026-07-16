@@ -25,7 +25,7 @@
   - `cmake/dependency.cmake`
   - `cmake/package.cmake`
 - Last verified against source:
-  - `2026-05-03`
+  - `2026-07-16`
 - Related context docs:
   - `README.md`
   - `../build-test-debug.md`
@@ -202,6 +202,8 @@ root
 | `datasystem_worker_shared` | service shared lib | `common_*`, `ds_master`, `ds_server`, `worker_object_cache`, `worker_stream_cache`, `cluster_manager`, `worker_client_manager`, generated protos | Biggest service fan-in target. |
 | `datasystem_worker_static` | static worker target | same worker sources/deps; adds ST implementation when `WITH_TESTS` | Test-only sources make test builds structurally different. |
 | `datasystem_worker_bin` | executable `datasystem_worker` | `datasystem_worker_shared`, `jemalloc`, `nlohmann_json` | Package-critical service binary. |
+| `datasystem_coordinator_shared` | service shared lib | `coordinator_service_impl`, common log/util/signal | Installed into service and both SDK library layouts; retained in CMake and Bazel wheels. |
+| `datasystem_coordinator` | executable `datasystem_coordinator` | `coordinator_server`, common log/util/flags | Package-critical service binary installed beside `coordinator_config.json`. |
 | `ds_master` | static | object/stream master cache, common RPC/log/util/rocksdb, cluster/client manager, `ds_server` | Pulled into worker shared lib. |
 | `ds_server` | static | common event loop/log/perf/metrics/RPC/util; `generic_service_protos` only in tests | Test builds add generic service implementation. |
 | `common_rpc_zmq` / `_client` | static | ZeroMQ, protobuf, common log/perf/util/event loop/encrypt, proto targets | Core RPC fan-out; client variant links client proto targets. |
@@ -232,8 +234,9 @@ root
 - `DatasystemConfig.cmake`, `DatasystemConfigVersion.cmake`, and exported targets are installed under
   `datasystem/sdk/cpp/lib/cmake/Datasystem`.
 - `package_datasystem_wheel` stages from installed service and SDK paths, so install order matters for wheel content.
-- `setup.py` prunes unused shared libraries with `ldd`, keeps UCX plugin-style libraries under `lib/ucx`, and strips the
-  worker binary.
+- `setup.py` prunes unused shared libraries with `ldd`, explicitly retains `libdatasystem_coordinator.so`, keeps UCX
+  plugin-style libraries under `lib/ucx`, and strips the worker and coordinator binaries.
+- `scripts/build_cmake.sh` strips installed ELF artifacts but skips JSON service configuration files.
 - `scripts/build_cmake.sh` creates the final tarball with `tar --remove-files`, so post-build tests that need
   `datasystem/service` or `datasystem/sdk` extract the tarball again.
 - Plugin libraries `libacl_plugin.so` and `libcuda_plugin.so` are special: runtime hash checking means package scripts
