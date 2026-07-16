@@ -158,11 +158,24 @@ private:
     };
 
     struct BatchRh2dContext {
+        enum class UrmaTransportMode {
+            DEFAULT,
+            SHARED_LANE,
+            TCP_FALLBACK,
+        };
+
         bool prepared = false;
         int32_t devId = -1;
-        // One worker-to-worker Batch Get RPC owns one URMA lane. Every object
-        // handler in the RPC shares this lease; only the RPC seals it.
+        // One worker-to-worker Batch Get RPC either owns one shared URMA lane or is pinned to TCP fallback before
+        // any sub-request starts. TCP_FALLBACK prevents per-object and aggregate paths from attempting URMA again.
+        UrmaTransportMode urmaTransportMode = UrmaTransportMode::DEFAULT;
         std::shared_ptr<UrmaSendLaneLease> sendLaneLease;
+        Status urmaAcquireStatus;
+
+        bool IsUrmaTcpFallback() const
+        {
+            return urmaTransportMode == UrmaTransportMode::TCP_FALLBACK;
+        }
     };
 
     /**
@@ -315,7 +328,7 @@ private:
      */
     Status ParallelBatchGetObject(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
                                   std::vector<ParallelRes> &parallelRes,
-                                  const std::shared_ptr<UrmaSendLaneLease> &sendLaneLease);
+                                  const BatchRh2dContext &batchTransportContext);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to prepare the aggregate info.

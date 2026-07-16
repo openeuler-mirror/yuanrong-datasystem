@@ -775,6 +775,7 @@ void UrmaResource::AsyncDeleteJetty(uint32_t jettyId)
         auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
         LOG(INFO) << "Remove Jetty with id " << jettyId << " from pendingDeleteJettys_ ";
         jetty.reset();
+        INJECT_POINT_NO_RETURN("urma.SendJettyAsyncDeleteComplete");
     });
 }
 
@@ -790,19 +791,22 @@ Status UrmaResource::RegisterJetty(const std::shared_ptr<UrmaJetty> &jetty)
 
 void UrmaResource::UnregisterJetty(uint32_t jettyId, const UrmaJetty *expected)
 {
-    std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
-    auto it = jettyRegistry_.find(jettyId);
-    if (it == jettyRegistry_.end()) {
-        return;
-    }
-    if (expected != nullptr) {
-        auto locked = it->second.lock();
-        if (locked && locked.get() != expected) {
+    {
+        std::lock_guard<std::mutex> lock(jettyRegistryMutex_);
+        auto it = jettyRegistry_.find(jettyId);
+        if (it == jettyRegistry_.end()) {
             return;
         }
+        if (expected != nullptr) {
+            auto locked = it->second.lock();
+            if (locked && locked.get() != expected) {
+                return;
+            }
+        }
+        jettyRegistry_.erase(it);
     }
-    jettyRegistry_.erase(it);
     LOG(INFO) << "[UrmaResource] Unregistered Jetty " << jettyId << " from registry";
+    INJECT_POINT_NO_RETURN("urma.SendJettyRegistryUnregister");
 }
 
 Status UrmaResource::GetJettyById(uint32_t jettyId, std::shared_ptr<UrmaJetty> &jetty)
@@ -910,7 +914,7 @@ bool UrmaResource::RefillSendJettyPool(size_t deficit)
     std::vector<std::shared_ptr<UrmaJetty>> created;
     for (size_t i = 0; i < deficit; ++i) {
         std::shared_ptr<UrmaJetty> jetty;
-        auto rc = CreateJetty(jetty);
+        auto rc = CreateSendJettyForRefill(jetty);
         if (rc.IsError()) {
             LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_WARNING_LOG_EVERY_N)
                 << "[URMA_SEND_LANE_POOL] Refill CreateJetty failed: " << rc.ToString() << ", created "
@@ -930,9 +934,18 @@ bool UrmaResource::RefillSendJettyPool(size_t deficit)
         }
         poolStats = sendJettyPool_.GetStats();
     }
+    for (size_t i = 0; i < created.size(); ++i) {
+        INJECT_POINT_NO_RETURN("urma.SendJettyPoolRefillAdded");
+    }
     LOG(INFO) << "[URMA_SEND_LANE_POOL] Refilled " << created.size() << " send Jetties, poolSize now "
               << poolStats.poolSize << ", idleCount=" << poolStats.idleCount;
     return created.size() != deficit;
+}
+
+Status UrmaResource::CreateSendJettyForRefill(std::shared_ptr<UrmaJetty> &jetty)
+{
+    INJECT_POINT("urma.RefillCreateSendJetty");
+    return CreateJetty(jetty);
 }
 
 void UrmaResource::MaybeTriggerRefill()

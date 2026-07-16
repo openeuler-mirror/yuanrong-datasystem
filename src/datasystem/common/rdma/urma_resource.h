@@ -866,6 +866,9 @@ private:
     // @return true when at least one Jetty creation failed and the next attempt must wait for a retry tick.
     bool RefillSendJettyPool(size_t deficit);
 
+    // Keep refill-only fault injection out of startup pre-fill and foreground creation paths.
+    Status CreateSendJettyForRefill(std::shared_ptr<UrmaJetty> &jetty);
+
     /**
      * @brief Wake the refill thread to top up the pool.
      */

@@ -681,7 +681,11 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
     };
 
     if (isFastTransportEnabled) {
-        if (batchPtr) {
+        if (batchRh2dContext != nullptr && batchRh2dContext->IsUrmaTcpFallback()) {
+            fastTransportStatus = batchRh2dContext->urmaAcquireStatus;
+            fastTransportName = "UrmaSendLaneAcquire";
+            RETURN_IF_NOT_OK(markFastTransferResult(fastTransportStatus));
+        } else if (batchPtr) {
             batchPtr->localSgeInfos.emplace_back(
                 LocalSgeInfo{ .segAddr = localSegAddress,
                               .segSize = localSegSize,
@@ -966,24 +970,36 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
                                                            std::vector<RpcMessage> &payload)
 {
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE);
-    std::shared_ptr<UrmaSendLaneLease> sendLaneLease;
+    BatchRh2dContext batchTransportContext;
     if (IsUrmaEnabled()) {
         for (const auto &subReq : req.requests()) {
             if (subReq.has_urma_info()) {
                 // Acquire before any sub-request starts. This is the only
                 // pool acquisition for the whole worker-to-worker Batch Get RPC.
-                RETURN_IF_NOT_OK(AcquireUrmaSendLane(subReq.urma_info(), sendLaneLease));
+                auto acquireRc = AcquireUrmaSendLane(subReq.urma_info(), batchTransportContext.sendLaneLease);
+                if (acquireRc.IsOk()) {
+                    batchTransportContext.urmaTransportMode = BatchRh2dContext::UrmaTransportMode::SHARED_LANE;
+                    // Test synchronization point after the RPC owns its lane and before any sub-request can post a WR.
+                    INJECT_POINT("WorkerWorkerOCServiceImpl.BatchGetAfterAcquireSendLane");
+                } else if (FLAGS_enable_transport_fallback) {
+                    // Pin the whole RPC to TCP before object processing begins. Propagate the original acquire status
+                    // through HandlePayloadFallback so existing fallback accounting and admission control still apply.
+                    batchTransportContext.urmaTransportMode = BatchRh2dContext::UrmaTransportMode::TCP_FALLBACK;
+                    batchTransportContext.urmaAcquireStatus = acquireRc;
+                } else {
+                    return acquireRc;
+                }
                 break;
             }
         }
     }
     bool sendLaneSealed = false;
     auto sealBatchLane = [&]() {
-        if (sendLaneSealed || sendLaneLease == nullptr) {
+        if (sendLaneSealed || batchTransportContext.sendLaneLease == nullptr) {
             return Status::OK();
         }
         sendLaneSealed = true;
-        return SealUrmaSendLaneLease(sendLaneLease);
+        return SealUrmaSendLaneLease(batchTransportContext.sendLaneLease);
     };
     Raii sealOnExit([&sealBatchLane]() {
         LOG_IF_ERROR(sealBatchLane(), "Failed to seal worker-to-worker Batch Get URMA lane");
@@ -991,13 +1007,12 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
 
     std::vector<ParallelRes> parallelRes;
     if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsFastTransportEnabled()) {
-        RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, parallelRes, sendLaneLease));
+        RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, parallelRes, batchTransportContext));
     } else {
         uint32_t parallelSize = 1;
         parallelRes.resize(parallelSize);
         PerfPoint loopPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_IMPL_LOOP_SERIAL);
-        BatchRh2dContext batchRh2dContext;
-        batchRh2dContext.sendLaneLease = sendLaneLease;
+        BatchRh2dContext batchRh2dContext = batchTransportContext;
         if (req.requests_size() > 0) {
             auto *firstReq = req.mutable_requests(0);
             *(firstReq->mutable_comm_id()) = req.comm_id();
@@ -1133,7 +1148,7 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
 
 Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
     BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp, std::vector<ParallelRes> &parallelRes,
-    const std::shared_ptr<UrmaSendLaneLease> &sendLaneLease)
+    const BatchRh2dContext &batchTransportContext)
 {
     tbb::task_arena limited;
     if (FLAGS_oc_worker_worker_parallel_nums > 0) {
@@ -1142,6 +1157,11 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
 
     AggregateInfo info;
     CHECK_FAIL_RETURN_STATUS(PrepareAggregateMemory(req, info), K_RUNTIME_ERROR, "Prepare Memory failed");
+    // An acquire failure selects TCP for the whole RPC. Disable aggregate SGE construction as well as GatherWrite;
+    // otherwise the aggregate path would either post URMA or lose the per-object TCP payloads.
+    if (batchTransportContext.IsUrmaTcpFallback()) {
+        info.canBatchHandler = false;
+    }
     uint64_t parallelSize = info.canBatchHandler ? info.batchReqSize.size() : req.requests_size();
 
     parallelRes.resize(parallelSize);
@@ -1156,8 +1176,7 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
                     batchPtr = std::make_shared<AggregateMemory>();
                     batchPtr->localSgeInfos.reserve(endPos - startPos);
                 }
-                BatchRh2dContext batchRh2dContext;
-                batchRh2dContext.sendLaneLease = sendLaneLease;
+                BatchRh2dContext batchRh2dContext = batchTransportContext;
                 auto *firstReq = req.mutable_requests(startPos);
                 *(firstReq->mutable_comm_id()) = req.comm_id();
                 LOG_IF_ERROR(PrepareBatchRh2dContext(*firstReq, batchRh2dContext), "PrepareBatchRh2dContext failed");
@@ -1169,7 +1188,7 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
                 }
                 loopPoint.Record();
                 PerfPoint pDo(PerfKey::URMA_GATHER_WRITE_DO);
-                LOG_IF_ERROR(GatherWrite(i, info, batchPtr, parallelRes, req, sendLaneLease),
+                LOG_IF_ERROR(GatherWrite(i, info, batchPtr, parallelRes, req, batchTransportContext.sendLaneLease),
                              "gather write error!");
             }
         });

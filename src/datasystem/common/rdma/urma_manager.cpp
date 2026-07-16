@@ -1002,6 +1002,11 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     INJECT_POINT("UrmaManager.UrmaWaitError", []() { return Status(K_URMA_WAIT_TIMEOUT, "Inject urma wait error"); });
     std::shared_ptr<UrmaEvent> event;
     RETURN_IF_NOT_OK(GetEvent(requestId, event));
+    // Unlike UrmaWaitError, this test hook models a timeout after an event owns an in-flight lane.
+    INJECT_POINT("UrmaManager.UrmaWaitInFlightTimeout", [&timeoutMs](int64_t injectedTimeoutMs) {
+        timeoutMs = injectedTimeoutMs;
+        return Status::OK();
+    });
     // use this unique request id as key to wait
     // wait until timeout
 
@@ -1927,6 +1932,7 @@ Status UrmaManager::UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo,
                                          "Batch Get URMA gather send lane Jetty is null");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(targetJetty != nullptr, K_RUNTIME_ERROR,
                                          "Gather write got empty remote Jetty");
+    INJECT_POINT("UrmaManager.GatherWriteAfterAcquire");
     bool laneLeaseSealed = false;
     auto sealLaneLease = [this, &laneLease, &laneLeaseSealed]() {
         if (laneLeaseSealed) {

@@ -5,7 +5,7 @@
 - Status:
   - `active`
 - Last verified against source:
-  - `2026-07-10`
+  - `2026-07-16`
 - Canonical source roots:
   - `tests`
   - `tests/README.md`
@@ -249,8 +249,10 @@ DS_URMA_DEV_NAME=<device> \
 
 - Manual URMA local send-Jetty fault coverage:
   - `//tests/ut/client:urma_send_jetty_fault_test` is a separate Bazel `manual` target. It covers manager-level
-    pool exhaustion, the recoverable CQE path, async `JETTY_ERR`, and timeout retirement, then verifies background
-    refill restores an idle send Jetty after each retirement.
+    pool exhaustion, repeated recoverable status-9 CQEs, non-recoverable CQE no-rebuild/no-leak behavior, async
+    `JETTY_ERR`, and repeated timeout retirement. Refill/capacity assertions use unique registry Jetty identities,
+    avoiding unstable retiring-plus-pending double counting. The non-recoverable case creates and seals a real event,
+    then drives the production failed-event release/notify/wait-delete sequence before reacquiring the same Jetty.
   - It needs the same URMA SDK/runtime and configured device:
 
 ```bash
@@ -261,9 +263,16 @@ DS_URMA_DEV_NAME=<device> \
 
 - Manual URMA send-Jetty pool system coverage:
   - `//tests/st/client/object_cache:urma_send_jetty_pool_test` starts real workers and clients with URMA enabled.
-    It verifies sequential small-pool reuse, one-lane ownership across overlapping objects in a Batch Get with pool
-    size 1, configured-capacity concurrent remote Get, and recovery after an injected recoverable CQE retires a send
-    Jetty.
+    It verifies sequential small-pool reuse, one-lane ownership across overlapping ordinary-write and GatherWrite
+    objects in a Batch Get with pool size 1, shared-lane cleanup after an injected GatherWrite failure, TCP-only
+    fallback for ordinary and aggregate Batch Get when the sole lane is held, rejection when that TCP fallback payload
+    reaches the limiter's 1 MiB exclusive upper bound, and fallback-disabled repeated pool backpressure without object
+    WR post or TCP success. The fallback-disabled KVClient assertion expects an eventual error rather than a final
+    `K_TRY_AGAIN`, because its worker-to-worker layer retries `K_TRY_AGAIN` until the request deadline; the manager fault
+    UT checks the exact acquire error. The target also covers configured-capacity concurrent remote Get, a manual
+    `LEVEL1_` 64 concurrently started Batch Get × 64 ordinary sub-object scenario with exactly 64 lane releases and zero
+    observed pool exhaustion (without claiming all lanes were simultaneously held), and recovery after an injected
+    recoverable CQE retires a send Jetty.
   - It needs the same URMA SDK/runtime and configured device:
 
 ```bash
