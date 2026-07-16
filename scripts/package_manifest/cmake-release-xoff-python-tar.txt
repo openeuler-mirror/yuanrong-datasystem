@@ -8,6 +8,7 @@ datasystem/sdk/DATASYSTEM_SYM/libcommon_flags.so.sym
 datasystem/sdk/DATASYSTEM_SYM/libcrypto.so.1.1.sym
 datasystem/sdk/DATASYSTEM_SYM/libcurl.so.4.8.0.sym
 datasystem/sdk/DATASYSTEM_SYM/libdatasystem.so.sym
+datasystem/sdk/DATASYSTEM_SYM/libdatasystem_coordinator.so.sym
 datasystem/sdk/DATASYSTEM_SYM/libdatasystem_worker.so.sym
 datasystem/sdk/DATASYSTEM_SYM/libds-spdlog.so.1.12.0.sym
 datasystem/sdk/DATASYSTEM_SYM/libds_client_py.so.sym
@@ -37,6 +38,7 @@ datasystem/sdk/cpp/include/
 datasystem/sdk/cpp/include/datasystem/
 datasystem/sdk/cpp/include/datasystem/context/
 datasystem/sdk/cpp/include/datasystem/context/context.h
+datasystem/sdk/cpp/include/datasystem/coordinator_server.h
 datasystem/sdk/cpp/include/datasystem/datasystem.h
 datasystem/sdk/cpp/include/datasystem/hetero/
 datasystem/sdk/cpp/include/datasystem/hetero/device_common.h
@@ -87,6 +89,7 @@ datasystem/sdk/cpp/lib/libcurl.so
 datasystem/sdk/cpp/lib/libcurl.so.4
 datasystem/sdk/cpp/lib/libcurl.so.4.8.0
 datasystem/sdk/cpp/lib/libdatasystem.so
+datasystem/sdk/cpp/lib/libdatasystem_coordinator.so
 datasystem/sdk/cpp/lib/libdatasystem_worker.so
 datasystem/sdk/cpp/lib/libds-spdlog.so
 datasystem/sdk/cpp/lib/libds-spdlog.so.1.12
@@ -145,6 +148,7 @@ datasystem/sdk/cpp/lib/libzmq.so.5.2.5
 datasystem/sdk/openyuanrong_datasystem_sdk-0.8.2-cp311-cp311-manylinux_2_34_aarch64.whl
 datasystem/service/
 datasystem/service/DATASYSTEM_SYM/
+datasystem/service/DATASYSTEM_SYM/datasystem_coordinator.sym
 datasystem/service/DATASYSTEM_SYM/datasystem_worker.sym
 datasystem/service/DATASYSTEM_SYM/libabseil_dll.so.2407.0.0.sym
 datasystem/service/DATASYSTEM_SYM/libaddress_sorting.so.42.0.0.sym
@@ -153,6 +157,7 @@ datasystem/service/DATASYSTEM_SYM/libcommon_flags.so.sym
 datasystem/service/DATASYSTEM_SYM/libcommon_metastore_service.so.sym
 datasystem/service/DATASYSTEM_SYM/libcrypto.so.1.1.sym
 datasystem/service/DATASYSTEM_SYM/libcurl.so.4.8.0.sym
+datasystem/service/DATASYSTEM_SYM/libdatasystem_coordinator.so.sym
 datasystem/service/DATASYSTEM_SYM/libdatasystem_worker.so.sym
 datasystem/service/DATASYSTEM_SYM/libds-spdlog.so.1.12.0.sym
 datasystem/service/DATASYSTEM_SYM/libetcdapi_proto.so.sym
@@ -176,6 +181,8 @@ datasystem/service/DATASYSTEM_SYM/libupb_textformat_lib.so.42.0.0.sym
 datasystem/service/DATASYSTEM_SYM/libutf8_range_lib.so.42.0.0.sym
 datasystem/service/DATASYSTEM_SYM/libxml2.so.2.9.12.sym
 datasystem/service/DATASYSTEM_SYM/libzmq.so.5.2.5.sym
+datasystem/service/coordinator_config.json
+datasystem/service/datasystem_coordinator
 datasystem/service/datasystem_worker
 datasystem/service/lib/
 datasystem/service/lib/libabseil_dll.so
@@ -193,6 +200,7 @@ datasystem/service/lib/libcrypto.so.1.1
 datasystem/service/lib/libcurl.so
 datasystem/service/lib/libcurl.so.4
 datasystem/service/lib/libcurl.so.4.8.0
+datasystem/service/lib/libdatasystem_coordinator.so
 datasystem/service/lib/libdatasystem_worker.so
 datasystem/service/lib/libds-spdlog.so
 datasystem/service/lib/libds-spdlog.so.1.12

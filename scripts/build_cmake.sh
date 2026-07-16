@@ -39,7 +39,7 @@ function strip_symbols() {
     type="$(file -b --mime-type ${file} | sed 's|/.*||')"
     local basename
     basename=$(basename "${file}")
-    if [[ ! -L "${file}" ]] && [[ ! -d "${file}" ]] && [[ "x${type}" != "xtext" ]] \
+    if [[ ! -L "${file}" ]] && [[ ! -d "${file}" ]] && [[ "x${type}" != "xtext" ]] && [[ "${basename}" != *.json ]] \
       && [[ "x${basename}" != "xlibacl_plugin.so" ]] && [[ "x${basename}" != "xlibcuda_plugin.so" ]]; then
       echo "---- start to strip ${file}"
       objcopy --only-keep-debug "${file}" "${dest_dir}/${basename}.sym"

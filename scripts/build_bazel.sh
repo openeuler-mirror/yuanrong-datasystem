@@ -171,9 +171,18 @@ function build_datasystem_bazel() {
   fi
   # Strip/sym artifacts (only for non-debug builds)
   if [[ "${BUILD_TYPE}" != "Debug" ]] && is_on "${ENABLE_STRIP}"; then
-    targets+=("//:libdatasystem_sym" "//:datasystem_worker_stripped" "//:datasystem_worker_sym")
+    targets+=(
+      "//:libdatasystem_sym"
+      "//:datasystem_worker_stripped"
+      "//:datasystem_worker_sym"
+      "//:datasystem_coordinator_stripped"
+      "//:datasystem_coordinator_sym"
+    )
   else
-    targets+=("//src/datasystem/worker:datasystem_worker")
+    targets+=(
+      "//src/datasystem/worker:datasystem_worker"
+      "//src/datasystem/coordinator:datasystem_coordinator"
+    )
   fi
 
   local baseTime_s
@@ -259,8 +268,27 @@ function _bazel_install_outputs() {
     cp -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" "${DS_DIR}/service/lib/libdatasystem_worker.so"
   fi
 
+  # Coordinator binary (stripped if available)
+  if [[ -f "${bazel_bin}/datasystem_coordinator.stripped" ]]; then
+    cp -f "${bazel_bin}/datasystem_coordinator.stripped" "${DS_DIR}/service/datasystem_coordinator"
+  elif [[ -f "${bazel_bin}/src/datasystem/coordinator/datasystem_coordinator" ]]; then
+    cp -f "${bazel_bin}/src/datasystem/coordinator/datasystem_coordinator" "${DS_DIR}/service/datasystem_coordinator"
+  fi
+
+  # Coordinator symbol file
+  if [[ -f "${bazel_bin}/datasystem_coordinator.sym" ]]; then
+    cp -f "${bazel_bin}/datasystem_coordinator.sym" "${DS_DIR}/service/DATASYSTEM_SYM/"
+  fi
+
+  # Coordinator shared library (rename to match CMake output name)
+  if [[ -f "${bazel_bin}/src/datasystem/coordinator/libdatasystem_coordinator_shared.so" ]]; then
+    cp -f "${bazel_bin}/src/datasystem/coordinator/libdatasystem_coordinator_shared.so" \
+      "${DS_DIR}/service/lib/libdatasystem_coordinator.so"
+  fi
+
   # --- 4. Config files ---
   cp -f "${DATASYSTEM_DIR}/cli/deploy/conf/worker_config.json" "${DS_DIR}/service/"
+  cp -f "${DATASYSTEM_DIR}/cli/deploy/conf/coordinator_config.json" "${DS_DIR}/service/"
   cp -f "${DATASYSTEM_DIR}/cli/deploy/conf/cluster_config.json" "${DS_DIR}/service/"
 
   # --- 5. Tools (only when tests enabled, matching CMake behavior) ---

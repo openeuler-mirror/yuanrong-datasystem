@@ -349,6 +349,40 @@ copy_file(
     ],
 )
 
+# --- Strip + Symbol for datasystem_coordinator ---
+genrule(
+    name = "datasystem_coordinator_sym",
+    srcs = ["//src/datasystem/coordinator:datasystem_coordinator"],
+    outs = ["datasystem_coordinator.sym"],
+    cmd = "objcopy --only-keep-debug $(location //src/datasystem/coordinator:datasystem_coordinator) $@",
+    output_to_bindir = True,
+)
+
+genrule(
+    name = "datasystem_coordinator_stripped",
+    srcs = [
+        "//src/datasystem/coordinator:datasystem_coordinator",
+        ":datasystem_coordinator_sym",
+    ],
+    outs = ["datasystem_coordinator.stripped"],
+    cmd = """
+cp $(location //src/datasystem/coordinator:datasystem_coordinator) $@
+chmod +w $@
+objcopy --add-gnu-debuglink=$(location :datasystem_coordinator_sym) $@
+objcopy --strip-all $@
+""",
+    output_to_bindir = True,
+)
+
+copy_file(
+    name = "datasystem_coordinator_file",
+    src = ":datasystem_coordinator_stripped",
+    out = "yr/datasystem/datasystem_coordinator",
+    visibility = [
+        "//bazel:__pkg__",
+    ],
+)
+
 # --- Worker shared library ---
 copy_file(
     name = "libdatasystem_worker_shared_file",
@@ -592,6 +626,12 @@ copy_file(
     name = "worker_config_file",
     src = "cli/deploy/conf/worker_config.json",
     out = "yr/datasystem/worker_config.json",
+)
+
+copy_file(
+    name = "coordinator_config_file",
+    src = "cli/deploy/conf/coordinator_config.json",
+    out = "yr/datasystem/coordinator_config.json",
 )
 
 # --- Tools ---
