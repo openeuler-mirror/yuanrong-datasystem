@@ -27,6 +27,7 @@
 
 #include <sys/syscall.h>
 
+#include <bthread/mutex.h>
 #include <bthread/rwlock.h>
 
 #include "datasystem/common/flags/flags.h"
@@ -100,11 +101,11 @@ public:
     /**
      * @brief Default destructor.
      *
-     * @note Caller must guarantee no bthread still holds a read or write lock
-     *       when this SafeObject is destroyed (e.g. LRU eviction must complete
-     *       the eviction under WLock and release before dropping the object).
-     *       Destroying a bthread_rwlock_t that is still held is UB; we cannot
-     *       query lock state portably, so we rely on the caller invariant.
+     * @note Caller must guarantee no bthread still holds or waits on the read/write
+     *       lock or gRefLock_ when this SafeObject is destroyed (e.g. LRU eviction
+     *       must complete the eviction under WLock and release before dropping the
+     *       object). Destroying a held bthread lock is UB; we cannot query lock
+     *       state portably, so we rely on the caller invariant.
      */
     ~SafeObject()
     {
@@ -176,6 +177,10 @@ public:
     /**
      * @brief Acquires a global reference lock on the SafeObject. The lock can prevent the concurrency of increasing or
      * decreasing global reference.
+     * @note Lock ordering: object WLock must be acquired before GRefLock. Do not acquire WLock while holding GRefLock.
+     * @note GRefLock uses bthread::Mutex in both brpc and ZMQ mode. This prevents brpc bthread waiters from blocking
+     *       worker pthreads, but adds one butex-backed mutex per SafeObject. Keep critical sections bounded and do not
+     *       issue nested callbacks or RPC response paths that recursively acquire the same object's GRefLock.
      */
     void GRefLock();
 
@@ -255,7 +260,7 @@ public:
 private:
     std::shared_mutex mutex_;              // The lock for the object metadata and data (ZMQ mode).
     bthread_rwlock_t bthread_mutex_;      // The lock for the object metadata and data (brpc mode).
-    std::mutex gRefLock_;                  // The lock for the object global reference.
+    bthread::Mutex gRefLock_;              // Bthread-friendly lock for object global reference state.
     std::unique_ptr<ObjType> realObject_;  // The actual object stored in a unique_ptr.
     std::atomic<bool> deleted_;            // Flag for checking the deleted state.
     std::atomic<pid_t> lastWriteThread_;   // Last thread that has the WLock on objLock_, valid when wLocked_ is true.

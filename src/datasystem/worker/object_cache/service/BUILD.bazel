@@ -158,11 +158,13 @@ ds_cc_library(
         "//src/datasystem/common/util:deadlock_util",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:raii",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/protos:object_posix_cc_proto",
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api_header",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
 
