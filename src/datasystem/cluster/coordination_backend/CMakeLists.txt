@@ -11,3 +11,9 @@ target_link_libraries(cluster_coordination_backend PUBLIC
         common_etcd
         common_util
         coordinator_protos)
+
+add_library(topology_recovery_reporter STATIC topology_recovery_reporter.cpp)
+target_include_directories(topology_recovery_reporter PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
+target_link_libraries(topology_recovery_reporter PUBLIC
+        common_ak_sk common_coordinator_store common_log common_util coordinator_protos)
+add_dependencies(topology_recovery_reporter coordinator_protos)

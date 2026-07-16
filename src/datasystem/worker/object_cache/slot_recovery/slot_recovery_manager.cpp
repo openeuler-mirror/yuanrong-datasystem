@@ -23,7 +23,6 @@
 #include <random>
 #include <unordered_map>
 
-#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -373,13 +372,13 @@ SlotRecoveryManager::~SlotRecoveryManager()
 }
 
 Status SlotRecoveryManager::Init(
-    const HostPort &localAddress, worker::WorkerTopologyReferences *topologyEngine,
+    const HostPort &localAddress, const cluster::MembershipEndpointView &membership,
     std::shared_ptr<PersistenceApi> persistApi,
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
     datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager)
 {
     localAddress_ = localAddress;
-    topologyEngine_ = topologyEngine;
+    membership_ = &membership;
     persistenceApi_ = std::move(persistApi);
     workerMasterApiManager_ = std::move(apiManager);
     metadataRecoveryManager_ = metadataRecoveryManager;
@@ -414,13 +413,18 @@ void SlotRecoveryManager::Shutdown()
     }
 }
 
-std::vector<std::string> SlotRecoveryManager::GetStableActiveWorkers() const
+Status SlotRecoveryManager::GetStableActiveWorkers(std::vector<std::string> &activeWorkers) const
 {
-    if (topologyEngine_ == nullptr) {
-        return {};
+    CHECK_FAIL_RETURN_STATUS(membership_ != nullptr, K_NOT_READY, "Topology membership view is unavailable");
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(membership_->GetSnapshot(snapshot));
+    const auto &members = snapshot->ActiveMembers();
+    activeWorkers.clear();
+    activeWorkers.reserve(members.size());
+    for (const auto *member : members) {
+        activeWorkers.emplace_back(member->identity.address);
     }
-    const auto &workers = worker::GetActiveTopologyMembers(topologyEngine_);
-    return { workers.begin(), workers.end() };
+    return Status::OK();
 }
 
 Status SlotRecoveryManager::ScheduleLocalPendingTasksFromStore()
@@ -483,7 +487,8 @@ Status SlotRecoveryManager::HandleFailedWorkers(const std::vector<HostPort> &fai
     }
     static thread_local std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
     std::shuffle(shuffledFailedWorkers.begin(), shuffledFailedWorkers.end(), gen);
-    const auto activeWorkers = GetStableActiveWorkers();
+    std::vector<std::string> activeWorkers;
+    RETURN_IF_NOT_OK(GetStableActiveWorkers(activeWorkers));
     const auto processWorkers = PickProcessWorkers(shuffledFailedWorkers, activeWorkers, 5);
     const bool isProcessWorker =
         std::find(processWorkers.begin(), processWorkers.end(), localAddress_.ToString()) != processWorkers.end();

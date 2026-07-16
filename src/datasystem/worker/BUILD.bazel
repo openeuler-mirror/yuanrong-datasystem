@@ -14,18 +14,18 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "worker_topology_references",
+    name = "metadata_route_resolver",
     srcs = [
-        "worker_topology_references.cpp",
+        "metadata_route_resolver.cpp",
     ],
     hdrs = [
-        "worker_topology_references.h",
+        "metadata_route_resolver.h",
     ],
     deps = [
+        ":metadata_route_options",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:uuid_generator",
     ],
 )
 
@@ -37,7 +37,7 @@ ds_cc_library(
         "worker_master_api_manager_base.h",
     ],
     deps = [
-        ":metadata_route_options",
+        ":metadata_route_resolver",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr_header",
         "//src/datasystem/common/util:format",
@@ -133,7 +133,6 @@ ds_cc_library(
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker/client_manager",
         "//src/datasystem/worker:worker_health_check",
-        "//src/datasystem/worker:worker_topology_references",
     ],
 )
 
@@ -159,8 +158,9 @@ ds_cc_library(
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker:worker_master_api_manager_base",
-        "//src/datasystem/worker:worker_topology_references",
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker/object_cache/data_migrator",
+        "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:rebalance_candidate_provider",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
@@ -193,8 +193,8 @@ ds_cc_library(
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/l2cache:slot_client",
         "//src/datasystem/worker:worker_flags",
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:rebalance_executor",
-        "//src/datasystem/worker:worker_topology_references",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:object_base",
@@ -234,9 +234,10 @@ ds_cc_library(
         "//src/datasystem/worker:worker_health_check",
         "//src/datasystem/worker/client_manager",
         "//src/datasystem/worker/coordinator:coordinator_watch_service_impl",
-        "//src/datasystem/worker/coordinator:topology_recovery_reporter",
+        "//src/datasystem/cluster/coordination_backend:topology_recovery_reporter",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
         "//src/datasystem/worker/object_cache:master_worker_oc_service_impl",
+        "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",

@@ -17,6 +17,9 @@
 #ifndef DATASYSTEM_WORKER_COORDINATOR_COORDINATOR_WATCH_SERVICE_IMPL_H
 #define DATASYSTEM_WORKER_COORDINATOR_COORDINATOR_WATCH_SERVICE_IMPL_H
 
+#include <chrono>
+#include <condition_variable>
+#include <cstddef>
 #include <functional>
 #include <mutex>
 #include <utility>
@@ -41,29 +44,23 @@ public:
     }
 
     /**
-     * @brief Construct a callback service with an identity-aware event route.
-     * @param[in] localAddress Worker callback address.
-     * @param[in] eventHandler CoordinatorId and watch-bound event route.
-     */
-    CoordinatorWatchServiceImpl(HostPort localAddress, EventHandler eventHandler)
-        : CoordinatorWatchService(std::move(localAddress)), eventHandler_(std::move(eventHandler))
-    {
-    }
-
-    /**
      * @brief Release the callback service after RPC ingress is stopped.
      */
     ~CoordinatorWatchServiceImpl() override = default;
 
     /**
-     * @brief Replace the event route during composition or shutdown.
-     * @param[in] eventHandler New identity-aware event route; empty disables delivery.
+     * @brief Bind the identity-aware route before Coordinator watch registration starts.
+     * @param[in] eventHandler Non-empty event route to consume.
+     * @return K_OK on success; K_INVALID when already bound; K_NOT_READY while an old route is draining.
      */
-    void SetEventHandler(EventHandler eventHandler)
-    {
-        std::lock_guard<std::mutex> lock(handlerMutex_);
-        eventHandler_ = std::move(eventHandler);
-    }
+    Status BindEventHandler(EventHandler eventHandler);
+
+    /**
+     * @brief Reject new deliveries and wait for every in-flight route invocation.
+     * @param[in] deadline Absolute drain deadline.
+     * @return K_OK after drain or K_RPC_DEADLINE_EXCEEDED when invocations remain.
+     */
+    Status UnbindEventHandlerAndWait(std::chrono::steady_clock::time_point deadline);
 
     /**
      * @brief Validate a complete callback batch before delivering any event.
@@ -74,9 +71,31 @@ public:
     Status HandleEvent(const EventReqPb &req, EventRspPb &rsp) override;
 
 private:
-    // Protects eventHandler_.
+    /**
+     * @brief Acquire one stable event route and register the invocation as in flight.
+     * @param[out] eventHandler Stable route copy; unchanged on failure.
+     * @return K_OK on success or K_NOT_READY while unbound.
+     */
+    Status AcquireEventHandler(EventHandler &eventHandler);
+
+    /**
+     * @brief Release one in-flight event route invocation.
+     */
+    void ReleaseEventHandler();
+
+    /**
+     * @brief Decode and deliver one fully validated batch under an acquired route lease.
+     * @param[in] req Validated Coordinator event batch.
+     * @param[in] eventHandler Stable route copy acquired for this batch.
+     * @return First decoding or route status, or K_OK after ordered delivery.
+     */
+    Status DeliverEventBatch(const EventReqPb &req, const EventHandler &eventHandler);
+
+    // Protects eventHandler_ and activeHandlerCount_; handlerDrained_ observes the same predicate.
     std::mutex handlerMutex_;
+    std::condition_variable handlerDrained_;
     EventHandler eventHandler_;
+    size_t activeHandlerCount_{ 0 };
 };
 }  // namespace coordinator
 }  // namespace datasystem

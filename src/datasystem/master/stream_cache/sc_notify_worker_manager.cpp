@@ -17,7 +17,6 @@
 
 #include "datasystem/master/stream_cache/sc_notify_worker_manager.h"
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log_helper.h"
 #include "datasystem/common/log/trace.h"
@@ -26,7 +25,6 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
-#include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/protos/master_stream.pb.h"
 #include "datasystem/protos/worker_stream.pb.h"
@@ -39,11 +37,12 @@ const size_t DELETE_STREAM_THREAD_NUM = 8;
 SCNotifyWorkerManager::SCNotifyWorkerManager(std::shared_ptr<RocksStreamMetaStore> streamMetaStore,
                                              std::shared_ptr<AkSkManager> akSkManager,
                                              std::shared_ptr<RpcSessionManager> rpcSessionManager,
-                                             worker::WorkerTopologyReferences *cm, SCMetadataManager *scMetadataManager)
+                                             const cluster::MembershipEndpointView *membership,
+                                             SCMetadataManager *scMetadataManager)
     : streamMetaStore_(std::move(streamMetaStore)),
       akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
-      topologyEngine_(cm),
+      topologyMembership_(membership),
       scMetadataManager_(scMetadataManager)
 {
 }
@@ -593,11 +592,15 @@ Status SCNotifyWorkerManager::CheckWorkerStatus(const std::string &workerAddr)
     // Check connection returns an error if the node is down or there is a problem, such as K_RPC_UNAVAILABLE
     // If any error is given, change the rc to be K_WORKER_ABNORMAL
     HostPort workerHostPort;
-    workerHostPort.ParseString(workerAddr);
-    if (topologyEngine_ == nullptr) {
-        RETURN_STATUS(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
+    RETURN_IF_NOT_OK(workerHostPort.ParseString(workerAddr));
+    if (topologyMembership_ == nullptr) {
+        RETURN_STATUS(StatusCode::K_NOT_READY, "Topology membership view is not available.");
     }
-    return worker::CheckTopologyMemberConnection(topologyEngine_, workerHostPort);
+    cluster::MemberEndpoint endpoint;
+    RETURN_IF_NOT_OK(topologyMembership_->ResolveByAddress(workerHostPort.ToString(), endpoint));
+    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE,
+                             K_WORKER_ABNORMAL, "Worker endpoint is unreachable");
+    return Status::OK();
 }
 
 Status SCNotifyWorkerManager::RecoverNotification()

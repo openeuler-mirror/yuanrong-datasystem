@@ -18,7 +18,9 @@
 #define DATASYSTEM_MASTER_METADATA_REDIRECT_HELPER_H
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <functional>
 #include <iomanip>
 #include <list>
 #include <map>
@@ -26,8 +28,11 @@
 #include <mutex>
 #include <set>
 #include <shared_mutex>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <google/protobuf/reflection.h>
@@ -35,9 +40,10 @@
 
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/protos/utils.pb.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 DS_DECLARE_bool(enable_redirect);
 
@@ -45,13 +51,31 @@ namespace datasystem {
 namespace master {
 using TbbMigratingTable = tbb::concurrent_hash_map<ImmutableString, bool>;
 
+/**
+ * @brief One metadata redirect decision after applying the Master deployment mode.
+ */
+struct MetaRedirectDecision {
+    bool redirect{ false };
+    bool moving{ false };
+    std::string targetAddress;
+    uint64_t topologyVersion{ 0 };
+};
+
 class MetadataRedirectHelper {
 public:
-    MetadataRedirectHelper(worker::WorkerTopologyReferences *cm) : topologyEngine_(cm)
-    {
-    }
+    /**
+     * @brief Bind metadata deployment mode and a non-owned placement capability once.
+     * @param[in] placement Required in distributed metadata mode and outlives this helper.
+     * @param[in] centralizedMetadata Whether one configured metadata Master owns every key.
+     * @param[in] metadataAddress Configured centralized metadata Master address.
+     */
+    MetadataRedirectHelper(const cluster::PlacementFacade *placement, bool centralizedMetadata,
+                           HostPort metadataAddress);
 
-    virtual ~MetadataRedirectHelper();
+    /**
+     * @brief Destroy the helper; the placement capability remains non-owned.
+     */
+    virtual ~MetadataRedirectHelper() = default;
 
     /**
      * @brief Check whether the item (object or stream) is being migrated.
@@ -149,7 +173,6 @@ private:
     }
 
 protected:
-
     /**
      * @brief Check if the metadata is available for given id.
      * @param[in] id The item identifier.
@@ -163,18 +186,63 @@ protected:
      * @param[out] redirect Redirect or not.
      * @param[out] newAddr If need to redirect, the new meta address of the item.
      * @param[out] topologyVersion Topology version that authorized the redirect.
+     * @return K_OK or placement availability/validation status.
      */
-    virtual void CheckNeedToRedirectOrNot(const std::string &id, bool &redirect, std::string &newAddr,
-                                          uint64_t &topologyVersion);
+    virtual Status CheckNeedToRedirectOrNot(const std::string &id, bool &redirect, std::string &newAddr,
+                                            uint64_t &topologyVersion);
 
     /**
      * @brief If need to redirect, group item ids by new meta address.
-     * @param[in] ids The item ids to redirect.
+     * @param[in,out] ids Item ids retained for local processing.
      * @param[out] redirectMap Redirect ids group by new meta address.
+     * @param[out] moving Whether at least one item must wait for metadata handoff.
+     * @return K_OK or placement availability/validation status.
      */
-    virtual void GroupRedirctObjectByNewMetaAddr(
+    virtual Status GroupRedirctObjectByNewMetaAddr(
         std::vector<std::string> &ids,
-        std::map<std::pair<uint64_t, std::string>, std::vector<std::string>> &redirectMap);
+        std::map<std::pair<uint64_t, std::string>, std::vector<std::string>> &redirectMap, bool &moving);
+
+    /**
+     * @brief Evaluate one key using the prebound Master metadata deployment mode.
+     * @param[in] key Binary-safe metadata key.
+     * @param[out] decision Structured redirect decision; unchanged on failure.
+     * @return K_OK or placement availability/validation status.
+     */
+    Status EvaluateMetadataRedirect(std::string_view key, MetaRedirectDecision &decision) const;
+
+    /**
+     * @brief Evaluate multiple metadata keys against one topology Snapshot.
+     * @param[in] keys Binary-safe metadata keys.
+     * @param[out] decisions Structured redirect decisions; unchanged on failure.
+     * @return K_OK or placement availability/validation status.
+     */
+    Status EvaluateMetadataRedirectBatch(const std::vector<std::string_view> &keys,
+                                         std::vector<MetaRedirectDecision> &decisions) const;
+
+    /**
+     * @brief Apply local metadata availability to one topology redirect decision.
+     * @param[in] id Metadata key.
+     * @param[in,out] decision Topology decision refined with local migration state.
+     * @return K_OK or injected test status.
+     */
+    Status ApplyMetadataAvailability(const std::string &id, MetaRedirectDecision &decision);
+
+    /**
+     * @brief Resolve one metadata owner using the prebound Master metadata deployment mode.
+     * @param[in] key Binary-safe metadata key.
+     * @param[out] owner Metadata owner; unchanged on failure.
+     * @return K_OK or placement/address status.
+     */
+    Status ResolveMetadataOwner(std::string_view key, HostPort &owner) const;
+
+    /**
+     * @brief Return whether metadata uses one configured centralized Master.
+     * @return True in centralized metadata mode.
+     */
+    bool IsCentralizedMetadata() const noexcept
+    {
+        return centralizedMetadata_;
+    }
 
     /**
      * @brief If need redirect, fill redirect info.
@@ -182,35 +250,40 @@ protected:
      * @param[out] response Response info.
      * @param[in] id The id of the item to redirect.
      * @param[out] redirect Need redirect or not.
+     * @return K_OK or placement availability/validation status.
      */
     template <typename Rsp>
-    void FillRedirectResponseInfo(Rsp &response, const std::string &id, bool &redirect)
+    Status FillRedirectResponseInfo(Rsp &response, const std::string &id, bool &redirect)
     {
-        std::string newMetaAddr;
         if (!redirect || !FLAGS_enable_redirect) {
             redirect = false;
-            return;
+            return Status::OK();
         }
-        uint64_t topologyVersion = 0;
-        CheckNeedToRedirectOrNot(id, redirect, newMetaAddr, topologyVersion);
-        INJECT_POINT("redirect.create.update.copy.meta", [&newMetaAddr, &redirect](std::string addr) {
-            newMetaAddr = addr;
-            redirect = true;
-            return;
+        MetaRedirectDecision decision;
+        RETURN_IF_NOT_OK(EvaluateMetadataRedirect(id, decision));
+        RETURN_IF_NOT_OK(ApplyMetadataAvailability(id, decision));
+        INJECT_POINT("redirect.create.update.copy.meta", [&decision](std::string addr) {
+            decision.targetAddress = std::move(addr);
+            decision.redirect = true;
+            return Status::OK();
         });
-        if (redirect) {
-            RedirectMetaInfo *info = response.mutable_info();
-            info->set_redirect_meta_address(newMetaAddr);
-            info->set_topology_version(topologyVersion);
-            info->add_change_meta_ids(id);
-            bool isMoving = ItemIsMigrating(id);
-            INJECT_POINT("meta.moving", [&isMoving]() {
-                isMoving = true;
-                return;
-            });
-            response.set_meta_is_moving(isMoving);
-            return;
+        INJECT_POINT("meta.moving", [&decision]() {
+            decision.moving = true;
+            return Status::OK();
+        });
+        redirect = decision.redirect || decision.moving;
+        if (decision.moving) {
+            response.set_meta_is_moving(true);
+            return Status::OK();
         }
+        if (!decision.redirect) {
+            return Status::OK();
+        }
+        RedirectMetaInfo *info = response.mutable_info();
+        info->set_redirect_meta_address(decision.targetAddress);
+        info->set_topology_version(decision.topologyVersion);
+        info->add_change_meta_ids(id);
+        return Status::OK();
     }
 
     /**
@@ -219,41 +292,41 @@ protected:
      * @param[out] rsp Response infos.
      * @param[in,out] ids The ids of the items to process in this node.
      * @param[in] redirect Need redirect or not.
+     * @return K_OK or placement availability/validation status.
      */
     template <typename Rsp>
-    void FillRedirectResponseInfos(Rsp &rsp, std::vector<std::string> &ids, bool redirect)
+    Status FillRedirectResponseInfos(Rsp &rsp, std::vector<std::string> &ids, bool redirect)
     {
         if (!redirect || !FLAGS_enable_redirect) {
             redirect = false;
-            return;
+            return Status::OK();
         }
         std::map<std::pair<uint64_t, std::string>, std::vector<std::string>> redirectQueryObjKeys;
-        GroupRedirctObjectByNewMetaAddr(ids, redirectQueryObjKeys);
         bool isMoving = false;
+        RETURN_IF_NOT_OK(GroupRedirctObjectByNewMetaAddr(ids, redirectQueryObjKeys, isMoving));
+        INJECT_POINT("metas.moving", [&isMoving]() {
+            isMoving = true;
+            return Status::OK();
+        });
+        if (isMoving) {
+            rsp.set_meta_is_moving(true);
+            return Status::OK();
+        }
         for (const auto &redirectInfo : redirectQueryObjKeys) {
             RedirectMetaInfo *info = rsp.add_info();
             info->set_topology_version(redirectInfo.first.first);
             info->set_redirect_meta_address(redirectInfo.first.second);
             for (auto &id : redirectInfo.second) {
-                VLOG(1) << FormatString("redirect id : %s, redirect meta address: %s", id,
-                                        redirectInfo.first.second);
-                bool tempIsMoving = ItemIsMigrating(id);
-                INJECT_POINT("metas.moving", [&tempIsMoving]() {
-                    tempIsMoving = true;
-                    return;
-                });
-                if (tempIsMoving) {
-                    isMoving = true;
-                    rsp.set_meta_is_moving(isMoving);
-                    return;
-                }
                 info->add_change_meta_ids(id);
             }
         }
+        return Status::OK();
     }
 
     TbbMigratingTable migratingItems_;
-    worker::WorkerTopologyReferences *topologyEngine_ = nullptr;
+    std::atomic<const cluster::PlacementFacade *> placement_{ nullptr };
+    const bool centralizedMetadata_;
+    const HostPort metadataAddress_;
 };
 }  // namespace master
 }  // namespace datasystem

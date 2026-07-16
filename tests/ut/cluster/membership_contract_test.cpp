@@ -156,5 +156,53 @@ TEST(MembershipEndpointViewTest, FencesLocalObservationByTopologyVersionAndIdent
     EXPECT_EQ(view.UpdateObservation(observation).GetCode(), K_INVALID);
 }
 
+TEST(MembershipEndpointViewTest, ResolvesUnknownWithoutObservationAndRemovesStaleObservation)
+{
+    TopologyState topology;
+    topology.version = 1;
+    topology.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 1, std::string(64, 'a'), snapshot));
+    TopologySnapshotState snapshots;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    MembershipEndpointView view(snapshots);
+    MemberEndpoint endpoint;
+
+    DS_ASSERT_OK(view.ResolveByAddress(topology.members.front().identity.address, endpoint));
+    EXPECT_EQ(endpoint.localAvailability, EndpointAvailability::UNKNOWN);
+    EndpointObservation observation{ topology.members.front().identity, 1, EndpointAvailability::REACHABLE,
+                                     std::chrono::steady_clock::now() };
+    DS_ASSERT_OK(view.UpdateObservation(observation));
+
+    topology.version = 2;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 2, std::string(64, 'b'), snapshot));
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    view.RemoveStaleObservations();
+    DS_ASSERT_OK(view.ResolveByAddress(topology.members.front().identity.address, endpoint));
+    EXPECT_EQ(endpoint.localAvailability, EndpointAvailability::UNKNOWN);
+}
+
+TEST(MembershipEndpointViewTest, RejectsObservationWhenIdentityDoesNotMatchCurrentAddress)
+{
+    TopologyState topology;
+    topology.version = 1;
+    topology.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 1, std::string(64, 'a'), snapshot));
+    TopologySnapshotState snapshots;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    MembershipEndpointView view(snapshots);
+    EndpointObservation observation{ topology.members.front().identity, 1, EndpointAvailability::REACHABLE,
+                                     std::chrono::steady_clock::now() };
+    observation.identity.id = std::string(16, 'b');
+
+    EXPECT_EQ(view.UpdateObservation(observation).GetCode(), K_INVALID);
+    MemberEndpoint endpoint;
+    DS_ASSERT_OK(view.ResolveByAddress(observation.identity.address, endpoint));
+    EXPECT_EQ(endpoint.localAvailability, EndpointAvailability::UNKNOWN);
+}
+
 }  // namespace
 }  // namespace datasystem::cluster

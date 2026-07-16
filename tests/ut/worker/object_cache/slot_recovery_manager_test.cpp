@@ -38,6 +38,7 @@
 #include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
+#include "tests/ut/worker/object_cache/test_metadata_route.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
 DS_DECLARE_string(l2_cache_type);
@@ -598,17 +599,23 @@ public:
     using SlotRecoveryManager::Shutdown;
     using SlotRecoveryManager::TakeOverPendingFromSourceIncident;
 
-    Status InitForTest()
+    Status InitForTest(std::shared_ptr<PersistenceApi> persistApi = nullptr,
+                       MetaDataRecoveryManager *metadataRecoveryManager = nullptr)
     {
-        return SlotRecoveryManager::Init(localAddress_, nullptr, nullptr, nullptr, nullptr);
+        auto &topologyRuntime = GetObjectTopologyTestRuntime();
+        RETURN_IF_NOT_OK(topologyRuntime.Init(localAddress_));
+        return SlotRecoveryManager::Init(localAddress_, topologyRuntime.Engine()->Membership(), std::move(persistApi),
+                                         nullptr, nullptr, metadataRecoveryManager);
     }
 
     void SetActiveWorkers(const std::vector<std::string> &workers)
     {
         activeWorkers_ = workers;
-        BINEXPECT_CALL(&SlotRecoveryManagerTestHelper::GetStableActiveWorkers, ()).WillRepeatedly(Invoke([this]() {
-            return activeWorkers_;
-        }));
+        BINEXPECT_CALL(&SlotRecoveryManagerTestHelper::GetStableActiveWorkers, (_))
+            .WillRepeatedly(Invoke([this](std::vector<std::string> &activeWorkers) {
+                activeWorkers = activeWorkers_;
+                return Status::OK();
+            }));
     }
 
     std::vector<RecoveryTaskPb> GetExecutedTasks() const
@@ -1007,164 +1014,174 @@ TEST_F(SlotRecoveryTest, ExcludesSourceBlockedSlotsOnRestart)
     EXPECT_EQ(CollectSlots(plannedLocalTasks[1]), (std::set<uint32_t>{ 3 }));
 }
 
-TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldRecoverEntriesObjectByObjectDuringPreload)
-{
-    LOG(INFO) << "Scenario: preload callback recovers local entries one object at a time.";
-    using RecoverLocalEntriesMethod = Status (MetaDataRecoveryManager::*)(
-        const std::vector<ObjectMetaPb> &, const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &,
-        std::vector<std::string> &) const;
-    using RecoverMetadataMethod =
-        Status (MetaDataRecoveryManager::*)(const std::vector<ObjectMetaPb> &, std::vector<std::string> &, std::string);
-    auto store = std::make_shared<FakeSlotRecoveryStore>();
-    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7101), store);
-    auto persistApi = std::make_shared<FakePersistenceApi>(
-        [](const std::string &sourceWorkerAddress, uint32_t slotId, const SlotPreloadCallback &callback) {
-            EXPECT_EQ(sourceWorkerAddress, "127.0.0.1:7100");
-            EXPECT_EQ(slotId, 3U);
-
-            SlotPreloadMeta meta1{ "tenant/object_a", 1, WriteMode::WRITE_THROUGH_L2_CACHE, 11 };
-            auto content1 = std::make_shared<std::stringstream>();
-            (*content1) << "v1";
-            RETURN_IF_NOT_OK(callback(meta1, content1));
-
-            SlotPreloadMeta meta2{ "tenant/object_a", 2, WriteMode::WRITE_THROUGH_L2_CACHE, 22 };
-            auto content2 = std::make_shared<std::stringstream>();
-            (*content2) << "v2";
-            RETURN_IF_NOT_OK(callback(meta2, content2));
-
-            SlotPreloadMeta meta3{ "tenant/object_b", 3, WriteMode::WRITE_THROUGH_L2_CACHE, 33 };
-            auto content3 = std::make_shared<std::stringstream>();
-            (*content3) << "v3";
-            return callback(meta3, content3);
-        });
-    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7101), nullptr,
-                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
-
+struct ObjectByObjectRecoveryResult {
     std::vector<std::vector<std::string>> localRecoverKeys;
-    BINEXPECT_CALL((RecoverLocalEntriesMethod)&MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
-        .Times(3)
-        .WillRepeatedly(
-            Invoke([&localRecoverKeys](
-                       const std::vector<ObjectMetaPb> &recoverMetas,
-                       const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &recoveredContents,
-                       std::vector<std::string> &recoveredObjectKeys) {
-                EXPECT_EQ(recoverMetas.size(), 1U);
-                if (recoverMetas.size() != 1U || recoveredContents.size() != 1U) {
-                    ADD_FAILURE() << "RecoverLocalEntries should receive exactly one object per callback.";
-                    return Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "invalid recover inputs");
-                }
-                const auto &meta = recoverMetas.front();
-                auto found = recoveredContents.find(meta.object_key());
-                if (found == recoveredContents.end() || found->second == nullptr) {
-                    ADD_FAILURE() << "Recovered content should exist for each callback object.";
-                    return Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "missing recovered content");
-                }
-                recoveredObjectKeys.emplace_back(meta.object_key());
-                localRecoverKeys.emplace_back(recoveredObjectKeys);
-                return Status::OK();
-            }));
-
     std::vector<ObjectMetaPb> finalRecoveredMetas;
-    BINEXPECT_CALL((RecoverMetadataMethod)&MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
-        .Times(1)
-        .WillOnce(Invoke([&finalRecoveredMetas](const std::vector<ObjectMetaPb> &metas,
-                                                std::vector<std::string> &failedIds, std::string standbyMasterAddr) {
-            EXPECT_TRUE(failedIds.empty());
-            EXPECT_TRUE(standbyMasterAddr.empty());
-            finalRecoveredMetas = metas;
+};
+
+std::shared_ptr<FakePersistenceApi> BuildVersionedPreloadApi()
+{
+    return std::make_shared<FakePersistenceApi>(
+        [](const std::string &source, uint32_t slot, const SlotPreloadCallback &callback) {
+            EXPECT_EQ(source, "127.0.0.1:7100");
+            EXPECT_EQ(slot, 3U);
+            for (const auto &[key, version] :
+                 std::vector<std::pair<std::string, uint64_t>>{ { "tenant/object_a", 1 },
+                                                                { "tenant/object_a", 2 },
+                                                                { "tenant/object_b", 3 } }) {
+                SlotPreloadMeta meta{ key, version, WriteMode::WRITE_THROUGH_L2_CACHE, version * 11 };
+                auto content = std::make_shared<std::stringstream>();
+                (*content) << "v" << version;
+                RETURN_IF_NOT_OK(callback(meta, content));
+            }
             return Status::OK();
-        }));
-
-    RecoveryTaskPb task;
-    task.set_failed_worker("127.0.0.1:7100");
-    task.add_slots(3);
-
-    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7101), nullptr, persistApi, nullptr, nullptr, &metadataManager));
-    DS_ASSERT_OK(manager.ExecuteRecoveryTask(task));
-
-    ASSERT_EQ(localRecoverKeys.size(), 3U);
-    EXPECT_THAT(localRecoverKeys[0], ElementsAre("tenant/object_a"));
-    EXPECT_THAT(localRecoverKeys[1], ElementsAre("tenant/object_a"));
-    EXPECT_THAT(localRecoverKeys[2], ElementsAre("tenant/object_b"));
-
-    ASSERT_EQ(finalRecoveredMetas.size(), 3U);
-    EXPECT_EQ(finalRecoveredMetas[0].object_key(), "tenant/object_a");
-    EXPECT_EQ(finalRecoveredMetas[0].version(), 1U);
-    EXPECT_EQ(finalRecoveredMetas[1].object_key(), "tenant/object_a");
-    EXPECT_EQ(finalRecoveredMetas[1].version(), 2U);
-    EXPECT_EQ(finalRecoveredMetas[2].object_key(), "tenant/object_b");
-    EXPECT_EQ(finalRecoveredMetas[2].version(), 3U);
+        });
 }
 
-TEST_F(SlotRecoveryTest, RestartShouldRecoverAfterTransientIoFailure)
+void ExpectObjectByObjectRecovery(ObjectByObjectRecoveryResult &result)
 {
-    LOG(INFO) << "Scenario: restart recovery should survive a transient preload I/O failure.";
-    using RecoverLocalEntriesMethod = Status (MetaDataRecoveryManager::*)(
-        const std::vector<ObjectMetaPb> &,
-        const std::unordered_map<std::string, std::shared_ptr<std::stringstream>> &,
-        std::vector<std::string> &) const;
-    using RecoverMetadataMethod =
-        Status (MetaDataRecoveryManager::*)(const std::vector<ObjectMetaPb> &, std::vector<std::string> &,
-                                            std::string);
+    BINEXPECT_CALL((RecoverLocalEntriesMethod)&MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
+        .Times(3)
+        .WillRepeatedly(Invoke([&result](const std::vector<ObjectMetaPb> &metas, const auto &contents,
+                                        std::vector<std::string> &keys) {
+            EXPECT_EQ(metas.size(), 1U);
+            CHECK_FAIL_RETURN_STATUS(metas.size() == 1U && contents.size() == 1U, K_RUNTIME_ERROR,
+                                     "recovery callback must contain one object");
+            const auto &key = metas.front().object_key();
+            CHECK_FAIL_RETURN_STATUS(contents.count(key) == 1U && contents.at(key) != nullptr, K_RUNTIME_ERROR,
+                                     "recovered object content is missing");
+            keys.emplace_back(key);
+            result.localRecoverKeys.emplace_back(keys);
+            return Status::OK();
+        }));
+    BINEXPECT_CALL((RecoverMetadataMethod)&MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
+        .Times(1)
+        .WillOnce(Invoke([&result](const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &failed,
+                                   std::string standby) {
+            EXPECT_TRUE(failed.empty());
+            EXPECT_TRUE(standby.empty());
+            result.finalRecoveredMetas = metas;
+            return Status::OK();
+        }));
+}
 
+void ExecuteObjectByObjectRecovery(ObjectByObjectRecoveryResult &result)
+{
     auto store = std::make_shared<FakeSlotRecoveryStore>();
-    auto persistApi = std::make_shared<FakePersistenceApi>(
-        [](const std::string &sourceWorkerAddress, uint32_t slotId, const SlotPreloadCallback &callback) {
-            EXPECT_EQ(sourceWorkerAddress, "127.0.0.1:7201");
-            SlotPreloadMeta meta{ FormatString("tenant/restart_slot_%u", slotId), slotId + 1,
-                                  WriteMode::WRITE_THROUGH_L2_CACHE, slotId + 11 };
-            auto content = std::make_shared<std::stringstream>();
-            (*content) << "payload_" << slotId;
-            return callback(meta, content);
-        });
-    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr,
-                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7101), store);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7101), nullptr,
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr,
+                                            GetTestMetadataRoute());
+    ExpectObjectByObjectRecovery(result);
+    auto task = BuildSingleSlotTask("127.0.0.1:7100", 3);
+    DS_ASSERT_OK(manager.InitForTest(BuildVersionedPreloadApi(), &metadataManager));
+    DS_ASSERT_OK(manager.ExecuteRecoveryTask(task));
+}
 
-    std::mutex recoveredMutex;
+TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskRecoversEachPreloadObjectIndividually)
+{
+    ObjectByObjectRecoveryResult result;
+    ExecuteObjectByObjectRecovery(result);
+
+    ASSERT_EQ(result.localRecoverKeys.size(), 3U);
+    EXPECT_THAT(result.localRecoverKeys[0], ElementsAre("tenant/object_a"));
+    EXPECT_THAT(result.localRecoverKeys[1], ElementsAre("tenant/object_a"));
+    EXPECT_THAT(result.localRecoverKeys[2], ElementsAre("tenant/object_b"));
+}
+
+TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskPreservesEveryRecoveredVersion)
+{
+    ObjectByObjectRecoveryResult result;
+    ExecuteObjectByObjectRecovery(result);
+
+    ASSERT_EQ(result.finalRecoveredMetas.size(), 3U);
+    EXPECT_EQ(result.finalRecoveredMetas[0].object_key(), "tenant/object_a");
+    EXPECT_EQ(result.finalRecoveredMetas[0].version(), 1U);
+    EXPECT_EQ(result.finalRecoveredMetas[1].object_key(), "tenant/object_a");
+    EXPECT_EQ(result.finalRecoveredMetas[1].version(), 2U);
+    EXPECT_EQ(result.finalRecoveredMetas[2].object_key(), "tenant/object_b");
+    EXPECT_EQ(result.finalRecoveredMetas[2].version(), 3U);
+}
+
+struct TransientRestartResult {
+    std::mutex mutex;
     std::vector<std::string> recoveredObjectKeys;
     std::vector<ObjectMetaPb> finalRecoveredMetas;
-    BINEXPECT_CALL((RecoverLocalEntriesMethod) & MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
-        .WillRepeatedly(Invoke([&recoveredMutex, &recoveredObjectKeys](
-                                   const std::vector<ObjectMetaPb> &recoverMetas,
-                                   const std::unordered_map<std::string, std::shared_ptr<std::stringstream>>
-                                       &recoveredContents,
-                                   std::vector<std::string> &recoveredKeys) {
-            EXPECT_EQ(recoverMetas.size(), 1U);
-            EXPECT_EQ(recoveredContents.size(), 1U);
-            recoveredKeys.emplace_back(recoverMetas.front().object_key());
-            std::lock_guard<std::mutex> lock(recoveredMutex);
-            recoveredObjectKeys.emplace_back(recoverMetas.front().object_key());
-            return Status::OK();
-        }));
-    BINEXPECT_CALL((RecoverMetadataMethod) & MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
-        .WillRepeatedly(Invoke([&finalRecoveredMetas](const std::vector<ObjectMetaPb> &metas,
-                                                      std::vector<std::string> &failedIds, std::string standbyAddr) {
-            EXPECT_TRUE(failedIds.empty());
-            EXPECT_TRUE(standbyAddr.empty());
-            finalRecoveredMetas = metas;
-            return Status::OK();
-        }));
+    SlotRecoveryInfoPb deleted;
+};
 
+std::shared_ptr<FakePersistenceApi> BuildRestartPreloadApi()
+{
+    return std::make_shared<FakePersistenceApi>(
+        [](const std::string &source, uint32_t slot, const SlotPreloadCallback &callback) {
+            EXPECT_EQ(source, "127.0.0.1:7201");
+            SlotPreloadMeta meta{ FormatString("tenant/restart_slot_%u", slot), slot + 1,
+                                  WriteMode::WRITE_THROUGH_L2_CACHE, slot + 11 };
+            auto content = std::make_shared<std::stringstream>();
+            (*content) << "payload_" << slot;
+            return callback(meta, content);
+        });
+}
+
+void ExpectTransientRestartRecovery(TransientRestartResult &result)
+{
+    BINEXPECT_CALL((RecoverLocalEntriesMethod)&MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
+        .WillRepeatedly(Invoke([&result](const std::vector<ObjectMetaPb> &metas, const auto &contents,
+                                        std::vector<std::string> &keys) {
+            EXPECT_EQ(metas.size(), 1U);
+            EXPECT_EQ(contents.size(), 1U);
+            keys.emplace_back(metas.front().object_key());
+            std::lock_guard<std::mutex> lock(result.mutex);
+            result.recoveredObjectKeys.emplace_back(metas.front().object_key());
+            return Status::OK();
+        }));
+    BINEXPECT_CALL((RecoverMetadataMethod)&MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
+        .WillRepeatedly(Invoke([&result](const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &failed,
+                                        std::string standby) {
+            EXPECT_TRUE(failed.empty());
+            EXPECT_TRUE(standby.empty());
+            result.finalRecoveredMetas = metas;
+            return Status::OK();
+        }));
+}
+
+void ExecuteTransientRestartRecovery(TransientRestartResult &result)
+{
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr,
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr,
+                                            GetTestMetadataRoute());
+    ExpectTransientRestartRecovery(result);
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7201), store);
     manager.SetActiveWorkers({ "127.0.0.1:7201" });
-    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7201), nullptr, persistApi, nullptr, nullptr, &metadataManager));
+    DS_ASSERT_OK(manager.InitForTest(BuildRestartPreloadApi(), &metadataManager));
     DS_ASSERT_OK(
         datasystem::inject::Set("SlotRecoveryManager.ExecuteRecoveryTask.PreloadSlot", "1*return(K_IO_ERROR)"));
-
     DS_ASSERT_OK(manager.HandleLocalRestart());
-
-    ASSERT_TRUE(WaitUntil([&recoveredMutex, &recoveredObjectKeys]() {
-        std::lock_guard<std::mutex> lock(recoveredMutex);
-        return recoveredObjectKeys.size() == DISTRIBUTED_DISK_SLOT_NUM;
+    ASSERT_TRUE(WaitUntil([&result]() {
+        std::lock_guard<std::mutex> lock(result.mutex);
+        return result.recoveredObjectKeys.size() == DISTRIBUTED_DISK_SLOT_NUM;
     }));
     ASSERT_TRUE(WaitUntil([&store]() { return store->HasDeletedSnapshot("127.0.0.1:7201"); }));
-
-    auto deleted = store->GetDeletedSnapshot("127.0.0.1:7201");
-    EXPECT_EQ(deleted.completed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
-    EXPECT_EQ(deleted.failed_slots(), 0);
-    EXPECT_EQ(finalRecoveredMetas.size(), DISTRIBUTED_DISK_SLOT_NUM);
-
+    result.deleted = store->GetDeletedSnapshot("127.0.0.1:7201");
     manager.Shutdown();
+}
+
+TEST_F(SlotRecoveryTest, RestartRetriesTransientIoAndCompletesEverySlot)
+{
+    TransientRestartResult result;
+    ExecuteTransientRestartRecovery(result);
+
+    EXPECT_EQ(result.deleted.completed_slots(), DISTRIBUTED_DISK_SLOT_NUM);
+    EXPECT_EQ(result.deleted.failed_slots(), 0);
+}
+
+TEST_F(SlotRecoveryTest, RestartAfterTransientIoRecoversEveryMetadataEntry)
+{
+    TransientRestartResult result;
+    ExecuteTransientRestartRecovery(result);
+
+    EXPECT_EQ(result.finalRecoveredMetas.size(), DISTRIBUTED_DISK_SLOT_NUM);
 }
 
 TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskDeferOnRpcUnavailable)
@@ -1174,7 +1191,8 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskDeferOnRpcUnavailable)
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7201), store);
     auto persistApi = BuildSingleMetaPreloadApi("127.0.0.1:7200", 1, "tenant/object_a", 1);
     MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr,
-                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr,
+                                            GetTestMetadataRoute());
     ExpectRecoverLocalEntriesAlwaysOk();
 
     std::atomic<int> recoverMetadataCalls{ 0 };
@@ -1193,7 +1211,7 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskDeferOnRpcUnavailable)
 
     auto task = BuildSingleSlotTask("127.0.0.1:7200", 1);
 
-    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7201), nullptr, persistApi, nullptr, nullptr, &metadataManager));
+    DS_ASSERT_OK(manager.InitForTest(persistApi, &metadataManager));
     DS_ASSERT_OK(manager.ExecuteRecoveryTask(task));
     ASSERT_TRUE(WaitUntil([&recoverMetadataCalls]() { return recoverMetadataCalls.load() >= 2; }));
     manager.Shutdown();
@@ -1206,7 +1224,8 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskFailOnInvalidMeta)
     SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7211), store);
     auto persistApi = BuildSingleMetaPreloadApi("127.0.0.1:7210", 2, "tenant/object_b", 2);
     MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7211), nullptr,
-                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr,
+                                            GetTestMetadataRoute());
     ExpectRecoverLocalEntriesAlwaysOk();
 
     std::atomic<int> recoverMetadataCalls{ 0 };
@@ -1220,7 +1239,7 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskFailOnInvalidMeta)
 
     auto task = BuildSingleSlotTask("127.0.0.1:7210", 2);
 
-    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7211), nullptr, persistApi, nullptr, nullptr, &metadataManager));
+    DS_ASSERT_OK(manager.InitForTest(persistApi, &metadataManager));
     auto rc = manager.ExecuteRecoveryTask(task);
     DS_ASSERT_NOT_OK(rc);
     EXPECT_EQ(rc.GetCode(), K_INVALID);
@@ -1255,7 +1274,8 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldPushSucceededSlotsEvenWhenAnot
                           "Rename file from manifest.tmp.f3nQVn to manifest failed with errno: 2");
         });
     MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7301), nullptr,
-                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr);
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr,
+                                            GetTestMetadataRoute());
     ExpectRecoverLocalEntriesAlwaysOk();
 
     std::mutex pushedMutex;
@@ -1276,7 +1296,7 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskShouldPushSucceededSlotsEvenWhenAnot
     task.add_slots(6);
     task.add_slots(12);
 
-    DS_ASSERT_OK(manager.Init(HostPort("127.0.0.1", 7301), nullptr, persistApi, nullptr, nullptr, &metadataManager));
+    DS_ASSERT_OK(manager.InitForTest(persistApi, &metadataManager));
 
     auto rc = manager.ExecuteRecoveryTask(task);
     DS_ASSERT_NOT_OK(rc);

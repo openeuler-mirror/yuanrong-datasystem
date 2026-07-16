@@ -18,7 +18,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -50,11 +49,12 @@ NodeSelector::~NodeSelector()
     Shutdown();
 }
 
-void NodeSelector::Init(const std::string &localAddress, worker::WorkerTopologyReferences *topologyEngine,
+void NodeSelector::Init(const std::string &localAddress, const cluster::MembershipEndpointView &membership,
+                        const std::atomic<bool> *exitRequested,
                         std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager)
 {
-    if (!topologyEngine || !apiManager) {
-        LOG(WARNING) << "The topologyEngine_ or apiManager_ is empty, can not set running and start worker thread";
+    if (!apiManager) {
+        LOG(WARNING) << "The apiManager is empty, can not set running and start worker thread";
         return;
     }
     if (running_.exchange(true)) {
@@ -62,7 +62,8 @@ void NodeSelector::Init(const std::string &localAddress, worker::WorkerTopologyR
         return;
     }
     localAddress_ = localAddress;
-    topologyEngine_ = topologyEngine;
+    membership_ = &membership;
+    exitRequested_ = exitRequested;
     apiManager_ = std::move(apiManager);
     running_.store(true);
 
@@ -88,7 +89,8 @@ void NodeSelector::Shutdown()
     if (workerThread_.joinable()) {
         workerThread_.join();
     }
-    topologyEngine_  = nullptr;
+    membership_ = nullptr;
+    exitRequested_ = nullptr;
     apiManager_.reset();
     LOG(INFO) << "NodeSelector shutdown";
 }
@@ -164,10 +166,15 @@ Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNo
 
 Status NodeSelector::GetLocalStandbyWorker(const std::unordered_set<std::string> &excludeNodes, std::string &outNode)
 {
+    CHECK_FAIL_RETURN_STATUS(membership_ != nullptr, K_NOT_READY, "Topology membership view is unavailable");
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(membership_->GetSnapshot(snapshot));
     std::string worker = localAddress_;
-    int maxCount = 5;
+    constexpr int maxCount = 5;
     for (int i = 0; i < maxCount; ++i) {
-        RETURN_IF_NOT_OK(worker::GetStandbyTopologyMember(topologyEngine_, worker, outNode));
+        const cluster::Member *standby = nullptr;
+        RETURN_IF_NOT_OK(snapshot->FindNextCommittedMember(worker, standby));
+        outNode = standby->identity.address;
         if (outNode == localAddress_) {
             outNode.clear();
             RETURN_STATUS(K_NOT_FOUND, "Not found the stand by worker");
@@ -267,15 +274,10 @@ void NodeSelector::WorkerThread()
 
 Status NodeSelector::GetWorkerMasterApi(std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi)
 {
-    HostPort masterAddr;
-    RETURN_IF_NOT_OK(worker::ResolveTopologyOwner(topologyEngine_, RESOURCE_MONITOR_MASTER, masterAddr));
+    auto rc = apiManager_->GetWorkerMasterApi(RESOURCE_MONITOR_MASTER, workerMasterApi);
     VLOG_EVERY_N(RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL, RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N)
-        << "Get " << RESOURCE_MONITOR_MASTER << " address: " << masterAddr.ToString();
-    workerMasterApi = apiManager_->GetWorkerMasterApi(masterAddr);
-    if (workerMasterApi == nullptr) {
-        RETURN_STATUS(K_RUNTIME_ERROR, "The worker master api is nullptr");
-    }
-    return Status::OK();
+        << "Resolve " << RESOURCE_MONITOR_MASTER << " master status: " << rc.ToString();
+    return rc;
 }
 
 Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
@@ -293,7 +295,8 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
     stat->set_memory_limit(memoryLimit);
     // Report capacity as current used memory plus memory still available to the high watermark.
     stat->set_memory_capacity(usedMemory + availableMemory);
-    stat->set_is_ready(!(worker::IsLocalTopologyMemberExiting(topologyEngine_)));
+    const bool exitRequested = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
+    stat->set_is_ready(!exitRequested);
     {
         std::lock_guard<std::mutex> lck(token_->mutex_);
         if (!token_->alive) {

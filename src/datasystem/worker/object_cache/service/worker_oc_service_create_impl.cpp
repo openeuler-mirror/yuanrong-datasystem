@@ -16,7 +16,6 @@
  */
 #include "datasystem/worker/object_cache/service/worker_oc_service_create_impl.h"
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
@@ -46,10 +45,8 @@ namespace object_cache {
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServiceCreateImpl::WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam,
-                                                     worker::WorkerTopologyReferences *topologyEngine,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      topologyEngine_(topologyEngine),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress)
 {
@@ -82,7 +79,7 @@ Status WorkerOcServiceCreateImpl::Create(const CreateReqPb &req, CreateRspPb &re
         access.Result(rc).Record();
         return rc;
     }
-    if (topologyEngine_ == nullptr) {
+    if (metadataRouteResolver_ == nullptr) {
         Status rc(StatusCode::K_NOT_READY, __LINE__, __FILE__, "ETCD cluster manager is not provided.");
         access.Result(rc).Record();
         return rc;
@@ -295,7 +292,7 @@ Status WorkerOcServiceCreateImpl::MultiCreate(const MultiCreateReqPb &req, Multi
 {
     PerfPoint pointAll(PerfKey::WORKER_MULTI_CREATE_TOTAL);
     PerfPoint point(PerfKey::WORKER_MULTI_CREATE_INPUT_CHECK);
-    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, StatusCode::K_NOT_READY,
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, StatusCode::K_NOT_READY,
                              "ETCD cluster manager is not provided.");
     std::string tenantId;
     Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)

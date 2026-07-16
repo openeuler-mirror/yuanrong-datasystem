@@ -43,7 +43,7 @@ ds_cc_library(
         "master_oc_service_impl.h",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
+        "//src/datasystem/cluster:cluster_topology",
         ":master_worker_oc_api",
         ":oc_metadata_manager",
         ":oc_migrate_metadata_manager",
@@ -146,7 +146,6 @@ ds_cc_library(
         "oc_notify_worker_manager.h",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
         ":delete_object_mediator",
         ":master_master_oc_api",
         ":master_worker_oc_api_header",
@@ -182,9 +181,10 @@ ds_cc_library(
         "oc_migrate_metadata_manager.h",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/cluster:cluster_topology_scope",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
+        "//src/datasystem/common/util:common_util",
         "//src/datasystem/master:metadata_manager_holder",
         "@tbb",
     ],

@@ -13,17 +13,3 @@ ds_cc_library(
         "//src/datasystem/cluster/coordination_backend:coordination_backend",
     ],
 )
-
-ds_cc_library(
-    name = "topology_recovery_reporter",
-    srcs = ["topology_recovery_reporter.cpp"],
-    hdrs = ["topology_recovery_reporter.h"],
-    deps = [
-        "//src/datasystem/common/ak_sk:hasher",
-        "//src/datasystem/common/coordinator:coordinator_store",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:thread_pool",
-        "//src/datasystem/protos:coordinator_cc_proto",
-    ],
-)

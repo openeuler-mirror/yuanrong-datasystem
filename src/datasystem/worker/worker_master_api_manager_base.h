@@ -17,6 +17,10 @@
 #ifndef DATASYSTEM_WORKER_WORKER_MASTER_API_MANAGER_BASE_H
 #define DATASYSTEM_WORKER_WORKER_MASTER_API_MANAGER_BASE_H
 
+#include <memory>
+#include <string_view>
+#include <utility>
+
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/format.h"
@@ -26,58 +30,41 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/cluster/routing/placement_facade.h"
-#include "datasystem/worker/metadata_route_options.h"
+#include "datasystem/worker/metadata_route_resolver.h"
 
 namespace datasystem {
 namespace worker {
 template <class ApiType>
 class WorkerMasterApiManagerBase {
 public:
-    WorkerMasterApiManagerBase(HostPort &hostPort, std::shared_ptr<AkSkManager> manager)
-        : workerAddr_(hostPort), akSkManager_(manager) {};
-
     /**
-     * @brief Get or Create a worker to Master api object according to an identifier.
-     * @param[in] id An identifier, can be an object key in OC scenario, or a stream name in SC scenario.
-     * @param[in] topologyPlacement Placement facade used to locate the metadata owner.
-     * @param[in] routeOptions Route options for the placement facade.
-     * @param[out] api The WorkerMasterApi instance.
-     * @return The status of this call.
+     * @brief Construct a manager with its metadata resolver bound once.
+     * @param[in] hostPort Local Worker address that outlives this manager.
+     * @param[in] manager Shared authentication manager.
+     * @param[in] routeResolver Metadata resolver that outlives this manager.
      */
-    virtual Status GetWorkerMasterApi(const std::string &id, const cluster::PlacementFacade *topologyPlacement,
-                                      const MetadataRouteOptions &routeOptions, std::shared_ptr<ApiType> &api)
+    WorkerMasterApiManagerBase(HostPort &hostPort, std::shared_ptr<AkSkManager> manager,
+                               const MetadataRouteResolver &routeResolver)
+        : workerAddr_(hostPort), akSkManager_(std::move(manager)), routeResolver_(routeResolver)
     {
-        if (routeOptions.centralizedMode) {
-            return GetWorkerMasterApi(routeOptions.masterAddress, api);
-        }
-        CHECK_FAIL_RETURN_STATUS(topologyPlacement != nullptr, K_RUNTIME_ERROR,
-                                 "Topology placement facade is empty, get WorkerMasterApi failed");
-        Timer timer;
-        cluster::PlacementDecision route;
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(topologyPlacement->Locate(id, route), "Locate metadata owner failed");
-        GetWorkerTimeCost().Append("Get master address", timer.ElapsedMilliSecond());
-        HostPort masterHostAddress;
-        RETURN_IF_NOT_OK(masterHostAddress.ParseString(route.committedOwnerAddress));
-
-        VLOG(1) << FormatString("Get masterHostAddress:[%s] for identifier:[%s]", masterHostAddress.ToString(), id);
-        return GetWorkerMasterApi(masterHostAddress, api);
     }
 
     /**
-     * @brief Get or Create a worker to Master api object according to an identifier.
-     * @param[in] id An identifier, can be an object key in OC scenario, or a stream name in SC scenario.
-     * @param[in] topologyPlacement Placement facade used to locate the metadata owner.
-     * @param[in] routeOptions Route options for the placement facade.
-     * @return The WorkerMasterApi
+     * @brief Release non-owned route dependencies and shared authentication state.
      */
-    virtual std::shared_ptr<ApiType> GetWorkerMasterApi(const std::string &id,
-                                                        const cluster::PlacementFacade *topologyPlacement,
-                                                        const MetadataRouteOptions &routeOptions)
+    virtual ~WorkerMasterApiManagerBase() = default;
+
+    /**
+     * @brief Get or create a Worker-to-Master API according to a metadata key.
+     * @param[in] key Binary-safe metadata placement key.
+     * @param[out] api WorkerMasterApi instance; unchanged when owner resolution fails.
+     * @return K_OK or metadata owner/API initialization status.
+     */
+    Status GetWorkerMasterApi(std::string_view key, std::shared_ptr<ApiType> &api)
     {
-        std::shared_ptr<ApiType> api;
-        LOG_IF_ERROR(GetWorkerMasterApi(id, topologyPlacement, routeOptions, api), "GetWorkerMasterApi failed");
-        return api;
+        HostPort owner;
+        RETURN_IF_NOT_OK(routeResolver_.ResolveOwner(key, owner));
+        return GetWorkerMasterApi(owner, api);
     }
 
     /**
@@ -120,21 +107,6 @@ public:
     }
 
     /**
-     * @brief Get or Create a worker to Master api object for masterAddress.
-     * @param[in] masterAddress The remote master ip address.
-     * @param[in] topologyPlacement Placement facade used to locate the metadata owner.
-     * @param[in] routeOptions Route options for the placement facade.
-     * @param[out] api The WorkerMasterApi instance.
-     * @return The status of this call.
-     */
-    virtual Status GetWorkerMasterApiByAddr(const std::string &masterAddress,
-                                            const cluster::PlacementFacade *topologyPlacement,
-                                            const MetadataRouteOptions &routeOptions, std::shared_ptr<ApiType> &api)
-    {
-        return GetWorkerMasterApi(masterAddress, topologyPlacement, routeOptions, api);
-    }
-
-    /**
      * @brief erase failed worker master api.
      * @param[in] masterAddr failed master addr.
      */
@@ -157,6 +129,8 @@ public:
 protected:
     HostPort &workerAddr_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
+    // Required non-owning resolver used by the key-only route; its owner must outlive this manager.
+    const MetadataRouteResolver &routeResolver_;
 };
 
 }  // namespace worker

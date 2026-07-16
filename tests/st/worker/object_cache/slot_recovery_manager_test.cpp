@@ -118,15 +118,17 @@ public:
                 }
                 return Status::OK();
             }));
-        return SlotRecoveryManager::Init(localAddress_, nullptr, nullptr, nullptr, nullptr);
+        return SlotRecoveryManager::Init(localAddress_, membership_, nullptr, nullptr, nullptr);
     }
 
     void SetActiveWorkers(const std::vector<std::string> &workers)
     {
         activeWorkers_ = workers;
-        BINEXPECT_CALL(&SlotRecoveryManagerTestHelper::GetStableActiveWorkers, ()).WillRepeatedly(Invoke([this]() {
-            return activeWorkers_;
-        }));
+        BINEXPECT_CALL(&SlotRecoveryManagerTestHelper::GetStableActiveWorkers, (_))
+            .WillRepeatedly(Invoke([this](std::vector<std::string> &activeWorkers) {
+                activeWorkers = activeWorkers_;
+                return Status::OK();
+            }));
     }
 
     void SetExecutionHook(std::function<Status(const RecoveryTaskPb &)> hook)
@@ -141,6 +143,8 @@ private:
         return store_;
     }
 
+    cluster::TopologySnapshotState snapshots_;
+    cluster::MembershipEndpointView membership_{ snapshots_ };
     HostPort localAddress_;
     std::shared_ptr<SlotRecoveryStore> store_;
     std::vector<std::string> activeWorkers_;
@@ -703,12 +707,12 @@ TEST_F(SlotRecoveryEtcdTest, HandlesMultipleWorkersFailingTogether)
         SlotRecoveryInfoPb info2;
         auto rc1 = store_->GetIncident(worker1, info1);
         auto rc2 = store_->GetIncident(worker2, info2);
-        const bool done1 =
-            rc1.IsOk() ? (info1.total_slots() != 0 && info1.completed_slots() == info1.total_slots() && info1.failed_slots() == 0)
-                       : (rc1.GetCode() == K_NOT_FOUND);
-        const bool done2 =
-            rc2.IsOk() ? (info2.total_slots() != 0 && info2.completed_slots() == info2.total_slots() && info2.failed_slots() == 0)
-                       : (rc2.GetCode() == K_NOT_FOUND);
+        const bool completed1 = info1.total_slots() != 0 && info1.completed_slots() == info1.total_slots()
+                                && info1.failed_slots() == 0;
+        const bool completed2 = info2.total_slots() != 0 && info2.completed_slots() == info2.total_slots()
+                                && info2.failed_slots() == 0;
+        const bool done1 = rc1.IsOk() ? completed1 : rc1.GetCode() == K_NOT_FOUND;
+        const bool done2 = rc2.IsOk() ? completed2 : rc2.GetCode() == K_NOT_FOUND;
         return done1 && done2;
     }));
     ExpectIncidentDeleted(worker1);

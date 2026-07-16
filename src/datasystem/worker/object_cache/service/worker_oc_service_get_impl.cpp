@@ -60,7 +60,6 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/timer.h"
-#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/validator.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/object_posix.pb.h"
@@ -72,7 +71,6 @@
 #include "datasystem/worker/object_cache/service/service_execution_policy.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_gather_layout.h"
 
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
@@ -100,42 +98,20 @@ static constexpr char URMA_WARMUP_KEY_PREFIX[] = "_urma_";
 static constexpr double US_PER_MS = 1000.0;
 
 namespace {
-bool IsEndpointViewLagStatus(const Status &status)
+Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeObjType &entry,
+    const std::string &objectKey, const std::string &address)
 {
-    return status.GetCode() == K_NOT_READY || status.GetCode() == K_NOT_FOUND;
-}
-
-Status CheckTopologyEndpointConnection(const cluster::MembershipEndpointView *membership, const HostPort &nodeAddr,
-                                       bool allowDirectoryLag)
-{
-    CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership endpoint view is not provided.");
-    cluster::MemberEndpoint endpoint;
-    Status rc = membership->ResolveByAddress(nodeAddr.ToString(), endpoint);
-    if (rc.IsError()) {
-        if (allowDirectoryLag && IsEndpointViewLagStatus(rc)) {
-            return Status::OK();
-        }
-        RETURN_STATUS(rc.GetCode(), "The node " + nodeAddr.ToString() + " could not be found in topology membership.");
+    if (workerConnected && status.GetCode() == K_NOT_FOUND && entry->GetShmUnit() == nullptr) {
+        RETURN_STATUS(K_RUNTIME_ERROR,
+                      FormatString("Object %s is not available on metadata location %s.", objectKey, address));
     }
-    if (allowDirectoryLag && endpoint.localAvailability == cluster::EndpointAvailability::UNKNOWN) {
-        return Status::OK();
+    if (status.IsError()) {
+        return status;
     }
-    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE, K_MASTER_TIMEOUT,
-                             "Disconnected from remote node " + nodeAddr.ToString());
+    if (entry.Get() == nullptr) {
+        RETURN_STATUS(K_NOT_FOUND, FormatString("GetFromRemote failed, object(%s) not exist in worker.", objectKey));
+    }
     return Status::OK();
-}
-
-std::string GetTopologyMemberDiagnosticId(const cluster::MembershipEndpointView *membership,
-                                          const std::string &address)
-{
-    if (membership == nullptr) {
-        return "";
-    }
-    cluster::MemberEndpoint endpoint;
-    if (membership->ResolveByAddress(address, endpoint).IsError()) {
-        return "";
-    }
-    return endpoint.identity.id.size() == UUID_SIZE ? BytesUuidToString(endpoint.identity.id) : endpoint.identity.id;
 }
 }  // namespace
 
@@ -174,13 +150,12 @@ std::string BuildExistRedirectExtra(const google::protobuf::RepeatedPtrField<Red
 }
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam,
-                                               worker::WorkerTopologyReferences *topologyEngine, EtcdStore *etcdStore,
+                                               EtcdStore *etcdStore,
                                                std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
                                                std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                                                std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
-      topologyEngine_(topologyEngine),
       etcdStore_(etcdStore),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
@@ -965,7 +940,8 @@ Status WorkerOcServiceGetImpl::MarkReferencedAbsentObjectsFailed(
         responseKeyToRequestKey.emplace(item.first, item.first);
     }
 
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeys);
     if (!grouped.failures.empty()) {
         LOG(WARNING) << "[Get] Skip global ref check for route failures, count: " << grouped.failures.size();
     }
@@ -1182,7 +1158,8 @@ Status WorkerOcServiceGetImpl::ProcessObjectEntryAndSyncMetadata(ReadObjectKV &o
     HostPort masterHostAddress;
     // If we can't connect to the master, then we can't update the location to the master so just set the delete flag
     // and return.
-    if (GetMetaAddress(objectKey, masterHostAddress).IsError()) {
+    if (metadataRouteResolver_ == nullptr
+        || metadataRouteResolver_->ResolveOwner(objectKey, masterHostAddress).IsError()) {
         LOG(WARNING) << "Can't connect with master " << masterHostAddress.ToString()
                      << ". Data will be automatically deleted after it is returned.";
         entry->stateInfo.SetNeedToDelete(true);
@@ -1267,7 +1244,7 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     }
 
     std::string remoteWorkerId = "UNKNOWN";
-    auto workerId = GetTopologyMemberDiagnosticId(topologyMembership_, endPoint);
+    auto workerId = endpointPolicy_ == nullptr ? "" : endpointPolicy_->GetDiagnosticMemberId(endPoint);
     if (!workerId.empty()) {
         remoteWorkerId = workerId;
     }
@@ -1691,7 +1668,8 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
     INJECT_POINT("worker.before_query_meta");
     // 1. Get map of objectKeys grouped by master
     point.RecordAndReset(PerfKey::WORKER_QUERY_META_ROUTER);
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeys);
     auto &objKeysGrpByMaster = grouped.groups;
     std::unordered_set<std::string> routeFailedObjectKeys;
     routeFailedObjectKeys.reserve(grouped.failures.size());
@@ -2218,8 +2196,9 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddr.ParseString(address),
                                          FormatString("Parse object %s address %s failed", objKey, address));
         // Step1: Try to get data from local AZ's worker
-        checkConnectStatus = CheckTopologyEndpointConnection(
-            topologyMembership_, hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
+        CHECK_FAIL_RETURN_STATUS(endpointPolicy_ != nullptr, K_NOT_READY, "Object endpoint policy is unavailable");
+        checkConnectStatus = endpointPolicy_->CheckEndpoint(
+            hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
         if (checkConnectStatus.IsOk()) {
             ifWorkerConnected = true;
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
@@ -2249,16 +2228,7 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
         CheckAndReturnPullNotFoundForRetry(meta, address, entry, checkConnectStatus, status);
         isFromL2 = true;
     }
-    if (ifWorkerConnected && status.GetCode() == K_NOT_FOUND && entry->GetShmUnit() == nullptr) {
-        RETURN_STATUS(K_RUNTIME_ERROR,
-                      FormatString("Object %s is not available on metadata location %s.", objKey, address));
-    }
-    RETURN_IF_NOT_OK(status);
-
-    // Either get from worker fail or address is null, we roll back and remove objectId from object table.
-    if (entry.Get() == nullptr) {
-        RETURN_STATUS(K_NOT_FOUND, FormatString("GetFromRemote failed, object(%s) not exist in worker.", objKey));
-    }
+    RETURN_IF_NOT_OK(ValidateRemoteGetResult(ifWorkerConnected, status, entry, objKey, address));
 
     LOG(INFO) << FormatString("object(%s) get from remote finish, size:%zu, use %f millisecond.", objKey,
                               entry->GetDataSize(), endToEndTimer.ElapsedMilliSecond());
@@ -2419,11 +2389,11 @@ void WorkerOcServiceGetImpl::AsyncUpdateSingleLocationFunc(UpdateLocationTask &&
     req.set_version(task.GetParams().front().version);
     VLOG(1) << FormatString("Send copy metadata to master req: %s", LogHelper::IgnoreSensitive(req));
     master::CreateCopyMetaRspPb rsp;
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(task.GetParams().front().objectKey, topologyPlacement_,
-                                                    topologyRouteOptions_);
-    if (workerMasterApi == nullptr) {
-        LOG(ERROR) << "GetWorkerMasterApi failed, objectKey: " << task.GetParams().front().objectKey;
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    auto routeRc = workerMasterApiManager_->GetWorkerMasterApi(task.GetParams().front().objectKey, workerMasterApi);
+    if (routeRc.IsError()) {
+        LOG(ERROR) << "GetWorkerMasterApi failed, objectKey: " << task.GetParams().front().objectKey
+                   << ", status: " << routeRc.ToString();
         DeleteObjectsMetaUnacked({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
         ClearObjectsByObjectKeys({ { task.GetParams().front().objectKey, task.GetParams().front().version } });
         return;
@@ -2458,8 +2428,8 @@ void WorkerOcServiceGetImpl::AsyncBatchUpdateLocationFunc(UpdateLocationTask &&t
         objectKeys.emplace_back(param.objectKey);
     }
     // grouped by master address
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
-    grouped.AppendFailuresToGroup();
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeys);
+    AppendRouteFailures(grouped);
     auto &objKeysGrpByMaster = grouped.groups;
     std::unordered_map<HostPort, std::vector<UpdateLocationParam>> paramsGroupByAddress;
     paramsGroupByAddress.reserve(objKeysGrpByMaster.size());
@@ -2619,11 +2589,8 @@ void WorkerOcServiceGetImpl::ClearObjectsByObjectKeys(const std::unordered_map<s
 Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint64_t version)
 {
     INJECT_POINT("worker.remove_location");
-    CHECK_FAIL_RETURN_STATUS(topologyPlacement_ != nullptr, StatusCode::K_NOT_READY,
-                             "Topology placement facade is not provided.");
-    auto api = workerMasterApiManager_->GetWorkerMasterApi(objectKey, topologyPlacement_, topologyRouteOptions_);
-    CHECK_FAIL_RETURN_STATUS(api != nullptr, StatusCode::K_INVALID,
-                             "Getting master api failed. object key: " + objectKey);
+    std::shared_ptr<WorkerMasterOCApi> api;
+    RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(objectKey, api));
     RemoveMetaReqPb req;
     RemoveMetaRspPb rsp;
     req.add_ids(objectKey);
@@ -2633,13 +2600,6 @@ Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api->RemoveMeta(req, rsp),
                                      FormatString("[ObjectKey %s] Remove location failed.", objectKey));
     return Status::OK();
-}
-
-Status WorkerOcServiceGetImpl::GetMetaAddress(const std::string &objKey, HostPort &masterAddr) const
-{
-    CHECK_FAIL_RETURN_STATUS(topologyPlacement_ != nullptr, StatusCode::K_NOT_READY,
-                             "Topology placement facade is not provided.");
-    return ResolveMetaOwner(objKey, topologyPlacement_, topologyRouteOptions_, masterAddr);
 }
 
 bool WorkerOcServiceGetImpl::IsNearDeathObject(const std::string &location, const ObjectMetaPb &meta)
@@ -2797,7 +2757,8 @@ Status WorkerOcServiceGetImpl::GetMapOfObjectKeys(const std::vector<std::basic_s
                                                   std::unordered_map<std::string, ObjectLocationInfoPb> &result,
                                                   Status &lastRc)
 {
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeys);
     auto &objKeysGrpByMaster = grouped.groups;
     for (auto &[master, objs] : objKeysGrpByMaster) {
         HostPort workerAddr = master;
@@ -2882,9 +2843,8 @@ Status WorkerOcServiceGetImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRsp
 Status WorkerOcServiceGetImpl::QueryExistMetadataViaPureQueryMeta(const std::vector<std::string> &objectKeys,
                                                                   std::vector<master::QueryMetaInfoPb> &queryMetas)
 {
-    auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_,
-                                                                       topologyRouteOptions_);
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Get masterApi failed, cannot query Exist");
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
     master::PureQueryMetaReqPb req;
     req.set_redirect(true);
     req.set_address(localAddress_.ToString());
@@ -3077,8 +3037,8 @@ Status WorkerOcServiceGetImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaI
         }
         return Status::OK();
     }
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, topologyPlacement_, topologyRouteOptions_);
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
     auto reqCopy = req;
     return workerMasterApi->GetMetaInfo(reqCopy, rsp);
 }

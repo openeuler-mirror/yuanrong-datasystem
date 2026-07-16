@@ -25,7 +25,6 @@ ds_cc_library(
         "slot_recovery_manager.h",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
         ":slot_recovery_store",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/inject:common_inject",

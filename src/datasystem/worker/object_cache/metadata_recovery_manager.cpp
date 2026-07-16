@@ -29,7 +29,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/request_table.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
-#include "datasystem/worker/object_cache/object_meta_route_helper.h"
+#include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/worker/object_cache/device/device_obj_cache.h"
 
@@ -103,14 +103,13 @@ Status SaveRecoveredContentToMemory(const ObjectMetaPb &meta, const std::shared_
 MetaDataRecoveryManager::MetaDataRecoveryManager(
     const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, ClusterAccess clusterAccess,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
-    uint64_t metadataSize, const std::shared_ptr<WorkerOcEvictionManager> &evictionManager,
-    const std::shared_ptr<ThreadPool> &memCpyThreadPool, const cluster::PlacementFacade *topologyPlacement,
-    worker::MetadataRouteOptions topologyRouteOptions, RecoveredContentSaver recoveredContentSaver)
+    const worker::MetadataRouteResolver &metadataRoute, uint64_t metadataSize,
+    const std::shared_ptr<WorkerOcEvictionManager> &evictionManager,
+    const std::shared_ptr<ThreadPool> &memCpyThreadPool, RecoveredContentSaver recoveredContentSaver)
     : localAddress_(localAddress),
       objectTable_(objectTable),
       clusterAccess_(std::move(clusterAccess)),
-      topologyPlacement_(topologyPlacement),
-      topologyRouteOptions_(topologyRouteOptions),
+      metadataRoute_(metadataRoute),
       workerMasterApiManager_(workerMasterApiManager),
       metadataSize_(metadataSize),
       evictionManager_(evictionManager),
@@ -193,8 +192,8 @@ MetaDataRecoveryManager::RecoverySummary MetaDataRecoveryManager::RecoverMetadat
         return summary;
     }
 
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
-    grouped.AppendFailuresToGroup();
+    auto grouped = metadataRoute_.GroupOwners(objectKeys);
+    AppendRouteFailures(grouped);
     auto &groupedByMaster = grouped.groups;
     std::vector<const GroupItem *> groupedByMasterKeys;
     groupedByMasterKeys.reserve(groupedByMaster.size());
@@ -229,8 +228,8 @@ MetaDataRecoveryManager::GroupedByMaster MetaDataRecoveryManager::BuildGroupedBy
     const std::vector<std::string> &objectKeys, const std::string &stanbyAddr) const
 {
     if (stanbyAddr.empty()) {
-        auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
-        grouped.AppendFailuresToGroup();
+        auto grouped = metadataRoute_.GroupOwners(objectKeys);
+        AppendRouteFailures(grouped);
         return std::move(grouped.groups);
     }
     HostPort masterAddr;
@@ -400,8 +399,8 @@ MetaDataRecoveryManager::MetasByMaster MetaDataRecoveryManager::GroupRecoveryMet
         masterAddr.ParseString(stanbyMasterAddr);
         groupedKeysByMaster[masterAddr] = { objectKeys.begin(), objectKeys.end() };
     } else {
-        auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
-        grouped.AppendFailuresToGroup();
+        auto grouped = metadataRoute_.GroupOwners(objectKeys);
+        AppendRouteFailures(grouped);
         groupedKeysByMaster = std::move(grouped.groups);
     }
 

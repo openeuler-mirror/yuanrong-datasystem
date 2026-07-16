@@ -26,8 +26,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/worker/worker_topology_references.h"
-
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
@@ -104,7 +102,7 @@ void HandleGroupKeysByMetaOwnerFailures(const std::unordered_map<std::string, St
 }
 
 std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
-    worker::WorkerTopologyReferences *topologyEngine,
+    const ObjectEndpointPolicy &endpointPolicy,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
     const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
     std::unordered_set<std::string> &failedIds)
@@ -114,7 +112,7 @@ std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
         LOG(WARNING) << "Skip ClearObject because master address is unresolved, object size: " << objectKeys.size();
         return nullptr;
     }
-    auto rc = worker::CheckTopologyMemberConnection(topologyEngine, masterAddr);
+    auto rc = endpointPolicy.CheckEndpoint(masterAddr, false);
     if (rc.IsError()) {
         InsertFailedIds(objectKeys, failedIds);
         LOG(ERROR) << "CheckConnection before ClearObject failed, status: " << rc.ToString();
@@ -134,15 +132,16 @@ WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
     std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager,
     std::shared_ptr<WorkerOcServiceGlobalReferenceImpl> gRefProc, std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc,
-    MetaDataRecoveryManager *metadataRecoveryManager, worker::WorkerTopologyReferences *topologyEngine,
-    std::string localAddress)
+    MetaDataRecoveryManager *metadataRecoveryManager, const worker::MetadataRouteResolver &metadataRoute,
+    const ObjectEndpointPolicy &endpointPolicy, std::string localAddress)
     : objectTable_(std::move(objectTable)),
       globalRefTable_(std::move(globalRefTable)),
       workerMasterApiManager_(std::move(workerMasterApiManager)),
       gRefProc_(std::move(gRefProc)),
       deleteProc_(std::move(deleteProc)),
       metadataRecoveryManager_(metadataRecoveryManager),
-      topologyEngine_(topologyEngine),
+      metadataRoute_(metadataRoute),
+      endpointPolicy_(endpointPolicy),
       localAddress_(std::move(localAddress))
 {
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
@@ -373,13 +372,13 @@ void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(const std::vec
     if (objectKeys.empty()) {
         return;
     }
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyEngine_);
+    auto grouped = metadataRoute_.GroupOwners(objectKeys);
     auto &objKeysGrpByMasterId = grouped.groups;
     HandleGroupKeysByMetaOwnerFailures(grouped.failures, failedIds);
 
     for (auto &item : objKeysGrpByMasterId) {
         auto workerMasterApi =
-            GetWorkerMasterApiForClear(topologyEngine_, workerMasterApiManager_, item.first, item.second, failedIds);
+            GetWorkerMasterApiForClear(endpointPolicy_, workerMasterApiManager_, item.first, item.second, failedIds);
         if (workerMasterApi == nullptr) {
             continue;
         }

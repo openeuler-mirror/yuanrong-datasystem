@@ -17,7 +17,7 @@
 #ifndef DATASYSTEM_MIGRATE_DATA_SPILL_NODE_SELECTOR_H
 #define DATASYSTEM_MIGRATE_DATA_SPILL_NODE_SELECTOR_H
 
-#include "datasystem/worker/worker_topology_references.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/selection_strategy.h"
@@ -27,8 +27,7 @@ namespace object_cache {
 
 class SpillNodeSelector : public SelectionStrategy {
 public:
-    SpillNodeSelector(worker::WorkerTopologyReferences *topologyEngine, HostPort &localAddress)
-        : topologyEngine_(topologyEngine), localAddress_(localAddress)
+    explicit SpillNodeSelector(HostPort &localAddress) : localAddress_(localAddress)
     {
         excludedNodes_.insert(localAddress_.ToString());
     }
@@ -69,7 +68,6 @@ public:
     }
 
 private:
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     HostPort &localAddress_;
     std::unordered_set<std::string> excludedNodes_;
 };

@@ -26,7 +26,7 @@
 #include <utility>
 
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
-#include "datasystem/worker/worker_topology_references.h"
+#include "datasystem/worker/object_cache/object_endpoint_policy.h"
 
 namespace datasystem {
 namespace cluster {
@@ -36,16 +36,23 @@ class CancellationToken;
 namespace object_cache {
 class DataMigrator {
 public:
-    /** @brief Sentinel used by legacy callers whose retry count is not bounded. */
+    /**
+     * @brief Sentinel used by legacy callers whose retry count is not bounded.
+     */
     static constexpr int UNLIMITED_RETRY_COUNT = -1;
 
-    DataMigrator(MigrateType type, worker::WorkerTopologyReferences *topologyEngine, HostPort &localAddress,
-                 std::shared_ptr<AkSkManager> manager, std::shared_ptr<ObjectTable> objectTable,
+    DataMigrator(MigrateType type, const worker::MetadataRouteResolver &metadataRoute,
+                 const cluster::MembershipEndpointView &membership, const ObjectEndpointPolicy &endpointPolicy,
+                 const std::atomic<bool> *exitRequested, HostPort &localAddress, std::shared_ptr<AkSkManager> manager,
+                 std::shared_ptr<ObjectTable> objectTable,
                  const std::string &taskId = "", int maxRetryCount = UNLIMITED_RETRY_COUNT,
                  std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max(),
                  const cluster::CancellationToken *cancellation = nullptr)
         : type_(type),
-          topologyEngine_(topologyEngine),
+          metadataRoute_(metadataRoute),
+          membership_(membership),
+          endpointPolicy_(endpointPolicy),
+          exitRequested_(exitRequested),
           localAddress_(localAddress),
           akSkManager_(std::move(manager)),
           objectTable_(std::move(objectTable)),
@@ -312,7 +319,10 @@ private:
                                      std::unordered_map<uint32_t, int> &sameNodeRetryCounts);
 
     MigrateType type_;
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
+    const worker::MetadataRouteResolver &metadataRoute_;
+    const cluster::MembershipEndpointView &membership_;
+    const ObjectEndpointPolicy &endpointPolicy_;
+    const std::atomic<bool> *exitRequested_{ nullptr };
     HostPort &localAddress_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<ObjectTable> objectTable_;

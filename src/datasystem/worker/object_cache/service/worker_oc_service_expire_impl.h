@@ -17,7 +17,6 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_EXPIRE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_EXPIRE_IMPL_H
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -30,8 +29,7 @@ namespace object_cache {
 
 class WorkerOcServiceExpireImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
-                              std::shared_ptr<AkSkManager> akSkManager);
+    WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<AkSkManager> akSkManager);
 
     /**
      * @brief Set expiration time for metas by objectKeys.
@@ -56,8 +54,6 @@ private:
     Status ExpireFromMaster(std::vector<std::string> objectKeys, const HostPort &masterAddr, uint32_t ttlSeconds,
                             std::vector<std::string> &absentObj, std::unordered_set<std::string> &objExpireFailed,
                             ExpireRspPb &rsp);
-
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ThreadPool> batchExpireThreadPool_{ nullptr };
 

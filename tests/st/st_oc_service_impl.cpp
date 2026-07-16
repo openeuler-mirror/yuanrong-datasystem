@@ -58,12 +58,14 @@ Status StOCServiceImpl::GetWorkerGRefTable(const GRefTableReqPb &req, GRefTableR
 Status StOCServiceImpl::GetCmNodeTable(const CmNodeTableReqPb &req, CmNodeTableRspPb &rsp)
 {
     (void)req;
-    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "topology engine is null");
-    for (const auto &worker : worker::GetValidTopologyMembers(topologyEngine_)) {
+    CHECK_FAIL_RETURN_STATUS(membership_ != nullptr, K_NOT_READY, "topology membership view is null");
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(membership_->GetSnapshot(snapshot));
+    for (const auto *member : snapshot->CommittedMembers()) {
         auto nodePb = rsp.add_cm_node_table();
-        nodePb->set_hostport(worker);
+        nodePb->set_hostport(member->identity.address);
         nodePb->set_time_epoch("0");
-        nodePb->set_state(worker::IsTopologyMemberPreLeaving(topologyEngine_, worker) ? "pre_leaving" : "active");
+        nodePb->set_state(member->state == cluster::MemberState::PRE_LEAVING ? "pre_leaving" : "active");
         nodePb->set_addition_event_type("ready");
     }
     return Status::OK();

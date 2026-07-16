@@ -161,8 +161,8 @@ private:
 
 class MigrateTestWorkerMasterApiManager : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
 public:
-    explicit MigrateTestWorkerMasterApiManager(HostPort &workerAddr)
-        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr)
+    MigrateTestWorkerMasterApiManager(HostPort &workerAddr, const worker::MetadataRouteResolver &metadataRoute)
+        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr, metadataRoute)
     {
     }
 
@@ -223,7 +223,7 @@ public:
     void Init()
     {
         objectTable_ = std::make_shared<ObjectTable>();
-        workerMasterApiManager_ = std::make_shared<MigrateTestWorkerMasterApiManager>(localAddress_);
+        workerMasterApiManager_ = std::make_shared<MigrateTestWorkerMasterApiManager>(localAddress_, metadataRoute_);
         WorkerOcServiceCrudParam param{
             .workerMasterApiManager = workerMasterApiManager_,
             .workerRequestManager = requestManager_,
@@ -235,17 +235,16 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .topologyEngine = nullptr,
-            .topologyPlacement = &placement_,
-            .topologyMembership = nullptr,
-            .topologyRouteOptions = worker::MetadataRouteOptions{},
+            .metadataRouteResolver = &metadataRoute_,
+            .endpointPolicy = nullptr,
+            .exitRequested = &localExiting_,
+            .allowDirectoryLag = false,
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        topologyReferences_.localExiting = &localExiting_;
-        impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, &topologyReferences_, threadPool_, nullptr,
-                                                             "127.0.0.1:18888", rateController_);
+        impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, threadPool_, nullptr, "127.0.0.1:18888",
+                                                             rateController_);
         TimerQueue::GetInstance()->Initialize();
     }
 
@@ -401,6 +400,7 @@ public:
 
 protected:
     MigrateTestPlacementFacade placement_;
+    worker::MetadataRouteResolver metadataRoute_{ &placement_, worker::MetadataRouteOptions{} };
     HostPort localAddress_{ "127.0.0.1", 18482 };
     datasystem::memory::Allocator *allocator_{ nullptr };
     std::shared_ptr<ObjectTable> objectTable_;
@@ -411,18 +411,17 @@ protected:
     WorkerRequestManager requestManager_;
     std::shared_ptr<MigrateDataRateController> rateController_;
     std::atomic<bool> localExiting_{ false };
-    WorkerTopologyReferences topologyReferences_;
 };
 
 TEST(MetaOwnerRouteGroupsTest, AppendFailuresToGroupDoesNotCreateEmptyGroupWithoutFailures)
 {
     MetaOwnerRouteGroups grouped;
-    grouped.AppendFailuresToGroup();
+    AppendRouteFailures(grouped);
     EXPECT_TRUE(grouped.groups.empty());
 
     const std::string failedKey = "failed-key";
     grouped.failures.emplace(failedKey, Status(K_NOT_FOUND, "route failed"));
-    grouped.AppendFailuresToGroup();
+    AppendRouteFailures(grouped);
     ASSERT_EQ(grouped.groups.size(), size_t(1));
     auto iter = grouped.groups.find(HostPort());
     ASSERT_NE(iter, grouped.groups.end());
@@ -436,7 +435,8 @@ TEST(MetaOwnerRouteGroupsTest, BuildGroupsFromTopologyPlacementAndKeepsPerKeyFai
     masterAddr.ParseString("127.0.0.1:18481");
     placement.SetOwner("ok-key", masterAddr);
 
-    auto grouped = BuildMetaOwnerRouteGroups({ "ok-key", "missing-key" }, &placement, worker::MetadataRouteOptions{});
+    worker::MetadataRouteResolver metadataRoute(&placement, worker::MetadataRouteOptions{});
+    auto grouped = metadataRoute.GroupOwners({ "ok-key", "missing-key" });
     ASSERT_EQ(grouped.groups.size(), size_t(1));
     auto iter = grouped.groups.find(masterAddr);
     ASSERT_NE(iter, grouped.groups.end());
@@ -602,6 +602,29 @@ TEST_F(MigrateDataServiceTest, ReplacePrimaryRetryFailed)
     master::ReplacePrimaryReqPb req;
     master::ReplacePrimaryRspPb rsp;
     DS_ASSERT_NOT_OK(impl_->ReplacePrimaryRetry(remoteApi, req, rsp));
+}
+
+TEST_F(MigrateDataServiceTest, PureQueryMetaMovingWithoutRedirectInfoRetries)
+{
+    constexpr size_t expectedRpcCalls = 2;
+    size_t rpcCalls = 0;
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::PureQueryMetaOnce, (_, _, _))
+        .Times(expectedRpcCalls)
+        .WillRepeatedly(Invoke([&rpcCalls](const std::shared_ptr<worker::WorkerMasterOCApi> &,
+                                          master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &rsp) {
+            ++rpcCalls;
+            rsp.set_meta_is_moving(rpcCalls == 1);
+            return Status::OK();
+        }));
+    auto remoteApi = std::make_shared<MigrateTestWorkerMasterOCApi>(HostPort("127.0.0.1:18481"),
+                                                                    HostPort("127.0.0.1:18482"));
+    master::PureQueryMetaReqPb req;
+    master::PureQueryMetaRspPb rsp;
+
+    DS_ASSERT_OK(impl_->PureQueryMetaRetry(remoteApi, req, rsp));
+
+    EXPECT_EQ(rpcCalls, expectedRpcCalls);
+    EXPECT_FALSE(rsp.meta_is_moving());
 }
 
 TEST_F(MigrateDataServiceTest, DISABLED_TestQueryMetaFromMasterMeetsRPCError)
@@ -848,14 +871,14 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .topologyEngine = nullptr,
-            .topologyPlacement = nullptr,
-            .topologyMembership = nullptr,
-            .topologyRouteOptions = worker::MetadataRouteOptions{},
+            .metadataRouteResolver = nullptr,
+            .endpointPolicy = nullptr,
+            .exitRequested = nullptr,
+            .allowDirectoryLag = false,
         };
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr, nullptr,
+        impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr,
                                                          HostPort("127.0.0.1:18888"), rateController_);
     }
 

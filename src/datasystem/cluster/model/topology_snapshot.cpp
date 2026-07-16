@@ -95,6 +95,18 @@ Status ValidateAddress(const std::string &address)
     return Status::OK();
 }
 
+Status FindExactMember(const TopologySnapshot &snapshot, const MemberIdentity &identity, const Member *&member)
+{
+    CHECK_FAIL_RETURN_STATUS(!identity.id.empty() && !identity.address.empty(), K_INVALID,
+                             "incomplete migration member identity");
+    const Member *candidate = nullptr;
+    auto rc = snapshot.FindMemberByAddress(identity.address, candidate);
+    CHECK_FAIL_RETURN_STATUS(rc.IsOk() && candidate != nullptr && candidate->identity == identity, K_INVALID,
+                             "migration member identity does not match topology");
+    member = candidate;
+    return Status::OK();
+}
+
 bool IsSha256Hex(const std::string &digest)
 {
     return digest.size() == SHA256_HEX_SIZE &&
@@ -149,6 +161,8 @@ Status TopologySnapshot::BuildIndexes()
 void TopologySnapshot::ReserveIndexes()
 {
     size_t committedMemberCount = 0;
+    size_t activeMemberCount = 0;
+    size_t failedMemberCount = 0;
     size_t committedTokenCount = 0;
     size_t prospectiveTokenCount = 0;
     for (const auto &member : state_.members) {
@@ -156,6 +170,8 @@ void TopologySnapshot::ReserveIndexes()
             ++committedMemberCount;
             committedTokenCount += member.tokens.size();
         }
+        activeMemberCount += member.state == MemberState::ACTIVE ? 1 : 0;
+        failedMemberCount += member.state == MemberState::FAILED ? 1 : 0;
         if (IsProspective(member.state, state_.activeBatch)) {
             prospectiveTokenCount += member.tokens.size();
         }
@@ -163,6 +179,8 @@ void TopologySnapshot::ReserveIndexes()
     addressIndex_.reserve(state_.members.size());
     idIndex_.reserve(state_.members.size());
     committedMembers_.reserve(committedMemberCount);
+    activeMembers_.reserve(activeMemberCount);
+    failedMembers_.reserve(failedMemberCount);
     committedTokenOwners_.reserve(committedTokenCount);
     prospectiveTokenOwners_.reserve(prospectiveTokenCount);
 }
@@ -190,6 +208,11 @@ Status TopologySnapshot::BuildIndexEntries()
             for (uint32_t token : member.tokens) {
                 committedTokenOwners_.emplace_back(token, &member);
             }
+        }
+        if (member.state == MemberState::ACTIVE) {
+            activeMembers_.emplace_back(&member);
+        } else if (member.state == MemberState::FAILED) {
+            failedMembers_.emplace_back(&member);
         }
         if (IsProspective(member.state, state_.activeBatch)) {
             for (uint32_t token : member.tokens) {
@@ -250,6 +273,67 @@ Status TopologySnapshot::FindMemberById(const std::string &id, const Member *&me
 const std::vector<const Member *> &TopologySnapshot::CommittedMembers() const noexcept
 {
     return committedMembers_;
+}
+
+const std::vector<const Member *> &TopologySnapshot::ActiveMembers() const noexcept
+{
+    return activeMembers_;
+}
+
+const std::vector<const Member *> &TopologySnapshot::FailedMembers() const noexcept
+{
+    return failedMembers_;
+}
+
+Status TopologySnapshot::FindNextCommittedMember(const std::string &address, const Member *&member) const
+{
+    const Member *current = nullptr;
+    auto rc = FindMemberByAddress(address, current);
+    CHECK_FAIL_RETURN_STATUS(rc.IsOk() && current != nullptr && IsCommitted(current->state), K_NOT_FOUND,
+                             "committed member address not found");
+    CHECK_FAIL_RETURN_STATUS(committedMembers_.size() > 1, K_NOT_FOUND, "no distinct committed member");
+    auto iter = std::upper_bound(
+        committedMembers_.begin(), committedMembers_.end(), address,
+        [](const std::string &value, const Member *candidate) { return value < candidate->identity.address; });
+    const Member *candidate = iter == committedMembers_.end() ? committedMembers_.front() : *iter;
+    CHECK_FAIL_RETURN_STATUS(candidate->identity.address != address, K_NOT_FOUND, "no distinct committed member");
+    member = candidate;
+    return Status::OK();
+}
+
+Status TopologySnapshot::FindNextActiveMember(const std::string &address, const Member *&member) const
+{
+    CHECK_FAIL_RETURN_STATUS(!activeMembers_.empty(), K_NOT_FOUND, "no active member");
+    auto iter = std::upper_bound(
+        activeMembers_.begin(), activeMembers_.end(), address,
+        [](const std::string &value, const Member *candidate) { return value < candidate->identity.address; });
+    const Member *candidate = iter == activeMembers_.end() ? activeMembers_.front() : *iter;
+    CHECK_FAIL_RETURN_STATUS(candidate->identity.address != address, K_NOT_FOUND, "no distinct active member");
+    member = candidate;
+    return Status::OK();
+}
+
+Status TopologySnapshot::ValidateMigrationFence(const TopologyMigrationFence &fence) const
+{
+    if (fence.topologyVersion > Version()) {
+        RETURN_STATUS(K_TRY_AGAIN, "migration fence topology is newer than local Snapshot");
+    }
+    CHECK_FAIL_RETURN_STATUS(fence.topologyVersion != 0 && fence.topologyVersion == Version(), K_INVALID,
+                             "migration fence topology version is stale or incomplete");
+    CHECK_FAIL_RETURN_STATUS(state_.activeBatch.has_value() && fence.batchEpoch != 0
+                                 && state_.activeBatch->epoch == fence.batchEpoch,
+                             K_INVALID, "migration fence batch epoch does not match topology");
+    const Member *source = nullptr;
+    const Member *target = nullptr;
+    RETURN_IF_NOT_OK(FindExactMember(*this, fence.source, source));
+    RETURN_IF_NOT_OK(FindExactMember(*this, fence.target, target));
+    const auto type = state_.activeBatch->type;
+    const bool scaleOut = type == TopologyChangeType::SCALE_OUT && IsCommitted(source->state)
+                          && target->state == MemberState::JOINING;
+    const bool scaleIn = type == TopologyChangeType::SCALE_IN && source->state == MemberState::LEAVING
+                         && target->state == MemberState::ACTIVE && !(source->identity == target->identity);
+    CHECK_FAIL_RETURN_STATUS(scaleOut || scaleIn, K_INVALID, "migration fence participants do not match batch");
+    return Status::OK();
 }
 
 }  // namespace datasystem::cluster

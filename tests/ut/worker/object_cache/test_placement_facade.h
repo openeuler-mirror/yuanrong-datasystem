@@ -77,7 +77,7 @@ private:
 
 class TestPlacementFacade final {
 public:
-    TestPlacementFacade() : facade_(snapshots_, algorithm_)
+    TestPlacementFacade() : facade_(snapshots_, algorithm_, "127.0.0.1:1")
     {
         cluster::TopologyState topology;
         topology.version = 1;

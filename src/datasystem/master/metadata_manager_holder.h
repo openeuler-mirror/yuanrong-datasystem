@@ -18,9 +18,12 @@
 #ifndef DATASYSTEM_MASTER_METADATA_MANAGER_HOLDER_H
 #define DATASYSTEM_MASTER_METADATA_MANAGER_HOLDER_H
 
+#include <atomic>
 #include <memory>
 #include <shared_mutex>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/kvstore/rocksdb/rocks_store.h"
@@ -28,7 +31,6 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -43,7 +45,14 @@ struct MetadataManagerHolderParam {
     EtcdStore *etcdStore;
     std::shared_ptr<PersistenceApi> persistenceApi;
     HostPort masterAddress;
-    worker::WorkerTopologyReferences *topologyEngine;
+    const cluster::PlacementFacade *placement;
+    const cluster::MembershipEndpointView *membership;
+    bool centralizedMetadata;
+    HostPort metadataAddress;
+    std::string localAddress;
+    bool isRestart;
+    bool controlBackendAvailableAtStartup;
+    const std::atomic<bool> *exitRequested;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerService;
     object_cache::WorkerWorkerOCServiceImpl *workerWorkerService;
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager;
@@ -108,7 +117,14 @@ protected:
     EtcdStore *etcdStore_ = nullptr;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     HostPort masterAddress_;
-    worker::WorkerTopologyReferences *topologyEngine_ = nullptr;
+    const cluster::PlacementFacade *placement_{ nullptr };
+    const cluster::MembershipEndpointView *membership_{ nullptr };
+    bool centralizedMetadata_{ false };
+    HostPort metadataAddress_;
+    std::string localAddress_;
+    bool isRestart_{ false };
+    bool controlBackendAvailableAtStartup_{ true };
+    const std::atomic<bool> *exitRequested_{ nullptr };
     object_cache::MasterWorkerOCServiceImpl *masterWorkerService_ = nullptr;
     object_cache::WorkerWorkerOCServiceImpl *workerWorkerService_ = nullptr;
     std::shared_ptr<master::RpcSessionManager> rpcSessionManager_;

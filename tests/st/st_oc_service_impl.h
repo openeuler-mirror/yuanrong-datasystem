@@ -18,6 +18,7 @@
 #define DATASYSTEM_ST_OBJECT_CACHE_ST_SERVICE_IMPL_H
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/protos/ut_object.irpc.pb.h"
 #include "datasystem/protos/ut_object.service.rpc.pb.h"
@@ -31,11 +32,11 @@ namespace st {
 class StOCServiceImpl : public UtOCService, public IUtOCService {
 public:
     explicit StOCServiceImpl(object_cache::WorkerOCServiceImpl *workerOc,
-                             worker::WorkerTopologyReferences *topologyEngine,
+                             const cluster::MembershipEndpointView *membership,
                              MetadataManagerHolder *metadataManagerHolder,
                              std::shared_ptr<AkSkManager> akSkManager)
         : workerOc_(workerOc),
-          topologyEngine_(topologyEngine),
+          membership_(membership),
           metadataManagerHolder_(metadataManagerHolder),
           akSkManager_(std::move(akSkManager))
     {
@@ -74,7 +75,7 @@ public:
 
 private:
     object_cache::WorkerOCServiceImpl *workerOc_;
-    worker::WorkerTopologyReferences *topologyEngine_;
+    const cluster::MembershipEndpointView *membership_;
     MetadataManagerHolder *metadataManagerHolder_;
     std::shared_ptr<AkSkManager> akSkManager_;
 };

@@ -31,6 +31,7 @@ add_library(cluster_topology STATIC
         algorithm/algorithm_catalog.cpp
         algorithm/hash_algorithm.cpp
         control/topology_controller.cpp
+        control/topology_controller_runtime.cpp
         control/topology_failure_classifier.cpp
         control/topology_plan_builder.cpp
         control/topology_task_materializer.cpp
@@ -55,6 +56,7 @@ target_link_libraries(cluster_topology PUBLIC
         cluster_topology_keyspace
         cluster_topology_scope
         cluster_topology_protos
+        topology_recovery_reporter
         common_ak_sk
         common_log
         common_util)

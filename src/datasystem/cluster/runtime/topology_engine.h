@@ -10,9 +10,13 @@
 #define DATASYSTEM_CLUSTER_RUNTIME_TOPOLOGY_ENGINE_H
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <unordered_map>
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/routing/placement_facade.h"
@@ -21,7 +25,28 @@
 #include "datasystem/cluster/runtime/topology_runtime_types.h"
 #include "datasystem/common/util/thread.h"
 
+namespace datasystem {
+class EtcdStore;
+class ICoordinatorServiceProxy;
+}
+
 namespace datasystem::cluster {
+
+class HashAlgorithm;
+class ITopologyPhaseCallbacks;
+class TopologyControllerRuntime;
+class TopologyRecoveryReporter;
+
+/**
+ * @brief Bind and safely drain the Worker RPC ingress used by Coordinator-backed watches.
+ */
+struct CoordinatorWatchIngress {
+    using Handler =
+        std::function<Status(const std::string &, int64_t, CoordinationEvent &&)>;
+
+    std::function<Status(Handler)> bind;
+    std::function<Status(std::chrono::steady_clock::time_point)> unbindAndDrain;
+};
 
 /**
  * @brief Worker-role composition root; not a business mega-facade.
@@ -29,17 +54,135 @@ namespace datasystem::cluster {
 class TopologyEngine final {
 public:
     /**
-     * @brief Validate options and construct all Worker-role components.
-     * @param[in] options Worker-role identity and bounded runtime options.
-     * @param[in] backend Worker-role backend that outlives the Engine.
-     * @param[in] routingAlgorithm Routing algorithm that outlives the Engine.
-     * @param[in] callbacks Business callbacks that outlive the Engine.
-     * @param[out] engine Constructed composition root; unchanged on failure.
-     * @return K_OK on success; K_INVALID or construction error otherwise.
+     * @brief Collect the complete Worker topology composition without exposing its subcomponents.
      */
-    static Status Create(TopologyEngineOptions options, ICoordinationBackend &backend,
-                         const IRoutingAlgorithm &routingAlgorithm, ITopologyPhaseCallbacks &callbacks,
-                         std::unique_ptr<TopologyEngine> &engine);
+    class Builder final {
+    public:
+        /**
+         * @brief Construct an empty one-shot Builder with bounded defaults.
+         */
+        Builder();
+
+        /**
+         * @brief Release resources retained by an unused or failed Builder.
+         */
+        ~Builder();
+
+        /**
+         * @brief Disable copying owned backend resources.
+         */
+        Builder(const Builder &) = delete;
+
+        /**
+         * @brief Disable copy assignment of owned backend resources.
+         */
+        Builder &operator=(const Builder &) = delete;
+
+        /**
+         * @brief Bind the cluster name; an empty name remains valid.
+         * @param[in] clusterName Cluster name to consume.
+         * @return This Builder.
+         */
+        Builder &SetClusterName(std::string clusterName);
+
+        /**
+         * @brief Bind the canonical local member address.
+         * @param[in] localAddress Canonical local address to consume.
+         * @return This Builder.
+         */
+        Builder &SetLocalAddress(std::string localAddress);
+
+        /**
+         * @brief Select ETCD using the two existing role-specific Store resources.
+         * @param[in] memberStore Shared non-owned member-role Store.
+         * @param[in] controllerStore Owned controller-role Store.
+         * @return This Builder.
+         */
+        Builder &UseEtcd(EtcdStore &memberStore, std::unique_ptr<EtcdStore> controllerStore);
+
+        /**
+         * @brief Select Coordinator and bind its Worker watch RPC ingress.
+         * @param[in] proxy Coordinator proxy that outlives the Engine.
+         * @param[in] ingress Complete bind and unbind-and-drain contract.
+         * @return This Builder.
+         */
+        Builder &UseCoordinator(ICoordinatorServiceProxy &proxy, CoordinatorWatchIngress ingress);
+
+        /**
+         * @brief Register the business topology phase callbacks.
+         * @param[in] callbacks Callback owner that outlives the Engine.
+         * @return This Builder.
+         */
+        Builder &SetPhaseCallbacks(ITopologyPhaseCallbacks &callbacks);
+
+        /**
+         * @brief Register the bounded control-backend failure-scope probe.
+         * @param[in] probe Probe to consume.
+         * @return This Builder.
+         */
+        Builder &SetControlBackendProbe(ControlBackendProbe probe);
+
+        /**
+         * @brief Register the non-blocking business-admission callback.
+         * @param[in] handler Availability callback to consume.
+         * @return This Builder.
+         */
+        Builder &SetAvailabilityHandler(std::function<void(TopologyAvailabilityLevel)> handler);
+
+        /**
+         * @brief Register the existing member-restart cleanup sink.
+         * @param[in] handler Restart sink to consume.
+         * @return This Builder.
+         */
+        Builder &SetMembershipRestartHandler(
+            std::function<Status(const std::string &, int64_t)> handler);
+
+        /**
+         * @brief Register a non-blocking newly-published Snapshot callback.
+         * @param[in] handler Callback that may only enqueue bounded work.
+         * @return This Builder.
+         */
+        Builder &SetSnapshotPublishedHandler(
+            std::function<void(std::shared_ptr<const TopologySnapshot>)> handler);
+
+        /**
+         * @brief Bind the configured confirmed-failure timeout.
+         * @param[in] timeout Existing node-dead timeout.
+         * @return This Builder.
+         */
+        Builder &SetNodeDeadTimeout(std::chrono::seconds timeout);
+
+        /**
+         * @brief Validate once, exact-read restart state, and construct every role component.
+         * @param[out] engine Complete Engine; unchanged on failure.
+         * @return K_OK on success; validation, read, or construction status otherwise.
+         */
+        Status Build(std::unique_ptr<TopologyEngine> &engine);
+
+    private:
+        friend class TopologyEngine;
+        struct Config;
+
+        /**
+         * @brief Validate the complete one-shot Builder configuration.
+         * @return K_OK when the configuration is complete; K_INVALID otherwise.
+         */
+        Status Validate() const;
+
+        /**
+         * @brief Register backend-local table mappings and construct two role backends plus one shared algorithm.
+         * @return K_OK on success or the dependency construction status.
+         */
+        Status CreateOwnedDependencies();
+
+        /**
+         * @brief Exact-read the startup topology and derive the immutable restart fact.
+         * @return K_OK on success or the exact-read/validation status.
+         */
+        Status ReadRestartFact();
+
+        std::unique_ptr<Config> config_;
+    };
 
     /**
      * @brief Stop and join all Worker-role runtime components before releasing state.
@@ -65,12 +208,56 @@ public:
 
     /**
      * @brief Cancel/drain callbacks, close ingress, join and clear Snapshot before returning.
-     * @param[in] deadline Absolute stop deadline, additionally bounded by options.stopGrace.
+     * @param[in] deadline Absolute stop deadline. Finite deadlines are additionally bounded by options.stopGrace;
+     *                     time_point::max() requests the destructor-only final safe join.
      * @return K_OK after all runtime work is stopped; the first timeout or stop error after safe teardown otherwise.
      * @note The call may wait past deadline to preserve object lifetime safety; the process manager owns the outer
      *       bound.
      */
-    Status Stop(std::chrono::steady_clock::time_point deadline);
+    Status Shutdown(std::chrono::steady_clock::time_point deadline);
+
+    /**
+     * @brief Publish the local membership as READY after the first lease is established.
+     * @return K_OK on update; lifecycle or backend status otherwise.
+     */
+    Status MarkReady();
+
+    /**
+     * @brief Publish the local membership as EXITING for graceful ScaleIn.
+     * @return K_OK on update; lifecycle or backend status otherwise.
+     */
+    Status MarkExiting();
+
+    /**
+     * @brief Inform the backend that restart reconciliation has completed.
+     * @return K_OK on success; lifecycle, address, or backend status otherwise.
+     */
+    Status NotifyReconciliationDone();
+
+    /**
+     * @brief Report the immutable restart fact derived by the startup exact-read.
+     * @return True only when the exact-read contained the local address.
+     */
+    bool IsRestart() const noexcept;
+
+    /**
+     * @brief Report whether the member-role backend established its first lease.
+     * @return True after the first successful lease publication.
+     */
+    bool HasEstablishedMemberLease() const noexcept;
+
+    /**
+     * @brief Report whether the current member lease timed out.
+     * @return True only for a confirmed local lease timeout.
+     */
+    bool IsMemberLeaseTimedOut() const noexcept;
+
+    /**
+     * @brief Read membership host identifiers for the existing routing response.
+     * @param[out] hostIds Address-to-host-id map; unchanged on failure.
+     * @return K_OK on success or backend/read/decode status otherwise.
+     */
+    Status GetRoutingHostIds(std::unordered_map<std::string, std::string> &hostIds) const;
 
     /**
      * @brief Return lifecycle state without IO.
@@ -94,7 +281,7 @@ public:
      * @brief Return the local member/endpoint view.
      * @return Stable view reference valid for this Engine's lifetime.
      */
-    MembershipEndpointView &Membership() noexcept;
+    const MembershipEndpointView &Membership() const noexcept;
 
     /**
      * @brief Atomically read the current PB-free Snapshot.
@@ -102,14 +289,6 @@ public:
      * @return K_OK on success; K_NOT_READY before the first legal publish.
      */
     Status GetSnapshot(std::shared_ptr<const TopologySnapshot> &snapshot) const;
-
-    /**
-     * @brief Export the last-good topology as canonical repository bytes without backend IO.
-     * @param[out] topologyVersion Snapshot topology version; unchanged when no Snapshot exists.
-     * @param[out] canonicalTopology Canonical topology bytes; unchanged when no Snapshot exists.
-     * @return K_OK on success or K_NOT_FOUND before the first legal Snapshot.
-     */
-    Status GetRecoveryTopology(uint64_t &topologyVersion, std::string &canonicalTopology) const;
 
     /**
      * @brief Return fresh Worker-role backend evidence for the peer-state RPC.
@@ -127,16 +306,80 @@ private:
     static constexpr int32_t ENGINE_READ_TIMEOUT_MS = 3'000;
 
     /**
-     * @brief Construct validated Worker-role components after KeyHelper creation.
-     * @param[in] options Validated Worker-role runtime options.
-     * @param[in] backend Worker-role backend that outlives the Engine.
-     * @param[in] routingAlgorithm Routing algorithm that outlives the Engine.
-     * @param[in] callbacks Business callbacks that outlive the Engine.
-     * @param[in] keys Validated key helper consumed by the Engine.
+     * @brief Private Worker runtime settings hidden from business composition code.
      */
-    TopologyEngine(TopologyEngineOptions options, ICoordinationBackend &backend,
-                   const IRoutingAlgorithm &routingAlgorithm, ITopologyPhaseCallbacks &callbacks,
-                   std::unique_ptr<TopologyKeyHelper> keys);
+    struct RuntimeOptions {
+        std::string clusterName;
+        std::string localAddress;
+        bool isRestart{ false };
+        size_t eventQueueCapacity{ 1'024 };
+        std::chrono::seconds scopeProbeDeadline{ 2 };
+        std::chrono::seconds scopeProbeInterval{ 5 };
+        std::chrono::seconds stopGrace{ 10 };
+        ControlBackendProbe controlBackendProbe;
+        std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
+        std::function<void(std::shared_ptr<const TopologySnapshot>)> snapshotPublishedHandler;
+        TopologyTaskExecutorOptions executor;
+    };
+
+    /**
+     * @brief Construct the Engine from one validated Builder configuration.
+     * @param[in] config Validated configuration and owned role resources to consume.
+     */
+    explicit TopologyEngine(std::unique_ptr<Builder::Config> config);
+
+    /**
+     * @brief Move Worker-role runtime values out of a validated Builder configuration.
+     * @param[in] config Validated Builder configuration.
+     * @return Private runtime options consumed by the Engine constructor.
+     */
+    static RuntimeOptions ConsumeRuntimeOptions(Builder::Config &config);
+
+    /**
+     * @brief Construct Controller Runtime and optional recovery reporter after core members exist.
+     * @param[in] membershipRestartHandler Existing Controller restart cleanup sink.
+     * @param[in] nodeDeadTimeout Existing confirmed-failure timeout.
+     * @return K_OK on success or component construction status otherwise.
+     */
+    Status InitializeOwnedComponents(
+        std::function<Status(const std::string &, int64_t)> membershipRestartHandler,
+        std::chrono::seconds nodeDeadTimeout);
+
+    /**
+     * @brief Route one Coordinator watch event to its unique role backend.
+     * @param[in] coordinatorId Coordinator process identity.
+     * @param[in] watchId Coordinator watch identity.
+     * @param[in] event Event to consume.
+     * @return K_OK on delivery or identity/lifecycle status otherwise.
+     */
+    Status RouteCoordinatorWatchEvent(const std::string &coordinatorId, int64_t watchId,
+                                      CoordinationEvent &&event);
+
+    /**
+     * @brief Bind Coordinator ingress before role watches are established.
+     * @return K_OK when absent or bound; ingress status otherwise.
+     */
+    Status BindCoordinatorIngress();
+
+    /**
+     * @brief Reject new Coordinator events and drain in-flight RPC handlers.
+     * @param[in] deadline Absolute drain deadline.
+     * @return K_OK when absent or drained; ingress status otherwise.
+     */
+    Status UnbindCoordinatorIngress(std::chrono::steady_clock::time_point deadline);
+
+    /**
+     * @brief Start only the member-role state machine after ingress is ready.
+     * @return K_OK on success or member-role startup status otherwise.
+     */
+    Status StartMemberRole();
+
+    /**
+     * @brief Attempt every safe shutdown step and retain the first failure.
+     * @param[in] deadline One absolute shutdown deadline.
+     * @return First error after all safe steps are attempted.
+     */
+    Status ShutdownComponents(std::chrono::steady_clock::time_point deadline);
 
     /**
      * @brief Non-blockingly enqueue one backend doorbell.
@@ -158,8 +401,14 @@ private:
 
     /**
      * @brief Disable event ingress and restore lifecycle state after a failed Start step.
+     * @return K_OK after complete rollback; the first cleanup error when Shutdown must be retried.
      */
-    void CleanupAfterStartFailure();
+    Status CleanupAfterStartFailure();
+
+    /**
+     * @brief Commit RUNNING and publish the latest traffic-allowing availability before releasing Start ownership.
+     */
+    void CommitSuccessfulStart();
 
     /**
      * @brief Exact-read topology and publish or rebuild the Snapshot.
@@ -173,6 +422,14 @@ private:
      * @return Read, publish, notify, or task admission status.
      */
     Status ReloadTopologyAndNotify();
+
+    /**
+     * @brief Export last-good canonical topology for the owned recovery reporter without backend IO.
+     * @param[out] topologyVersion Snapshot version; unchanged when no Snapshot exists.
+     * @param[out] canonicalTopology Canonical topology bytes; unchanged when no Snapshot exists.
+     * @return K_OK on success or K_NOT_FOUND before the first legal Snapshot.
+     */
+    Status GetRecoveryTopology(uint64_t &topologyVersion, std::string &canonicalTopology) const;
 
     /**
      * @brief Publish identity-bound evidence after one successful exact read.
@@ -220,14 +477,24 @@ private:
     void NotifyAvailability(TopologyAvailabilityLevel level) noexcept;
 
     /**
+     * @brief Invoke the non-blocking Snapshot publication hook.
+     * @param[in] snapshot Newly published immutable Snapshot.
+     */
+    void NotifySnapshotPublished(std::shared_ptr<const TopologySnapshot> snapshot);
+
+    /**
      * @brief Record a runtime error without exposing high-cardinality payload.
      * @param[in] status Runtime error to retain and log.
      */
     void RecordError(const Status &status);
 
-    TopologyEngineOptions options_;
-    ICoordinationBackend &backend_;
-    const IRoutingAlgorithm &routingAlgorithm_;
+    RuntimeOptions options_;
+    std::unique_ptr<EtcdStore> controllerEtcdStore_;
+    std::unique_ptr<ICoordinationBackend> memberBackend_;
+    std::unique_ptr<ICoordinationBackend> controllerBackend_;
+    std::unique_ptr<HashAlgorithm> algorithm_;
+    ICoordinatorServiceProxy *coordinatorProxy_{ nullptr };  // Non-owning; outlives the Engine.
+    CoordinatorWatchIngress coordinatorIngress_;
     std::unique_ptr<TopologyKeyHelper> keys_;
     TopologyRepository repository_;
     TopologyReader reader_;
@@ -236,19 +503,26 @@ private:
     MembershipEndpointView membershipView_;
     PlacementFacade placement_;
     TopologyTaskExecutor executor_;
-    // Protects the complete Start/Stop transaction, startAttempted_, and stateThread_ construction/join sequence.
-    // The state thread never acquires this lock.
+    std::unique_ptr<TopologyControllerRuntime> controllerRuntime_;
+    std::unique_ptr<TopologyRecoveryReporter> recoveryReporter_;
+    // Protects lifecycle transactions, startAttempted_, ingressBound_, and thread join sequencing.
+    // Backend IO, callbacks, drain, component Start/Stop, and thread join execute without this lock.
     std::mutex lifecycleMutex_;
     // Protects threadExited_, isolationReason_, lastError_, and backendObservation_.
     mutable std::mutex stateMutex_;
     // Serializes availability_, publishedAvailability_, isolationReason_, and Host admission callback transitions.
+    // The successful-Start commit may acquire lifecycleMutex_ while holding this mutex; lifecycle paths never acquire
+    // this mutex while holding lifecycleMutex_.
     std::mutex availabilityTransitionMutex_;
     // Uses stateMutex_ and signals changes to threadExited_.
     std::condition_variable stoppedCv_;
     Thread stateThread_;
     bool startAttempted_{ false };
+    bool ingressBound_{ false };
+    bool lifecycleOperationInFlight_{ false };
     bool threadExited_{ true };
     std::atomic<TopologyEngineState> state_{ TopologyEngineState::STOPPED };
+    // Latest internal candidate; traffic-allowing candidates remain unpublished until Start commits RUNNING.
     std::atomic<TopologyAvailabilityLevel> availability_{ TopologyAvailabilityLevel::NOT_READY };
     // Exposes availability only after the corresponding Host admission transition has completed.
     std::atomic<TopologyAvailabilityLevel> publishedAvailability_{ TopologyAvailabilityLevel::NOT_READY };

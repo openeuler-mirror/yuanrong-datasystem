@@ -30,6 +30,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "eviction_manager_common.h"
+#include "test_metadata_route.h"
 
 DS_DECLARE_uint32(arena_per_tenant);
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
@@ -72,17 +73,16 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .topologyEngine = nullptr,
-            .topologyPlacement = nullptr,
-            .topologyMembership = nullptr,
-            .topologyRouteOptions = worker::MetadataRouteOptions{},
+            .metadataRouteResolver = &GetTestMetadataRoute(),
+            .endpointPolicy = nullptr,
+            .exitRequested = nullptr,
+            .allowDirectoryLag = false,
         };
         threadPool_ = std::make_shared<ThreadPool>(MEMCOPY_THREAD_NUM);
         auto rateController =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        impl_ =
-            std::make_shared<WorkerOcServiceMigrateImpl>(param, nullptr, threadPool_, nullptr, "127.0.0.1:18888",
-                                                         rateController);
+        impl_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, threadPool_, nullptr, "127.0.0.1:18888",
+                                                             rateController);
         TimerQueue::GetInstance()->Initialize();
     }
 

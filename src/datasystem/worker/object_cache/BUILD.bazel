@@ -2,6 +2,24 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+ds_cc_library(
+    name = "object_endpoint_policy",
+    srcs = [
+        "object_endpoint_policy.cpp",
+    ],
+    hdrs = [
+        "object_endpoint_policy.h",
+    ],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uuid_generator",
+        "//src/datasystem/worker:metadata_route_resolver",
+    ],
+)
+
 # success
 ds_cc_library(
     name = "eviction_list",
@@ -173,24 +191,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "object_meta_route_helper",
-    srcs = [
-        "object_meta_route_helper.cpp",
-    ],
-    hdrs = [
-        "object_meta_route_helper.h",
-    ],
-    deps = [
-        "//src/datasystem/worker:metadata_route_options",
-        "//src/datasystem/worker:worker_topology_references",
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:format",
-        "//src/datasystem/cluster:cluster_topology",
-    ],
-)
-
-ds_cc_library(
     name = "metadata_recovery_manager",
     srcs = [
         "metadata_recovery_manager.cpp",
@@ -207,9 +207,10 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:metadata_route_resolver",
+        "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//src/datasystem/worker:worker_master_api_manager_base",
         "//src/datasystem/worker/object_cache:object_kv",
-        "//src/datasystem/worker/object_cache:object_meta_route_helper",
         "//src/datasystem/worker/object_cache:worker_master_oc_api_header",
     ],
 )
@@ -227,8 +228,9 @@ ds_cc_library(
         "worker_oc_service_impl.h",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
         "//src/datasystem/cluster:cluster_topology_scope",
+        "//src/datasystem/worker:metadata_route_resolver",
+        "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/flags:ds_flags",
@@ -296,7 +298,6 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:async_update_location_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
-        "//src/datasystem/worker/object_cache:object_meta_route_helper",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
@@ -370,7 +371,8 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/worker:metadata_route_options",
-        "//src/datasystem/worker:worker_topology_references",
+        "//src/datasystem/worker:metadata_route_resolver",
+        "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:object_base",
@@ -382,7 +384,6 @@ ds_cc_library(
         "//include/datasystem/object:object_headers",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache:eviction_list",
-        "//src/datasystem/worker/object_cache:object_meta_route_helper",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
@@ -486,7 +487,8 @@ ds_cc_library(
     ],
     deps = [
         "//src/datasystem/worker:metadata_route_options",
-        "//src/datasystem/worker:worker_topology_references",
+        "//src/datasystem/worker:metadata_route_resolver",
+        "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//include/datasystem/hetero:hetero_headers",
         "//src/datasystem/client/hetero_cache:hetero_cache_headers",
         "//src/datasystem/common/device/ascend:acl_device_manager_header",
@@ -595,7 +597,6 @@ ds_cc_library(
         "worker_worker_oc_service_impl.h",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
@@ -620,7 +621,6 @@ ds_cc_library(
         "worker_worker_oc_service_impl.cpp",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
         ":worker_oc_service_impl",
         ":worker_worker_oc_gather_layout",
         ":worker_worker_oc_service_impl_header",

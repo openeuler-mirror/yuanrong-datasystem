@@ -383,6 +383,7 @@ Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const 
 
     keepAliveTableName_ = tableName;
     keepAliveKey_ = key;
+    firstKeepAliveSent_.store(false, std::memory_order_release);
     keepAliveTtlMs_ = static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND;
     keepAliveValue_.timestamp = 0;
     keepAliveValue_.hostId = hostId;
@@ -426,6 +427,7 @@ Status DsCoordinationBackend::AutoCreateKeepAliveKey(bool recreated)
                           &coordinatorId);
     LOG(INFO) << "AutoCreateKeepAliveKey: Put keepalive key " << keepAliveKey_ << " result: " << rc.ToString();
     RETURN_IF_NOT_OK(rc);
+    firstKeepAliveSent_.store(true, std::memory_order_release);
     HandleMembershipSuccess(coordinatorId, recreated);
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
@@ -696,8 +698,7 @@ bool DsCoordinationBackend::IsKeepAliveTimeout()
 
 bool DsCoordinationBackend::IsFirstKeepAliveSent()
 {
-    std::lock_guard<std::mutex> lock(keepAliveMutex_);
-    return keepAliveValue_.lifecycleState == MemberLifecycleState::RECOVERING;
+    return firstKeepAliveSent_.load(std::memory_order_acquire);
 }
 
 void DsCoordinationBackend::SetEventHandler(EventHandler &&eventHandler)

@@ -51,20 +51,21 @@ Status MetadataManagerHolder::Init(MetadataManagerHolderParam param)
     etcdStore_ = param.etcdStore;
     persistenceApi_ = param.persistenceApi;
     masterAddress_ = param.masterAddress;
-    topologyEngine_ = param.topologyEngine;
+    placement_ = param.placement;
+    membership_ = param.membership;
+    centralizedMetadata_ = param.centralizedMetadata;
+    metadataAddress_ = std::move(param.metadataAddress);
+    localAddress_ = std::move(param.localAddress);
+    isRestart_ = param.isRestart;
+    controlBackendAvailableAtStartup_ = param.controlBackendAvailableAtStartup;
+    exitRequested_ = param.exitRequested;
     masterWorkerService_ = param.masterWorkerService;
     workerWorkerService_ = param.workerWorkerService;
     rpcSessionManager_ = param.rpcSessionManager;
     isOcEnabled_ = param.isOcEnabled;
     isScEnabled_ = param.isScEnabled;
 
-    bool isRestart = false;
-    if (topologyEngine_ != nullptr) {
-        isRestart = topologyEngine_->restart;
-    }
-    bool isNewNode = topologyEngine_ == nullptr ? true : !isRestart;
-    bool isCentralized = topologyEngine_ == nullptr ? false : topologyEngine_->centralizedMetadata;
-    if (isNewNode && !isCentralized) {
+    if (!isRestart_ && !centralizedMetadata_) {
         isNewNode_ = true;
         LOG(INFO) << "Newly-added node, remove local metadata store if it exists.";
         RETURN_IF_NOT_OK(Replica::RemoveRocksFromFileSystem(dbRootPath_));
@@ -87,8 +88,8 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
     double scElapsed = 0;
     if (isOcEnabled_) {
         auto oc = std::make_shared<master::OCMetadataManager>(
-            akSkManager_, objectRocksStore, etcdStore_, persistenceApi_, masterAddress_.ToString(), topologyEngine_,
-            workerId, isNewNode_);
+            akSkManager_, objectRocksStore, etcdStore_, persistenceApi_, masterAddress_.ToString(), placement_,
+            membership_, centralizedMetadata_, metadataAddress_, localAddress_, exitRequested_, workerId, isNewNode_);
         LOG(INFO) << "Start init OCMetadataManager for " << workerId;
         RETURN_IF_NOT_OK(oc->Init());
         ocElapsed = timer.ElapsedMilliSecond();
@@ -97,8 +98,9 @@ Status MetadataManagerHolder::CreateMetaManager(const std::string &workerId, Roc
     }
 
     if (isScEnabled_) {
-        auto sc = std::make_shared<master::SCMetadataManager>(masterAddress_, akSkManager_, rpcSessionManager_,
-                                                              topologyEngine_, streamRocksStore, workerId);
+        auto sc = std::make_shared<master::SCMetadataManager>(
+            masterAddress_, akSkManager_, rpcSessionManager_, placement_, membership_, centralizedMetadata_,
+            metadataAddress_, streamRocksStore, workerId);
         LOG(INFO) << "Start init SCMetadataManager for " << workerId;
         timer.Reset();
         RETURN_IF_NOT_OK(sc->Init());

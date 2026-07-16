@@ -19,8 +19,6 @@
 #include <algorithm>
 #include <exception>
 
-#include "datasystem/worker/worker_topology_references.h"
-
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/common/util/request_context.h"
@@ -35,6 +33,23 @@ namespace datasystem {
 namespace master {
 static constexpr int MOVE_THREAD_NUM = 4;
 static constexpr int MAX_MIGRATE_CNT_PER_STREAM = 30;
+
+namespace {
+Status CheckMigrationTargetConnection(const cluster::MembershipEndpointView *membership, const HostPort &address)
+{
+    CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership view is not available");
+    cluster::MemberEndpoint endpoint;
+    auto rc = membership->ResolveByAddress(address.ToString(), endpoint);
+    if (rc.GetCode() == K_NOT_READY || rc.GetCode() == K_NOT_FOUND) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(rc);
+    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE,
+                             K_MASTER_TIMEOUT, "Migration target is unreachable");
+    return Status::OK();
+}
+}  // namespace
+
 MasterMasterSCApi::MasterMasterSCApi(const HostPort &hostPort, const HostPort &localHostPort,
                                      std::shared_ptr<AkSkManager> akSkManager)
     : destHostPort_(hostPort), localHostPort_(localHostPort), akSkManager_(std::move(akSkManager))
@@ -64,11 +79,11 @@ SCMigrateMetadataManager &SCMigrateMetadataManager::Instance()
 
 Status SCMigrateMetadataManager::Init(
     const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-    worker::WorkerTopologyReferences *cm, MetadataManagerHolder *metadataManagerHolder)
+    const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder)
 {
     localHostPort_ = localHostPort;
     akSkManager_ = std::move(akSkManager);
-    cm_ = cm;
+    topologyMembership_ = membership;
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "ScMigrateMetadata");
     metadataManagerHolder_ = metadataManagerHolder;
 
@@ -84,7 +99,7 @@ SCMigrateMetadataManager::~SCMigrateMetadataManager()
 void SCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
-    cm_ = nullptr;
+    topologyMembership_ = nullptr;
 }
 
 Status SCMigrateMetadataManager::MigrateTopologyMetadata(
@@ -183,7 +198,7 @@ Status SCMigrateMetadataManager::MigrateMetaDataWithRetry(
     Raii clean([&scMetadataManager, &info]() { scMetadataManager->CleanMigratingItems(info.streamNames); });
 
     while (!exitFlag_) {
-        if ((!isNetworkRecovery && worker::CheckTopologyMemberConnection(cm_, destAddr, true).IsError())
+        if ((!isNetworkRecovery && CheckMigrationTargetConnection(topologyMembership_, destAddr).IsError())
             || (isNetworkRecovery && timer.ElapsedSecond() > FLAGS_node_timeout_s)) {
             break;
         }
@@ -209,7 +224,7 @@ Status SCMigrateMetadataManager::MigrateMetaDataWithRetry(
                   FormatString("LastStatus: %s. The connection to %s is %u. Unfinished stream size %u. "
                                "Time elapsed %d seconds. isNetworkRecovery %s",
                                status.ToString(), info.destAddr,
-                               worker::CheckTopologyMemberConnection(cm_, destAddr, true).IsOk(),
+                               CheckMigrationTargetConnection(topologyMembership_, destAddr).IsOk(),
                                info.streamNames.size(), timer.ElapsedSecond(), isNetworkRecovery));
 }
 

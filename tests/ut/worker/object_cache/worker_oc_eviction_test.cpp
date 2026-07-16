@@ -43,6 +43,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "eviction_manager_common.h"
+#include "test_metadata_route.h"
 
 using namespace datasystem::object_cache;
 using namespace datasystem::worker;
@@ -65,6 +66,39 @@ public:
         allocator->Init(maxMemorySize);
         akSkManager_ = std::make_shared<AkSkManager>(0);
     }
+
+    void InitEvictionManager(std::unique_ptr<WorkerOcEvictionManager> &manager,
+                             std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &globalRefs)
+    {
+        manager = std::make_unique<WorkerOcEvictionManager>(
+            objectTable_, HostPort("127.0.0.1", 31501), HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
+        globalRefs = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
+        DS_ASSERT_OK(manager->Init(globalRefs, akSkManager_));
+    }
+
+    void AddThreeTrackedObjects(WorkerOcEvictionManager &manager,
+                                const std::shared_ptr<ObjectGlobalRefTable<ClientKey>> &globalRefs)
+    {
+        DS_ASSERT_OK(CreateObject("id1", TEST_DATA_SIZE));
+        manager.Add("id1");
+        DS_ASSERT_OK(CreateObject("id2", TEST_DATA_SIZE, WriteMode::WRITE_THROUGH_L2_CACHE));
+        manager.Add("id2");
+        std::vector<std::string> keys{ "id3" };
+        std::vector<std::string> failed;
+        std::vector<std::string> firstIncrements;
+        globalRefs->GIncreaseRef(ClientKey::Intern("client-id"), keys, failed, firstIncrements);
+        DS_ASSERT_OK(CreateObject("id3", TEST_DATA_SIZE));
+        manager.Add("id3");
+    }
+
+    void DeleteThreeObjects()
+    {
+        DS_ASSERT_OK(DeleteObject("id1"));
+        DS_ASSERT_OK(DeleteObject("id2"));
+        DS_ASSERT_OK(DeleteObject("id3"));
+    }
+
+    static constexpr uint64_t TEST_DATA_SIZE = 10 * 1024 * 1024;
     std::shared_ptr<AkSkManager> akSkManager_;
 };
 
@@ -146,7 +180,7 @@ TEST_F(EvictionManagerTest, TestEvictionManagerInit)
 {
     std::shared_ptr<ObjectTable> &objectTable = GetObjectTable();
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, HostPort("127.0.0.1", 31501),
-                                                          HostPort("127.0.0.1", 31500));
+                                                          HostPort("127.0.0.1", 31500), GetTestMetadataRoute());
     auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
     std::vector<EvictionList::Node> objsInList;
@@ -155,77 +189,57 @@ TEST_F(EvictionManagerTest, TestEvictionManagerInit)
     ASSERT_EQ(objsInList.size(), size_t(0));
 }
 
-TEST_F(EvictionManagerTest, TestEvictionManagerAddErase)
+TEST_F(EvictionManagerTest, AddTracksObjectTableAndEvictionCounters)
 {
-    std::shared_ptr<ObjectTable> &objectTable = GetObjectTable();
-    object_cache::WorkerOcEvictionManager evictionManager(objectTable, HostPort("127.0.0.1", 31501),
-                                                          HostPort("127.0.0.1", 31500));
-    auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
-    DS_EXPECT_OK(evictionManager.Init(globalRefTable, akSkManager_));
+    std::unique_ptr<WorkerOcEvictionManager> manager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(manager, globalRefs);
+    AddThreeTrackedObjects(*manager, globalRefs);
 
-    uint64_t dataSize = 10 * 1024 * 1024;
-    std::string id1 = "id1";
-    DS_EXPECT_OK(CreateObject(id1, dataSize));
-    std::shared_ptr<SafeObjType> entry1;
-    DS_EXPECT_OK(objectTable_->Get(id1, entry1));
-    evictionManager.Add(id1);
-
-    std::string id2 = "id2";
-    DS_EXPECT_OK(CreateObject(id2, dataSize, WriteMode::WRITE_THROUGH_L2_CACHE));
-    std::shared_ptr<SafeObjType> entry2;
-    DS_EXPECT_OK(objectTable_->Get(id2, entry2));
-    evictionManager.Add(id2);
-
-    std::string id3 = "id3";
-    std::vector<std::string> objectKeys = { id3 };
-    std::vector<std::string> failIncIds;
-    std::vector<std::string> firstIncIds;
-    globalRefTable->GIncreaseRef(ClientKey::Intern("client-id"), objectKeys, failIncIds, firstIncIds);
-    DS_EXPECT_OK(CreateObject(id3, dataSize));
-    std::shared_ptr<SafeObjType> entry3;
-    DS_EXPECT_OK(objectTable_->Get(id3, entry3));
-    evictionManager.Add(id3);
-
-    std::unordered_map<std::string, std::shared_ptr<SafeObjType>> objsInTable;
-    GetAllObjsFromObjectTable(objsInTable);
-    ASSERT_EQ(objsInTable.size(), size_t(3));
-    ASSERT_EQ((*objsInTable[id1])->GetDataSize(), dataSize);
-    ASSERT_EQ((*objsInTable[id2])->GetDataSize(), dataSize);
-    ASSERT_EQ((*objsInTable[id3])->GetDataSize(), dataSize);
-
-    std::vector<EvictionList::Node> objsInList;
+    std::unordered_map<std::string, std::shared_ptr<SafeObjType>> tableObjects;
+    GetAllObjsFromObjectTable(tableObjects);
+    ASSERT_EQ(tableObjects.size(), 3U);
+    EXPECT_EQ((*tableObjects["id1"])->GetDataSize(), TEST_DATA_SIZE);
+    EXPECT_EQ((*tableObjects["id2"])->GetDataSize(), TEST_DATA_SIZE);
+    EXPECT_EQ((*tableObjects["id3"])->GetDataSize(), TEST_DATA_SIZE);
+    std::vector<EvictionList::Node> listObjects;
     EvictionList::Node oldest;
-    DS_EXPECT_OK(evictionManager.GetAllObjectsInfo(objsInList, oldest));
-    ASSERT_EQ(objsInList.size(), size_t(3));
-    ASSERT_TRUE(objsInList[0].objectKey == id1 && objsInList[0].curCounter == 1);
-    ASSERT_TRUE(objsInList[1].objectKey == id2 && objsInList[1].curCounter == 1);
-    ASSERT_TRUE(objsInList[2].objectKey == id3 && objsInList[2].curCounter == 2);
-    ASSERT_TRUE(oldest.objectKey == id1 && oldest.curCounter == 1);
+    DS_ASSERT_OK(manager->GetAllObjectsInfo(listObjects, oldest));
+    ASSERT_EQ(listObjects.size(), 3U);
+    EXPECT_EQ(listObjects[0].curCounter, 1U);
+    EXPECT_EQ(listObjects[1].curCounter, 1U);
+    EXPECT_EQ(listObjects[2].curCounter, 2U);
+    EXPECT_EQ(oldest.objectKey, "id1");
+    DeleteThreeObjects();
+}
 
-    objsInList.clear();
-    evictionManager.Erase(id1);
-    DS_EXPECT_OK(evictionManager.GetAllObjectsInfo(objsInList, oldest));
-    ASSERT_EQ(objsInList.size(), size_t(2));
-    ASSERT_TRUE(objsInList[0].objectKey == id2 && objsInList[0].curCounter == 1);
-    ASSERT_TRUE(objsInList[1].objectKey == id3 && objsInList[1].curCounter == 2);
+TEST_F(EvictionManagerTest, EraseUpdatesEvictionListAndObjectTable)
+{
+    std::unique_ptr<WorkerOcEvictionManager> manager;
+    std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefs;
+    InitEvictionManager(manager, globalRefs);
+    AddThreeTrackedObjects(*manager, globalRefs);
+    std::vector<EvictionList::Node> listObjects;
+    EvictionList::Node oldest;
 
-    objsInList.clear();
-    evictionManager.Erase(id2);
-    DS_EXPECT_OK(evictionManager.GetAllObjectsInfo(objsInList, oldest));
-    ASSERT_EQ(objsInList.size(), size_t(1));
-    ASSERT_TRUE(objsInList[0].objectKey == id3 && objsInList[0].curCounter == 2);
-
-    objsInList.clear();
-    evictionManager.Erase(id3);
-    DS_EXPECT_OK(evictionManager.GetAllObjectsInfo(objsInList, oldest));
-    ASSERT_EQ(objsInList.size(), size_t(0));
-
-    DS_EXPECT_OK(DeleteObject(id1));
-    DS_EXPECT_OK(DeleteObject(id2));
-    DS_EXPECT_OK(DeleteObject(id3));
-    objsInTable.clear();
-    GetAllObjsFromObjectTable(objsInTable);
-    ASSERT_EQ(objsInTable.size(), size_t(0));
+    manager->Erase("id1");
+    DS_ASSERT_OK(manager->GetAllObjectsInfo(listObjects, oldest));
+    ASSERT_EQ(listObjects.size(), 2U);
+    EXPECT_EQ(listObjects[0].objectKey, "id2");
+    EXPECT_EQ(listObjects[1].objectKey, "id3");
+    listObjects.clear();
+    manager->Erase("id2");
+    DS_ASSERT_OK(manager->GetAllObjectsInfo(listObjects, oldest));
+    ASSERT_EQ(listObjects.size(), 1U);
+    EXPECT_EQ(listObjects[0].objectKey, "id3");
+    listObjects.clear();
+    manager->Erase("id3");
+    DS_ASSERT_OK(manager->GetAllObjectsInfo(listObjects, oldest));
+    EXPECT_TRUE(listObjects.empty());
+    DeleteThreeObjects();
+    std::unordered_map<std::string, std::shared_ptr<SafeObjType>> tableObjects;
+    GetAllObjsFromObjectTable(tableObjects);
+    EXPECT_TRUE(tableObjects.empty());
 }
 
 class ScEvictionObjectTest : public CommonTest, public EvictionManagerCommon {
@@ -245,7 +259,7 @@ public:
         std::shared_ptr<ObjectTable> &objectTable = GetObjectTable();
         evictionManager_ = std::make_shared<object_cache::WorkerOcEvictionManager>(
             objectTable, HostPort("127.0.0.1", 32131),  // worker port is 32131,
-            HostPort("127.0.0.1", 52319));              // master port is 52319;
+            HostPort("127.0.0.1", 52319), GetTestMetadataRoute());  // master port is 52319;
         auto globalRefTable = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
         DS_ASSERT_OK(evictionManager_->Init(globalRefTable, akSkManager_));
         scAllocateManager_ = std::make_shared<worker::stream_cache::WorkerSCAllocateMemory>(evictionManager_);

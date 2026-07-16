@@ -18,7 +18,6 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -29,7 +28,6 @@ namespace object_cache {
 class WorkerOcServiceGlobalReferenceImpl : public WorkerOcServiceCrudCommonApi {
 public:
     WorkerOcServiceGlobalReferenceImpl(WorkerOcServiceCrudParam &initParam,
-                                       worker::WorkerTopologyReferences *topologyEngine,
                                        std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
                                        std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
 
@@ -283,8 +281,6 @@ private:
             SleepForMetaMovingRetry(std::min(sleepTimeMs, remainingTimeMs));
         }
     }
-
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
 

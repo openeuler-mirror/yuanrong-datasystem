@@ -33,19 +33,23 @@
 #include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/worker/object_cache/rebalance_candidate_provider.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/worker_topology_references.h"
+#include "datasystem/worker/metadata_route_resolver.h"
 
 namespace datasystem {
 namespace worker {
 
 struct RebalanceExecutorConfig {
     HostPort localAddress;
-    // Non-owning. The owner must keep the cluster manager alive until RebalanceExecutor is destroyed.
-    worker::WorkerTopologyReferences *topologyEngine;
+    // Non-owning narrow dependencies; WorkerOCServer keeps them alive until the executor is destroyed.
+    const worker::MetadataRouteResolver *metadataRoute;
+    const cluster::MembershipEndpointView *membership;
+    const object_cache::ObjectEndpointPolicy *endpointPolicy;
+    const std::atomic<bool> *exitRequested;
     std::shared_ptr<AkSkManager> akSkManager;
     std::shared_ptr<object_cache::ObjectTable> objectTable;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager;
@@ -132,7 +136,10 @@ private:
     void MarkTaskDone();
 
     HostPort localAddress_;
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
+    const worker::MetadataRouteResolver *metadataRoute_{ nullptr };
+    const cluster::MembershipEndpointView *membership_{ nullptr };
+    const object_cache::ObjectEndpointPolicy *endpointPolicy_{ nullptr };
+    const std::atomic<bool> *exitRequested_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<object_cache::ObjectTable> objectTable_{ nullptr };
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager_{ nullptr };

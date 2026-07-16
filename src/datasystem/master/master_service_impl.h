@@ -28,7 +28,6 @@
 #include "datasystem/protos/master_heartbeat.service.rpc.pb.h"
 #include "datasystem/protos/master_heartbeat.brpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
@@ -54,17 +53,7 @@ public:
 
     Status Init() override;
 
-    /**
-     * @brief Setter method for assigning cluster manager
-     * @param[in] cm Borrowed Worker topology dependencies.
-     */
-    void SetTopologyEngine(worker::WorkerTopologyReferences *cm)
-    {
-        topologyEngine_ = cm;
-    }
-
 private:
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 };
 }  // namespace master

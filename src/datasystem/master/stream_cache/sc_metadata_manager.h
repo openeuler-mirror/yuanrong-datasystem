@@ -26,13 +26,15 @@
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/master/metadata_redirect_helper.h"
 #include "datasystem/master/stream_cache/sc_notify_worker_manager.h"
 #include "datasystem/master/stream_cache/stream_metadata.h"
 #include "datasystem/protos/worker_stream.pb.h"
 #include "datasystem/stream/stream_config.h"
-#include "datasystem/worker/worker_topology_references.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 
 namespace datasystem {
 namespace master {
@@ -46,26 +48,23 @@ public:
      * @param[in] masterHostPort The master address.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] rpcSessionManager Master to Worker session manager.
-     * @param[in] cm The cluster manager instance.
+     * @param[in] placement Borrowed metadata placement capability.
+     * @param[in] membership Borrowed read-only membership capability.
+     * @param[in] centralizedMetadata Whether metadata uses one configured Master.
+     * @param[in] metadataAddress Configured centralized metadata Master address.
      * @param[in] rocksStore The rocks store instance.
      * @param[in] workerId The worker id.
      */
     SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                      std::shared_ptr<RpcSessionManager> rpcSessionManager, worker::WorkerTopologyReferences *cm,
-                      RocksStore *rocksStore, const std::string &workerId);
+                      std::shared_ptr<RpcSessionManager> rpcSessionManager,
+                      const cluster::PlacementFacade *placement,
+                      const cluster::MembershipEndpointView *membership, bool centralizedMetadata,
+                      HostPort metadataAddress, RocksStore *rocksStore, const std::string &workerId);
 
     /**
      * @brief Shutdown the sc metadata manager module.
      */
     void Shutdown() override;
-
-    /**
-     * @brief WorkerOCServer uses the SetTopologyEngine method to directly pass the std::unique_ptr address of
-     * topologyEngine_ to SCMetadataManager. If the topologyEngine_ destructor releases the memory, a core dump occurs
-     * when the SCMetadataManager object that holds the pointer address operates the address. Therefore, the
-     * TopologyEngine needs to notify the SCMetadataManager before exiting.
-     */
-    void SetTopologyEngineToNullptr();
 
     /**
      * @brief Initialize SCMetadataManager.
@@ -102,11 +101,9 @@ public:
     /**
      * @brief Save migration data.
      * @param[in] streamMeta The stream meta.
-     * @param[out] rsp The rpc response protobuf.
-     * @param[out] rsp The rpc response protobuf.
-     * @return status of the call.
+     * @return K_OK or migration metadata persistence status.
      */
-    Status SaveMigrationData(const MetaForSCMigrationPb &streamMeta, Status &status, MigrateSCMetadataRspPb &rsp);
+    Status SaveMigrationData(const MetaForSCMigrationPb &streamMeta);
 
     /**
      * @brief Fill in the data to be migrated.
@@ -266,6 +263,31 @@ public:
 
 private:
     friend SCNotifyWorkerManager;
+
+    /**
+     * @brief Restore migrated producer and consumer relationships and register rollback effects.
+     * @param[in,out] metadata Destination stream metadata.
+     * @param[in] streamMeta Persisted migration payload.
+     * @param[in] needRevert Shared rollback gate owned by SaveMigrationData.
+     * @param[in,out] rollback Rollback effects executed when the gate remains set.
+     * @return K_OK or relationship recovery/persistence status.
+     */
+    Status RestoreMigratedRelations(StreamMetadata &metadata, const MetaForSCMigrationPb &streamMeta,
+                                    const bool &needRevert, RaiiPlus &rollback);
+
+    /**
+     * @brief Persist migrated stream-level state and register rollback effects.
+     * @param[in,out] metadata Destination stream metadata.
+     * @param[in] streamMeta Persisted migration payload.
+     * @param[in] streamFields Validated immutable stream fields.
+     * @param[in] streamName Stream identity.
+     * @param[in] needRevert Shared rollback gate owned by SaveMigrationData.
+     * @param[in,out] rollback Rollback effects executed when the gate remains set.
+     * @return K_OK or stream-state persistence status.
+     */
+    Status PersistMigratedStream(StreamMetadata &metadata, const MetaForSCMigrationPb &streamMeta,
+                                 const StreamFields &streamFields, const std::string &streamName,
+                                 const bool &needRevert, RaiiPlus &rollback);
 
     /**
      * @brief Check metadata with worker.
@@ -444,6 +466,7 @@ private:
     mutable std::shared_timed_mutex metaDictMutex_;
 
     HostPort masterAddress_;
+    const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
 
     std::unique_ptr<SCNotifyWorkerManager> notifyWorkerManager_;
 

@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 
+#include <atomic>
 #include <algorithm>
 #include <future>
 #include <string>
@@ -31,15 +32,13 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_pool.h"
 
-#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
-#include "datasystem/worker/object_cache/object_meta_route_helper.h"
+#include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -91,10 +90,10 @@ struct WorkerOcServiceCrudParam {
     std::shared_ptr<AsyncSendManager> asyncSendManager;
     size_t metadataSize;
     std::shared_ptr<PersistenceApi> persistenceApi;
-    worker::WorkerTopologyReferences *topologyEngine;
-    const cluster::PlacementFacade *topologyPlacement;
-    cluster::MembershipEndpointView *topologyMembership;
-    worker::MetadataRouteOptions topologyRouteOptions;
+    const worker::MetadataRouteResolver *metadataRouteResolver;
+    const ObjectEndpointPolicy *endpointPolicy;
+    const std::atomic<bool> *exitRequested;
+    bool allowDirectoryLag;
 };
 
 class WorkerOcServiceCrudCommonApi {
@@ -136,9 +135,10 @@ public:
                 GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             RETURN_IF_NOT_OK(fun(req, rsp));
-            if (rsp.info().redirect_meta_address().empty()) {
-                return Status::OK();
-            } else if (!rsp.meta_is_moving()) {
+            if (!rsp.meta_is_moving()) {
+                if (rsp.info().redirect_meta_address().empty()) {
+                    return Status::OK();
+                }
                 HostPort newMetaAddr;
                 RETURN_IF_NOT_OK(newMetaAddr.ParseString(rsp.info().redirect_meta_address()));
                 LOG(INFO) << "meta has been migrated to the new master: " << newMetaAddr.ToString();
@@ -178,7 +178,7 @@ public:
                 GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             RETURN_IF_NOT_OK(func(req, rsp));
-            RETURN_OK_IF_TRUE(rsp.info_size() == 0 || !rsp.meta_is_moving());
+            RETURN_OK_IF_TRUE(!rsp.meta_is_moving());
             rsp.Clear();
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
@@ -208,7 +208,7 @@ public:
                 GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
             RETURN_IF_NOT_OK(func(req, rsp, payload));
-            RETURN_OK_IF_TRUE(rsp.info_size() == 0 || !rsp.meta_is_moving());
+            RETURN_OK_IF_TRUE(!rsp.meta_is_moving());
             rsp.Clear();
             int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
             CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
@@ -403,7 +403,7 @@ protected:
     template <typename Rsp>
     static bool MetaMovingDone(Rsp &rsp)
     {
-        if (rsp.info_size() == 0 || !rsp.meta_is_moving()) {
+        if (!rsp.meta_is_moving()) {
             return true;
         }
         static const int sleepTimeMs = 200;
@@ -413,6 +413,31 @@ protected:
     }
 
     static void SleepForMetaMovingRetry(int64_t sleepTimeMs);
+
+private:
+    /**
+     * @brief Merge one remove-metadata result and process any redirected metadata.
+     * @param[in] result Remove-metadata RPC status.
+     * @param[in] objectKeysRemoveList Object keys in this batch.
+     * @param[in,out] response Remove-metadata response.
+     * @param[in] removeCause Remove-metadata cause.
+     * @param[in] localAddress Local Worker address.
+     * @param[in] batchKeyVersions Object key versions in this batch.
+     * @param[out] failedIds Failed object keys.
+     * @param[out] needMigrateIds Object keys requiring data migration.
+     * @param[out] needWaitIds Object keys requiring a wait.
+     * @param[out] needMigrateL2CacheIds Object keys requiring L2 cache migration.
+     * @param[in] topologyOperationId Fenced topology operation id, or empty for ordinary traffic.
+     */
+    void HandleRemoveMetaResponse(
+        const Status &result, const std::list<std::string> &objectKeysRemoveList,
+        master::RemoveMetaRspPb &response, const master::RemoveMetaReqPb::Cause removeCause,
+        const std::string &localAddress, const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
+        std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
+        std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds,
+        const std::string &topologyOperationId);
+
+protected:
 
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
 
@@ -433,10 +458,10 @@ protected:
     size_t metadataSize_{ 0 };
 
     L2StorageType supportL2Storage_;
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
-    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
-    cluster::MembershipEndpointView *topologyMembership_{ nullptr };
-    worker::MetadataRouteOptions topologyRouteOptions_;
+    const worker::MetadataRouteResolver *metadataRouteResolver_{ nullptr };
+    const ObjectEndpointPolicy *endpointPolicy_{ nullptr };
+    const std::atomic<bool> *exitRequested_{ nullptr };
+    const bool allowDirectoryLag_{ false };
 
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager_{ nullptr };
 };

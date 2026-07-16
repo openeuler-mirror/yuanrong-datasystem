@@ -25,13 +25,13 @@
 #include <vector>
 
 #include "datasystem/common/object_cache/node_info.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -48,10 +48,12 @@ public:
     /**
      * @brief Init NodeSelector.
      * @param[in] localAddress The worker local address.
-     * @param[in] topologyEngine Borrowed Worker topology dependencies.
+     * @param[in] membership Read-only topology membership view.
+     * @param[in] exitRequested Local graceful-exit flag that outlives this selector.
      * @param[in] apiManager The manager of worker master api.
      */
-    void Init(const std::string &localAddress, worker::WorkerTopologyReferences *topologyEngine,
+    void Init(const std::string &localAddress, const cluster::MembershipEndpointView &membership,
+              const std::atomic<bool> *exitRequested,
               std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager);
 
     /**
@@ -161,7 +163,8 @@ private:
     void WorkerThread();
 
     std::string localAddress_;
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
+    const cluster::MembershipEndpointView *membership_{ nullptr };
+    const std::atomic<bool> *exitRequested_{ nullptr };
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager_{ nullptr };
 
     std::atomic<bool> running_;

@@ -30,7 +30,7 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
-#include "datasystem/cluster/routing/placement_types.h"
+#include "datasystem/worker/metadata_route_resolver.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
@@ -59,10 +59,9 @@ public:
     MetaDataRecoveryManager(
         const HostPort &localAddress, const std::shared_ptr<ObjectTable> &objectTable, ClusterAccess clusterAccess,
         const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
-        uint64_t metadataSize = 0, const std::shared_ptr<WorkerOcEvictionManager> &evictionManager = nullptr,
+        const worker::MetadataRouteResolver &metadataRoute, uint64_t metadataSize = 0,
+        const std::shared_ptr<WorkerOcEvictionManager> &evictionManager = nullptr,
         const std::shared_ptr<ThreadPool> &memCpyThreadPool = nullptr,
-        const cluster::PlacementFacade *topologyPlacement = nullptr,
-        worker::MetadataRouteOptions topologyRouteOptions = worker::MetadataRouteOptions{},
         RecoveredContentSaver recoveredContentSaver = nullptr);
 
     ~MetaDataRecoveryManager() = default;
@@ -151,8 +150,7 @@ private:
     HostPort localAddress_;
     std::shared_ptr<ObjectTable> objectTable_;
     ClusterAccess clusterAccess_;
-    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
-    worker::MetadataRouteOptions topologyRouteOptions_;
+    const worker::MetadataRouteResolver &metadataRoute_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
     uint64_t metadataSize_{ 0 };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_{ nullptr };

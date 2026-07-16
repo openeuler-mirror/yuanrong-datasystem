@@ -17,8 +17,11 @@
 #ifndef DATASYSTEM_MASTER_OBJECT_CACHE_MASTER_OBJECT_CACHE_SERVICE_IMPL_H
 #define DATASYSTEM_MASTER_OBJECT_CACHE_MASTER_OBJECT_CACHE_SERVICE_IMPL_H
 
+#include <string>
 #include <unordered_map>
+#include <utility>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/util/net_util.h"
@@ -32,7 +35,6 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/protos/master_object.brpc.pb.h"
 #include "datasystem/protos/p2p_subscribe.pb.h"
-#include "datasystem/worker/worker_topology_references.h"
 // .brpc.pb.h above pulls in brpc headers which override LOG/VLOG/DLOG via
 // butil/logging.h. Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"
@@ -45,10 +47,18 @@ public:
 
     /**
      * @brief Construct MasterOCServiceImpl.
+     * @param[in] serverAddress Local Master address.
+     * @param[in] persistApi Persistence API.
+     * @param[in] akSkManager Authentication manager.
+     * @param[in] metadataManagerHolder Metadata manager owner.
+     * @param[in] resourceManager Resource manager.
+     * @param[in] topologyMembership Read-only topology capability that outlives this service.
+     * @param[in] localAddress Canonical address of the local migration target.
      */
     MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
                         std::shared_ptr<AkSkManager> akSkManager, MetadataManagerHolder *metadataManagerHolder,
-                        master::ResourceManager *resourceManager);
+                        master::ResourceManager *resourceManager,
+                        const cluster::MembershipEndpointView &topologyMembership, std::string localAddress);
 
     /**
      * @brief Deconstruct MasterOCServiceImpl.
@@ -308,15 +318,6 @@ public:
     void AssignLocalWorker(object_cache::MasterWorkerOCServiceImpl *masterWorkerService);
 
     /**
-     * @brief Setter method for assigning cluster manager
-     * @param[in] cm Borrowed Worker topology dependencies.
-     */
-    void SetTopologyEngine(worker::WorkerTopologyReferences *cm)
-    {
-        topologyEngine_ = cm;
-    }
-
-    /**
      * @brief Check whether there are any requests for asynchronously writing metadata to ETCD.
      * @return True if there are unfinished async requests.
      */
@@ -494,7 +495,8 @@ private:
     HostPort masterAddress_;
     std::shared_ptr<PersistenceApi> persistenceApi_;
     object_cache::MasterWorkerOCServiceImpl *masterWorkerOCService_{ nullptr };
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
+    const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
+    std::string localAddress_;
     std::shared_ptr<AkSkManager> akSkManager_;
     EtcdStore *etcdStore_;
     std::unique_ptr<ThreadPool> reconciliationAsyncPool_;

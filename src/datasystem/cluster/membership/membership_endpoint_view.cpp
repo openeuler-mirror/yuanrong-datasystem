@@ -44,6 +44,7 @@ Status MembershipEndpointView::UpdateObservation(const EndpointObservation &obse
         current == observationsByAddress_.end() || current->second.topologyVersion <= observation.topologyVersion,
         K_INVALID, "Endpoint observation version regressed");
     observationsByAddress_[observation.identity.address] = observation;
+    hasObservations_.store(true, std::memory_order_release);
     return Status::OK();
 }
 
@@ -61,6 +62,7 @@ void MembershipEndpointView::RemoveStaleObservations()
                              && snapshot->Version() == iter->second.topologyVersion;
         iter = current ? std::next(iter) : observationsByAddress_.erase(iter);
     }
+    hasObservations_.store(!observationsByAddress_.empty(), std::memory_order_release);
 }
 
 EndpointAvailability MembershipEndpointView::ResolveLocalAvailability(const Member &member,
@@ -68,6 +70,9 @@ EndpointAvailability MembershipEndpointView::ResolveLocalAvailability(const Memb
 {
     if (member.state == MemberState::FAILED) {
         return EndpointAvailability::UNREACHABLE;
+    }
+    if (!hasObservations_.load(std::memory_order_acquire)) {
+        return EndpointAvailability::UNKNOWN;
     }
     std::shared_lock<std::shared_mutex> lock(mutex_);
     auto iter = observationsByAddress_.find(member.identity.address);

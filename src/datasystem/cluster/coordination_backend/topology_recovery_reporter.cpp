@@ -2,7 +2,11 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  */
-#include "datasystem/worker/coordinator/topology_recovery_reporter.h"
+
+/**
+ * Description: Coordinator-backed Worker topology recovery reporter.
+ */
+#include "datasystem/cluster/coordination_backend/topology_recovery_reporter.h"
 
 #include <algorithm>
 #include <exception>
@@ -15,12 +19,18 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
-namespace datasystem::worker {
+namespace datasystem::cluster {
 namespace {
 constexpr size_t REPORT_POOL_SIZE = 1;
 constexpr int RETRY_BACKOFF_MULTIPLIER = 2;
 constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 
+/**
+ * @brief Derive deterministic per-Worker jitter without shared random state.
+ * @param[in] reporter Canonical reporter address used as the deterministic seed.
+ * @param[in] options Reporter timing options containing the jitter bound.
+ * @return Deterministic initial report delay.
+ */
 std::chrono::milliseconds InitialJitter(const std::string &reporter,
                                         const TopologyRecoveryReporterOptions &options)
 {
@@ -32,6 +42,11 @@ std::chrono::milliseconds InitialJitter(const std::string &reporter,
         static_cast<int64_t>(std::hash<std::string>{}(reporter) % static_cast<uint64_t>(bound)));
 }
 
+/**
+ * @brief Classify report statuses that remain safe to retry within one CoordinatorId.
+ * @param[in] status Report operation status to classify.
+ * @return True when the report may be retried for the same CoordinatorId.
+ */
 bool IsRetryableReportStatus(const Status &status)
 {
     return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY
@@ -39,6 +54,15 @@ bool IsRetryableReportStatus(const Status &status)
            || status.GetCode() == K_RPC_CANCELLED;
 }
 
+/**
+ * @brief Emit one low-volume transient report failure.
+ * @param[in] cluster Cluster scope of the report.
+ * @param[in] reporter Canonical reporter address.
+ * @param[in] version Reported topology version.
+ * @param[in] coordinatorId Coordinator generation that owns the report round.
+ * @param[in] backoff Delay before the next retry.
+ * @param[in] status Transient report failure.
+ */
 void LogReportRetry(const std::string &cluster, const std::string &reporter, uint64_t version,
                     const std::string &coordinatorId, std::chrono::milliseconds backoff, const Status &status)
 {
@@ -48,6 +72,13 @@ void LogReportRetry(const std::string &cluster, const std::string &reporter, uin
             << ", backoff_ms=" << backoff.count() << ", status=" << status.ToString();
 }
 
+/**
+ * @brief Emit a Coordinator decision that intentionally ends the current report round.
+ * @param[in] cluster Cluster scope of the report.
+ * @param[in] reporter Canonical reporter address.
+ * @param[in] coordinatorId Coordinator generation that owns the report round.
+ * @param[in] response Coordinator recovery decision.
+ */
 void LogReportDeferred(const std::string &cluster, const std::string &reporter,
                        const std::string &coordinatorId,
                        const coordinator::ReportTopologyRecoveryCandidateRspPb &response)
@@ -57,6 +88,13 @@ void LogReportDeferred(const std::string &cluster, const std::string &reporter,
             << ", result=" << response.result() << ", state=" << response.recovery_state();
 }
 
+/**
+ * @brief Emit successful completion for one CoordinatorId-bound report round.
+ * @param[in] cluster Cluster scope of the report.
+ * @param[in] reporter Canonical reporter address.
+ * @param[in] version Reported topology version.
+ * @param[in] coordinatorId Coordinator generation that accepted the report.
+ */
 void LogReportComplete(const std::string &cluster, const std::string &reporter, uint64_t version,
                        const std::string &coordinatorId)
 {
@@ -86,7 +124,7 @@ TopologyRecoveryReporter::TopologyRecoveryReporter(ICoordinatorServiceProxy &pro
 
 TopologyRecoveryReporter::~TopologyRecoveryReporter()
 {
-    LOG_IF_ERROR(Shutdown(), "Shut down topology recovery Reporter");
+    LOG_IF_ERROR(Shutdown(), "CLUSTER_RECOVERY_REPORT_SHUTDOWN_FAILED");
 }
 
 bool TopologyRecoveryReporter::CanReportLocked() const
@@ -132,15 +170,18 @@ void TopologyRecoveryReporter::ScheduleReport()
             try {
                 RunReportLoop(coordinatorId, completed);
             } catch (const std::exception &error) {
-                LOG(ERROR) << "CLUSTER_RECOVERY reporter failed: " << error.what();
+                LOG(ERROR) << "CLUSTER_RECOVERY_REPORT_FAILED cluster=" << clusterName_
+                           << " reporter=" << reporterAddress_ << " reason=exception error=" << error.what();
             } catch (...) {
-                LOG(ERROR) << "CLUSTER_RECOVERY reporter failed with an unknown exception";
+                LOG(ERROR) << "CLUSTER_RECOVERY_REPORT_FAILED cluster=" << clusterName_
+                           << " reporter=" << reporterAddress_ << " reason=unknown_exception";
             }
             FinishRound(coordinatorId, completed);
         });
     } catch (const std::exception &error) {
         scheduled_ = false;
-        LOG(WARNING) << "CLUSTER_RECOVERY schedule reporter failed: " << error.what();
+        LOG(WARNING) << "CLUSTER_RECOVERY_REPORT_SCHEDULE_FAILED cluster=" << clusterName_
+                     << " reporter=" << reporterAddress_ << " error=" << error.what();
     }
 }
 
@@ -277,4 +318,4 @@ Status TopologyRecoveryReporter::Shutdown()
     return Status::OK();
 }
 
-}  // namespace datasystem::worker
+}  // namespace datasystem::cluster

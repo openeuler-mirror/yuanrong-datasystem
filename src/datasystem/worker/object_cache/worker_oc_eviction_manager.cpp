@@ -50,7 +50,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
-#include "datasystem/worker/object_cache/object_meta_route_helper.h"
+#include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 
@@ -189,16 +189,15 @@ WorkerOcEvictionManager::EvictionTraceAggregator::GetSummaries() const
 }
 
 WorkerOcEvictionManager::WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress,
-                                                 HostPort masterAddress, master::MasterOCServiceImpl *masterOc,
-                                                 const cluster::PlacementFacade *topologyPlacement,
-                                                 worker::MetadataRouteOptions topologyRouteOptions)
+                                                 HostPort masterAddress,
+                                                 const worker::MetadataRouteResolver &metadataRoute,
+                                                 master::MasterOCServiceImpl *masterOc)
     : objectTable_(std::move(objectTable)),
       localAddress_(std::move(localAddress)),
       masterAddress_(std::move(masterAddress)),
       isDone_(true),
       masterOc_(masterOc),
-      topologyPlacement_(topologyPlacement),
-      topologyRouteOptions_(std::move(topologyRouteOptions))
+      metadataRoute_(metadataRoute)
 {
 }
 
@@ -289,9 +288,6 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
 {
     RETURN_OK_IF_TRUE(objectKeyVersions.empty());
     VLOG(DEBUG_LOG_LEVEL) << "RemoveMetaFromMasterForEviction start. Object count: " << objectKeyVersions.size();
-    if (topologyPlacement_ == nullptr) {
-        RETURN_STATUS(StatusCode::K_NOT_FOUND, "Topology placement facade is not provided");
-    }
     EvictDeletedObjects failedObjects;
     Status lastRc;
     std::vector<std::string> objectKeys;
@@ -299,8 +295,8 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
     for (const auto &item : objectKeyVersions) {
         objectKeys.emplace_back(item.first);
     }
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
-    grouped.AppendFailuresToGroup();
+    auto grouped = metadataRoute_.GroupOwners(objectKeys);
+    AppendRouteFailures(grouped);
     auto &objKeysGrpByMaster = grouped.groups;
     INJECT_POINT_NO_RETURN("WorkerOcEvictionManager.RemoveMetaFromMasterForEviction.moveToEmptyMaster",
                            [&objKeysGrpByMaster](const std::string &objectKey) {
@@ -820,11 +816,6 @@ std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> WorkerOcEvictionManager
 
 void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks)
 {
-    if (topologyPlacement_ == nullptr) {
-        LOG(ERROR) << "Topology placement facade is not provided for primary end-life eviction.";
-        ReaddPrimaryEndLifeTasks(tasks);
-        return;
-    }
     std::vector<std::string> objectKeys;
     std::unordered_map<std::string, PrimaryEndLifeTask> taskByKey;
     objectKeys.reserve(tasks.size());
@@ -833,7 +824,7 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndL
         objectKeys.emplace_back(task.objectKey);
         taskByKey.emplace(task.objectKey, task);
     }
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyPlacement_, topologyRouteOptions_);
+    auto grouped = metadataRoute_.GroupOwners(objectKeys);
     auto &groupedKeys = grouped.groups;
 
     std::unordered_set<std::string> routeFailedKeys;
@@ -1316,18 +1307,8 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
 {
     const auto &objectKey = objectKV.GetObjKey();
     VLOG(DEBUG_LOG_LEVEL) << "DeleteNoneL2CacheEvictableObject start. ObjectKey: " << objectKey;
-    // Get Master address from objectKey
-    if (topologyPlacement_ == nullptr) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "Topology placement facade is not provided");
-    }
-    auto grouped = BuildMetaOwnerRouteGroups(std::vector<std::string>{ objectKey }, topologyPlacement_,
-                                             topologyRouteOptions_);
-    auto failed = grouped.failures.find(objectKey);
-    if (failed != grouped.failures.end()) {
-        return failed->second;
-    }
-    CHECK_FAIL_RETURN_STATUS(!grouped.groups.empty(), K_NOT_FOUND, "No metadata address found.");
-    const auto &masterAddr = grouped.groups.begin()->first;
+    HostPort masterAddr;
+    RETURN_IF_NOT_OK(metadataRoute_.ResolveOwner(objectKey, masterAddr));
 
     auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_,
                                                                               masterOc_);

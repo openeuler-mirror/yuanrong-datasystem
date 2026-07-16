@@ -32,7 +32,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/cluster/executor/key_filter.h"
@@ -120,10 +119,15 @@ static Status WaitForClientIdRefMigration(MasterMasterOCApi &api, const GIncreas
 
 OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore,
                                      EtcdStore *etcdStore, std::shared_ptr<PersistenceApi> persistApi,
-                                     const std::string &masterAddress, worker::WorkerTopologyReferences *cm,
-                                     const std::string &workerId, bool newNode)
-    : MetadataRedirectHelper(cm),
+                                     const std::string &masterAddress, const cluster::PlacementFacade *placement,
+                                     const cluster::MembershipEndpointView *membership, bool centralizedMetadata,
+                                     HostPort metadataAddress, std::string localAddress,
+                                     const std::atomic<bool> *exitRequested, const std::string &workerId, bool newNode)
+    : MetadataRedirectHelper(placement, centralizedMetadata, std::move(metadataAddress)),
       masterAddress_(masterAddress),
+      topologyMembership_(membership),
+      localAddress_(std::move(localAddress)),
+      exitRequested_(exitRequested),
       akSkManager_(std::move(akSkManager)),
       eventName_(OC_METADATA_MANAGER + workerId),
       persistApi_(persistApi),
@@ -131,14 +135,13 @@ OCMetadataManager::OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, R
 {
     bool isEnabled = FLAGS_rocksdb_write_mode != "none" || FLAGS_oc_io_from_l2cache_need_metadata;
     objectStore_ = std::make_shared<ObjectMetaStore>(rocksStore, etcdStore, isEnabled);
-    if (topologyEngine_ != nullptr && !topologyEngine_->centralizedMetadata) {
+    if (!IsCentralizedMetadata()) {
         workerId_ = workerId;
     }
 }
 
 Status OCMetadataManager::Init()
 {
-    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "TopologyEngine must be inited firstly");
     RETURN_IF_NOT_OK(objectStore_->Init());
     if (newNode_) {
         RETURN_IF_NOT_OK(objectStore_->AddRocksdbHealthTag());
@@ -146,7 +149,7 @@ Status OCMetadataManager::Init()
     // let it skips recovery from etcd
     bool skipRecoveryFromEtcd = objectStore_->CheckHealth();
 
-    nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_, topologyEngine_->centralizedMetadata);
+    nestedRefManager_ = std::make_unique<OCNestedManager>(objectStore_, IsCentralizedMetadata());
     RETURN_IF_NOT_OK(InitGlobalRef());
     asyncPool_ = std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "OcAsyncTask");
     notifyWorkerManager_ =
@@ -304,7 +307,7 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
 {
     std::vector<std::pair<std::string, std::string>> globalRefs;
 
-    if (objectStore_->IsRocksdbRunning() || topologyEngine_->centralizedMetadata) {
+    if (objectStore_->IsRocksdbRunning() || IsCentralizedMetadata()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
                                          "Load global ref from Rocksdb failed.");
     } else {
@@ -332,7 +335,7 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
 {
     std::vector<std::pair<std::string, std::string>> globalRefs;
 
-    if (objectStore_->IsRocksdbRunning() || topologyEngine_->centralizedMetadata) {
+    if (objectStore_->IsRocksdbRunning() || IsCentralizedMetadata()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->GetAllFromRocks(tableName, globalRefs),
                                          "Load global ref from Rocksdb failed.");
     } else {
@@ -364,7 +367,7 @@ Status OCMetadataManager::IncreaseNestedRefCnt(const GIncNestedRefReqPb &req, GI
 {
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     Status rc = Status::OK();
-    RedirectObjRefs(resp, req.redirect(), objectKeys);
+    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -382,7 +385,7 @@ Status OCMetadataManager::DecreaseNestedRefCnt(const GDecNestedRefReqPb &req, GD
 {
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     Status rc = Status::OK();
-    RedirectObjRefs(resp, req.redirect(), objectKeys);
+    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -415,7 +418,7 @@ Status OCMetadataManager::DecreaseNestedRefCnt(const GDecNestedRefReqPb &req, GD
         DeleteAllCopyMetaRspPb deleteRsp;
         VLOG(DEBUG_LOG_LEVEL) << "Request deleteReq: " << LogHelper::IgnoreSensitive(deleteReq)
                               << ", obj size: " << deleteReq.object_keys_size();
-        DeleteAllCopyMeta(deleteReq, deleteRsp);
+        RETURN_IF_NOT_OK(DeleteAllCopyMeta(deleteReq, deleteRsp));
         Status respRc(static_cast<StatusCode>(deleteRsp.last_rc().error_code()), deleteRsp.last_rc().error_msg());
         if (respRc.IsError()) {
             for (const auto &id : deleteRsp.failed_object_keys()) {
@@ -503,10 +506,11 @@ Status OCMetadataManager::HandleNestedRefsOnCreate(const std::string &objectKey,
     for (const auto &nestedObjectKey : nestedObjectKeys) {
         size_t shardIdx = GetShardIndex(nestedObjectKey);
         std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-        bool redirect = false;
-        bool moving = false;
-        RETURN_IF_NOT_OK(worker::EvaluateTopologyRedirect(topologyEngine_, nestedObjectKey, redirect, moving,
-                                                          redirectAddr));
+        MetaRedirectDecision route;
+        RETURN_IF_NOT_OK(EvaluateMetadataRedirect(nestedObjectKey, route));
+        const bool redirect = route.redirect;
+        const bool moving = route.moving;
+        redirectAddr = route.targetAddress;
         HostPort nestedMasterAddr;
         RETURN_IF_NOT_OK(nestedMasterAddr.ParseString(redirectAddr));
         INJECT_POINT("IncreaseNestedRefCnt.local.addr", [this, &nestedObjectKey]() {
@@ -692,7 +696,7 @@ Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, Creat
     }
     LOG(INFO) << FormatString("Processing CreateMultiMeta objectKeys: %s, source: %s", VectorToString(objectKeys),
                               req.address());
-    FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(!rsp.info().empty());
     return CreateMultiMetaNtx(req, rsp);
 }
@@ -979,7 +983,7 @@ Status OCMetadataManager::CreateMeta(const CreateMetaReqPb &request, CreateMetaR
     bool redirect = request.redirect();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objectKey.empty() && !request.address().empty(), K_INVALID,
                                          "CreateMeta: Cannot CreateMeta with empty objectKey or server address.");
-    FillRedirectResponseInfo(response, objectKey, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(response, objectKey, redirect));
     RETURN_OK_IF_TRUE(redirect);
     int64_t version = 0;
     bool firstOne = false;
@@ -1040,7 +1044,7 @@ Status OCMetadataManager::CreateCopyMeta(const CreateCopyMetaReqPb &request, Cre
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         !objectKey.empty() && !address.empty(), K_INVALID,
         "CreateCopyMeta: Cannot CreateCopyMeta with empty objectKey or server address.");
-    FillRedirectResponseInfo(response, objectKey, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(response, objectKey, redirect));
     RETURN_OK_IF_TRUE(redirect);
     {
         // Check meta info in cache and rocksdb.
@@ -1073,7 +1077,7 @@ Status OCMetadataManager::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &re
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         !ids.empty() && !request.address().empty(), K_INVALID,
         "CreateMultiCopyMeta: Cannot CreateMultiCopyMeta with empty ids or server address.");
-    FillRedirectResponseInfos(response, ids, request.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, ids, request.redirect()));
     RETURN_OK_IF_TRUE(response.meta_is_moving() || !response.info().empty());
     std::unordered_map<std::string, std::string> updateKeyLocations;  // key: objectKey, value: workerAddr
     {
@@ -1194,13 +1198,13 @@ Status OCMetadataManager::QueryMeta(const QueryMetaReqPb &req, QueryMetaRspPb &r
     std::vector<std::string> notRedirectObjectKeys = { req.ids().begin(), req.ids().end() };
     const auto &address = req.address();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!address.empty(), StatusCode::K_RUNTIME_ERROR, "Address is empty");
-    FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
     INJECT_POINT("OCMetadataManager.QueryMeta,wait");
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_FROM_META_TABLE);
     std::vector<std::string> tmpNotExistObjectKeys;
     RETURN_IF_NOT_OK(QueryMetaFromMetaTable(req, notRedirectObjectKeys, rsp, payloads, tmpNotExistObjectKeys));
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_FILL_REDIRECT_AGAIN);
-    FillRedirectResponseInfos(rsp, tmpNotExistObjectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, tmpNotExistObjectKeys, req.redirect()));
     point.RecordAndReset(PerfKey::MASTER_QUERY_META_SET_RSP);
     std::list<std::string> notExistObjectKeys = { tmpNotExistObjectKeys.begin(), tmpNotExistObjectKeys.end() };
     std::vector<uint64_t> deletingVersions;
@@ -1363,13 +1367,13 @@ Status OCMetadataManager::RemoveMeta(const RemoveMetaReqPb &request, RemoveMetaR
     switch (request.cause()) {
         case RemoveMetaReqPb_Cause_NORMAL:
         case RemoveMetaReqPb_Cause_EVICTION:
-            RemoveMetaLocation(request, address, response, request.version());
+            RETURN_IF_NOT_OK(RemoveMetaLocation(request, address, response, request.version()));
             break;
         case RemoveMetaReqPb_Cause_INVALID_BUFFER:
-            RemoveMetaForInvalidateBuffer(request, address, response);
+            RETURN_IF_NOT_OK(RemoveMetaForInvalidateBuffer(request, address, response));
             break;
         case RemoveMetaReqPb_Cause_GIVEUP_PRIMARY:
-            GiveUpPrimaryLocation(request, address, response);
+            RETURN_IF_NOT_OK(GiveUpPrimaryLocation(request, address, response));
             break;
         default:
             LOG(WARNING) << "Unsupported type: " << request.cause();
@@ -1380,54 +1384,65 @@ Status OCMetadataManager::RemoveMeta(const RemoveMetaReqPb &request, RemoveMetaR
     return Status::OK();
 }
 
-bool OCMetadataManager::IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std::string &address)
+Status OCMetadataManager::IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std::string &address, bool &result)
 {
-    bool result = meta.IsPrimaryWithoutCopy(address);
-    if (result) {
-        return true;
+    bool selected = meta.IsPrimaryWithoutCopy(address);
+    if (selected) {
+        result = true;
+        return Status::OK();
     }
-    INJECT_POINT("OCMetadataManager.IsPrimaryCopyWithCopy", []() { return false; });
+    INJECT_POINT("OCMetadataManager.IsPrimaryCopyWithCopy", [&result]() {
+        result = false;
+        return Status::OK();
+    });
     bool allCopyIsExitingNode = true;
     for (const auto &loc : meta.locations) {
-        if (loc.first != address && loc.second == AckState::ACK
-            && !worker::IsTopologyMemberPreLeaving(topologyEngine_, loc.first)) {
+        if (loc.first == address || loc.second != AckState::ACK) {
+            continue;
+        }
+        bool isPreLeaving = false;
+        RETURN_IF_NOT_OK(IsTopologyMemberPreLeaving(loc.first, isPreLeaving));
+        if (!isPreLeaving) {
             allCopyIsExitingNode = false;
             break;
         }
     }
-    return allCopyIsExitingNode;
+    result = allCopyIsExitingNode;
+    return Status::OK();
 }
 
-void OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, const std::string &address,
-                                              RemoveMetaRspPb &response)
+Status OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, const std::string &address,
+                                                RemoveMetaRspPb &response)
 {
     std::vector<std::string> notRedirectObjectKeys = { request.ids().begin(), request.ids().end() };
     PrimaryChangeMap workerForChangePrimaryIds;
-    FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect()));
     if (response.meta_is_moving()) {
-        return;
+        return Status::OK();
     }
     LOG(INFO) << FormatString("[Objects %s] Start to give up meta location %s", VectorToString(notRedirectObjectKeys),
                               address);
     const bool topologyOperation = !request.topology_operation_id().empty();
     for (const auto &objectKey : notRedirectObjectKeys) {
-        ProcessGiveUpPrimaryObject(objectKey, address, response, workerForChangePrimaryIds, topologyOperation);
+        RETURN_IF_NOT_OK(
+            ProcessGiveUpPrimaryObject(objectKey, address, response, workerForChangePrimaryIds, topologyOperation));
     }
     SendChangePrimaryCopy(workerForChangePrimaryIds, response);
     if (!workerForChangePrimaryIds.empty()) {
-        RetryForFailedIds(workerForChangePrimaryIds, response);
+        RETURN_IF_NOT_OK(RetryForFailedIds(workerForChangePrimaryIds, response));
     }
+    return Status::OK();
 }
 
-void OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKey, const std::string &address,
-                                                   RemoveMetaRspPb &response,
-                                                   PrimaryChangeMap &workerForChangePrimaryIds,
-                                                   bool topologyOperation)
+Status OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKey, const std::string &address,
+                                                     RemoveMetaRspPb &response,
+                                                     PrimaryChangeMap &workerForChangePrimaryIds,
+                                                     bool topologyOperation)
 {
-    if (worker::IsLocalTopologyMemberExiting(topologyEngine_) && !topologyOperation) {
+    if (IsLocalExitRequested() && !topologyOperation) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Node exiting, give up primary failed.", objectKey);
         response.add_failed_ids(objectKey);
-        return;
+        return Status::OK();
     }
     size_t shardIdx = GetShardIndex(objectKey);
     std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
@@ -1435,10 +1450,11 @@ void OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKey,
     if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
         LOG(WARNING) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", objectKey);
         response.add_success_ids(objectKey);
-        return;
+        return Status::OK();
     }
     ObjectMeta &meta = accessor->second;
-    bool isPrimaryWithoutCopy = IsPrimaryCopyWithCopy(meta, address);
+    bool isPrimaryWithoutCopy = false;
+    RETURN_IF_NOT_OK(IsPrimaryCopyWithCopy(meta, address, isPrimaryWithoutCopy));
     VLOG(1) << FormatString("[Objects %s] Write mode: %d, is primary without other: %d", objectKey,
                             meta.meta.config().write_mode(), isPrimaryWithoutCopy);
     if (meta.meta.primary_address() == address && meta.HasL2Cache()) {
@@ -1446,24 +1462,30 @@ void OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKey,
         if (meta.IsWriteBackL2Cache() || meta.IsWriteBackL2CacheEvict()) {
             response.add_need_wait_ids(objectKey);
         }
-        return;
+        return Status::OK();
     }
     if (isPrimaryWithoutCopy) {
         response.add_need_data_ids(objectKey);
         if (meta.IsWriteBackL2Cache() || meta.IsWriteBackL2CacheEvict()) {
             response.add_need_wait_ids(objectKey);
         }
-        return;
+        return Status::OK();
     }
     for (const auto &location : meta.locations) {
-        if (location.first != address && !worker::IsTopologyMemberPreLeaving(topologyEngine_, location.first)) {
+        if (location.first == address) {
+            continue;
+        }
+        bool isPreLeaving = false;
+        RETURN_IF_NOT_OK(IsTopologyMemberPreLeaving(location.first, isPreLeaving));
+        if (!isPreLeaving) {
             workerForChangePrimaryIds[location.first].insert(objectKey);
             (void)meta.locations.erase(address);
             (void)objectStore_->RemoveObjectLocation(objectKey, address);
-            return;
+            return Status::OK();
         }
     }
     response.add_need_data_ids(objectKey);
+    return Status::OK();
 }
 
 void OCMetadataManager::SendChangePrimaryCopy(
@@ -1498,7 +1520,7 @@ void OCMetadataManager::SendChangePrimaryCopy(
     }
 }
 
-void OCMetadataManager::RetryForFailedIds(
+Status OCMetadataManager::RetryForFailedIds(
     const std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds,
     RemoveMetaRspPb &rsp)
 {
@@ -1506,8 +1528,8 @@ void OCMetadataManager::RetryForFailedIds(
         for (const auto &id : info.second) {
             std::unordered_map<ImmutableString, AckState> locations;
             {
-            size_t shardIdx = GetShardIndex(id);
-            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+                size_t shardIdx = GetShardIndex(id);
+                std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
                 TbbMetaTable::accessor accessor;
                 if (!metaShards_[shardIdx].table.find(accessor, id)) {
                     LOG(WARNING) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", id);
@@ -1518,7 +1540,12 @@ void OCMetadataManager::RetryForFailedIds(
             }
             bool success = false;
             for (const auto &addr : locations) {
-                if (addr.first == info.first || worker::IsTopologyMemberPreLeaving(topologyEngine_, addr.first)) {
+                if (addr.first == info.first) {
+                    continue;
+                }
+                bool isPreLeaving = false;
+                RETURN_IF_NOT_OK(IsTopologyMemberPreLeaving(addr.first, isPreLeaving));
+                if (isPreLeaving) {
                     continue;
                 }
                 std::unordered_set<std::string> successIds;
@@ -1544,11 +1571,12 @@ void OCMetadataManager::RetryForFailedIds(
             }
         }
     }
+    return Status::OK();
 }
 
 Status OCMetadataManager::ChangePrimaryCopy(const std::string &primaryAddr, const std::string &objectKey)
 {
-    if (worker::IsLocalTopologyMemberExiting(topologyEngine_)) {
+    if (IsLocalExitRequested()) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Node exiting, change primary copy failed.", objectKey);
         return Status(StatusCode::K_TRY_AGAIN, "Try again");
     }
@@ -1570,8 +1598,8 @@ Status OCMetadataManager::ChangePrimaryCopy(const std::string &primaryAddr, cons
     return Status::OK();
 }
 
-void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const std::string &address,
-                                           RemoveMetaRspPb &response, uint64_t version)
+Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const std::string &address,
+                                             RemoveMetaRspPb &response, uint64_t version)
 {
     std::vector<std::string> notRedirectObjectKeys = { request.ids().begin(), request.ids().end() };
     std::unordered_map<std::string, uint64_t> objectsKeyAndVersion;
@@ -1581,15 +1609,15 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
             objectsKeyAndVersion.emplace(idWithVersion.id(), idWithVersion.version());
         }
     }
-    FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect()));
     if (response.meta_is_moving()) {
-        return;
+        return Status::OK();
     }
     uint64_t compareVersion;
     VLOG(1) << FormatString("[Objects %s] Start to remove meta location %s", VectorToString(notRedirectObjectKeys),
                             address);
     for (const auto &objectKey : notRedirectObjectKeys) {
-        if (worker::IsLocalTopologyMemberExiting(topologyEngine_) && request.topology_operation_id().empty()) {
+        if (IsLocalExitRequested() && request.topology_operation_id().empty()) {
             response.add_failed_ids(objectKey);
             LOG(WARNING) << FormatString("[ObjectKey %s] Node exiting, remove meta location failed.", objectKey);
             continue;
@@ -1623,6 +1651,7 @@ void OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, const
         }
         response.add_success_ids(objectKey);
     }
+    return Status::OK();
 }
 
 Status OCMetadataManager::RemoveMetaLocation(const std::string &objectKey, const std::string &address, uint64_t version)
@@ -1647,14 +1676,14 @@ Status OCMetadataManager::RemoveMetaLocation(const std::string &objectKey, const
     return Status::OK();
 }
 
-void OCMetadataManager::RemoveMetaForInvalidateBuffer(const RemoveMetaReqPb &request, const std::string &address,
-                                                      RemoveMetaRspPb &response)
+Status OCMetadataManager::RemoveMetaForInvalidateBuffer(const RemoveMetaReqPb &request, const std::string &address,
+                                                        RemoveMetaRspPb &response)
 {
     std::vector<std::string> notRedirectObjectKeys = { request.ids().begin(), request.ids().end() };
     std::unordered_map<std::string, std::unordered_set<std::string>> toBeChanged;
-    FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, notRedirectObjectKeys, request.redirect()));
     if (response.meta_is_moving()) {
-        return;
+        return Status::OK();
     }
     LOG(INFO) << FormatString("[Objects %s] Start to remove meta for invalidating buffer operation",
                               VectorToString(notRedirectObjectKeys));
@@ -1704,6 +1733,7 @@ void OCMetadataManager::RemoveMetaForInvalidateBuffer(const RemoveMetaReqPb &req
         response.add_success_ids(objectKey);
         notifyWorkerManager_->AsyncChangePrimaryCopy(toBeChanged);
     }
+    return Status::OK();
 }
 
 void OCMetadataManager::TransferSyncDeleteRequest(
@@ -1741,7 +1771,7 @@ void OCMetadataManager::TransferSyncDeleteRequest(
     });
 }
 
-void OCMetadataManager::DeleteAllCopyMetaImpl(
+Status OCMetadataManager::DeleteAllCopyMetaImpl(
     const DeleteAllCopyMetaReqPb &request, DeleteAllCopyMetaRspPb &response,
     const std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> &serverApi,
     bool needReleaseRpc)
@@ -1758,9 +1788,9 @@ void OCMetadataManager::DeleteAllCopyMetaImpl(
         if (serverApi != nullptr) {
             LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
         }
-        return;
+        return Status(K_INVALID, "Cannot RemoveMeta with empty server address.");
     }
-    FillRedirectResponseInfos(response, objectKeys, request.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(response, objectKeys, request.redirect()));
     VLOG(1) << "DeleteAllCopyMeta begin, sourceWorker: " << sourceWorker;
     std::unordered_map<std::string, bool> requestObjKeyMap;
     std::transform(objectKeys.begin(), objectKeys.end(), std::inserter(requestObjKeyMap, requestObjKeyMap.end()),
@@ -1784,7 +1814,7 @@ void OCMetadataManager::DeleteAllCopyMetaImpl(
                                                   deleteMediator.GetOutdatedObjs().end() };
         } else {
             TransferSyncDeleteRequest(deleteMediator, response, serverApi);
-            return;
+            return Status::OK();
         }
     }
     if (!deleteMediator.GetStatus().IsOk()) {
@@ -1794,21 +1824,22 @@ void OCMetadataManager::DeleteAllCopyMetaImpl(
     if (serverApi != nullptr) {
         LOG_IF_ERROR(serverApi->Write(response), "Write reply to client stream failed.");
     }
+    return Status::OK();
 }
 
-void OCMetadataManager::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &request, DeleteAllCopyMetaRspPb &response)
+Status OCMetadataManager::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &request, DeleteAllCopyMetaRspPb &response)
 {
     // create a empty serverApi and don't use it.
     std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> serverApi;
-    DeleteAllCopyMetaImpl(request, response, serverApi, false);
+    return DeleteAllCopyMetaImpl(request, response, serverApi, false);
 }
 
-void OCMetadataManager::DeleteAllCopyMetaWithServerApi(
+Status OCMetadataManager::DeleteAllCopyMetaWithServerApi(
     const DeleteAllCopyMetaReqPb &request,
     const std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> &serverApi)
 {
     DeleteAllCopyMetaRspPb response;
-    DeleteAllCopyMetaImpl(request, response, serverApi, true);
+    return DeleteAllCopyMetaImpl(request, response, serverApi, true);
 }
 
 void OCMetadataManager::FindNeedDeleteIds(DeleteObjectMediator &delMediator)
@@ -2199,7 +2230,7 @@ Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaR
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objectKey.empty() && !address.empty(), K_INVALID,
                                          "UpdateMeta: Cannot UpdateMeta with empty objectKey or server address.");
     bool redirect = request.redirect();
-    FillRedirectResponseInfo(response, objectKey, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(response, objectKey, redirect));
     RETURN_OK_IF_TRUE(redirect);
 
     RETURN_IF_NOT_OK(expiredObjectManager_->RemoveObjectIfExist(objectKey));
@@ -2225,21 +2256,65 @@ Status OCMetadataManager::UpdateMeta(const UpdateMetaReqPb &request, UpdateMetaR
     return UpdateMetaByState(request, objectMeta, response);
 }
 
-std::set<std::string> OCMetadataManager::GetValidTopologyWorkers()
+Status OCMetadataManager::GetValidTopologyWorkers(std::set<std::string> &workers) const
 {
-    INJECT_POINT("OCMetadataManager.GetValidTopologyWorkers", [](std::string worker) {
-        std::set<std::string> workers;
+    INJECT_POINT("OCMetadataManager.GetValidTopologyWorkers", [&workers](std::string worker) {
         workers.insert(worker);
-        return workers;
+        return Status::OK();
     });
-    return worker::GetValidTopologyMembers(topologyEngine_);
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    CHECK_FAIL_RETURN_STATUS(topologyMembership_ != nullptr, K_NOT_READY,
+                             "Object metadata topology membership is not available");
+    auto rc = topologyMembership_->GetSnapshot(snapshot);
+    if (rc.GetCode() == K_NOT_READY) {
+        workers.clear();
+        VLOG(1) << "CLUSTER_METADATA_LOAD topology Snapshot is not ready; continue without committed members";
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(rc);
+    std::set<std::string> resolved;
+    for (const auto *member : snapshot->CommittedMembers()) {
+        resolved.emplace(member->identity.address);
+    }
+    workers = std::move(resolved);
+    return Status::OK();
+}
+
+Status OCMetadataManager::GetFailedTopologyWorkers(std::unordered_set<std::string> &workers) const
+{
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    CHECK_FAIL_RETURN_STATUS(topologyMembership_ != nullptr, K_NOT_READY,
+                             "Object metadata topology membership is not available");
+    RETURN_IF_NOT_OK(topologyMembership_->GetSnapshot(snapshot));
+    std::unordered_set<std::string> resolved;
+    for (const auto *member : snapshot->FailedMembers()) {
+        resolved.emplace(member->identity.address);
+    }
+    workers = std::move(resolved);
+    return Status::OK();
+}
+
+Status OCMetadataManager::IsTopologyMemberPreLeaving(const std::string &address, bool &isPreLeaving) const
+{
+    CHECK_FAIL_RETURN_STATUS(topologyMembership_ != nullptr, K_NOT_READY,
+                             "Object metadata topology membership is not available");
+    cluster::MemberEndpoint endpoint;
+    RETURN_IF_NOT_OK(topologyMembership_->ResolveByAddress(address, endpoint));
+    isPreLeaving = endpoint.topologyState == cluster::MemberState::PRE_LEAVING;
+    return Status::OK();
+}
+
+bool OCMetadataManager::IsLocalExitRequested() const
+{
+    return exitRequested_ != nullptr && exitRequested_->load(std::memory_order_acquire);
 }
 
 Status OCMetadataManager::RecoverObjectLocations(
     const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap)
 {
     INJECT_POINT("OCNotifyWorkerManager.NoNeedRecoveryMeta");
-    auto workers = GetValidTopologyWorkers();
+    std::set<std::string> workers;
+    RETURN_IF_NOT_OK(GetValidTopologyWorkers(workers));
     for (const auto &it : objLocMap) {
         const std::string &objKey = it.first;
         const std::vector<std::pair<std::string, AckState>> &locations = it.second;
@@ -2284,29 +2359,38 @@ Status OCMetadataManager::LoadObjectLocations(
     return Status::OK();
 }
 
-std::string OCMetadataManager::SelectPrimaryCopyWhenScaleIn(
+Status OCMetadataManager::SelectPrimaryCopyWhenScaleIn(
     const std::string &objectKey, const std::string &primaryAddress,
-    const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap)
+    const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap,
+    std::string &selectedAddress)
 {
-    INJECT_POINT("master.SelectPrimaryCopy", [this] { return masterAddress_; });
-    auto failedWorkers = worker::GetFailedTopologyMembers(topologyEngine_);
+    INJECT_POINT("master.SelectPrimaryCopy", [this, &selectedAddress] {
+        selectedAddress = masterAddress_;
+        return Status::OK();
+    });
+    std::unordered_set<std::string> failedWorkers;
+    RETURN_IF_NOT_OK(GetFailedTopologyWorkers(failedWorkers));
     // case 1: if old primary copy is alive, return old primary copy address
     if (failedWorkers.find(primaryAddress) == failedWorkers.end()) {
-        return primaryAddress;
+        selectedAddress = primaryAddress;
+        return Status::OK();
     }
     // case 2: if old primary copy is dead, reselect new primary copy address from locations. If there is no location
     // or all locations are failed nodes, return current meta node address as primary copy address.
     auto it = objLocMap.find(objectKey);
     if (it == objLocMap.end()) {
-        return masterAddress_;
+        selectedAddress = masterAddress_;
+        return Status::OK();
     }
     for (const auto &addr : it->second) {
         if (addr.second == AckState::ACK && failedWorkers.find(addr.first) == failedWorkers.end()) {
             VLOG(1) << "old primaryAddr:" << primaryAddress << " new primaryAddr:" << addr.first;
-            return addr.first;
+            selectedAddress = addr.first;
+            return Status::OK();
         }
     }
-    return masterAddress_;
+    selectedAddress = masterAddress_;
+    return Status::OK();
 }
 
 void OCMetadataManager::InsertExpireObjects(ObjectMetaPb &metaPb,
@@ -2324,6 +2408,10 @@ Status OCMetadataManager::HandleLoadMeta(
     std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
     bool &isFromRocksdb)
 {
+    std::set<std::string> workers;
+    if (!IsCentralizedMetadata()) {
+        RETURN_IF_NOT_OK(GetValidTopologyWorkers(workers));
+    }
     for (const auto &meta : metas) {
         ObjectMetaPb metaPb;
         if (!metaPb.ParseFromString(meta.second)) {
@@ -2337,9 +2425,7 @@ Status OCMetadataManager::HandleLoadMeta(
             InsertToEtcdTableInMemory(objectKey, metaPb, ETCD_META_TABLE_PREFIX, objectKey);
         }
 
-        auto workers = worker::GetValidTopologyMembers(topologyEngine_);
-        if (topologyEngine_->centralizedMetadata
-            || workers.find(metaCache.meta.primary_address()) != workers.end()) {
+        if (IsCentralizedMetadata() || workers.find(metaCache.meta.primary_address()) != workers.end()) {
             if (metaCache.meta.primary_address().empty()) {
                 LOG(ERROR) << FormatString("[Obj: %s] primary address is empty", objectKey);
             } else {
@@ -2510,7 +2596,7 @@ void OCMetadataManager::RemoveSubscribeCache(const std::string &requestId)
 Status OCMetadataManager::GetObjectLocations(const GetObjectLocationsReqPb &req, GetObjectLocationsRspPb &rsp)
 {
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     for (const auto &objectKey : objectKeys) {
         TbbMetaTable::const_accessor accessor;
@@ -2538,7 +2624,7 @@ Status OCMetadataManager::QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRs
     INJECT_POINT("client.transport.query_and_get", []() { return Status::OK(); });
     RETURN_IF_NOT_OK(ValidateQueryAndGetDataRequest(req));
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(rsp.meta_is_moving());
 
     std::unordered_map<std::string, bool> redirectedKeys;
@@ -2907,7 +2993,7 @@ Status OCMetadataManager::GIncreaseRemoteClientIdToMaster(const std::string &rem
 {
     bool checkRedirect = false;
     if (masterAddr.Empty()) {
-        RETURN_IF_NOT_OK(worker::ResolveTopologyOwner(topologyEngine_, remoteClientId, masterAddr));
+        RETURN_IF_NOT_OK(ResolveMetadataOwner(remoteClientId, masterAddr));
         checkRedirect = true;
     }
     RETURN_IF_NOT_OK(GetPrimaryReplicaAddr(masterAddr.ToString(), masterAddr));
@@ -2955,7 +3041,7 @@ Status OCMetadataManager::GIncreaseRefWithRemoteClientId(const GIncreaseReqPb &r
     LOG(INFO) << "GIncreaseRefWithRemoteClientId remoteClientId:" << remoteClientId;
     // If object is migrating, return rsp and let worker retry later
     bool needRedirect = req.redirect();
-    RedirectObjRefs(resp, needRedirect, objectKeys);
+    RETURN_IF_NOT_OK(RedirectObjRefs(resp, needRedirect, objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -3010,62 +3096,56 @@ Status OCMetadataManager::EvaluateClientIdRefRedirect(const std::string &remoteC
         VLOG(1) << "receive redirect object: " << remoteClientId;
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(
-        worker::EvaluateTopologyRedirect(topologyEngine_, remoteClientId, needRedirect, isMoving, newAddr));
+    MetaRedirectDecision route;
+    RETURN_IF_NOT_OK(EvaluateMetadataRedirect(remoteClientId, route));
+    needRedirect = route.redirect;
+    isMoving = route.moving;
+    newAddr = std::move(route.targetAddress);
     if (needRedirect) {
         LOG(WARNING) << FormatString("ref need redirect, ClientId: %s, redirect address %s", remoteClientId, newAddr);
     }
     return Status::OK();
 }
 
-void OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedirect, std::string &newAddr,
-                                        bool &isMoving)
+Status OCMetadataManager::RedirectObjRefs(std::string &objectKey, bool &needRedirect, std::string &newAddr,
+                                          bool &isMoving)
 {
     if (!FLAGS_enable_redirect) {
         needRedirect = false;
-        return;
+        isMoving = false;
+        newAddr.clear();
+        return Status::OK();
     }
-    bool topologyMoving = false;
-    auto rc = worker::EvaluateTopologyRedirect(topologyEngine_, objectKey, needRedirect, topologyMoving, newAddr);
-    if (rc.IsError()) {
-        isMoving = true;
-        needRedirect = true;
-        LOG(WARNING) << FormatString("Defer object ref %s because topology redirect evaluation failed: %s", objectKey,
-                                     rc.ToString());
-        return;
-    }
-    if (topologyMoving) {
-        isMoving = true;
-        needRedirect = true;
+    MetaRedirectDecision route;
+    RETURN_IF_NOT_OK(EvaluateMetadataRedirect(objectKey, route));
+    bool resolvedMoving = route.moving;
+    bool resolvedRedirect = route.redirect || resolvedMoving;
+    if (resolvedMoving) {
         VLOG(1) << FormatString("objectKey %s is waiting for ScaleOut metadata migration", objectKey);
-        return;
-    }
-    if (!needRedirect) {
-        return;
-    }
-    if (globalRefTable_->GetRefWorkerCount(objectKey) > 0) {
+    } else if (!resolvedRedirect) {
+        // No reference-state lookup is needed for local ownership.
+    } else if (globalRefTable_->GetRefWorkerCount(objectKey) > 0) {
         // refs is migrating, need to wait meta migrate done
-        isMoving = true;
-        needRedirect = true;
+        resolvedMoving = true;
         LOG(WARNING) << FormatString("objectKey %s ref is moving", objectKey);
-        return;
-    }
-    if (!nestedRefManager_->CheckIsNoneNestedRefById(objectKey)) {
+    } else if (!nestedRefManager_->CheckIsNoneNestedRefById(objectKey)) {
         // nested ref is moving, need to wait meta migrate done
-        isMoving = true;
-        needRedirect = true;
+        resolvedMoving = true;
         LOG(WARNING) << FormatString("objectKey %s ref is moving", objectKey);
-        return;
+    } else {
+        TbbMetaTable::const_accessor accessor;
+        if (metaShards_[GetShardIndex(objectKey)].table.find(accessor, objectKey)) {
+            resolvedMoving = true;
+            LOG(WARNING) << FormatString("objectKey %s ref is moved, meta is moving", objectKey);
+        }
     }
-    // ref already migrated and meta is migrating, need to wait meta migrate done
-    TbbMetaTable::const_accessor accessor;
-    size_t shardIdx = GetShardIndex(objectKey);
-    if (metaShards_[shardIdx].table.find(accessor, objectKey)) {
-        isMoving = true;
-        LOG(WARNING) << FormatString("objectKey %s ref is moved, meta is moving", objectKey);
+    needRedirect = resolvedRedirect;
+    isMoving = resolvedMoving;
+    newAddr = std::move(route.targetAddress);
+    if (resolvedRedirect && !resolvedMoving) {
+        LOG(WARNING) << FormatString("ref need redirect, objectKey: %s, redirect address %s", objectKey, newAddr);
     }
-    needRedirect = true;
-    LOG(WARNING) << FormatString("ref need redirect, objectKey: %s, redirect address %s", objectKey, newAddr);
+    return Status::OK();
 }
 
 Status OCMetadataManager::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRspPb &resp)
@@ -3074,7 +3154,7 @@ Status OCMetadataManager::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRspPb
         return GIncreaseRefWithRemoteClientId(req, resp);
     }
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    RedirectObjRefs(resp, req.redirect(), objectKeys);
+    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         return Status::OK();
     }
@@ -3166,7 +3246,7 @@ Status OCMetadataManager::ReleaseGRefsOfRemoteClientId(const ReleaseGRefsReqPb &
     decReq.set_redirect(false);
     master::GDecreaseRspPb decRsp;
     std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> serverApi;
-    GDecreaseRefImplWithRemoteClientId(decReq, decRsp, serverApi, false);
+    RETURN_IF_NOT_OK(GDecreaseRefImplWithRemoteClientId(decReq, decRsp, serverApi, false));
     resp.mutable_last_rc()->set_error_code(decRsp.mutable_last_rc()->error_code());
     resp.mutable_last_rc()->set_error_msg(decRsp.mutable_last_rc()->error_msg());
     VLOG(1) << "recv ReleaseGRefsOfRemoteClientId src:" << req.address() << ", remoteClientId:" << remoteClientId;
@@ -3190,7 +3270,7 @@ void OCMetadataManager::ConstructRequestObjectKeyMap(const std::vector<std::stri
     }
 }
 
-void OCMetadataManager::GDecreaseRefImplWithRemoteClientId(
+Status OCMetadataManager::GDecreaseRefImplWithRemoteClientId(
     const GDecreaseReqPb &req, GDecreaseRspPb &resp,
     const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> serverApi, bool needReleaseRpc)
 {
@@ -3198,12 +3278,12 @@ void OCMetadataManager::GDecreaseRefImplWithRemoteClientId(
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     std::vector<std::string> failedDecIds;
     std::vector<std::string> finishDecIds;
-    RedirectObjRefs(resp, req.redirect(), objectKeys);
+    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
         if (serverApi != nullptr) {
             LOG_IF_ERROR(serverApi->Write(resp), "Write reply to client stream failed.");
         }
-        return;
+        return Status::OK();
     }
     Status lastErr =
         globalRefTable_->GDecreaseRef(req.remote_client_id(), objectKeys, failedDecIds, finishDecIds, true);
@@ -3220,7 +3300,7 @@ void OCMetadataManager::GDecreaseRefImplWithRemoteClientId(
             NotifyDeleteAndClearMeta(delMediator, false);
         } else {
             AsyncNotifyWorkerGDec(delMediator, failedDecIds, resp, serverApi, req.remote_client_id());
-            return;
+            return Status::OK();
         }
     }
     RollbackIfGDecRefFail(delMediator, failedDecIds, req.remote_client_id());
@@ -3228,6 +3308,7 @@ void OCMetadataManager::GDecreaseRefImplWithRemoteClientId(
     if (serverApi != nullptr) {
         LOG_IF_ERROR(serverApi->Write(resp), "Write reply to client stream failed.");
     }
+    return Status::OK();
 }
 
 void OCMetadataManager::AsyncNotifyWorkerGDec(
@@ -3258,16 +3339,16 @@ void OCMetadataManager::AsyncNotifyWorkerGDec(
     });
 }
 
-void OCMetadataManager::GDecreaseRefImpl(
+Status OCMetadataManager::GDecreaseRefImpl(
     const GDecreaseReqPb &req, GDecreaseRspPb &resp,
     const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi, bool needReleaseRpc)
 {
     std::vector<std::string> objectKeys = { req.object_keys().begin(), req.object_keys().end() };
     std::vector<std::string> failedDecIds;
     std::vector<std::string> finishDecIds;
-    RedirectObjRefs(resp, req.redirect(), objectKeys);
+    RETURN_IF_NOT_OK(RedirectObjRefs(resp, req.redirect(), objectKeys));
     if (resp.ref_is_moving()) {
-        return;
+        return Status::OK();
     }
     Status lastErr = globalRefTable_->GDecreaseRef(req.address(), objectKeys, failedDecIds, finishDecIds);
 
@@ -3307,7 +3388,7 @@ void OCMetadataManager::GDecreaseRefImpl(
         } else {
             // Case 3: Need to notify workers. Clear metadata in the asynchronous thread.
             AsyncNotifyWorkerGDec(delMediator, failedDecIds, resp, serverApi);
-            return;
+            return Status::OK();
         }
     }
     RollbackIfGDecRefFail(delMediator, failedDecIds);
@@ -3315,27 +3396,28 @@ void OCMetadataManager::GDecreaseRefImpl(
     if (serverApi != nullptr) {
         LOG_IF_ERROR(serverApi->Write(resp), "Write reply to client stream failed.");
     }
+    return Status::OK();
 }
 
-void OCMetadataManager::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp)
+Status OCMetadataManager::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp)
 {
     std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> serverApi;
     if (!req.remote_client_id().empty()) {
-        GDecreaseRefImplWithRemoteClientId(req, resp, serverApi, false);
+        return GDecreaseRefImplWithRemoteClientId(req, resp, serverApi, false);
     } else {
-        GDecreaseRefImpl(req, resp, serverApi, false);
+        return GDecreaseRefImpl(req, resp, serverApi, false);
     }
 }
 
-void OCMetadataManager::GDecreaseRefWithServerApi(
+Status OCMetadataManager::GDecreaseRefWithServerApi(
     const GDecreaseReqPb &req,
     const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi)
 {
     GDecreaseRspPb resp;
     if (!req.remote_client_id().empty()) {
-        GDecreaseRefImplWithRemoteClientId(req, resp, serverApi, true);
+        return GDecreaseRefImplWithRemoteClientId(req, resp, serverApi, true);
     } else {
-        GDecreaseRefImpl(req, resp, serverApi, true);
+        return GDecreaseRefImpl(req, resp, serverApi, true);
     }
 }
 
@@ -3615,7 +3697,7 @@ Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bo
         GDecreaseRspPb resp;
         *req.mutable_object_keys() = { refIds.begin(), refIds.end() };
         req.set_address(workerAddr);
-        OCMetadataManager::GDecreaseRef(req, resp);
+        RETURN_IF_NOT_OK(OCMetadataManager::GDecreaseRef(req, resp));
         Status respRc(static_cast<StatusCode>(resp.last_rc().error_code()), resp.last_rc().error_msg());
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(respRc, "GDecreaseRef failed in ProcessWorkerTimeout");
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
@@ -4017,7 +4099,7 @@ void OCMetadataManager::InsertToEtcdTableInMemory(const std::string &objectKey, 
 Status OCMetadataManager::ClearDevClientMetaForScaledInWorker(const std::vector<std::string> &removeNodes)
 {
     HostPort devMasterHostPort;
-    auto rc = worker::ResolveTopologyOwner(topologyEngine_, P2P_DEFAULT_MASTER, devMasterHostPort);
+    auto rc = ResolveMetadataOwner(P2P_DEFAULT_MASTER, devMasterHostPort);
     // The master node managing heterogeneous metadata has voluntarily scaled down.
     if (rc.GetCode() == StatusCode::K_RPC_UNAVAILABLE) {
         return Status::OK();
@@ -4026,7 +4108,7 @@ Status OCMetadataManager::ClearDevClientMetaForScaledInWorker(const std::vector<
     // If this node is the heterogeneous metadata master, clean up client metadata
     // associated with the scaled-in worker nodes
     auto devMasterAddr = devMasterHostPort.ToString();
-    auto localWorkerAddr = topologyEngine_->localAddress;
+    auto localWorkerAddr = localAddress_;
     if (localWorkerAddr == devMasterAddr) {
         return masterDevOcManager_->ReleaseClientMetaForScaledInWorker(removeNodes);
     }
@@ -4586,77 +4668,82 @@ Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, Replace
     std::vector<std::string> notRedirectObjectKeys;
     std::transform(req.object_infos().begin(), req.object_infos().end(), std::back_inserter(notRedirectObjectKeys),
                    [](const ReplacePrimaryReqPb::ObjectInfoPb &info) { return info.object_key(); });
-    FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
     if (rsp.meta_is_moving()) {
         return Status::OK();
     }
 
     std::unordered_set<std::string> notRedirectSet{ notRedirectObjectKeys.begin(), notRedirectObjectKeys.end() };
-    const auto &infos = req.object_infos();
     VLOG(1) << "Replace primary process object size: " << notRedirectSet.size();
-    for (const auto &info : infos) {
+    for (const auto &info : req.object_infos()) {
         const auto &objectKey = info.object_key();
         if (notRedirectSet.find(objectKey) == notRedirectSet.end()) {
             VLOG(1) << FormatString("[ObjectKey %s] The object key has been redirect, skip it", objectKey);
             continue;
         }
-
-        uint64_t version = info.version();
-        TbbMetaTable::accessor accessor;
-        bool isDeleting = false;
-        {
-            std::shared_lock<std::shared_mutex> l(isDeletingObjMutex_);
-            isDeleting = isDeletingObjs_.count(objectKey) > 0;
-        }
-        size_t shardIdx = GetShardIndex(objectKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-        if (!metaShards_[shardIdx].table.find(accessor, objectKey) || isDeleting) {
-            VLOG(1) << FormatString("[ObjectKey %s] The object key not exists in metaTable, skip it", objectKey);
-            rsp.add_expired_ids(objectKey);
-            continue;
-        }
-
-        if (accessor->second.meta.version() == version
-            && accessor->second.meta.primary_address() == req.new_primary_addr()) {
-            LOG(INFO) << FormatString(
-                "[ObjectKey %s] The object has been changed to this primary, set success directly", objectKey);
-            rsp.add_success_ids(objectKey);
-            continue;
-        }
-        if (accessor->second.meta.version() != version
-            || accessor->second.meta.primary_address() != req.origin_primary_addr()) {
-            LOG(WARNING) << FormatString(
-                "[ObjectKey %s] The object has been updated, expect version: %ld, now version: %ld; expect primary: "
-                "%s, "
-                "now primary: %s, skip it",
-                objectKey, version, accessor->second.meta.version(), req.origin_primary_addr(),
-                accessor->second.meta.primary_address());
-            rsp.add_expired_ids(objectKey);
-            continue;
-        }
-
-        accessor->second.meta.set_primary_address(req.new_primary_addr());
-        accessor->second.locations[req.new_primary_addr()] = AckState::ACK;
-        if (req.remove_location()) {
-            accessor->second.locations.erase(req.origin_primary_addr());
-        }
-        rsp.add_success_ids(objectKey);
-        VLOG(1) << FormatString("[ObjectKey %s] Change primary copy from %s to %s", objectKey,
-                                req.origin_primary_addr(), req.new_primary_addr());
-        std::string serializedStr;
-        LOG_IF_ERROR(objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
-                     "serialize meta to rocksdb failed");
-        LOG_IF_ERROR(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
-                                                      WriteMode2MetaType(accessor->second.meta.config().write_mode())),
-                     "Create meta to rocksdb failed");
+        ReplacePrimaryObject(req, info, rsp);
     }
     return Status::OK();
+}
+
+void OCMetadataManager::ReplacePrimaryObject(const ReplacePrimaryReqPb &req,
+                                             const ReplacePrimaryReqPb::ObjectInfoPb &info,
+                                             ReplacePrimaryRspPb &rsp)
+{
+    const auto &objectKey = info.object_key();
+    const uint64_t version = info.version();
+    bool isDeleting = false;
+    {
+        std::shared_lock<std::shared_mutex> lock(isDeletingObjMutex_);
+        isDeleting = isDeletingObjs_.count(objectKey) > 0;
+    }
+    TbbMetaTable::accessor accessor;
+    const size_t shardIndex = GetShardIndex(objectKey);
+    std::shared_lock<std::shared_timed_mutex> lock(metaShards_[shardIndex].mutex);
+    if (!metaShards_[shardIndex].table.find(accessor, objectKey) || isDeleting) {
+        VLOG(1) << FormatString("[ObjectKey %s] The object key not exists in metaTable, skip it", objectKey);
+        rsp.add_expired_ids(objectKey);
+        return;
+    }
+
+    if (accessor->second.meta.version() == version
+        && accessor->second.meta.primary_address() == req.new_primary_addr()) {
+        LOG(INFO) << FormatString(
+            "[ObjectKey %s] The object has been changed to this primary, set success directly", objectKey);
+        rsp.add_success_ids(objectKey);
+        return;
+    }
+    if (accessor->second.meta.version() != version
+        || accessor->second.meta.primary_address() != req.origin_primary_addr()) {
+        LOG(WARNING) << FormatString(
+            "[ObjectKey %s] The object has been updated, expect version: %ld, now version: %ld; expect primary: %s, "
+            "now primary: %s, skip it",
+            objectKey, version, accessor->second.meta.version(), req.origin_primary_addr(),
+            accessor->second.meta.primary_address());
+        rsp.add_expired_ids(objectKey);
+        return;
+    }
+
+    accessor->second.meta.set_primary_address(req.new_primary_addr());
+    accessor->second.locations[req.new_primary_addr()] = AckState::ACK;
+    if (req.remove_location()) {
+        accessor->second.locations.erase(req.origin_primary_addr());
+    }
+    rsp.add_success_ids(objectKey);
+    VLOG(1) << FormatString("[ObjectKey %s] Change primary copy from %s to %s", objectKey,
+                            req.origin_primary_addr(), req.new_primary_addr());
+    std::string serializedStr;
+    LOG_IF_ERROR(objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
+                 "serialize meta to rocksdb failed");
+    LOG_IF_ERROR(objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
+                                                  WriteMode2MetaType(accessor->second.meta.config().write_mode())),
+                 "Create meta to rocksdb failed");
 }
 
 Status OCMetadataManager::PureQueryMeta(const PureQueryMetaReqPb &req, PureQueryMetaRspPb &rsp)
 {
     std::vector<std::string> notRedirectObjectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
     if (rsp.meta_is_moving()) {
         return Status::OK();
     }
@@ -4695,7 +4782,7 @@ Status OCMetadataManager::CheckObjectDataLocation(const CheckObjectDataLocationR
         notRedirectObjectKeys.emplace_back(objectVersion.object_key());
         versionByObjectKey[objectVersion.object_key()] = objectVersion.version();
     }
-    FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
     if (rsp.meta_is_moving() || !rsp.info().empty()) {
         return Status::OK();
     }
@@ -4733,7 +4820,7 @@ Status OCMetadataManager::RollbackMultiMeta(const RollbackMultiMetaReqPb &req, R
         objectKeys.emplace_back(objKey);
     }
     std::sort(objectKeys.begin(), objectKeys.end());  // To prevent deadlock.
-    FillRedirectResponseInfos(rsp, objectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(!rsp.info().empty());
     for (int i = 0; (size_t)i < objectKeys.size(); ++i) {
         const auto &objKey = objectKeys[i];
@@ -4793,7 +4880,7 @@ bool OCMetadataManager::GetObjectVersion(const std::string &objKey, int64_t &ver
 Status OCMetadataManager::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
     std::vector<std::string> notRedirectObjectKeys = { req.object_keys().begin(), req.object_keys().end() };
-    FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect());
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, notRedirectObjectKeys, req.redirect()));
     RETURN_OK_IF_TRUE(rsp.meta_is_moving());
     Status lastRc;
     std::vector<std::string> notExistObjectKeys;

@@ -18,7 +18,6 @@
 
 #include <utility>
 
-#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -57,11 +56,9 @@ static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr double US_PER_MS = 1000.0;
 
 WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam,
-                                                       worker::WorkerTopologyReferences *topologyEngine,
                                                        std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                        std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      topologyEngine_(topologyEngine),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress)
@@ -138,10 +135,8 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
     master::CreateMetaRspPb metaResp;
     PerfPoint point(PerfKey::WORKER_CREATE_META);
 
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(objectKey, topologyPlacement_, topologyRouteOptions_);
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                             "hash master get failed, CreateMetadataToMaster failed");
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi));
     std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func = [&workerMasterApi](CreateMetaReqPb &metaReq,
                                                                                           CreateMetaRspPb &metaResp) {
         VLOG(1) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", workerMasterApi->GetHostPort()),
@@ -187,10 +182,8 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     UpdateMetaRspPb metaRsp;
     VLOG(1) << FormatString("Send Update metadata to master for object: %s, address: %s", objectKey,
                             localAddress_.ToString());
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerMasterApiManager_->GetWorkerMasterApi(objectKey, topologyPlacement_, topologyRouteOptions_);
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                             "hash master get failed, UpdateMetadataToMaster failed");
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi));
     std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func = [&workerMasterApi](UpdateMetaReqPb &metaReq,
                                                                                           UpdateMetaRspPb &metaRsp) {
         VLOG(1) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", workerMasterApi->GetHostPort()),
@@ -258,10 +251,8 @@ Status WorkerOcServicePublishImpl::RollbackPublishFailure(ObjectKV &objectKV, Ob
 
     objectKV.GetObjEntry()->stateInfo.SetCacheInvalid(true);
     if (newLifeState == ObjectLifeState::OBJECT_SEALED) {
-        std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-            workerMasterApiManager_->GetWorkerMasterApi(objectKey, topologyPlacement_, topologyRouteOptions_);
-        CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                                 "Hash master get failed, RollbackPublish failed");
+        std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+        RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi));
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->RollbackSeal(objectKey, static_cast<uint32_t>(oldLifeState)),
                                          FormatString("RollbackSeal failed."));
     }

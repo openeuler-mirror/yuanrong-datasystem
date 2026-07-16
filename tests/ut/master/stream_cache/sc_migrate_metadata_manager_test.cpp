@@ -44,8 +44,8 @@ public:
         BINEXPECT_CALL(&SCMigrateMetadataManager::MigrateMetaData, (_, _))
             .WillRepeatedly(Invoke(this, &SCMigrateMetadataManagerTest::MockMigrateMetaDataFailed));
         HostPort hostPort;
-        std::shared_ptr<master::SCMetadataManager> scMetadataManager =
-            std::make_shared<master::SCMetadataManager>(hostPort, nullptr, nullptr, nullptr, nullptr, "");
+        auto scMetadataManager = std::make_shared<master::SCMetadataManager>(
+            hostPort, nullptr, nullptr, nullptr, nullptr, false, HostPort(), nullptr, "");
         DS_ASSERT_OK(migrateManager_.MigrateMetaDataWithRetry(scMetadataManager, info, true));
     }
 
@@ -62,8 +62,8 @@ public:
         BINEXPECT_CALL(&SCMigrateMetadataManager::MigrateMetaData, (_, _))
             .WillRepeatedly(Invoke(this, &SCMigrateMetadataManagerTest::MockMigrateMetaDataRetError));
         HostPort hostPort;
-        std::shared_ptr<master::SCMetadataManager> scMetadataManager =
-            std::make_shared<master::SCMetadataManager>(hostPort, nullptr, nullptr, nullptr, nullptr, "");
+        auto scMetadataManager = std::make_shared<master::SCMetadataManager>(
+            hostPort, nullptr, nullptr, nullptr, nullptr, false, HostPort(), nullptr, "");
         ASSERT_EQ(migrateManager_.MigrateMetaData(scMetadataManager, info).GetCode(), K_RUNTIME_ERROR);
     }
 

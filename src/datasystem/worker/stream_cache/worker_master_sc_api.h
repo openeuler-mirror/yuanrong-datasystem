@@ -222,9 +222,21 @@ private:
 
 class WorkerMasterSCApiManager : public WorkerMasterApiManagerBase<WorkerMasterSCApi> {
 public:
+    /**
+     * @brief Construct a Stream Worker-to-Master API manager with key routing bound once.
+     * @param[in] hostPort Local Worker address that outlives this manager.
+     * @param[in] manager Shared authentication manager.
+     * @param[in] masterSCService Optional local Stream Master service.
+     * @param[in] metadataRoute Metadata resolver that outlives this manager.
+     */
     WorkerMasterSCApiManager(HostPort &hostPort, std::shared_ptr<AkSkManager> manager,
-                             master::MasterSCServiceImpl *masterSCService);
-    virtual ~WorkerMasterSCApiManager() = default;
+                             master::MasterSCServiceImpl *masterSCService,
+                             const worker::MetadataRouteResolver &metadataRoute);
+
+    /**
+     * @brief Release non-owned route and local-service dependencies.
+     */
+    ~WorkerMasterSCApiManager() override = default;
 
     /**
      * @brief Create a worker to Master api object for masterAddress

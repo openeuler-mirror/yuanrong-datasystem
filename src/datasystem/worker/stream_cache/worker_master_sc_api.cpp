@@ -310,8 +310,10 @@ std::string WorkerLocalMasterSCApi::LogPrefix() const
 }
 
 WorkerMasterSCApiManager::WorkerMasterSCApiManager(HostPort &hostPort, std::shared_ptr<AkSkManager> akSkManager,
-                                                   master::MasterSCServiceImpl *masterSCService)
-    : WorkerMasterApiManagerBase<WorkerMasterSCApi>(hostPort, akSkManager), masterSCService_(masterSCService)
+                                                   master::MasterSCServiceImpl *masterSCService,
+                                                   const worker::MetadataRouteResolver &metadataRoute)
+    : WorkerMasterApiManagerBase<WorkerMasterSCApi>(hostPort, akSkManager, metadataRoute),
+      masterSCService_(masterSCService)
 {
 }
 

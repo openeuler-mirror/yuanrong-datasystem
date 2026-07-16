@@ -32,12 +32,47 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/utils/status.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
 static constexpr int MOVE_THREAD_NUM = 4;
 constexpr uint32_t OBJECT_BATCH = 300;  // Comparison test: The performance is optimal when the batch number is 300.
+
+namespace {
+Status CheckMigrationTargetConnection(const cluster::MembershipEndpointView *membership, const HostPort &address)
+{
+    CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership view is not available");
+    cluster::MemberEndpoint endpoint;
+    auto rc = membership->ResolveByAddress(address.ToString(), endpoint);
+    if (rc.GetCode() == K_NOT_READY || rc.GetCode() == K_NOT_FOUND) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(rc);
+    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE,
+                             K_MASTER_TIMEOUT, "Migration target is unreachable");
+    return Status::OK();
+}
+
+Status GetMigrationTargetState(const cluster::MembershipEndpointView *membership, const std::string &address,
+                               bool &committed, bool &preLeaving)
+{
+    CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership view is not available");
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(membership->GetSnapshot(snapshot));
+    const cluster::Member *member = nullptr;
+    auto rc = snapshot->FindMemberByAddress(address, member);
+    if (rc.GetCode() == K_NOT_FOUND) {
+        committed = false;
+        preLeaving = false;
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(rc);
+    committed = member->state == cluster::MemberState::ACTIVE || member->state == cluster::MemberState::PRE_LEAVING
+                || member->state == cluster::MemberState::LEAVING;
+    preLeaving = member->state == cluster::MemberState::PRE_LEAVING;
+    return Status::OK();
+}
+}  // namespace
 
 Status BuildMigrationFailureStatus(const Status &lastStatus,
                                    const OCMigrateMetadataManager::MigrateMetaInfo &info,
@@ -58,11 +93,11 @@ OCMigrateMetadataManager &OCMigrateMetadataManager::Instance()
 
 Status OCMigrateMetadataManager::Init(
     const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-    worker::WorkerTopologyReferences *cm, MetadataManagerHolder *metadataManagerHolder)
+    const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder)
 {
     localHostPort_ = localHostPort;
     akSkManager_ = std::move(akSkManager);
-    cm_ = cm;
+    topologyMembership_ = membership;
     metadataManagerHolder_ = metadataManagerHolder;
     threadPool_ = std::make_unique<ThreadPool>(0, MOVE_THREAD_NUM, "MigrateMetadataThreadPool");
 
@@ -78,7 +113,7 @@ OCMigrateMetadataManager::~OCMigrateMetadataManager()
 void OCMigrateMetadataManager::Shutdown()
 {
     exitFlag_ = true;
-    cm_ = nullptr;
+    topologyMembership_ = nullptr;
 }
 
 Status OCMigrateMetadataManager::MigrateTopologyMetadata(
@@ -196,13 +231,14 @@ Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
         // 2. Submit the scale-up task first, and then process the put event of the clusterNodeTable of the scale-up
         // node, retry until success.
         // 3. for dest worker timeout, retry for 3 times, interval is 100 ms
-        if ((!isNetworkRecovery && (status = worker::CheckTopologyMemberConnection(cm_, destAddr, true)).IsError())) {
+        if (!isNetworkRecovery && (status = CheckMigrationTargetConnection(topologyMembership_, destAddr)).IsError()) {
             LOG(ERROR) << "Check connection of " << info.destAddr << " failed: " << status.ToString();
             static const int totleRetryTimes = 3;
             static const int sleepTimeMs = 100;
-            auto validWorkers = worker::GetValidTopologyMembers(cm_);
-            if (validWorkers.find(destAddr.ToString()) == validWorkers.end()
-                || worker::IsTopologyMemberPreLeaving(cm_, destAddr.ToString())) {
+            bool committed = false;
+            bool preLeaving = false;
+            RETURN_IF_NOT_OK(GetMigrationTargetState(topologyMembership_, destAddr.ToString(), committed, preLeaving));
+            if (!committed || preLeaving) {
                 // worker is scale down
                 LOG(WARNING) << "The dest node cannot be found, so the migration task is abandoned.";
                 break;
@@ -236,7 +272,7 @@ Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
         return Status::OK();
     }
 
-    const bool connected = worker::CheckTopologyMemberConnection(cm_, destAddr, true).IsOk();
+    const bool connected = CheckMigrationTargetConnection(topologyMembership_, destAddr).IsOk();
     return BuildMigrationFailureStatus(status, info, timer.ElapsedSecond(), isNetworkRecovery, connected);
 }
 

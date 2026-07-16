@@ -7,7 +7,7 @@
   - `src/datasystem/cluster`
   - `src/datasystem/protos/cluster_topology.proto`
   - `src/datasystem/worker/worker_oc_server.cpp`
-  - `src/datasystem/worker/worker_topology_references.{h,cpp}`
+  - `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
 - The module owns authoritative cluster membership state, immutable routing snapshots, topology planning, task
   materialization/execution, and the ETCD-backed control loop.
 - `DsCoordinationBackend` preserves the topology architecture while using the in-memory Coordinator transport. A
@@ -17,9 +17,10 @@
 
 ## Current Design Shape
 
-- `datasystem::cluster::TopologyEngine` is the Worker-role runtime root. It owns its repository/reader, role-minimal
-  dispatcher, executor, immutable snapshot state, placement facade, and endpoint view; it does not own the Controller,
-  Janitor, or standalone Observer.
+- `datasystem::cluster::TopologyEngine` is the Worker-role composition root. Its nested Builder is the sole Worker
+  construction path. Engine creates and owns both role backends, the shared algorithm, Worker repository/reader,
+  dispatcher, executor, immutable snapshot state, placement facade, endpoint view, `TopologyControllerRuntime`,
+  Janitor, and optional Coordinator recovery reporter. It does not own standalone Observer.
 - Every ETCD Worker may run a `TopologyController`. Controllers contend through the single authoritative topology-key
   CAS; controller identity is not persisted, and deterministic batch/task identities make duplicate reconciliation safe.
 - `TopologyRepository` stores one `ClusterTopologyPb` authority record and derived task/notify records. Derived records
@@ -29,8 +30,12 @@
 - `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop and one
   dedicated backend instance. Worker watches exact topology plus its own notify key; Controller watches topology,
   membership, and derived task/notify directories; Observer watches exact topology only.
-- Foreground routing uses `PlacementFacade` and one immutable snapshot per decision. It never performs backend IO and
-  never exposes protobuf or raw token ranges to business code. `TopologySnapshotState` uses a publication generation
+- Foreground routing uses `PlacementFacade` and one immutable snapshot per single-key or batch decision. Batch-level
+  failures leave the output unchanged; one item vector returns each per-key status beside its decision so successful
+  results from the same snapshot survive without an extra aligned-vector allocation. Routing never performs backend IO
+  or exposes protobuf/raw token ranges to business code.
+  `TopologySnapshotState` uses a publication
+  generation
   plus a thread-local weak cache so unchanged reads avoid repeatedly loading the atomically published shared pointer
   without retaining old 10K-member snapshots on long-lived request threads. During an ordinary batch, the Snapshot
   also derives the post-commit owner ring: ScaleOut transfer ranges wait on the committed source, while a ScaleIn
@@ -45,13 +50,13 @@
   complete before ScaleIn progress allows final member removal. Worker callbacks install their remaining budget in the
   repository `ApiDeadline`; metadata-removal batches cap their thread-local RPC budget by that remaining deadline
   instead of restarting the default RPC timeout for every batch.
-- `WorkerOCServer` owns separate Worker-role and Controller-role backends plus `TopologyEngine`, `TopologyController`,
-  and `TopologyTaskJanitor`. Shutdown first idempotently stops both event sources, then Janitor, Engine, and Controller;
-  each Runtime Stop can also stop its dedicated event source for standalone shutdown and destructor safety. Full backend
-  Shutdown runs only after every Runtime is safe. Engine Start is one-shot; Stop records deadline expiry but never
-  returns while a thread still captures Engine state. The process manager owns the outer termination bound. Normal
-  lifecycle code uses bounded Stop/Shutdown; component destructors safely stop and join as a final fallback and never
-  call `std::terminate`, detach a live thread, or kill the process.
+- `WorkerOCServer` owns only the `TopologyEngine` composition root plus the Store/Proxy and callback resources borrowed
+  by it. Shutdown drains business RPC ingress and calls Engine once; Engine unbinds Coordinator watch ingress, closes
+  the member-role event source, drains Reporter and Worker execution, then Runtime stops Janitor/Controller and the
+  Controller closes its own role event source before Engine fully shuts down both backends. A deadline failure preserves
+  Engine and every borrowed dependency for retry. Engine Start is one-shot;
+  component destructors safely stop and join as a final fallback and never call `std::terminate`, detach a live thread,
+  or kill the process. The process manager owns the outer hard termination bound.
 
 ## Persistence And Recovery
 
@@ -60,7 +65,8 @@
   deployments sharing one backend must use non-empty distinct names. The five logical paths are topology,
   tasks/migrate, tasks/delete, notify, and cluster membership.
 - `TopologyKeyHelper` is the only table/key builder. `EtcdStore::CreateTableWithExactPrefix` registers these paths without
-  legacy `FLAGS_cluster_name` prefix rewriting.
+  legacy `FLAGS_cluster_name` prefix rewriting. `TopologyEngine::Builder` owns registration for both ETCD role Stores;
+  Worker business composition does not construct topology keys or table mappings.
 - There is no persisted Worker-local topology authority. ETCD restart recovery reads the latest legal topology and
   reconstructs deterministic work. The in-memory Coordinator backend recovers only the latest topology from Workers;
   task/notify records are treated as absent and regenerated. Candidate arbitration is cluster-scoped and resource
@@ -83,6 +89,7 @@
 ## Key Entry Points
 
 - Runtime: `src/datasystem/cluster/runtime/topology_engine.{h,cpp}`
+- Controller composition: `src/datasystem/cluster/control/topology_controller_runtime.{h,cpp}`
 - Control: `src/datasystem/cluster/control/topology_controller.{h,cpp}`
 - Execution: `src/datasystem/cluster/executor/topology_task_executor.{h,cpp}`
 - Persistence: `src/datasystem/cluster/repository/topology_repository.{h,cpp}`
@@ -90,6 +97,7 @@
 - Backend: `src/datasystem/cluster/coordination_backend/etcd_coordination_backend.{h,cpp}`
 - Existing Coordinator transport: `src/datasystem/cluster/coordination_backend/ds_coordination_backend.{h,cpp}`
 - Worker composition: `src/datasystem/worker/worker_oc_server.cpp`
+- Worker metadata routing adapter: `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
 - Standalone observer consumer: `src/datasystem/client/router_client.cpp`
 
 ## Invariants And Risks

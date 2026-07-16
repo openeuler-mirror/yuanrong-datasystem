@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <shared_mutex>
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/worker/worker_health_check.h"
 #ifdef __linux__
 #include <linux/memfd.h>
@@ -80,7 +79,9 @@ namespace datasystem {
 namespace worker {
 const size_t UNBOUNDED_FD_MULTIPIER = 10;
 WorkerServiceImpl::WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, double timeoutMult, CommonServer *worker,
-                                     std::shared_ptr<AkSkManager> akSkManager, std::string workerUuid)
+                                     std::shared_ptr<AkSkManager> akSkManager, std::string workerUuid,
+                                     const cluster::MembershipEndpointView &membership,
+                                     const std::atomic<bool> &localExiting)
     : WorkerService(std::move(serverAddr)),
       masterAddr_(std::move(masterAddr)),
       worker_(worker),
@@ -89,6 +90,8 @@ WorkerServiceImpl::WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, d
       shmWorkerPort_(0),
       akSkManager_(akSkManager),
       workerUuid_(std::move(workerUuid)),
+      membership_(membership),
+      localExiting_(localExiting),
       maxCacheUnboundedUnixSockFdsCount_(FLAGS_max_client_num * UNBOUNDED_FD_MULTIPIER)
 {
 }
@@ -214,13 +217,17 @@ Status WorkerServiceImpl::CheckClientVersion(const std::string &clientVersion)
 
 const std::string WorkerServiceImpl::GetLocalStandbyWorker()
 {
-    std::string standbyWorker;
-    Status rc = worker::GetStandbyTopologyMember(topologyEngine_, topologyEngine_->localAddress, standbyWorker);
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    Status rc = membership_.GetSnapshot(snapshot);
+    const cluster::Member *standby = nullptr;
+    if (rc.IsOk()) {
+        rc = snapshot->FindNextCommittedMember(localAddress_.ToString(), standby);
+    }
     if (rc.IsError()) {
         VLOG(HEARTBEAT_LEVEL) << "Get standby worker failed: " << rc.ToString();
         return "";
     }
-    return standbyWorker;
+    return standby->identity.address;
 }
 
 Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, RegisterClientRspPb &rsp)
@@ -279,7 +286,7 @@ Status WorkerServiceImpl::ValidateRegisterClientRequest(const RegisterClientReqP
 {
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
                                      "Authenticate failed");
-    if (topologyEngine_ != nullptr && worker::IsLocalTopologyMemberExiting(topologyEngine_)) {
+    if (localExiting_.load(std::memory_order_acquire)) {
         LOG(WARNING) << "Register client failed because the Worker is draining for ScaleIn";
         RETURN_STATUS(StatusCode::K_NOT_READY, "Worker is draining for ScaleIn");
     }
@@ -398,12 +405,7 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     rsp.set_unhealthy(!IsHealthy());
     SetAvailableWorkers(rsp);
     LogSampler::Instance().PopulateConfigProto(rsp.mutable_log_sample_config());
-    if (topologyEngine_ != nullptr) {
-        rsp.set_is_voluntary_scale_down(worker::IsLocalTopologyMemberExiting(topologyEngine_));
-    } else {
-        const int logDuration = 30;
-        LOG_EVERY_T(WARNING, logDuration) << "[Heartbeat] Cluster topology dependencies are unavailable";
-    }
+    rsp.set_is_voluntary_scale_down(localExiting_.load(std::memory_order_acquire));
 
     auto expiredFds = memory::Allocator::Instance()->GetAllExpiredFds();
     auto fdsMmapedByClient = ClientManager::Instance().GetWorkerFdByClientId(clientId);

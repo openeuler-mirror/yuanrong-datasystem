@@ -63,6 +63,16 @@ struct ActiveBatch {
     uint64_t epoch{ 0 };
 };
 
+/**
+ * @brief Identity- and epoch-bound metadata migration RPC fence.
+ */
+struct TopologyMigrationFence {
+    uint64_t topologyVersion{ 0 };
+    uint64_t batchEpoch{ 0 };
+    MemberIdentity source;
+    MemberIdentity target;
+};
+
 struct TopologyState {
     bool clusterHasInit{ false };
     uint64_t version{ 0 };

@@ -18,9 +18,12 @@
 #define DATASYSTEM_MASTER_STREAM_CACHE_MASTER_SC_SERVICE_IMPL_H
 
 #include <memory>
+#include <string>
+#include <utility>
 
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/master/stream_cache/master_worker_sc_api.h"
@@ -30,7 +33,6 @@
 #include "datasystem/protos/master_stream.service.rpc.pb.h"
 #include "datasystem/protos/master_stream.brpc.pb.h"
 #include "datasystem/stream/stream_config.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 class MetadataManagerHolder;
@@ -38,9 +40,29 @@ class MetadataManagerHolder;
 namespace master {
 class MasterSCServiceImpl : public MasterSCService, public IMasterSCService {
 public:
+    /**
+     * @brief Construct a fully bound Stream Master service.
+     * @param[in] masterAddress Local Master address.
+     * @param[in] akSkManager Authentication manager.
+     * @param[in] metadataManagerHolder Metadata manager owner.
+     * @param[in] topologyMembership Read-only topology capability that outlives this service.
+     * @param[in] localAddress Canonical address of the local migration target.
+     * @param[in] isRestart Whether this Worker recovered an existing topology member.
+     * @param[in] controlBackendAvailableAtStartup Whether the control backend was initially available.
+     */
     MasterSCServiceImpl(const HostPort &masterAddress, std::shared_ptr<AkSkManager> akSkManager,
-                        MetadataManagerHolder *metadataManagerHolder);
+                        MetadataManagerHolder *metadataManagerHolder,
+                        const cluster::MembershipEndpointView &topologyMembership, std::string localAddress,
+                        bool isRestart, bool controlBackendAvailableAtStartup);
+
+    /**
+     * @brief Construct an unbound test double; production uses the fully bound constructor.
+     */
     MasterSCServiceImpl() = default;
+
+    /**
+     * @brief Release service resources.
+     */
     ~MasterSCServiceImpl() override = default;
 
     /**
@@ -170,15 +192,6 @@ public:
     Status StartCheckMetadata();
 
     /**
-     * @brief Setter function to assign the cluster manager back pointer.
-     * @param[in] topologyEngine Borrowed Worker topology dependencies.
-     */
-    void SetTopologyEngine(worker::WorkerTopologyReferences *topologyEngine)
-    {
-        topologyEngine_ = topologyEngine;
-    }
-
-    /**
      * @brief Migrate stream metadata.
      * @param[in] req The rpc request protobuf.
      * @param[out] rsp The rpc response protobuf.
@@ -195,7 +208,10 @@ protected:
     std::string GetWorkerId();
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
+    const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
+    std::string localAddress_;
+    bool isRestart_{ false };
+    bool controlBackendAvailableAtStartup_{ true };
     std::unique_ptr<ThreadPool> threadPool_{ nullptr };
     MetadataManagerHolder *metadataManagerHolder_;
 };

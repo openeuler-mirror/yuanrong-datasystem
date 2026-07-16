@@ -47,12 +47,39 @@ static constexpr int ASYNC_MAX_THREAD_NUM = 4;
 
 static constexpr double US_PER_MS = 1000.0;
 
+namespace {
+Status ValidateMigrationRequest(const cluster::MembershipEndpointView *membership, const std::string &localAddress,
+                                uint64_t topologyVersion, uint64_t batchEpoch, const std::string &sourceMemberId,
+                                const std::string &targetMemberId, const std::string &sourceAddress)
+{
+    const bool hasFence = topologyVersion != 0 || batchEpoch != 0 || !sourceMemberId.empty() || !targetMemberId.empty();
+    if (!hasFence) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(topologyVersion > 0 && batchEpoch > 0 && !sourceMemberId.empty()
+                                 && !targetMemberId.empty() && !sourceAddress.empty(),
+                             K_INVALID, "Incomplete topology migration RPC fence");
+    CHECK_FAIL_RETURN_STATUS(membership != nullptr && !localAddress.empty(), K_NOT_READY,
+                             "Topology membership is unavailable for migration fence validation");
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(membership->GetSnapshot(snapshot));
+    cluster::TopologyMigrationFence fence{ topologyVersion, batchEpoch,
+                                           { sourceMemberId, sourceAddress },
+                                           { targetMemberId, localAddress } };
+    return snapshot->ValidateMigrationFence(fence);
+}
+}  // namespace
+
 MasterOCServiceImpl::MasterOCServiceImpl(HostPort serverAddress, std::shared_ptr<PersistenceApi> persistApi,
                                          std::shared_ptr<AkSkManager> akSkManager,
-                                         MetadataManagerHolder *metadataManagerHolder, ResourceManager *resourceManager)
+                                         MetadataManagerHolder *metadataManagerHolder, ResourceManager *resourceManager,
+                                         const cluster::MembershipEndpointView &topologyMembership,
+                                         std::string localAddress)
     : MasterOCService(serverAddress),
       masterAddress_(std::move(serverAddress)),
       persistenceApi_(persistApi),
+      topologyMembership_(&topologyMembership),
+      localAddress_(std::move(localAddress)),
       akSkManager_(akSkManager),
       metadataManagerHolder_(metadataManagerHolder),
       resourceManager_(resourceManager)
@@ -71,10 +98,10 @@ void MasterOCServiceImpl::Shutdown()
 
 Status MasterOCServiceImpl::Init()
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
+    RETURN_RUNTIME_ERROR_IF_NULL(topologyMembership_);
     reconciliationAsyncPool_ =
         std::make_unique<ThreadPool>(ASYNC_MIN_THREAD_NUM, ASYNC_MAX_THREAD_NUM, "Reconciliation");
-    RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, topologyEngine_,
+    RETURN_IF_NOT_OK(OCMigrateMetadataManager::Instance().Init(masterAddress_, akSkManager_, topologyMembership_,
                                                                metadataManagerHolder_));
     return Status::OK();
 }
@@ -439,7 +466,7 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(
     Timer timer;
     GetRequestContext()->timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
-    ocMetadataManager->DeleteAllCopyMetaWithServerApi(req, serverApi);
+    RETURN_IF_NOT_OK(ocMetadataManager->DeleteAllCopyMetaWithServerApi(req, serverApi));
     auto totalMs = timer.ElapsedMilliSecond();
     auto vlogLevel = (totalMs > 1) ? 0 : 1;
     VLOG(vlogLevel) << FormatString("DeleteAllCopyMeta done, object count: %d, cost: %.1fms", req.object_keys_size(),
@@ -462,7 +489,7 @@ Status MasterOCServiceImpl::DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &req,
     }
     GetRequestContext()->timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
-    ocMetadataManager->DeleteAllCopyMeta(req, rsp);
+    RETURN_IF_NOT_OK(ocMetadataManager->DeleteAllCopyMeta(req, rsp));
     auto totalMs = timer.ElapsedMilliSecond();
     GetMasterTimeCost().Append("Total DeleteAllCopyMeta", totalMs);
     auto vlogLevel = (totalMs > 1) ? 0 : 1;
@@ -525,12 +552,19 @@ Status MasterOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
 
     // Iterate all workers concurrently.
     std::vector<HostPort> allWorkers;
-    RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::GetTopologyMemberAddresses(topologyEngine_, allWorkers),
-                                     "cluster manager get cluster addrs failed");
+    RETURN_RUNTIME_ERROR_IF_NULL(topologyMembership_);
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(topologyMembership_->GetSnapshot(snapshot),
+                                     "Failed to load the cluster topology Snapshot");
+    allWorkers.reserve(snapshot->CommittedMembers().size());
+    for (const auto *member : snapshot->CommittedMembers()) {
+        HostPort address;
+        RETURN_IF_NOT_OK(address.ParseString(member->identity.address));
+        allWorkers.emplace_back(std::move(address));
+    }
 
     std::vector<std::string> objectKeys(req.object_keys().begin(), req.object_keys().end());
-    ocMetadataManager->RedirectObjRefs(rsp, req.redirect(), objectKeys);
+    RETURN_IF_NOT_OK(ocMetadataManager->RedirectObjRefs(rsp, req.redirect(), objectKeys));
     if (rsp.ref_is_moving()) {
         return Status::OK();
     }
@@ -628,7 +662,7 @@ Status MasterOCServiceImpl::GDecreaseRef(
     INJECT_POINT("master.GDecreaseRef.before");
     GetRequestContext()->timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
-    ocMetadataManager->GDecreaseRefWithServerApi(req, serverApi);
+    RETURN_IF_NOT_OK(ocMetadataManager->GDecreaseRefWithServerApi(req, serverApi));
     LOG(INFO) << FormatString("The operations of master GDecreaseRef %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
 }
@@ -646,7 +680,7 @@ Status MasterOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRsp
     INJECT_POINT("master.GDecreaseRef.before");
     GetRequestContext()->timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
-    ocMetadataManager->GDecreaseRef(req, resp);
+    RETURN_IF_NOT_OK(ocMetadataManager->GDecreaseRef(req, resp));
     GetMasterTimeCost().Append("Total GDecreaseRef", timer.ElapsedMilliSecond());
     LOG(INFO) << FormatString("The operations of master GDecreaseRef %s", GetMasterTimeCost().GetInfo());
     return Status::OK();
@@ -719,7 +753,8 @@ Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const Reconciliation
     HostPort workerAddr;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerAddr.ParseString(req.hostport()), "workeradd parse failed");
     LOG(INFO) << "The master receives a reconciliation request from the worker on " << req.hostport() << ".";
-    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, StatusCode::K_INVALID, "No TopologyEngine is provided.");
+    CHECK_FAIL_RETURN_STATUS(topologyMembership_ != nullptr, StatusCode::K_NOT_READY,
+                             "Topology membership view is not available.");
     // TopologyController continuously reconciles membership; consume its current immutable Snapshot here.
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
@@ -781,9 +816,9 @@ Status MasterOCServiceImpl::MigrateMetadata(const MigrateMetadataReqPb &req, Mig
     ScopedRequestContext ctx;
     Timer timer;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    RETURN_IF_NOT_OK(worker::ValidateTopologyMigrationRequest(topologyEngine_, req.topology_version(),
-                                                              req.batch_epoch(), req.source_member_id(),
-                                                              req.target_member_id(), req.source_addr()));
+    RETURN_IF_NOT_OK(ValidateMigrationRequest(topologyMembership_, localAddress_, req.topology_version(),
+                                              req.batch_epoch(), req.source_member_id(), req.target_member_id(),
+                                              req.source_addr()));
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");

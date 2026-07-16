@@ -40,11 +40,9 @@
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/timer.h"
 #include "datasystem/object/object_enum.h"
-#include "datasystem/cluster/routing/placement_types.h"
+#include "datasystem/worker/metadata_route_resolver.h"
 #include "datasystem/worker/object_cache/eviction_list.h"
 #include "datasystem/worker/object_cache/object_kv.h"
-#include "datasystem/worker/metadata_route_options.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -75,13 +73,11 @@ public:
      * @param[in] localAddress Address of the worker.
      * @param[in] masterAddress Address of the local master.
      * @param[in] masterOc Pointer to the master object cache service.
-     * @param[in] topologyPlacement Borrowed cluster placement service.
-     * @param[in] topologyRouteOptions Worker metadata-routing mode and local endpoint facts.
+     * @param[in] metadataRoute Metadata owner resolver that outlives this manager.
      */
     WorkerOcEvictionManager(std::shared_ptr<ObjectTable> objectTable, HostPort localAddress, HostPort masterAddress,
-                            master::MasterOCServiceImpl *masterOc = nullptr,
-                            const cluster::PlacementFacade *topologyPlacement = nullptr,
-                            worker::MetadataRouteOptions topologyRouteOptions = worker::MetadataRouteOptions{});
+                            const worker::MetadataRouteResolver &metadataRoute,
+                            master::MasterOCServiceImpl *masterOc = nullptr);
 
     ~WorkerOcEvictionManager()
     {
@@ -137,15 +133,6 @@ public:
      * @return Status of the call.
      */
     Status GetObjectsInfoFromOldest(size_t maxScanCount, std::vector<EvictionList::Node> &res);
-
-    /**
-     * @brief Setter function to assign the topology engine back pointer.
-     * @param[in] topologyEngine The topology engine pointer to assign
-     */
-    void SetTopologyEngine(worker::WorkerTopologyReferences *topologyEngine)
-    {
-        topologyEngine_ = topologyEngine;
-    }
 
     /**
      * @brief Setter function to assign the async send manager.
@@ -646,9 +633,7 @@ private:
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> gRefTable_{ nullptr };
     master::MasterOCServiceImpl *masterOc_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
-    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
-    worker::MetadataRouteOptions topologyRouteOptions_;
+    const worker::MetadataRouteResolver &metadataRoute_;
     std::unique_ptr<ThreadPool> scheduleEvictThreadPool_{ nullptr };
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
     std::mutex primaryEndLifeMutex_;

@@ -18,7 +18,6 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MULTI_PUBLISH_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MULTI_PUBLISH_IMPL_H
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/util/net_util.h"
@@ -39,14 +38,12 @@ public:
     /**
      * @brief Construct WorkerOcServiceMultiPublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
-     * @param[in] topologyEngine Borrowed Worker topology dependencies.
      * @param[in] memCpyThreadPool Used to copy data to memory.
      * @param[in] threadPool Worker pool used by publish operations.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] localAddress The local worker address.
      */
     WorkerOcServiceMultiPublishImpl(WorkerOcServiceCrudParam &initParam,
-                                    worker::WorkerTopologyReferences *topologyEngine,
                                     std::shared_ptr<ThreadPool> memCpyThreadPool,
                                     std::shared_ptr<ThreadPool> threadPool, std::shared_ptr<AkSkManager> akSkManager,
                                     HostPort &localAddress);
@@ -211,6 +208,14 @@ private:
                                    std::vector<master::CreateMultiMetaReqPb> &reqs);
 
     /**
+     * @brief Roll back one metadata record when write-through persistence fails.
+     * @param[in] status Persistence result.
+     * @param[in] objectKey Object key whose metadata must be rolled back.
+     * @param[in] version Created metadata version.
+     */
+    void RollbackPersistenceIfFailed(const Status &status, const std::string &objectKey, uint64_t version);
+
+    /**
      * @brief Fill the entry and save object to L2 cache if success to create meta.
      * @param[in] objectKeys Object key list.
      * @param[in] objectEntries The object entries.
@@ -295,8 +300,6 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     Status VerifyDuplicateKeys(const std::vector<std::string> &objectKeys);
-
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
 

@@ -109,13 +109,19 @@ Status ScaleDownNodeSelector::SelectNode(const std::string &originAddr, const st
         outNode = preferNode;
         return Status::OK();
     }
-    Status status = worker::GetActiveStandbyTopologyMember(topologyEngine_, originAddr, outNode);
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    Status status = membership_.GetSnapshot(snapshot);
+    const cluster::Member *standby = nullptr;
+    if (status.IsOk()) {
+        status = snapshot->FindNextActiveMember(originAddr, standby);
+    }
     if (status.IsError()) {
         LOG_EVERY_N(WARNING, MIGRATION_SELECTION_LOG_EVERY_N)
             << FormatString("[Migrate Data] Failed to get [%s]'s next addr: %s", originAddr, status.ToString());
         outNode = originAddr;
         return status;
     }
+    outNode = standby->identity.address;
     if (outNode == localAddress_.ToString()) {
         std::string errMsg = FormatString("[Migrate Data] Skip, [%s]'s next addr is ourselves", originAddr);
         LOG(INFO) << errMsg;

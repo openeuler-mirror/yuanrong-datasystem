@@ -48,7 +48,10 @@ uint64_t SubtractOffsetOrZero(uint64_t value, int64_t offset)
 
 RebalanceExecutor::RebalanceExecutor(RebalanceExecutorConfig config)
     : localAddress_(std::move(config.localAddress)),
-      topologyEngine_(config.topologyEngine),
+      metadataRoute_(config.metadataRoute),
+      membership_(config.membership),
+      endpointPolicy_(config.endpointPolicy),
+      exitRequested_(config.exitRequested),
       akSkManager_(std::move(config.akSkManager)),
       objectTable_(std::move(config.objectTable)),
       evictionManager_(std::move(config.evictionManager)),
@@ -250,8 +253,14 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
             break;
         }
         if (migrator == nullptr) {
+            if (metadataRoute_ == nullptr || membership_ == nullptr || endpointPolicy_ == nullptr
+                || exitRequested_ == nullptr) {
+                stats.failedReason = "Rebalance topology dependencies are not initialized";
+                break;
+            }
             migrator = std::make_unique<object_cache::DataMigrator>(
-                MigrateType::SPILL, topologyEngine_, localAddress_, akSkManager_, objectTable_, task.task_id(), 0);
+                MigrateType::SPILL, *metadataRoute_, *membership_, *endpointPolicy_, exitRequested_, localAddress_,
+                akSkManager_, objectTable_, task.task_id(), 0);
             migrator->Init();
         }
         auto rc = ExecuteBatch(task, targetAddr, stats, *migrator);
@@ -320,13 +329,9 @@ uint64_t RebalanceExecutor::CalculateMigratedBytes(const std::unordered_map<std:
 
 Status RebalanceExecutor::GetWorkerMasterApi(std::shared_ptr<WorkerMasterOCApi> &workerMasterApi) const
 {
-    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr && apiManager_ != nullptr, K_RUNTIME_ERROR,
+    CHECK_FAIL_RETURN_STATUS(apiManager_ != nullptr, K_RUNTIME_ERROR,
                              "Rebalance executor is not initialized");
-    HostPort masterAddr;
-    RETURN_IF_NOT_OK(worker::ResolveTopologyOwner(topologyEngine_, RESOURCE_MONITOR_MASTER, masterAddr));
-    workerMasterApi = apiManager_->GetWorkerMasterApi(masterAddr);
-    RETURN_RUNTIME_ERROR_IF_NULL(workerMasterApi);
-    return Status::OK();
+    return apiManager_->GetWorkerMasterApi(RESOURCE_MONITOR_MASTER, workerMasterApi);
 }
 
 void RebalanceExecutor::ReportResult(const master::RebalanceTaskPb &task, master::RebalanceTaskStatusPb status,

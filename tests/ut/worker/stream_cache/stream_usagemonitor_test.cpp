@@ -34,9 +34,29 @@ using namespace datasystem::worker::stream_cache;
 namespace datasystem {
 namespace worker {
 namespace stream_cache {
+namespace {
+const cluster::MembershipEndpointView &TestMembership()
+{
+    static cluster::TopologySnapshotState snapshots;
+    static cluster::MembershipEndpointView membership(snapshots);
+    return membership;
+}
+
+const worker::MetadataRouteResolver &TestMetadataRoute()
+{
+    static worker::MetadataRouteResolver route(nullptr, worker::MetadataRouteOptions{});
+    return route;
+}
+}  // namespace
+
 class ClientWorkerSCServiceImplMock : public ClientWorkerSCServiceImpl {
 public:
-    ClientWorkerSCServiceImplMock() : ClientWorkerSCServiceImpl(HostPort(), HostPort(), nullptr, nullptr, nullptr){};
+    ClientWorkerSCServiceImplMock()
+        : ClientWorkerSCServiceImpl(HostPort(), HostPort(), nullptr, nullptr, nullptr, TestMetadataRoute(),
+                                    TestMembership())
+    {
+    }
+
     Status SendBlockProducerReq(const std::string &streamName, const std::string &remoteWorkerAddr)
     {
         std::string id = streamName + remoteWorkerAddr;

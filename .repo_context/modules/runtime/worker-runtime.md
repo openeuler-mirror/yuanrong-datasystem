@@ -94,15 +94,13 @@
   - initialize logs and worker flags
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
-  - `WorkerOCServer::Init()` constructs separate Worker-role and Controller-role coordination backends, then starts
-    `cluster::TopologyController`, `cluster::TopologyEngine`, and `cluster::TopologyTaskJanitor` only after callback
-    targets are initialized. The callback adapter resolves the object-cache service through a Worker-owned late-bound
-    provider because the service itself needs the Engine placement view during construction; callbacks cannot run until
-    service initialization and runtime Start complete. A missing initial topology keeps Engine `NOT_READY` while the
-    co-located Controller establishes authority instead of failing Worker initialization. It publishes READY only after
-    the first membership lease succeeds. `Start()` writes the configured ready-check file only after the local member is
-    committed, a placement probe resolves, and the Worker RPC health check succeeds. No Worker-local topology authority
-    is persisted.
+  - `WorkerOCServer::Init()` selects ETCD or Coordinator transport through `TopologyEngine::Builder`. The Engine creates
+    and owns both role backends, the hash algorithm, Worker runtime, Controller runtime, Janitor, and optional recovery
+    reporter. Worker code does not assemble or retain those concrete components. Callback targets are initialized before
+    `TopologyEngine::Start()`, so callbacks cannot run against partially constructed services. A missing initial topology
+    keeps Engine `NOT_READY` while the co-located Controller establishes authority. The Worker publishes READY only after
+    the first membership lease succeeds, and writes the ready-check file only after committed membership, a placement
+    probe, and Worker RPC health all succeed. No Worker-local topology authority is persisted.
   - when `enable_urma=true`, URMA connection warmup runs after object-cache startup/restart handling and before
     `ReadinessProbe()`: it synchronously prepares the local warmup object, then starts best-effort async peer warmup
     without delaying readiness
@@ -110,8 +108,8 @@
     best-effort miss because ready-state discovery can race peer warmup-object creation; ordinary RemoteGet failures
     still use normal error logs
   - object-cache worker-to-master RPC warmup also starts before `ReadinessProbe()`: a best-effort asynchronous startup
-    task scans `GetAll(ETCD_CLUSTER_TABLE)` until the discovered ready worker/master set is stable or the startup
-    warmup window expires, and later ETCD cluster ready PUT events trigger warmup for newly ready workers/masters
+    task reads immutable topology snapshots until the ready member set is stable or the startup warmup window expires;
+    later Snapshot publication callbacks enqueue bounded warmup for newly ready members
 - Steady state:
   - accept/register clients
   - manage shared-memory or socket-based FD passing for client-worker IPC
@@ -141,9 +139,14 @@
     are rejected. Timeout keeps the gate closed and returns an explicit error so the external lifecycle manager can
     enforce final termination. Concurrent leavers cannot exchange objects after either member takes its drain snapshot.
   - tear down runtime services and service threads
-  - `WorkerOCServer` stops both event sources, then Janitor, `cluster::TopologyEngine`, and
-    `cluster::TopologyController`. Any timeout preserves the full dependency chain for a later retry; coordination
-    backends and ETCD stores are torn down only after those owners stop successfully.
+  - `WorkerOCServer` first drains business RPC ingress and then calls only `TopologyEngine::Shutdown(deadline)`. Engine
+    closes Coordinator ingress and the member-role event source, drains Reporter and Worker execution, then Runtime
+    stops Janitor/Controller and the Controller closes its role event source before Engine fully shuts down both
+    backends. Any timeout preserves the full dependency chain for a later retry; borrowed Store/Proxy
+    and business callback owners outlive the Engine. The abnormal destructor path first stops Rebalance, NodeSelector,
+    and Worker background threads. If bounded shutdown did not converge, it performs a final safe Engine join while
+    metadata/service callback targets remain alive; it then shuts down the metadata/service borrowers, resets their
+    endpoint and route adapters, and finally destroys Engine before Store/Proxy/callback owners.
   - embedded mode uses exported destroy helpers
 
 ## Cluster And Metadata Notes
@@ -151,9 +154,17 @@
 - Verified:
   - current docs and code support ETCD, Coordinator transport, and Metastore-based metadata paths.
   - `worker_oc_server.cpp` enforces that at least one of `etcd_address` or `metastore_address` is set.
-  - `WorkerOCServer` constructs `cluster::HashAlgorithm`, Worker-role `cluster::TopologyEngine`, and independent
-    `cluster::TopologyController`/Janitor ownership. ETCD uses separate backend/store instances per role;
-    Coordinator transport uses separate `cluster::DsCoordinationBackend` instances.
+  - `WorkerOCServer` constructs `TopologyEngine` only through its nested Builder. ETCD supplies existing role Store
+    resources and Coordinator supplies a Proxy plus bind/drain ingress; Engine internally creates the role backends,
+    algorithm and Controller Runtime. Engine also registers the ETCD topology keyspace on both role Stores.
+    `WorkerTopologyReferences` no longer exists.
+  - topology Snapshot publication only coalesces the newest master-RPC warmup request on the Engine callback thread.
+    One Worker background task scans that Snapshot, warms only new or changed member generations, and never queues one
+    task or repeats one RPC for every unchanged member on every topology version.
+  - ordinary Object/Stream/Master paths retain only the narrow capability they use: prebound
+    `MetadataRouteResolver`, `PlacementFacade`, `MembershipEndpointView`, immutable Snapshot, or an Object-specific
+    endpoint policy. `WorkerOCServiceImpl` is the sole business lifecycle owner allowed to retain a non-owning Engine
+    pointer for semantic lifecycle and cold Host queries.
 - Review caution:
   - topology behavior is spread across flags, `WorkerOCServer`, and `src/datasystem/cluster`, so config-only changes
     may still impact worker request routing and recovery behavior.
@@ -175,9 +186,9 @@
     state and worker-side remote-get helpers.
   - URMA warmup object races should stay out of normal warning/error logs so operators do not confuse internal best-effort
     warmup misses with user request failures.
-  - Worker-master RPC warmup is one-way per initiating worker. Startup scans warm each worker's outbound paths, and the
-    cluster ready event hook in `WorkerOCServer::UpdateClusterInfoInRocksDb` remains necessary for old-node to new-node
-    paths during scale-out.
+  - Worker-master RPC warmup is one-way per initiating worker. Startup Snapshot reads warm each Worker's outbound paths,
+    and Snapshot publication callbacks cover old-node to new-node paths during scale-out without a Rocks membership
+    mirror.
   - topology routing distinguishes a real redirect from a ScaleOut transfer barrier. Structured callers receive
     `moving=true`; legacy boolean callers receive `true` with an empty target address so they defer the operation instead
     of redirecting back to the committed source or mutating metadata while migration is in flight.

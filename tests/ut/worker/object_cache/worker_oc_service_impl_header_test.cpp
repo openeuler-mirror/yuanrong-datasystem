@@ -31,6 +31,7 @@
 #include "datasystem/common/object_cache/lock.h"
 #include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/protos/worker_object.pb.h"
+#include "tests/ut/worker/object_cache/test_metadata_route.h"
 
 using namespace datasystem::object_cache;
 
@@ -75,15 +76,19 @@ public:
         objectTable_ = std::make_shared<object_cache::ObjectTable>();
         HostPort hostPort("127.0.0.1:18481");
         auto evictionManager = std::make_shared<WorkerOcEvictionManager>(
-            objectTable_, hostPort, hostPort, nullptr);
+            objectTable_, hostPort, hostPort, GetTestMetadataRoute(), nullptr);
         impl_ = std::make_shared<WorkerOCServiceImpl>(
-            hostPort, hostPort, objectTable_, nullptr, evictionManager,
-            nullptr, nullptr, nullptr);
+            hostPort, hostPort, objectTable_, nullptr, evictionManager, nullptr, nullptr, nullptr,
+            nullptr, GetTestMetadataRoute(), membership_, &exitRequested_, false, false);
         impl_->InitMetaSize();
         impl_->InitServiceImpl();
     }
 
 protected:
+    // Header sizing does not exercise Engine lifecycle; bind only the endpoint view required by the service.
+    cluster::TopologySnapshotState snapshots_;
+    cluster::MembershipEndpointView membership_{ snapshots_ };
+    std::atomic<bool> exitRequested_{ false };
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<WorkerOCServiceImpl> impl_;
 };

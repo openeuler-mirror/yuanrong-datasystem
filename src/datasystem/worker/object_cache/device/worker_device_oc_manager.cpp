@@ -103,11 +103,8 @@ Status WorkerDeviceOcManager::CreateDeviceMetaToMaster(const ObjectKV &objectKV)
     devInfo->set_offset(devObj->GetOffset());
 
     master::CreateMetaRspPb metaResp;
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerOcImpl_->topologyPlacement_,
-                                                                   workerOcImpl_->BuildMetaRouteOptions(true));
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                             "hash master get failed, CreateDeviceMetaToMaster failed");
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi));
     return workerMasterApi->CreateMeta(metaReq, metaResp);
 }
 
@@ -273,10 +270,9 @@ Status WorkerDeviceOcManager::ProcessGetP2PMetaRequest(
     GetP2PMetaReqPb &req,
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetP2PMetaRspPb, GetP2PMetaReqPb>> &serverApi)
 {
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(
-            P2P_DEFAULT_MASTER, workerOcImpl_->topologyPlacement_, workerOcImpl_->BuildMetaRouteOptions(true));
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "hash master get failed, GetP2P meta failed");
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
     return workerMasterApi->GetP2PMeta(req, serverApi, workerOcImpl_->asyncRpcManager_);
 }
 
@@ -284,22 +280,18 @@ Status WorkerDeviceOcManager::ProcessSubscribeReceiveEventRequest(
     SubscribeReceiveEventReqPb &req,
     std::shared_ptr<ServerUnaryWriterReader<SubscribeReceiveEventRspPb, SubscribeReceiveEventReqPb>> &serverApi)
 {
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(
-            P2P_DEFAULT_MASTER, workerOcImpl_->topologyPlacement_, workerOcImpl_->BuildMetaRouteOptions(true));
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                             "hash master get failed, send RootInfo failed");
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
     return workerMasterApi->SubscribeReceiveEvent(req, serverApi, workerOcImpl_->asyncRpcManager_);
 }
 
 Status WorkerDeviceOcManager::ProcessRecvRootInfoRequest(
     RecvRootInfoReqPb &req, std::shared_ptr<ServerUnaryWriterReader<RecvRootInfoRspPb, RecvRootInfoReqPb>> &serverApi)
 {
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(
-            P2P_DEFAULT_MASTER, workerOcImpl_->topologyPlacement_, workerOcImpl_->BuildMetaRouteOptions(true));
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                             "hash master get failed, recv RootInfo failed");
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
     return workerMasterApi->RecvRootInfo(req, serverApi, workerOcImpl_->asyncRpcManager_);
 }
 
@@ -308,11 +300,9 @@ Status WorkerDeviceOcManager::ProcessGetDataInfoRequest(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetDataInfoRspPb, GetDataInfoReqPb>> &serverApi,
     const int64_t subTimeout)
 {
-    std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(
-            P2P_DEFAULT_MASTER, workerOcImpl_->topologyPlacement_, workerOcImpl_->BuildMetaRouteOptions(true));
-    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR,
-                             "hash master get failed, get dataInfo failed");
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    RETURN_IF_NOT_OK(
+        workerOcImpl_->workerMasterApiManager_->GetWorkerMasterApi(P2P_DEFAULT_MASTER, workerMasterApi));
     return workerMasterApi->GetDataInfo(req, serverApi, subTimeout, workerOcImpl_->asyncRpcManager_);
 }
 }  // namespace object_cache

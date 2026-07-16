@@ -36,14 +36,14 @@
 #include "datasystem/protos/stream_posix.service.rpc.pb.h"
 #include "datasystem/protos/stream_posix.brpc.pb.h"
 #include "datasystem/protos/stream_posix.stub.rpc.pb.h"
-#include "datasystem/cluster/routing/placement_facade.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/utils/optional.h"
 #include "datasystem/worker/stream_cache/remote_worker_manager.h"
 #include "datasystem/worker/stream_cache/stream_producer.h"
 #include "datasystem/worker/stream_cache/worker_master_sc_api.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
-#include "datasystem/worker/worker_topology_references.h"
+#include "datasystem/worker/metadata_route_resolver.h"
 
 namespace datasystem {
 namespace worker {
@@ -192,10 +192,15 @@ public:
      * @param[in] masterAddr The address of master.
      * @param[in] masterSCService The master service.
      * @param[in] akSkManager Used to do AK/SK authenticate.
+     * @param[in] manager Stream shared-memory allocation manager.
+     * @param[in] metadataRoute Metadata owner resolver that outlives this service.
+     * @param[in] membership Membership endpoint view that outlives this service.
      */
     ClientWorkerSCServiceImpl(HostPort serverAddr, HostPort masterAddr, master::MasterSCServiceImpl *masterSCService,
                               std::shared_ptr<AkSkManager> akSkManager,
-                              std::shared_ptr<WorkerSCAllocateMemory> manager);
+                              std::shared_ptr<WorkerSCAllocateMemory> manager,
+                              const worker::MetadataRouteResolver &metadataRoute,
+                              const cluster::MembershipEndpointView &membership);
 
     /**
      * @brief Init the service.
@@ -459,22 +464,6 @@ public:
     }
 
     /**
-     * @brief Setter method for assigning cluster manager
-     * @param[in] cm Borrowed Worker topology dependencies.
-     */
-    void SetTopologyEngine(worker::WorkerTopologyReferences *cm)
-    {
-        topologyEngine_ = cm;
-    }
-
-    void SetTopologyPlacement(const cluster::PlacementFacade *topologyPlacement,
-                              worker::MetadataRouteOptions routeOptions)
-    {
-        topologyPlacement_ = topologyPlacement;
-        topologyRouteOptions_ = std::move(routeOptions);
-    }
-
-    /**
      * @brief erase failed worker master api.
      * @param[in] masterAddr failed master addr.
      */
@@ -696,6 +685,79 @@ private:
      */
     Status CreateProducerImpl(const std::string &namespaceUri, const CreateProducerReqPb &req,
                               CreateProducerRspPb &rsp);
+
+    /**
+     * @brief Roll back resources owned by one failed CreateProducer attempt.
+     * @param[in] namespaceUri Stream namespace URI.
+     * @param[in] producerId Producer identity.
+     * @param[in] streamMgrWithLock Stream manager accessor created for this attempt.
+     * @param[in] streamMgr Stream manager being initialized.
+     * @param[in] blockMemoryReclaim Whether memory reclaim was blocked.
+     * @param[in] rollbackProducer Whether the local producer must be removed.
+     */
+    void CleanupCreateProducer(const std::string &namespaceUri, const std::string &producerId,
+                               const std::shared_ptr<StreamManagerWithLock> &streamMgrWithLock,
+                               const std::shared_ptr<StreamManager> &streamMgr, bool blockMemoryReclaim,
+                               bool rollbackProducer);
+
+    /**
+     * @brief Prepare an existing local stream for another producer.
+     * @param[in] streamExisted Whether the stream manager already existed.
+     * @param[in] streamFields Immutable stream fields.
+     * @param[in] streamMgr Stream manager being initialized.
+     * @param[out] blockMemoryReclaim Set when cleanup must unblock memory reclaim.
+     * @return K_OK or shared-memory reservation status.
+     */
+    Status PrepareExistingProducerStream(bool streamExisted, const Optional<StreamFields> &streamFields,
+                                         const std::shared_ptr<StreamManager> &streamMgr,
+                                         bool &blockMemoryReclaim);
+
+    /**
+     * @brief Publish a successfully created producer to local bookkeeping.
+     * @param[in] clientId Client identity.
+     * @param[in] namespaceUri Stream namespace URI.
+     * @param[in] producerId Producer identity.
+     * @param[in,out] streamMgrWithLock Stream manager accessor whose cleanup is disabled.
+     * @param[in,out] createLock Per-stream creation lock to release.
+     */
+    void CommitCreatedProducer(const std::string &clientId, const std::string &namespaceUri,
+                               const std::string &producerId,
+                               const std::shared_ptr<StreamManagerWithLock> &streamMgrWithLock,
+                               CreatePubSubCtrl::Accessor &createLock);
+
+    /**
+     * @brief Register the first local producer with the metadata Master.
+     * @param[in] firstProducer Whether this is the first local producer.
+     * @param[in] namespaceUri Stream namespace URI.
+     * @param[in] producerId Producer identity for logs.
+     * @param[in] streamFields Immutable stream fields.
+     * @param[in] req Original CreateProducer request.
+     * @param[in] streamMgr Stream manager being initialized.
+     * @param[out] rollbackProducer Set when local producer rollback is required.
+     * @return K_OK, K_DUPLICATED treated as success, or the Master request status.
+     */
+    Status RegisterFirstProducer(bool firstProducer, const std::string &namespaceUri,
+                                 const std::string &producerId, const Optional<StreamFields> &streamFields,
+                                 const CreateProducerReqPb &req, const std::shared_ptr<StreamManager> &streamMgr,
+                                 bool &rollbackProducer);
+
+    /**
+     * @brief Fill shared-memory views and immutable producer response fields.
+     * @param[in] namespaceUri Stream namespace URI.
+     * @param[in] producerId Producer identity.
+     * @param[in] streamFields Immutable stream fields.
+     * @param[in] streamMgr Initialized stream manager.
+     * @param[in] senderProducerNo Local producer sequence number.
+     * @param[in] streamNo Local stream sequence number.
+     * @param[in] req Original CreateProducer request.
+     * @param[out] rsp CreateProducer response to fill.
+     * @return K_OK or shared-memory view creation status.
+     */
+    Status FillCreateProducerResponse(const std::string &namespaceUri, const std::string &producerId,
+                                      const Optional<StreamFields> &streamFields,
+                                      const std::shared_ptr<StreamManager> &streamMgr,
+                                      DataVerificationHeader::SenderProducerNo senderProducerNo, uint64_t streamNo,
+                                      const CreateProducerReqPb &req, CreateProducerRspPb &rsp);
 
     /**
      * @brief Implementation of the Subscribe logic.
@@ -1022,9 +1084,8 @@ private:
     std::shared_ptr<ThreadPool> ackPool_{ nullptr };
     std::atomic<bool> interrupt_;
     std::future<void> autoAck_;
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
-    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
-    worker::MetadataRouteOptions topologyRouteOptions_;
+    const worker::MetadataRouteResolver &metadataRoute_;       // Immutable owner-routing dependency.
+    const cluster::MembershipEndpointView &membership_;        // Immutable topology plus local endpoint evidence.
 };
 
 template <>

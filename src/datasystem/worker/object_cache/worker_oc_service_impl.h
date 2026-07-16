@@ -67,7 +67,7 @@
 #include "datasystem/cluster/routing/placement_types.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
-#include "datasystem/cluster/coordination_backend/coordination_backend.h"
+#include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/worker/object_cache/async_rpc_request_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
@@ -75,6 +75,7 @@
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_create_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_publish_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
@@ -83,7 +84,6 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
@@ -116,15 +116,21 @@ public:
      * @param[in] persistApi Persistence service client.
      * @param[in] etcdStore Pointer to EtcdStore owned by WorkerOcServer.
      * @param[in] masterOCService The master service.
-     * @param[in] coordinationBackend Coordination backend used by recovery workflows.
-     * @param[in] topologyEngine Borrowed Worker topology dependencies.
+     * @param[in] topologyEngine Borrowed topology lifecycle and query service.
+     * @param[in] metadataRoute Metadata owner resolver that outlives this service.
+     * @param[in] membership Membership query capability that outlives this service.
+     * @param[in] exitRequested Local graceful-exit flag that outlives this service.
+     * @param[in] isRestart Immutable restart fact captured during topology initialization.
+     * @param[in] controlBackendAvailableAtStartup Whether startup exact-read reached the control backend.
      */
     WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
                         std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                         std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
-                        master::MasterOCServiceImpl *masterOCService = nullptr,
-                        cluster::ICoordinationBackend *coordinationBackend = nullptr,
-                        worker::WorkerTopologyReferences *topologyEngine = nullptr);
+                        master::MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
+                        const worker::MetadataRouteResolver &metadataRoute,
+                        const cluster::MembershipEndpointView &membership,
+                        const std::atomic<bool> *exitRequested, bool isRestart,
+                        bool controlBackendAvailableAtStartup);
 
     ~WorkerOCServiceImpl() override;
 
@@ -541,16 +547,6 @@ public:
     size_t GetMetadataSize() const;
 
     /**
-     * @brief Setter function to assign the cluster manager back pointer.
-     * @param[in] topologyEngine The topology engine pointer to assign.
-     */
-    void SetTopologyEngine(worker::WorkerTopologyReferences *topologyEngine)
-    {
-        topologyEngine_ = topologyEngine;
-        evictionManager_->SetTopologyEngine(topologyEngine);
-    }
-
-    /**
      * @brief Get the worker-to-master object cache api manager.
      * @return The worker master api manager.
      */
@@ -863,7 +859,7 @@ public:
      */
     bool MigrateDataStarted()
     {
-        return worker::IsLocalTopologyMemberExiting(topologyEngine_);
+        return exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
     }
 
     /**
@@ -1043,19 +1039,15 @@ private:
     Status DecNestedRef(const std::vector<std::string> &nestedObjectKeys);
 
     /**
-     * @brief Get or Create a worker to Master api object for objKey in format uuid:host:port
-     * @param[in] objKey Object key that contain remote master's ip address
-     * @param[out] masterAddr The metadata owner address.
+     * @brief Get addresses of all committed topology members.
+     * @param[out] addresses Committed member addresses.
      * @return Status of the call.
      */
-    Status GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr) const;
+    Status GetCommittedMemberAddresses(std::vector<std::string> &addresses) const;
 
-    /**
-     * @brief Build routing options for metadata owner placement lookups.
-     * @param[in] requireAvailableTarget Whether route lookup must reject unavailable targets.
-     * @return Route options for topology placement.
-     */
-    worker::MetadataRouteOptions BuildMetaRouteOptions(bool requireAvailableTarget) const;
+    Status GetExpectedReconciliationCount(int &expectedCount) const;
+
+    Status CheckTopologyServingReady() const;
 
     /**
      * @brief Update object version from worker or redis when object is expired
@@ -1317,10 +1309,14 @@ private:
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
     EtcdStore *etcdStore_;                   // pointer to EtcdStore in WorkerOcServer
-    cluster::ICoordinationBackend *coordinationBackend_{ nullptr };
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
-    const cluster::PlacementFacade *topologyPlacement_{ nullptr };
-    cluster::MembershipEndpointView *topologyMembership_{ nullptr };
+    cluster::TopologyEngine *topologyEngine_{ nullptr };  // Non-owning lifecycle service owned by Worker Host.
+    const worker::MetadataRouteResolver &metadataRoute_;
+    const cluster::MembershipEndpointView &membership_;
+    ObjectEndpointPolicy endpointPolicy_;
+    const std::atomic<bool> *exitRequested_{ nullptr };
+    const bool isRestart_;
+    const bool centralizedMetadata_;
+    const bool controlBackendAvailableAtStartup_;
     // Wait for client reconnect when worker crash and recovery.
     WaitPost clientReconnectPost_;
     bool waited_{ false };
