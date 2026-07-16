@@ -23,6 +23,11 @@
 
 #include "ut/common.h"
 
+#include <chrono>
+#include <thread>
+
+#include <bthread/bthread.h>
+
 namespace datasystem {
 namespace ut {
 class StatusTest : public CommonTest {
@@ -163,6 +168,15 @@ TEST_F(StatusTest, EventWaitAnyTimeoutReturnsDeadlineExceeded)
     ASSERT_TRUE(status.GetMsg().find("Timed out waiting for any event") != std::string::npos);
 }
 
+TEST_F(StatusTest, EventWaitAnyTimedWaitReturnsDeadlineExceeded)
+{
+    auto waiter = std::make_shared<EventWaiter>();
+    std::shared_ptr<Event> event;
+    Status status = waiter->WaitAny(std::chrono::milliseconds(1), event);
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+    ASSERT_TRUE(status.GetMsg().find("Timed out waiting for any event") != std::string::npos);
+}
+
 TEST_F(StatusTest, EventWaitAnySucceedsAfterNotify)
 {
     auto waiter = std::make_shared<EventWaiter>();
@@ -174,6 +188,53 @@ TEST_F(StatusTest, EventWaitAnySucceedsAfterNotify)
     ASSERT_TRUE(status.IsOk()) << status.ToString();
     ASSERT_NE(notifiedEvent, nullptr);
     ASSERT_EQ(notifiedEvent->GetRequestId(), 3);
+}
+
+TEST_F(StatusTest, EventWaitAnySucceedsAfterBlockingNotify)
+{
+    auto waiter = std::make_shared<EventWaiter>();
+    auto event = std::make_shared<Event>(4, waiter);
+    std::shared_ptr<Event> notifiedEvent;
+    Status waitStatus = Status::OK();
+
+    std::thread waitThread([&waiter, &notifiedEvent, &waitStatus] {
+        waitStatus = waiter->WaitAny(std::chrono::milliseconds(1000), notifiedEvent);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    event->NotifyAll();
+    waitThread.join();
+
+    ASSERT_TRUE(waitStatus.IsOk()) << waitStatus.ToString();
+    ASSERT_NE(notifiedEvent, nullptr);
+    ASSERT_EQ(notifiedEvent->GetRequestId(), 4);
+}
+
+TEST_F(StatusTest, EventWaitAnySucceedsFromBthreadAfterNotify)
+{
+    struct WaitArgs {
+        std::shared_ptr<EventWaiter> waiter;
+        std::shared_ptr<Event> notifiedEvent;
+        Status status = Status::OK();
+    };
+
+    auto waiter = std::make_shared<EventWaiter>();
+    auto event = std::make_shared<Event>(5, waiter);
+    WaitArgs args{ waiter, nullptr, Status::OK() };
+
+    bthread_t tid;
+    auto waitAny = [](void *arg) -> void * {
+        auto *waitArgs = static_cast<WaitArgs *>(arg);
+        waitArgs->status = waitArgs->waiter->WaitAny(std::chrono::milliseconds(1000), waitArgs->notifiedEvent);
+        return nullptr;
+    };
+    ASSERT_EQ(bthread_start_background(&tid, nullptr, waitAny, &args), 0);
+    bthread_usleep(10 * 1000);
+    event->NotifyAll();
+    ASSERT_EQ(bthread_join(tid, nullptr), 0);
+
+    ASSERT_TRUE(args.status.IsOk()) << args.status.ToString();
+    ASSERT_NE(args.notifiedEvent, nullptr);
+    ASSERT_EQ(args.notifiedEvent->GetRequestId(), 5);
 }
 
 TEST_F(StatusTest, TestOperatorEqual)

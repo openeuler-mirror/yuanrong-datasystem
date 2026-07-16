@@ -18,10 +18,17 @@
 #define DATASYSTEM_COMMON_RDMA_RDMA_UTIL_H
 
 #include <chrono>
+#include <cerrno>
 #include <condition_variable>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <queue>
+
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
+#include <butil/time.h>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
@@ -52,23 +59,49 @@ inline custom_unique_ptr<T> MakeCustomUnique(T *p, std::function<void(T *)> cust
 class Event;
 class EventWaiter {
 public:
-    EventWaiter() = default;
-    ~EventWaiter() = default;
+    EventWaiter()
+    {
+        CHECK_EQ(0, bthread_mutex_init(&mtx_, nullptr));
+        CHECK_EQ(0, bthread_cond_init(&cv_, nullptr));
+    }
+
+    ~EventWaiter()
+    {
+        CHECK_EQ(0, bthread_cond_destroy(&cv_));
+        CHECK_EQ(0, bthread_mutex_destroy(&mtx_));
+    }
 
     void Notify(std::shared_ptr<Event> event)
     {
         {
-            std::lock_guard<std::mutex> lock(mtx_);
+            std::lock_guard<bthread_mutex_t> lock(mtx_);
             ready_.push(event);
         }
-        cv_.notify_one();
+        (void)bthread_cond_signal(&cv_);
     }
 
     Status WaitAny(std::chrono::milliseconds timeout, std::shared_ptr<Event> &event)
     {
-        std::unique_lock<std::mutex> lock(mtx_);
-        if (!cv_.wait_for(lock, timeout, [&] { return !ready_.empty(); })) {
-            RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED, "Timed out waiting for any event");
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        std::unique_lock<bthread_mutex_t> lock(mtx_);
+        while (ready_.empty()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) {
+                RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED, "Timed out waiting for any event");
+            }
+
+            const auto dueTime = butil::microseconds_from_now(ToBthreadWaitUs(deadline - now));
+            const int rc = bthread_cond_timedwait(&cv_, lock.mutex(), &dueTime);
+            if (rc == 0 || rc == EINTR) {
+                continue;
+            }
+            if (rc == ETIMEDOUT) {
+                if (ready_.empty()) {
+                    RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED, "Timed out waiting for any event");
+                }
+                break;
+            }
+            RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, FormatString("Failed waiting for any event, errno: %d", rc));
         }
         event = ready_.front();
         ready_.pop();
@@ -76,8 +109,20 @@ public:
     }
 
 private:
-    std::mutex mtx_;
-    std::condition_variable cv_;
+    static long ToBthreadWaitUs(std::chrono::steady_clock::duration timeout)
+    {
+        auto timeoutUs = std::chrono::duration_cast<std::chrono::microseconds>(timeout).count();
+        if (timeoutUs <= 0) {
+            return 0;
+        }
+        if (timeoutUs > std::numeric_limits<long>::max()) {
+            return std::numeric_limits<long>::max();
+        }
+        return static_cast<long>(timeoutUs);
+    }
+
+    bthread_mutex_t mtx_;
+    bthread_cond_t cv_;
     std::queue<std::shared_ptr<Event>> ready_;
 };
 

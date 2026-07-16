@@ -2,6 +2,7 @@ set(RDMA_UTIL_SRCS
     rdma_util.cpp)
 
 add_library(common_rdma_util STATIC ${RDMA_UTIL_SRCS})
+target_link_libraries(common_rdma_util PUBLIC ${BRPC_LIBRARIES})
 
 set(URMA_SRCS "")
 set(RDMA_SRCS "")
@@ -73,7 +74,7 @@ if (BUILD_WITH_URMA_MOCK)
 endif()
 target_link_libraries(common_rdma
     PRIVATE ${URMA_DEPEND_LIBS} ${RDMA_DEPEND_LIBS} meta_transport_protos_client share_memory_protos_client
-    PUBLIC ${HCCS_EXTRA_LIBS})
+    PUBLIC ${HCCS_EXTRA_LIBS} ${BRPC_LIBRARIES})
 
 # Propagate HCCS transport availability to source files via compile definition
 if (ASCEND_HIXL_HCCS_SUPPORTED)
