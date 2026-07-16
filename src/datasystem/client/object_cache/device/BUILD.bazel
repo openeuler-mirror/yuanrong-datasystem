@@ -115,19 +115,3 @@ ds_cc_library(
         "@tbb",
     ],
 )
-
-ds_cc_library(
-    name = "page_attn_utils",
-    srcs = [
-        "page_attn_utils.cpp",
-    ],
-    hdrs = [
-        "page_attn_utils.h",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//include/datasystem/hetero:hetero_headers",
-        "//include/datasystem/utils:utils_headers",
-        "//src/datasystem/common/util:status_helper",
-    ],
-)

@@ -23,7 +23,6 @@
 
 #include <pybind11/detail/common.h>
 
-#include "datasystem/client/object_cache/device/page_attn_utils.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/hetero_client.h"
@@ -333,31 +332,6 @@ PybindDefineRegisterer g_pybind_define_f_Tensor("Tensor", PRIORITY_LOW, [](const
                        && std::equal(lhs.shape.begin(), lhs.shape.end(), rhs.shape.begin());
             },
             "other"_a);
-});
-
-PybindDefineRegisterer g_pybind_define_f_PageAttnUtils("PageAttnUtils", PRIORITY_LOW, [](const py::module *m) {
-    using namespace pybind11::literals;
-
-    py::class_<PageAttnUtils>(*m, "PageAttnUtils")
-        .def_static("blk_2_blob", &PageAttnUtils::Blk2Blob, "ptr"_a, "elem_size"_a, "num_block_elem"_a, "block_id"_a)
-        .def_static("blks_2_dev_blob_list", &PageAttnUtils::Blks2DevBlobList, "device_idx"_a, "ptr"_a, "elem_size"_a,
-                    "num_block_elem"_a, "block_ids"_a)
-        .def_static(
-            "layerwise_dev_blob_lists",
-            [](int32_t deviceIdx, const std::vector<Tensor> &layerTensors, const std::vector<uint32_t> &blockIds) {
-                std::vector<DeviceBlobList> outDblList;
-                auto status = PageAttnUtils::LayerwiseDevBlobLists(deviceIdx, layerTensors, blockIds, outDblList);
-                return std::make_pair(status, std::move(outDblList));
-            },
-            "device_idx"_a, "layer_tensors"_a, "block_ids"_a)
-        .def_static(
-            "blockwise_dev_blob_lists",
-            [](int32_t deviceIdx, const std::vector<Tensor> &layerTensors, const std::vector<uint32_t> &blockIds) {
-                std::vector<DeviceBlobList> outDblList;
-                auto status = PageAttnUtils::BlockwiseDevBlobLists(deviceIdx, layerTensors, blockIds, outDblList);
-                return std::make_pair(status, std::move(outDblList));
-            },
-            "device_idx"_a, "layer_tensors"_a, "block_ids"_a);
 });
 
 }  // namespace datasystem

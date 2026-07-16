@@ -157,7 +157,9 @@
 - `DsClient` in Python mirrors the C++ aggregate pattern by composing Python `KVClient`, `HeteroClient`, and `ObjectClient`.
 - `KVClient`, `ObjectClient`, `StreamClient`, and `HeteroClient` wrap `yr.datasystem.lib.libds_client_py` objects.
 - `libds_client_py` is populated by `src/datasystem/pybind_api/pybind_register*.cpp`.
-- `DsTensorClient` is a Python-side convenience layer built on top of `HeteroClient`, tensor pointer extraction, and page-attention helpers.
+- `DsTensorClient` is a Python-side convenience layer built on top of `HeteroClient` and tensor pointer extraction.
+  The former page-attention-specific APIs and `PageAttnUtils` binding have been removed; callers use the remaining
+  generic D2H, H2D, and D2D tensor operations.
 
 ### Verified Python/C++ differences to remember
 
