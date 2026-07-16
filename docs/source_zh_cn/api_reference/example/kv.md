@@ -156,6 +156,16 @@ spillEnableReadahead: true
 global:
   memoryRebalance:
     enabled: true
+    # source worker 的共享内存使用率阈值（百分比），取值范围：1-100
+    rebalanceSourceUsagePercent: 70
+    # source 与 target 之间的最小使用率差值（百分比），取值范围：1-100
+    rebalanceUsageGapPercent: 20
+    # 失败或超时后的冷却时间（秒）
+    rebalanceCooldownS: 60
+    # 任务上报宽限时间（毫秒）
+    rebalanceTaskReportGraceMs: 60000
+    # 单次任务最多迁移数据量（字节），默认 1GB；超过 5 位需用字符串
+    rebalanceMaxMigrateBytesPerRound: "1073741824"
 ```
 
 当 `enabled` 为 `false` 时，master 不会调度内存均衡任务，worker 在本地共享内存不足时仍按既有驱逐、Spill 和二级缓存策略处理。开启该能力后，如果集群中没有满足条件的低使用率 worker，数据仍会继续走本地驱逐、Spill 或二级缓存流程，因此该配置不能替代 Spill 或二级缓存可靠性配置。

@@ -221,6 +221,11 @@ spec:
         - -spill_high_watermark_ratio={{ $.Values.global.spill.spillHighWatermarkRatio }}
         - -spill_low_watermark_ratio={{ $.Values.global.spill.spillLowWatermarkRatio }}
         - -enable_memory_rebalance={{ $.Values.global.memoryRebalance.enabled }}
+        - -rebalance_source_usage_percent={{ $.Values.global.memoryRebalance.rebalanceSourceUsagePercent }}
+        - -rebalance_usage_gap_percent={{ $.Values.global.memoryRebalance.rebalanceUsageGapPercent }}
+        - -rebalance_cooldown_s={{ $.Values.global.memoryRebalance.rebalanceCooldownS }}
+        - -rebalance_task_report_grace_ms={{ $.Values.global.memoryRebalance.rebalanceTaskReportGraceMs }}
+        - -rebalance_max_migrate_bytes_per_round={{ $.Values.global.memoryRebalance.rebalanceMaxMigrateBytesPerRound | int64 }}
         - -data_migrate_rate_limit_mb={{ $.Values.global.gracefulShutdown.dataMigrateRateLimitMb }}
         - -data_migrate_urma_transport_mode={{ $.Values.global.gracefulShutdown.dataMigrateUrmaTransportMode }}
         - -enable_curve_zmq={{ $.Values.global.rpc.enableCurveZmq }}

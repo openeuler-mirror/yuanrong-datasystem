@@ -770,6 +770,17 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | spill_high_watermark_ratio | double | `0.8` | 否 | Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spill_low_watermark_ratio |
 | spill_low_watermark_ratio | double | `0.6` | 否 | Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spill_high_watermark_ratio |
 
+#### Memory Rebalance相关配置
+
+| 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
+|-----|------|---------|-----|-------------|
+| enable_memory_rebalance | bool | `false` | 否 | 是否开启由 master 调度的内存均衡能力。开启后，master 会将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
+| rebalance_source_usage_percent | uint32 | `70` | 否 | source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。取值范围：1-100 |
+| rebalance_usage_gap_percent | uint32 | `20` | 否 | source 与 target worker 之间的最小共享内存使用率差值（百分比）。仅当差值不小于该值时才下发迁移任务。取值范围：1-100 |
+| rebalance_cooldown_s | uint32 | `60` | 否 | worker 在一次失败或超时的均衡任务后的冷却时间（秒），冷却期内不再被选为均衡源 |
+| rebalance_task_report_grace_ms | uint32 | `60000` | 否 | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
+| rebalance_max_migrate_bytes_per_round | uint64 | `1073741824` | 否 | 单次内存均衡任务最多迁移的数据量（字节），必须大于 0，默认 1GB（1073741824） |
+
 #### 日志与可观测相关配置
 
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
