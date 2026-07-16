@@ -88,12 +88,45 @@ public:
      */
     void ClearExpiredFds(const std::vector<int64_t> &fds);
 
+    /**
+     * @brief Associate a shm_id with the worker fd of an already-stored entry. The new
+     * (enableLocalCache=false) multi-worker flow uses shm_id as the stable per-worker key so that
+     * expired-fd reclaim and full release can be scoped per worker without relying on fd-number
+     * space assumptions (review fix #3). Old flow entries simply never call this.
+     * @param[in] workerFd The worker fd whose entry should carry the shm_id.
+     * @param[in] shmId The worker-assigned shm region id.
+     */
+    void AssociateShmId(int workerFd, const std::string &shmId);
+
+    /**
+     * @brief Resolve the worker fd backing a shm_id, or -1 if none.
+     */
+    int GetWorkerFdByShmId(const std::string &shmId);
+
+    /**
+     * @brief Reclaim only the fds that belong to the entry carrying shm_id. Looks up the entry via
+     * shm_id (not by assuming the fd number space) so worker A's expired fds never reclaim worker B's
+     * entry (UC6 / review fix #3).
+     * @param[in] shmId The owning shm_id.
+     * @param[in] fds The expired fd list reported by the worker (filtered to this shm_id's entry).
+     */
+    void ClearExpiredByShmId(const std::string &shmId, const std::vector<int64_t> &fds);
+
+    /**
+     * @brief Drop the entry carrying shm_id and remove the shm_id mapping (full per-worker release).
+     * Single critical section over mutex_ so concurrent AssociateShmId/ClearByShmId on the same shm_id
+     * cannot race (review fix #4).
+     */
+    void ClearByShmId(const std::string &shmId);
+
 protected:
-    // Protects 'mmapTable_'.
+    // Protects 'mmapTable_' and 'shmIdToWorkerFd_'.
     std::shared_timed_mutex mutex_;
 
     // The mmap fd table. The key is worker fd, value is mmap entry.
     std::unordered_map<int, std::shared_ptr<IMmapTableEntry>> mmapTable_;
+    // Reverse index for the new flow: shm_id -> worker fd. Empty for enableLocalCache=true.
+    std::unordered_map<std::string, int> shmIdToWorkerFd_;
     //   huge_tlb switch
     bool enableHugeTlb_;
 };

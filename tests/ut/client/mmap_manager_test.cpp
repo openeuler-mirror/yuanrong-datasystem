@@ -185,5 +185,60 @@ TEST_F(MmapManagerTest, TestLookupUnitsAndMmapFdsConcurrentSameFdOnlyTransfersOn
     GTEST_SKIP() << "Linux memfd + ShmMmapTable path only";
 #endif
 }
+
+// UC6 / review fix #3/#4: per-shm_id scoped reclaim must not cross workers.
+TEST_F(MmapManagerTest, TestClearExpiredByShmIdDoesNotCrossWorker)
+{
+#if defined(__linux__)
+    const int mmapSize = 4096;
+    auto api = std::make_shared<MmapUtFakeWorkerApi>(HostPort("127.0.0.1", 1));
+    MmapManager mmapManager(api, false);
+
+    // mmap two distinct worker fds via LookupUnitsAndMmapFds so both entries exist in the table.
+    int memfdA = static_cast<int>(syscall(SYS_memfd_create, "shm_id_ut_a", MFD_ALLOW_SEALING));
+    int memfdB = static_cast<int>(syscall(SYS_memfd_create, "shm_id_ut_b", MFD_ALLOW_SEALING));
+    ASSERT_GE(memfdA, 0);
+    ASSERT_GE(memfdB, 0);
+    ASSERT_EQ(0, ftruncate(memfdA, mmapSize));
+    ASSERT_EQ(0, ftruncate(memfdB, mmapSize));
+    api->SetTestMemfd(memfdA);
+    auto unitA = std::make_shared<ShmUnitInfo>(901, static_cast<uint64_t>(mmapSize));
+    std::vector<std::shared_ptr<ShmUnitInfo>> unitsA{ unitA };
+    ASSERT_TRUE(mmapManager.LookupUnitsAndMmapFds("t", unitsA).IsOk());
+    api->SetTestMemfd(memfdB);
+    auto unitB = std::make_shared<ShmUnitInfo>(902, static_cast<uint64_t>(mmapSize));
+    std::vector<std::shared_ptr<ShmUnitInfo>> unitsB{ unitB };
+    ASSERT_TRUE(mmapManager.LookupUnitsAndMmapFds("t", unitsB).IsOk());
+
+    // Associate each workerFd with its own shm_id.
+    mmapManager.AssociateShmId(unitA->fd, "shm-A");
+    mmapManager.AssociateShmId(unitB->fd, "shm-B");
+    EXPECT_EQ(mmapManager.GetWorkerFdByShmId("shm-A"), unitA->fd);
+    EXPECT_EQ(mmapManager.GetWorkerFdByShmId("shm-B"), unitB->fd);
+
+    // Reclaim A's expired fd: must free A only, leave B intact.
+    mmapManager.ClearExpiredByShmId("shm-A", { unitA->fd });
+    EXPECT_EQ(mmapManager.GetMmapEntryByFd(unitA->fd), nullptr) << "A's entry freed";
+    EXPECT_NE(mmapManager.GetMmapEntryByFd(unitB->fd), nullptr) << "B's entry intact (UC6)";
+
+    // Even if A's list erroneously contains B's fd, only A's workerFd is touched.
+    mmapManager.ClearExpiredByShmId("shm-A", { unitA->fd, unitB->fd });
+    EXPECT_NE(mmapManager.GetMmapEntryByFd(unitB->fd), nullptr) << "B still intact";
+
+    // Unknown shm_id is a no-op (no global fallback that could reclaim B).
+    mmapManager.ClearExpiredByShmId("shm-UNKNOWN", { unitB->fd });
+    EXPECT_NE(mmapManager.GetMmapEntryByFd(unitB->fd), nullptr) << "unknown shm_id must not reclaim";
+
+    // ClearByShmId releases B wholesale and removes its mapping.
+    mmapManager.ClearByShmId("shm-B");
+    EXPECT_EQ(mmapManager.GetMmapEntryByFd(unitB->fd), nullptr);
+    EXPECT_EQ(mmapManager.GetWorkerFdByShmId("shm-B"), -1) << "B's mapping removed";
+
+    ASSERT_EQ(0, close(memfdA));
+    ASSERT_EQ(0, close(memfdB));
+#else
+    GTEST_SKIP() << "Linux memfd + ShmMmapTable path only";
+#endif
+}
 }  // namespace ut
 }  // namespace datasystem

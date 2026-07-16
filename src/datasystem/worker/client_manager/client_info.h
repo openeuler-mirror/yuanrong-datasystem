@@ -33,11 +33,11 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
+#include "datasystem/common/heartbeat_type.h"
 
 namespace datasystem {
 namespace worker {
 
-enum class HeartbeatType { NO_HEARTBEAT = 0, RPC_HEARTBEAT = 1, UDS_HEARTBEAT = 2 };
 
 class ClientInfo {
 public:

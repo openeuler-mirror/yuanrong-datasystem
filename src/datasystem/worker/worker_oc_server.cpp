@@ -2265,6 +2265,12 @@ Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int
     if (objCacheClientWorkerSvc_ != nullptr) {
         objCacheClientWorkerSvc_->InitShmRefForClient(clientId, supportMultiShmRefCount);
     }
+    // Old flow (enableLocalCache=true): all registering clients keep RPC_HEARTBEAT so worker-side
+    // crash detection still relies on the 120s heartbeat timeout as before. The new (enableLocalCache=
+    // false) flow's clients opt out of heartbeat (RegisterClientReqPb.heartbeat_enabled=false) and are
+    // returned early in WorkerServiceImpl::AddRegisteringClient before reaching here, so they do not
+    // take this path yet. Activating SOCKET_HEARTBEAT for them is a follow-up of the shm-and-heartbeat
+    // design UC1 and must be wired on the new-flow registration path, not this shared AddClient.
     return ClientManager::Instance().RegisterLostHandler(
         clientId, std::bind(&WorkerOCServer::AfterClientLostHandler, this, clientId), HeartbeatType::RPC_HEARTBEAT);
 }

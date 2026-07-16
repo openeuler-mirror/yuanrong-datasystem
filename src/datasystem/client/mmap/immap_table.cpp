@@ -55,12 +55,14 @@ void IMmapTable::Clear()
 {
     std::lock_guard<std::shared_timed_mutex> l(mutex_);
     mmapTable_.clear();
+    shmIdToWorkerFd_.clear();
 }
 
 void IMmapTable::CleanInvalidMmapTable()
 {
     std::lock_guard<std::shared_timed_mutex> l(mutex_);
     mmapTable_.clear();
+    shmIdToWorkerFd_.clear();
 }
 
 void IMmapTable::ClearExpiredFds(const std::vector<int64_t> &fds)
@@ -68,6 +70,13 @@ void IMmapTable::ClearExpiredFds(const std::vector<int64_t> &fds)
     LOG(INFO) << "Clear expired workerfds: " << VectorToString(fds);
     std::lock_guard<std::shared_timed_mutex> l(mutex_);
     for (auto fd : fds) {
+        // Drop the shm_id reverse entry too, if the freed fd was associated with one.
+        for (auto it = shmIdToWorkerFd_.begin(); it != shmIdToWorkerFd_.end(); ++it) {
+            if (it->second == fd) {
+                shmIdToWorkerFd_.erase(it);
+                break;
+            }
+        }
         mmapTable_.erase(fd);
     }
 }
@@ -77,6 +86,66 @@ std::shared_ptr<IMmapTableEntry> IMmapTable::GetMmapEntryByFd(int fd)
     std::shared_lock<std::shared_timed_mutex> l(mutex_);
     auto iter = mmapTable_.find(fd);
     return iter == mmapTable_.end() ? nullptr : iter->second;
+}
+
+void IMmapTable::AssociateShmId(int workerFd, const std::string &shmId)
+{
+    if (shmId.empty()) {
+        return;
+    }
+    std::lock_guard<std::shared_timed_mutex> l(mutex_);
+    auto it = mmapTable_.find(workerFd);
+    if (it == mmapTable_.end()) {
+        LOG(WARNING) << "AssociateShmId: worker fd " << workerFd << " not in table, skip";
+        return;
+    }
+    it->second->SetShmId(shmId);
+    shmIdToWorkerFd_[shmId] = workerFd;
+}
+
+int IMmapTable::GetWorkerFdByShmId(const std::string &shmId)
+{
+    std::shared_lock<std::shared_timed_mutex> l(mutex_);
+    auto it = shmIdToWorkerFd_.find(shmId);
+    return it == shmIdToWorkerFd_.end() ? -1 : it->second;
+}
+
+void IMmapTable::ClearExpiredByShmId(const std::string &shmId, const std::vector<int64_t> &fds)
+{
+    if (shmId.empty() || fds.empty()) {
+        return;
+    }
+    // Hold the write lock across lookup + reclaim so a concurrent AssociateShmId/ClearByShmId on the
+    // same shm_id cannot race (review fix #4). The fd is resolved via the shm_id reverse index, so
+    // worker A's expired fds never reclaim worker B's entry (review fix #3).
+    std::lock_guard<std::shared_timed_mutex> l(mutex_);
+    auto it = shmIdToWorkerFd_.find(shmId);
+    if (it == shmIdToWorkerFd_.end()) {
+        // No mapping for this shm_id: do not fall back to a global clear — that would risk reclaiming
+        // another worker's entry (the very bug UC6 forbids).
+        return;
+    }
+    int workerFd = it->second;
+    for (auto fd : fds) {
+        if (fd == workerFd) {
+            mmapTable_.erase(fd);
+        }
+    }
+}
+
+void IMmapTable::ClearByShmId(const std::string &shmId)
+{
+    if (shmId.empty()) {
+        return;
+    }
+    std::lock_guard<std::shared_timed_mutex> l(mutex_);
+    auto it = shmIdToWorkerFd_.find(shmId);
+    if (it == shmIdToWorkerFd_.end()) {
+        return; // idempotent: nothing associated with this shm_id.
+    }
+    int workerFd = it->second;
+    mmapTable_.erase(workerFd);
+    shmIdToWorkerFd_.erase(it);
 }
 }  // namespace client
 }  // namespace datasystem

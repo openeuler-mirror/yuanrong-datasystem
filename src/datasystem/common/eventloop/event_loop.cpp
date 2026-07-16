@@ -166,6 +166,26 @@ void SockEventLoop::HandleEvent(const struct epoll_event *tEvents, int nevent)
 {
     for (int i = 0; i < nevent; i++) {
         auto *tev = reinterpret_cast<EventData *>(tEvents[i].data.ptr);
+        // EPOLLHUP/EPOLLERR (with or without EPOLLIN) means the peer closed/crashed. When a crash
+        // produces HUP/ERR without IN (e.g. RST with no pending readable data), the old code fell
+        // through to the else branch and only logged, so the lost-handle callback never fired. Handle
+        // these first and treat them as a disconnect before any read attempt.
+        if (tEvents[i].events & (EPOLLHUP | EPOLLERR)) {
+            if (tev->readCallBack) {
+                LOG(INFO) << FormatString("Socket fd(%d) peer closed (events=0x%x), run all callback.", tev->fd,
+                    tEvents[i].events);
+                tev->readCallBack();
+            }
+            Status delStatus = DelFdEvent(tev->fd);
+            if (delStatus.IsError()) {
+                // DelFdEvent can fail if the fd was already removed (e.g. the lost-handle callback
+                // itself removed it). Worst case is epoll re-firing this handled HUP once; the callback
+                // is idempotent, so this is a state-consistency warning, not a crash (review fix #16).
+                LOG(ERROR) << FormatString("DelFdEvent failed after HUP/ERR on fd(%d): %s", tev->fd,
+                    delStatus.GetMsg());
+            }
+            continue;
+        }
         if (tEvents[i].events & EPOLLIN) {
             ReadSockAndCallBack(tev);
         } else if (tEvents[i].events & EPOLLOUT) {
@@ -186,11 +206,18 @@ void SockEventLoop::ReadSockAndCallBack(const EventLoop::EventData *tev)
         int err = errno;
         if (ret == -1) {
             if (err == EAGAIN) {
-                continue;
+                // No data right now and the peer is still alive (non-blocking fd). The old code did
+                // `continue` here, which busy-loops on a level-triggered epoll. Break out instead and
+                // keep the fd registered (do NOT DelFdEvent) so epoll can notify again on the next
+                // readable/disconnect event.
+                return;
             }
-            // When errno is EINVAL, it means we shutdown the fd.
-            if (err == EINVAL && tev->readCallBack) {
-                LOG(INFO) << FormatString("Socket fd(%d) disconnection, run all callback.", tev->fd);
+            // Any other read error (EINVAL for local shutdown, ECONNRESET/EPIPE on peer crash with
+            // pending data) is a disconnect: run the lost-handle callback. The old code only handled
+            // EINVAL here, so ECONNRESET/EPIPE fell through without invoking the callback, leaving the
+            // crash undetected.
+            if (tev->readCallBack) {
+                LOG(INFO) << FormatString("Socket fd(%d) disconnection (errno=%d), run all callback.", tev->fd, err);
                 tev->readCallBack();
             }
         } else if (ret == 0 && tev->readCallBack) {

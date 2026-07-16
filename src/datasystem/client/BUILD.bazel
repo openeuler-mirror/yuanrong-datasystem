@@ -226,6 +226,7 @@ ds_cc_library(
     name = "client_transport",
     srcs = [
         "transport/transport_advisor.cpp",
+        "transport/shm_connection_pool.cpp",
         "transport/common/deadline_retry.cpp",
         "transport/metadata/object_metadata_client.cpp",
         "transport/object_read/object_read_flow.cpp",
@@ -245,6 +246,9 @@ ds_cc_library(
     hdrs = [
         "transport/object_buffer_internal.h",
         "transport/transport_advisor.h",
+        "transport/shm_connection_pool.h",
+        "transport/shm_entry.h",
+        "transport/shm_fd.h",
         "transport/transport_kind.h",
         "transport/transport_layer.h",
         "transport/worker_snapshot.h",

@@ -150,6 +150,36 @@ void MmapManager::ClearExpiredFds(const std::vector<int64_t> &fds)
     }
 }
 
+void MmapManager::AssociateShmId(int workerFd, const std::string &shmId)
+{
+    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    if (mmapTable_) {
+        mmapTable_->AssociateShmId(workerFd, shmId);
+    }
+}
+
+int MmapManager::GetWorkerFdByShmId(const std::string &shmId) const
+{
+    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    return mmapTable_ ? mmapTable_->GetWorkerFdByShmId(shmId) : -1;
+}
+
+void MmapManager::ClearExpiredByShmId(const std::string &shmId, const std::vector<int64_t> &fds)
+{
+    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    if (mmapTable_) {
+        mmapTable_->ClearExpiredByShmId(shmId, fds);
+    }
+}
+
+void MmapManager::ClearByShmId(const std::string &shmId)
+{
+    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    if (mmapTable_) {
+        mmapTable_->ClearByShmId(shmId);
+    }
+}
+
 void MmapManager::Clear()
 {
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);

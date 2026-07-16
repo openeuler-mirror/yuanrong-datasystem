@@ -213,7 +213,7 @@ TEST_F(ClientManagerTest, TestRunCallbackByUDSHeartbeat)
         LOG(INFO) << "run callback";
         called = true;
     };
-    ASSERT_TRUE(clientMgr.RegisterLostHandler(clientId, callback, HeartbeatType::UDS_HEARTBEAT));
+    ASSERT_TRUE(clientMgr.RegisterLostHandler(clientId, callback, HeartbeatType::SOCKET_HEARTBEAT));
     ASSERT_FALSE(called);
 
     int ret = shutdown(socketFd, SHUT_RDWR);
