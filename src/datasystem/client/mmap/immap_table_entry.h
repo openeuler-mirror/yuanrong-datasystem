@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
 
 #include "datasystem/utils/status.h"
 
@@ -48,12 +49,33 @@ public:
         return pointer_;
     }
 
+    /**
+     * @brief The shm_id this entry belongs to (empty if not associated yet). Used by the new
+     * (enableLocalCache=false) multi-worker flow to scope expired-fd reclaim and full release per
+     * worker, so worker A's reclaim never touches worker B's entry (UC6).
+     */
+    const std::string &GetShmId() const
+    {
+        return shmId_;
+    }
+
+    void SetShmId(const std::string &shmId)
+    {
+        shmId_ = shmId;
+    }
+
+    int GetFd() const
+    {
+        return fd_;
+    }
+
 protected:
     friend class IMmapTable;
 
     int fd_;
     size_t size_;
     uint8_t *pointer_;
+    std::string shmId_;  // worker-assigned shm region id; empty for the old (enableLocalCache=true) flow.
 };
 }  // namespace client
 }  // namespace datasystem

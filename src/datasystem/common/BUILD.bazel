@@ -5,5 +5,5 @@ package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
     name = "common_constants",
-    hdrs = ["constants.h"],
+    hdrs = ["constants.h", "heartbeat_type.h"],
 )

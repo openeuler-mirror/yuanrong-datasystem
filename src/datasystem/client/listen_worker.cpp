@@ -67,8 +67,8 @@ Status ListenWorker::StartListenWorker(int socketFd)
             case HeartbeatType::NO_HEARTBEAT:
                 name = "NO_HEARTBEAT";
                 break;
-            case HeartbeatType::UDS_HEARTBEAT:
-                name = "UDS_HEARTBEAT";
+            case HeartbeatType::SOCKET_HEARTBEAT:
+                name = "SOCKET_HEARTBEAT";
                 break;
             case HeartbeatType::RPC_HEARTBEAT:
                 name = "RPC_HEARTBEAT";
@@ -81,7 +81,7 @@ Status ListenWorker::StartListenWorker(int socketFd)
         return Status::OK();
     }
 
-    if (heartbeatType_ == HeartbeatType::UDS_HEARTBEAT) {
+    if (heartbeatType_ == HeartbeatType::SOCKET_HEARTBEAT) {
         CHECK_FAIL_RETURN_STATUS(socketFd != INVALID_SOCKET_FD, K_RUNTIME_ERROR,
                                  "Start to listen worker failed, socket invalid.");
         RETURN_IF_NOT_OK(udsEventLoop_->Init());

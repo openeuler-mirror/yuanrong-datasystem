@@ -80,6 +80,39 @@ public:
     void ClearExpiredFds(const std::vector<int64_t> &fds);
 
     /**
+     * @brief Associate a shm_id with the worker fd of an already-mmap'd entry, enabling per-worker
+     * scoped reclaim in the new (enableLocalCache=false) flow. Delegates to IMmapTable which holds the
+     * shm_id -> worker fd reverse index under the same lock as the mmap table (no TOCTOU, no fd-number
+     * space assumption; review fix #3/#4/#5).
+     * @param[in] workerFd The worker fd (the shm DATA fd that worker-side GetAllExpiredFds returns,
+     *                     same number space as the fds in ClearExpiredByShmId).
+     * @param[in] shmId Worker-assigned unique shm region id (worker_uuid-prefixed).
+     */
+    void AssociateShmId(int workerFd, const std::string &shmId);
+
+    /**
+     * @brief Resolve the worker fd backing a shm_id, or -1 if none. Delegates to IMmapTable.
+     */
+    int GetWorkerFdByShmId(const std::string &shmId) const;
+
+    /**
+     * @brief Reclaim expired fds scoped to a shm_id. The owning worker fd is resolved via the
+     * shm_id reverse index (not by assuming the fd number space), so worker A's expired fds never
+     * touch worker B's mmap entry (UC6 / review fix #3). Delegates to IMmapTable.
+     * @param[in] shmId The shm_id whose expired fds should be reclaimed.
+     * @param[in] fds The expired fd list reported by the worker (filtered to this shm_id's entry).
+     */
+    void ClearExpiredByShmId(const std::string &shmId, const std::vector<int64_t> &fds);
+
+    /**
+     * @brief Drop all mmap state for a shm_id: clear the underlying fd entry from the mmap table and
+     * remove the shm_id -> fd mapping. Used when the client stops routing to a worker (topology change
+     * / RPC failure) to release that worker's shm resources wholesale (UC3/UC10). Delegates to IMmapTable.
+     * @param[in] shmId The shm_id to release.
+     */
+    void ClearByShmId(const std::string &shmId);
+
+    /**
      * @brief Clear mmapTable.
      */
     void Clear();

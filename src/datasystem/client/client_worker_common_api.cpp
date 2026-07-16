@@ -405,7 +405,7 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
     int32_t serverFd = INVALID_SOCKET_FD;
     int32_t socketFd = INVALID_SOCKET_FD;
     ShmEnableType shmEnableType = ShmEnableType::NONE;
-    bool mustUds = heartbeatType_ == HeartbeatType::UDS_HEARTBEAT || (reconnection && IsShmEnable());
+    bool mustUds = heartbeatType_ == HeartbeatType::SOCKET_HEARTBEAT || (reconnection && IsShmEnable());
 #ifdef WITH_TESTS
     INJECT_POINT_NO_RETURN("ClientWorkerCommonApi.Connect.MustUds", [&mustUds] { mustUds = true; });
 #endif

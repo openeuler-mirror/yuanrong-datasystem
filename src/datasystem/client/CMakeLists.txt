@@ -37,6 +37,7 @@ list(APPEND CLIENT_SRCS
         stream_cache/stream_client_impl.cpp
         stream_cache/producer_consumer_worker_api.cpp
         transport/transport_advisor.cpp
+        transport/shm_connection_pool.cpp
         transport/common/deadline_retry.cpp
         transport/metadata/object_metadata_client.cpp
         transport/object_read/object_read_flow.cpp

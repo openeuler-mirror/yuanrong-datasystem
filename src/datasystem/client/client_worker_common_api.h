@@ -38,6 +38,7 @@
 // before any brpc/butil header can #undef it.
 #include "datasystem/common/log/log.h"
 
+#include "datasystem/common/heartbeat_type.h"
 #include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/rpc_credential.h"
@@ -77,7 +78,6 @@ static constexpr int MAX_HEARTBEAT_INTERVAL_MS = 30 * 1000;  // 30s, Maintain co
 static constexpr int32_t CONNECT_ATTEMPT_TIMEOUT_THRESHOLD_MS = 3 * 1000;
 static constexpr int32_t CONNECT_ATTEMPT_TIMEOUT_RATIO = 3;
 constexpr int INVALID_SOCKET_FD = -1;
-enum class HeartbeatType { NO_HEARTBEAT = 0, RPC_HEARTBEAT = 1, UDS_HEARTBEAT = 2 };
 enum class ShmEnableType { NONE, UDS, SCMTCP };
 
 inline int32_t CalculateConnectAttemptTimeoutMs(int32_t connectTimeoutMs)

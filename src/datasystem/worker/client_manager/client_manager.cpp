@@ -168,7 +168,7 @@ Status ClientManager::RegisterLostHandler(const ClientKey &clientId, std::functi
 {
     RETURN_IF_NOT_OK(CheckClientId(clientId));
     auto clientInfo = GetClientInfo(clientId);
-    if (type == HeartbeatType::UDS_HEARTBEAT) {
+    if (type == HeartbeatType::SOCKET_HEARTBEAT) {
         Status status = heartbeatEventLoop_->AddFdEvent(clientInfo->GetSocketFd(), EPOLLIN | EPOLLHUP,
                                                         std::move(lostHandle), nullptr);
         CHECK_FAIL_RETURN_STATUS(status.IsOk(), K_RUNTIME_ERROR,
