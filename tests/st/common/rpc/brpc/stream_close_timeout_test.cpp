@@ -14,17 +14,21 @@
  * limitations under the License.
  */
 
-#include "datasystem/common/rpc/brpc_stream_close_helper.h"
-
 #include <brpc/channel.h>
 #include <brpc/controller.h>
 #include <brpc/server.h>
 #include <brpc/stream.h>
+// brpc headers above override LOG/VLOG/DLOG via butil/logging.h and pull in
+// glog-style CHECK macros. Re-include datasystem's log.h to restore the
+// spdlog-based macros (otherwise brpc's CHECK_EQ in doubly_buffered_data.h
+// fails to parse). Same pattern as rpc_server.cpp.
+#include "datasystem/common/log/log.h"
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <thread>
 
+#include "datasystem/common/rpc/brpc_stream_close_helper.h"
 #include "datasystem/common/rpc/brpc/hello.pb.h"
 
 namespace datasystem {
@@ -284,6 +288,65 @@ TEST_F(StreamCloseTimeoutTest, DrainResetsControllerOnNormalClose)
     EXPECT_EQ(streamId, brpc::INVALID_STREAM_ID);
 
     signalThread.join();
+}
+
+// Regression: StreamCloseAndWait must wait for on_closed (streamEnd) and NOT
+// return on on_failed (readError). brpc fires on_failed THEN on_closed during
+// recycle (stream.cpp:594 -> :596); the old predicate (streamEnd || readError)
+// returned on on_failed, letting the caller destroy the StreamInputHandler before
+// the guaranteed on_closed -> UAF. This fires readError mid-wait and asserts the
+// wait still times out (not satisfied by readError alone).
+TEST_F(StreamCloseTimeoutTest, WaitDoesNotReturnOnFailedOnly)
+{
+    brpc::ChannelOptions opts;
+    opts.timeout_ms = 3000;
+    opts.max_retry = 0;
+
+    brpc::Channel channel;
+    ASSERT_EQ(channel.Init("localhost", kTestPort, &opts), 0);
+
+    datasystem::rpc::brpc::HelloService_Stub stub(&channel);
+
+    brpc::Controller cntl;
+    cntl.set_timeout_ms(3000);
+
+    brpc::StreamId streamId = brpc::INVALID_STREAM_ID;
+    brpc::StreamOptions streamOpts;
+    streamOpts.handler = nullptr;
+    ASSERT_EQ(brpc::StreamCreate(&streamId, cntl, &streamOpts), 0);
+    ASSERT_NE(streamId, brpc::INVALID_STREAM_ID);
+
+    datasystem::rpc::brpc::HelloRequest req;
+    req.set_name("test");
+    datasystem::rpc::brpc::HelloResponse rsp;
+    stub.BidiStreamHello(&cntl, &req, &rsp, nullptr);
+
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool streamEnd = false;
+    bool readError = false;
+
+    // Fire readError (on_failed analog) at 100ms, but never streamEnd (on_closed).
+    std::thread failThread([&mtx, &cv, &readError]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        std::lock_guard<std::mutex> lk(mtx);
+        readError = true;
+        cv.notify_one();
+    });
+
+    StreamCloseState state{streamId, mtx, cv, streamEnd, readError};
+    auto start = std::chrono::steady_clock::now();
+    StreamCloseResult result = StreamCloseAndWait(state, 2);  // 2s timeout
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+
+    // readError alone must NOT satisfy the wait -> kTimeout, having waited the
+    // full 2s (well past the 100ms readError signal).
+    EXPECT_EQ(result, StreamCloseResult::kTimeout);
+    EXPECT_GE(elapsedMs, 1500);
+    EXPECT_EQ(streamId, brpc::INVALID_STREAM_ID);
+
+    failThread.join();
 }
 
 }  // namespace

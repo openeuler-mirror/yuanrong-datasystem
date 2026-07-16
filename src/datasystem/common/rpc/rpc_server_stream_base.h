@@ -111,18 +111,23 @@ public:
     {
     }
 
-    explicit ServerReader(std::unique_ptr<BrpcServerReaderImpl<R>> &&impl) : pimpl_(std::move(impl))
+    explicit ServerReader(std::shared_ptr<BrpcServerReaderImpl<R>> &&impl) : pimpl_(std::move(impl))
     {
     }
 
-    ~ServerReader() = default;
+    // Trigger non-blocking Close() so the brpc handler fires on_closed and its
+    // self-keepalive can release (ZMQ Close() is a no-op).
+    ~ServerReader()
+    {
+        std::visit([](auto &pimpl) { if (pimpl) { pimpl->Close(); } }, pimpl_);
+    }
 
     Status SendStatus(const Status &rc)
     {
         return std::visit(
             overloaded{
                 [&rc](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->SendStatus(rc); },
-                [&rc](std::unique_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->SendStatus(rc); },
+                [&rc](std::shared_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->SendStatus(rc); },
             },
             pimpl_);
     }
@@ -143,7 +148,7 @@ public:
         return std::visit(
             overloaded{
                 [&pb](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->WritePb(pb); },
-                [&pb](std::unique_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->WritePb(pb); },
+                [&pb](std::shared_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->WritePb(pb); },
             },
             pimpl_);
     }
@@ -153,7 +158,7 @@ public:
         return std::visit(
             overloaded{
                 [&buffer](std::unique_ptr<ServerReaderImpl<R>> &pimpl) { return pimpl->SendPayload(buffer); },
-                [&buffer](std::unique_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->SendPayload(buffer); },
+                [&buffer](std::shared_ptr<BrpcServerReaderImpl<R>> &pimpl) { return pimpl->SendPayload(buffer); },
             },
             pimpl_);
     }
@@ -170,7 +175,7 @@ public:
 
 private:
     std::variant<std::unique_ptr<ServerReaderImpl<R>>,
-                 std::unique_ptr<BrpcServerReaderImpl<R>>> pimpl_;
+                 std::shared_ptr<BrpcServerReaderImpl<R>>> pimpl_;
 };
 
 /**

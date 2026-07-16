@@ -722,8 +722,12 @@ void RpcGenerator::ImplementBrpcCallMethodClientStream(io::Printer &printer,
     }
     impl +=
         "$indent$auto pimpl =\n"
-        "$indent$    std::make_unique<::datasystem::BrpcServerReaderImpl<$inputTypeName$>>(cntl,\n"
+        "$indent$    std::make_shared<::datasystem::BrpcServerReaderImpl<$inputTypeName$>>(cntl,\n"
         "\"$methodFullName$\");\n"
+        "$indent$// Arm self-keepalive: shared_from_this() requires the object to already be\n"
+        "$indent$// managed by a shared_ptr, so it cannot run in the ctor. Must run after\n"
+        "$indent$// make_shared and before pimpl is moved into ServerReader.\n"
+        "$indent$pimpl->Init();\n"
         "$indent$// Sync adapter's scTimeoutDuration to RequestContext before pimpl is moved.\n"
         "$indent$GetRequestContext()->scTimeoutDuration = pimpl->GetScTimeoutDuration();\n"
         "$indent$auto reader =\n"

@@ -95,3 +95,4 @@ plan.md
 bazel-*
 .clwb/
 MODULE.bazel.lock
+remote_build_results/

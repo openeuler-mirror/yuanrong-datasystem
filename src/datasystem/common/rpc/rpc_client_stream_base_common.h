@@ -82,13 +82,20 @@ ClientReader<R>::ClientReader(std::unique_ptr<ClientReaderImpl<R>> &&impl)
 }
 
 template <typename R>
-ClientReader<R>::ClientReader(std::unique_ptr<BrpcClientReaderImpl<R>> &&impl)
+ClientReader<R>::ClientReader(std::shared_ptr<BrpcClientReaderImpl<R>> &&impl)
 {
     pimpl_ = std::move(impl);
 }
 
 template <typename R>
-ClientReader<R>::~ClientReader() = default;
+ClientReader<R>::~ClientReader()
+{
+    // Trigger non-blocking Close() so brpc fires on_closed and the brpc handler's
+    // self-keepalive can release (ZMQ Close() is a no-op). Without this, dropping
+    // a brpc stream without Finish() would never close it -> on_closed never fires
+    // -> keepalive leak.
+    std::visit([](auto &p) { if (p) { p->Close(); } }, pimpl_);
+}
 
 template <typename R>
 Status ClientReader<R>::Read(R &pb)

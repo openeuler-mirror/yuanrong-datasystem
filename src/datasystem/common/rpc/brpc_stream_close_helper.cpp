@@ -43,8 +43,13 @@ StreamCloseResult StreamCloseAndWait(StreamCloseState state, int timeoutSec)
     }
     brpc::StreamClose(state.streamId);
     std::unique_lock<std::mutex> lk(state.mtx);
+    // Wait for on_closed ONLY (streamEnd), not on_failed (readError). brpc fires
+    // on_failed then ALWAYS on_closed as the final callback during stream recycle
+    // (stream.cpp:594 -> :596). Returning on on_failed alone let the caller destroy
+    // the StreamInputHandler while brpc immediately fired on_closed on the dangling
+    // pointer -> UAF. readError_ still unblocks the Read() loop separately.
     bool closed = state.cv.wait_for(lk, std::chrono::seconds(timeoutSec),
-        [&state] { return state.streamEnd || state.readError; });
+        [&state] { return state.streamEnd; });
     state.streamId = brpc::INVALID_STREAM_ID;
     return closed ? StreamCloseResult::kClosed : StreamCloseResult::kTimeout;
 }

@@ -213,7 +213,8 @@ private:
 // BrpcServerReaderImpl<R> — client-streaming (stream→unary)
 // ============================================================================
 template <typename R>
-class BrpcServerReaderImpl : public brpc::StreamInputHandler {
+class BrpcServerReaderImpl : public brpc::StreamInputHandler,
+                            public std::enable_shared_from_this<BrpcServerReaderImpl<R>> {
 public:
     explicit BrpcServerReaderImpl(brpc::Controller *cntl, std::string methodName = "client_streaming")
         : cntl_(cntl),
@@ -254,12 +255,35 @@ public:
         }
     }
 
-    ~BrpcServerReaderImpl() override
+    // Arm self-keepalive. MUST be called once after the object is managed by a
+    // shared_ptr (shared_from_this() is UB inside the constructor). The generated
+    // stub calls this right after make_shared<BrpcServerReaderImpl>.
+    void Init()
     {
-        if (streamId_ != brpc::INVALID_STREAM_ID) {
-            brpc::StreamClose(streamId_);
+        keepalive_ = this->shared_from_this();
+    }
+
+    // Non-blocking close: triggers brpc to fire on_closed asynchronously, which
+    // drops the self-keepalive so this object can be destroyed safely once brpc
+    // is done with the raw handler pointer. Called by the ServerReader wrapper dtor.
+    void Close()
+    {
+        brpc::StreamId id = brpc::INVALID_STREAM_ID;
+        {
+            std::lock_guard<std::mutex> lock(readMtx_);
+            id = streamId_;
             streamId_ = brpc::INVALID_STREAM_ID;
         }
+        if (id != brpc::INVALID_STREAM_ID) {
+            brpc::StreamClose(id);
+        }
+    }
+
+    ~BrpcServerReaderImpl() override
+    {
+        // Under keepalive this runs only after on_closed has fired (keepalive_
+        // cleared) — or when Init() was never called. The stream is already closed
+        // by then. Just record the trace.
         RecordTraceOnce();
     }
 
@@ -267,6 +291,9 @@ public:
     int on_received_messages(brpc::StreamId id, butil::IOBuf *const messages[], size_t size) override
     {
         (void)id;
+        if (destroyed_->load(std::memory_order_acquire)) {
+            return 0;  // stream logically closed; ignore racing late data
+        }
         {
             std::lock_guard<std::mutex> lock(readMtx_);
             for (size_t i = 0; i < size; ++i) {
@@ -281,6 +308,9 @@ public:
     void on_idle_timeout(brpc::StreamId id) override
     {
         (void)id;
+        if (destroyed_->load(std::memory_order_acquire)) {
+            return;
+        }
         std::lock_guard<std::mutex> lock(readMtx_);
         readError_ = true;
         readCond_.notify_one();
@@ -289,9 +319,17 @@ public:
     void on_closed(brpc::StreamId id) override
     {
         (void)id;
-        std::lock_guard<std::mutex> lock(readMtx_);
-        streamEnd_ = true;
-        readCond_.notify_one();
+        if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
+        destroyed_->store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(readMtx_);
+            streamEnd_ = true;
+            readCond_.notify_one();
+        }
+        // Drop self-keepalive LAST (on_closed is brpc's final callback). If this
+        // was the last ref, this object is destroyed here, after the lock is
+        // released and all member access is done.
+        keepalive_.reset();
     }
 
     Status SendStatus(const Status &rc)
@@ -408,6 +446,13 @@ private:
     bool readReady_;
     bool streamEnd_;
     bool readError_;
+    // See BrpcClientReaderImpl for the keepalive/destroyed/closeNotifier rationale
+    // (handler must outlive brpc's final on_closed callback).
+    std::shared_ptr<std::atomic<bool>> closeNotifier_ =
+        std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<std::atomic<bool>> destroyed_ =
+        std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<BrpcServerReaderImpl<R>> keepalive_;
     TimeoutDuration scTimeoutDuration_;
     std::atomic<bool> execStarted_;
     std::atomic<bool> traceRecorded_;
