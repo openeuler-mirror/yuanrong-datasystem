@@ -18,6 +18,7 @@
 #include <algorithm>
 
 #include "common.h"
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"

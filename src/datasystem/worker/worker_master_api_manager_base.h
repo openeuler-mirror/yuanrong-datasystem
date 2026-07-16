@@ -121,9 +121,18 @@ public:
     template <typename F>
     static Status RetryForReplicaNotReady(int32_t timeoutMs, F &&f)
     {
+        // Retry the transient RPC errors seen while a peer worker is restarting.
+        // brpc POOLED channels have a short window after a worker restart where the
+        // cached socket is dead but not yet revived by brpc health-check (E112
+        // EHOSTDOWN -> K_RPC_UNAVAILABLE); brpc pure-timeout fallbacks surface as
+        // K_RPC_CANCELLED. Like K_REPLICA_NOT_READY, these are recoverable by retry
+        // once brpc revives the socket (AfterRevived). Without retrying them, the
+        // first E112 breaks RetryOnError (rpc_util.h:127) and the caller waits out
+        // the full deadline with 0 retries instead of recovering in ~3s.
         return RetryOnError(
             timeoutMs, [&f](int32_t) { return f(); }, []() { return Status::OK(); },
-            { StatusCode::K_REPLICA_NOT_READY });
+            { StatusCode::K_REPLICA_NOT_READY, StatusCode::K_RPC_UNAVAILABLE,
+              StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED });
     }
 
 protected:

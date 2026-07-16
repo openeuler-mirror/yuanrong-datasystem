@@ -6,6 +6,7 @@
 /**
  * Description: Cluster topology DFX healing and cascade-failure tests.
  */
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/cluster/control/topology_controller.h"
 
 #include <algorithm>

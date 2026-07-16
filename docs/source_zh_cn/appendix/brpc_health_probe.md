@@ -1,6 +1,6 @@
 # brpc 健康探针与诊断接口
 
-适用启用 brpc 模式（`FLAGS_use_brpc=true`）的 worker。brpc server 内置一组 HTTP 服务，可用于线上诊断与可选的 K8s 探针。**内置服务默认关闭**（由 `FLAGS_brpc_enable_builtin_services` 控制，见下文注意事项）；开启后无需额外组件即可用于诊断与探针。
+brpc 模式（默认启用，`FLAGS_use_brpc=true`）。brpc server 内置一组 HTTP 服务，可用于线上诊断与可选的 K8s 探针。**内置服务默认关闭**（由 `FLAGS_brpc_enable_builtin_services` 控制，见下文注意事项）；开启后无需额外组件即可用于诊断与探针。
 
 ## 端口说明
 

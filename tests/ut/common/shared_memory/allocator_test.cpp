@@ -17,6 +17,7 @@
 /**
  * Description: allocator class test.
  */
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/shared_memory/allocator.h"
 
 #include <cstdint>
