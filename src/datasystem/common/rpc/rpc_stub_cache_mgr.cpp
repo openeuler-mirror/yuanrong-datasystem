@@ -150,6 +150,9 @@ Status RpcStubCacheMgr::CreateRpcStub(StubType type, const std::shared_ptr<RpcCh
         case StubType::COORDINATOR_WORKER_SVC:
             stub = std::make_shared<coordinator::CoordinatorWatchService_Stub>(channel);
             break;
+        case StubType::CLIENT_WORKER_SC_SVC:
+            stub = std::make_shared<ClientWorkerSCService_Stub>(channel);
+            break;
         default:
             RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
     }
@@ -190,6 +193,9 @@ Status RpcStubCacheMgr::CreateBrpcStub(StubType type, const std::shared_ptr<brpc
             break;
         case StubType::COORDINATOR_WORKER_SVC:
             stub = std::make_shared<coordinator::CoordinatorWatchService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
+            break;
+        case StubType::CLIENT_WORKER_SC_SVC:
+            stub = std::make_shared<ClientWorkerSCService_BrpcGenericStub>(brpcChannel.get(), timeoutMs);
             break;
         default:
             RETURN_STATUS(K_RUNTIME_ERROR, "Unsupport type: " + std::to_string(static_cast<int>(type)));
@@ -290,6 +296,7 @@ void RpcStubCacheMgr::InitCreators()
         creators_.emplace(StubType::WORKER_WORKER_TRANS_SVC, makeBrpcCreator(StubType::WORKER_WORKER_TRANS_SVC));
         creators_.emplace(StubType::TO_COORDINATOR_SVC, makeBrpcCreator(StubType::TO_COORDINATOR_SVC));
         creators_.emplace(StubType::COORDINATOR_WORKER_SVC, makeBrpcCreator(StubType::COORDINATOR_WORKER_SVC));
+        creators_.emplace(StubType::CLIENT_WORKER_SC_SVC, makeBrpcCreator(StubType::CLIENT_WORKER_SC_SVC));
         return;
     }
 
@@ -362,6 +369,12 @@ void RpcStubCacheMgr::InitCreators()
             return CreatorTemplate(
                 [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
                 StubType::COORDINATOR_WORKER_SVC, rpcStub);
+        });
+    creators_.emplace(
+        StubType::CLIENT_WORKER_SC_SVC, [](const HostPort &hostPort, std::shared_ptr<RpcStubBase> &rpcStub) {
+            return CreatorTemplate(
+                [&hostPort](std::shared_ptr<RpcChannel> &channel) { return CreateRpcChannel(hostPort, "", channel); },
+                StubType::CLIENT_WORKER_SC_SVC, rpcStub);
         });
 }
 
@@ -494,6 +507,7 @@ StubPriority GetStubPriority(StubType type)
         case StubType::MASTER_MASTER_OC_SVC:
         case StubType::TO_COORDINATOR_SVC:
         case StubType::COORDINATOR_WORKER_SVC:
+        case StubType::CLIENT_WORKER_SC_SVC:
             return StubPriority::HIGH;
 #ifdef WITH_TESTS
         case StubType::TEST_TYPE_1:

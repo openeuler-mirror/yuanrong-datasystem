@@ -1778,21 +1778,16 @@ Status ClientWorkerSCServiceImpl::DeleteStreamContext(const std::string &streamN
 }
 
 Status ClientWorkerSCServiceImpl::GetWorkerStub(const HostPort &workerHostPort,
-                                                std::shared_ptr<ClientWorkerSCService_Stub> &stub)
+                                                std::shared_ptr<RpcStubBase> &stub)
 {
-    std::lock_guard<std::mutex> lock(remotePubStubMutex_);
-    auto workerAddr = workerHostPort.ToString();
-    auto it = remotePubStubs_.find(workerAddr);
-    if (it == remotePubStubs_.end()) {
-        RpcCredential cred;
-        RETURN_IF_NOT_OK(RpcAuthKeyManager::CreateCredentials(WORKER_SERVER_NAME, cred));
-        auto channel = std::make_shared<RpcChannel>(workerHostPort, cred);
-        stub = std::make_shared<ClientWorkerSCService_Stub>(channel);
-        remotePubStubs_.emplace(workerAddr, stub);
-    } else {
-        stub = it->second;
-    }
-    return Status::OK();
+    // Worker<->worker stream block/unblock RPCs (ClientWorkerSCService) must use the
+    // transport selected by FLAGS_use_brpc, exactly like WORKER_WORKER_SC_SVC. The
+    // cached stub is a ClientWorkerSCService_Stub (ZMQ) or ClientWorkerSCService_
+    // BrpcGenericStub (brpc); callers downcast per FLAGS_use_brpc. In brpc-exclusive
+    // mode the worker does not listen on a ZMQ frontend gateway, so a ZMQ stub here
+    // would hang 3s on every block/unblock RPC (RPC_SERVICE_UNAVAILABLE) and cascade
+    // into std::system_error/Resource-deadlock during stream OOM handling.
+    return RpcStubCacheMgr::Instance().GetStub(workerHostPort, StubType::CLIENT_WORKER_SC_SVC, stub);
 }
 
 Status ClientWorkerSCServiceImpl::ResetStreams(
