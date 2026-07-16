@@ -2923,7 +2923,7 @@ Status OCMetadataManager::GIncreaseRemoteClientIdToMaster(const std::string &rem
     req.set_remote_client_id(remoteClientId);
     req.set_redirect(checkRedirect);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    Status rc = RetryOnRPCError([&api, &req, &rsp, &localAddr, this]() {
+    Status rc = [&api, &req, &rsp, &localAddr, this]() {
         Status res = WaitForClientIdRefMigration(*api, req, rsp);
         RETURN_IF_NOT_OK(res);
         if (rsp.ref_is_moving()) {
@@ -2938,7 +2938,7 @@ Status OCMetadataManager::GIncreaseRemoteClientIdToMaster(const std::string &rem
             res = api->GIncreaseMasterAppRef(req, rsp);
         }
         return res;
-    });
+    }();
     LOG_IF_ERROR(
         rc, FormatString("GIncreaseMasterAppRef fail masterAddr:%s, status:%s", masterAddr.ToString(), rc.ToString()));
     return rc;
@@ -3134,7 +3134,7 @@ Status OCMetadataManager::ReleaseGRefsToMaster(const std::string &remoteClientId
     req.set_remote_client_id(remoteClientId);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        RetryOnRPCError([&api, &req, &rsp]() { return api->ReleaseGRefsOfRemoteClientId(req, rsp); }),
+        api->ReleaseGRefsOfRemoteClientId(req, rsp),
         FormatString("ReleaseGRefsToMaster failed. masterAddr:%s", masterAddr.ToString()));
     std::shared_lock<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
     TbbRemoteClientIdRefTable::accessor accessor;

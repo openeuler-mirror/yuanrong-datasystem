@@ -1064,8 +1064,7 @@ Status OCNotifyWorkerManager::IncNestedRefs(const std::string &workerAddr, const
     NotifyMasterIncNestedResPb rsp;
     *req.mutable_nested_object_keys() = { objectKeys.begin(), objectKeys.end() };
 
-    Status rc = RetryOnRPCError(
-        [&masterWorkerApi, &req, &rsp]() { return masterWorkerApi->NotifyMasterIncNestedRefs(req, rsp); });
+    Status rc = masterWorkerApi->NotifyMasterIncNestedRefs(req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("IncNestedRefs failed. workerAddr: %s, status: %s", workerAddr, rc.ToString());
         return rc;
@@ -1104,8 +1103,7 @@ void OCNotifyWorkerManager::DecNestedRefs(const std::string &workerAddr, const s
         uint64_t start = i * batchSize;
         uint64_t end = (i == batchCount - 1) ? objSize : start + batchSize;
         *req.mutable_nested_object_keys() = { objectKeys.begin() + start, objectKeys.begin() + end };
-        rc = RetryOnRPCError(
-            [&masterWorkerApi, &req, &rsp]() { return masterWorkerApi->NotifyMasterDecNestedRefs(req, rsp); });
+        rc = masterWorkerApi->NotifyMasterDecNestedRefs(req, rsp);
         if (rc.IsError()) {
             LOG(ERROR) << FormatString("DecNestedRefs failed. workerAddr: %s, status:%s", workerAddr, rc.ToString());
             return;
@@ -1125,8 +1123,7 @@ Status OCNotifyWorkerManager::RequestMetaFromWorker(const std::string &masterAdd
                                      "Could not get MasterWorkerOCApi for the given worker address");
     RequestMetaFromWorkerReqPb req;
     req.set_address(masterAddr);
-    Status rc =
-        RetryOnRPCError([&masterWorkerApi, &req, &rsp]() { return masterWorkerApi->RequestMetaFromWorker(req, rsp); });
+    Status rc = masterWorkerApi->RequestMetaFromWorker(req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("RequestMetaFromWorker failed. workerAddr:%s, status:%s", workerAddr, rc.ToString());
         return rc;
@@ -1220,7 +1217,7 @@ void OCNotifyWorkerManager::NotifyOpToWorker(const std::string &workerAddr, int6
         // There is no need to process the request to notify the master here.
     }
 
-    rc = RetryOnRPCError([&masterWorkerApi, &req, &rsp]() { return masterWorkerApi->PushMetaToWorker(req, rsp); });
+    rc = masterWorkerApi->PushMetaToWorker(req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("PushMetaToWorker failed. workerAddr:%s, status:%s", workerAddr, rc.ToString());
         return;

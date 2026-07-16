@@ -191,6 +191,9 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
         cfg.endpoint = brpcAddr.ToString();
         cfg.timeout_ms = requestTimeoutMs;
         cfg.connect_timeout_ms = connectTimeoutMs;
+        // Disable brpc blind retry: this channel carries non-idempotent
+        // object RPCs (Delete, etc.) that must not be re-driven silently.
+        cfg.max_retry = 0;
         std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
                                              FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
@@ -288,6 +291,8 @@ void ClientWorkerRemoteApi::RecreateOCStub()
         cfg.endpoint = brpcAddr.ToString();
         cfg.timeout_ms = requestTimeoutMs_;
         cfg.connect_timeout_ms = stubTimeout;
+        // Same as Init(): disable brpc blind retry on this non-idempotent object channel.
+        cfg.max_retry = 0;
         std::shared_ptr<brpc::Channel> newChannel(BrpcChannelFactory::Create(cfg));
         if (newChannel == nullptr) {
             LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, endpoint=" << brpcAddr.ToString();

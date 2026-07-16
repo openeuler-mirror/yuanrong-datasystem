@@ -618,18 +618,16 @@ Status WorkerRemoteMasterOCApi::PushMetadataToMaster(master::PushMetaToMasterReq
                                                      master::PushMetaToMasterRspPb &rsp)
 {
     INJECT_POINT("WorkerRemote.PushMetadataToMaster");
-    constexpr int retryTime = 3;  // retry time
-    constexpr int64_t timeoutMs = RPC_TIMEOUT / retryTime;
-    auto status = RetryOnRPCError([this, &req, &rsp]() {
-        RpcOptions opts;
-        opts.SetTimeout(timeoutMs + WORKER_ADD_MILLISECOND);
-        RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-        Timer timer;
-        Status rc = (brpcSession_ ? brpcSession_->PushMetaToMaster(opts, req, rsp)
+    // Single attempt: app-level retry (RetryOnRPCError) was removed and mesh channels
+    // run with brpc max_retry=0, so give the one call the full RPC_TIMEOUT budget.
+    constexpr int64_t timeoutMs = RPC_TIMEOUT;
+    RpcOptions opts;
+    opts.SetTimeout(timeoutMs + WORKER_ADD_MILLISECOND);
+    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    Timer timer;
+    Status status = (brpcSession_ ? brpcSession_->PushMetaToMaster(opts, req, rsp)
                                     : rpcSession_->PushMetaToMaster(opts, req, rsp));
-        GetWorkerTimeCost().Append("Worker to master rpc PushMetadataToMaster", timer.ElapsedMilliSecond());
-        return rc;
-    });
+    GetWorkerTimeCost().Append("Worker to master rpc PushMetadataToMaster", timer.ElapsedMilliSecond());
     return WithRpcDiag(status, "PushMetadataToMaster", localHostPort_, hostPort_);
 }
 

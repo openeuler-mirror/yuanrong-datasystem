@@ -76,14 +76,9 @@ Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &
     VLOG(1) << FormatString("[Migrate Data] MigrateDataToRemote total data size %lu bytes, calculated timeout %ld ms",
                             totalDataBytes, migrateDirectTimeoutMs);
     NotifyRemoteGetRspPb rspPb;
-    Status rc = RetryOnRPCErrorByCount(maxRetryCount_,
-                                       [&]() {
-                                           rspPb.Clear();
-                                           GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(
-                                               migrateDirectTimeoutMs);
-                                           return req.api->NotifyRemoteGet(reqPb, rspPb);
-                                       },
-                                       {});
+    rspPb.Clear();
+    GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(migrateDirectTimeoutMs);
+    Status rc = req.api->NotifyRemoteGet(reqPb, rspPb);
     if (rc.IsOk()) {
         ProcessMigrateResponse(reqPb, rspPb, req, rsp);
     } else {

@@ -61,14 +61,10 @@ Status TcpMigrateTransport::MigrateDataToRemote(const Request &req, Response &rs
 
     INJECT_POINT("TcpMigrateTransport.MigrateDataToRemote.delay");
 
-    // 2. Migrate data with retry.
+    // 2. Migrate data (single attempt; the outer migration loop handles retry).
     MigrateDataRspPb rspPb;
-    Status rc = RetryOnRPCErrorByCount(maxRetryCount_,
-                                       [&]() {
-                                           rspPb.Clear();
-                                           return req.api->MigrateData(reqPb, payloads, rspPb);
-                                       },
-                                       {});
+    rspPb.Clear();
+    Status rc = req.api->MigrateData(reqPb, payloads, rspPb);
     if (rc.IsOk()) {
         rsp.remainBytes = rspPb.remain_bytes();
         rsp.successKeys.insert(rspPb.success_ids().begin(), rspPb.success_ids().end());

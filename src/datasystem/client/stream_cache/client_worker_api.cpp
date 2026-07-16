@@ -62,6 +62,9 @@ Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs,
         cfg.endpoint = brpcAddr.ToString();
         cfg.timeout_ms = requestTimeoutMs;
         cfg.connect_timeout_ms = connectTimeoutMs;
+        // Disable brpc blind retry: this channel carries non-idempotent
+        // stream RPCs (DeleteStream, CloseProducer, CloseConsumer).
+        cfg.max_retry = 0;
         brpcChannel_ = BrpcChannelFactory::Create(cfg);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(brpcChannel_ != nullptr, StatusCode::K_RPC_UNAVAILABLE,
             FormatString("Failed to init brpc channel to %s for ClientWorkerSCService", brpcAddr.ToString()));
