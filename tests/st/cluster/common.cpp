@@ -24,9 +24,6 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "kill_timer.h"
 
-DS_DECLARE_uint32(arena_per_tenant);
-DS_DECLARE_bool(alsologtostderr);
-DS_DECLARE_string(log_dir);
 DS_DECLARE_string(cluster_name);
 
 namespace datasystem {
@@ -107,37 +104,7 @@ Status RegisterTopologyTables(EtcdStore &store)
     return RegisterTopologyTables(store, FLAGS_cluster_name);
 }
 
-namespace {
-constexpr int DEFAULT_SLEEP_FOR_TIME = 500;
-void ClearTestCaseDir(const std::string &path)
-{
-    auto rc = RemoveAll(path);
-    // retry once
-    if (rc.IsError()) {
-        std::string cmd = "mount | grep " + path + " | awk '{print $3}' | xargs -I {} fusermount3 -u {}";
-        DS_ASSERT_OK(st::ExecuteCmd(cmd));
-        std::this_thread::sleep_for(std::chrono::milliseconds(DEFAULT_SLEEP_FOR_TIME));
-        // remove again.
-        DS_ASSERT_OK(RemoveAll(path));
-    }
-}
-}  // namespace
 
-CommonTest::CommonTest()
-{
-    FLAGS_alsologtostderr = true;
-    std::string caseName;
-    std::string name;
-    GetCurTestName(caseName, name);
-    testCasePath_ = std::string(LLT_BIN_PATH) + "/ds/" + caseName + "." + name;
-    FLAGS_log_dir = testCasePath_ + "/client";
-    ClearTestCaseDir(testCasePath_);
-    CreateDir(FLAGS_log_dir, true);
-}
-
-void CommonTest::SetUp()
-{
-};
 
 ClusterTest::ClusterTest()
 {
@@ -270,36 +237,7 @@ void ExternalClusterTest::SetDefaultOptions(ExternalClusterOptions &opts) const
     LOG(INFO) << "rootDir:" << opts.rootDir;
 }
 
-Status ExecuteCmd(const std::string &cmd, std::string &result, int *exitCode)
-{
-    FILE *ptr = popen(cmd.c_str(), "r");
-    CHECK_FAIL_RETURN_STATUS(ptr != nullptr, StatusCode::K_RUNTIME_ERROR, "Execute cmd:" + cmd + " error.");
-    const int masBufLen = 1024;
-    char buffer[masBufLen] = { 0 };
-    while (fgets(buffer, masBufLen, ptr) != nullptr) {
-        result.append(buffer);
-        CHECK_FAIL_RETURN_STATUS(memset_s(buffer, masBufLen, 0, masBufLen) == EOK, K_RUNTIME_ERROR,
-                                 "Memset failed, execute cmd failed");
-    }
-    if (exitCode) {
-        *exitCode = pclose(ptr);
-    } else {
-        pclose(ptr);
-    }
-    return Status::OK();
-}
 
-Status ExecuteCmd(const std::string &cmd)
-{
-    int exitCode = 0;
-    std::string result;
-    Status status = ExecuteCmd(cmd + " 2>&1", result, &exitCode);
-    if (status.IsOk() && exitCode != 0) {
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, result);
-    } else {
-        return status;
-    }
-}
 
 void ExternalClusterTest::GetFreePort(int &port, const int maxPort) const
 {

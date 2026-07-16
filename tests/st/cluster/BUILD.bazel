@@ -5,19 +5,29 @@ package(default_visibility = ["//visibility:public"])
 exports_files(["common.cpp"])
 exports_files(["mock_obs_service.py"])
 
+cc_library(
+    name = "test_port_allocator",
+    srcs = ["test_port_allocator.cpp"],
+    hdrs = ["test_port_allocator.h"],
+    includes = [".."],
+    visibility = ["//tests:__subpackages__"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
 # st_cluster 需要将 tests/st/ 加入 include 路径，以支持 "cluster/xxx.h" 风格的 include
 cc_library(
     name = "st_cluster",
     srcs = [
         "external_cluster.cpp",
         "subprocess.cpp",
-        "test_port_allocator.cpp",
     ],
     hdrs = [
         "base_cluster.h",
         "external_cluster.h",
         "subprocess.h",
-        "test_port_allocator.h",
     ],
     copts = [
         '-DMASTER_BIN_PATH=\\"/usr/local/bin/master\\"',
@@ -39,6 +49,7 @@ cc_library(
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/protos:generic_service_zmq_cc_proto",
+        ":test_port_allocator",
         "@com_google_googletest//:gtest",
         "@securec",
     ],

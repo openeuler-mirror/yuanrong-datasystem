@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include "cluster/external_cluster.h"
+#include "common_test.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
@@ -96,20 +97,7 @@ using MembershipPb = datasystem::MembershipPb;
 
 class KillTimer;
 
-class CommonTest : public testing::Test {
-public:
-    CommonTest();
 
-    ~CommonTest() override = default;
-
-    // every TEST_F macro will call SetUp when start
-    void SetUp() override;
-
-    // every TEST_F macro will call TearDown when end
-    void TearDown() override{};
-protected:
-    std::string testCasePath_;
-};
 
 class ClusterTest : public CommonTest {
 public:
@@ -230,9 +218,7 @@ Status RegisterTopologyTables(EtcdStore &store);
  */
 Status RegisterTopologyTables(EtcdStore &store, const std::string &clusterName);
 
-Status ExecuteCmd(const std::string &cmd, std::string &result, int *exitCode = nullptr);
 
-Status ExecuteCmd(const std::string &cmd);
 
 // calculate crc32 with polynomial 0xedb88320
 uint32_t GetCrc32(const void *buf, size_t sz, uint32_t checksumbase = 0);

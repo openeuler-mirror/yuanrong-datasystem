@@ -41,6 +41,10 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/client/object_cache)
 include_directories(${PROJECT_DIR}/src)
 include_directories(${PROJECT_DIR}/tests/support)
 
+add_library(common_test STATIC common_test.cpp)
+target_compile_definitions(common_test PRIVATE LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/.")
+target_link_libraries(common_test PUBLIC GTest::gtest common_log common_util)
+
 add_subdirectory(cluster)
 
 # fetch st test files and remove the files we don't care about.
@@ -71,6 +75,8 @@ list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/kv_cache/.*)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/rpc/brpc/hello_test\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/rpc/brpc/shutdown_timeout_test\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/rpc/brpc/stream_close_timeout_test\\.cpp$)
+list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/common/raft/braft_cluster_test\\.cpp$)
+list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/common_test\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/test_main\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/st_oc_service_impl\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client/object_cache/oc_client_common\\.cpp$)
@@ -118,6 +124,9 @@ add_ds_st_grouped_executable(ds_st_object_cache _ds_st_object_cache_obj)
 add_ds_st_grouped_executable(ds_st_kv_cache _ds_st_kv_cache_obj)
 add_ds_st_grouped_executable(ds_st _ds_st_other_obj)
 add_executable(ds_st_embedded_client ${DS_ST_EMBEDDED_CLIENT_SRCS} $<TARGET_OBJECTS:_ds_st_main_obj>)
+add_executable(braft_cluster_test
+        common/raft/braft_cluster_test.cpp
+        $<TARGET_OBJECTS:_ds_st_main_obj>)
 
 # Heavy ST link targets (ds_st / ds_st_stream_cache / ds_st_object_cache /
 # ds_st_kv_cache) pull in worker+master+rocksdb+zmq and trip the OOM killer on
@@ -129,6 +138,7 @@ target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock -W
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_embedded_client GTest::gtest GTest::gmock common_etcd nlohmann_json::nlohmann_json
         generic_service_protos datasystem cluster cluster_topology_protos_client)
+target_link_libraries(braft_cluster_test PRIVATE GTest::gtest GTest::gmock common_test test_port_allocator ${BRAFT_LIBRARIES})
 if (BUILD_WITH_URMA_MOCK)
     target_link_libraries(ds_st PRIVATE common_urma_mock_obj)
     target_link_libraries(ds_st_object_cache PRIVATE common_urma_mock_obj)
@@ -154,6 +164,7 @@ if (BUILD_OBSERVABILITY)
 else()
     set(TEST_ENVIRONMENT "LD_LIBRARY_PATH=${_WORKER_BIN_DIR}:${OpenSSL_LIB_PATH}:${gRPC_LIB_PATH}:${Protobuf_LIB_PATH}:${absl_LIB_PATH}:${gflags_LIB_PATH}:${brpc_LIB_PATH}:${ICONV_ROOT}/lib:$ENV{LD_LIBRARY_PATH}")
 endif()
+string(REPLACE "LD_LIBRARY_PATH=" "LD_LIBRARY_PATH=${BRAFT_LIB_DIR}:" TEST_ENVIRONMENT "${TEST_ENVIRONMENT}")
 
 add_custom_command(
         TARGET ds_st POST_BUILD
@@ -287,6 +298,7 @@ add_datasystem_test(ds_st_stream_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_object_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_kv_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_embedded_client TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(braft_cluster_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 file(GLOB_RECURSE DS_DEVICE_TEST_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cpp"

@@ -1,0 +1,13 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "braft_cluster_test",
+    srcs = ["braft_cluster_test.cpp"],
+    deps = [
+        "//tests/st:common_test",
+        "//tests/st/cluster:test_port_allocator",
+        "@braft//:braft",
+    ],
+)

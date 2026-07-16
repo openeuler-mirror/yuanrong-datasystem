@@ -14,7 +14,7 @@ SECTIONS = [
     {"name": "public_headers", "path": "include/datasystem", "max_depth": 2},
     {"name": "python_sdk", "path": "python/yr/datasystem", "max_depth": 1},
     {"name": "cli", "path": "cli", "max_depth": 2},
-    {"name": "tests", "path": "tests", "max_depth": 2},
+    {"name": "tests", "path": "tests", "max_depth": 3},
     {"name": "examples", "path": "example", "max_depth": 2},
     {"name": "docs", "path": "docs/source_zh_cn", "max_depth": 2},
     {"name": "skills", "path": ".skills", "max_depth": 3},
@@ -34,6 +34,7 @@ ROOT_FILES = [
 IGNORED_NAMES = {
     "__pycache__",
     ".DS_Store",
+    "build",
     "working-state.md",
 }
 

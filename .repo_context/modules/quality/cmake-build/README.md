@@ -110,7 +110,7 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | --- | --- | --- | --- |
 | `-d` / `-r` | `CMAKE_BUILD_TYPE` | `Release` | Selects Debug or Release flag set. |
 | `-S address/thread/undefined/off` | `USE_SANITIZER` | `off` | Adds Google sanitizer flags to project and selected third-party builds. |
-| `-t != off` | `WITH_TESTS` | `off` | Adds test subdirectories and `WITH_TESTS` define. |
+| `-t != off` | `WITH_TESTS` | `off` | Adds test subdirectories and `WITH_TESTS` define; also enables the test-only braft `1.1.2` dependency and its election test target. |
 | `-c on/html` | `BUILD_COVERAGE` | `off` | Adds gcov flags and `BUILD_COVERAGE` define. |
 | `-p on` | `ENABLE_PERF` | `off` | Adds `ENABLE_PERF`, perf service/client sources, and perf proto targets. |
 | `-P on/off/path` | `BUILD_PYTHON_API` | `on` from script | Adds `pybind_api`, pybind11 dependency, and wheel packaging. |
@@ -168,6 +168,9 @@ against checked-in baselines, and it must be run after `build.sh` creates packag
 | Java SDK | `BUILD_JAVA_API=on` | `datasystem/sdk/datasystem-${DATASYSTEM_VERSION}_${CMAKE_HOST_SYSTEM_PROCESSOR}.jar` | `java/CMakeLists.txt`, `cmake/package.cmake` |
 | Go SDK | `BUILD_GO_API=on` | `datasystem/sdk/go`, C API headers under `datasystem/sdk/go/include/datasystem/c_api`, Go libs under `datasystem/sdk/go/lib`; post-install validation builds example/client packages | `src/datasystem/c_api/CMakeLists.txt`, `cmake/package.cmake`, `scripts/package_go_sdk.sh` |
 | Final tarball | always after install | `yr-datasystem-v$(cat VERSION).tar.gz`; the script removes the installed `datasystem/` tree while creating the tarball | `scripts/build_cmake.sh` |
+
+The braft dependency is test-only and has no install or package rule; `libbraft`, its headers, and its tools are not
+part of SDK, service, wheel, or final tarball outputs.
 
 ### Package Manifest Baselines
 

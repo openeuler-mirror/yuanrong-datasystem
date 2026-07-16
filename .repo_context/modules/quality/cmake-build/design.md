@@ -113,6 +113,7 @@
 | libsodium | `1.0.18` | always through `libzmq.cmake` | Built before ZeroMQ. |
 | ZeroMQ | `4.3.5` | always | Provides main RPC transport library. |
 | brpc | `1.15.0` | always | Built as shared brpc with `WITH_GLOG=OFF` against project gflags, leveldb, protobuf, and OpenSSL; applies `avoid-glog-flag-conflicts.patch` so brpc's built-in logging path registers `brpc_*` verbosity flags instead of glog-owned names. |
+| braft | `1.1.2` | `WITH_TESTS=on` | Reuses the existing brpc, gflags, leveldb, protobuf, OpenSSL, and zlib builds. `modern-toolchain-compat.patch` backports modern compiler/architecture compatibility, fixes the revision to the release tag supplied by DataSystem, and disables unused tools for the test-only build. |
 | jemalloc | `5.3.0` | always | Shared jemalloc is linked into `datasystem_worker_bin`; profiling controlled by `SUPPORT_JEPROF`. |
 | RocksDB | `7.10.2` | always | Used by metadata/replica storage code. |
 | SecureC / libboundscheck | `v1.1.16` | always | Also passed into p2p-transfer build. |
@@ -151,10 +152,14 @@
     `grpc:protobuf:openssl:zlib:re2`.
 - `DS_OPENSOURCE_DIR` controls third-party cache root. If not set, `cmake/util.cmake` hashes `CMAKE_BINARY_DIR` and
   uses `/tmp/<sha256>`.
-- `DS_PACKAGE` switches dependency sources to local packages/source trees and generates package hashes.
+- `DS_PACKAGE` switches dependency sources to local packages/source trees and generates package hashes; the test-only
+  braft dependency follows the same rule when `WITH_TESTS=on`.
 - `DS_LOCAL_LIBS_DIR` switches many open-source URLs to local tarballs under `opensource_third_party`.
 - Cache keys include dependency name, package hash, version, components, toolchain, configure options, compiler
   versions, flags, link flags, patches, and extra dependency roots.
+- braft is currently consumed only by `braft_cluster_test`; it is not installed into SDK, service, wheel, or release
+  package outputs. Its CMake build pins `BRAFT_REVISION` to `v1.1.2`, applies SSE flags only on x86_64, uses C++17,
+  and links the repository's zlib instead of an ambient system copy.
 
 ## CMake Target Graph Summary
 
