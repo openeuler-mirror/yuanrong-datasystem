@@ -25,25 +25,21 @@
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/uuid_generator.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/coordinator/topology_recovery_manager.h"
 
 DS_DEFINE_uint64(coordinator_rpc_stub_cache_size, 2048, "Maximum coordinator RPC stub cache size.");
 
 namespace datasystem {
 namespace coordinator {
 namespace {
+constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
+
 Status CheckCoordinatorStore(const std::shared_ptr<CoordinatorStore> &store)
 {
     CHECK_FAIL_RETURN_STATUS(store != nullptr, StatusCode::K_NOT_READY, "coordinator store is not bound");
     return Status::OK();
-}
-
-void MarkLeader(ResponseHeader *header)
-{
-    if (header == nullptr) {
-        return;
-    }
-    header->set_is_leader(true);
-    header->clear_leader_address();
 }
 
 void FillKeyValuePb(const KeyValueEntry &entry, KeyValue *kv)
@@ -53,6 +49,30 @@ void FillKeyValuePb(const KeyValueEntry &entry, KeyValue *kv)
     kv->set_version(entry.version);
     kv->set_mod_revision(entry.modRevision);
 }
+
+CoordinatorRecoveryStatePb ToPbRecoveryState(TopologyRecoveryState state)
+{
+    if (state == TopologyRecoveryState::READY) {
+        return COORDINATOR_READY;
+    }
+    if (state == TopologyRecoveryState::BLOCKED) {
+        return COORDINATOR_BLOCKED;
+    }
+    return COORDINATOR_RECOVERING;
+}
+
+ReportTopologyRecoveryCandidateRspPb::ResultPb ToPbReportResult(TopologyRecoveryReportResult result)
+{
+    switch (result) {
+        case TopologyRecoveryReportResult::ACCEPTED:
+            return ReportTopologyRecoveryCandidateRspPb::ACCEPTED;
+        case TopologyRecoveryReportResult::COORDINATOR_ID_MISMATCH:
+            return ReportTopologyRecoveryCandidateRspPb::COORDINATOR_ID_MISMATCH;
+        case TopologyRecoveryReportResult::MEMBERSHIP_NOT_READY:
+            return ReportTopologyRecoveryCandidateRspPb::MEMBERSHIP_NOT_READY;
+    }
+    return ReportTopologyRecoveryCandidateRspPb::RESULT_UNSPECIFIED;
+}
 }  // namespace
 
 CoordinatorServiceImpl::CoordinatorServiceImpl(const HostPort &localAddress)
@@ -60,25 +80,69 @@ CoordinatorServiceImpl::CoordinatorServiceImpl(const HostPort &localAddress)
 {
 }
 
+CoordinatorServiceImpl::~CoordinatorServiceImpl()
+{
+    (void)Shutdown();
+}
+
 Status CoordinatorServiceImpl::Init()
 {
     Logging::GetInstance()->Start("datasystem_coordinator");
-
-    // RPC authentication setup
+    coordinatorId_ = GetBytesUuid();
+    LOG(INFO) << "CLUSTER_COORDINATOR_ID role=coordinator id="
+              << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << " state=created";
     RpcCredential cred;
     RETURN_IF_NOT_OK(RpcAuthKeyManager::ServerLoadKeys(WORKER_SERVER_NAME, cred));
     builder_.SetCredential(cred);
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(FLAGS_coordinator_rpc_stub_cache_size, coordinatorAddr_));
+    BuildComponentTree();
+    ConfigureRpcService();
+    return Status::OK();
+}
 
-    // Build the internal component tree
+void CoordinatorServiceImpl::BuildComponentTree()
+{
     memStore_ = std::make_shared<MemoryKvStore>();
     watchRegistry_ = std::make_shared<WatchRegistry>();
-    watchDispatcher_ = std::make_shared<WatchDispatcherImpl>(watchRegistry_.get());
+    watchDispatcher_ = std::make_shared<WatchDispatcherImpl>(watchRegistry_.get(), coordinatorId_);
     clock_ = std::make_shared<SteadyClockReal>();
     ttlManager_ = std::make_shared<TtlManager>(clock_);
     store_ = std::make_shared<CoordinatorStore>(memStore_, watchRegistry_, watchDispatcher_, ttlManager_);
+    topologyRecoveryManager_ =
+        std::make_unique<TopologyRecoveryManager>(coordinatorId_, *store_, clock_, TopologyRecoveryOptions{});
+    store_->SetCommittedMutationObserver([this](WatchEvent::Type, const std::string &key) {
+        HandleCommittedMembershipMutation(key);
+    });
+}
 
-    // Configure RPC service settings
+void CoordinatorServiceImpl::HandleCommittedMembershipMutation(const std::string &key)
+{
+    if (topologyRecoveryManager_ == nullptr || store_ == nullptr) {
+        return;
+    }
+    ParsedTopologyCoordinationKey parsed;
+    if (topologyRecoveryManager_->ParseKey(key, parsed).IsError()
+        || parsed.kind != TopologyCoordinationKeyKind::MEMBERSHIP) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(membershipWatchMutex_);
+    std::vector<KeyValueEntry> current;
+    int64_t revision = 0;
+    auto rangeStatus = store_->Range(key, "", current, revision);
+    if (rangeStatus.IsError()) {
+        LOG(WARNING) << "CLUSTER_MEMBERSHIP_OBSERVER_READ_FAILED, key=" << key
+                     << ", status=" << rangeStatus.ToString();
+        return;
+    }
+    const bool present = !current.empty();
+    topologyRecoveryManager_->ObserveMembershipChange(key, present);
+    if (!present && watchDispatcher_ != nullptr) {
+        watchDispatcher_->RemoveChannelsByWatcher(parsed.relativeKey);
+    }
+}
+
+void CoordinatorServiceImpl::ConfigureRpcService()
+{
     RpcServiceCfg cfg;
     cfg.numRegularSockets_ = FLAGS_rpc_thread_num;
     cfg.numStreamSockets_ = 0;
@@ -86,18 +150,14 @@ Status CoordinatorServiceImpl::Init()
     cfg.udsEnabled_ = false;
 
     if (FLAGS_use_brpc) {
-        // brpc path: register ZMQ builder for common infra, brpc handles the RPC service.
-        // CoordinatorServiceImpl : ICoordinatorService → CoordinatorServiceBrpcAdapter in Start().
         brpcAddr_ = coordinatorAddr_.Host();
         brpcPort_ = coordinatorAddr_.Port() + kBrpcPortOffset;
         builder_.SetUseBrpc(true).SetBrpcAddr(brpcAddr_, brpcPort_);
         builder_.AddService(this, cfg);
     } else {
-        // ZMQ path (original)
         builder_.AddEndPoint(RpcChannel::TcpipEndPoint(coordinatorAddr_));
         builder_.AddService(this, cfg);
     }
-    return Status::OK();
 }
 
 Status CoordinatorServiceImpl::Start()
@@ -124,13 +184,24 @@ Status CoordinatorServiceImpl::Shutdown()
         brpcAdapter_.reset();     // Safe: brpc server already stopped, no longer references adapter.
         rpcServer_.reset();
     }
-    // Reset in reverse dependency order
+    if (topologyRecoveryManager_ != nullptr) {
+        LOG_IF_ERROR(topologyRecoveryManager_->Shutdown(), "CLUSTER_RECOVERY_MANAGER_SHUTDOWN_FAILED");
+    }
+    if (store_ != nullptr) {
+        store_->StopTtl();
+        store_->SetCommittedMutationObserver({});
+    }
+    topologyRecoveryManager_.reset();
+    if (store_ != nullptr) {
+        store_->Shutdown();
+    }
     store_.reset();
     ttlManager_.reset();
     clock_.reset();
     watchDispatcher_.reset();
     watchRegistry_.reset();
     memStore_.reset();
+    coordinatorId_.clear();
     LOG(INFO) << "Coordinator shutdown success.";
     return Status::OK();
 }
@@ -138,11 +209,16 @@ Status CoordinatorServiceImpl::Shutdown()
 Status CoordinatorServiceImpl::Put(const PutReqPb &req, PutRspPb &rsp)
 {
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
+    CHECK_FAIL_RETURN_STATUS(req.expected_coordinator_id().empty()
+                                 || req.expected_coordinator_id() == coordinatorId_,
+                             K_TRY_AGAIN, "Put CoordinatorId fence no longer matches this process");
+    CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY, "recovery manager is not bound");
+    RETURN_IF_NOT_OK(topologyRecoveryManager_->CheckMutationAllowed(req.key(), ""));
 
     int64_t version = 0;
     int64_t revision = 0;
     RETURN_IF_NOT_OK(store_->Put(req.key(), req.value(), req.ttl(), req.expected_version(), version, revision));
-    MarkLeader(rsp.mutable_header());
+    FillResponseHeader(rsp.mutable_header());
     rsp.set_version(version);
     rsp.set_revision(revision);
     return Status::OK();
@@ -151,11 +227,13 @@ Status CoordinatorServiceImpl::Put(const PutReqPb &req, PutRspPb &rsp)
 Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
 {
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
+    CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY, "recovery manager is not bound");
+    RETURN_IF_NOT_OK(topologyRecoveryManager_->CheckReadAllowed(req.key(), req.range_end()));
 
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
     RETURN_IF_NOT_OK(store_->Range(req.key(), req.range_end(), kvs, revision));
-    MarkLeader(rsp.mutable_header());
+    FillResponseHeader(rsp.mutable_header());
     rsp.set_revision(revision);
     for (const auto &entry : kvs) {
         FillKeyValuePb(entry, rsp.add_kvs());
@@ -166,11 +244,16 @@ Status CoordinatorServiceImpl::Range(const RangeReqPb &req, RangeRspPb &rsp)
 Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRangeRspPb &rsp)
 {
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
+    CHECK_FAIL_RETURN_STATUS(req.expected_coordinator_id().empty()
+                                 || req.expected_coordinator_id() == coordinatorId_,
+                             K_TRY_AGAIN, "DeleteRange CoordinatorId fence no longer matches this process");
+    CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY, "recovery manager is not bound");
+    RETURN_IF_NOT_OK(topologyRecoveryManager_->CheckMutationAllowed(req.key(), req.range_end()));
 
     int64_t deleted = 0;
     int64_t revision = 0;
     RETURN_IF_NOT_OK(store_->DeleteRange(req.key(), req.range_end(), deleted, revision));
-    MarkLeader(rsp.mutable_header());
+    FillResponseHeader(rsp.mutable_header());
     rsp.set_deleted(deleted);
     rsp.set_revision(revision);
     return Status::OK();
@@ -179,11 +262,17 @@ Status CoordinatorServiceImpl::DeleteRange(const DeleteRangeReqPb &req, DeleteRa
 Status CoordinatorServiceImpl::WatchRange(const WatchRangeReqPb &req, WatchRangeRspPb &rsp)
 {
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
+    CHECK_FAIL_RETURN_STATUS(!req.registration_id().empty(), K_INVALID, "watch registration ID is empty");
+    CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY, "recovery manager is not bound");
+    RETURN_IF_NOT_OK(topologyRecoveryManager_->ValidateWatchRange(req.key(), req.range_end()));
+    std::lock_guard<std::mutex> lock(membershipWatchMutex_);
+    RETURN_IF_NOT_OK(CheckWatcherMembership(req));
 
     int64_t watchId = 0;
     std::vector<KeyValueEntry> initialKvs;
-    RETURN_IF_NOT_OK(store_->WatchRange(req.key(), req.range_end(), req.watcher_addr(), watchId, initialKvs));
-    MarkLeader(rsp.mutable_header());
+    RETURN_IF_NOT_OK(store_->WatchRange(req.key(), req.range_end(), req.watcher_addr(), req.registration_id(), watchId,
+                                       initialKvs));
+    FillResponseHeader(rsp.mutable_header());
     rsp.set_watch_id(watchId);
     for (const auto &entry : initialKvs) {
         FillKeyValuePb(entry, rsp.add_initial_kvs());
@@ -191,13 +280,34 @@ Status CoordinatorServiceImpl::WatchRange(const WatchRangeReqPb &req, WatchRange
     return Status::OK();
 }
 
+Status CoordinatorServiceImpl::CheckWatcherMembership(const WatchRangeReqPb &req)
+{
+    ParsedTopologyCoordinationKey parsed;
+    RETURN_IF_NOT_OK(topologyRecoveryManager_->ParseKey(req.key(), parsed));
+    if (parsed.kind == TopologyCoordinationKeyKind::OTHER) {
+        return Status::OK();
+    }
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(parsed.clusterName, keys));
+    std::string memberKey;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::MembershipKey(req.watcher_addr(), memberKey));
+    const std::string physicalKey = keys->MembershipTable() + "/" + memberKey;
+    std::vector<KeyValueEntry> members;
+    int64_t revision = 0;
+    RETURN_IF_NOT_OK(store_->Range(physicalKey, "", members, revision));
+    CHECK_FAIL_RETURN_STATUS(!members.empty(), K_NOT_FOUND, "watcher membership no longer exists");
+    return Status::OK();
+}
+
 Status CoordinatorServiceImpl::CancelWatch(const CancelWatchReqPb &req, CancelWatchRspPb &rsp)
 {
     RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
+    CHECK_FAIL_RETURN_STATUS(req.expected_coordinator_id() == coordinatorId_, K_TRY_AGAIN,
+                             "CancelWatch CoordinatorId no longer owns these watch IDs");
 
     std::vector<int64_t> watchIds(req.watch_ids().begin(), req.watch_ids().end());
     RETURN_IF_NOT_OK(store_->CancelWatch(req.watcher_addr(), watchIds));
-    MarkLeader(rsp.mutable_header());
+    FillResponseHeader(rsp.mutable_header());
     return Status::OK();
 }
 
@@ -208,10 +318,55 @@ Status CoordinatorServiceImpl::KeepAlive(const KeepAliveReqPb &req, KeepAliveRsp
     int64_t ttlMs = 0;
     int64_t remainingTtlMs = 0;
     RETURN_IF_NOT_OK(store_->KeepAlive(req.key(), ttlMs, remainingTtlMs));
-    MarkLeader(rsp.mutable_header());
+    if (topologyRecoveryManager_ != nullptr) {
+        topologyRecoveryManager_->NotifyMembershipActivity(req.key());
+    }
+    FillResponseHeader(rsp.mutable_header());
     rsp.set_ttl(ttlMs);
     rsp.set_remaining_ttl(remainingTtlMs);
     return Status::OK();
+}
+
+Status CoordinatorServiceImpl::GetCoordinatorId(const GetCoordinatorIdReqPb &, GetCoordinatorIdRspPb &rsp)
+{
+    CHECK_FAIL_RETURN_STATUS(coordinatorId_.size() == UUID_SIZE, K_NOT_READY, "CoordinatorId is not initialized");
+    FillResponseHeader(rsp.mutable_header());
+    return Status::OK();
+}
+
+Status CoordinatorServiceImpl::ReportTopologyRecoveryCandidate(const ReportTopologyRecoveryCandidateReqPb &req,
+                                                                ReportTopologyRecoveryCandidateRspPb &rsp)
+{
+    CHECK_FAIL_RETURN_STATUS(topologyRecoveryManager_ != nullptr, K_NOT_READY, "recovery manager is not bound");
+    CHECK_FAIL_RETURN_STATUS(req.result() == TOPOLOGY_RECOVERY_NO_SNAPSHOT
+                                 || req.result() == TOPOLOGY_RECOVERY_SNAPSHOT,
+                             K_INVALID, "invalid topology recovery report result");
+    CHECK_FAIL_RETURN_STATUS(req.canonical_topology().size() <= MAX_TOPOLOGY_RECOVERY_PAYLOAD_BYTES, K_INVALID,
+                             "candidate topology payload exceeds limit");
+    TopologyRecoveryCandidateReport report;
+    report.reporterAddress = req.reporter_address();
+    report.hasSnapshot = req.result() == TOPOLOGY_RECOVERY_SNAPSHOT;
+    report.topologyVersion = req.topology_version();
+    report.canonicalDigest = req.topology_digest();
+    report.canonicalTopology = req.canonical_topology();
+    TopologyRecoveryReportDecision decision;
+    RETURN_IF_NOT_OK(topologyRecoveryManager_->ReportCandidate(req.cluster_name(), req.coordinator_id(),
+                                                                std::move(report), decision));
+    FillResponseHeader(rsp.mutable_header());
+    rsp.set_result(ToPbReportResult(decision.result));
+    rsp.set_recovery_state(ToPbRecoveryState(decision.state));
+    rsp.set_payload_required(decision.payloadRequired);
+    return Status::OK();
+}
+
+void CoordinatorServiceImpl::FillResponseHeader(ResponseHeader *header) const
+{
+    if (header == nullptr) {
+        return;
+    }
+    header->set_is_leader(true);
+    header->clear_leader_address();
+    header->set_coordinator_id(coordinatorId_);
 }
 }  // namespace coordinator
 }  // namespace datasystem

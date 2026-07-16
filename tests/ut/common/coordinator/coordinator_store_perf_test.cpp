@@ -222,7 +222,8 @@ void AddWatchers(CoordinatorStore &store, int watcherCount)
     for (int i = 0; i < watcherCount; ++i) {
         int64_t watchId = 0;
         std::vector<KeyValueEntry> initial;
-        DS_ASSERT_OK(store.WatchRange("/perf/watch/", "/perf/watch0", "addr" + std::to_string(i), watchId, initial));
+        DS_ASSERT_OK(
+            store.WatchRange("/perf/watch/", "/perf/watch0", "addr" + std::to_string(i), "", watchId, initial));
         ASSERT_TRUE(initial.empty());
     }
 }

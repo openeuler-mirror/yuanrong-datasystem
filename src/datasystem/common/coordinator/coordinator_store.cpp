@@ -16,6 +16,7 @@
 
 #include "datasystem/common/coordinator/coordinator_store.h"
 
+#include <exception>
 #include <utility>
 #include <vector>
 
@@ -43,22 +44,32 @@ CoordinatorStore::CoordinatorStore(std::shared_ptr<MemoryKvStore> memKvStore,
 
 CoordinatorStore::~CoordinatorStore()
 {
-    if (watchDispatcher_) {
-        watchDispatcher_->Stop();
-    }
-    if (ttlManager_) {
-        ttlManager_->Stop();
-    }
+    Shutdown();
 }
 
 void CoordinatorStore::BindCallbacks()
 {
     if (memKvStore_ && watchDispatcher_) {
         std::weak_ptr<WatchDispatcher> weakDispatcher = watchDispatcher_;
-        memKvStore_->SetMutationCallback([weakDispatcher](std::shared_ptr<WatchEvent> event) {
+        memKvStore_->SetMutationCallback([this, weakDispatcher](std::shared_ptr<WatchEvent> event) {
+            if (event != nullptr && committedMutationObserver_) {
+                try {
+                    committedMutationObserver_(event->type, event->entry.key);
+                } catch (const std::exception &error) {
+                    LOG(ERROR) << "CLUSTER_COMMITTED_MUTATION_OBSERVER_FAILED, error=" << error.what();
+                } catch (...) {
+                    LOG(ERROR) << "CLUSTER_COMMITTED_MUTATION_OBSERVER_FAILED, unknown error";
+                }
+            }
             auto dispatcher = weakDispatcher.lock();
             if (dispatcher) {
-                dispatcher->Enqueue(std::move(event));
+                try {
+                    dispatcher->Enqueue(std::move(event));
+                } catch (const std::exception &error) {
+                    LOG(ERROR) << "CLUSTER_WATCH_EVENT_ENQUEUE_FAILED, error=" << error.what();
+                } catch (...) {
+                    LOG(ERROR) << "CLUSTER_WATCH_EVENT_ENQUEUE_FAILED, unknown error";
+                }
             }
         });
     }
@@ -120,13 +131,16 @@ Status CoordinatorStore::DeleteRange(const std::string &key, const std::string &
 }
 
 Status CoordinatorStore::WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
-                                    int64_t &watchId, std::vector<KeyValueEntry> &initialKvs)
+                                    const std::string &registrationId, int64_t &watchId,
+                                    std::vector<KeyValueEntry> &initialKvs)
 {
     RETURN_IF_NOT_OK(CheckInitialized());
-
-    watchId = watchRegistry_->Register(key, rangeEnd, watcherAddr);
+    bool created = false;
+    RETURN_IF_NOT_OK(watchRegistry_->Register(key, rangeEnd, watcherAddr, registrationId, watchId, created));
     VLOG(1) << "WatchRange key: " << key << " rangeEnd: " << rangeEnd << ", watchId: " << watchId;
-    watchDispatcher_->AddChannel(watchId, watcherAddr);
+    if (created) {
+        watchDispatcher_->AddChannel(watchId, watcherAddr);
+    }
 
     int64_t snapshotRevision = 0;
     memKvStore_->Range(key, rangeEnd, initialKvs, snapshotRevision);
@@ -138,11 +152,16 @@ Status CoordinatorStore::CancelWatch(const std::string &watcherAddr, const std::
 {
     VLOG(1) << "CancelWatch watcherAddr: " << watcherAddr << " watchIds: " << VectorToString(watchIds);
     RETURN_IF_NOT_OK(CheckInitialized());
+    Status firstError;
     for (auto watchId : watchIds) {
-        RETURN_IF_NOT_OK(watchRegistry_->Cancel(watchId, watcherAddr));
-        watchDispatcher_->RemoveChannel(watchId);
+        auto status = watchRegistry_->Cancel(watchId, watcherAddr);
+        if (status.IsOk() || status.GetCode() == K_NOT_FOUND) {
+            watchDispatcher_->RemoveChannel(watchId);
+        } else if (firstError.IsOk()) {
+            firstError = status;
+        }
     }
-    return Status::OK();
+    return firstError;
 }
 
 Status CoordinatorStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs)
@@ -153,5 +172,33 @@ Status CoordinatorStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64
     RETURN_IF_NOT_OK(memKvStore_->KeepAlive(key, ttlMs, remainingTtlMs, revision, ttlGeneration));
     VLOG(1) << "KeepAlive key: " << key << " ttlMs: " << ttlMs << ", remainingTtlMs: " << remainingTtlMs;
     return ttlManager_->Schedule(key, ttlMs, revision, ttlGeneration);
+}
+
+void CoordinatorStore::SetCommittedMutationObserver(CommittedMutationObserver observer)
+{
+    committedMutationObserver_ = std::move(observer);
+}
+
+void CoordinatorStore::StopTtl()
+{
+    if (ttlManager_ != nullptr) {
+        ttlManager_->Stop();
+    }
+}
+
+void CoordinatorStore::Shutdown()
+{
+    if (shutdown_) {
+        return;
+    }
+    shutdown_ = true;
+    StopTtl();
+    committedMutationObserver_ = {};
+    if (memKvStore_ != nullptr) {
+        memKvStore_->SetMutationCallback({});
+    }
+    if (watchDispatcher_ != nullptr) {
+        watchDispatcher_->Stop();
+    }
 }
 }  // namespace datasystem

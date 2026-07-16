@@ -854,13 +854,10 @@ void WorkerOCServer::CreateRebalanceExecutor(
 void WorkerOCServer::CreateAllServices()
 {
     if (!FLAGS_coordinator_address.empty()) {
-        auto *workerBackend = static_cast<cluster::DsCoordinationBackend *>(coordinationBackend_.get());
-        auto *controllerBackend = static_cast<cluster::DsCoordinationBackend *>(controllerBackend_.get());
         coordinatorWatchSvc_ = std::make_unique<coordinator::CoordinatorWatchServiceImpl>(
-            hostPort_, [workerBackend, controllerBackend](cluster::CoordinationEvent &&event) {
-                auto controllerEvent = event;
-                workerBackend->HandleWatchEvent(std::move(event));
-                controllerBackend->HandleWatchEvent(std::move(controllerEvent));
+            hostPort_, [this](const std::string &coordinatorId, int64_t watchId,
+                             cluster::CoordinationEvent &&event) {
+                return RouteCoordinatorWatchEvent(coordinatorId, watchId, std::move(event));
             });
     }
     // In case of centralized master, create either master or worker services
@@ -1022,8 +1019,62 @@ Status WorkerOCServer::ConstructTopologyRuntime()
     bool isRestart = false;
     RETURN_IF_NOT_OK(ConstructTopologyControllerBackend(isRestart));
     RETURN_IF_NOT_OK(ConstructTopologyComponents(isRestart));
+    RETURN_IF_NOT_OK(ConstructTopologyRecoveryReporter());
     LOG(INFO) << "Cluster topology runtime constructed, cluster: " << FLAGS_cluster_name
               << ", localAddress: " << hostPort_.ToString() << ", isRestart: " << isRestart;
+    return Status::OK();
+}
+
+Status WorkerOCServer::ConstructTopologyRecoveryReporter()
+{
+    if (FLAGS_coordinator_address.empty()) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(coordinatorServiceProxy_ != nullptr && topologyEngine_ != nullptr, K_NOT_READY,
+                             "Coordinator recovery reporter dependencies are not ready");
+    topologyRecoveryReporter_ = std::make_unique<TopologyRecoveryReporter>(
+        *coordinatorServiceProxy_, FLAGS_cluster_name, hostPort_.ToString(),
+        [this](uint64_t &version, std::string &canonical) {
+            CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "topology Engine is not ready");
+            return topologyEngine_->GetRecoveryTopology(version, canonical);
+        });
+    auto *workerBackend = static_cast<cluster::DsCoordinationBackend *>(coordinationBackend_.get());
+    workerBackend->SetMembershipReadyHandler([this](const std::string &coordinatorId, bool watchesInvalidated) {
+        if (topologyRecoveryReporter_ != nullptr) {
+            topologyRecoveryReporter_->NotifyMembershipReady(coordinatorId);
+        }
+        if (watchesInvalidated && controllerBackend_ != nullptr) {
+            auto *controller = static_cast<cluster::DsCoordinationBackend *>(controllerBackend_.get());
+            controller->InvalidateWatches();
+        }
+    });
+    return Status::OK();
+}
+
+Status WorkerOCServer::RouteCoordinatorWatchEvent(const std::string &coordinatorId, int64_t watchId,
+                                                  cluster::CoordinationEvent &&event)
+{
+    auto *workerBackend = static_cast<cluster::DsCoordinationBackend *>(coordinationBackend_.get());
+    auto *controllerBackend = static_cast<cluster::DsCoordinationBackend *>(controllerBackend_.get());
+    bool workerOwns = workerBackend->OwnsWatchIdentity(coordinatorId, watchId);
+    bool controllerOwns = controllerBackend->OwnsWatchIdentity(coordinatorId, watchId);
+    if (workerOwns == controllerOwns) {
+        if (!workerOwns && (workerBackend->IsWatchRegistrationInProgress()
+                            || controllerBackend->IsWatchRegistrationInProgress())) {
+            RETURN_STATUS(K_NOT_READY, "Coordinator watch registration is in progress");
+        }
+        workerOwns = workerBackend->OwnsWatchIdentity(coordinatorId, watchId);
+        controllerOwns = controllerBackend->OwnsWatchIdentity(coordinatorId, watchId);
+    }
+    if (workerOwns == controllerOwns) {
+        constexpr uint64_t ownerLogInterval = 1'024;
+        LOG_FIRST_AND_EVERY_N(WARNING, ownerLogInterval)
+            << "CLUSTER_WATCH callback owner count invalid, watch_id=" << watchId;
+        return workerOwns ? Status(K_INVALID, "Coordinator watch has multiple owners")
+                          : Status(K_NOT_FOUND, "Coordinator watch owner no longer exists");
+    }
+    auto *owner = workerOwns ? workerBackend : controllerBackend;
+    owner->HandleWatchEvent(coordinatorId, watchId, std::move(event));
     return Status::OK();
 }
 
@@ -1060,7 +1111,7 @@ Status WorkerOCServer::ConstructTopologyControllerBackend(bool &isRestart)
                                 });
         return Status::OK();
     }
-    RETURN_OK_IF_TRUE(startupRead.GetCode() == K_NOT_FOUND);
+    RETURN_OK_IF_TRUE(startupRead.GetCode() == K_NOT_FOUND || startupRead.GetCode() == K_NOT_READY);
     return startupRead;
 }
 
@@ -1158,16 +1209,24 @@ Status WorkerOCServer::StartTopologyRuntime()
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "topology engine is not constructed");
     CHECK_FAIL_RETURN_STATUS(topologyController_ != nullptr && topologyTaskJanitor_ != nullptr, K_NOT_READY,
                              "topology control components are not constructed");
-    RETURN_IF_NOT_OK(topologyController_->Start());
+    // Engine publishes the Worker membership before either role opens Coordinator watches. It can remain NOT_READY
+    // until the sibling Controller observes that membership and bootstraps the first topology.
     auto rc = topologyEngine_->Start();
     if (rc.IsError()) {
-        (void)topologyController_->Stop(std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE);
+        return rc;
+    }
+    rc = topologyController_->Start();
+    if (rc.IsError()) {
+        (void)topologyEngine_->Stop(std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE);
         return rc;
     }
     rc = topologyTaskJanitor_->Start();
     if (rc.IsError()) {
         (void)topologyEngine_->Stop(std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE);
         (void)topologyController_->Stop(std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE);
+    }
+    if (rc.IsOk() && topologyRecoveryReporter_ != nullptr) {
+        topologyRecoveryReporter_->NotifyRuntimeReady();
     }
     return rc;
 }
@@ -1229,6 +1288,9 @@ Status WorkerOCServer::StopTopologyRuntime(std::chrono::steady_clock::time_point
     }
     if (controllerBackend_ != nullptr) {
         preserveFirstError(controllerBackend_->ShutdownEventSources());
+    }
+    if (topologyRecoveryReporter_ != nullptr) {
+        preserveFirstError(topologyRecoveryReporter_->Shutdown());
     }
     if (topologyTaskJanitor_ != nullptr) {
         preserveFirstError(topologyTaskJanitor_->Stop(deadline));

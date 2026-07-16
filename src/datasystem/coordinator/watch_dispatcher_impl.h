@@ -22,6 +22,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "datasystem/common/coordinator/watch_dispatcher.h"
@@ -30,14 +31,34 @@ namespace datasystem {
 namespace coordinator {
 class WatchDispatcherImpl : public WatchDispatcher {
 public:
-    explicit WatchDispatcherImpl(WatchRegistry *watchRegistry) : WatchDispatcher(watchRegistry)
+    /**
+     * @brief Construct an RPC dispatcher bound to one CoordinatorId.
+     * @param[in] watchRegistry Registry that owns watch IDs.
+     * @param[in] coordinatorId Immutable Coordinator process identity.
+     */
+    WatchDispatcherImpl(WatchRegistry *watchRegistry, std::string coordinatorId)
+        : WatchDispatcher(watchRegistry), coordinatorId_(std::move(coordinatorId))
     {
     }
-    ~WatchDispatcherImpl() override = default;
+
+    /**
+     * @brief Destroy the RPC watch dispatcher after its base dispatcher has stopped.
+     */
+    ~WatchDispatcherImpl() override;
 
 protected:
+    /**
+     * @brief Deliver a watch-event batch to one worker RPC endpoint.
+     * @param[in] watchId Watch ID associated with the worker stream.
+     * @param[in] watcherAddr Worker RPC endpoint.
+     * @param[in] events Watch events to serialize and deliver.
+     * @return Status of the worker notification RPC.
+     */
     Status DoNotify(int64_t watchId, const std::string &watcherAddr,
                     std::vector<std::shared_ptr<WatchEvent>> &events) override;
+
+private:
+    const std::string coordinatorId_;
 };
 }  // namespace coordinator
 }  // namespace datasystem

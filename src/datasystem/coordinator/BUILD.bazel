@@ -3,11 +3,28 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
+    name = "coordinator_topology_recovery_manager",
+    srcs = ["topology_recovery_manager.cpp"],
+    hdrs = ["topology_recovery_manager.h"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread_pool",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_library(
     name = "coordinator_service_impl",
     srcs = ["coordinator_service_impl.cpp"],
     hdrs = ["coordinator_service_impl.h"],
     deps = [
         ":coordinator_watch_dispatcher_impl",
+        ":coordinator_topology_recovery_manager",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/flags:dynamic_flag_config",

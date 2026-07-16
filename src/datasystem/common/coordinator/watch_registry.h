@@ -35,6 +35,7 @@ namespace datasystem {
 struct WatcherEntry {
     int64_t watchId = 0;
     std::string watcherAddr;
+    std::string registrationId;
     bool active = true;
 };
 
@@ -59,6 +60,19 @@ public:
     int64_t Register(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr);
 
     /**
+     * @brief Idempotently register a watcher by a client-generated registration ID.
+     * @param[in] key Start key.
+     * @param[in] rangeEnd End key.
+     * @param[in] watcherAddr Callback address.
+     * @param[in] registrationId Stable ID reused after an ambiguous RPC result.
+     * @param[out] watchId Existing or newly assigned watch ID.
+     * @param[out] created True only when a new registry entry was created.
+     * @return K_OK or K_INVALID when an ID is reused by another watcher.
+     */
+    Status Register(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
+                    const std::string &registrationId, int64_t &watchId, bool &created);
+
+    /**
      * @brief Cancel a watcher only when it belongs to the watcher address.
      * @param[in] watchId The watch ID to cancel.
      * @param[in] watcherAddr Expected watcher address.
@@ -75,6 +89,7 @@ public:
 
 private:
     std::unordered_map<int64_t, std::shared_ptr<WatcherEntry>> watchers_;
+    std::unordered_map<std::string, int64_t> watchIdsByRegistrationId_;
     std::vector<WatchRange> watchRanges_;
     std::atomic<int64_t> nextWatchId_{ 1 };
     mutable std::shared_mutex mutex_;

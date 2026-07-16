@@ -32,11 +32,21 @@ namespace coordinator {
 namespace {
 constexpr int32_t WATCH_NOTIFY_RPC_TIMEOUT_MS = 3000;
 
+/**
+ * @brief Calculate the watch callback RPC timeout from the node timeout.
+ * @return Bounded callback RPC timeout in milliseconds.
+ */
 int32_t GetWatchNotifyRpcTimeoutMs()
 {
     return std::min<int32_t>(WATCH_NOTIFY_RPC_TIMEOUT_MS, static_cast<int32_t>(FLAGS_node_timeout_s) * TO_MILLISECOND);
 }
 
+/**
+ * @brief Convert an internal watch event type to its RPC representation.
+ * @param[in] type Internal watch event type.
+ * @param[out] pbType RPC watch event type.
+ * @return Status of the conversion.
+ */
 Status ConvertEventType(WatchEvent::Type type, EventPb::EventType &pbType)
 {
     switch (type) {
@@ -47,12 +57,18 @@ Status ConvertEventType(WatchEvent::Type type, EventPb::EventType &pbType)
             pbType = EventPb::DELETE;
             return Status::OK();
         case WatchEvent::Type::REWATCH:
-            RETURN_STATUS(StatusCode::K_TRY_AGAIN, "watch channel requires rewatch");
+            pbType = EventPb::RESET;
+            return Status::OK();
         default:
             RETURN_STATUS(StatusCode::K_INVALID, "unknown watch event type");
     }
 }
 
+/**
+ * @brief Serialize one committed key-value entry into a watch response.
+ * @param[in] entry Committed store entry.
+ * @param[out] kv RPC key-value message to populate.
+ */
 void FillEventKv(const KeyValueEntry &entry, KeyValue *kv)
 {
     kv->set_key(entry.key);
@@ -61,6 +77,11 @@ void FillEventKv(const KeyValueEntry &entry, KeyValue *kv)
     kv->set_mod_revision(entry.modRevision);
 }
 }  // namespace
+
+WatchDispatcherImpl::~WatchDispatcherImpl()
+{
+    Stop();
+}
 
 Status WatchDispatcherImpl::DoNotify(int64_t watchId, const std::string &watcherAddr,
                                      std::vector<std::shared_ptr<WatchEvent>> &events)
@@ -73,13 +94,16 @@ Status WatchDispatcherImpl::DoNotify(int64_t watchId, const std::string &watcher
 
     EventReqPb req;
     req.set_watch_id(watchId);
+    req.set_coordinator_id(coordinatorId_);
     for (const auto &event : events) {
         CHECK_FAIL_RETURN_STATUS(event != nullptr, StatusCode::K_INVALID, "watch event is null");
         EventPb::EventType pbType = EventPb::EVENT_TYPE_UNSPECIFIED;
         RETURN_IF_NOT_OK(ConvertEventType(event->type, pbType));
         auto *pbEvent = req.add_events();
         pbEvent->set_type(pbType);
-        FillEventKv(event->entry, pbEvent->mutable_kv());
+        if (pbType != EventPb::RESET) {
+            FillEventKv(event->entry, pbEvent->mutable_kv());
+        }
     }
     RpcOptions opts;
     opts.SetTimeout(GetWatchNotifyRpcTimeoutMs());

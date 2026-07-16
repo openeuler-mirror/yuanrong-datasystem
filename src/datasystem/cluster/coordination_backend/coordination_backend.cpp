@@ -23,7 +23,14 @@ namespace datasystem::cluster {
 std::string CoordinationEvent::ToString() const
 {
     std::stringstream stream;
-    const char *typeName = type == CoordinationEventType::PUT ? "PUT" : "DELETE";
+    const char *typeName = "UNSPECIFIED";
+    if (type == CoordinationEventType::PUT) {
+        typeName = "PUT";
+    } else if (type == CoordinationEventType::DELETE) {
+        typeName = "DELETE";
+    } else if (type == CoordinationEventType::RESET) {
+        typeName = "RESET";
+    }
     stream << "type: " << typeName << ", key: " << key << ", version: " << version << ", revision: " << revision;
     return stream.str();
 }

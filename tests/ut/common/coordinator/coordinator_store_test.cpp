@@ -26,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -35,15 +36,23 @@
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
+#include "datasystem/coordinator/topology_recovery_manager.h"
 #include "datasystem/common/coordinator/memory_kv_store.h"
 #include "datasystem/common/coordinator/steady_clock.h"
 #include "datasystem/common/coordinator/ttl_manager.h"
 #include "datasystem/common/coordinator/watch_dispatcher.h"
 #include "datasystem/common/coordinator/watch_registry.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 namespace ut {
 namespace {
+constexpr int64_t CANCEL_RETRY_OBSERVE_MS = 350;
+constexpr int64_t RETRY_QUEUE_SETTLE_MS = 20;
+constexpr int64_t MAX_RETRY_SHUTDOWN_MS = 1000;
+constexpr uint16_t OVERSIZED_RECOVERY_TEST_PORT = 18486;
+constexpr uint16_t WATCH_RANGE_VALIDATION_TEST_PORT = 18487;
+
 class MockWatchDispatcher : public WatchDispatcher {
 public:
     explicit MockWatchDispatcher(WatchRegistry *watchRegistry) : WatchDispatcher(watchRegistry)
@@ -116,6 +125,59 @@ public:
 private:
     std::atomic<int> notifyAttempts_{ 0 };
     bool failNext_ = true;
+};
+
+class AlwaysFailingWatchDispatcher : public WatchDispatcher {
+public:
+    explicit AlwaysFailingWatchDispatcher(WatchRegistry *watchRegistry) : WatchDispatcher(watchRegistry)
+    {
+    }
+
+    ~AlwaysFailingWatchDispatcher() override = default;
+
+    Status DoNotify(int64_t watchId, const std::string &watcherAddr,
+                    std::vector<std::shared_ptr<WatchEvent>> &events) override
+    {
+        (void)watchId;
+        (void)watcherAddr;
+        (void)events;
+        notifyAttempts_.fetch_add(1);
+        cv_.notify_all();
+        return Status(StatusCode::K_RUNTIME_ERROR, "injected persistent notify failure");
+    }
+
+    bool WaitNotifyAttempts(int expected, uint64_t timeoutMs = 2000)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return cv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                            [this, expected] { return notifyAttempts_.load() >= expected; });
+    }
+
+    int GetNotifyAttempts() const
+    {
+        return notifyAttempts_.load();
+    }
+
+private:
+    std::atomic<int> notifyAttempts_{ 0 };
+
+    // Used only to coordinate condition-variable waits; notifyAttempts_ is atomic.
+    std::mutex mutex_;
+    std::condition_variable cv_;
+};
+
+class MissingOwnerWatchDispatcher : public AlwaysFailingWatchDispatcher {
+public:
+    explicit MissingOwnerWatchDispatcher(WatchRegistry *watchRegistry) : AlwaysFailingWatchDispatcher(watchRegistry)
+    {
+    }
+
+    ~MissingOwnerWatchDispatcher() override = default;
+
+    Status DoNotify(int64_t, const std::string &, std::vector<std::shared_ptr<WatchEvent>> &) override
+    {
+        return Status(K_NOT_FOUND, "watch owner disappeared");
+    }
 };
 
 class FailingRewatchWatchDispatcher : public MockWatchDispatcher {
@@ -218,6 +280,142 @@ protected:
     std::shared_ptr<TtlManager> ttlManager_;
     std::unique_ptr<CoordinatorStore> store_;
 };
+
+class CoordinatorIdTest : public CommonTest {
+};
+
+TEST_F(CoordinatorIdTest, AddsStableCoordinatorIdToResponses)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18482));
+    DS_ASSERT_OK(service.Init());
+
+    coordinator::PutReqPb putReq;
+    putReq.set_key("/coordinator/id/key");
+    putReq.set_value("value");
+    coordinator::PutRspPb putRsp;
+    DS_ASSERT_OK(service.Put(putReq, putRsp));
+    ASSERT_EQ(putRsp.header().coordinator_id().size(), UUID_SIZE);
+
+    coordinator::RangeReqPb rangeReq;
+    rangeReq.set_key("/coordinator/id/key");
+    coordinator::RangeRspPb rangeRsp;
+    DS_ASSERT_OK(service.Range(rangeReq, rangeRsp));
+    ASSERT_EQ(rangeRsp.header().coordinator_id(), putRsp.header().coordinator_id());
+
+    coordinator::GetCoordinatorIdReqPb idReq;
+    coordinator::GetCoordinatorIdRspPb idRsp;
+    DS_ASSERT_OK(service.GetCoordinatorId(idReq, idRsp));
+    ASSERT_EQ(idRsp.header().coordinator_id(), putRsp.header().coordinator_id());
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, PutRejectsAStaleCoordinatorIdBeforeMutation)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18483));
+    DS_ASSERT_OK(service.Init());
+    coordinator::GetCoordinatorIdReqPb idReq;
+    coordinator::GetCoordinatorIdRspPb idRsp;
+    DS_ASSERT_OK(service.GetCoordinatorId(idReq, idRsp));
+
+    coordinator::PutReqPb request;
+    request.set_key("/coordinator/fenced-put");
+    request.set_value("value");
+    request.set_expected_coordinator_id(std::string(UUID_SIZE, 'x'));
+    coordinator::PutRspPb response;
+    EXPECT_EQ(service.Put(request, response).GetCode(), K_TRY_AGAIN);
+
+    request.set_expected_coordinator_id(idRsp.header().coordinator_id());
+    DS_ASSERT_OK(service.Put(request, response));
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, DeleteRejectsAStaleCoordinatorIdBeforeMutation)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18484));
+    DS_ASSERT_OK(service.Init());
+    coordinator::PutReqPb putReq;
+    putReq.set_key("/coordinator/fenced-delete");
+    putReq.set_value("value");
+    coordinator::PutRspPb putRsp;
+    DS_ASSERT_OK(service.Put(putReq, putRsp));
+
+    coordinator::DeleteRangeReqPb deleteReq;
+    deleteReq.set_key(putReq.key());
+    deleteReq.set_expected_coordinator_id(std::string(UUID_SIZE, 'x'));
+    coordinator::DeleteRangeRspPb deleteRsp;
+    EXPECT_EQ(service.DeleteRange(deleteReq, deleteRsp).GetCode(), K_TRY_AGAIN);
+    deleteReq.set_expected_coordinator_id(putRsp.header().coordinator_id());
+    DS_ASSERT_OK(service.DeleteRange(deleteReq, deleteRsp));
+    EXPECT_EQ(deleteRsp.deleted(), 1);
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, RejectsOversizedRecoveryPayloadAtServiceBoundary)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", OVERSIZED_RECOVERY_TEST_PORT));
+    DS_ASSERT_OK(service.Init());
+    coordinator::ReportTopologyRecoveryCandidateReqPb request;
+    request.set_result(coordinator::TOPOLOGY_RECOVERY_SNAPSHOT);
+    request.mutable_canonical_topology()->assign(coordinator::MAX_TOPOLOGY_RECOVERY_PAYLOAD_BYTES + 1, 'x');
+    coordinator::ReportTopologyRecoveryCandidateRspPb response;
+
+    EXPECT_EQ(service.ReportTopologyRecoveryCandidate(request, response).GetCode(), K_INVALID);
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, WatchRejectsADeletedTopologyMember)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18485));
+    DS_ASSERT_OK(service.Init());
+    coordinator::PutReqPb putReq;
+    putReq.set_key("/datasystem/watch-race/cluster/127.0.0.1:31501");
+    putReq.set_value("membership");
+    coordinator::PutRspPb putRsp;
+    DS_ASSERT_OK(service.Put(putReq, putRsp));
+    coordinator::DeleteRangeReqPb deleteReq;
+    deleteReq.set_key(putReq.key());
+    deleteReq.set_expected_coordinator_id(putRsp.header().coordinator_id());
+    coordinator::DeleteRangeRspPb deleteRsp;
+    DS_ASSERT_OK(service.DeleteRange(deleteReq, deleteRsp));
+
+    coordinator::WatchRangeReqPb watchReq;
+    watchReq.set_key("/datasystem/watch-race/topology/");
+    watchReq.set_watcher_addr("127.0.0.1:31501");
+    watchReq.set_registration_id("stale-registration");
+    coordinator::WatchRangeRspPb watchRsp;
+    EXPECT_EQ(service.WatchRange(watchReq, watchRsp).GetCode(), K_NOT_FOUND);
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, WatchRangeCannotCrossClusterOrTopologyRoot)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", WATCH_RANGE_VALIDATION_TEST_PORT));
+    DS_ASSERT_OK(service.Init());
+    coordinator::PutReqPb putReq;
+    putReq.set_key("/datasystem/a/cluster/127.0.0.1:31502");
+    putReq.set_value("membership");
+    coordinator::PutRspPb putRsp;
+    DS_ASSERT_OK(service.Put(putReq, putRsp));
+
+    coordinator::WatchRangeReqPb watchReq;
+    watchReq.set_key("/datasystem/a/topology/");
+    watchReq.set_range_end("/datasystem/b/topology0");
+    watchReq.set_watcher_addr("127.0.0.1:31502");
+    watchReq.set_registration_id("cross-cluster");
+    coordinator::WatchRangeRspPb watchRsp;
+    EXPECT_EQ(service.WatchRange(watchReq, watchRsp).GetCode(), K_INVALID);
+
+    watchReq.set_key("/");
+    watchReq.set_range_end(std::string(1, static_cast<char>(0x7f)));
+    watchReq.set_registration_id("cross-root");
+    EXPECT_EQ(service.WatchRange(watchReq, watchRsp).GetCode(), K_INVALID);
+
+    watchReq.set_key("/datasystem/a/topology/");
+    watchReq.set_range_end("/datasystem/a/topology0");
+    watchReq.set_registration_id("valid-topology-prefix");
+    DS_ASSERT_OK(service.WatchRange(watchReq, watchRsp));
+    DS_ASSERT_OK(service.Shutdown());
+}
 
 TEST_F(CoordinatorStoreTest, CoordinatorServiceForwardsStoreOperationsAndMarksLeader)
 {
@@ -513,6 +711,28 @@ TEST_F(CoordinatorStoreTest, WatchDispatcherLimitsDoNotifyBatchSize)
     ASSERT_LE(dispatcher_->GetMaxBatchSize(watchId), MAX_BATCH_SIZE);
 }
 
+TEST_F(CoordinatorStoreTest, WatchDispatcherSplitsLargeEventsWithoutLosingOrder)
+{
+    int64_t watchId = registry_->Register("/large", "", "addr");
+    dispatcher_->AddChannel(watchId, "addr");
+    dispatcher_->SetSnapshotRevision(watchId, 1);
+    const std::string value(MAX_WATCH_EVENT_BATCH_BYTES / 2, 'x');
+    for (int64_t revision = 2; revision <= 3; ++revision) {
+        auto event = std::make_shared<WatchEvent>();
+        event->type = WatchEvent::Type::PUT;
+        event->entry = KeyValueEntry{ "/large", value, revision - 1, revision };
+        event->revision = revision;
+        dispatcher_->Enqueue(std::move(event));
+    }
+
+    ASSERT_TRUE(dispatcher_->WaitEventCount(watchId, 2));
+    const auto events = dispatcher_->GetEvents(watchId);
+    ASSERT_EQ(events.size(), 2UL);
+    EXPECT_EQ(events[0]->revision, 2);
+    EXPECT_EQ(events[1]->revision, 3);
+    EXPECT_EQ(dispatcher_->GetMaxBatchSize(watchId), 1UL);
+}
+
 TEST_F(CoordinatorStoreTest, WatchDispatcherRetriesFailedNotify)
 {
     auto registry = std::make_shared<WatchRegistry>();
@@ -722,7 +942,7 @@ TEST_F(CoordinatorStoreTest, CoordinatorStoreIntegratesPutRangeWatchDeleteAndTtl
 
     std::vector<KeyValueEntry> initial;
     int64_t watchId = 0;
-    DS_ASSERT_OK(store_->WatchRange("/ring/1", "/ring/9", "addr", watchId, initial));
+    DS_ASSERT_OK(store_->WatchRange("/ring/1", "/ring/9", "addr", "", watchId, initial));
     ASSERT_EQ(initial.size(), 1ul);
     ASSERT_EQ(initial[0].key, "/ring/1/key");
 
@@ -751,7 +971,7 @@ TEST_F(CoordinatorStoreTest, CoordinatorStoreIntegratesPutRangeWatchDeleteAndTtl
     ASSERT_TRUE(kvs.empty());
 }
 
-TEST_F(CoordinatorStoreTest, WatchDispatcherEnqueueWaitsWhenPendingQueueIsFull)
+TEST_F(CoordinatorStoreTest, WatchDispatcherDropsDoorbellWhenPendingQueueIsFull)
 {
     dispatcher_->Stop();
     constexpr size_t WATCH_PENDING_QUEUE_LIMIT = 10000;
@@ -774,8 +994,11 @@ TEST_F(CoordinatorStoreTest, WatchDispatcherEnqueueWaitsWhenPendingQueueIsFull)
         enqueueDone.store(true, std::memory_order_release);
     });
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    ASSERT_FALSE(enqueueDone.load(std::memory_order_acquire));
+    for (int i = 0; i < 10 && !enqueueDone.load(std::memory_order_acquire); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    const bool completedWithoutDrain = enqueueDone.load(std::memory_order_acquire);
+    const size_t pendingBeforeDrain = dispatcher_->GetPendingEventCount();
 
     dispatcher_->Start();
     for (int i = 0; i < 100 && !enqueueDone.load(std::memory_order_acquire); ++i) {
@@ -783,6 +1006,8 @@ TEST_F(CoordinatorStoreTest, WatchDispatcherEnqueueWaitsWhenPendingQueueIsFull)
     }
     ASSERT_TRUE(enqueueDone.load(std::memory_order_acquire));
     writer.join();
+    ASSERT_TRUE(completedWithoutDrain);
+    ASSERT_EQ(pendingBeforeDrain, WATCH_PENDING_QUEUE_LIMIT);
 }
 
 TEST_F(CoordinatorStoreTest, ConstructorStartsTtlAndWatchDispatcher)
@@ -796,7 +1021,7 @@ TEST_F(CoordinatorStoreTest, ConstructorStartsTtlAndWatchDispatcher)
 
     int64_t watchId = 0;
     std::vector<KeyValueEntry> initial;
-    DS_ASSERT_OK(store->WatchRange("/auto/key", "", "addr", watchId, initial));
+    DS_ASSERT_OK(store->WatchRange("/auto/key", "", "addr", "", watchId, initial));
 
     int64_t version = 0;
     int64_t revision = 0;
@@ -817,7 +1042,7 @@ TEST_F(CoordinatorStoreTest, WatchRangeSnapshotDoesNotReplayInitialData)
 
     int64_t watchId = 0;
     std::vector<KeyValueEntry> initial;
-    DS_ASSERT_OK(store_->WatchRange("/snapshot/", "/snapshot0", "addr", watchId, initial));
+    DS_ASSERT_OK(store_->WatchRange("/snapshot/", "/snapshot0", "addr", "", watchId, initial));
     ASSERT_EQ(initial.size(), 1ul);
     ASSERT_EQ(initial[0].value, "v1");
     ASSERT_FALSE(dispatcher_->WaitEventCount(watchId, 1, 200));
@@ -839,7 +1064,7 @@ TEST_F(CoordinatorStoreTest, DeleteRangeUsesOneRevisionForDeliveredDeleteEvents)
 
     int64_t watchId = 0;
     std::vector<KeyValueEntry> initial;
-    DS_ASSERT_OK(store_->WatchRange("/delete/", "/delete0", "addr", watchId, initial));
+    DS_ASSERT_OK(store_->WatchRange("/delete/", "/delete0", "addr", "", watchId, initial));
     ASSERT_EQ(initial.size(), 3ul);
 
     int64_t deleted = 0;
@@ -1064,6 +1289,167 @@ TEST_F(CoordinatorStoreTest, RemoveChannelStopsFurtherNotifications)
     ASSERT_FALSE(dispatcher_->WaitEventCount(watchId, 1, 200));
 }
 
+TEST_F(CoordinatorStoreTest, RemoveChannelsByWatcherCancelsOnlyOwnedChannels)
+{
+    int64_t firstWatchId = registry_->Register("/remove-owner/first", "", "failed-worker");
+    int64_t secondWatchId = registry_->Register("/remove-owner/second", "", "failed-worker");
+    int64_t retainedWatchId = registry_->Register("/remove-owner/retained", "", "healthy-worker");
+    for (int64_t watchId : { firstWatchId, secondWatchId, retainedWatchId }) {
+        dispatcher_->AddChannel(watchId, watchId == retainedWatchId ? "healthy-worker" : "failed-worker");
+        dispatcher_->SetSnapshotRevision(watchId, 1);
+    }
+
+    dispatcher_->RemoveChannelsByWatcher("failed-worker");
+
+    std::vector<std::shared_ptr<WatcherEntry>> matched;
+    registry_->MatchWatchers("/remove-owner/first", matched);
+    ASSERT_TRUE(matched.empty());
+    registry_->MatchWatchers("/remove-owner/second", matched);
+    ASSERT_TRUE(matched.empty());
+    registry_->MatchWatchers("/remove-owner/retained", matched);
+    ASSERT_EQ(matched.size(), 1UL);
+    ASSERT_EQ(matched.front()->watchId, retainedWatchId);
+
+    auto cancelledEvent = std::make_shared<WatchEvent>();
+    cancelledEvent->type = WatchEvent::Type::PUT;
+    cancelledEvent->entry = KeyValueEntry{ "/remove-owner/second", "value", 1, 2 };
+    cancelledEvent->revision = 2;
+    dispatcher_->Enqueue(cancelledEvent);
+
+    auto retainedEvent = std::make_shared<WatchEvent>();
+    retainedEvent->type = WatchEvent::Type::PUT;
+    retainedEvent->entry = KeyValueEntry{ "/remove-owner/retained", "value", 1, 2 };
+    retainedEvent->revision = 2;
+    dispatcher_->Enqueue(retainedEvent);
+    ASSERT_TRUE(dispatcher_->WaitEventCount(retainedWatchId, 1));
+    ASSERT_FALSE(dispatcher_->WaitEventCount(firstWatchId, 1, 200));
+    ASSERT_FALSE(dispatcher_->WaitEventCount(secondWatchId, 1, 200));
+}
+
+TEST_F(CoordinatorStoreTest, CancelWatchContinuesAfterAnAlreadyMissingId)
+{
+    const std::string watcher = "cancel-worker";
+    const int64_t missing = registry_->Register("/cancel/missing", "", watcher);
+    const int64_t remaining = registry_->Register("/cancel/remaining", "", watcher);
+    dispatcher_->AddChannel(missing, watcher);
+    dispatcher_->AddChannel(remaining, watcher);
+    DS_ASSERT_OK(registry_->Cancel(missing, watcher));
+
+    DS_ASSERT_OK(store_->CancelWatch(watcher, { missing, remaining }));
+
+    std::vector<std::shared_ptr<WatcherEntry>> matched;
+    registry_->MatchWatchers("/cancel/remaining", matched);
+    EXPECT_TRUE(matched.empty());
+}
+
+TEST_F(CoordinatorStoreTest, RegistrationIdMakesAmbiguousWatchRetryIdempotent)
+{
+    int64_t firstWatchId = 0;
+    int64_t retriedWatchId = 0;
+    std::vector<KeyValueEntry> initial;
+    DS_ASSERT_OK(store_->WatchRange("/idempotent", "", "worker", "registration-a", firstWatchId, initial));
+
+    DS_ASSERT_OK(store_->WatchRange("/idempotent", "", "worker", "registration-a", retriedWatchId, initial));
+
+    EXPECT_EQ(retriedWatchId, firstWatchId);
+    std::vector<std::shared_ptr<WatcherEntry>> matched;
+    registry_->MatchWatchers("/idempotent", matched);
+    ASSERT_EQ(matched.size(), 1UL);
+    EXPECT_EQ(matched.front()->watchId, firstWatchId);
+}
+
+TEST_F(CoordinatorStoreTest, RegistrationIdCannotBeReusedForAnotherRange)
+{
+    int64_t watchId = 0;
+    std::vector<KeyValueEntry> initial;
+    DS_ASSERT_OK(store_->WatchRange("/scope/a", "", "worker", "registration-scope", watchId, initial));
+
+    int64_t reusedWatchId = 0;
+    EXPECT_EQ(store_->WatchRange("/scope/b", "", "worker", "registration-scope", reusedWatchId, initial).GetCode(),
+              K_INVALID);
+    EXPECT_EQ(store_->WatchRange("/scope/a", "/scope/z", "worker", "registration-scope", reusedWatchId, initial)
+                  .GetCode(),
+              K_INVALID);
+}
+
+TEST_F(CoordinatorStoreTest, MissingCallbackOwnerCancelsTheOrphanChannel)
+{
+    auto registry = std::make_shared<WatchRegistry>();
+    auto dispatcher = std::make_shared<MissingOwnerWatchDispatcher>(registry.get());
+    dispatcher->Start();
+    const int64_t watchId = registry->Register("/orphan", "", "worker");
+    dispatcher->AddChannel(watchId, "worker");
+    dispatcher->SetSnapshotRevision(watchId, 1);
+    auto event = std::make_shared<WatchEvent>();
+    event->type = WatchEvent::Type::PUT;
+    event->entry = KeyValueEntry{ "/orphan", "value", 1, 2 };
+    event->revision = 2;
+
+    std::vector<std::shared_ptr<WatcherEntry>> matched;
+    dispatcher->Enqueue(std::move(event));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    do {
+        matched.clear();
+        registry->MatchWatchers("/orphan", matched);
+        std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_QUEUE_SETTLE_MS));
+    } while (!matched.empty() && std::chrono::steady_clock::now() < deadline);
+    EXPECT_TRUE(matched.empty());
+    dispatcher->Stop();
+}
+
+TEST_F(CoordinatorStoreTest, RemoveChannelsByWatcherCancelsQueuedRetry)
+{
+    auto registry = std::make_shared<WatchRegistry>();
+    auto dispatcher = std::make_shared<AlwaysFailingWatchDispatcher>(registry.get());
+    dispatcher->Start();
+
+    int64_t watchId = registry->Register("/cancel-retry", "", "failed-worker");
+    dispatcher->AddChannel(watchId, "failed-worker");
+    dispatcher->SetSnapshotRevision(watchId, 1);
+
+    auto event = std::make_shared<WatchEvent>();
+    event->type = WatchEvent::Type::PUT;
+    event->entry = KeyValueEntry{ "/cancel-retry", "value", 1, 2 };
+    event->revision = 2;
+    dispatcher->Enqueue(event);
+    ASSERT_TRUE(dispatcher->WaitNotifyAttempts(1));
+
+    dispatcher->RemoveChannelsByWatcher("failed-worker");
+    const int attemptsAfterCancel = dispatcher->GetNotifyAttempts();
+    std::this_thread::sleep_for(std::chrono::milliseconds(CANCEL_RETRY_OBSERVE_MS));
+    ASSERT_EQ(dispatcher->GetNotifyAttempts(), attemptsAfterCancel);
+    std::vector<std::shared_ptr<WatcherEntry>> matched;
+    registry->MatchWatchers("/cancel-retry", matched);
+    ASSERT_TRUE(matched.empty());
+    dispatcher->Stop();
+}
+
+TEST_F(CoordinatorStoreTest, WatchDispatcherStopCancelsRetryBackoff)
+{
+    auto registry = std::make_shared<WatchRegistry>();
+    auto dispatcher = std::make_shared<AlwaysFailingWatchDispatcher>(registry.get());
+    dispatcher->Start();
+
+    int64_t watchId = registry->Register("/stop-retry", "", "worker");
+    dispatcher->AddChannel(watchId, "worker");
+    dispatcher->SetSnapshotRevision(watchId, 1);
+
+    auto event = std::make_shared<WatchEvent>();
+    event->type = WatchEvent::Type::PUT;
+    event->entry = KeyValueEntry{ "/stop-retry", "value", 1, 2 };
+    event->revision = 2;
+    dispatcher->Enqueue(event);
+    ASSERT_TRUE(dispatcher->WaitNotifyAttempts(2));
+    std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_QUEUE_SETTLE_MS));
+
+    const auto begin = std::chrono::steady_clock::now();
+    dispatcher->Stop();
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - begin)
+                               .count();
+    ASSERT_LT(elapsedMs, MAX_RETRY_SHUTDOWN_MS);
+}
+
 TEST_F(CoordinatorStoreTest, DoNotifyFailureKeepsBatchForRetry)
 {
     auto registry = std::make_shared<WatchRegistry>();
@@ -1220,7 +1606,8 @@ TEST_F(CoordinatorStoreTest, ConcurrentWatchRegistrationAndEventsAreSafe)
     for (int i = 0; i < WATCHER_COUNT; ++i) {
         registerThreads.emplace_back([this, i, &watchIds] {
             std::vector<KeyValueEntry> initial;
-            DS_ASSERT_OK(store_->WatchRange("/watch/", "/watch0", "addr" + std::to_string(i), watchIds[i], initial));
+            DS_ASSERT_OK(
+                store_->WatchRange("/watch/", "/watch0", "addr" + std::to_string(i), "", watchIds[i], initial));
         });
     }
     for (auto &thread : registerThreads) {
@@ -1312,7 +1699,7 @@ TEST_F(CoordinatorStoreTest, DefaultConstructedCoordinatorStoreReturnsNotReady)
     ASSERT_TRUE(store.DeleteRange("/not-ready", "", deleted, revision).IsError());
 
     int64_t watchId = 0;
-    ASSERT_TRUE(store.WatchRange("/not-ready", "", "addr", watchId, kvs).IsError());
+    ASSERT_TRUE(store.WatchRange("/not-ready", "", "addr", "", watchId, kvs).IsError());
 
     int64_t ttlMs = 0;
     int64_t remainingTtlMs = 0;
@@ -1424,6 +1811,34 @@ TEST_F(CoordinatorStoreTest, WatchDispatcherDispatchesEventsEnqueuedBeforeStart)
     dispatcher->Stop();
 }
 
+TEST_F(CoordinatorStoreTest, PendingQueueOverflowRewatchesEveryLiveChannel)
+{
+    constexpr size_t pendingQueueLimit = 10'000;
+    auto registry = std::make_shared<WatchRegistry>();
+    auto dispatcher = std::make_shared<MockWatchDispatcher>(registry.get());
+    const int64_t first = registry->Register("/overflow/a", "", "worker-a");
+    const int64_t second = registry->Register("/overflow/b", "", "worker-b");
+    dispatcher->AddChannel(first, "worker-a");
+    dispatcher->AddChannel(second, "worker-b");
+    dispatcher->SetSnapshotRevision(first, 1);
+    dispatcher->SetSnapshotRevision(second, 1);
+    for (size_t i = 0; i <= pendingQueueLimit; ++i) {
+        auto event = std::make_shared<WatchEvent>();
+        event->type = WatchEvent::Type::PUT;
+        event->entry = KeyValueEntry{ "/unmatched/" + std::to_string(i), "value", 1,
+                                     static_cast<int64_t>(i + 2) };
+        event->revision = static_cast<int64_t>(i + 2);
+        dispatcher->Enqueue(std::move(event));
+    }
+
+    dispatcher->Start();
+    ASSERT_TRUE(dispatcher->WaitEventCount(first, 1));
+    ASSERT_TRUE(dispatcher->WaitEventCount(second, 1));
+    EXPECT_EQ(dispatcher->GetEvents(first).front()->type, WatchEvent::Type::REWATCH);
+    EXPECT_EQ(dispatcher->GetEvents(second).front()->type, WatchEvent::Type::REWATCH);
+    dispatcher->Stop();
+}
+
 TEST_F(CoordinatorStoreTest, CasFailureDoesNotChangeValueRevisionEventOrTtl)
 {
     int64_t version = 0;
@@ -1433,7 +1848,7 @@ TEST_F(CoordinatorStoreTest, CasFailureDoesNotChangeValueRevisionEventOrTtl)
 
     int64_t watchId = 0;
     std::vector<KeyValueEntry> initial;
-    DS_ASSERT_OK(store_->WatchRange("/cas/key", "", "addr", watchId, initial));
+    DS_ASSERT_OK(store_->WatchRange("/cas/key", "", "addr", "", watchId, initial));
     ASSERT_EQ(initial.size(), 1UL);
 
     int64_t failedVersion = 0;

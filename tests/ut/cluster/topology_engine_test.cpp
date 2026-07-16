@@ -11,12 +11,15 @@
 #include <algorithm>
 #include <atomic>
 #include <future>
+#include <mutex>
 #include <thread>
 #include <type_traits>
+#include <vector>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/control/topology_plan_builder.h"
 #include "datasystem/cluster/control/topology_task_materializer.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "ut/cluster/testing/fake_coordination_backend.h"
 
 #include "gtest/gtest.h"
@@ -134,6 +137,20 @@ TEST(TopologyEngineTest, StartsWorkerRolePublishesEvidenceAndStopsWithoutClosing
     DS_ASSERT_OK(backend.Get(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), topology));
 }
 
+TEST(TopologyEngineTest, PublishesMembershipBeforeRegisteringTopologyWatches)
+{
+    FakeCoordinationBackend backend;
+    HashAlgorithm algorithm;
+    NoopTopologyCallbacks callbacks;
+    TopologyEngineOptions options{ "startup-order", "127.0.0.1:10001" };
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(TopologyEngine::Create(options, backend, algorithm, callbacks, engine));
+
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_EQ(backend.LifecycleCalls(), (std::vector<std::string>{ "membership", "watch" }));
+    DS_ASSERT_OK(engine->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyEngineTest, EnforcesWorkerEventQueueCapacity)
 {
     FakeCoordinationBackend backend;
@@ -192,6 +209,135 @@ TEST(TopologyEngineTest, MissingInitialTopologyStaysNotReadyUntilControllerBoots
         std::this_thread::yield();
     }
     EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NORMAL);
+    DS_ASSERT_OK(engine->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, RecoveringBackendDoesNotFailWorkerStartup)
+{
+    FakeCoordinationBackend backend;
+    HashAlgorithm algorithm;
+    NoopTopologyCallbacks callbacks;
+    TopologyEngineOptions options{ "recovering", "127.0.0.1:10001" };
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(TopologyEngine::Create(options, backend, algorithm, callbacks, engine));
+    backend.ReturnNotReadyOnNextGet();
+
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NOT_READY);
+    DS_ASSERT_OK(engine->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, ExportsCanonicalLastGoodRecoveryTopology)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("export", keys));
+    const auto expected = MakeEngineTopology(7);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), expected);
+    HashAlgorithm algorithm;
+    NoopTopologyCallbacks callbacks;
+    TopologyEngineOptions options{ "export", "127.0.0.1:10001" };
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(TopologyEngine::Create(options, backend, algorithm, callbacks, engine));
+    uint64_t version = 99;
+    std::string canonical = "unchanged";
+    EXPECT_EQ(engine->GetRecoveryTopology(version, canonical).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(version, 99);
+    EXPECT_EQ(canonical, "unchanged");
+
+    DS_ASSERT_OK(engine->Start());
+    DS_ASSERT_OK(engine->GetRecoveryTopology(version, canonical));
+    EXPECT_EQ(version, expected.version);
+    TopologyState decoded;
+    DS_ASSERT_OK(TopologyRepositoryCodec::DecodeTopology(canonical, decoded));
+    EXPECT_EQ(decoded.version, expected.version);
+    EXPECT_EQ(decoded.members.front().identity.address, expected.members.front().identity.address);
+    DS_ASSERT_OK(engine->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, RecoveringExactReadPreservesLastGoodSnapshotAndAvailability)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("last-good", keys));
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeEngineTopology(7));
+    HashAlgorithm algorithm;
+    NoopTopologyCallbacks callbacks;
+    TopologyEngineOptions options{ "last-good", "127.0.0.1:10001" };
+    std::mutex levelsMutex;
+    std::vector<TopologyAvailabilityLevel> levels;
+    options.availabilityHandler = [&](TopologyAvailabilityLevel level) {
+        std::lock_guard<std::mutex> lock(levelsMutex);
+        levels.emplace_back(level);
+    };
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(TopologyEngine::Create(options, backend, algorithm, callbacks, engine));
+    DS_ASSERT_OK(engine->Start());
+    ASSERT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NORMAL);
+
+    const auto expectedAttempts = backend.GetAttemptCount() + 1;
+    backend.ReturnNotReadyOnNextGet();
+    backend.EmitEvent({ CoordinationEventType::PUT, "topology", "doorbell", 8, 8 });
+    ASSERT_TRUE(backend.WaitForGetAttempts(expectedAttempts, std::chrono::steady_clock::now() + TEST_WAIT));
+
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(engine->GetSnapshot(snapshot));
+    ASSERT_NE(snapshot, nullptr);
+    EXPECT_EQ(snapshot->Version(), 7);
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NORMAL);
+
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeEngineTopology(8));
+    backend.EmitEvent({ CoordinationEventType::PUT, "topology", "doorbell", 8, 9 });
+    const auto repairDeadline = std::chrono::steady_clock::now() + TEST_WAIT;
+    while (std::chrono::steady_clock::now() < repairDeadline) {
+        if (engine->GetSnapshot(snapshot).IsOk() && snapshot->Version() == 8) {
+            break;
+        }
+        std::this_thread::yield();
+    }
+    ASSERT_EQ(snapshot->Version(), 8);
+    {
+        std::lock_guard<std::mutex> lock(levelsMutex);
+        EXPECT_EQ(std::count(levels.begin(), levels.end(), TopologyAvailabilityLevel::NOT_READY), 0);
+    }
+    DS_ASSERT_OK(engine->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, AuthorityRollbackIsolationPersistsForEngineLifetime)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("authority-fence", keys));
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeEngineTopology(2));
+    HashAlgorithm algorithm;
+    NoopTopologyCallbacks callbacks;
+    TopologyEngineOptions options{ "authority-fence", "127.0.0.1:10001" };
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(TopologyEngine::Create(options, backend, algorithm, callbacks, engine));
+    DS_ASSERT_OK(engine->Start());
+
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeEngineTopology(1));
+    backend.EmitEvent({ CoordinationEventType::PUT, "topology", "doorbell", 1, 1 });
+    const auto deadline = std::chrono::steady_clock::now() + TEST_WAIT;
+    while (std::chrono::steady_clock::now() < deadline
+           && engine->GetAvailability() != TopologyAvailabilityLevel::ROLE_ISOLATED) {
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::ROLE_ISOLATED);
+
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeEngineTopology(3));
+    backend.EmitEvent({ CoordinationEventType::PUT, "topology", "doorbell", 3, 3 });
+    uint64_t recoveredVersion = 0;
+    std::string canonical;
+    const auto rebuildDeadline = std::chrono::steady_clock::now() + TEST_WAIT;
+    while (std::chrono::steady_clock::now() < rebuildDeadline) {
+        if (engine->GetRecoveryTopology(recoveredVersion, canonical).IsOk() && recoveredVersion == 3) {
+            break;
+        }
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(recoveredVersion, 3);
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::ROLE_ISOLATED);
     DS_ASSERT_OK(engine->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

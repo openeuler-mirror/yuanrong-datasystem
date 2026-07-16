@@ -52,9 +52,15 @@ Status FakeCoordinationBackend::Get(const std::string &table, const std::string 
 {
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "invalid timeout");
     std::unique_lock<std::mutex> lock(mutex_);
+    ++getAttempts_;
+    getCv_.notify_all();
     if (failNextGet_) {
         failNextGet_ = false;
         return Status(K_RPC_UNAVAILABLE, "injected exact-read backend failure");
+    }
+    if (notReadyNextGet_) {
+        notReadyNextGet_ = false;
+        return Status(K_NOT_READY, "injected recovering backend");
     }
     if (blockNextGet_) {
         blockNextGet_ = false;
@@ -144,6 +150,7 @@ Status FakeCoordinationBackend::Delete(const std::string &table, const std::stri
 Status FakeCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    lifecycleCalls_.emplace_back("watch");
     if (failNextWatch_) {
         failNextWatch_ = false;
         return Status(K_RPC_UNAVAILABLE, "injected watch failure");
@@ -154,6 +161,8 @@ Status FakeCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKe
 
 Status FakeCoordinationBackend::InitKeepAlive(const std::string &, const std::string &, bool, bool)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
+    lifecycleCalls_.emplace_back("membership");
     return Status::OK();
 }
 
@@ -238,6 +247,12 @@ void FakeCoordinationBackend::FailNextGet()
     failNextGet_ = true;
 }
 
+void FakeCoordinationBackend::ReturnNotReadyOnNextGet()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    notReadyNextGet_ = true;
+}
+
 void FakeCoordinationBackend::EmitEvent(CoordinationEvent event)
 {
     EventHandler handler;
@@ -254,6 +269,12 @@ std::vector<WatchKey> FakeCoordinationBackend::WatchKeys() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
     return watchKeys_;
+}
+
+std::vector<std::string> FakeCoordinationBackend::LifecycleCalls() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lifecycleCalls_;
 }
 
 bool FakeCoordinationBackend::HasEventHandler() const
@@ -274,6 +295,18 @@ bool FakeCoordinationBackend::WaitUntilGetBlocked(std::chrono::steady_clock::tim
 {
     std::unique_lock<std::mutex> lock(mutex_);
     return getCv_.wait_until(lock, deadline, [this] { return getBlocked_; });
+}
+
+size_t FakeCoordinationBackend::GetAttemptCount() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return getAttempts_;
+}
+
+bool FakeCoordinationBackend::WaitForGetAttempts(size_t expected, std::chrono::steady_clock::time_point deadline)
+{
+    std::unique_lock<std::mutex> lock(mutex_);
+    return getCv_.wait_until(lock, deadline, [this, expected] { return getAttempts_ >= expected; });
 }
 
 void FakeCoordinationBackend::ReleaseBlockedGet()

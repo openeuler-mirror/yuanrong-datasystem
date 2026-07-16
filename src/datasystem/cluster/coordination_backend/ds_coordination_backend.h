@@ -10,6 +10,7 @@
 #define DATASYSTEM_CLUSTER_COORDINATION_BACKEND_DS_COORDINATION_BACKEND_H
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <mutex>
@@ -29,6 +30,8 @@ namespace datasystem::cluster {
  */
 class DsCoordinationBackend final : public ICoordinationBackend {
 public:
+    using MembershipReadyHandler = std::function<void(const std::string &, bool)>;
+
     /**
      * @brief Construct a Coordinator-backed coordination backend.
      * @param[in] proxy Coordinator proxy that must outlive this backend.
@@ -204,16 +207,47 @@ public:
     const std::string &GetWatcherAddr() const;
 
     /**
-     * @brief Deliver one Coordinator watch event to the currently installed handler.
+     * @brief Install a callback for exact membership-operation CoordinatorIds.
+     * @param[in] handler Callback invoked outside backend locks with identity and watch-invalidation state.
+     */
+    void SetMembershipReadyHandler(MembershipReadyHandler handler);
+
+    /**
+     * @brief Check whether this backend owns one CoordinatorId/watch identity.
+     * @param[in] coordinatorId Coordinator process-lifetime identity.
+     * @param[in] watchId Watch identity within that Coordinator lifetime.
+     * @return True only for a committed current registration.
+     */
+    bool OwnsWatchIdentity(const std::string &coordinatorId, int64_t watchId) const;
+
+    /**
+     * @brief Check whether a watch registration transaction is in progress.
+     * @return True while an RPC may have created a channel not yet known by watch ID.
+     */
+    bool IsWatchRegistrationInProgress() const;
+
+    /**
+     * @brief Mark the saved watch plan stale and enqueue a non-blocking exact-read doorbell.
+     */
+    void InvalidateWatches();
+
+    /**
+     * @brief Deliver one identity-bound Coordinator watch event.
+     * @param[in] coordinatorId Coordinator process-lifetime identity.
+     * @param[in] watchId Watch identity within that Coordinator lifetime.
      * @param[in] event Event delivered by the Worker watch RPC service.
      */
-    void HandleWatchEvent(CoordinationEvent &&event);
+    void HandleWatchEvent(const std::string &coordinatorId, int64_t watchId, CoordinationEvent &&event);
 
 private:
     struct KeepAliveFailureState;
     struct WatchedKey {
         std::string key;
         bool isPrefix{ false };
+    };
+    struct WatchRegistration {
+        int64_t watchId{ 0 };
+        WatchedKey scope;
     };
 
     /**
@@ -234,9 +268,10 @@ private:
 
     /**
      * @brief Create or recreate the leased membership key.
+     * @param[in] recreated True when existing watch ownership must be invalidated.
      * @return Status of the call.
      */
-    Status AutoCreateKeepAliveKey();
+    Status AutoCreateKeepAliveKey(bool recreated = false);
 
     /**
      * @brief Renew the current membership lease once.
@@ -259,6 +294,13 @@ private:
      * @param[in,out] state Failure evidence accumulated by the renewal loop.
      */
     void HandleKeepAliveSuccess(KeepAliveFailureState &state);
+
+    /**
+     * @brief Record one successful membership CoordinatorId and request rewatch when it changes.
+     * @param[in] coordinatorId Exact successful membership response identity.
+     * @param[in] recreated True when the membership key was newly created or recreated.
+     */
+    void HandleMembershipSuccess(const std::string &coordinatorId, bool recreated = false);
 
     /**
      * @brief Classify and handle one failed lease renewal.
@@ -292,29 +334,94 @@ private:
     void ShutdownKeepAliveThread();
 
     /**
+     * @brief Register and atomically commit one complete logical watch plan.
+     * @param[in] watchKeys Logical watch plan.
+     * @return K_OK after complete registration or an RPC/identity status without partial commit.
+     */
+    Status RegisterWatchPlan(const std::vector<WatchKey> &watchKeys);
+
+    /**
+     * @brief Build all physical registrations and initial snapshot events for a logical plan.
+     * @param[in] watchKeys Logical watch plan.
+     * @param[out] registrations Successful physical registrations.
+     * @param[out] registeredIds Successful watch IDs for rollback.
+     * @param[out] initialEvents Initial snapshot events.
+     * @param[out] coordinatorId Coordinator lifetime shared by the complete batch.
+     * @return K_OK for a complete same-lifetime batch, otherwise an RPC or identity status.
+     */
+    Status PrepareWatchPlan(const std::vector<WatchKey> &watchKeys,
+                            std::vector<WatchRegistration> &registrations,
+                            std::vector<int64_t> &registeredIds,
+                            std::vector<CoordinationEvent> &initialEvents, std::string &coordinatorId);
+
+    /**
+     * @brief Atomically replace the committed registrations after a complete batch succeeds.
+     * @param[in] watchKeys Logical watch plan.
+     * @param[in] registrations Complete physical registrations.
+     * @param[in] coordinatorId Coordinator lifetime that owns registrations.
+     */
+    void CommitWatchPlan(const std::vector<WatchKey> &watchKeys, std::vector<WatchRegistration> registrations,
+                         const std::string &coordinatorId);
+
+    /**
+     * @brief Re-register the saved watch plan after a CoordinatorId change or RESET.
+     * @return K_OK when no rewatch is needed or after a complete replacement.
+     */
+    Status RewatchIfNeeded();
+
+    /**
+     * @brief Observe successful identity or probe after a cold identity-ambiguous failure.
+     * @param[in] status Completed backend RPC status.
+     */
+    void RefreshWatchIdentity(const Status &status);
+
+    /**
+     * @brief Deliver one already fenced watch doorbell to the installed consumer.
+     * @param[in] event Move-only event.
+     */
+    void DispatchWatchEvent(CoordinationEvent &&event);
+
+    /**
      * @brief Check whether one physical event key belongs to a registered watch.
+     * @param[in] watchId Coordinator watch identity.
      * @param[in] key Physical Coordinator event key.
      * @return True when this backend instance subscribed to the key.
      */
-    bool AcceptsWatchEvent(const std::string &key);
+    bool AcceptsWatchEvent(int64_t watchId, const std::string &key) const;
 
     ICoordinatorServiceProxy *proxy_;
     std::string watcherAddr_;
-    // Protects watchIds_ and watchedKeys_ while shutdown can race with watch delivery.
-    std::mutex watchMutex_;
-    std::vector<int64_t> watchIds_;
-    std::vector<WatchedKey> watchedKeys_;
+    std::string pendingWatchRegistrationId_;
+    // Serializes complete watch registration transactions without being held by callbacks or RPC helpers.
+    std::mutex rewatchMutex_;
+    // Protects watch state, identity probe backoff and nextIdentityProbeAt_.
+    mutable std::mutex watchMutex_;
+    std::vector<WatchKey> watchPlan_;
+    std::vector<WatchRegistration> registrations_;
+    std::string registeredCoordinatorId_;
+    bool watchRegistrationInProgress_{ false };
+    bool rewatchRequired_{ false };
+    bool watchStopping_{ false };
+    static constexpr std::chrono::milliseconds INITIAL_IDENTITY_PROBE_BACKOFF{ 100 };
+    static constexpr std::chrono::milliseconds MAX_IDENTITY_PROBE_BACKOFF{ 5'000 };
+    static constexpr int IDENTITY_PROBE_BACKOFF_MULTIPLIER = 2;
+    std::chrono::milliseconds identityProbeBackoff_{ INITIAL_IDENTITY_PROBE_BACKOFF };
+    std::chrono::steady_clock::time_point nextIdentityProbeAt_;
 
-    // Protects eventHandler_, checkStoreStateWhenNetworkFailedHandler_, and activeEventHandlers_.
+    // Protects event handlers, store-state callback, last membership identity and activeEventHandlers_.
     std::mutex eventHandlerMutex_;
     // Uses eventHandlerMutex_ to drain handler copies before their consumer is destroyed.
     std::condition_variable eventHandlerCv_;
     EventHandler eventHandler_;
+    MembershipReadyHandler membershipReadyHandler_;
+    std::string lastMembershipCoordinatorId_;
     std::function<bool()> checkStoreStateWhenNetworkFailedHandler_;
     size_t activeEventHandlers_{ 0 };
 
     std::string keepAliveTableName_;
     std::string keepAliveKey_;
+    // Serializes complete membership state mutations and their RPC commit order.
+    std::mutex membershipMutationMutex_;
     // Protects keepAliveValue_; also used by keepAliveCv_ to interrupt its wait.
     std::mutex keepAliveMutex_;
     MembershipValue keepAliveValue_;

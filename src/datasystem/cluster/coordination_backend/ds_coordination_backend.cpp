@@ -29,14 +29,20 @@
 #include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 DS_DECLARE_string(host_id_env_name);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_uint32(node_timeout_s);
 
 namespace datasystem::cluster {
+namespace {
+constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
+}
 
 struct DsCoordinationBackend::KeepAliveFailureState {
     int confirmMinTimes{ 3 };
@@ -63,10 +69,12 @@ Status DsCoordinationBackend::GetAll(const std::string &tableName,
     const std::string rangeKey = prefix + "/";
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(proxy_->Range(rangeKey, StringPlusOne(rangeKey), kvs, revision));
+    auto rc = proxy_->Range(rangeKey, StringPlusOne(rangeKey), kvs, revision);
+    RefreshWatchIdentity(rc);
+    RETURN_IF_NOT_OK(rc);
     outKeyValues.reserve(outKeyValues.size() + kvs.size());
-    for (const auto &kv : kvs) {
-        outKeyValues.emplace_back(RemoveTablePrefix(kv.key, prefix), kv.value);
+    for (auto &kv : kvs) {
+        outKeyValues.emplace_back(RemoveTablePrefix(kv.key, prefix), std::move(kv.value));
     }
     return Status::OK();
 }
@@ -85,7 +93,9 @@ Status DsCoordinationBackend::Get(const std::string &tableName, const std::strin
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
-    RETURN_IF_NOT_OK(proxy_->Range(BuildRealKey(tableName, key), "", kvs, revision, timeoutMs));
+    auto rc = proxy_->Range(BuildRealKey(tableName, key), "", kvs, revision, timeoutMs);
+    RefreshWatchIdentity(rc);
+    RETURN_IF_NOT_OK(rc);
     if (kvs.empty()) {
         RETURN_STATUS(K_NOT_FOUND, "The key does not exist in coordinator. key:" + key);
     }
@@ -116,7 +126,9 @@ Status DsCoordinationBackend::CAS(const std::string &tableName, const std::strin
         }
         return Status::OK();
     };
-    RETURN_IF_NOT_OK(proxy_->CAS(realKey, coordinatorProcessFunc, version, revision));
+    auto rc = proxy_->CAS(realKey, coordinatorProcessFunc, version, revision);
+    RefreshWatchIdentity(rc);
+    RETURN_IF_NOT_OK(rc);
     res.key = realKey;
     res.value = std::move(valueFromCas);
     res.version = version;
@@ -137,15 +149,24 @@ Status DsCoordinationBackend::CAS(const std::string &tableName, const std::strin
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
+    std::string coordinatorId;
     const std::string realKey = BuildRealKey(tableName, key);
-    RETURN_IF_NOT_OK(proxy_->Range(realKey, "", kvs, revision));
+    auto rangeStatus = proxy_->Range(realKey, "", kvs, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId);
+    RefreshWatchIdentity(rangeStatus);
+    RETURN_IF_NOT_OK(rangeStatus);
     if (kvs.empty()) {
         int64_t version = 0;
-        return proxy_->Put(realKey, newValue, 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, revision);
+        auto rc = proxy_->Put(realKey, newValue, 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, revision,
+                              DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr, coordinatorId);
+        RefreshWatchIdentity(rc);
+        return rc;
     }
     CHECK_FAIL_RETURN_STATUS(kvs.front().value == oldValue, K_TRY_AGAIN, "Coordinator compare value failed");
     int64_t version = 0;
-    return proxy_->Put(realKey, newValue, 0, kvs.front().version, version, revision);
+    auto rc = proxy_->Put(realKey, newValue, 0, kvs.front().version, version, revision,
+                          DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr, coordinatorId);
+    RefreshWatchIdentity(rc);
+    return rc;
 }
 
 Status DsCoordinationBackend::Delete(const std::string &tableName, const std::string &key)
@@ -158,51 +179,188 @@ Status DsCoordinationBackend::Delete(const std::string &tableName, const std::st
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     int64_t deleted = 0;
     int64_t revision = 0;
-    return proxy_->DeleteRange(BuildRealKey(tableName, key), "", deleted, revision, timeoutMs);
+    auto rc = proxy_->DeleteRange(BuildRealKey(tableName, key), "", deleted, revision, timeoutMs);
+    RefreshWatchIdentity(rc);
+    return rc;
 }
 
 Status DsCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKeys)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
-    std::vector<int64_t> registeredWatchIds;
+    std::lock_guard<std::mutex> lock(rewatchMutex_);
+    return RegisterWatchPlan(watchKeys);
+}
+
+Status DsCoordinationBackend::RegisterWatchPlan(const std::vector<WatchKey> &watchKeys)
+{
+    {
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        CHECK_FAIL_RETURN_STATUS(!watchStopping_ && !watchKeys.empty(), K_NOT_READY,
+                                 "Coordinator watch backend is stopping or has an empty plan");
+        watchRegistrationInProgress_ = true;
+    }
+    Raii clearRegistration([this] {
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        watchRegistrationInProgress_ = false;
+    });
+    std::vector<WatchRegistration> registrations;
+    std::vector<int64_t> registeredIds;
     std::vector<CoordinationEvent> initialEvents;
-    std::vector<WatchedKey> watchedKeys;
+    std::string batchCoordinatorId;
+    if (pendingWatchRegistrationId_.empty()) {
+        pendingWatchRegistrationId_ = GetBytesUuid();
+    }
+    RETURN_IF_NOT_OK(
+        PrepareWatchPlan(watchKeys, registrations, registeredIds, initialEvents, batchCoordinatorId));
+    std::string observedCoordinatorId;
+    proxy_->GetObservedCoordinatorId(observedCoordinatorId);
+    if (batchCoordinatorId.empty() || batchCoordinatorId != observedCoordinatorId) {
+        LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, registeredIds, batchCoordinatorId),
+                     "Rollback stale Coordinator watch batch");
+        RETURN_STATUS(K_TRY_AGAIN, "Coordinator watch batch became stale before commit");
+    }
+    CommitWatchPlan(watchKeys, std::move(registrations), batchCoordinatorId);
+    pendingWatchRegistrationId_.clear();
+    for (auto &event : initialEvents) {
+        DispatchWatchEvent(std::move(event));
+    }
+    DispatchWatchEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    return Status::OK();
+}
+
+Status DsCoordinationBackend::PrepareWatchPlan(const std::vector<WatchKey> &watchKeys,
+                                               std::vector<WatchRegistration> &registrations,
+                                               std::vector<int64_t> &registeredIds,
+                                               std::vector<CoordinationEvent> &initialEvents,
+                                               std::string &coordinatorId)
+{
     for (const auto &watchKey : watchKeys) {
         const std::string realKey = BuildRealKey(watchKey.tableName, watchKey.key);
         const bool isPrefix = watchKey.key.empty();
         const std::string rangeEnd = isPrefix ? StringPlusOne(realKey) : "";
         std::vector<KeyValueEntry> initialKvs;
         int64_t watchId = 0;
-        auto rc = proxy_->WatchRange(realKey, rangeEnd, watcherAddr_, watchId, initialKvs);
+        std::string responseCoordinatorId;
+        auto rc = proxy_->WatchRange(realKey, rangeEnd, watcherAddr_, pendingWatchRegistrationId_ + realKey,
+                                     watchId, initialKvs,
+                                     DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &responseCoordinatorId);
+        if (rc.IsOk() && !coordinatorId.empty() && coordinatorId != responseCoordinatorId) {
+            LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, { watchId }, responseCoordinatorId),
+                         "Cancel current-generation watch");
+            LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, registeredIds, coordinatorId),
+                         "Cancel previous-generation partial watches");
+            RETURN_STATUS(K_TRY_AGAIN, "CoordinatorId changed during watch registration");
+        }
         if (rc.IsError()) {
-            if (!registeredWatchIds.empty()) {
-                LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, registeredWatchIds),
-                             "Rollback registered coordinator watches failed");
+            if (!registeredIds.empty()) {
+                LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, registeredIds, coordinatorId),
+                             "Rollback partial Coordinator watches");
             }
             return rc;
         }
-        registeredWatchIds.emplace_back(watchId);
-        for (const auto &kv : initialKvs) {
-            CoordinationEvent event;
-            event.type = CoordinationEventType::PUT;
-            event.key = kv.key;
-            event.value = kv.value;
-            event.version = kv.version;
-            event.revision = kv.modRevision;
-            initialEvents.emplace_back(std::move(event));
+        registrations.push_back({ watchId, { realKey, isPrefix } });
+        registeredIds.emplace_back(watchId);
+        coordinatorId = responseCoordinatorId;
+        for (auto &kv : initialKvs) {
+            initialEvents.push_back({ CoordinationEventType::PUT, std::move(kv.key), std::move(kv.value),
+                                      kv.version, kv.modRevision });
         }
-        watchedKeys.emplace_back(WatchedKey{ realKey, isPrefix });
-    }
-    {
-        std::lock_guard<std::mutex> lock(watchMutex_);
-        watchIds_.insert(watchIds_.end(), registeredWatchIds.begin(), registeredWatchIds.end());
-        watchedKeys_.insert(watchedKeys_.end(), watchedKeys.begin(), watchedKeys.end());
-    }
-    for (auto &event : initialEvents) {
-        LOG(INFO) << "WatchEvents: fake event " << event.ToString();
-        HandleWatchEvent(std::move(event));
     }
     return Status::OK();
+}
+
+void DsCoordinationBackend::CommitWatchPlan(const std::vector<WatchKey> &watchKeys,
+                                            std::vector<WatchRegistration> registrations,
+                                            const std::string &coordinatorId)
+{
+    std::vector<int64_t> previousWatchIds;
+    std::string previousCoordinatorId;
+    {
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        previousCoordinatorId = registeredCoordinatorId_;
+        for (const auto &registration : registrations_) {
+            previousWatchIds.emplace_back(registration.watchId);
+        }
+        watchPlan_ = watchKeys;
+        registrations_ = std::move(registrations);
+        registeredCoordinatorId_ = coordinatorId;
+        rewatchRequired_ = false;
+        watchRegistrationInProgress_ = false;
+    }
+    LOG(INFO) << "CLUSTER_WATCH_REGISTERED watcher=" << watcherAddr_ << ", scope_count=" << watchKeys.size()
+              << ", coordinator_id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE);
+    if (previousCoordinatorId == coordinatorId && !previousWatchIds.empty()) {
+        LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, previousWatchIds, previousCoordinatorId),
+                     "Cancel replaced Coordinator watches");
+    }
+}
+
+Status DsCoordinationBackend::RewatchIfNeeded()
+{
+    std::lock_guard<std::mutex> rewatchLock(rewatchMutex_);
+    std::vector<WatchKey> plan;
+    {
+        std::lock_guard<std::mutex> watchLock(watchMutex_);
+        if (!rewatchRequired_ || watchStopping_) {
+            return Status::OK();
+        }
+        plan = watchPlan_;
+    }
+    return RegisterWatchPlan(plan);
+}
+
+void DsCoordinationBackend::RefreshWatchIdentity(const Status &status)
+{
+    std::string coordinatorId;
+    const bool probe = status.GetCode() == K_NOT_READY || IsRpcTimeout(status);
+    std::unique_lock<std::mutex> probeLock(rewatchMutex_, std::defer_lock);
+    if (status.IsError() && !probe && status.GetCode() != K_TRY_AGAIN) {
+        return;
+    }
+    if (probe) {
+        probeLock.lock();
+        const auto now = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(watchMutex_);
+            if (watchStopping_ || watchPlan_.empty() || now < nextIdentityProbeAt_) {
+                return;
+            }
+            nextIdentityProbeAt_ = now + identityProbeBackoff_;
+            identityProbeBackoff_ =
+                std::min(identityProbeBackoff_ * IDENTITY_PROBE_BACKOFF_MULTIPLIER, MAX_IDENTITY_PROBE_BACKOFF);
+        }
+        if (proxy_->GetCoordinatorId(coordinatorId).IsError()) {
+            return;
+        }
+    } else {
+        proxy_->GetObservedCoordinatorId(coordinatorId);
+    }
+    bool identityChanged = false;
+    bool rewatch = false;
+    {
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        if (probe) {
+            identityProbeBackoff_ = INITIAL_IDENTITY_PROBE_BACKOFF;
+            nextIdentityProbeAt_ = {};
+        }
+        if (!coordinatorId.empty() && !watchPlan_.empty() && registeredCoordinatorId_ != coordinatorId) {
+            rewatchRequired_ = true;
+            identityChanged = true;
+        }
+        rewatch = rewatchRequired_ && (status.IsOk() || identityChanged);
+    }
+    if (rewatch) {
+        if (probe) {
+            std::vector<WatchKey> plan;
+            {
+                std::lock_guard<std::mutex> lock(watchMutex_);
+                plan = watchPlan_;
+            }
+            LOG_IF_ERROR(RegisterWatchPlan(plan), "Re-register Coordinator watches after identity probe");
+        } else {
+            LOG_IF_ERROR(RewatchIfNeeded(), "Re-register Coordinator watches after identity observation");
+        }
+    }
 }
 
 Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
@@ -236,23 +394,25 @@ Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const 
     } else {
         keepAliveValue_.lifecycleState = MemberLifecycleState::STARTING;
     }
-    RETURN_IF_NOT_OK(AutoCreateKeepAliveKey());
+    // Publishing the lease can race the previous lease's TTL delete, which also removes this address's watch channels.
+    RETURN_IF_NOT_OK(AutoCreateKeepAliveKey(true));
     LaunchKeepAliveThread();
     return Status::OK();
 }
 
-Status DsCoordinationBackend::AutoCreateKeepAliveKey()
+Status DsCoordinationBackend::AutoCreateKeepAliveKey(bool recreated)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     CHECK_FAIL_RETURN_STATUS(!keepAliveTableName_.empty(), K_INVALID, "Coordinator keepalive table is empty");
     CHECK_FAIL_RETURN_STATUS(!keepAliveKey_.empty(), K_INVALID, "Coordinator keepalive key is empty");
-    CHECK_FAIL_RETURN_STATUS(keepAliveValue_.lifecycleState != MemberLifecycleState::UNKNOWN, K_INVALID,
-                             "Node state should not be empty.");
+    std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
 
     MembershipValue value;
     int64_t timeStamp = std::chrono::system_clock::now().time_since_epoch().count();
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
+        CHECK_FAIL_RETURN_STATUS(keepAliveValue_.lifecycleState != MemberLifecycleState::UNKNOWN, K_INVALID,
+                                 "Node state should not be empty.");
         keepAliveValue_.timestamp = timeStamp;
         value = keepAliveValue_;
     }
@@ -260,10 +420,13 @@ Status DsCoordinationBackend::AutoCreateKeepAliveKey()
     RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, valueStr));
     int64_t version = 0;
     int64_t revision = 0;
+    std::string coordinatorId;
     auto rc = proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
-                          COORDINATOR_NO_VERSION_CHECK, version, revision);
+                          COORDINATOR_NO_VERSION_CHECK, version, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                          &coordinatorId);
     LOG(INFO) << "AutoCreateKeepAliveKey: Put keepalive key " << keepAliveKey_ << " result: " << rc.ToString();
     RETURN_IF_NOT_OK(rc);
+    HandleMembershipSuccess(coordinatorId, recreated);
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
         if (keepAliveValue_.lifecycleState == MemberLifecycleState::STARTING
@@ -280,7 +443,13 @@ Status DsCoordinationBackend::RenewKeepAliveOnce()
     INJECT_POINT("CoordinationBackend.KeepAlive.returnError");
     int64_t ttlMs = keepAliveTtlMs_;
     int64_t remainingTtlMs = 0;
-    return proxy_->KeepAlive(BuildRealKey(keepAliveTableName_, keepAliveKey_), ttlMs, remainingTtlMs);
+    std::string coordinatorId;
+    auto rc = proxy_->KeepAlive(BuildRealKey(keepAliveTableName_, keepAliveKey_), ttlMs, remainingTtlMs,
+                                DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId);
+    if (rc.IsOk()) {
+        HandleMembershipSuccess(coordinatorId);
+    }
+    return rc;
 }
 
 void DsCoordinationBackend::LaunchKeepAliveThread()
@@ -321,6 +490,37 @@ void DsCoordinationBackend::HandleKeepAliveSuccess(KeepAliveFailureState &state)
     state.needHandleFailure = true;
 }
 
+void DsCoordinationBackend::HandleMembershipSuccess(const std::string &coordinatorId, bool recreated)
+{
+    MembershipReadyHandler handler;
+    bool identityChanged = false;
+    {
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        identityChanged = !coordinatorId.empty() && lastMembershipCoordinatorId_ != coordinatorId;
+        lastMembershipCoordinatorId_ = coordinatorId;
+        handler = membershipReadyHandler_;
+    }
+    bool invalidated = false;
+    {
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        if (!watchPlan_.empty() && !rewatchRequired_ && (recreated || registeredCoordinatorId_ != coordinatorId)) {
+            rewatchRequired_ = true;
+            invalidated = true;
+        }
+    }
+    if (invalidated) {
+        DispatchWatchEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    }
+    if (identityChanged || recreated) {
+        LOG(INFO) << "CLUSTER_COORDINATOR_ID role=worker watcher=" << watcherAddr_
+                  << ", id=" << coordinatorId.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                  << ", membership_recreated=" << recreated << ", watches_invalidated=" << invalidated;
+    }
+    if (handler != nullptr) {
+        handler(coordinatorId, invalidated);
+    }
+}
+
 bool DsCoordinationBackend::CheckStoreAvailableAfterKeepAliveFailure(KeepAliveFailureState &state)
 {
     std::function<bool()> availabilityCheck;
@@ -349,7 +549,7 @@ void DsCoordinationBackend::HandleKeepAliveFailure(const Status &status, const s
         LOG(WARNING) << "Confirmed local Coordinator network isolation; keep the process alive and report the "
                         "membership deletion event.";
     } else if (status.GetCode() == K_NOT_FOUND) {
-        (void)AutoCreateKeepAliveKey();
+        (void)AutoCreateKeepAliveKey(true);
     }
 }
 
@@ -359,21 +559,29 @@ void DsCoordinationBackend::HandleKeepAliveFailed(const std::string &realKey)
     event.type = CoordinationEventType::DELETE;
     event.key = realKey;
     event.value = "";
-    HandleWatchEvent(std::move(event));
+    DispatchWatchEvent(std::move(event));
 }
 
 void DsCoordinationBackend::CancelWatches()
 {
     std::vector<int64_t> watchIds;
+    std::string watchCoordinatorId;
     {
         std::lock_guard<std::mutex> lock(watchMutex_);
-        watchIds.swap(watchIds_);
-        watchedKeys_.clear();
+        for (const auto &registration : registrations_) {
+            watchIds.emplace_back(registration.watchId);
+        }
+        registrations_.clear();
+        watchPlan_.clear();
+        watchCoordinatorId = registeredCoordinatorId_;
+        registeredCoordinatorId_.clear();
+        rewatchRequired_ = false;
     }
     if (proxy_ == nullptr || watchIds.empty()) {
         return;
     }
-    LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, watchIds), "Cancel coordinator watches failed");
+    LOG_IF_ERROR(proxy_->CancelWatch(watcherAddr_, watchIds, watchCoordinatorId),
+                 "Cancel coordinator watches failed");
 }
 
 void DsCoordinationBackend::ShutdownKeepAliveThread()
@@ -390,6 +598,12 @@ Status DsCoordinationBackend::ShutdownEventSources()
     {
         std::lock_guard<std::mutex> lock(eventHandlerMutex_);
         eventHandler_ = {};
+        membershipReadyHandler_ = {};
+    }
+    {
+        std::lock_guard<std::mutex> rewatchLock(rewatchMutex_);
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        watchStopping_ = true;
     }
     ShutdownKeepAliveThread();
     CancelWatches();
@@ -408,18 +622,26 @@ Status DsCoordinationBackend::UpdateNodeState(MemberLifecycleState state)
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout(), K_NOT_READY,
                              "The key written to the cluster table must be bound to a lease");
+    std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
     MembershipValue value;
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
-        keepAliveValue_.lifecycleState = state;
         value = keepAliveValue_;
+        value.lifecycleState = state;
     }
     std::string valueStr;
     RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, valueStr));
     int64_t version = 0;
     int64_t revision = 0;
+    std::string coordinatorId;
     RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
-                                 COORDINATOR_NO_VERSION_CHECK, version, revision));
+                                 COORDINATOR_NO_VERSION_CHECK, version, revision,
+                                 DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId));
+    {
+        std::lock_guard<std::mutex> lock(keepAliveMutex_);
+        keepAliveValue_ = value;
+    }
+    HandleMembershipSuccess(coordinatorId);
     return Status::OK();
 }
 
@@ -437,19 +659,32 @@ Status DsCoordinationBackend::GetStorePrefix(const std::string &tableName, std::
 Status DsCoordinationBackend::InformReconciliationDone(const HostPort &workerAddr)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
-    std::string valueStr;
-    RETURN_IF_NOT_OK(Get(keepAliveTableName_, workerAddr.ToString(), valueStr));
+    std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
+    const std::string realKey = BuildRealKey(keepAliveTableName_, workerAddr.ToString());
+    std::vector<KeyValueEntry> entries;
+    int64_t revision = 0;
+    std::string rangeCoordinatorId;
+    auto rangeStatus = proxy_->Range(realKey, "", entries, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                                     &rangeCoordinatorId);
+    RefreshWatchIdentity(rangeStatus);
+    RETURN_IF_NOT_OK(rangeStatus);
+    CHECK_FAIL_RETURN_STATUS(!entries.empty(), K_NOT_FOUND, "membership does not exist during reconciliation");
     MembershipValue value;
-    RETURN_IF_NOT_OK(MembershipValueCodec::Decode(valueStr, value));
+    RETURN_IF_NOT_OK(MembershipValueCodec::Decode(entries.front().value, value));
     if (value.lifecycleState == MemberLifecycleState::RESTARTING
         || value.lifecycleState == MemberLifecycleState::RECOVERING) {
         value.lifecycleState = MemberLifecycleState::READY;
         std::string readyValue;
         RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, readyValue));
         int64_t version = 0;
-        int64_t revision = 0;
-        RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, workerAddr.ToString()), readyValue,
-                                     keepAliveTtlMs_, COORDINATOR_NO_VERSION_CHECK, version, revision));
+        int64_t putRevision = 0;
+        std::string coordinatorId;
+        auto putStatus = proxy_->Put(realKey, readyValue, keepAliveTtlMs_, entries.front().version, version,
+                                     putRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId,
+                                     rangeCoordinatorId);
+        RefreshWatchIdentity(putStatus);
+        RETURN_IF_NOT_OK(putStatus);
+        HandleMembershipSuccess(coordinatorId);
     }
     return Status::OK();
 }
@@ -482,11 +717,73 @@ const std::string &DsCoordinationBackend::GetWatcherAddr() const
     return watcherAddr_;
 }
 
-void DsCoordinationBackend::HandleWatchEvent(CoordinationEvent &&event)
+void DsCoordinationBackend::SetMembershipReadyHandler(MembershipReadyHandler handler)
 {
-    if (!AcceptsWatchEvent(event.key)) {
+    std::string coordinatorId;
+    {
+        std::lock_guard<std::mutex> lock(eventHandlerMutex_);
+        membershipReadyHandler_ = handler;
+        coordinatorId = lastMembershipCoordinatorId_;
+    }
+    if (handler != nullptr && !coordinatorId.empty()) {
+        handler(coordinatorId, false);
+    }
+}
+
+bool DsCoordinationBackend::OwnsWatchIdentity(const std::string &coordinatorId, int64_t watchId) const
+{
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    return !watchStopping_ && registeredCoordinatorId_ == coordinatorId
+           && std::any_of(registrations_.begin(), registrations_.end(),
+                          [watchId](const auto &entry) { return entry.watchId == watchId; });
+}
+
+bool DsCoordinationBackend::IsWatchRegistrationInProgress() const
+{
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    return !watchStopping_ && watchRegistrationInProgress_;
+}
+
+void DsCoordinationBackend::InvalidateWatches()
+{
+    bool invalidated = false;
+    {
+        std::lock_guard<std::mutex> lock(watchMutex_);
+        invalidated = !watchStopping_ && !watchPlan_.empty() && !rewatchRequired_;
+        if (invalidated) {
+            rewatchRequired_ = true;
+        }
+    }
+    if (invalidated) {
+        DispatchWatchEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    }
+}
+
+void DsCoordinationBackend::HandleWatchEvent(const std::string &coordinatorId, int64_t watchId,
+                                             CoordinationEvent &&event)
+{
+    if (!OwnsWatchIdentity(coordinatorId, watchId)) {
         return;
     }
+    if (event.type == CoordinationEventType::RESET) {
+        bool invalidated = false;
+        {
+            std::lock_guard<std::mutex> lock(watchMutex_);
+            invalidated = !rewatchRequired_;
+            rewatchRequired_ = true;
+        }
+        if (invalidated) {
+            DispatchWatchEvent(std::move(event));
+        }
+        return;
+    }
+    if (AcceptsWatchEvent(watchId, event.key)) {
+        DispatchWatchEvent(std::move(event));
+    }
+}
+
+void DsCoordinationBackend::DispatchWatchEvent(CoordinationEvent &&event)
+{
     EventHandler handler;
     {
         std::lock_guard<std::mutex> lock(eventHandlerMutex_);
@@ -496,6 +793,7 @@ void DsCoordinationBackend::HandleWatchEvent(CoordinationEvent &&event)
         }
         ++activeEventHandlers_;
     }
+    // User event handlers must not unwind through the Coordinator RPC callback boundary.
     try {
         handler(std::move(event));
     } catch (const std::exception &error) {
@@ -510,14 +808,17 @@ void DsCoordinationBackend::HandleWatchEvent(CoordinationEvent &&event)
     eventHandlerCv_.notify_all();
 }
 
-bool DsCoordinationBackend::AcceptsWatchEvent(const std::string &key)
+bool DsCoordinationBackend::AcceptsWatchEvent(int64_t watchId, const std::string &key) const
 {
     std::lock_guard<std::mutex> lock(watchMutex_);
-    return std::any_of(watchedKeys_.begin(), watchedKeys_.end(), [&key](const WatchedKey &watchedKey) {
-        if (watchedKey.isPrefix) {
-            return key.rfind(watchedKey.key, 0) == 0;
+    return std::any_of(registrations_.begin(), registrations_.end(), [&](const WatchRegistration &registration) {
+        if (registration.watchId != watchId) {
+            return false;
         }
-        return key == watchedKey.key;
+        if (registration.scope.isPrefix) {
+            return key.rfind(registration.scope.key, 0) == 0;
+        }
+        return key == registration.scope.key;
     });
 }
 
