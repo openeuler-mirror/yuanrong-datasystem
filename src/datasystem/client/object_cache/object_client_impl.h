@@ -1225,7 +1225,7 @@ private:
     /**
      * @brief If can not connect to worker, do some clean worker in this function.
      */
-    void ProcessWorkerLost();
+    Status ProcessWorkerLost(client::WorkerRecoveryReason reason);
 
     /**
      * @brief Clean local shm and mmap state when local worker heartbeat times out.
@@ -1236,7 +1236,7 @@ private:
      * @brief Process standby worker lost.
      * @param[in] node Standby worker node index.
      */
-    void ProcessStandbyWorkerLost(WorkerNode node);
+    Status ProcessStandbyWorkerLost(WorkerNode node, client::WorkerRecoveryReason reason);
 
     /**
      * @brief Stop listening standby worker.
@@ -1732,6 +1732,12 @@ private:
     Status PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp,
                             std::vector<std::shared_ptr<Buffer>> &buffers);
 
+    void CleanupWorkerShmAfterWorkerLost();
+
+    Status RegisterWorkerAfterWorkerLost(client::WorkerRecoveryReason reason);
+
+    Status RebuildWorkerShm();
+
     Status SetShmObjectBufferWithMetric(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
                                         uint32_t version, const std::vector<ReadParam> &readParams, size_t index,
                                         std::shared_ptr<Buffer> &bufferPtr);
@@ -1769,6 +1775,8 @@ private:
 
     ClientMemoryRefTable memoryRefCount_;
     TbbGlobalRefTable globalRefCount_;
+    struct ShmRecoveryState;
+    std::unique_ptr<ShmRecoveryState> shmRecoveryState_;
 
     std::unique_ptr<ClientStateManager> clientStateManager_{ nullptr };
     std::shared_ptr<datasystem::client::EmbeddedClientWorkerApi> embeddedClientWorkerApi_{ nullptr };

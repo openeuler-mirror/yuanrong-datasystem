@@ -91,7 +91,10 @@ Status ListenWorker::StartListenWorker(int socketFd)
             [this]() {
                 LOG(INFO) << "The client detects that the worker is disconnected, socket fd: " << socketFd_;
                 workerAvailable_ = false;
-                RunAllCallback();
+                auto rc = RunAllCallback(WorkerRecoveryReason::CONNECTION_BROKEN);
+                if (rc.IsError()) {
+                    LOG(ERROR) << "Failed to recover client after worker connection broke: " << rc.ToString();
+                }
             },
             nullptr));
     } else {
@@ -265,13 +268,21 @@ Status ListenWorker::CheckHeartbeat()
             workerReboot = true;
             return Status::OK();
         });
-        if (IsReconnectable() && (workerReboot || clientRemoved)) {
-            LOG(INFO) << "Heartbeat success, start to run all callback.";
-            RunAllCallback();
-            NotifyFirstHeartbeat(true);
-            continue;
+        WorkerRecoveryReason recoveryReason = WorkerRecoveryReason::RETRY_PENDING;
+        if ((workerReboot || clientRemoved) && IsReconnectable()) {
+            workerAvailable_ = false;
+            recoveryPending_ = true;
+            recoveryReason = workerReboot ? WorkerRecoveryReason::WORKER_REBOOT
+                                          : WorkerRecoveryReason::CLIENT_REMOVED;
         }
         fdReleaseHelper_.Update(std::move(expiredWorkerFds));
+        if (recoveryPending_) {
+            TryRecoverClientResources(recoveryReason);
+            waitPost_->WaitFor(intervalMs);
+            remainTime = clientDeadTimeoutMs;
+            timer.Reset();
+            continue;
+        }
         NotifyFirstHeartbeat(true);
         workerAvailable_ = true;
         TryRecoverLocalWorker();
@@ -281,6 +292,29 @@ Status ListenWorker::CheckHeartbeat()
         timer.Reset();
     }
     return Status::OK();
+}
+
+void ListenWorker::TryRecoverClientResources(WorkerRecoveryReason reason)
+{
+    if (!IsReconnectable()) {
+        return;
+    }
+    if (reason == WorkerRecoveryReason::RETRY_PENDING) {
+        VLOG(1) << "Heartbeat success, retry client resource recovery.";
+    } else {
+        LOG(INFO) << "Heartbeat success, start to recover client resources.";
+    }
+    auto recoveryStatus = RunAllCallback(reason);
+    NotifyFirstHeartbeat(true);
+    if (recoveryStatus.IsError()) {
+        constexpr int logInterval = 10;
+        LOG_EVERY_T(ERROR, logInterval)
+            << "Client resource recovery failed, keep request admission closed: " << recoveryStatus.ToString();
+        return;
+    }
+    recoveryPending_ = false;
+    workerAvailable_ = true;
+    LOG(INFO) << "Client resources recovered, reopen request admission.";
 }
 
 void ListenWorker::CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTimeoutMs, const Status &status)
@@ -296,6 +330,7 @@ void ListenWorker::CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTim
             NotifyFirstHeartbeat(false);
             std::shared_lock<std::shared_timed_mutex> l(workerTimeoutHandleMutex_);
             if (workerTimeoutHandle_) {
+                recoveryPending_ = true;
                 workerTimeoutHandle_();
             }
         }
@@ -303,37 +338,58 @@ void ListenWorker::CheckAndSetClientTimeout(int64_t failureTime, int64_t nodeTim
     }
 }
 
-void ListenWorker::RunAllCallback()
+Status ListenWorker::RunAllCallback(WorkerRecoveryReason reason)
 {
     if (stop_) {
-        return;
+        return Status::OK();
     }
     CleanInvalidCallback();
 
-    LOG(INFO) << "All callback size: " << callBackTable_.size() << ", local worker: " << isLocalWorker_;
+    if (reason == WorkerRecoveryReason::RETRY_PENDING) {
+        VLOG(1) << "Retry all worker recovery callbacks, local worker: " << isLocalWorker_;
+    } else {
+        LOG(INFO) << "Run all worker recovery callbacks, local worker: " << isLocalWorker_;
+    }
     auto traceId = Trace::Instance().GetTraceID();
-    auto func = [this, traceId]() {
+    auto func = [this, traceId, reason]() -> Status {
         auto traceGuard = Trace::Instance().SetTraceNewID(traceId);
         std::shared_lock<std::shared_timed_mutex> l(callbackMutex_);
+        Status result = Status::OK();
         for (const auto &func : callBackTable_) {
             if (stop_) {
-                return;
+                return Status::OK();
             }
             if (func.second) {
-                func.second();
+                auto rc = func.second(reason);
+                if (result.IsOk() && rc.IsError()) {
+                    result = std::move(rc);
+                }
             }
         }
+        return result;
     };
     if (asyncSwitchWorkerPool_ == nullptr || isLocalWorker_) {
-        func();
+        return func();
     } else {
-        LOG(INFO) << "async pool statistics: " << asyncSwitchWorkerPool_->GetStatistics();
+        if (reason == WorkerRecoveryReason::RETRY_PENDING) {
+            VLOG(1) << "async pool statistics: " << asyncSwitchWorkerPool_->GetStatistics();
+        } else {
+            LOG(INFO) << "async pool statistics: " << asyncSwitchWorkerPool_->GetStatistics();
+        }
         auto future = asyncSwitchWorkerPool_->Submit(func);
-        future.get();
+        return future.get();
     }
 }
 
 void ListenWorker::AddCallBackFunc(void *pointer, std::function<void()> callback)
+{
+    AddRecoveryCallback(pointer, [callback = std::move(callback)](WorkerRecoveryReason) {
+        callback();
+        return Status::OK();
+    });
+}
+
+void ListenWorker::AddRecoveryCallback(void *pointer, std::function<Status(WorkerRecoveryReason)> callback)
 {
     if (stop_ || pointer == nullptr) {
         return;
@@ -466,7 +522,10 @@ Status ListenWorker::UpdateSocketFd(const int socketFd)
         [this]() {
             LOG(INFO) << "The client detects that the worker is disconnected, socket fd: " << socketFd_;
             workerAvailable_ = false;
-            RunAllCallback();
+            auto rc = RunAllCallback(WorkerRecoveryReason::CONNECTION_BROKEN);
+            if (rc.IsError()) {
+                LOG(ERROR) << "Failed to recover client after worker connection broke: " << rc.ToString();
+            }
         },
         nullptr);
     if (status.IsError()) {

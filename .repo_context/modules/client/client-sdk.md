@@ -84,6 +84,11 @@
     placement deterministic across protobuf map iteration orders; this may redistribute same-node-preferred keys once
     at upgrade without changing the policy contract.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
+  - `ListenWorker` closes request admission before invoking recovery callbacks for a changed `worker_start_id` or a
+    worker-reported missing client. Recovery callbacks return `Status`; successful heartbeats do not reopen admission
+    while mandatory client resources are still pending. Object/KV recovery separates one-shot worker registration from
+    retryable decrease-ref and pipeline SHM mmap rebuild, while Stream clears producer/consumer and mmap state before
+    reconnecting. During recovery, new requests fail with `K_RPC_UNAVAILABLE`.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
   - Python package `yr.datasystem` lazily exposes public SDK symbols, `DsTensorClient`, and optional transfer-engine
     bindings so importing `TransferEngine` alone does not eagerly load `libds_client_py` or its `libbrpc` dependency.
@@ -219,6 +224,14 @@
 - Important invariants:
   - `DsClient` init order is KV -> Hetero -> Object; shutdown order is Object -> Hetero -> KV.
   - worker connectivity and auth material may come from explicit options or environment fallback in shared client backend code.
+  - Worker FD integers are process-local identifiers, not stable SHM identities. After worker restart, the client must
+    remove old mmap-table lookup entries and receive new SCM_RIGHTS FDs even when the new worker reuses the same integer.
+    Existing Buffer and Stream page objects retain their old mapping through `shared_ptr<IMmapTableEntry>`; Object/KV
+    Buffers additionally use `workerVersion` to reject cross-incarnation access as `K_BUFFER_DEPRECATED`.
+  - If worker registration succeeds but mandatory SHM mmap rebuild fails, recovery retries only the rebuild stage for
+    that worker incarnation. Re-registering the same client ID would be rejected by the worker client table. Object/KV
+    recovery stage transitions are serialized by the bthread-friendly `shmRecoveryMutex_`; this lock is used only by
+    background recovery and timeout callbacks, never by the foreground request hot path.
   - direct-read mode does not dynamically update AK/SK and does not load missing objects from L2; callers must recreate
     the client to change credentials for that mode.
   - direct-read endpoint entries use a TBB concurrent map under a lifecycle shared mutex, while each entry has its own

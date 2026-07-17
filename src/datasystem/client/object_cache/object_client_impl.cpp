@@ -37,6 +37,7 @@
 #include <utility>
 #include <vector>
 
+#include <bthread/mutex.h>
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/client/client_flags_monitor.h"
@@ -331,7 +332,21 @@ static constexpr int32_t INIT_SELECT_WORKER_TRIES = 6;
 
 }  // namespace
 
+struct ObjectClientImpl::ShmRecoveryState {
+    enum class Stage : uint8_t {
+        IDLE = 0,
+        CLEANUP_REQUIRED,
+        REGISTER_REQUIRED,
+        REBUILD_REQUIRED,
+    };
+
+    // Serialize cleanup, registration and mmap rebuild without blocking a bthread worker.
+    bthread::Mutex mutex;
+    Stage stage{ Stage::IDLE };
+};
+
 ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
+    : shmRecoveryState_(std::make_unique<ShmRecoveryState>())
 {
     (void)Provider::Instance();
     intern::StringPool::InitAll(false);
@@ -690,12 +705,14 @@ Status ObjectClientImpl::InitListenWorkerAt(WorkerNode node, bool isLocalWorker)
     listenWorker_[node] =
         std::make_shared<client::ListenWorker>(workerApi_[node], heartbeatType, node, asyncSwitchWorkerPool_.get());
     if (isLocalWorker) {
-        listenWorker_[node]->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
+        listenWorker_[node]->AddRecoveryCallback(
+            this, [this](client::WorkerRecoveryReason reason) { return ProcessWorkerLost(reason); });
         listenWorker_[node]->SetWorkerTimeoutHandle([this] { ProcessWorkerTimeout(); });
         listenWorker_[node]->SetReleaseFdCallBack(
             [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
     } else {
-        listenWorker_[node]->AddCallBackFunc(this, [this, node]() { ProcessStandbyWorkerLost(node); });
+        listenWorker_[node]->AddRecoveryCallback(
+            this, [this, node](client::WorkerRecoveryReason reason) { return ProcessStandbyWorkerLost(node, reason); });
         if (serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()) {
             listenWorker_[node]->SetRecoverLocalWorkerHandle([this]() { return RecoverPreferredLocalWorker(); });
         }
@@ -917,14 +934,54 @@ void ObjectClientImpl::InitParallelFor()
     datasystem::Parallel::InitParallelThreadPool(minThreadNum, maxThreadNum);
 }
 
-void ObjectClientImpl::ProcessWorkerLost()
+Status ObjectClientImpl::ProcessWorkerLost(client::WorkerRecoveryReason reason)
 {
     if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
-        return;
+        return Status::OK();
     }
-    ProcessWorkerTimeout();
-    auto &workerApi = workerApi_[LOCAL_WORKER];
-    LOG(INFO) << "[Reconnect] Clear meta and try reconnect to " << ipAddress_.ToString();
+    auto &recovery = *shmRecoveryState_;
+    std::lock_guard<bthread::Mutex> recoveryLock(recovery.mutex);
+
+    if (reason != client::WorkerRecoveryReason::RETRY_PENDING) {
+        recovery.stage = ShmRecoveryState::Stage::CLEANUP_REQUIRED;
+    }
+    if (recovery.stage == ShmRecoveryState::Stage::IDLE) {
+        recovery.stage = ShmRecoveryState::Stage::CLEANUP_REQUIRED;
+    }
+
+    if (recovery.stage == ShmRecoveryState::Stage::CLEANUP_REQUIRED) {
+        CleanupWorkerShmAfterWorkerLost();
+        recovery.stage = ShmRecoveryState::Stage::REGISTER_REQUIRED;
+    }
+
+    if (recovery.stage == ShmRecoveryState::Stage::REGISTER_REQUIRED) {
+        RETURN_IF_NOT_OK(RegisterWorkerAfterWorkerLost(reason));
+        recovery.stage = ShmRecoveryState::Stage::REBUILD_REQUIRED;
+    }
+
+    RETURN_IF_NOT_OK(RebuildWorkerShm());
+    recovery.stage = ShmRecoveryState::Stage::IDLE;
+    if (reason == client::WorkerRecoveryReason::CONNECTION_BROKEN) {
+        listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
+    }
+    {
+        std::lock_guard<std::mutex> lock(switchNodeMutex_);
+        if (currentNode_ == LOCAL_WORKER) {
+            MarkWorkerAvailableLocked();
+        }
+    }
+    LOG(INFO) << "[Reconnect] Reconnect to local worker success.";
+    INJECT_POINT("ObjectClientImpl.ProcessWorkerLost", []() { return Status::OK(); });
+    return Status::OK();
+}
+
+Status ObjectClientImpl::RegisterWorkerAfterWorkerLost(client::WorkerRecoveryReason reason)
+{
+    if (reason == client::WorkerRecoveryReason::RETRY_PENDING) {
+        VLOG(1) << "[Reconnect] Retry reconnect to " << ipAddress_.ToString();
+    } else {
+        LOG(INFO) << "[Reconnect] Clear meta and try reconnect to " << ipAddress_.ToString();
+    }
     std::vector<std::string> ids;
     {
         std::lock_guard<std::shared_timed_mutex> l(globalRefMutex_);
@@ -933,41 +990,48 @@ void ObjectClientImpl::ProcessWorkerLost()
             ids.emplace_back(entry.first);
         }
     }
-    Status s = workerApi->ReconnectWorker(ids);
-    if (s.IsError()) {
-        LOG(ERROR) << "[Reconnect] Reconnect local worker failed, error message: " << s.ToString();
-        return;
+    auto &workerApi = workerApi_[LOCAL_WORKER];
+    Status rc = workerApi->ReconnectWorker(ids);
+    if (rc.IsError()) {
+        constexpr int logInterval = 10;
+        LOG_EVERY_T(ERROR, logInterval)
+            << "[Reconnect] Reconnect local worker failed, error message: " << rc.ToString();
+        return rc;
     }
     memoryRefCount_.SetSupportMultiShmRefCount(workerApi->workerSupportMultiShmRefCount_);
+    return Status::OK();
+}
+
+Status ObjectClientImpl::RebuildWorkerShm()
+{
+    auto &workerApi = workerApi_[LOCAL_WORKER];
+    (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
+    workerApi->CleanUpForPipelineRH2DQueueAfterWorkerLost();
+    mmapManager_->CleanInvalidMmapTable();
+
     auto rc = workerApi->PrepairForDecreaseShmRef(std::bind(
         &client::MmapManager::LookupUnitsAndMmapFd, mmapManager_.get(), std::placeholders::_1, std::placeholders::_2));
     if (rc.IsError()) {
-        LOG(ERROR) << "[Reconnect] Failed to prepair for DecreaseShmRef:" << rc.ToString();
-        return;
+        constexpr int logInterval = 10;
+        LOG_EVERY_T(ERROR, logInterval) << "[Reconnect] Failed to prepair for DecreaseShmRef:" << rc.ToString();
+        return rc;
     }
-    auto rc2 = workerApi->InitPipelineRH2DQueue([this](std::shared_ptr<ShmUnitInfo> &shmUnitInfo) {
+    rc = workerApi->InitPipelineRH2DQueue([this](std::shared_ptr<ShmUnitInfo> &shmUnitInfo) {
         return mmapManager_->LookupUnitsAndMmapFd("", shmUnitInfo);
     });
-    if (rc2.IsError()) {
-        LOG(ERROR) << PIPLN_LOG_PREFIX "Reconnect: InitQueue failed: " << rc2.ToString();
-        return;
+    if (rc.IsError()) {
+        constexpr int logInterval = 10;
+        LOG_EVERY_T(ERROR, logInterval) << PIPLN_LOG_PREFIX "Reconnect: InitQueue failed: " << rc.ToString();
+        (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
+        workerApi->CleanUpForPipelineRH2DQueueAfterWorkerLost();
+        mmapManager_->CleanInvalidMmapTable();
+        return rc;
     }
-    listenWorker_[LOCAL_WORKER]->SetWorkerAvailable(true);
-    {
-        std::lock_guard<std::mutex> lock(switchNodeMutex_);
-        if (currentNode_ == LOCAL_WORKER) {
-            MarkWorkerAvailableLocked();
-        }
-    }
-    LOG(INFO) << "[Reconnect] Reconnect to local worker success.";
-    INJECT_POINT("ObjectClientImpl.ProcessWorkerLost", []() {});
+    return Status::OK();
 }
 
-void ObjectClientImpl::ProcessWorkerTimeout()
+void ObjectClientImpl::CleanupWorkerShmAfterWorkerLost()
 {
-    if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
-        return;
-    }
     auto &workerApi = workerApi_[LOCAL_WORKER];
     (void)workerApi->CleanUpForDecreaseShmRefAfterWorkerLost();
     (void)workerApi->CleanUpForPipelineRH2DQueueAfterWorkerLost();
@@ -977,24 +1041,42 @@ void ObjectClientImpl::ProcessWorkerTimeout()
     memoryRefCount_.Clear();
 }
 
-void ObjectClientImpl::ProcessStandbyWorkerLost(WorkerNode node)
+void ObjectClientImpl::ProcessWorkerTimeout()
 {
     if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
         return;
     }
-    if (workerApi_[node] == nullptr) {
-        LOG(ERROR) << FormatString("[Reconnect] client %d is null", node);
-        return;
+    auto &recovery = *shmRecoveryState_;
+    std::lock_guard<bthread::Mutex> recoveryLock(recovery.mutex);
+    CleanupWorkerShmAfterWorkerLost();
+    // If the same worker recovers, its registration is still valid and only the local SHM resources need rebuilding.
+    recovery.stage = ShmRecoveryState::Stage::REBUILD_REQUIRED;
+}
+
+Status ObjectClientImpl::ProcessStandbyWorkerLost(WorkerNode node, client::WorkerRecoveryReason reason)
+{
+    if (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED) {
+        return Status::OK();
     }
-    LOG(INFO) << FormatString("[Reconnect] Client[%d] %s try to reconnect to %s", node, workerApi_[node]->clientId_,
-                              workerApi_[node]->hostPort_.ToString());
+    if (workerApi_[node] == nullptr) {
+        RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, FormatString("[Reconnect] client %d is null", node));
+    }
+    if (reason == client::WorkerRecoveryReason::RETRY_PENDING) {
+        VLOG(1) << FormatString("[Reconnect] Client[%d] %s retry reconnect to %s", node,
+                                workerApi_[node]->clientId_, workerApi_[node]->hostPort_.ToString());
+    } else {
+        LOG(INFO) << FormatString("[Reconnect] Client[%d] %s try to reconnect to %s", node,
+                                  workerApi_[node]->clientId_, workerApi_[node]->hostPort_.ToString());
+    }
     Status s = workerApi_[node]->ReconnectWorker({});
     if (s.IsError()) {
-        LOG(ERROR) << FormatString("[Reconnect] client[%d] %s reconnect to worker failed: %s", node,
-                                   workerApi_[node]->clientId_, s.ToString());
-        return;
+        constexpr int logInterval = 10;
+        LOG_EVERY_T(ERROR, logInterval)
+            << FormatString("[Reconnect] client[%d] %s reconnect to worker failed: %s", node,
+                            workerApi_[node]->clientId_, s.ToString());
+        return s;
     }
-    if (listenWorker_[node] != nullptr) {
+    if (reason == client::WorkerRecoveryReason::CONNECTION_BROKEN && listenWorker_[node] != nullptr) {
         listenWorker_[node]->SetWorkerAvailable(true);
     }
     {
@@ -1005,6 +1087,7 @@ void ObjectClientImpl::ProcessStandbyWorkerLost(WorkerNode node)
     }
     LOG(INFO) << FormatString("[Reconnect] Client[%d] %s reconnect to worker %s success.", node,
                               workerApi_[node]->clientId_, workerApi_[node]->hostPort_.ToString());
+    return Status::OK();
 }
 
 ObjectClientImpl::WorkerNode ObjectClientImpl::GetNextWorkerNode(WorkerNode current)
@@ -1279,7 +1362,9 @@ ObjectClientImpl::StandbySwitchAttemptResult ObjectClientImpl::TrySwitchToStandb
     if (serviceDiscovery_ != nullptr && serviceDiscovery_->HasHostAffinity()) {
         candidateListenWorker->SetRecoverLocalWorkerHandle([this]() { return RecoverPreferredLocalWorker(); });
     }
-    candidateListenWorker->AddCallBackFunc(this, [this, next]() { ProcessStandbyWorkerLost(next); });
+    candidateListenWorker->AddRecoveryCallback(
+        this,
+        [this, next](client::WorkerRecoveryReason reason) { return ProcessStandbyWorkerLost(next, reason); });
     rc = candidateListenWorker->StartListenWorker();
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("[Switch] Listen worker(%s) failed, with status: %s", standbyWorker.ToString(),
@@ -1487,7 +1572,8 @@ Status ObjectClientImpl::PreparePreferredLocalWorker(const HostPort &localAddres
 
     localListenWorker = std::make_shared<client::ListenWorker>(localWorkerApi, localWorkerApi->heartbeatType_,
                                                                LOCAL_WORKER, asyncSwitchWorkerPool_.get());
-    localListenWorker->AddCallBackFunc(this, [this] { ProcessWorkerLost(); });
+    localListenWorker->AddRecoveryCallback(
+        this, [this](client::WorkerRecoveryReason reason) { return ProcessWorkerLost(reason); });
     localListenWorker->SetWorkerTimeoutHandle([this] { ProcessWorkerTimeout(); });
     localListenWorker->SetReleaseFdCallBack(
         [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
