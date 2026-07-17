@@ -24,7 +24,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "datasystem/client/routing/worker_router.h"
+#include "datasystem/client/routing/routing.h"
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -32,6 +32,10 @@
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+namespace client {
+class TransportLayer;
+}  // namespace client
+
 namespace object_cache {
 
 class IExistRouting {
@@ -91,6 +95,9 @@ private:
 
 class ExistHandler {
 public:
+    ExistHandler(std::shared_ptr<client::Routing> routing, client::TransportLayer *transport,
+                 std::shared_ptr<ThreadPool> taskPool);
+
     ExistHandler(std::shared_ptr<IExistRouting> routing, std::shared_ptr<IExistTransport> transport,
                  std::shared_ptr<ThreadPool> taskPool);
 
@@ -99,6 +106,11 @@ public:
     Status Run(const ExistHandlerRequest &request, std::vector<bool> &exists);
 
 private:
+    Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups);
+
+    void UpdateRoutingState(const HostPort &addr, StatusCode status);
+
     Status RunSelectedWorkers(const ExistHandlerRequest &request,
                               const std::unordered_map<std::string, std::vector<size_t>> &keyIndexes,
                               std::vector<bool> &exists);
@@ -108,8 +120,10 @@ private:
                           const std::unordered_map<std::string, std::vector<size_t>> &keyIndexes,
                           std::vector<bool> &exists, int32_t &redirectRetries, bool &redirected);
 
-    std::shared_ptr<IExistRouting> routing_;
-    std::shared_ptr<IExistTransport> transport_;
+    std::shared_ptr<client::Routing> clientRouting_;
+    std::shared_ptr<IExistRouting> testRouting_;
+    client::TransportLayer *transportLayer_;
+    std::shared_ptr<IExistTransport> testTransport_;
     std::shared_ptr<ThreadPool> taskPool_;
     ExistRedirectResolver redirectResolver_;
 };

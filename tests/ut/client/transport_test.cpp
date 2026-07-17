@@ -1500,6 +1500,7 @@ TEST(ExistRequestBuilderTest, BuildsRequestWithAuthFields)
     EXPECT_EQ(request.client_id(), "client-1");
     EXPECT_EQ(request.tenant_id(), "tenant-1");
     EXPECT_EQ(request.token(), "token-1");
+    EXPECT_TRUE(request.is_routed());
 }
 
 TEST(WorkerRpcClientTest, HashRingRefreshSignsRequestAndUsesControlTimeoutOutsideApiDeadline)

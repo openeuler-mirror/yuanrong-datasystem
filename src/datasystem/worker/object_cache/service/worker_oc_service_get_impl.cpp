@@ -2899,7 +2899,8 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     auto clientId = ClientKey::Intern(req.client_id());
     VLOG(1) << "Exist start from client:" << clientId;
     std::string tenantId;
-    Status authRc = worker::Authenticate(akSkManager_, req, tenantId);
+    Status authRc = req.is_routed() ? worker::AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId)
+                                    : worker::Authenticate(akSkManager_, req, tenantId);
     if (authRc.IsError()) {
         LOG(ERROR) << "Authenticate failed. Detail: " << authRc.ToString();
         access.Result(authRc).Record();

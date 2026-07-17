@@ -56,6 +56,7 @@ Status BuildExistRequest(const TransportExistRequest &input, ExistReqPb &request
     request.set_is_local(input.isLocal);
     request.set_client_id(input.clientId);
     request.set_tenant_id(input.tenantId);
+    request.set_is_routed(true);
     if (!input.token.Empty()) {
         request.set_token(input.token.GetData(), input.token.GetSize());
     }
