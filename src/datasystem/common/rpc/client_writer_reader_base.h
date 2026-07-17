@@ -76,6 +76,13 @@ public:
      * @return Status of the call.
      */
     virtual Status ReceivePayload(std::vector<RpcMessage> &recvBuffer) = 0;
+
+    /**
+     * @brief Non-blocking close. Called by the wrapper destructor so the brpc
+     * handler can trigger async on_closed (which clears its self-keepalive).
+     * Default no-op for ZMQ; brpc overrides.
+     */
+    virtual void Close() {}
 };
 
 }  // namespace datasystem

@@ -176,6 +176,11 @@ public:
     {
         RETURN_STATUS(StatusCode::K_INVALID, "Invalid Finish operation for ClientReaderImpl");
     }
+
+    // No-op for ZMQ (ZMQ stream lifecycle is handled in its own dtor/Finish).
+    // Exists so the ClientReader wrapper's destructor can call Close() uniformly
+    // on both ZMQ and brpc reader impls (brpc uses it to trigger async on_closed).
+    void Close() {}
 };
 
 /**

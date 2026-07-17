@@ -281,7 +281,8 @@ private:
  * @tparam R Read (response) protobuf type that the client reads from the stream.
  */
 template <typename R>
-class BrpcClientReaderImpl : public brpc::StreamInputHandler {
+class BrpcClientReaderImpl : public brpc::StreamInputHandler,
+                            public std::enable_shared_from_this<BrpcClientReaderImpl<R>> {
 public:
     BrpcClientReaderImpl(brpc::Channel *channel,
                          const google::protobuf::MethodDescriptor *method,
@@ -302,10 +303,10 @@ public:
 
     ~BrpcClientReaderImpl() override
     {
-        StreamCloseAndDrain(
-            {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
-            cntl_,
-            "~BrpcClientReaderImpl");
+        // Under the keepalive model this destructor runs only after on_closed has
+        // fired (keepalive_ cleared) — or when Write() was never called (stream not
+        // created, keepalive_ unarmed). In both cases there is nothing to close;
+        // brpc is already done with the raw handler pointer. Just record the trace.
         if (ShouldRecordBrpcTraceOnDestroy(trace_)) {
             RecordTraceOnce();
         }
@@ -316,6 +317,9 @@ public:
     int on_received_messages(brpc::StreamId id, butil::IOBuf *const messages[], size_t size) override
     {
         (void)id;
+        if (destroyed_->load(std::memory_order_acquire)) {
+            return 0;  // stream logically closed; ignore racing late data
+        }
         if (firstResponseTs_.exchange(BrpcTraceNowNs(), std::memory_order_acq_rel) == 0) {
             trace_.MarkClientRecv(firstResponseTs_.load(std::memory_order_relaxed));
         }
@@ -333,6 +337,9 @@ public:
     void on_idle_timeout(brpc::StreamId id) override
     {
         (void)id;
+        if (destroyed_->load(std::memory_order_acquire)) {
+            return;
+        }
         std::lock_guard<std::mutex> lock(readMtx_);
         readError_ = true;
         readCond_.notify_one();
@@ -342,10 +349,18 @@ public:
     {
         (void)id;
         if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
-        std::lock_guard<std::mutex> lock(readMtx_);
-        streamEnd_ = true;
-        readReady_ = true;
-        readCond_.notify_one();
+        destroyed_->store(true, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lock(readMtx_);
+            streamEnd_ = true;
+            readReady_ = true;
+            readCond_.notify_one();
+        }
+        // Drop self-keepalive LAST. on_closed is brpc's final callback, so once
+        // this runs no further callback can touch this object. If the external
+        // owner has already released its ref, this destroys this object here —
+        // the lock is released and all member access is done, so it is safe.
+        keepalive_.reset();
     }
 
     void on_failed(brpc::StreamId id, int error_code, const std::string &error_text) override
@@ -353,7 +368,12 @@ public:
         (void)id;
         (void)error_code;
         LOG(WARNING) << "BrpcClientReaderImpl stream failed: " << error_text;
-        if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
+        if (destroyed_->load(std::memory_order_acquire)) {
+            return;
+        }
+        // Do NOT set closeNotifier_ here: brpc always fires on_closed after on_failed
+        // (stream.cpp:594 -> :596); the Controller/handler are only safe to release once
+        // on_closed (the final callback) has run.
         std::lock_guard<std::mutex> lock(readMtx_);
         readError_ = true;
         readCond_.notify_one();
@@ -387,6 +407,10 @@ public:
             RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                 "brpc::StreamCreate failed for server-streaming reader");
         }
+        // Arm self-keepalive so this object outlives brpc's final on_closed
+        // callback (fired asynchronously after StreamClose). Must run after the
+        // object is managed by shared_ptr (post-construction).
+        keepalive_ = this->shared_from_this();
 
         // Send the RPC with the request in the body.
         // The response is a placeholder — real responses arrive via the stream.
@@ -400,18 +424,12 @@ public:
             Status embedded = TryExtractStatusFromResponse(dummyResponse);
             if (embedded.IsError()) {
                 RecordTraceOnce();
-                StreamCloseAndDrain(
-                    {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
-                    cntl_,
-                    "BrpcClientReaderImpl::Write (embedded error)");
+                Close();  // trigger async on_closed so the armed keepalive_ can release
                 return embedded;
             }
             auto errText = cntl_->ErrorText();
             RecordTraceOnce();
-            StreamCloseAndDrain(
-                {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_},
-                cntl_,
-                "BrpcClientReaderImpl::Write (errText)");
+            Close();  // trigger async on_closed so the armed keepalive_ can release
             // Wrap with RETURN_STATUS to retain this adapter's call-site
             // (file/line) for on-call; the helper's Status carries the brpc
             // errno/name + ErrorText diagnostics in its message.
@@ -470,15 +488,37 @@ public:
      * @brief Signal reading is done. Closes the stream.
      * @return Status of the call.
      */
+    // Non-blocking close: triggers brpc to fire on_closed asynchronously, which
+    // drops the self-keepalive and lets this object be destroyed safely once brpc
+    // is finished with the raw handler pointer. Called by the wrapper destructor
+    // when the caller drops the stream without Finish().
+    void Close()
+    {
+        brpc::StreamId id = brpc::INVALID_STREAM_ID;
+        {
+            std::lock_guard<std::mutex> lock(readMtx_);
+            id = streamId_;
+            streamId_ = brpc::INVALID_STREAM_ID;
+        }
+        if (id != brpc::INVALID_STREAM_ID) {
+            brpc::StreamClose(id);
+        }
+    }
+
+    /**
+     * @brief Signal reading is done. Closes the stream.
+     * @return Status of the call.
+     */
     Status Finish()
     {
         if (finished_.exchange(true)) {
             return Status::OK();
         }
-        StreamCloseAndDrain(
-            {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec},
-            cntl_,
-            "BrpcClientReaderImpl::Finish");
+        // Bounded wait for on_closed so callers retain blocking close semantics.
+        // On timeout the object stays alive via keepalive_ until the (possibly
+        // late) on_closed fires, so a timeout here is safe (no UAF).
+        (void)StreamCloseAndWait(
+            {streamId_, readMtx_, readCond_, streamEnd_, readError_, closeNotifier_, kDefaultDeferredWaitSec});
         RecordTraceOnce();
         return Status::OK();
     }
@@ -515,6 +555,16 @@ private:
     bool readError_;
     std::shared_ptr<std::atomic<bool>> closeNotifier_ =
         std::make_shared<std::atomic<bool>>(false);
+    // Defense-in-depth: set when the stream is logically closed so that any
+    // racing callback (on_received_messages/on_idle_timeout) can bail out early
+    // instead of touching state after the consumer is gone. The object itself
+    // stays alive until on_closed via keepalive_, so this guards logic, not UAF.
+    std::shared_ptr<std::atomic<bool>> destroyed_ =
+        std::make_shared<std::atomic<bool>>(false);
+    // Self-keepalive: armed after StreamCreate, cleared at the tail of on_closed
+    // (brpc's guaranteed-final callback). Keeps this object (and its cntl_) alive
+    // until brpc is finished with the raw handler pointer, closing the UAF window.
+    std::shared_ptr<BrpcClientReaderImpl<R>> keepalive_;
     std::atomic<uint64_t> firstResponseTs_ { 0 };
     std::atomic<bool> traceRecorded_;
     BrpcPerfTrace trace_;

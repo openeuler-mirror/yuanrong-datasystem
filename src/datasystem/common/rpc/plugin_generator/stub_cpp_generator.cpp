@@ -475,7 +475,7 @@ void RpcGenerator::ImplementStubStreamingDef(io::Printer &printer, const google:
         "      rc = ::datasystem::Status{ datasystem::StatusCode::K_OUT_OF_MEMORY, \"Out of memory\"};\n"
         "    }\n"
         "    if (rc.IsError()) { return rc; }\n"
-        "    auto stream = std::make_unique<datasystem::ClientWriterReaderImpl<$inputTypeName$, $outputTypeName$>>(\n"
+        "    auto stream = std::make_shared<datasystem::ClientWriterReaderImpl<$inputTypeName$, $outputTypeName$>>(\n"
         "        std::move(sock), ServiceName(), methodObj->MethodIndex(), workerId,\n"
         "        methodObj->HasPayloadSendOption(), methodObj->HasPayloadRecvOption());\n"
         "    *out = std::make_unique<datasystem::ClientWriterReader<\n"

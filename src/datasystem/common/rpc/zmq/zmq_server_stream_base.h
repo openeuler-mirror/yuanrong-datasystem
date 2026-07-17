@@ -230,6 +230,11 @@ public:
     {
         RETURN_STATUS(StatusCode::K_INVALID, "Invalid Finish operation");
     }
+
+    // No-op for ZMQ. Exists so the ServerReader wrapper's destructor can call
+    // Close() uniformly on both ZMQ and brpc reader impls (brpc uses it to trigger
+    // async on_closed and release its self-keepalive).
+    void Close() {}
 };
 
 /**

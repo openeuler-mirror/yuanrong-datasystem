@@ -32,12 +32,19 @@
  *        as a safety fallback (Plan A), and the leak counter is incremented.
  *   4. If timeout without closeNotifier: immediate leak (backward compatible).
  *
- * KNOWN LIMITATION: This strategy protects the Controller from UAF, but does
- * NOT protect the StreamInputHandler from UAF.  In the destructor path, the
- * handler object is destroyed immediately after StreamCloseAndDrain returns;
- * if on_closed fires after that point, brpc's raw handler pointer is dangling.
- * In practice this is rare: on_closed typically fires within the 5s wait, and
- * if it does not (peer unresponsive), it is unlikely to fire later.
+ * KNOWN LIMITATION (Controller only): This deferred-cleanup strategy protects
+ * the Controller from UAF. It does NOT by itself protect the StreamInputHandler
+ * object: brpc borrows the raw handler pointer and fires on_closed (its final
+ * callback) on a brpc bthread after the owner may have destroyed it.
+ * The handler UAF is fixed at the handler layer: each BrpcClientReaderImpl /
+ * BrpcClientStreamWriterReader / BrpcServerReaderImpl keeps itself alive via a
+ * shared_ptr keepalive cleared at the tail of on_closed, so the object outlives
+ * brpc's final callback. See those headers.
+ *
+ * Predicate: StreamCloseAndWait waits for on_closed (streamEnd) only, NOT
+ * on_failed (readError). brpc always fires on_failed then on_closed during
+ * recycle (stream.cpp:594 -> :596); returning on on_failed alone was a UAF root
+ * cause (caller destroyed the handler before the guaranteed on_closed).
  *
  * maxDeferredWaitSec calculation:
  *   When brpc StreamOptions::idle_timeout_ms is set (>0), brpc detects the

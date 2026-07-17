@@ -45,12 +45,20 @@ class ClientReaderImpl;
 template <typename W, typename R>
 class ClientWriterReader {
 public:
-    explicit ClientWriterReader(std::unique_ptr<ClientWriterReaderBase<W, R>> &&impl)
+    explicit ClientWriterReader(std::shared_ptr<ClientWriterReaderBase<W, R>> &&impl)
         : pimpl_(std::move(impl))
     {
     }
 
-    ~ClientWriterReader() = default;
+    // Trigger non-blocking Close() so the brpc handler fires on_closed and its
+    // self-keepalive can release (ZMQ Close() is a no-op). shared_ptr so the brpc
+    // handler can hold a self-keepalive keeping itself alive past this drop.
+    ~ClientWriterReader()
+    {
+        if (pimpl_) {
+            pimpl_->Close();
+        }
+    }
 
     Status Write(const W &pb)
     {
@@ -94,7 +102,7 @@ public:
     }
 
 private:
-    std::unique_ptr<ClientWriterReaderBase<W, R>> pimpl_;
+    std::shared_ptr<ClientWriterReaderBase<W, R>> pimpl_;
 };
 
 template <typename W>
@@ -143,7 +151,7 @@ class ClientReader {
 public:
     explicit ClientReader(std::unique_ptr<ClientReaderImpl<R>> &&impl);
 
-    explicit ClientReader(std::unique_ptr<BrpcClientReaderImpl<R>> &&impl);
+    explicit ClientReader(std::shared_ptr<BrpcClientReaderImpl<R>> &&impl);
 
     ~ClientReader();
 
@@ -175,8 +183,11 @@ public:
     Status ReceivePayload(std::vector<RpcMessage> &recvBuffer);
 
 private:
+    // Brpc branch is shared_ptr: the brpc handler keeps itself alive via a
+    // self-keepalive until on_closed fires (see BrpcClientReaderImpl), so its
+    // lifetime must be shared, not uniquely owned. ZMQ stays unique_ptr.
     std::variant<std::unique_ptr<ClientReaderImpl<R>>,
-                 std::unique_ptr<BrpcClientReaderImpl<R>>> pimpl_;
+                 std::shared_ptr<BrpcClientReaderImpl<R>>> pimpl_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_RPC_STUB_H
