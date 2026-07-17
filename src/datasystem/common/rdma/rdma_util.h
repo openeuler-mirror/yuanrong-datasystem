@@ -26,11 +26,12 @@
 #include <mutex>
 #include <queue>
 
+#include "datasystem/common/log/log.h"
+
 #include <bthread/condition_variable.h>
 #include <bthread/mutex.h>
 #include <butil/time.h>
 
-#include "datasystem/common/log/log.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/net_util.h"
