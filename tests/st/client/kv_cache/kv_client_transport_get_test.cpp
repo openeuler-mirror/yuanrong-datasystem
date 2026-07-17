@@ -538,6 +538,36 @@ TEST_F(KVClientTransportGetTest, DirectBatchGetPreservesOrderAcrossMetadataOwner
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
 }
 
+TEST_F(KVClientTransportGetTest, U7LargeBatchUsesStableRoutingSnapshotAcrossMetadataOwners)
+{
+    constexpr size_t keysPerOwner = 32;
+    const auto keys = MakeKeysAcrossMetaOwners(keysPerOwner);
+    ASSERT_EQ(keys.size(), cluster_->GetWorkerNum() * keysPerOwner);
+
+    std::vector<std::string> values;
+    values.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        values.emplace_back(VALUE_SIZE + i, 'A' + static_cast<char>(i % 26));
+    }
+    std::vector<StringView> valueViews;
+    valueViews.reserve(values.size());
+    for (const auto &value : values) {
+        valueViews.emplace_back(value);
+    }
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(writer_->MSet(keys, valueViews, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get(keys, buffers));
+    ASSERT_EQ(buffers.size(), keys.size());
+    for (size_t i = 0; i < buffers.size(); ++i) {
+        ASSERT_TRUE(buffers[i]) << "missing buffer at position " << i;
+        AssertBufferEqual(*buffers[i], values[i]);
+    }
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
 TEST_F(KVClientTransportGetTest, DirectBatchGetReturnsExistingValuesWithMissingSlots)
 {
     auto existingKeys = MakeRandomKeys(3);
