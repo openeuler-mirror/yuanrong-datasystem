@@ -582,7 +582,8 @@ private:
      * @return Status of the call.
      */
     Status PollJfcWait(urma_jfc_t *jfc, const uint64_t maxTryCount, std::unordered_set<uint64_t> &successCompletedReqs,
-                       std::unordered_map<uint64_t, int> &failedCompletedReqs, const uint64_t numPollCRS = 1);
+                       std::unordered_map<uint64_t, int> &failedCompletedReqs, UrmaWriteTrace &pollTrace,
+                       const uint64_t numPollCRS = 1);
 
     /**
      * @brief Given list of CRs, fills successful req and failed req lists
@@ -641,7 +642,7 @@ private:
      * @brief Checks if waiting requests are completed and notifys them
      * @return Status of the call.
      */
-    Status CheckAndNotify();
+    Status CheckAndNotify(const UrmaWriteTrace &pollTrace);
 
     /**
      * @brief Gets event object of request id
@@ -662,8 +663,8 @@ private:
     Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
                        const std::shared_ptr<UrmaSendLaneLease> &laneLease, const std::string &remoteAddress,
                        uint64_t dataSize, UrmaEvent::OperationType operationType,
-                       std::atomic<int> *srcChipInflightCounter,
-                       std::shared_ptr<EventWaiter> waiter = nullptr);
+                       std::atomic<int> *srcChipInflightCounter = nullptr,
+                       std::shared_ptr<EventWaiter> waiter = nullptr, std::shared_ptr<UrmaEvent> *event = nullptr);
     void ReleaseEventLane(const std::shared_ptr<UrmaEvent> &event);
     void ReleaseAndDeleteEvent(uint64_t requestId);
     void RetireAndDeleteEvent(uint64_t requestId);
