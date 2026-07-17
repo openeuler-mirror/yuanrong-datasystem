@@ -75,7 +75,7 @@
 | --- | --- | --- | --- |
 | Top-level test tree | Routes CMake into UT, ST, perf, and shared helpers | `tests/CMakeLists.txt` | Adds `ut`, `st`, `perf`, and `common`. |
 | UT CMake | Builds unit/component gtest binaries | `tests/ut/CMakeLists.txt` | Splits stream, object, slot-store, and flags tests out of the default `ds_ut` bucket. |
-| ST CMake | Builds system-test binaries and runtime helpers | `tests/st/CMakeLists.txt` | Splits stream, object, KV, embedded-client, and device tests; generates runtime data and helper tools. |
+| ST CMake | Builds system-test binaries and runtime helpers | `tests/st/CMakeLists.txt` | Splits stream, object, KV, embedded-client, device, and the standalone braft election test; generates runtime data and helper tools. |
 | Perf CMake | Builds ZMQ performance helpers | `tests/perf/zmq/CMakeLists.txt` | Produces client, server, and agent binaries. |
 | Common helpers | Provides binmock support | `tests/common/binmock` | Builds `binmock` and `binmock_spec`. |
 | Test registration function | Converts gtest binaries into CTest cases | `cmake/util.cmake` | `ADD_DATASYSTEM_TEST` writes include files and invokes `GoogleTestToCTest.cmake`. |
@@ -83,6 +83,7 @@
 | CMake test runner | Runs examples, Python tests, and CTest | `scripts/build_cmake.sh` | Retries failed CTest cases with lower parallelism. |
 | Bazel test runner | Runs Bazel tests | `scripts/build_bazel.sh` | Uses `bazel test --config=test //...`. |
 | ST port allocator | Coordinates service ports across concurrent ST processes | `tests/st/cluster/test_port_allocator.*`, `scripts/modules/llt_util.sh` | Uses per-port `flock`, bind probing, lease metadata, and bounded stale cleanup. |
+| ST common fixture | Owns lightweight `CommonTest` path setup and command helpers | `tests/st/common_test.*`, `tests/st/BUILD.bazel` | Built once as `common_test`; helper sources are excluded from glob-based ST object buckets, and fixtures that need same-name process isolation can supply a path suffix. |
 
 ## Main Flows
 
@@ -90,8 +91,9 @@
 
 1. `tests/CMakeLists.txt` adds the test subdirectories.
 2. `tests/ut/CMakeLists.txt` and `tests/st/CMakeLists.txt` collect source files and split them into gtest binaries.
-3. UT and ST binaries reuse small OBJECT targets for shared `test_main` and common helper sources, so new test files
-   still enter their existing glob-based buckets while shared helper code is compiled once.
+3. UT and ST binaries reuse small OBJECT targets for shared `test_main` and grouped helper sources. The base
+   `CommonTest` implementation is owned by the explicit `common_test` static target and excluded from recursive source
+   globs so it is compiled once.
 4. `ds_st_embedded_client` links the existing `cluster` helper library instead of recompiling `tests/st/cluster/*.cpp`.
 5. Each gtest binary calls `add_datasystem_test`.
 6. `ADD_DATASYSTEM_TEST` creates a post-build command that runs `cmake/scripts/GoogleTestToCTest.cmake`.
@@ -103,7 +105,7 @@ Failure-sensitive steps:
 
 - test binaries must be runnable at build time so `--gtest_list_tests` succeeds;
 - runtime library paths in `TEST_ENVIRONMENT` must include worker, OpenSSL, gRPC, protobuf, absl, gflags, brpc, optional
-  observability, UCX, and URMA paths when those builds are enabled;
+  braft, observability, UCX, and URMA paths when those builds are enabled;
 - generated CTest files must exist before CTest discovery.
 
 ### CMake Test Execution
@@ -167,7 +169,12 @@ Failure-sensitive steps:
 - Executable path/name controls `object`, `stream`, `ut`, and `st` labels.
 - Adding a test under a filtered directory can move it into a different binary from nearby files.
 - New test files should continue to be added under the existing domain directories so the glob/filter buckets pick them
-  up automatically; only shared test entrypoints or helper sources should be added to the common OBJECT targets.
+  up automatically. Shared helper `.cpp` files with their own library target must be explicitly excluded from recursive
+  globs; `common_test.cpp` is the current ST example.
+- `braft_cluster_test` is intentionally standalone in both CMake and Bazel so it does not pull the full ST worker/master
+  dependency graph.
+- Fixtures that can run concurrently under the same suite/test name must use the `CommonTest` path-suffix constructor
+  before any cleanup occurs. `BraftClusterTest` supplies its PID and cleans only that process-specific top-level path.
 
 ## Validation Guidance
 

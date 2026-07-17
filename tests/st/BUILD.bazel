@@ -2,6 +2,21 @@ load("//bazel:build_defs.bzl", "ds_cc_test_library")
 
 package(default_visibility = ["//visibility:public"])
 
+ds_cc_test_library(
+    name = "common_test",
+    srcs = ["common_test.cpp"],
+    hdrs = ["common_test.h"],
+    copts = [
+        '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',
+    ],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
 # ST 公共基础库：common.h、kill_timer.h、st_oc_service_impl 等
 # includes = ["."] 将 tests/st/ 加入 include 路径，使得 "common.h"、
 # "cluster/xxx.h"、"client/xxx.h" 等相对于 tests/st/ 的 include 均可工作
@@ -23,6 +38,7 @@ ds_cc_test_library(
         '-DLLT_BIN_PATH=\\"/tmp/ds_llt\\"',
     ],
     deps = [
+        ":common_test",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/util:file_util",
@@ -35,5 +51,6 @@ ds_cc_test_library(
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/st/cluster:st_cluster",
+        "//tests/st/cluster:test_port_allocator",
     ],
 )

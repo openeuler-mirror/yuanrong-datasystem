@@ -28,6 +28,7 @@ def ds_deps():
     setup_gflags()
     setup_leveldb()
     setup_brpc()
+    setup_braft()
     setup_nlohmann_json()
     setup_rocksdb()
     setup_curl()
@@ -333,6 +334,17 @@ def setup_brpc():
             "@yuanrong-datasystem//third_party/patches/brpc:fix-boringssl-compat.patch",
         ],
         patch_args = ["-p1"],
+    )
+
+def setup_braft():
+    """Setup braft using the existing brpc and common dependency repositories."""
+    maybe(
+        http_archive,
+        name = "braft",
+        sha256 = "bb3705f61874f8488e616ae38464efdec1a20610ddd6cd82468adc814488f14e",
+        urls = ["https://github.com/baidu/braft/archive/refs/tags/v1.1.2.tar.gz"],
+        strip_prefix = "braft-1.1.2",
+        build_file = "@yuanrong-datasystem//third_party:braft.BUILD",
     )
 
 def setup_rocksdb():

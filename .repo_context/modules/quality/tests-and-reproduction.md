@@ -46,7 +46,7 @@
 | Path | Role | Source-backed notes |
 | --- | --- | --- |
 | `tests/ut` | C++ unit and component tests | `tests/ut/CMakeLists.txt` builds the main UT binaries and filters stream/object/slot/flags tests into separate targets. |
-| `tests/st` | C++ system tests | `tests/st/CMakeLists.txt` builds cache-specific ST binaries, embedded-client tests, device LLT, cluster helpers, and post-build runtime assets. |
+| `tests/st` | C++ system tests | `tests/st/CMakeLists.txt` builds cache-specific ST binaries, embedded-client tests, device LLT, cluster helpers, the standalone braft election test, and post-build runtime assets. |
 | `tests/perf` | Performance helper binaries | `tests/perf/CMakeLists.txt` adds `zmq`; `tests/perf/zmq/CMakeLists.txt` builds ZMQ perf client/server/agent binaries. |
 | `tests/common` | Shared test support | `tests/common/CMakeLists.txt` adds `binmock`; `tests/common/binmock` provides function-stub/binmock support and has its own spec test. |
 | `tests/python` | Python unittest suites | `scripts/build_cmake.sh` runs `python3 -m unittest` from this directory after packaging and starting services. |
@@ -54,8 +54,8 @@
 | `tests/kvconnector` | External connector patch/test material | Contains versioned patch/deploy/benchmark material, not part of the main CMake gtest tree. |
 
 - Verified current C++ source scale:
-  - `tests/ut`: 124 `.cpp` files, grouped under `client`, `common`, `master`, and `worker`.
-  - `tests/st`: 155 `.cpp` files, grouped under `client`, `cluster`, `common`, `device`, `embedded_client`,
+  - `tests/ut`: 197 `.cpp` files, grouped under `client`, `common`, `master`, and `worker`.
+  - `tests/st`: 156 `.cpp` files, grouped under `client`, `cluster`, `common`, `device`, `embedded_client`,
     `master`, and `worker`.
 
 ## CTest Registration Model
@@ -208,7 +208,22 @@ python3 -m unittest
     `DeviceManagerFactory::ProbeBackend()` finds GPU or NPU, and fall back to `AclDeviceManagerMock` only when no
     accelerator backend is detected. Ascend manager self-tests still force the Ascend/mock path when no usable Ascend
     environment is present. Real hetero GPU/NPU builds still copy the matching plugin libraries when enabled.
+  - `braft_cluster_test`: standalone three-node braft election coverage. It reuses the ST `CommonTest` path fixture and
+    port allocator without linking the full worker/master ST graph.
   - helper tool: `curve_keygen`.
+- Run the braft election case after building the matching backend:
+
+```bash
+# CMake build directory
+ctest -R 'BraftClusterTest\.ThreeNodesElectOneLeader' --output-on-failure
+
+# Repository root
+bazel test --config=release --config=test \
+  //tests/st/common/raft:braft_cluster_test \
+  --test_output=all \
+  '--test_filter=*.ThreeNodesElectOneLeader'
+```
+
 - Verified from `tests/perf/zmq/CMakeLists.txt`:
   - `zmq_perf_client`
   - `zmq_perf_server`

@@ -53,6 +53,7 @@ if (BUILD_JAVA_API)
 endif()
 
 if (WITH_TESTS)
+    include(${CMAKE_SOURCE_DIR}/cmake/external_libs/braft.cmake)
     include(${CMAKE_SOURCE_DIR}/cmake/external_libs/gtest.cmake)
 endif()
 
