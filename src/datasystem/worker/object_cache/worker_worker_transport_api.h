@@ -20,7 +20,9 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_WORKER_TRANSPORT_API_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_WORKER_TRANSPORT_API_H
 
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include <memory>
+#include <string>
+
 #include "datasystem/common/rpc/mem_view.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_unary_client_impl.h"
@@ -33,7 +35,8 @@ namespace datasystem {
 namespace object_cache {
 class WorkerWorkerTransportApi {
 public:
-    virtual ~WorkerWorkerTransportApi() = default;
+    WorkerWorkerTransportApi();
+    virtual ~WorkerWorkerTransportApi();
 
     /**
      * @brief Initialize the transport API implementation.
@@ -55,11 +58,16 @@ public:
      */
     Status ExecOnceParrallelExchange(UrmaHandshakeRspPb &rsp);
 
+#ifdef WITH_TESTS
+protected:
+    virtual void OnExchangeWaitForTest()
+    {
+    }
+#endif
+
 private:
-    std::mutex mtx_;
-    std::condition_variable cv_;
-    std::atomic<bool> isExecuting_{ false };
-    std::atomic<bool> globalStopFlag_{ false };
+    struct ExchangeState;
+    std::unique_ptr<ExchangeState> exchangeState_;
 };
 
 class WorkerRemoteWorkerTransApi : public WorkerWorkerTransportApi {

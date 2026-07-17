@@ -59,6 +59,7 @@ set(WORKER_TRANSPORT_API_DEPEND_LIBS
         common_log
         common_metrics
         common_util
+        common_request_context
         common_inject
         common_rpc_zmq
         common_rdma
@@ -70,6 +71,7 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         common_etcd
         common_log
         common_util
+        common_request_context
         common_buffer
         common_ref
         common_iam

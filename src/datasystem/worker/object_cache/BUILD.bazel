@@ -712,6 +712,7 @@ ds_cc_library(
         "//src/datasystem/protos:worker_object_brpc",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/protos:worker_object_zmq_cc_proto",
+        "@com_github_apache_brpc//:brpc",
     ],
 )
 
@@ -726,6 +727,8 @@ ds_cc_library(
     deps = [
         ":worker_worker_transport_api_header",
         ":worker_worker_transport_service_impl",
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:request_context",
     ],
     alwayslink = True,
 )
