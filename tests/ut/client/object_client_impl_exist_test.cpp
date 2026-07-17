@@ -174,6 +174,24 @@ TEST_F(ExistHandlerTest, ExistUsesRoutingAndTransportAndKeepsInputOrder)
     EXPECT_FALSE(transport_->isLocal[0]);
 }
 
+TEST_F(ExistHandlerTest, ExistFallsBackToSerialOwnerCallsWithoutTaskPool)
+{
+    HostPort workerA = MakeWorker(18481);
+    HostPort workerB = MakeWorker(18482);
+    routing_->groups[workerA] = { "k1" };
+    routing_->groups[workerB] = { "k2" };
+    transport_->resultsByWorker[workerA] = { { Status::OK(), { true } } };
+    transport_->resultsByWorker[workerB] = { { Status::OK(), { false } } };
+    taskPool_.reset();
+    std::vector<bool> exists;
+
+    Status rc = RunFlow({ "k1", "k2" }, exists);
+
+    ASSERT_TRUE(rc.IsOk());
+    EXPECT_EQ(exists, std::vector<bool>({ true, false }));
+    EXPECT_EQ(transport_->workers, std::vector<HostPort>({ workerA, workerB }));
+}
+
 TEST_F(ExistHandlerTest, ExistRetriesNotOwnerExtraWithoutSelectingAgain)
 {
     HostPort workerA = MakeWorker(18481);

@@ -106,6 +106,14 @@ public:
     Status Run(const ExistHandlerRequest &request, std::vector<bool> &exists);
 
 private:
+    struct OwnerGroupWork {
+        HostPort worker;
+        const std::vector<std::string> &keys;
+        const ExistHandlerRequest &request;
+        const std::unordered_map<std::string, std::vector<size_t>> &keyIndexes;
+        std::vector<bool> &exists;
+    };
+
     Status SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups);
 
@@ -114,6 +122,16 @@ private:
     Status RunSelectedWorkers(const ExistHandlerRequest &request,
                               const std::unordered_map<std::string, std::vector<size_t>> &keyIndexes,
                               std::vector<bool> &exists);
+
+    Status RunOwnerGroup(OwnerGroupWork &work);
+
+    Status RunOwnerGroupsParallel(const std::vector<std::pair<HostPort, std::vector<std::string>>> &orderedGroups,
+                                  const ExistHandlerRequest &request,
+                                  const std::unordered_map<std::string, std::vector<size_t>> &keyIndexes,
+                                  std::vector<bool> &exists);
+
+    Status ContinueOwnerGroupAfterResult(const Status &firstRc, const std::vector<bool> &firstExists,
+                                         OwnerGroupWork &work);
 
     Status HandleRedirect(const Status &rc, HostPort &worker, const std::vector<std::string> &workerKeys,
                           const ExistHandlerRequest &request,

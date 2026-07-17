@@ -384,35 +384,84 @@ Status ExistHandler::RunSelectedWorkers(const ExistHandlerRequest &request,
     std::sort(orderedGroups.begin(), orderedGroups.end(), [](const auto &lhs, const auto &rhs) {
         return lhs.first.ToString() < rhs.first.ToString();
     });
+    if (orderedGroups.size() <= 1 || taskPool_ == nullptr) {
+        for (const auto &group : orderedGroups) {
+            OwnerGroupWork work{ group.first, group.second, request, keyIndexes, exists };
+            RETURN_IF_NOT_OK(RunOwnerGroup(work));
+        }
+        return Status::OK();
+    }
+    return RunOwnerGroupsParallel(orderedGroups, request, keyIndexes, exists);
+}
 
+Status ExistHandler::RunOwnerGroup(OwnerGroupWork &work)
+{
+    ExistCallResult result = DoExistTransportCallWithConnectionRetry(transportLayer_, testTransport_, work.worker,
+                                                                     work.keys, work.request);
+    return ContinueOwnerGroupAfterResult(result.rc, result.exists, work);
+}
+
+Status ExistHandler::RunOwnerGroupsParallel(
+    const std::vector<std::pair<HostPort, std::vector<std::string>>> &orderedGroups,
+    const ExistHandlerRequest &request, const std::unordered_map<std::string, std::vector<size_t>> &keyIndexes,
+    std::vector<bool> &exists)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(taskPool_);
+    std::vector<std::future<ExistCallResult>> futures;
+    futures.reserve(orderedGroups.size());
+    client::TransportLayer *transport = transportLayer_;
+    const std::shared_ptr<IExistTransport> &testTransport = testTransport_;
     for (const auto &group : orderedGroups) {
-        HostPort worker = group.first;
-        int32_t redirectRetries = 0;
-        while (true) {
-            ExistCallResult result = DoExistTransportCallWithConnectionRetry(transportLayer_, testTransport_, worker,
-                                                                             group.second, request);
-            Status rc = result.rc;
-            if (rc.IsOk()) {
-                RETURN_IF_NOT_OK(FillExistResults(group.second, result.exists, keyIndexes, exists));
-                break;
-            }
-            bool redirected = false;
-            if (rc.GetCode() == K_NOT_OWNER && !rc.GetExtra().empty()
-                && redirectRetries < EXIST_MAX_REDIRECT_RETRY) {
-                RETURN_IF_NOT_OK(HandleRedirect(rc, worker, group.second, request, keyIndexes, exists,
-                                                redirectRetries, redirected));
-                if (redirected) {
-                    break;
+        try {
+            futures.emplace_back(taskPool_->Submit([transport, testTransport, worker = group.first,
+                                                    keys = group.second, &request]() {
+                return DoExistTransportCallWithConnectionRetry(transport, testTransport, worker, keys, request);
+            }));
+        } catch (const std::exception &e) {
+            for (auto &future : futures) {
+                if (future.valid()) {
+                    (void)future.wait();
                 }
-                continue;
             }
-            if (IsExistConnectionError(rc)) {
-                UpdateRoutingState(worker, K_CLIENT_WORKER_DISCONNECT);
-            }
-            return rc;
+            return Status(K_RUNTIME_ERROR, FormatString("Submit Exist owner task failed: %s", e.what()));
         }
     }
+    for (size_t index = 0; index < futures.size(); ++index) {
+        ExistCallResult firstResult = futures[index].get();
+        OwnerGroupWork work{ orderedGroups[index].first, orderedGroups[index].second, request, keyIndexes, exists };
+        RETURN_IF_NOT_OK(ContinueOwnerGroupAfterResult(firstResult.rc, firstResult.exists, work));
+    }
     return Status::OK();
+}
+
+Status ExistHandler::ContinueOwnerGroupAfterResult(const Status &firstRc, const std::vector<bool> &firstExists,
+                                                   OwnerGroupWork &work)
+{
+    Status rc = firstRc;
+    std::vector<bool> batchExists = firstExists;
+    int32_t redirectRetries = 0;
+    while (true) {
+        if (rc.IsOk()) {
+            return FillExistResults(work.keys, batchExists, work.keyIndexes, work.exists);
+        }
+        bool redirected = false;
+        if (rc.GetCode() == K_NOT_OWNER && !rc.GetExtra().empty() && redirectRetries < EXIST_MAX_REDIRECT_RETRY) {
+            RETURN_IF_NOT_OK(HandleRedirect(rc, work.worker, work.keys, work.request, work.keyIndexes, work.exists,
+                                            redirectRetries, redirected));
+            if (redirected) {
+                return Status::OK();
+            }
+            ExistCallResult result = DoExistTransportCallWithConnectionRetry(
+                transportLayer_, testTransport_, work.worker, work.keys, work.request);
+            rc = result.rc;
+            batchExists = std::move(result.exists);
+            continue;
+        }
+        if (IsExistConnectionError(rc)) {
+            UpdateRoutingState(work.worker, K_CLIENT_WORKER_DISCONNECT);
+        }
+        return rc;
+    }
 }
 
 Status ExistHandler::HandleRedirect(const Status &rc, HostPort &worker, const std::vector<std::string> &workerKeys,
