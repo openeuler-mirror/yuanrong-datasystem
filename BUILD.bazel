@@ -53,6 +53,20 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+# Sanitizer config settings — used by build_defs.bzl ds_cc_test to auto-tag
+# tests for sanitizer-aware test selection (build_bazel.sh _bazel_test_query_expr).
+config_setting(
+    name = "is_asan",
+    define_values = {"asan": "1"},
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "is_tsan",
+    define_values = {"tsan": "1"},
+    visibility = ["//visibility:public"],
+)
+
 cc_shared_library(
     name = "datasystem",
     additional_linker_inputs = ["export_datasystem_symbols.lds"],

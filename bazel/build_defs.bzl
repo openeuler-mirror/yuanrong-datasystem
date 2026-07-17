@@ -38,7 +38,11 @@ def ds_cc_test(
         linkopts = linkopts + [
             "-pthread",
         ],
-        tags = tags + ["ds_test"],
+        tags = tags + ["ds_test"] + select({
+            "//:is_asan": ["asan", "sanitizer"],
+            "//:is_tsan": ["tsan", "sanitizer"],
+            "//conditions:default": [],
+        }),
         timeout = timeout,
         **kwargs
     )
