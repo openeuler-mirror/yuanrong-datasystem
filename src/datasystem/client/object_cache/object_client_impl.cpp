@@ -2545,7 +2545,7 @@ Status ObjectClientImpl::UpdateConfig(const std::string &configJson)
             if (it != g_kvClientProcessConfig.end() && !it->second.empty()) {
                 const std::string reason =
                     "UpdateConfig: MonitorConfigPath must be empty when using UpdateConfig API";
-                OperationLogger::Instance().LogConfigFailed("UpdateConfig", reason);
+                OperationLogger::Instance().LogConfigApiFailed("UpdateConfig", reason);
                 return Status(StatusCode::K_INVALID, reason);
             }
         }

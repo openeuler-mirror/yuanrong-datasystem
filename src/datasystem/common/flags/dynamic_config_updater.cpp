@@ -81,13 +81,13 @@ Status DynamicConfigUpdater::ApplyJson(const std::string &configJson, const std:
     std::lock_guard<std::mutex> lock(mutex_);
     if (!ConfigMonitorState::Instance().IsUpdateConfigAllowed()) {
         const std::string reason = apiPrefix + ": file monitor is enabled, API disabled";
-        OperationLogger::Instance().LogConfigFailed("UpdateConfig", reason);
+        OperationLogger::Instance().LogConfigApiFailed("UpdateConfig", reason);
         return Status(StatusCode::K_INVALID, reason);
     }
     std::unordered_map<std::string, std::string> flagMap;
     std::string parseErr;
     if (!ParseJsonToMap(configJson, apiPrefix, flagMap, parseErr)) {
-        OperationLogger::Instance().LogConfigFailed("UpdateConfig", parseErr);
+        OperationLogger::Instance().LogConfigApiFailed("UpdateConfig", parseErr);
         return Status(StatusCode::K_INVALID, parseErr);
     }
     if (flagMap.empty()) {

@@ -24,6 +24,8 @@
 
 #include <spdlog/async.h>
 #include <spdlog/sinks/rotating_file_sink.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log_time.h"
@@ -42,6 +44,7 @@ constexpr char OPERATION_LOGGER_NAME[] = "ds_operation_logger";
 constexpr uint32_t HIGHEST_MAX_LOG_SIZE = 4096;
 constexpr std::size_t HIGHEST_SPDLOG_MAX_FILE_NUM = 200000;
 constexpr std::size_t K_GFLAG_NAME_PREFIX_LEN = 2;
+constexpr char ROLE_CLIENT[] = "client";
 
 const std::unordered_set<std::string> kSensitiveFlagNames = {
     "system_access_key", "system_secret_key", "system_data_key", "sc_encrypt_secret_key",
@@ -112,6 +115,51 @@ void WriteLogToLogger(const std::shared_ptr<ds_spdlog::logger> &logger, const st
     AppendLogMessagePrefix(out, Provider::GetPodName(), FLAGS_cluster_name);
     out << message;
     logger->log(sourceLoc, ds_spdlog::level::info, out.str());
+}
+
+// Flags the client process actually touches at runtime.
+const std::unordered_set<std::string> &ClientUsedFlagNames()
+{
+    static const std::unordered_set<std::string> kSet = {
+        // ---- ZMQ client transport (ZmqStubConnMgrImpl, reached when use_brpc=false) ----
+        "zmq_client_io_context",
+        "zmq_client_io_thread",
+        // ---- logging isClient_ startup branch (InitClientConfig / InitClientAdvancedConfig) ----
+        "log_dir", "log_filename", "max_log_size", "max_log_file_num", "log_compress", "v",
+        "minloglevel", "log_retention_day", "logtostderr", "alsologtostderr", "stderrthreshold",
+        "log_async", "log_async_queue_size", "log_monitor", "log_only_write_info_file",
+        "logbufsecs", "cluster_name",
+        // ---- log sampling rates (InitLogSampler on client path) ----
+        "request_sample_rate", "access_sample_rate", "diagnostic_sample_rate",
+        // ---- client config file monitor ----
+        "monitor_config_file",
+        // ---- client slow-log thresholds (GetClientLatencyTraceConfig on client path) ----
+        "client_slow_log_process_slower_than", "client_slow_log_rpc_slower_than",
+        // ---- RPC backend selection (every client RPC / startup path) ----
+        "use_brpc",
+        // ---- URMA data-plane (client UB transport + failover) ----
+        "enable_urma", "urma_send_jetty_lane_pool_size",
+        "urma_failover_success_rate_ratio", "urma_failover_min_sample_count",
+        // ---- conditionally reached by client ----
+        "encrypt_kit", "shared_memory_distribution_policy",
+        // read via etcd_keep_alive on the client etcd path (router_client / service_discovery)
+        "heartbeat_interval_ms",
+        // read via arena.cpp on the embedded, client + URMA arena registration path
+        "arena_per_tenant", "shared_disk_arena_per_tenant",
+    };
+    return kSet;
+}
+
+std::string FlagNameFromLine(const std::string &line)
+{
+    if (!IsDoubleDashGflagLine(line)) {
+        return "";
+    }
+    const auto eqPos = line.find('=');
+    if (eqPos == std::string::npos) {
+        return "";
+    }
+    return line.substr(K_GFLAG_NAME_PREFIX_LEN, eqPos - K_GFLAG_NAME_PREFIX_LEN);
 }
 }  // namespace
 
@@ -188,36 +236,98 @@ void OperationLogger::Shutdown()
 
 void OperationLogger::LogOperationStart()
 {
-    WriteLog("OPERATION_START: role=" + role_, ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
+    WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, false, "",
+        [](const std::string &role) { return "OPERATION_START: role=" + role; });
 }
 
 void OperationLogger::LogOperationStop()
 {
-    WriteLog("OPERATION_STOP: role=" + role_, ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
+    WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, false, "",
+        [](const std::string &role) { return "OPERATION_STOP: role=" + role; });
 }
 
 void OperationLogger::LogConfigInit(const std::string &flagsSnapshot)
 {
-    WriteLog("CONFIG_INIT: " + MaskSensitiveFlagsSnapshot(flagsSnapshot),
-             ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
+    WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, false, "",
+        [&flagsSnapshot](const std::string &role) {
+            return "CONFIG_INIT: " + MaskSensitiveFlagsSnapshot(FilterByRole(flagsSnapshot, role));
+        });
 }
 
 void OperationLogger::LogConfigInitFailed(const std::string &detail)
 {
-    WriteLog("CONFIG_INIT_FAILED: " + detail, ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
+    WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, false, "",
+        [&detail](const std::string &role) {
+            (void)role;
+            return "CONFIG_INIT_FAILED: " + detail;
+        });
 }
 
 void OperationLogger::LogConfigChanged(const std::string &name, const std::string &oldVal, const std::string &newVal)
 {
-    WriteLog("CONFIG_CHANGED: " + name + "=" + MaskSensitiveFlagValue(name, oldVal) + " --> "
-                 + MaskSensitiveFlagValue(name, newVal),
-             ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
+    WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, true, name,
+        [&name, &oldVal, &newVal](const std::string &role) {
+            (void)role;
+            return "CONFIG_CHANGED: " + name + "=" + MaskSensitiveFlagValue(name, oldVal) + " --> "
+                + MaskSensitiveFlagValue(name, newVal);
+        });
 }
 
 void OperationLogger::LogConfigFailed(const std::string &name, const std::string &reason)
 {
-    WriteLog("CONFIG_FAILED: flag '" + name + "' " + reason,
-             ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
+    WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, true, name,
+        [&name, &reason](const std::string &role) {
+            (void)role;
+            return "CONFIG_FAILED: flag '" + name + "' " + reason;
+        });
+}
+
+void OperationLogger::LogConfigApiFailed(const std::string &operation, const std::string &reason)
+{
+    // Operation-level failures (name is an operation tag, not a gflag) are always recorded,
+    // regardless of role.
+    WriteLogWithRole(ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ }, false, "",
+        [&operation, &reason](const std::string &role) {
+            (void)role;
+            return "CONFIG_FAILED: " + operation + " " + reason;
+        });
+}
+
+std::string OperationLogger::FilterByRole(const std::string &flagsSnapshot, const std::string &role)
+{
+    // Worker/master: log the full snapshot (only sensitive values are masked downstream).
+    // Client: keep only flags the client process actually reaches (allow-list), so
+    // worker/master-only flags registered via the common lib do not leak into the client log.
+    if (role != ROLE_CLIENT) {
+        return flagsSnapshot;
+    }
+    const auto &allow = ClientUsedFlagNames();
+    std::ostringstream out;
+    std::istringstream in(flagsSnapshot);
+    std::string line;
+    while (std::getline(in, line)) {
+        TrimTrailingCarriageReturn(line);
+        if (line.empty()) {
+            continue;
+        }
+        const std::string name = FlagNameFromLine(line);
+        if (!name.empty() && allow.count(name) == 0) {
+            continue;
+        }
+        out << line << '\n';
+    }
+    return out.str();
+}
+
+bool OperationLogger::ShouldRecordChange(const std::string &flagName, const std::string &role)
+{
+    // Worker/master: record every dynamic change. Client: record only changes to flags the
+    // client process actually reaches, so a worker-only flag mutated via the shared registry
+    // does not pollute the client operation log.
+    if (role == ROLE_CLIENT) {
+        return ClientUsedFlagNames().count(flagName) > 0;
+    }
+    return true;
 }
 
 std::string OperationLogger::OperationLogPath() const
@@ -232,17 +342,24 @@ std::string OperationLogger::OperationLogPath() const
     return FLAGS_log_dir + "/" + FLAGS_log_filename + "_operation.log";
 }
 
-void OperationLogger::WriteLog(const std::string &message, const ds_spdlog::source_loc &sourceLoc)
+void OperationLogger::WriteLogWithRole(const ds_spdlog::source_loc &sourceLoc, bool gateByRole,
+                                       const std::string &flagName,
+                                       std::function<std::string(const std::string &role)> buildMessage)
 {
+    std::string role;
     std::shared_ptr<ds_spdlog::logger> logger;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        role = role_;
         logger = logger_;
     }
     if (logger == nullptr) {
         return;
     }
-    WriteLogToLogger(logger, message, sourceLoc);
+    if (gateByRole && !ShouldRecordChange(flagName, role)) {
+        return;
+    }
+    WriteLogToLogger(logger, buildMessage(role), sourceLoc);
 }
 
 }  // namespace datasystem
