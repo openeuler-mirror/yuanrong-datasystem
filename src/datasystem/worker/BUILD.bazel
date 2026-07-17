@@ -401,10 +401,6 @@ ds_cc_library(
     name = "worker",
     srcs = [
         "data_worker.cpp",
-        "worker_sched_runtime_linux.cpp",
-    ],
-    hdrs = [
-        "worker_sched_runtime.h",
     ],
     deps = [
         "//include/datasystem:headers",

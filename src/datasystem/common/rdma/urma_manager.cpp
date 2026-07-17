@@ -25,8 +25,10 @@
 #endif
 #include <algorithm>
 #include <chrono>
+#include <cerrno>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 
@@ -46,6 +48,7 @@
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/request_context.h"
+#include "datasystem/common/util/sched_runtime.h"
 #include "datasystem/common/util/uri.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/common/util/wait_post.h"
@@ -754,6 +757,21 @@ Status UrmaManager::PerfThreadMain()
 
 Status UrmaManager::ServerEventHandleThreadMain()
 {
+    const auto setSchedRuntimeResult = SetCurrentThreadSchedRuntime();
+    if (!setSchedRuntimeResult.success) {
+        char errMsg[256] = { 0 };
+#if defined(__GLIBC__) && defined(_GNU_SOURCE)
+        const char *error = strerror_r(setSchedRuntimeResult.err, errMsg, sizeof(errMsg));
+#else
+        const char *error =
+            strerror_r(setSchedRuntimeResult.err, errMsg, sizeof(errMsg)) == 0 ? errMsg : "Unknown error";
+#endif
+        LOG(WARNING) << FormatString("Failed to set UrmaPollJfc sched runtime to %llu ns, errno: %d, error: %s",
+                                     static_cast<unsigned long long>(GetSchedRuntimeNs()), setSchedRuntimeResult.err,
+                                     error);
+    } else {
+        LOG(INFO) << "Set UrmaPollJfc sched runtime to " << GetSchedRuntimeNs() << " ns.";
+    }
     if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {
         LOG(WARNING) << "Failed to set nice for UrmaManager server event thread, nice=" << FLAGS_io_thread_nice
                      << ", errno=" << errno;
