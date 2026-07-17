@@ -34,3 +34,24 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "state_filter_test",
+    srcs = ["state_filter_test.cpp"],
+    deps = [
+        "//src/datasystem/client/routing:routing",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "broken_filter_test",
+    srcs = ["broken_filter_test.cpp"],
+    deps = [
+        "//src/datasystem/client/routing:routing",
+        "//src/datasystem/common/util:net_util",
+        "//tests/ut:ut_common",
+    ],
+)
