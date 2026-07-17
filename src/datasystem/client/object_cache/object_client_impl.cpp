@@ -3107,6 +3107,7 @@ Status ObjectClientImpl::Put(const std::string &objectKey, const uint8_t *data, 
         Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_SET_START);
     }
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     Timer setTimer;
     Status rc = ExecuteSetFlow(objectKey, data, size, param, nestedObjectKeys, ttlSecond, existence);
     if (traceEnabled) {
