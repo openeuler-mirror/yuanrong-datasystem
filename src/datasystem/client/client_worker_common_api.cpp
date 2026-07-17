@@ -829,9 +829,10 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetToken(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    // Millions of objects will cost worker dozens of seconds to process, set 10 min RPC timeout to prevent the client
-    // from timeout error while the worker doesn't finish processing.
-    int rpcTimeoutMs = 10 * 60 * 1000;
+    // ZMQ connection teardown is synchronous and needs headroom for in-flight
+    // frames; keep the legacy 10 min timeout.  brpc connections use a short
+    // 1 s timeout — the DisconnectClient RPC is a lightweight handshake.
+    int rpcTimeoutMs = FLAGS_use_brpc ? 1000 : 10 * 60 * 1000;
 #ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.Disconnect.ShutdownQuickily", [&rpcTimeoutMs](int time) {
         rpcTimeoutMs = time;
