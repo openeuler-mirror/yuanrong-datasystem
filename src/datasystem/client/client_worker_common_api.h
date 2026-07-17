@@ -159,6 +159,11 @@ struct ClientWorkerCommonApiAttribute {
         return workerCompatibilityVersion_;
     }
 
+    uint32_t GetMemoryAlignment() const
+    {
+        return memoryAlignment_.load(std::memory_order_relaxed);
+    }
+
     uint64_t InvokeCount() const
     {
         return invokeCount_.load(std::memory_order_relaxed);
@@ -206,11 +211,14 @@ struct ClientWorkerCommonApiAttribute {
     bool workerSupportMultiShmRefCount_;
 
 protected:
+    void UpdateMemoryAlignment(const RegisterClientRspPb &rsp);
+
     void SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp);
 
     int64_t heartBeatTimeoutMs_{ 0 };
 
 private:
+    std::atomic<uint32_t> memoryAlignment_{ 64 };
     std::atomic<uint64_t> invokeCount_{ 0 };
 };
 

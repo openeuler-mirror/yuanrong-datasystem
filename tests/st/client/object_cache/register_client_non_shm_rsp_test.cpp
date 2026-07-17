@@ -20,6 +20,7 @@
 #include <string>
 
 #include "common.h"
+#include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/version.h"
 #include "datasystem/common/rpc/rpc_auth_keys.h"
@@ -39,24 +40,25 @@ public:
     {
         opts.numWorkers = 1;
         opts.numEtcd = 1;
-        opts.workerGflagParams = " -shared_memory_size_mb=64 -v=1 -ipc_through_shared_memory=false";
+        opts.workerGflagParams =
+            " -shared_memory_size_mb=64 -v=1 -ipc_through_shared_memory=false -memory_alignment=4096";
     }
 
     void SetUp() override
     {
         ExternalClusterTest::SetUp();
 
-        HostPort workerAddr;
-        DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr));
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr_));
 
-        RpcCredential cred;
-        RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred);
-        channel_ = std::make_shared<RpcChannel>(workerAddr, cred);
+        RpcAuthKeyManager::CreateClientCredentials(authKeys_, WORKER_SERVER_NAME, cred_);
+        channel_ = std::make_shared<RpcChannel>(workerAddr_, cred_);
         stub_ = std::make_unique<WorkerService_Stub>(channel_);
     }
 
 protected:
     RpcAuthKeys authKeys_;
+    HostPort workerAddr_;
+    RpcCredential cred_;
     std::shared_ptr<RpcChannel> channel_;
     std::unique_ptr<WorkerService_Stub> stub_;
 };
@@ -88,8 +90,13 @@ TEST_F(RegisterClientNonShmRspTest, RegisterClientReturnsNonShmFields)
     ASSERT_EQ(rsp.mmap_size(), 0u);
     ASSERT_EQ(rsp.offset(), 0u);
     ASSERT_TRUE(rsp.shm_id().empty());
+    ASSERT_EQ(rsp.memory_alignment(), 4096u);
+
+    auto clientApi = std::make_shared<client::ClientWorkerRemoteCommonApi>(
+        workerAddr_, cred_, HeartbeatType::NO_HEARTBEAT, SensitiveValue(""), &signature);
+    DS_ASSERT_OK(clientApi->Init(60'000, 60'000));
+    EXPECT_EQ(clientApi->GetMemoryAlignment(), 4096u);
 }
 
 }  // namespace st
 }  // namespace datasystem
-

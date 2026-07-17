@@ -56,6 +56,7 @@
 #include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/validator.h"
 #include "datasystem/common/util/version.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/request_context.h"
@@ -147,6 +148,15 @@ CompatibilityVersion ParseWorkerCompatibilityVersionOrCurrent(const std::string 
     return workerCompatibilityVersion;
 }
 }  // namespace
+
+void ClientWorkerCommonApiAttribute::UpdateMemoryAlignment(const RegisterClientRspPb &rsp)
+{
+    constexpr uint32_t defaultMemoryAlignment = 64;
+    const auto memoryAlignment = rsp.memory_alignment();
+    const bool isValid = memoryAlignment != 0
+                         && Validator::ValidateMemoryAlignment("worker memory_alignment", memoryAlignment);
+    memoryAlignment_.store(isValid ? memoryAlignment : defaultMemoryAlignment, std::memory_order_relaxed);
+}
 
 void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
@@ -289,6 +299,7 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api_->WorkerRegisterClient(workerService_, req, rsp), "Register client failed");
     VLOG(1) << "Register response: " << rsp.DebugString();
     enableHugeTlb_ = rsp.enable_huge_tlb();
+    UpdateMemoryAlignment(rsp);
     clientId_ = rsp.client_id();
     lockId_ = rsp.lock_id();
     (void)workerVersion_.fetch_add(1, std::memory_order_relaxed);
@@ -1015,6 +1026,7 @@ Status ClientWorkerRemoteCommonApi::Reconnect()
 void ClientWorkerRemoteCommonApi::PostRegisterClient(int32_t timeoutMs, const RegisterClientRspPb &rsp)
 {
     enableHugeTlb_ = rsp.enable_huge_tlb();
+    UpdateMemoryAlignment(rsp);
     clientId_ = rsp.client_id();
     workerStartId_ = rsp.worker_start_id();
     lockId_ = rsp.lock_id();
