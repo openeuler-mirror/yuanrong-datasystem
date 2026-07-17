@@ -64,6 +64,7 @@ constexpr char QUERY_AND_GET_INJECT[] = "client.transport.query_and_get";
 constexpr char GET_OBJECT_REMOTE_INJECT[] = "client.transport.get_object_remote";
 constexpr char BATCH_GET_OBJECT_REMOTE_INJECT[] = "client.transport.batch_get_object_remote";
 constexpr char INLINE_READ_FAILURE_INJECT[] = "worker.worker_worker_remote_get_failure";
+constexpr char SHM_LATCH_FAIL_INJECT[] = "worker.ShmGuard.TryRLatch.Fail";
 
 struct TransportRpcCounts {
     uint64_t queryAndGet = 0;
@@ -844,6 +845,156 @@ TEST_F(KVClientTransportGetTest, DirectBatchGetUbConcurrentOverlappingBatches)
         }
     }
 #endif
+}
+
+// Reproduces issue #749: with enable_local_cache=false the direct Get path goes through
+// WorkerWorkerOCServiceImpl::GetObjectRemote, which takes the SHM read latch via ShmGuard::TryRLatch.
+// When the latch cannot be acquired (write-side contention during set/eviction/migration under load),
+// TryRLatch previously returned K_RUNTIME_ERROR (code=5). Because ReplicaReader treats K_RUNTIME_ERROR as
+// a non-retryable location error, every direct Get surfaced code=5 to the client — matching the 100%
+// get failure observed in the issue while Set stayed healthy. The latch failure is transient contention,
+// so it must return K_TRY_AGAIN to let the reader retry until the API deadline.
+class KVClientTransportGetShmLatchTest : public OCClientCommon, public CommonDistributedExt {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numEtcd = 1;
+        opts.numWorkers = 3;
+        opts.enableDistributedMaster = "true";
+        // Enable SHM so the worker GetObjectRemote path exercises ShmGuard::TryRLatch.
+        opts.workerGflagParams =
+            " -shared_memory_size_mb=512 -ipc_through_shared_memory=true -arena_per_tenant=1 -use_brpc=true"
+            " -enable_urma=false";
+    }
+
+    void SetUp() override
+    {
+        previousUseBrpc_ = FLAGS_use_brpc;
+        FLAGS_use_brpc = true;
+        DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(QUERY_AND_GET_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(GET_OBJECT_REMOTE_INJECT, "call()"));
+        ExternalClusterTest::SetUp();
+        CommonDistributedExt::InitTestEtcdInstance();
+
+        // Reuse the base class CommonDistributedExt::etcd_ instead of shadowing it, so TearDown resets a
+        // single owner. InitTestEtcdInstance is idempotent (early-returns when etcd_ != nullptr).
+        ASSERT_NE(etcd_, nullptr);
+        InitTestKVClient(META_OWNER_INDEX, writer_, CLIENT_TIMEOUT_MS);
+        InitTransportClient();
+    }
+
+    void TearDown() override
+    {
+        reader_.reset();
+        writer_.reset();
+        etcd_.reset();
+        (void)inject::Clear(SKIP_WARMUP_INJECT);
+        (void)inject::Clear(QUERY_AND_GET_INJECT);
+        (void)inject::Clear(GET_OBJECT_REMOTE_INJECT);
+        ClearShmLatchFailureEverywhere();
+        ExternalClusterTest::TearDown();
+        FLAGS_use_brpc = previousUseBrpc_;
+    }
+
+protected:
+    BaseCluster *GetCluster() override
+    {
+        return cluster_.get();
+    }
+
+    void InitTransportClient()
+    {
+        ConnectOptions options;
+        InitConnectOpt(TRANSPORT_CLIENT_WORKER_INDEX, options, CLIENT_TIMEOUT_MS);
+        options.enableLocalCache = false;
+        reader_ = std::make_shared<KVClient>(options);
+        DS_ASSERT_OK(reader_->Init());
+    }
+
+    // Pin the SHM read-latch to fail on every worker so the direct Get exercises the retryable
+    // error path regardless of which worker owns the pulled object's metadata or replicas.
+    void PinShmLatchFailureEverywhere()
+    {
+        for (uint32_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+            DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, SHM_LATCH_FAIL_INJECT, "return()"));
+        }
+    }
+
+    // Symmetric cleanup so neither the test body nor TearDown can forget to clear the inject.
+    void ClearShmLatchFailureEverywhere()
+    {
+        for (uint32_t i = 0; i < cluster_->GetWorkerNum(); ++i) {
+            (void)cluster_->ClearInjectAction(WORKER, i, SHM_LATCH_FAIL_INJECT);
+        }
+    }
+
+    std::shared_ptr<KVClient> writer_;
+    std::shared_ptr<KVClient> reader_;
+    bool previousUseBrpc_ = false;
+};
+
+// Baseline: a direct Get with SHM enabled succeeds and returns the written value.
+TEST_F(KVClientTransportGetShmLatchTest, DirectGetSucceedsWithShmEnabled)
+{
+    const std::string key = "shm_latch_baseline_" + GetStringUuid();
+    const std::string value(VALUE_SIZE, 'x');
+    DS_ASSERT_OK(writer_->Set(key, value));
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader_->Get({ key }, buffers));
+    ASSERT_EQ(buffers.size(), 1u);
+    ASSERT_TRUE(buffers[0]);
+    AssertBufferEqual(*buffers[0], value);
+}
+
+// Regression: unresolved SHM read-latch contention must surface as a retryable error, never as
+// K_RUNTIME_ERROR (code=5). With the latch pinned to fail, the reader retries until the API deadline
+// and returns K_RPC_DEADLINE_EXCEEDED; after clearing the inject the same key reads successfully.
+TEST_F(KVClientTransportGetShmLatchTest, LatchFailureIsRetryableNotRuntimeError)
+{
+    const std::string key = "shm_latch_fail_" + GetStringUuid();
+    const std::string value(VALUE_SIZE, 'y');
+    DS_ASSERT_OK(writer_->Set(key, value));
+
+    // Sanity check that the object is readable before injecting contention.
+    {
+        std::vector<Optional<Buffer>> buffers;
+        DS_ASSERT_OK(reader_->Get({ key }, buffers));
+        ASSERT_TRUE(buffers[0]);
+        AssertBufferEqual(*buffers[0], value);
+    }
+
+    PinShmLatchFailureEverywhere();
+    // Single-key Get is required for the K_RPC_DEADLINE_EXCEEDED assertion: ObjectReadFlow::ReadObjects
+    // takes its ready.size()==1 branch (ReplicaReader::Read), where K_TRY_AGAIN stays retryable until
+    // CheckDeadline/Backoff exhaust the API deadline. A multi-key request would take ReplicaReader::ReadBatch,
+    // whose FinishUnresolvedWithDeadline returns lastStatus (K_TRY_AGAIN) under some states — not deadline.
+    std::vector<Optional<Buffer>> buffers;
+    const auto start = std::chrono::steady_clock::now();
+    const Status rc = reader_->Get({ key }, buffers);
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+    // With the latch pinned to fail, TryRLatch returns K_TRY_AGAIN on every replica, the reader retries
+    // via CheckDeadline/Backoff until the API deadline, and ReplicaReader::Read returns
+    // K_RPC_DEADLINE_EXCEEDED. K_RUNTIME_ERROR here would mean the bug is back. Accepting other retryable
+    // codes would mask a regression where the reader stops exhausting the deadline, so pin the final code.
+    ASSERT_NE(rc.GetCode(), StatusCode::K_RUNTIME_ERROR)
+        << "direct Get must not surface SHM latch contention as K_RUNTIME_ERROR";
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED)
+        << "expected deadline exhaustion after latch-contention retries, got: " << rc.ToString();
+    // Wall-clock guard: the contention Get must exhaust around the API deadline (sourced from
+    // requestTimeoutMs_, bounded by CLIENT_TIMEOUT_MS), and must not run far longer if the deadline is
+    // ever raised. Cap at 2x CLIENT_TIMEOUT_MS to catch regressions.
+    ASSERT_LT(elapsedMs, 2 * CLIENT_TIMEOUT_MS)
+        << "latch-contention Get ran " << elapsedMs << "ms, expected near the API deadline";
+
+    ClearShmLatchFailureEverywhere();
+    std::vector<Optional<Buffer>> recovered;
+    DS_ASSERT_OK(reader_->Get({ key }, recovered));
+    ASSERT_EQ(recovered.size(), 1u);
+    ASSERT_TRUE(recovered[0]);
+    AssertBufferEqual(*recovered[0], value);
 }
 
 }  // namespace st

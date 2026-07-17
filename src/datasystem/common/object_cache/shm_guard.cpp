@@ -18,6 +18,7 @@
  * Description: Implementation of ShmGuard.
  */
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 
 namespace datasystem {
@@ -37,6 +38,10 @@ Status ShmGuard::TryRLatch(bool retry)
     auto lockFrame = reinterpret_cast<uint32_t *>(impl_->shmUnit->GetPointer());
     auto tmpLock = std::make_shared<object_cache::ShmLock>(lockFrame, metaSize_, 0);
     RETURN_IF_NOT_OK(tmpLock->Init());
+    // Test hook: simulate unresolved SHM read-latch contention so callers exercise the retryable
+    // error path. The returned code must stay retryable (K_TRY_AGAIN) to match real contention.
+    INJECT_POINT("worker.ShmGuard.TryRLatch.Fail",
+                 []() { return Status(K_TRY_AGAIN, "Inject SHM read latch contention"); });
 
     static const int maxRetry = 20;
     static const int sleepTimeMs = 10;
@@ -49,7 +54,10 @@ Status ShmGuard::TryRLatch(bool retry)
         LOG(WARNING) << "Try read latch failed, try again...";
         std::this_thread::sleep_for(std::chrono::milliseconds(sleepTimeMs));
     }
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(locked, K_RUNTIME_ERROR, "Try read latch failed");
+    // A failed read latch is a transient contention with writers (set/eviction/migration), not a fatal
+    // data error. Returning K_TRY_AGAIN lets the transport reader retry the replica or back off until
+    // the API deadline, instead of surfacing K_RUNTIME_ERROR which the caller treats as unrecoverable.
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(locked, K_TRY_AGAIN, "Try read latch failed");
     impl_->lock = std::move(tmpLock);
     return Status::OK();
 }
