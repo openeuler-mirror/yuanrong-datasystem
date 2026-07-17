@@ -29,7 +29,10 @@
 #include <vector>
 
 #include "datasystem/client/routing/hash_ring_refresher.h"
+#include "datasystem/client/routing/routing_rpc_client.h"
 #include "datasystem/client/routing/worker_router.h"
+#include "datasystem/common/ak_sk/signature.h"
+#include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
 
@@ -44,29 +47,55 @@ enum class DataPlacementPolicy {
 
 class Routing {
 public:
+    Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
+            HashRingRefresher::RingUpdateHook ringUpdateHook = {},
+            int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS);
+
+    // Dependency-injection seam used by focused routing tests.
     Routing(std::shared_ptr<WorkerRouter> router, std::shared_ptr<HashRingRefresher> refresher,
             int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS);
     ~Routing();
 
-    Status Init(const std::string &hostId, const HostPort &initialWorkerAddr);
+    Status Init(const std::string &hostId, const HostPort &initialWorkerAddr, bool initialWorkerIsLocal = false);
 
+    // Legacy compatibility overload. New callers must use DataPlacementPolicy.
     Status SelectWorker(const std::string &key, SelectStrategy strategy, HostPort &worker,
-                         const std::vector<HostPort> &exclude = {});
+                        const std::vector<HostPort> &exclude = {});
 
+    // Routing owns only its GetHashRing control channel. The caller owns business RPC execution and retries.
+    Status SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
+                        const std::vector<HostPort> &exclude = {});
+
+    // Legacy compatibility overload. New callers must use DataPlacementPolicy.
     Status SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
-                          std::unordered_map<HostPort, std::vector<std::string>> &groups);
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups);
+
+    Status SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                         const std::vector<HostPort> &exclude = {});
 
     void UpdateState(const HostPort &addr, StatusCode status);
 
     void Shutdown();
 
 private:
+    Status FetchHashRing(const HostPort &workerAddr, uint64_t currentVersion,
+                         ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
+                         uint64_t &newVersion, bool &changed,
+                         std::unordered_map<std::string, std::string> &hostIdMap);
+
     static constexpr int64_t DEFAULT_REFRESH_INTERVAL_MS = 5'000;
     std::shared_ptr<WorkerRouter> router_;
     std::shared_ptr<HashRingRefresher> refresher_;
+    std::shared_ptr<RoutingRpcClient> rpcClient_;
     int64_t refreshIntervalMs_;
+    HostPort initialWorkerAddr_;
+    bool initialWorkerIsLocal_{ false };
+    std::atomic<bool> hostIdResolutionAttempted_{ false };
     std::atomic<bool> initialized_{ false };
 };
+
+Status ParseDataPlacementPolicy(const std::string &value, DataPlacementPolicy &policy);
 
 }  // namespace client
 }  // namespace datasystem

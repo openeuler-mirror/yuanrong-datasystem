@@ -96,6 +96,8 @@ Status HashRingRefresher::DoRefresh()
         const uint64_t requestedVersion = currentVersion_.load(std::memory_order_acquire);
         Status st = fetchRpc_(worker, requestedVersion, ring, masterAddress, newVersion, changed, hostIdMap);
         if (st.IsError()) {
+            LOG(WARNING) << "[Routing] Skip failed hash ring refresh from " << worker.ToString()
+                         << ", requested version: " << requestedVersion << ", status: " << st.ToString();
             continue;
         }
 

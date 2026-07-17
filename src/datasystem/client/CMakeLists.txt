@@ -56,6 +56,7 @@ list(APPEND CLIENT_SRCS
         routing/broken_filter.cpp
         routing/hash_ring_refresher.cpp
         routing/routing.cpp
+        routing/routing_rpc_client.cpp
         routing/state_filter.cpp
         routing/worker_router.cpp)
 

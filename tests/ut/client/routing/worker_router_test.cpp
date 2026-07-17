@@ -168,6 +168,21 @@ TEST_F(RoutingTest, TestSelectWorkersEmptyInputClearsOutput)
     EXPECT_TRUE(groups.empty());
 }
 
+TEST_F(RoutingTest, TestSelectWorkersUsesSameNodeWorkersWithoutHashTokens)
+{
+    auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    auto &worker = (*ring->mutable_members())["127.0.0.1:1000"];
+    worker.set_state(::datasystem::MembershipPb::ACTIVE);
+    auto router = CreateRouter("host-a");
+    router->UpdateHashRing(ring, BuildHostIdMap());
+
+    std::unordered_map<HostPort, std::vector<std::string>> groups;
+    DS_ASSERT_OK(router->SelectWorkers({ "k1", "k2" }, client::DataPlacementPolicy::REQUIRED_SAME_NODE, groups));
+    ASSERT_EQ(groups.size(), 1u);
+    EXPECT_EQ(groups.begin()->first.ToString(), "127.0.0.1:1000");
+    EXPECT_EQ(groups.begin()->second.size(), 2u);
+}
+
 TEST_F(RoutingTest, TestSameNodePreferred)
 {
     auto router = CreateRouter("host-a");
@@ -176,6 +191,67 @@ TEST_F(RoutingTest, TestSameNodePreferred)
     HostPort worker;
     DS_ASSERT_OK(router->SelectWorker("samenode_key", client::SelectStrategy::SAME_NODE_PREFERRED, worker));
     EXPECT_EQ(worker.ToString(), "127.0.0.1:1000");  // host-a's worker
+}
+
+TEST_F(RoutingTest, TestRequiredSameNodeDoesNotFallback)
+{
+    auto router = CreateRouter("host-without-worker");
+    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+
+    HostPort worker;
+    auto rc = router->SelectWorker("key", client::DataPlacementPolicy::REQUIRED_SAME_NODE, worker);
+    EXPECT_EQ(rc.GetCode(), K_NO_AVAILABLE_WORKER);
+}
+
+TEST_F(RoutingTest, TestPreferredSameNodeFallsBackToMetaOwner)
+{
+    auto router = CreateRouter("host-without-worker");
+    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+
+    HostPort expected;
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_META_OWNER, expected));
+    HostPort selected;
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, selected));
+    EXPECT_EQ(selected, expected);
+}
+
+TEST_F(RoutingTest, TestPreferredSameNodeHonorsExclude)
+{
+    auto hostIdMap = BuildHostIdMap();
+    (*hostIdMap)["127.0.0.1:2000"] = "host-a";
+    auto router = CreateRouter("host-a");
+    router->UpdateHashRing(BuildRing(), hostIdMap);
+
+    HostPort first;
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, first));
+    HostPort second;
+    DS_ASSERT_OK(router->SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, second, { first }));
+    EXPECT_NE(first, second);
+}
+
+TEST_F(RoutingTest, TestHashEqualTokenSelectsTokenOwner)
+{
+    constexpr int MAX_KEY_SEARCH_ATTEMPTS = 100;
+    std::string key = "exact-token";
+    uint32_t keyHash = MurmurHash3_32(key);
+    for (int i = 0; keyHash == std::numeric_limits<uint32_t>::max() && i < MAX_KEY_SEARCH_ATTEMPTS; ++i) {
+        key = "exact-token-" + std::to_string(i);
+        keyHash = MurmurHash3_32(key);
+    }
+    ASSERT_NE(keyHash, std::numeric_limits<uint32_t>::max());
+    auto ring = std::make_shared<::datasystem::ClusterTopologyPb>();
+    auto &exactOwner = (*ring->mutable_members())["127.0.0.1:1000"];
+    exactOwner.set_state(::datasystem::MembershipPb::ACTIVE);
+    exactOwner.add_tokens(keyHash);
+    auto &nextOwner = (*ring->mutable_members())["127.0.0.1:2000"];
+    nextOwner.set_state(::datasystem::MembershipPb::ACTIVE);
+    nextOwner.add_tokens(keyHash + 1);
+
+    auto router = CreateRouter();
+    router->UpdateHashRing(ring, BuildHostIdMap());
+    HostPort selected;
+    DS_ASSERT_OK(router->SelectWorker(key, client::DataPlacementPolicy::PREFERRED_META_OWNER, selected));
+    EXPECT_EQ(selected.ToString(), "127.0.0.1:1000");
 }
 
 TEST_F(RoutingTest, TestSameNodePreferredDistributesByKey)
@@ -242,6 +318,36 @@ TEST_F(RoutingTest, TestStateFilterRejectsWhenRouterIsMissing)
 {
     client::StateFilter filter(nullptr);
     EXPECT_FALSE(filter.IsAvailable(HostPort("127.0.0.1", 1000)));
+}
+
+TEST_F(RoutingTest, TestConcurrentSelectAndHashRingUpdate)
+{
+    auto router = CreateRouter();
+    router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+    std::atomic<bool> failed{ false };
+    std::thread updater([&] {
+        for (int i = 0; i < 200; ++i) {
+            router->UpdateHashRing(BuildRing(), BuildHostIdMap());
+        }
+    });
+    std::vector<std::thread> readers;
+    for (int threadIndex = 0; threadIndex < 4; ++threadIndex) {
+        readers.emplace_back([&, threadIndex] {
+            for (int i = 0; i < 500; ++i) {
+                HostPort selected;
+                auto rc = router->SelectWorker("key-" + std::to_string(threadIndex) + "-" + std::to_string(i),
+                                               client::DataPlacementPolicy::PREFERRED_META_OWNER, selected);
+                if (rc.IsError() || selected.Empty()) {
+                    failed.store(true);
+                }
+            }
+        });
+    }
+    updater.join();
+    for (auto &reader : readers) {
+        reader.join();
+    }
+    EXPECT_FALSE(failed.load());
 }
 
 TEST_F(RoutingTest, TestGetRingState)

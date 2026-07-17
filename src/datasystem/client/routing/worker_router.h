@@ -37,6 +37,9 @@
 namespace datasystem {
 namespace client {
 
+enum class DataPlacementPolicy;
+
+// Legacy compatibility enum. New routing code must use DataPlacementPolicy so REQUIRED_SAME_NODE remains expressible.
 enum class SelectStrategy {
     HASH_RING_AFFINITY,     // Select by key hash on ring (metadata owner)
     SAME_NODE_PREFERRED,    // Prefer same-node worker, fallback to ring
@@ -61,12 +64,21 @@ public:
     void SetHostId(std::string hostId);
 
     // Single key selection. exclude list avoids specific workers (e.g., LEAVING on write retry).
+    // Legacy compatibility overload. New callers must use DataPlacementPolicy.
     Status SelectWorker(const std::string &key, SelectStrategy strategy, HostPort &worker,
                         const std::vector<HostPort> &exclude = {}) const;
 
+    Status SelectWorker(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
+                        const std::vector<HostPort> &exclude = {}) const;
+
     // Batch selection: group keys by owner, return map<worker, keys>.
+    // Legacy compatibility overload. New callers must use DataPlacementPolicy.
     Status SelectWorkers(const std::vector<std::string> &keys, SelectStrategy strategy,
                          std::unordered_map<HostPort, std::vector<std::string>> &groups) const;
+
+    Status SelectWorkers(const std::vector<std::string> &keys, DataPlacementPolicy policy,
+                         std::unordered_map<HostPort, std::vector<std::string>> &groups,
+                         const std::vector<HostPort> &exclude = {}) const;
 
     std::vector<HostPort> GetAvailableWorkers() const;
 
@@ -98,7 +110,7 @@ private:
 
     bool IsWorkerAvailable(const HostPort &addr) const;
     bool IsExcluded(const HostPort &addr, const std::vector<HostPort> &exclude) const;
-    Status SelectWorkerFromView(const std::string &key, SelectStrategy strategy, HostPort &worker,
+    Status SelectWorkerFromView(const std::string &key, DataPlacementPolicy policy, HostPort &worker,
                                 const std::vector<HostPort> &exclude,
                                 const std::shared_ptr<const RingView> &view) const;
     static std::shared_ptr<const RingView::TokenIndex> BuildTokenIndex(const ::datasystem::ClusterTopologyPb &ring);

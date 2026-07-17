@@ -16,8 +16,10 @@
 
 /** Description: Tests the routed KVClient Set transaction. */
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <string>
@@ -27,7 +29,9 @@
 #include <gtest/gtest.h>
 
 #include "client/object_cache/oc_client_common.h"
+#include "datasystem/client/routing/routing.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
@@ -41,6 +45,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 DS_DECLARE_bool(use_brpc);
+DS_DECLARE_string(sdk_data_placement_policy);
 
 namespace datasystem {
 namespace st {
@@ -52,6 +57,8 @@ constexpr size_t VALUE_SIZE = 128 * 1024;
 constexpr size_t KEY_SEARCH_LIMIT = 100'000;
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
 constexpr char PUBLISH_INJECT[] = "WorkerRpcClient.InvokeSet.beforeRpc";
+constexpr char HOST_ID_ENV_NAME[] = "routing_transport_set_host_id";
+constexpr char HOST_ID_VALUE[] = "routing-transport-set-host";
 
 const char *ExpectedTransport()
 {
@@ -73,6 +80,7 @@ public:
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
             " -shared_memory_size_mb=512 -ipc_through_shared_memory=false -arena_per_tenant=1 -use_brpc=true";
+        opts.workerGflagParams += " -host_id_env_name=" + std::string(HOST_ID_ENV_NAME);
 #ifdef USE_URMA
         opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=false";
 #else
@@ -83,7 +91,10 @@ public:
     void SetUp() override
     {
         previousUseBrpc_ = FLAGS_use_brpc;
+        previousPlacementPolicy_ = FLAGS_sdk_data_placement_policy;
         FLAGS_use_brpc = true;
+        FLAGS_sdk_data_placement_policy = "PREFERRED_META_OWNER";
+        ASSERT_EQ(setenv(HOST_ID_ENV_NAME, HOST_ID_VALUE, 1), 0);
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         ExternalClusterTest::SetUp();
 
@@ -106,7 +117,9 @@ public:
         (void)inject::Clear(PUBLISH_INJECT);
         (void)inject::Clear(SKIP_WARMUP_INJECT);
         ExternalClusterTest::TearDown();
+        (void)unsetenv(HOST_ID_ENV_NAME);
         FLAGS_use_brpc = previousUseBrpc_;
+        FLAGS_sdk_data_placement_policy = previousPlacementPolicy_;
     }
 
 protected:
@@ -117,6 +130,13 @@ protected:
         options.enableLocalCache = false;
         routedClient_ = std::make_shared<KVClient>(options);
         DS_ASSERT_OK(routedClient_->Init());
+    }
+
+    void ReinitRoutedClient(const std::string &policy)
+    {
+        routedClient_.reset();
+        FLAGS_sdk_data_placement_policy = policy;
+        InitRoutedClient();
     }
 
     void InitLocalClient()
@@ -202,7 +222,7 @@ protected:
         CHECK_FAIL_RETURN_STATUS(!tokenWorkers.empty(), K_NOT_FOUND, "Hash ring has no worker tokens");
         for (size_t i = 0; i < KEY_SEARCH_LIMIT; ++i) {
             std::string candidate = prefix + std::to_string(i);
-            auto owner = tokenWorkers.upper_bound(MurmurHash3_32(candidate));
+            auto owner = tokenWorkers.lower_bound(MurmurHash3_32(candidate));
             if (owner == tokenWorkers.end()) {
                 owner = tokenWorkers.begin();
             }
@@ -212,6 +232,64 @@ protected:
             }
         }
         return Status(K_NOT_FOUND, "Unable to find a key for the target worker");
+    }
+
+    Status FindSameNodeDivergentRouteKey(const std::string &prefix, std::string &key, HostPort &metaOwner,
+                                         HostPort &preferredWorker)
+    {
+        RETURN_RUNTIME_ERROR_IF_NULL(etcd_);
+        std::string value;
+        RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
+        ClusterTopologyPb ring;
+        CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
+        std::map<uint32_t, std::string> tokenWorkers;
+        std::vector<HostPort> sameNodeWorkers;
+        for (const auto &worker : ring.members()) {
+            if (worker.second.state() != MembershipPb::ACTIVE) {
+                continue;
+            }
+            HostPort address;
+            RETURN_IF_NOT_OK(address.ParseString(worker.first));
+            sameNodeWorkers.emplace_back(std::move(address));
+            for (const auto token : worker.second.tokens()) {
+                tokenWorkers.emplace(token, worker.first);
+            }
+        }
+        CHECK_FAIL_RETURN_STATUS(sameNodeWorkers.size() == WORKER_NUM, K_NOT_READY,
+                                 "Expected all external-cluster workers on the same host");
+        CHECK_FAIL_RETURN_STATUS(!tokenWorkers.empty(), K_NOT_FOUND, "Hash ring has no worker tokens");
+        std::sort(sameNodeWorkers.begin(), sameNodeWorkers.end());
+        for (size_t i = 0; i < KEY_SEARCH_LIMIT; ++i) {
+            std::string candidate = prefix + std::to_string(i);
+            const uint32_t keyHash = MurmurHash3_32(candidate);
+            auto owner = tokenWorkers.lower_bound(keyHash);
+            if (owner == tokenWorkers.end()) {
+                owner = tokenWorkers.begin();
+            }
+            HostPort candidateOwner;
+            RETURN_IF_NOT_OK(candidateOwner.ParseString(owner->second));
+            const HostPort &candidatePreferred = sameNodeWorkers[keyHash % sameNodeWorkers.size()];
+            if (candidatePreferred != candidateOwner) {
+                key = std::move(candidate);
+                metaOwner = std::move(candidateOwner);
+                preferredWorker = candidatePreferred;
+                return Status::OK();
+            }
+        }
+        return Status(K_NOT_FOUND, "Unable to find a key whose same-node worker differs from its metadata owner");
+    }
+
+    Status FindWorkerIndex(const HostPort &worker, uint32_t &workerIndex)
+    {
+        for (uint32_t i = 0; i < WORKER_NUM; ++i) {
+            HostPort candidate;
+            RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(i, candidate));
+            if (candidate == worker) {
+                workerIndex = i;
+                return Status::OK();
+            }
+        }
+        return Status(K_NOT_FOUND, "Worker address is absent from the external cluster");
     }
 
     void AssertValue(const std::string &key, const std::string &expected)
@@ -238,6 +316,7 @@ protected:
     std::vector<std::unique_ptr<worker::WorkerRemoteMasterOCApi>> masterApis_;
     std::string queryAddress_;
     bool previousUseBrpc_ = false;
+    std::string previousPlacementPolicy_;
 };
 
 TEST_F(KVClientTransportSetTest, RoutedSetPublishesDataAndMetadata)
@@ -255,6 +334,82 @@ TEST_F(KVClientTransportSetTest, RoutedSetPublishesDataAndMetadata)
     HostPort expectedWorker;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(READER_WORKER_INDEX, expectedWorker));
     ASSERT_EQ(primaryWorker, expectedWorker);
+}
+
+TEST_F(KVClientTransportSetTest, U1U2DirectWriteReadAtMetadataOwner)
+{
+    std::string key;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "routing_u1_u2_", key));
+    const std::string value(VALUE_SIZE, 'u');
+
+    DS_ASSERT_OK(routedClient_->Set(key, value));
+
+    ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+    std::string actual;
+    DS_ASSERT_OK(routedClient_->Get(key, actual));
+    ASSERT_EQ(actual, value);
+    HostPort primaryWorker;
+    DS_ASSERT_OK(QueryPrimaryWorker(key, primaryWorker));
+    HostPort expectedWorker;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(READER_WORKER_INDEX, expectedWorker));
+    ASSERT_EQ(primaryWorker, expectedWorker);
+}
+
+TEST_F(KVClientTransportSetTest, DefaultPolicyRoutesSetAndMSetToSameNodeWorkers)
+{
+    ReinitRoutedClient("PREFERRED_SAME_NODE");
+    std::string setKey;
+    HostPort setMetaOwner;
+    HostPort setPreferredWorker;
+    DS_ASSERT_OK(FindSameNodeDivergentRouteKey("routing_default_set_", setKey, setMetaOwner, setPreferredWorker));
+    ASSERT_NE(setMetaOwner, setPreferredWorker);
+    uint32_t setMetaOwnerIndex = 0;
+    uint32_t setPreferredWorkerIndex = 0;
+    DS_ASSERT_OK(FindWorkerIndex(setMetaOwner, setMetaOwnerIndex));
+    DS_ASSERT_OK(FindWorkerIndex(setPreferredWorker, setPreferredWorkerIndex));
+
+    const std::string setValue(VALUE_SIZE, 'd');
+    DS_ASSERT_OK(routedClient_->Set(setKey, setValue));
+    AssertValue(setKey, setValue);
+    AssertPrimaryWorker(setKey, setPreferredWorkerIndex);
+
+    std::string msetKey;
+    HostPort msetMetaOwner;
+    HostPort msetPreferredWorker;
+    DS_ASSERT_OK(
+        FindSameNodeDivergentRouteKey("routing_default_mset_", msetKey, msetMetaOwner, msetPreferredWorker));
+    const std::string msetValue(VALUE_SIZE, 'm');
+    std::vector<std::string> failedKeys;
+    DS_ASSERT_OK(routedClient_->MSet({ msetKey }, { StringView(msetValue) }, failedKeys));
+    ASSERT_TRUE(failedKeys.empty());
+    AssertValue(msetKey, msetValue);
+    uint32_t msetPreferredWorkerIndex = 0;
+    DS_ASSERT_OK(FindWorkerIndex(msetPreferredWorker, msetPreferredWorkerIndex));
+    AssertPrimaryWorker(msetKey, msetPreferredWorkerIndex);
+}
+
+TEST_F(KVClientTransportSetTest, RequiredSameNodeRejectsBeforeBusinessRpc)
+{
+    HostPort initialWorker;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(ROUTED_CLIENT_WORKER_INDEX, initialWorker));
+    BrpcChannelConfig channelConfig;
+    channelConfig.timeout_ms = 3'000;
+    channelConfig.connect_timeout_ms = 3'000;
+    channelConfig.max_retry = 0;
+    channelConfig.enable_circuit_breaker = false;
+    ConnectOptions options;
+    InitConnectOpt(ROUTED_CLIENT_WORKER_INDEX, options);
+    auto signature = std::make_shared<Signature>(options.accessKey, options.secretKey);
+    client::Routing routing(channelConfig, std::move(signature));
+    DS_ASSERT_OK(routing.Init("routing-st-nonexistent-host", initialWorker));
+
+    HostPort selectedWorker;
+    EXPECT_EQ(routing
+                  .SelectWorker("routing_required_same_node", client::DataPlacementPolicy::REQUIRED_SAME_NODE,
+                                selectedWorker)
+                  .GetCode(),
+              K_NO_AVAILABLE_WORKER);
+    routing.Shutdown();
 }
 
 TEST_F(KVClientTransportSetTest, LocalCacheEnabledSetUsesConnectedWorker)
