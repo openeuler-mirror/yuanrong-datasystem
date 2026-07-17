@@ -36,6 +36,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "kv_client_brpc_local_cache_verify_test",
+    srcs = ["kv_client_brpc_local_cache_verify_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_test(
     name = "kv_cache_client_evict_test",
     srcs = ["kv_cache_client_evict_test.cpp"],
     tags = ["manual"],

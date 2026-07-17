@@ -197,8 +197,11 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
         // object RPCs (Delete, etc.) that must not be re-driven silently.
         cfg.max_retry = 0;
         std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(channel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
-                                             FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
+        if (channel == nullptr) {
+            LOG(ERROR) << "Failed to init brpc channel for WorkerOCService, endpoint=" << brpcAddr.ToString();
+            return Status(StatusCode::K_RPC_UNAVAILABLE,
+                          FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
+        }
         (void)WaitForBrpcSocketAvailable(brpcAddr);
         auto stub = std::make_shared<WorkerOCService_BrpcGenericStub>(channel.get(), requestTimeoutMs);
         auto session = std::make_shared<BrpcSession>(std::move(stub), std::move(channel));
@@ -297,6 +300,7 @@ void ClientWorkerRemoteApi::RecreateOCStub()
         cfg.max_retry = 0;
         std::shared_ptr<brpc::Channel> newChannel(BrpcChannelFactory::Create(cfg));
         if (newChannel == nullptr) {
+            // Old BrpcSession is still valid — log and keep it as fallback.
             LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
             return;
         }
