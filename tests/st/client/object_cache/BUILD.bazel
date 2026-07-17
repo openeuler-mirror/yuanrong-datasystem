@@ -346,6 +346,7 @@ ds_cc_test(
     tags = ["manual", "urma"],
     deps = OC_CLIENT_COMMON_DEPS + [
         "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/object_cache:common_object_cache",
         "//src/datasystem/common/util:thread_pool",
     ],
 )
