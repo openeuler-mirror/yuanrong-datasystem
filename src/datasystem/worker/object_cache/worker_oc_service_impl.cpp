@@ -103,11 +103,13 @@
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/device/worker_device_oc_manager.h"
+#include "datasystem/worker/object_cache/get_hash_ring_response.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
+#include "datasystem/worker/object_cache/verify_leaving_state.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/worker_health_check.h"
 
@@ -192,6 +194,25 @@ Status BuildClusterTopologyPb(const cluster::TopologySnapshot &snapshot, ::datas
 
 }  // namespace
 
+Status BuildGetHashRingResponse(const cluster::TopologySnapshot &snapshot, uint64_t requestedVersion,
+                                const std::string &masterAddress, const RoutingHostIdLoader &loadHostIds,
+                                GetHashRingRspPb &rsp)
+{
+    rsp.Clear();
+    rsp.set_version(snapshot.Version());
+    rsp.set_master_address(masterAddress);
+    if (requestedVersion != 0 && requestedVersion == snapshot.Version()) {
+        rsp.set_hash_ring_changed(false);
+        return Status::OK();
+    }
+
+    rsp.set_hash_ring_changed(true);
+    RETURN_IF_NOT_OK(BuildClusterTopologyPb(snapshot, *rsp.mutable_hash_ring()));
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(loadHostIds), K_NOT_READY,
+                             "Host ID loader is unavailable for hash ring refresh");
+    return loadHostIds(*rsp.mutable_host_id_map());
+}
+
 static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint64_t URMA_WARMUP_OBJECT_SIZE = 1;
 static constexpr int64_t URMA_WARMUP_REQUEST_TIMEOUT_MS = 5'000;
@@ -217,6 +238,33 @@ void UpdateWorkerObjectGauge(const std::shared_ptr<ObjectTable> &objectTable)
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_ALLOCATED_MEMORY_SIZE))
         .Set(stat.objectMemoryUsage);
 }
+
+void RecordMultiPublishTransportMetrics(const MultiPublishReqPb &req, uint64_t payloadBytes, bool clientShmEnabled)
+{
+    const bool shmEnabled = WorkerOcServiceCrudCommonApi::ShmEnable();
+    uint64_t shmBytes = 0;
+    uint64_t urmaBytes = 0;
+    bool hasNonShmObject = false;
+    for (const auto &info : req.object_info()) {
+        if (info.shm_id().empty()) {
+            hasNonShmObject = true;
+            continue;
+        }
+        if (shmEnabled && clientShmEnabled) {
+            shmBytes += static_cast<uint64_t>(info.data_size());
+        } else {
+            urmaBytes += static_cast<uint64_t>(info.data_size());
+        }
+    }
+    if (hasNonShmObject && payloadBytes > 0) {
+        const auto metricId = clientShmEnabled ? metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES
+                                               : metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES;
+        METRIC_ADD(metricId, payloadBytes);
+    }
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES, shmBytes);
+    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, urmaBytes);
+}
+
 static constexpr int OLD_VERSION_DEL_THREAD_MIN_NUM = 0;
 static constexpr int OLD_VERSION_DEL_THREAD_MAX_NUM = 1;
 static constexpr uint32_t SHM_QUEUE_SLOT_NUM = 32;
@@ -494,6 +542,8 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::VerifyLeavingState(exitRequested_, FLAGS_enable_leaving_intercept),
+                                     "verify leaving state failed");
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -528,6 +578,8 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_PUBLISH_LATENCY);
     uint64_t payloadBytes = PayloadBytes(payloads);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::VerifyLeavingState(exitRequested_, FLAGS_enable_leaving_intercept),
+                                     "verify leaving state failed");
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -535,30 +587,7 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     auto clientId = ClientKey::Intern(req.client_id());
     RETURN_IF_NOT_OK(multiPublishProc_->MultiPublish(req, resp, payloads, clientId));
     const bool clientShmEnabled = WorkerOcServiceCrudCommonApi::ClientShmEnabled(clientId);
-    const bool shmEnabled = WorkerOcServiceCrudCommonApi::ShmEnable();
-    uint64_t shmBytes = 0;
-    uint64_t urmaBytes = 0;
-    bool hasNonShmObject = false;
-    for (const auto &info : req.object_info()) {
-        if (info.shm_id().empty()) {
-            hasNonShmObject = true;
-            continue;
-        }
-        if (shmEnabled && clientShmEnabled) {
-            shmBytes += static_cast<uint64_t>(info.data_size());
-        } else {
-            urmaBytes += static_cast<uint64_t>(info.data_size());
-        }
-    }
-    if (hasNonShmObject && payloadBytes > 0) {
-        if (clientShmEnabled) {
-            METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_LOCAL_TOTAL_BYTES, payloadBytes);
-        } else {
-            METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_TCP_TOTAL_BYTES, payloadBytes);
-        }
-    }
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_SHM_TOTAL_BYTES, shmBytes);
-    METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, urmaBytes);
+    RecordMultiPublishTransportMetrics(req, payloadBytes, clientShmEnabled);
     UpdateWorkerObjectGauge(objectTable_);
     if (req.auto_release_memory_ref()) {
         std::set<std::string> failedSet{ resp.failed_object_keys().begin(), resp.failed_object_keys().end() };
@@ -1192,6 +1221,8 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 {
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_PROCESS_CREATE_LATENCY);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::VerifyLeavingState(exitRequested_, FLAGS_enable_leaving_intercept),
+                                     "verify leaving state failed");
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
@@ -1213,6 +1244,11 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_MULTI_CREATE);
     access.ObjectKeysRef(req.object_key());
     Raii raii([&returnStatus, &access]() { access.Result(returnStatus).Record(); });
+    returnStatus = worker::VerifyLeavingState(exitRequested_, FLAGS_enable_leaving_intercept);
+    if (returnStatus.IsError()) {
+        LOG(ERROR) << "verify leaving state failed:" << returnStatus.ToString();
+        return returnStatus;
+    }
     ReadLock noRecon;
     returnStatus = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     if (returnStatus.IsError()) {
@@ -2789,20 +2825,13 @@ Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRing
     RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(membership_.GetSnapshot(snapshot));
-    rsp.set_version(snapshot->Version());
-    rsp.set_master_address(FLAGS_master_address);
-
-    if (req.version() != 0 && snapshot->Version() == req.version()) {
-        rsp.set_hash_ring_changed(false);
+    auto loadHostIds = [this](RoutingHostIdMap &hostIdMap) {
+        std::unordered_map<std::string, std::string> hostIds;
+        RETURN_IF_NOT_OK(topologyEngine_->GetRoutingHostIds(hostIds));
+        hostIdMap.insert(hostIds.begin(), hostIds.end());
         return Status::OK();
-    }
-
-    rsp.set_hash_ring_changed(true);
-    RETURN_IF_NOT_OK(BuildClusterTopologyPb(*snapshot, *rsp.mutable_hash_ring()));
-    std::unordered_map<std::string, std::string> hostIds;
-    RETURN_IF_NOT_OK(topologyEngine_->GetRoutingHostIds(hostIds));
-    rsp.mutable_host_id_map()->insert(hostIds.begin(), hostIds.end());
-    return Status::OK();
+    };
+    return BuildGetHashRingResponse(*snapshot, req.version(), FLAGS_master_address, loadHostIds, rsp);
 }
 
 Status WorkerOCServiceImpl::DeleteDevObjects(const DeleteAllCopyReqPb &req, DeleteAllCopyRspPb &resp)

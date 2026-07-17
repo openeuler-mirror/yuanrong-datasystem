@@ -129,6 +129,10 @@
     propagates its non-empty `businessOperationId` as `RemoveMetaReqPb.topology_operation_id`. Metadata owners use that
     marker only to allow the callback's own idempotent remove/give-up-primary effects. The data phase, final source
     cleanup, and redirect retries must all preserve the same marker; ordinary requests leave the field unset.
+  - when `enable_leaving_intercept` is enabled, the object-cache `Create`, `Publish`, `MultiCreate`, and `MultiPublish`
+    RPC entrypoints read the same local ScaleIn drain gate and return `K_SCALE_DOWN` before entering their write
+    processors. This gate marks topology scale-in draining, not process-level exit. Read-only RPCs keep their existing
+    behavior, and disabling the flag preserves the legacy write path.
   - metadata ownership task ranges do not describe where object data is physically resident. ScaleIn therefore drains
     the leaving Worker's complete local object table once per source/batch before task-scoped metadata migration. The
     Worker callback adapter coalesces concurrent disjoint tasks behind a deadline-aware process-local gate; metadata

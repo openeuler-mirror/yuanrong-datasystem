@@ -83,6 +83,9 @@
     matching the server topology snapshot. Same-node worker addresses are sorted before hash-index selection, making
     placement deterministic across protobuf map iteration orders; this may redistribute same-node-preferred keys once
     at upgrade without changing the policy contract.
+  - The Routing-owned `GetHashRing` control request is AK/SK signed. A matching topology version returns only the
+    current version and `hash_ring_changed=false`; a mismatch returns one immutable ring snapshot together with its
+    host-id map and current master address.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
   - `src/datasystem/client/cluster_query` is a dscli-only read facade with protobuf hidden behind its native

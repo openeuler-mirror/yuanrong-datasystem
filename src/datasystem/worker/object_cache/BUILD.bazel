@@ -191,6 +191,16 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "verify_leaving_state",
+    hdrs = [
+        "verify_leaving_state.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+    ],
+)
+
+ds_cc_library(
     name = "metadata_recovery_manager",
     srcs = [
         "metadata_recovery_manager.cpp",
@@ -223,6 +233,7 @@ ds_cc_library(
         "worker_oc_service_impl.cpp",
     ],
     hdrs = [
+        "get_hash_ring_response.h",
         "metadata_recovery_manager.h",
         "slot_recovery_orchestrator.h",
         "worker_oc_service_impl.h",
@@ -301,6 +312,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//src/datasystem/worker/object_cache:verify_leaving_state",
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker:cluster_event_type",
         # "//src/datasystem/master/object_cache/store:object_meta_store",

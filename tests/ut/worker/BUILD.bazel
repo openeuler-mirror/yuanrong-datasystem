@@ -37,6 +37,15 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "worker_leaving_intercept_test",
+    srcs = ["worker_leaving_intercept_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/object_cache:verify_leaving_state",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # 驱逐管理器测试公共辅助库
 ds_cc_test_library(
     name = "eviction_manager_common",
@@ -133,6 +142,16 @@ ds_cc_test(
         "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",
         "//tests/ut/worker:test_metadata_route",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_get_hash_ring_test",
+    srcs = ["object_cache/worker_get_hash_ring_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+        "//tests/ut:ut_common",
     ],
 )
 
@@ -513,6 +532,8 @@ test_suite(
         "stream_cursor_test",
         "stream_data_page_test",
         "stream_usagemonitor_test",
+        "worker_get_hash_ring_test",
+        "worker_leaving_intercept_test",
         "worker_oc_eviction_test",
         "worker_oc_service_impl_header_test",
         "worker_oc_service_impl_test",

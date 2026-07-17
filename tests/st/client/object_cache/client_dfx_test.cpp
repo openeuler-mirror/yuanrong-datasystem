@@ -1319,10 +1319,9 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL2_ClientExitDuringWorkerRestart1)
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // Phase2 excludes the stopped worker from routable membership, so master0 keeps only the healthy worker's ref.
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
+    // Liveness removal is asynchronous after ShutdownNode returns.
+    AssertGRefTableSizeEventually(*utSvcStub0_, GRefTableKind::MASTER, 1,
+                                  "worker0 master gref table after worker1 shutdown");
 
     // restart node1
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
@@ -1363,10 +1362,9 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart2)
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // Phase2 excludes the stopped worker from routable membership, so master0 keeps only the healthy worker's ref.
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
+    // Liveness removal is asynchronous after ShutdownNode returns.
+    AssertGRefTableSizeEventually(*utSvcStub0_, GRefTableKind::MASTER, 1,
+                                  "worker0 master gref table after worker1 shutdown");
 
     // restart node1
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
@@ -1409,10 +1407,9 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_ClientExitDuringWorkerRestart3)
     rsp.clear_single_client_gref();
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
-    // Phase2 excludes the stopped worker from routable membership, so master0 keeps only the healthy worker's ref.
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
+    // Liveness removal is asynchronous after ShutdownNode returns.
+    AssertGRefTableSizeEventually(*utSvcStub0_, GRefTableKind::MASTER, 1,
+                                  "worker0 master gref table after worker1 shutdown");
 
     // restart node1
     DS_ASSERT_OK(cluster_->StartNode(WORKER, 1, ""));
