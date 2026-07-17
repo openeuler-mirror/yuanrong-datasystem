@@ -29,25 +29,48 @@ namespace datasystem {
 namespace coordinator {
 class CoordinatorWatchServiceImpl : public CoordinatorWatchService, public ICoordinatorWatchService {
 public:
-    using EventHandler = std::function<void(cluster::CoordinationEvent &&event)>;
+    using EventHandler =
+        std::function<Status(const std::string &coordinatorId, int64_t watchId, cluster::CoordinationEvent &&event)>;
 
+    /**
+     * @brief Construct a callback service before its event route is bound.
+     * @param[in] localAddress Worker callback address.
+     */
     explicit CoordinatorWatchServiceImpl(HostPort localAddress) : CoordinatorWatchService(std::move(localAddress))
     {
     }
 
+    /**
+     * @brief Construct a callback service with an identity-aware event route.
+     * @param[in] localAddress Worker callback address.
+     * @param[in] eventHandler CoordinatorId and watch-bound event route.
+     */
     CoordinatorWatchServiceImpl(HostPort localAddress, EventHandler eventHandler)
         : CoordinatorWatchService(std::move(localAddress)), eventHandler_(std::move(eventHandler))
     {
     }
 
+    /**
+     * @brief Release the callback service after RPC ingress is stopped.
+     */
     ~CoordinatorWatchServiceImpl() override = default;
 
+    /**
+     * @brief Replace the event route during composition or shutdown.
+     * @param[in] eventHandler New identity-aware event route; empty disables delivery.
+     */
     void SetEventHandler(EventHandler eventHandler)
     {
         std::lock_guard<std::mutex> lock(handlerMutex_);
         eventHandler_ = std::move(eventHandler);
     }
 
+    /**
+     * @brief Validate a complete callback batch before delivering any event.
+     * @param[in] req CoordinatorId, watch identity, and event batch.
+     * @param[out] rsp Empty success response.
+     * @return K_OK after delivery or a protocol/lifecycle status.
+     */
     Status HandleEvent(const EventReqPb &req, EventRspPb &rsp) override;
 
 private:

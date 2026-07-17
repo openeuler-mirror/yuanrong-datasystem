@@ -29,30 +29,45 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
-#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "datasystem/common/coordinator/watch_event.h"
 #include "datasystem/common/coordinator/watch_registry.h"
+#include "datasystem/common/util/thread.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 struct WatcherChannel {
     int64_t watchId = 0;
     std::string watcherAddr;
-    std::deque<std::shared_ptr<WatchEvent>> queue;
+
+    // Protects queue, backpressureLimit, snapshotRevision, needReWatch, dispatchQueued and retryDelayMs.
     std::mutex mutex;
+    std::deque<std::shared_ptr<WatchEvent>> queue;
     size_t backpressureLimit = 1024;
+
+    // Assigned before channel publication and immutable afterwards.
     size_t assignedThread = 0;
     int64_t snapshotRevision = 0;
     bool needReWatch = false;
     bool dispatchQueued = false;
+    int64_t retryDelayMs = 0;
+    std::atomic<bool> cancelled{ false };
 };
 
 class WatchDispatcher {
 public:
+    /**
+     * @brief Construct a watch dispatcher using the specified registry.
+     * @param[in] watchRegistry Registry that owns watch IDs.
+     */
     explicit WatchDispatcher(WatchRegistry *watchRegistry);
+
+    /**
+     * @brief Stop dispatcher threads before destroying the dispatcher.
+     */
     virtual ~WatchDispatcher();
 
     /**
@@ -80,6 +95,12 @@ public:
      * @param[in] watchId The watch ID.
      */
     void RemoveChannel(int64_t watchId);
+
+    /**
+     * @brief Cancel and remove all channels owned by one watcher address.
+     * @param[in] watcherAddr Watcher address whose channels should be removed.
+     */
+    void RemoveChannelsByWatcher(const std::string &watcherAddr);
 
     /**
      * @brief Set the snapshot revision for dedup after WatchRange snapshot.
@@ -116,10 +137,12 @@ private:
     };
 
     struct DispatchThread {
-        std::thread thread;
+        Thread thread;
+
+        // Protects readyChannels and retryChannels.
+        std::mutex mutex;
         std::deque<std::shared_ptr<WatcherChannel>> readyChannels;
         std::deque<RetryChannel> retryChannels;
-        std::mutex mutex;
         std::condition_variable cv;
     };
 
@@ -143,6 +166,7 @@ private:
     /**
      * @brief Notify and commit queued events for one watcher channel.
      * @param[in] channel Watcher channel to process.
+     * @return Scheduling decision after this notification attempt.
      */
     HandleResult HandleChannelEvents(const std::shared_ptr<WatcherChannel> &channel);
 
@@ -164,21 +188,66 @@ private:
     void ScheduleChannelLocked(const std::shared_ptr<WatcherChannel> &channel);
 
     /**
+     * @brief Prepare the next bounded retry delay for a failed channel.
+     * @param[in] channel Failed watcher channel.
+     * @param[out] delay Retry delay for this failure.
+     * @return True when the retry may be queued.
+     */
+    bool PrepareRetry(const std::shared_ptr<WatcherChannel> &channel, std::chrono::milliseconds &delay);
+
+    /**
+     * @brief Insert a retry in ascending ready-time order.
+     * @param[in] dispatchThread Dispatch thread that owns the channel.
+     * @param[in] retry Retry record to insert.
+     */
+    void InsertRetryLocked(DispatchThread &dispatchThread, RetryChannel retry);
+
+    /**
+     * @brief Mark a channel cancelled and clear its pending events.
+     * @param[in] channel Channel to cancel.
+     */
+    void CancelChannel(const std::shared_ptr<WatcherChannel> &channel);
+
+    /**
+     * @brief Remove a watch ID from the watcher-address reverse index.
+     * @param[in] channel Channel whose reverse-index entry should be removed.
+     */
+    void RemoveReverseIndexLocked(const std::shared_ptr<WatcherChannel> &channel);
+
+    /**
+     * @brief Replace every live channel queue with one RESET after global pending overflow.
+     */
+    void ScheduleAllChannelsForRewatch();
+
+    /**
+     * @brief Wait for the next non-cancelled channel owned by a dispatch thread.
+     * @param[in] dispatchThread Dispatch thread state to wait on.
+     * @return Ready channel, or nullptr after shutdown.
+     */
+    std::shared_ptr<WatcherChannel> WaitForReadyChannel(DispatchThread &dispatchThread);
+
+    /**
      * @brief Cancel a watcher after notifying that the stream must be rebuilt.
      * @param[in] watchId The watch ID.
      * @param[in] watcherAddr Address that owns the watch.
      */
     void RemoveRewatchRequiredWatcher(int64_t watchId, const std::string &watcherAddr);
 
-    std::deque<std::shared_ptr<WatchEvent>> pendingQueue_;
+    // The mutex protects pendingQueue_.
     std::mutex pendingMutex_;
+    std::deque<std::shared_ptr<WatchEvent>> pendingQueue_;
     std::condition_variable pendingEmptyCv_;
-    std::condition_variable pendingFullCv_;
-    std::thread fanOutThread_;
+    Thread fanOutThread_;
 
-    // Worker failure handling must proactively remove all watch IDs associated with the workerAddr.
-    std::unordered_map<int64_t, std::shared_ptr<WatcherChannel>> channels_;
+    std::atomic<uint64_t> droppedPendingEvents_{ 0 };
+    std::atomic<uint64_t> cancelFailures_{ 0 };
+    std::atomic<uint64_t> notifyFailures_{ 0 };
+    std::atomic<bool> pendingOverflow_{ false };
+
+    // The mutex protects channels_ and watchIdsByWatcher_.
     std::shared_mutex channelsMutex_;
+    std::unordered_map<int64_t, std::shared_ptr<WatcherChannel>> channels_;
+    std::unordered_map<std::string, std::unordered_set<int64_t>> watchIdsByWatcher_;
 
     std::vector<std::unique_ptr<DispatchThread>> dispatchThreadPool_;
 

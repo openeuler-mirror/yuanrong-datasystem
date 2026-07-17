@@ -234,6 +234,7 @@ ds_cc_library(
         "//src/datasystem/worker:worker_health_check",
         "//src/datasystem/worker/client_manager",
         "//src/datasystem/worker/coordinator:coordinator_watch_service_impl",
+        "//src/datasystem/worker/coordinator:topology_recovery_reporter",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
         "//src/datasystem/worker/object_cache:master_worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:object_kv",

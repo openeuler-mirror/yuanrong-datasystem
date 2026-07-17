@@ -420,6 +420,16 @@ ds_cc_test(
     ],
 )
 
+# Worker topology recovery reporter test
+ds_cc_test(
+    name = "topology_recovery_reporter_test",
+    srcs = ["topology_recovery_reporter_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/coordinator:topology_recovery_reporter",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # 汇总测试套件
 test_suite(
     name = "all_worker_tests",
@@ -429,6 +439,7 @@ test_suite(
         "authenticate_test",
         "client_manager_test",
         "coordinator_watch_service_test",
+        "topology_recovery_reporter_test",
         "lock_map_test",
         "metadata_recovery_manager_test",
         "migrate_data_direct_test",

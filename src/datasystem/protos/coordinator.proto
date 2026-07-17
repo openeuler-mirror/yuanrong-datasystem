@@ -27,6 +27,49 @@ message ResponseHeader {
   // false = this node is not leader, check leader_address
   bool is_leader = 1;
   string leader_address = 2; // Empty if is_leader=true or if leader unknown
+  bytes coordinator_id = 3; // Unique identifier of this Coordinator process lifetime.
+}
+
+enum CoordinatorRecoveryStatePb {
+  COORDINATOR_RECOVERY_STATE_UNSPECIFIED = 0;
+  COORDINATOR_RECOVERING = 1;
+  COORDINATOR_READY = 2;
+  COORDINATOR_BLOCKED = 3;
+}
+
+message GetCoordinatorIdReqPb {}
+
+message GetCoordinatorIdRspPb {
+  ResponseHeader header = 1;
+}
+
+enum TopologyRecoveryCandidateResultPb {
+  TOPOLOGY_RECOVERY_RESULT_UNSPECIFIED = 0;
+  TOPOLOGY_RECOVERY_NO_SNAPSHOT = 1;
+  TOPOLOGY_RECOVERY_SNAPSHOT = 2;
+}
+
+message ReportTopologyRecoveryCandidateReqPb {
+  string cluster_name = 1;
+  bytes coordinator_id = 2;
+  string reporter_address = 3;
+  TopologyRecoveryCandidateResultPb result = 4;
+  uint64 topology_version = 5;
+  bytes topology_digest = 6;
+  bytes canonical_topology = 7; // Canonical payload; at most 4 MiB and empty for evidence-only reports.
+}
+
+message ReportTopologyRecoveryCandidateRspPb {
+  enum ResultPb {
+    RESULT_UNSPECIFIED = 0;
+    ACCEPTED = 1;
+    COORDINATOR_ID_MISMATCH = 2;
+    MEMBERSHIP_NOT_READY = 3;
+  }
+  ResponseHeader header = 1;
+  ResultPb result = 2;
+  CoordinatorRecoveryStatePb recovery_state = 3;
+  bool payload_required = 4;
 }
 
 message PutReqPb {
@@ -34,6 +77,7 @@ message PutReqPb {
   bytes value = 2;
   int64 ttl = 3; // TTL in milliseconds. 0 means no expiration.
   int64 expected_version = 4; // 0 means no CAS check; non-zero means expected key version.
+  bytes expected_coordinator_id = 5; // Empty disables the process-lifetime fence.
 }
 
 message PutRspPb {
@@ -79,6 +123,7 @@ message RangeRspPb {
 message DeleteRangeReqPb {
   bytes key = 1;
   bytes range_end = 2;
+  bytes expected_coordinator_id = 3; // Empty disables the process-lifetime fence.
 }
 
 message DeleteRangeRspPb {
@@ -91,6 +136,8 @@ message WatchRangeReqPb {
   bytes key = 1;
   bytes range_end = 2;
   string watcher_addr = 3;
+  // Client-assigned idempotency key; an identical retry returns the original watch_id.
+  bytes registration_id = 4;
 }
 
 message WatchRangeRspPb {
@@ -102,6 +149,8 @@ message WatchRangeRspPb {
 message CancelWatchReqPb {
   string watcher_addr = 1;
   repeated int64 watch_ids = 2;
+  // Required identity of the Coordinator process that created watch_ids.
+  bytes expected_coordinator_id = 3;
 }
 
 message CancelWatchRspPb {
@@ -125,6 +174,9 @@ service CoordinatorService {
   rpc WatchRange(WatchRangeReqPb) returns (WatchRangeRspPb) {}
   rpc CancelWatch(CancelWatchReqPb) returns (CancelWatchRspPb) {}
   rpc KeepAlive(KeepAliveReqPb) returns (KeepAliveRspPb) {}
+  rpc GetCoordinatorId(GetCoordinatorIdReqPb) returns (GetCoordinatorIdRspPb) {}
+  rpc ReportTopologyRecoveryCandidate(ReportTopologyRecoveryCandidateReqPb)
+      returns (ReportTopologyRecoveryCandidateRspPb) {}
 }
 
 message EventPb {
@@ -132,6 +184,8 @@ message EventPb {
     EVENT_TYPE_UNSPECIFIED = 0;
     PUT = 1;
     DELETE = 2;
+    // Payload-free signal: discard incremental assumptions, exact-read state and re-register watches.
+    RESET = 3;
   }
   EventType type = 1;
   KeyValue kv = 2;
@@ -140,6 +194,7 @@ message EventPb {
 message EventReqPb {
   int64 watch_id = 1;
   repeated EventPb events = 2;
+  bytes coordinator_id = 3;
 }
 
 message EventRspPb {}

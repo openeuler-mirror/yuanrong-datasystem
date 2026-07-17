@@ -104,6 +104,14 @@ public:
     Status GetSnapshot(std::shared_ptr<const TopologySnapshot> &snapshot) const;
 
     /**
+     * @brief Export the last-good topology as canonical repository bytes without backend IO.
+     * @param[out] topologyVersion Snapshot topology version; unchanged when no Snapshot exists.
+     * @param[out] canonicalTopology Canonical topology bytes; unchanged when no Snapshot exists.
+     * @return K_OK on success or K_NOT_FOUND before the first legal Snapshot.
+     */
+    Status GetRecoveryTopology(uint64_t &topologyVersion, std::string &canonicalTopology) const;
+
+    /**
      * @brief Return fresh Worker-role backend evidence for the peer-state RPC.
      * @return Identity- and version-bound observation; stale or incomplete evidence is UNKNOWN.
      */
@@ -244,6 +252,8 @@ private:
     std::atomic<TopologyAvailabilityLevel> availability_{ TopologyAvailabilityLevel::NOT_READY };
     // Exposes availability only after the corresponding Host admission transition has completed.
     std::atomic<TopologyAvailabilityLevel> publishedAvailability_{ TopologyAvailabilityLevel::NOT_READY };
+    // Permanently fences this Engine lifetime after authoritative rollback or same-version content conflict.
+    std::atomic<bool> authorityIsolated_{ false };
     std::string isolationReason_;
     std::string lastError_;
     ControlBackendObservation backendObservation_;

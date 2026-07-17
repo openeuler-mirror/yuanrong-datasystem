@@ -16,6 +16,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <map>
 #include <mutex>
 
@@ -57,11 +58,15 @@ public:
     void FailNextCasBeforeCommit();
     void FailNextWatch();
     void FailNextGet();
+    void ReturnNotReadyOnNextGet();
     void EmitEvent(CoordinationEvent event);
     std::vector<WatchKey> WatchKeys() const;
+    std::vector<std::string> LifecycleCalls() const;
     bool HasEventHandler() const;
     void BlockNextGet();
     bool WaitUntilGetBlocked(std::chrono::steady_clock::time_point deadline);
+    size_t GetAttemptCount() const;
+    bool WaitForGetAttempts(size_t expected, std::chrono::steady_clock::time_point deadline);
     void ReleaseBlockedGet();
     void SetBeforeDeleteHandler(std::function<void()> handler);
 
@@ -73,12 +78,15 @@ private:
     int64_t revision_{ 0 };
     EventHandler handler_;
     std::vector<WatchKey> watchKeys_;
+    std::vector<std::string> lifecycleCalls_;
     bool failNextCasAfterCommit_{ false };
     bool failNextCasBeforeCommit_{ false };
     bool failNextWatch_{ false };
     bool failNextGet_{ false };
+    bool notReadyNextGet_{ false };
     // Uses mutex_ to signal changes to getBlocked_ and releaseGet_.
     std::condition_variable getCv_;
+    size_t getAttempts_{ 0 };
     bool blockNextGet_{ false };
     bool getBlocked_{ false };
     bool releaseGet_{ false };

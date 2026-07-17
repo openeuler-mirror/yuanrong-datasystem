@@ -17,6 +17,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 
 namespace datasystem::cluster {
 namespace {
@@ -196,24 +197,28 @@ Status TopologyEngine::Start()
     }
     backend_.SetEventHandler([this](CoordinationEvent &&event) { (void)EnqueueCoordinationEvent(std::move(event)); });
 
-    rc = backend_.WatchEvents(watches);
-    if (rc.IsError()) {
-        CleanupAfterStartFailure();
-        return rc;
-    }
-    LOG(INFO) << "CLUSTER_WATCH cluster=" << options_.clusterName << " role=worker scope_count=" << watches.size()
-              << " revision=0 status=registered";
-
+    // A Coordinator rejects topology watches without a live owning membership, which also fences delayed watches
+    // after lease deletion. Publish the lease first, then use watch initial snapshots and ReloadTopology to catch up.
     rc = backend_.InitKeepAlive(keys_->MembershipTable(), options_.localAddress, options_.isRestart, true);
     if (rc.IsError()) {
         CleanupAfterStartFailure();
         return rc;
     }
 
+    rc = backend_.WatchEvents(watches);
+    if (rc.IsError()) {
+        CleanupAfterStartFailure();
+        LOG_IF_ERROR(backend_.Delete(keys_->MembershipTable(), options_.localAddress),
+                     "CLUSTER_MEMBERSHIP_STARTUP_CLEANUP_FAILED");
+        return rc;
+    }
+    LOG(INFO) << "CLUSTER_WATCH cluster=" << options_.clusterName << " role=worker scope_count=" << watches.size()
+              << " revision=0 status=registered";
+
     auto readStatus = ReloadTopology(true);
     if (readStatus.IsError()) {
         RecordError(readStatus);
-        if (readStatus.GetCode() != K_NOT_FOUND) {
+        if (readStatus.GetCode() != K_NOT_FOUND && readStatus.GetCode() != K_NOT_READY) {
             CleanupAfterStartFailure();
             return readStatus;
         }
@@ -326,6 +331,23 @@ Status TopologyEngine::GetSnapshot(std::shared_ptr<const TopologySnapshot> &snap
     return snapshots_.Load(snapshot);
 }
 
+Status TopologyEngine::GetRecoveryTopology(uint64_t &topologyVersion, std::string &canonicalTopology) const
+{
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    auto rc = snapshots_.Load(snapshot);
+    if (rc.GetCode() == K_NOT_READY) {
+        RETURN_STATUS(K_NOT_FOUND, "cluster topology recovery Snapshot is not ready");
+    }
+    RETURN_IF_NOT_OK(rc);
+    TopologyState state{ snapshot->ClusterHasInit(), snapshot->Version(), snapshot->Members(),
+                         snapshot->GetActiveBatch() };
+    std::string encoded;
+    RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeTopology(state, encoded));
+    topologyVersion = snapshot->Version();
+    canonicalTopology = std::move(encoded);
+    return Status::OK();
+}
+
 ControlBackendObservation TopologyEngine::GetControlBackendObservation() const
 {
     std::lock_guard<std::mutex> lock(stateMutex_);
@@ -366,8 +388,11 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     std::shared_ptr<const TopologySnapshot> candidate;
     auto rc = reader_.Read(ENGINE_READ_TIMEOUT_MS, candidate);
     if (rc.IsError()) {
-        if (rc.GetCode() == K_NOT_FOUND) {
-            SetAvailability(TopologyAvailabilityLevel::NOT_READY, "topology_missing");
+        std::shared_ptr<const TopologySnapshot> lastGood;
+        const bool hasLastGood = snapshots_.Load(lastGood).IsOk();
+        if (rc.GetCode() == K_NOT_FOUND || (rc.GetCode() == K_NOT_READY && !hasLastGood)) {
+            SetAvailability(TopologyAvailabilityLevel::NOT_READY,
+                            rc.GetCode() == K_NOT_FOUND ? "topology_missing" : "topology_recovering");
         }
         return rc;
     }
@@ -375,6 +400,11 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     rc = snapshots_.Publish(candidate, outcome);
     if (rc.IsError() && outcome == SnapshotUpdateOutcome::VERSION_GAP && fullRebuildAllowed) {
         rc = snapshots_.PublishAfterFullRebuild(candidate);
+    }
+    if (rc.IsError() && (outcome == SnapshotUpdateOutcome::VERSION_ROLLBACK
+                         || outcome == SnapshotUpdateOutcome::CONFLICT)) {
+        authorityIsolated_.store(true);
+        SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "authority_version_or_digest_conflict");
     }
     RETURN_IF_NOT_OK(rc);
     std::shared_ptr<const TopologySnapshot> published;
@@ -489,6 +519,7 @@ Status TopologyEngine::ReevaluateFailureScope()
     }
     const auto deadline = std::chrono::steady_clock::now() + options_.scopeProbeDeadline;
     std::vector<ControlBackendObservation> observations;
+    // An injected control-plane probe must not unwind through the Engine state thread.
     try {
         observations = options_.controlBackendProbe(local, targets, deadline);
     } catch (const std::exception &error) {
@@ -518,6 +549,11 @@ Status TopologyEngine::RefreshUnavailableBackend()
 
 void TopologyEngine::SetAvailability(TopologyAvailabilityLevel level, std::string reason)
 {
+    if (authorityIsolated_.load() && level != TopologyAvailabilityLevel::ROLE_ISOLATED
+        && level != TopologyAvailabilityLevel::SHUTTING_DOWN) {
+        level = TopologyAvailabilityLevel::ROLE_ISOLATED;
+        reason = "authority_version_or_digest_conflict";
+    }
     std::lock_guard<std::mutex> transitionLock(availabilityTransitionMutex_);
     TopologyAvailabilityLevel previous;
     {
@@ -549,6 +585,7 @@ void TopologyEngine::NotifyAvailability(TopologyAvailabilityLevel level) noexcep
     if (options_.availabilityHandler == nullptr) {
         return;
     }
+    // An injected availability callback must not unwind through the Engine state thread.
     try {
         options_.availabilityHandler(level);
     } catch (const std::exception &error) {

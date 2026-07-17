@@ -20,11 +20,16 @@
 #ifndef DATASYSTEM_COMMON_COORDINATOR_WATCH_EVENT_H
 #define DATASYSTEM_COMMON_COORDINATOR_WATCH_EVENT_H
 
+#include <cstddef>
 #include <cstdint>
 
 #include "datasystem/common/coordinator/key_value_entry.h"
 
 namespace datasystem {
+static constexpr size_t MAX_WATCH_EVENTS_PER_BATCH = 32;
+static constexpr size_t MAX_WATCH_EVENT_BATCH_BYTES = 8 * 1'024 * 1'024;
+static constexpr size_t WATCH_EVENT_WIRE_OVERHEAD_BYTES = 128;
+
 struct WatchEvent {
     enum class Type { PUT, DELETE, REWATCH };
     Type type;

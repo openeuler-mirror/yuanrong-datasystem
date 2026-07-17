@@ -19,12 +19,13 @@
 #include <chrono>
 #include <memory>
 #include <thread>
-#include <vector>
+#include <utility>
 
 #include "datasystem/common/rpc/rpc_options.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/protos/coordinator.brpc.stub.pb.h"
 #include "datasystem/protos/coordinator.stub.rpc.pb.h"
 
@@ -39,10 +40,12 @@ Status CheckCoordinatorAddress(const HostPort &coordinatorAddr)
     return Status::OK();
 }
 
-Status CheckLeader(const coordinator::ResponseHeader &header)
+Status CheckResponseHeader(const coordinator::ResponseHeader &header)
 {
     CHECK_FAIL_RETURN_STATUS(header.is_leader(), StatusCode::K_NOT_READY,
                              "coordinator is not leader, leader address: " + header.leader_address());
+    CHECK_FAIL_RETURN_STATUS(header.coordinator_id().size() == UUID_SIZE, StatusCode::K_INVALID,
+                             "Coordinator response contains an invalid CoordinatorId");
     return Status::OK();
 }
 
@@ -77,213 +80,318 @@ Status GetCoordinatorStub(const HostPort &coordinatorAddr, std::shared_ptr<StubT
     return Status::OK();
 }
 
-template <typename StubT>
-Status PutImpl(const HostPort &coordinatorAddr, const std::string &key, const std::string &value, int64_t ttlMs,
-               int64_t expectedVersion, int64_t &version, int64_t &revision, int32_t timeoutMs)
+Status IdentityChangedStatus()
 {
-    std::shared_ptr<StubT> stub;
-    RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr, stub));
+    return Status(StatusCode::K_TRY_AGAIN, "CoordinatorId changed; retry request on the current Coordinator");
+}
+}  // namespace
 
+class CoordinatorServiceProxyBase::InFlightScope final {
+public:
+    InFlightScope(CoordinatorServiceProxyBase &owner, std::string startedCoordinatorId, int32_t timeoutMs)
+        : owner_(&owner), startedCoordinatorId_(std::move(startedCoordinatorId)), timeoutMs_(timeoutMs)
+    {
+    }
+
+    InFlightScope(const InFlightScope &) = delete;
+    InFlightScope &operator=(const InFlightScope &) = delete;
+
+    InFlightScope(InFlightScope &&other) noexcept
+        : owner_(other.owner_),
+          startedCoordinatorId_(std::move(other.startedCoordinatorId_)),
+          timeoutMs_(other.timeoutMs_)
+    {
+        other.owner_ = nullptr;
+    }
+
+    ~InFlightScope()
+    {
+        if (owner_ != nullptr) {
+            owner_->CompleteRpc(startedCoordinatorId_);
+        }
+    }
+
+    Status Accept(const coordinator::ResponseHeader &header, std::string *coordinatorId)
+    {
+        return owner_->AcceptResponse(header, timeoutMs_, coordinatorId);
+    }
+
+    const std::string &StartedCoordinatorId() const
+    {
+        return startedCoordinatorId_;
+    }
+
+private:
+    CoordinatorServiceProxyBase *owner_;
+    std::string startedCoordinatorId_;
+    int32_t timeoutMs_;
+};
+
+template <typename ReqT, typename RspT, typename CallT>
+Status CoordinatorServiceProxyBase::CallRaw(RpcOptions &options, const ReqT &req, RspT &rsp, CallT call)
+{
+    if (GetTransport() == Transport::ZMQ) {
+        std::shared_ptr<coordinator::CoordinatorService_Stub> stub;
+        RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr_, stub));
+        return call(*stub, options, req, rsp);
+    }
+    std::shared_ptr<coordinator::CoordinatorService_BrpcGenericStub> stub;
+    RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr_, stub));
+    return call(*stub, options, req, rsp);
+}
+
+CoordinatorServiceProxyBase::InFlightScope CoordinatorServiceProxyBase::BeginRpc(int32_t timeoutMs)
+{
+    std::string startedCoordinatorId;
+    {
+        std::lock_guard<std::mutex> lock(identityMutex_);
+        startedCoordinatorId = currentCoordinatorId_;
+        if (!startedCoordinatorId.empty()) {
+            ++inFlightByCoordinatorId_[startedCoordinatorId];
+        }
+    }
+    return InFlightScope(*this, std::move(startedCoordinatorId), timeoutMs);
+}
+
+void CoordinatorServiceProxyBase::CompleteRpc(const std::string &startedCoordinatorId)
+{
+    if (startedCoordinatorId.empty()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(identityMutex_);
+    auto iter = inFlightByCoordinatorId_.find(startedCoordinatorId);
+    if (iter == inFlightByCoordinatorId_.end() || --iter->second != 0) {
+        return;
+    }
+    inFlightByCoordinatorId_.erase(iter);
+}
+
+Status CoordinatorServiceProxyBase::AcceptResponse(const coordinator::ResponseHeader &header, int32_t timeoutMs,
+                                                   std::string *coordinatorId)
+{
+    RETURN_IF_NOT_OK(CheckResponseHeader(header));
+    const std::string &responseId = header.coordinator_id();
+    {
+        std::lock_guard<std::mutex> lock(identityMutex_);
+        if (currentCoordinatorId_.empty()) {
+            currentCoordinatorId_ = responseId;
+        }
+        if (currentCoordinatorId_ == responseId) {
+            if (coordinatorId != nullptr) {
+                *coordinatorId = responseId;
+            }
+            return Status::OK();
+        }
+        if (inFlightByCoordinatorId_.count(responseId) != 0) {
+            return IdentityChangedStatus();
+        }
+    }
+    RETURN_IF_NOT_OK(ConfirmResponseIdentity(responseId, timeoutMs));
+    if (coordinatorId != nullptr) {
+        *coordinatorId = responseId;
+    }
+    return Status::OK();
+}
+
+Status CoordinatorServiceProxyBase::ConfirmResponseIdentity(const std::string &responseId, int32_t timeoutMs)
+{
+    std::lock_guard<std::mutex> refreshLock(identityRefreshMutex_);
+    {
+        std::lock_guard<std::mutex> identityLock(identityMutex_);
+        if (currentCoordinatorId_ == responseId) {
+            return Status::OK();
+        }
+        if (inFlightByCoordinatorId_.count(responseId) != 0) {
+            return IdentityChangedStatus();
+        }
+    }
+    std::string probedId;
+    RETURN_IF_NOT_OK(ProbeCoordinatorId(timeoutMs, probedId));
+    RETURN_IF_NOT_OK(InstallProbedIdentity(probedId));
+    return probedId == responseId ? Status::OK() : IdentityChangedStatus();
+}
+
+Status CoordinatorServiceProxyBase::ProbeCoordinatorId(int32_t timeoutMs, std::string &coordinatorId)
+{
+    coordinator::GetCoordinatorIdReqPb req;
+    coordinator::GetCoordinatorIdRspPb rsp;
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.GetCoordinatorId(opts, request, response);
+    }));
+    RETURN_IF_NOT_OK(CheckResponseHeader(rsp.header()));
+    coordinatorId = rsp.header().coordinator_id();
+    return Status::OK();
+}
+
+Status CoordinatorServiceProxyBase::InstallProbedIdentity(const std::string &coordinatorId)
+{
+    std::lock_guard<std::mutex> lock(identityMutex_);
+    if (currentCoordinatorId_ == coordinatorId) {
+        return Status::OK();
+    }
+    if (inFlightByCoordinatorId_.count(coordinatorId) != 0) {
+        return IdentityChangedStatus();
+    }
+    currentCoordinatorId_ = coordinatorId;
+    return Status::OK();
+}
+
+Status CoordinatorServiceProxyBase::Put(const std::string &key, const std::string &value, int64_t ttlMs,
+                                        int64_t expectedVersion, int64_t &version, int64_t &revision, int32_t timeoutMs,
+                                        std::string *coordinatorId, const std::string &expectedCoordinatorId)
+{
+    auto inFlight = BeginRpc(timeoutMs);
     coordinator::PutReqPb req;
     req.set_key(key);
     req.set_value(value);
     req.set_ttl(ttlMs);
     req.set_expected_version(expectedVersion);
+    req.set_expected_coordinator_id(expectedCoordinatorId);
     coordinator::PutRspPb rsp;
-    RpcOptions opts;
-    opts.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(stub->Put(opts, req, rsp));
-    RETURN_IF_NOT_OK(CheckLeader(rsp.header()));
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.Put(opts, request, response);
+    }));
+    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), coordinatorId));
     version = rsp.version();
     revision = rsp.revision();
     return Status::OK();
 }
 
-template <typename StubT>
-Status RangeImpl(const HostPort &coordinatorAddr, const std::string &key, const std::string &rangeEnd,
-                 std::vector<KeyValueEntry> &kvs, int64_t &revision, int32_t timeoutMs)
+Status CoordinatorServiceProxyBase::Range(const std::string &key, const std::string &rangeEnd,
+                                          std::vector<KeyValueEntry> &kvs, int64_t &revision, int32_t timeoutMs,
+                                          std::string *coordinatorId)
 {
-    std::shared_ptr<StubT> stub;
-    RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr, stub));
-
+    auto inFlight = BeginRpc(timeoutMs);
     coordinator::RangeReqPb req;
     req.set_key(key);
     req.set_range_end(rangeEnd);
     coordinator::RangeRspPb rsp;
-    RpcOptions opts;
-    opts.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(stub->Range(opts, req, rsp));
-    RETURN_IF_NOT_OK(CheckLeader(rsp.header()));
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.Range(opts, request, response);
+    }));
+    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), coordinatorId));
     FillKeyValueEntries(rsp.kvs(), kvs);
     revision = rsp.revision();
     return Status::OK();
 }
 
-template <typename StubT>
-Status DeleteRangeImpl(const HostPort &coordinatorAddr, const std::string &key, const std::string &rangeEnd,
-                       int64_t &deleted, int64_t &revision, int32_t timeoutMs)
+Status CoordinatorServiceProxyBase::DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
+                                                int64_t &revision, int32_t timeoutMs)
 {
-    std::shared_ptr<StubT> stub;
-    RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr, stub));
-
+    auto inFlight = BeginRpc(timeoutMs);
     coordinator::DeleteRangeReqPb req;
     req.set_key(key);
     req.set_range_end(rangeEnd);
+    req.set_expected_coordinator_id(inFlight.StartedCoordinatorId());
     coordinator::DeleteRangeRspPb rsp;
-    RpcOptions opts;
-    opts.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(stub->DeleteRange(opts, req, rsp));
-    RETURN_IF_NOT_OK(CheckLeader(rsp.header()));
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.DeleteRange(opts, request, response);
+    }));
+    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), nullptr));
     deleted = rsp.deleted();
     revision = rsp.revision();
     return Status::OK();
 }
 
-template <typename StubT>
-Status WatchRangeImpl(const HostPort &coordinatorAddr, const std::string &key, const std::string &rangeEnd,
-                      const std::string &watcherAddr, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs,
-                      int32_t timeoutMs)
+Status CoordinatorServiceProxyBase::WatchRange(const std::string &key, const std::string &rangeEnd,
+                                               const std::string &watcherAddr, const std::string &registrationId,
+                                               int64_t &watchId, std::vector<KeyValueEntry> &initialKvs,
+                                               int32_t timeoutMs, std::string *coordinatorId)
 {
-    std::shared_ptr<StubT> stub;
-    RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr, stub));
-
+    auto inFlight = BeginRpc(timeoutMs);
     coordinator::WatchRangeReqPb req;
     req.set_key(key);
     req.set_range_end(rangeEnd);
     req.set_watcher_addr(watcherAddr);
+    req.set_registration_id(registrationId);
     coordinator::WatchRangeRspPb rsp;
-    RpcOptions opts;
-    opts.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(stub->WatchRange(opts, req, rsp));
-    RETURN_IF_NOT_OK(CheckLeader(rsp.header()));
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.WatchRange(opts, request, response);
+    }));
+    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), coordinatorId));
     watchId = rsp.watch_id();
     FillKeyValueEntries(rsp.initial_kvs(), initialKvs);
     return Status::OK();
 }
 
-template <typename StubT>
-Status CancelWatchImpl(const HostPort &coordinatorAddr, const std::string &watcherAddr,
-                       const std::vector<int64_t> &watchIds, int32_t timeoutMs)
+Status CoordinatorServiceProxyBase::CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds,
+                                                const std::string &expectedCoordinatorId, int32_t timeoutMs)
 {
-    std::shared_ptr<StubT> stub;
-    RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr, stub));
-
+    auto inFlight = BeginRpc(timeoutMs);
     coordinator::CancelWatchReqPb req;
     req.set_watcher_addr(watcherAddr);
-    for (const auto &watchId : watchIds) {
+    req.set_expected_coordinator_id(expectedCoordinatorId);
+    for (const auto watchId : watchIds) {
         req.add_watch_ids(watchId);
     }
     coordinator::CancelWatchRspPb rsp;
-    RpcOptions opts;
-    opts.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(stub->CancelWatch(opts, req, rsp));
-    RETURN_IF_NOT_OK(CheckLeader(rsp.header()));
-    return Status::OK();
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.CancelWatch(opts, request, response);
+    }));
+    return inFlight.Accept(rsp.header(), nullptr);
 }
 
-template <typename StubT>
-Status KeepAliveImpl(const HostPort &coordinatorAddr, const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
-                     int32_t timeoutMs)
+Status CoordinatorServiceProxyBase::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
+                                              int32_t timeoutMs, std::string *coordinatorId)
 {
-    std::shared_ptr<StubT> stub;
-    RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr, stub));
-
+    auto inFlight = BeginRpc(timeoutMs);
     coordinator::KeepAliveReqPb req;
     req.set_key(key);
     coordinator::KeepAliveRspPb rsp;
-    RpcOptions opts;
-    opts.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(stub->KeepAlive(opts, req, rsp));
-    RETURN_IF_NOT_OK(CheckLeader(rsp.header()));
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.KeepAlive(opts, request, response);
+    }));
+    RETURN_IF_NOT_OK(inFlight.Accept(rsp.header(), coordinatorId));
     ttlMs = rsp.ttl();
     remainingTtlMs = rsp.remaining_ttl();
     return Status::OK();
 }
-}  // namespace
 
-Status CoordinatorServiceProxyZmqImpl::Put(const std::string &key, const std::string &value, int64_t ttlMs,
-                                           int64_t expectedVersion, int64_t &version, int64_t &revision,
-                                           int32_t timeoutMs)
+Status CoordinatorServiceProxyBase::GetCoordinatorId(std::string &coordinatorId, int32_t timeoutMs)
 {
-    return PutImpl<coordinator::CoordinatorService_Stub>(coordinatorAddr_, key, value, ttlMs, expectedVersion, version,
-                                                         revision, timeoutMs);
+    auto inFlight = BeginRpc(timeoutMs);
+    std::lock_guard<std::mutex> refreshLock(identityRefreshMutex_);
+    std::string probedId;
+    RETURN_IF_NOT_OK(ProbeCoordinatorId(timeoutMs, probedId));
+    RETURN_IF_NOT_OK(InstallProbedIdentity(probedId));
+    coordinatorId = std::move(probedId);
+    return Status::OK();
 }
 
-Status CoordinatorServiceProxyZmqImpl::Range(const std::string &key, const std::string &rangeEnd,
-                                             std::vector<KeyValueEntry> &kvs, int64_t &revision, int32_t timeoutMs)
+Status CoordinatorServiceProxyBase::ReportTopologyRecoveryCandidate(
+    const coordinator::ReportTopologyRecoveryCandidateReqPb &req,
+    coordinator::ReportTopologyRecoveryCandidateRspPb &rsp, int32_t timeoutMs)
 {
-    return RangeImpl<coordinator::CoordinatorService_Stub>(coordinatorAddr_, key, rangeEnd, kvs, revision, timeoutMs);
+    auto inFlight = BeginRpc(timeoutMs);
+    coordinator::ReportTopologyRecoveryCandidateRspPb localRsp;
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, localRsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.ReportTopologyRecoveryCandidate(opts, request, response);
+    }));
+    RETURN_IF_NOT_OK(inFlight.Accept(localRsp.header(), nullptr));
+    rsp = std::move(localRsp);
+    return Status::OK();
 }
 
-Status CoordinatorServiceProxyZmqImpl::DeleteRange(const std::string &key, const std::string &rangeEnd,
-                                                   int64_t &deleted, int64_t &revision, int32_t timeoutMs)
+void CoordinatorServiceProxyBase::GetObservedCoordinatorId(std::string &coordinatorId) const
 {
-    return DeleteRangeImpl<coordinator::CoordinatorService_Stub>(coordinatorAddr_, key, rangeEnd, deleted, revision,
-                                                                 timeoutMs);
-}
-
-Status CoordinatorServiceProxyZmqImpl::WatchRange(const std::string &key, const std::string &rangeEnd,
-                                                  const std::string &watcherAddr, int64_t &watchId,
-                                                  std::vector<KeyValueEntry> &initialKvs, int32_t timeoutMs)
-{
-    return WatchRangeImpl<coordinator::CoordinatorService_Stub>(coordinatorAddr_, key, rangeEnd, watcherAddr, watchId,
-                                                                initialKvs, timeoutMs);
-}
-
-Status CoordinatorServiceProxyZmqImpl::CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds,
-                                                   int32_t timeoutMs)
-{
-    return CancelWatchImpl<coordinator::CoordinatorService_Stub>(coordinatorAddr_, watcherAddr, watchIds, timeoutMs);
-}
-
-Status CoordinatorServiceProxyZmqImpl::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
-                                                 int32_t timeoutMs)
-{
-    return KeepAliveImpl<coordinator::CoordinatorService_Stub>(coordinatorAddr_, key, ttlMs, remainingTtlMs, timeoutMs);
-}
-
-Status CoordinatorServiceProxyBrpcImpl::Put(const std::string &key, const std::string &value, int64_t ttlMs,
-                                            int64_t expectedVersion, int64_t &version, int64_t &revision,
-                                            int32_t timeoutMs)
-{
-    return PutImpl<coordinator::CoordinatorService_BrpcGenericStub>(coordinatorAddr_, key, value, ttlMs,
-                                                                    expectedVersion, version, revision, timeoutMs);
-}
-
-Status CoordinatorServiceProxyBrpcImpl::Range(const std::string &key, const std::string &rangeEnd,
-                                              std::vector<KeyValueEntry> &kvs, int64_t &revision, int32_t timeoutMs)
-{
-    return RangeImpl<coordinator::CoordinatorService_BrpcGenericStub>(coordinatorAddr_, key, rangeEnd, kvs, revision,
-                                                                      timeoutMs);
-}
-
-Status CoordinatorServiceProxyBrpcImpl::DeleteRange(const std::string &key, const std::string &rangeEnd,
-                                                    int64_t &deleted, int64_t &revision, int32_t timeoutMs)
-{
-    return DeleteRangeImpl<coordinator::CoordinatorService_BrpcGenericStub>(coordinatorAddr_, key, rangeEnd, deleted,
-                                                                            revision, timeoutMs);
-}
-
-Status CoordinatorServiceProxyBrpcImpl::WatchRange(const std::string &key, const std::string &rangeEnd,
-                                                   const std::string &watcherAddr, int64_t &watchId,
-                                                   std::vector<KeyValueEntry> &initialKvs, int32_t timeoutMs)
-{
-    return WatchRangeImpl<coordinator::CoordinatorService_BrpcGenericStub>(coordinatorAddr_, key, rangeEnd, watcherAddr,
-                                                                           watchId, initialKvs, timeoutMs);
-}
-
-Status CoordinatorServiceProxyBrpcImpl::CancelWatch(const std::string &watcherAddr,
-                                                    const std::vector<int64_t> &watchIds, int32_t timeoutMs)
-{
-    return CancelWatchImpl<coordinator::CoordinatorService_BrpcGenericStub>(coordinatorAddr_, watcherAddr, watchIds,
-                                                                            timeoutMs);
-}
-
-Status CoordinatorServiceProxyBrpcImpl::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
-                                                  int32_t timeoutMs)
-{
-    return KeepAliveImpl<coordinator::CoordinatorService_BrpcGenericStub>(coordinatorAddr_, key, ttlMs, remainingTtlMs,
-                                                                          timeoutMs);
+    std::lock_guard<std::mutex> lock(identityMutex_);
+    coordinatorId = currentCoordinatorId_;
 }
 
 Status CoordinatorServiceProxyBase::CAS(const std::string &key, const CasProcessFunc &processFunc, int64_t &version,
@@ -296,15 +404,15 @@ Status CoordinatorServiceProxyBase::CAS(const std::string &key, const CasProcess
         std::this_thread::sleep_for(std::chrono::microseconds(randomData.GetRandomUint32(0, CAS_MAX_SLEEP_TIME_US)));
         std::vector<KeyValueEntry> kvs;
         int64_t rangeRevision = 0;
-        RETURN_IF_NOT_OK(Range(key, "", kvs, rangeRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS));
-
+        std::string rangeCoordinatorId;
+        RETURN_IF_NOT_OK(Range(key, "", kvs, rangeRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                               &rangeCoordinatorId));
         std::string oldValue;
         int64_t expectedVersion = COORDINATOR_KEY_NOT_EXISTS_VERSION;
         if (!kvs.empty()) {
             oldValue = kvs.front().value;
             expectedVersion = kvs.front().version;
         }
-
         std::unique_ptr<std::string> newValue;
         bool retryByCaller = true;
         Status status = processFunc(oldValue, newValue, retryByCaller);
@@ -316,10 +424,20 @@ Status CoordinatorServiceProxyBase::CAS(const std::string &key, const CasProcess
             continue;
         }
         if (newValue == nullptr) {
-            return Status::OK();
+            std::string currentCoordinatorId;
+            auto identityStatus = GetCoordinatorId(currentCoordinatorId, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS);
+            if (identityStatus.IsOk() && currentCoordinatorId == rangeCoordinatorId) {
+                return Status::OK();
+            }
+            lastErr = identityStatus.IsError() ? identityStatus : IdentityChangedStatus();
+            continue;
         }
-
-        Status rc = Put(key, *newValue, 0, expectedVersion, version, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS);
+        std::string putCoordinatorId;
+        Status rc = Put(key, *newValue, 0, expectedVersion, version, revision,
+                        DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &putCoordinatorId, rangeCoordinatorId);
+        if (rc.IsOk() && putCoordinatorId != rangeCoordinatorId) {
+            rc = IdentityChangedStatus();
+        }
         if (rc.IsOk()) {
             return Status::OK();
         }
@@ -331,4 +449,5 @@ Status CoordinatorServiceProxyBase::CAS(const std::string &key, const CasProcess
     }
     return lastErr.IsError() ? lastErr : Status(StatusCode::K_TRY_AGAIN, "coordinator CAS exceeded retry limit");
 }
+
 }  // namespace datasystem

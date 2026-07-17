@@ -21,6 +21,7 @@
 #define DATASYSTEM_COORDINATOR_COORDINATOR_SERVICE_IMPL_H
 
 #include <memory>
+#include <mutex>
 #include <string>
 
 #include "datasystem/common/coordinator/coordinator_store.h"
@@ -36,26 +37,134 @@
 
 namespace datasystem {
 namespace coordinator {
+class TopologyRecoveryManager;
+
 class CoordinatorServiceImpl : public CoordinatorService, public ICoordinatorService {
 public:
-    CoordinatorServiceImpl(const HostPort &localAddress);
-    ~CoordinatorServiceImpl() override = default;
+    /**
+     * @brief Construct an in-memory Coordinator RPC service.
+     * @param[in] localAddress Coordinator listen address.
+     */
+    explicit CoordinatorServiceImpl(const HostPort &localAddress);
 
-    /// Self-contained initialization: parses flags, loads auth keys, builds full component tree, configures RPC.
+    /**
+     * @brief Invoke idempotent Shutdown before releasing owned components.
+     */
+    ~CoordinatorServiceImpl() override;
+
+    /**
+     * @brief Load authentication and construct the in-memory service component tree.
+     * @return Operation status.
+     */
     Status Init();
-    /// Start the RPC server and bind ports.
+
+    /**
+     * @brief Start the configured RPC server and bind its endpoints.
+     * @return Operation status.
+     */
     Status Start();
-    /// Shutdown RPC server and destroy all components in reverse dependency order.
+
+    /**
+     * @brief Stop RPC and destroy all components in reverse dependency order.
+     * @return Operation status.
+     */
     Status Shutdown();
 
+    /**
+     * @brief Store one key/value request after recovery-gate validation.
+     * @param[in] req Key, value, TTL, and CAS expectation.
+     * @param[out] rsp Committed version, revision, and CoordinatorId.
+     * @return Store, gate, or validation status.
+     */
     Status Put(const PutReqPb &req, PutRspPb &rsp) override;
+
+    /**
+     * @brief Read one exact key or key range after recovery-gate validation.
+     * @param[in] req Physical key and optional range end.
+     * @param[out] rsp Matching values, revision, and CoordinatorId.
+     * @return Store, gate, or validation status.
+     */
     Status Range(const RangeReqPb &req, RangeRspPb &rsp) override;
+
+    /**
+     * @brief Delete one exact key or key range after recovery-gate validation.
+     * @param[in] req Physical key and optional range end.
+     * @param[out] rsp Delete count, revision, and CoordinatorId.
+     * @return Store, gate, or validation status.
+     */
     Status DeleteRange(const DeleteRangeReqPb &req, DeleteRangeRspPb &rsp) override;
+
+    /**
+     * @brief Register one watch and return its initial snapshot.
+     * @param[in] req Physical range and watcher callback address.
+     * @param[out] rsp Watch identity, initial values, and CoordinatorId.
+     * @return Store or validation status.
+     */
     Status WatchRange(const WatchRangeReqPb &req, WatchRangeRspPb &rsp) override;
+
+    /**
+     * @brief Cancel watch IDs owned by one watcher address.
+     * @param[in] req Watcher address and watch identities.
+     * @param[out] rsp CoordinatorId after cancellation.
+     * @return Store or validation status.
+     */
     Status CancelWatch(const CancelWatchReqPb &req, CancelWatchRspPb &rsp) override;
+
+    /**
+     * @brief Renew one membership lease and wake recovery reconciliation.
+     * @param[in] req Exact membership key.
+     * @param[out] rsp Lease timing and CoordinatorId.
+     * @return Store, gate, or validation status.
+     */
     Status KeepAlive(const KeepAliveReqPb &req, KeepAliveRspPb &rsp) override;
 
+    /**
+     * @brief Return the current CoordinatorId without reading cluster recovery state.
+     * @param[in] req Empty identity query.
+     * @param[out] rsp Current CoordinatorId in the response header.
+     * @return Operation status.
+     */
+    Status GetCoordinatorId(const GetCoordinatorIdReqPb &req, GetCoordinatorIdRspPb &rsp) override;
+
+    /**
+     * @brief Accept one Worker-initiated topology recovery candidate report.
+     * @param[in] req Cluster, CoordinatorId, reporter, and candidate evidence or payload.
+     * @param[out] rsp Admission decision, recovery state, and payload request.
+     * @return Validation, admission, or recovery status.
+     */
+    Status ReportTopologyRecoveryCandidate(const ReportTopologyRecoveryCandidateReqPb &req,
+                                           ReportTopologyRecoveryCandidateRspPb &rsp) override;
+
 private:
+    /**
+     * @brief Construct the Store, watch, TTL, and topology recovery component tree.
+     */
+    void BuildComponentTree();
+
+    /**
+     * @brief Configure the selected RPC transport and service endpoint.
+     */
+    void ConfigureRpcService();
+
+    /**
+     * @brief Reconcile a membership callback against the latest committed key before watch cleanup.
+     * @param[in] key Physical membership key reported by the Store.
+     */
+    void HandleCommittedMembershipMutation(const std::string &key);
+
+    /**
+     * @brief Reject a topology watch whose owning membership no longer exists.
+     * @param[in] req Watch request to validate while membershipWatchMutex_ is held.
+     * @return K_OK for a live member or non-topology watch; K_NOT_FOUND for a stale member.
+     */
+    Status CheckWatcherMembership(const WatchRangeReqPb &req);
+
+    /**
+     * @brief Fill leader and CoordinatorId response metadata.
+     * @param[out] header Response header to fill.
+     */
+    void FillResponseHeader(ResponseHeader *header) const;
+
     HostPort coordinatorAddr_;
     RpcServer::Builder builder_;
     // brpc mode — MUST be declared before rpcServer_: the brpc adapter holds a
@@ -69,9 +178,13 @@ private:
     std::shared_ptr<SteadyClockReal> clock_;
     std::shared_ptr<TtlManager> ttlManager_;
     std::shared_ptr<CoordinatorStore> store_;
+    std::unique_ptr<TopologyRecoveryManager> topologyRecoveryManager_;
+    // Serializes membership-current-value checks, stale-channel cleanup and new watch registration.
+    std::mutex membershipWatchMutex_;
     // brpc mode address (set in Init, consumed in Start)
     std::string brpcAddr_;
     int brpcPort_ = 0;
+    std::string coordinatorId_;
 };
 }  // namespace coordinator
 }  // namespace datasystem

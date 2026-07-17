@@ -2,3 +2,9 @@ add_library(coordinator_watch_service_impl STATIC coordinator_watch_service_impl
 target_include_directories(coordinator_watch_service_impl PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
 target_link_libraries(coordinator_watch_service_impl PUBLIC coordinator_protos cluster_coordination_backend common_util)
 add_dependencies(coordinator_watch_service_impl coordinator_protos)
+
+add_library(topology_recovery_reporter STATIC topology_recovery_reporter.cpp)
+target_include_directories(topology_recovery_reporter PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
+target_link_libraries(topology_recovery_reporter PUBLIC
+    common_ak_sk common_coordinator_store common_log common_util coordinator_protos)
+add_dependencies(topology_recovery_reporter coordinator_protos)

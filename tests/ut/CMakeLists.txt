@@ -77,6 +77,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_config_monitor_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/cluster_topology_schema_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_key_helper_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/coordination_backend_contract_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/ds_coordination_backend_session_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/membership_contract_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_snapshot_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_repository_codec_test\\.cpp$)
@@ -164,6 +165,7 @@ add_executable(coordinator_store_perf_test
 add_executable(cluster_topology_contract_ut
         cluster/cluster_topology_schema_test.cpp
         cluster/coordination_backend_contract_test.cpp
+        cluster/ds_coordination_backend_session_test.cpp
         cluster/membership_contract_test.cpp
         cluster/topology_repository_codec_test.cpp
         cluster/topology_repository_test.cpp
@@ -249,10 +251,6 @@ target_link_libraries(cluster_topology_contract_ut PRIVATE
         GTest::gmock
         cluster_topology
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
-
-
-
-
 target_compile_definitions(ds_ut_slot_store PRIVATE ${BIN_PATH_LIST})
 
 if (BUILD_OBSERVABILITY)

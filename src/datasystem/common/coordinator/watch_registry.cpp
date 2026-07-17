@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <mutex>
 
+#include "datasystem/common/util/status_helper.h"
+
 namespace datasystem {
 namespace {
 bool IsSameRange(const WatchRange &watchRange, const std::string &key, const std::string &rangeEnd)
@@ -40,14 +42,42 @@ bool IsKeyInRange(const std::string &key, const WatchRange &watchRange)
 
 int64_t WatchRegistry::Register(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr)
 {
+    int64_t watchId = 0;
+    bool created = false;
+    (void)Register(key, rangeEnd, watcherAddr, "", watchId, created);
+    return watchId;
+}
+
+Status WatchRegistry::Register(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
+                               const std::string &registrationId, int64_t &watchId, bool &created)
+{
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    if (!registrationId.empty()) {
+        auto registered = watchIdsByRegistrationId_.find(registrationId);
+        if (registered != watchIdsByRegistrationId_.end()) {
+            auto watcher = watchers_.find(registered->second);
+            CHECK_FAIL_RETURN_STATUS(watcher != watchers_.end() && watcher->second->watcherAddr == watcherAddr,
+                                     K_INVALID, "watch registration ID belongs to another watcher");
+            const bool sameRange = std::any_of(watchRanges_.begin(), watchRanges_.end(), [&](const auto &range) {
+                return IsSameRange(range, key, rangeEnd) && range.watchIds.count(registered->second) != 0;
+            });
+            CHECK_FAIL_RETURN_STATUS(sameRange, K_INVALID,
+                                     "watch registration ID belongs to another key range");
+            watchId = registered->second;
+            created = false;
+            return Status::OK();
+        }
+    }
     auto entry = std::make_shared<WatcherEntry>();
     entry->watcherAddr = watcherAddr;
+    entry->registrationId = registrationId;
     entry->active = true;
-
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-    int64_t watchId = nextWatchId_.fetch_add(1);
+    watchId = nextWatchId_.fetch_add(1);
     entry->watchId = watchId;
     watchers_[watchId] = entry;
+    if (!registrationId.empty()) {
+        watchIdsByRegistrationId_[registrationId] = watchId;
+    }
 
     auto groupIt = std::find_if(
         watchRanges_.begin(), watchRanges_.end(),
@@ -61,7 +91,8 @@ int64_t WatchRegistry::Register(const std::string &key, const std::string &range
     } else {
         groupIt->watchIds.insert(watchId);
     }
-    return watchId;
+    created = true;
+    return Status::OK();
 }
 
 Status WatchRegistry::Cancel(int64_t watchId, const std::string &watcherAddr)
@@ -76,6 +107,9 @@ Status WatchRegistry::Cancel(int64_t watchId, const std::string &watcherAddr)
     }
 
     it->second->active = false;
+    if (!it->second->registrationId.empty()) {
+        watchIdsByRegistrationId_.erase(it->second->registrationId);
+    }
 
     for (auto iter = watchRanges_.begin(); iter != watchRanges_.end();) {
         iter->watchIds.erase(watchId);

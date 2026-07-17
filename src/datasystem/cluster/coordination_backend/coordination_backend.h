@@ -41,7 +41,7 @@ constexpr int DEFAULT_COORDINATION_DELETE_TIMEOUT_MS = 3'000;
 /**
  * @brief Existing backend watch operation type.
  */
-enum class CoordinationEventType : uint8_t { UNSPECIFIED = 0, PUT, DELETE };
+enum class CoordinationEventType : uint8_t { UNSPECIFIED = 0, PUT, DELETE, RESET };
 
 /**
  * @brief Backend watch doorbell; value is never published directly as topology.

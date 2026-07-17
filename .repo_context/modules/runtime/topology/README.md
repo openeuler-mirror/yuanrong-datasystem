@@ -10,8 +10,10 @@
   - `src/datasystem/worker/worker_topology_references.{h,cpp}`
 - The module owns authoritative cluster membership state, immutable routing snapshots, topology planning, task
   materialization/execution, and the ETCD-backed control loop.
-- Phase 1 validates the ETCD authority path. `DsCoordinationBackend` preserves the existing Coordinator transport and
-  service-discovery contract, but moving topology control decisions into `datasystem_coordinator` remains later work.
+- `DsCoordinationBackend` preserves the topology architecture while using the in-memory Coordinator transport. A
+  restarted Coordinator fences its new lifetime with `CoordinatorId`, gates topology/task/notify access, accepts
+  Worker-reported last-good topology candidates, installs one canonical highest version, and regenerates derived work.
+  Moving topology control decisions into `datasystem_coordinator` remains later work.
 
 ## Current Design Shape
 
@@ -60,8 +62,12 @@
 - `TopologyKeyHelper` is the only table/key builder. `EtcdStore::CreateTableWithExactPrefix` registers these paths without
   legacy `FLAGS_cluster_name` prefix rewriting.
 - There is no persisted Worker-local topology authority. ETCD restart recovery reads the latest legal topology and
-  reconstructs deterministic work. A future in-memory coordinator backend recovers only the latest topology from a
-  Worker; task/notify records are treated as absent and regenerated.
+  reconstructs deterministic work. The in-memory Coordinator backend recovers only the latest topology from Workers;
+  task/notify records are treated as absent and regenerated. Candidate arbitration is cluster-scoped and resource
+  bounded; conflicting same-version digests block only that cluster until membership/evidence changes.
+- Coordinator watches bind both `CoordinatorId` and `watch_id`. Watch registration uses a client registration ID so an
+  ambiguous WatchRange result retries idempotently. Initial/recreated membership invalidates both Worker and Controller
+  role plans using O(1) RESET doorbells; lease threads never wait for watch-registration RPCs.
 - Task cleanup first CASes the exact task value to a repository-internal deletion tombstone, then performs physical
   deletion. The tombstone is never exposed as a task and temporarily fences same-ID rematerialization, closing the
   conditional-cleanup/delete race without extending `ICoordinationBackend`.

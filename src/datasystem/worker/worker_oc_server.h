@@ -54,6 +54,7 @@
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_service_impl.h"
 #include "datasystem/worker/coordinator/coordinator_watch_service_impl.h"
+#include "datasystem/worker/coordinator/topology_recovery_reporter.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
@@ -578,7 +579,22 @@ private:
     Status ConstructTopologyRuntime();
 
     /**
-     * @brief Construct the controller-side ETCD backend and determine whether this member is restarting.
+     * @brief Bind the Worker-only recovery reporter before membership starts.
+     * @return K_OK when disabled or after successful Coordinator composition.
+     */
+    Status ConstructTopologyRecoveryReporter();
+
+    /**
+     * @brief Route one identity-bound Coordinator doorbell to exactly one backend owner.
+     * @param[in] coordinatorId Coordinator process-lifetime identity.
+     * @param[in] watchId Watch identity within that Coordinator lifetime.
+     * @param[in] event Move-only watch doorbell.
+     */
+    Status RouteCoordinatorWatchEvent(const std::string &coordinatorId, int64_t watchId,
+                                      cluster::CoordinationEvent &&event);
+
+    /**
+     * @brief Construct the controller-side coordination backend and detect a restarting member.
      * @param[out] isRestart True when the authoritative topology already contains the local address.
      * @return Status of this call.
      */
@@ -716,6 +732,7 @@ private:
     std::unique_ptr<cluster::TopologyTaskJanitor> topologyTaskJanitor_{ nullptr };
     std::unique_ptr<WorkerTopologyReferences> topologyReferences_{ nullptr };
     std::unique_ptr<coordinator::CoordinatorWatchServiceImpl> coordinatorWatchSvc_{ nullptr };
+    std::unique_ptr<TopologyRecoveryReporter> topologyRecoveryReporter_{ nullptr };
     std::atomic<bool> topologyExitRequested_{ false };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;

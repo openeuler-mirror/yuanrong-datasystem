@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_COORDINATOR_COORDINATOR_STORE_H
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -35,6 +36,8 @@
 namespace datasystem {
 class CoordinatorStore {
 public:
+    using CommittedMutationObserver = std::function<void(WatchEvent::Type type, const std::string &key)>;
+
     CoordinatorStore() = default;
     CoordinatorStore(std::shared_ptr<MemoryKvStore> memKvStore, std::shared_ptr<WatchRegistry> watchRegistry,
                      std::shared_ptr<WatchDispatcher> watchDispatcher, std::shared_ptr<TtlManager> ttlManager);
@@ -80,12 +83,14 @@ public:
      * @param[in] key Start key.
      * @param[in] rangeEnd End key (exclusive). Empty for single key.
      * @param[in] watcherAddr Address for notifications.
+     * @param[in] registrationId Stable token for an ambiguous registration retry.
      * @param[out] watchId Assigned watch ID.
      * @param[out] initialKvs Current snapshot of the watched range.
      * @return Status of the operation.
      */
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
-                      int64_t &watchId, std::vector<KeyValueEntry> &initialKvs);
+                      const std::string &registrationId, int64_t &watchId,
+                      std::vector<KeyValueEntry> &initialKvs);
 
     /**
      * @brief Cancel watches for a watcher address.
@@ -104,6 +109,22 @@ public:
      */
     Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs);
 
+    /**
+     * @brief Install an observer invoked after committed Store mutations.
+     * @param[in] observer Observer receiving only mutation type and key; empty detaches it.
+     */
+    void SetCommittedMutationObserver(CommittedMutationObserver observer);
+
+    /**
+     * @brief Stop and join TTL expiry before observer detachment.
+     */
+    void StopTtl();
+
+    /**
+     * @brief Idempotently stop TTL and watch dispatch.
+     */
+    void Shutdown();
+
 private:
     /**
      * @brief Bind callbacks between memory store, watch dispatcher, and TTL manager.
@@ -120,6 +141,9 @@ private:
     std::shared_ptr<WatchRegistry> watchRegistry_;
     std::shared_ptr<WatchDispatcher> watchDispatcher_;
     std::shared_ptr<TtlManager> ttlManager_;
+    // Bound and detached only while mutation producers are stopped.
+    CommittedMutationObserver committedMutationObserver_;
+    bool shutdown_{ false };
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_COORDINATOR_COORDINATOR_STORE_H
