@@ -14,32 +14,32 @@
  * limitations under the License.
  */
 
+#include "datasystem/common/util/sched_runtime.h"
+
 #include <cerrno>
-#include <cstdint>
-#include <sys/syscall.h>
-#include <unistd.h>
 #include <linux/sched.h>
 #include <linux/sched/types.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
-#include "datasystem/worker/worker_sched_runtime.h"
-
+namespace datasystem {
 namespace {
-// Use half of /sys/kernel/debug/sched/base_slice_ns to reduce worker scheduling latency while keeping the value
-// tied to the kernel CFS base slice for future tuning.
-constexpr uint64_t WORKER_SCHED_RUNTIME_NS = 1'400'000;
-}
+// Half of the kernel CFS base slice reduces scheduling latency while retaining
+// the previous worker runtime value.
+constexpr uint64_t SCHED_RUNTIME_NS = 1'400'000;
+}  // namespace
 
-uint64_t GetWorkerSchedRuntimeNs()
+uint64_t GetSchedRuntimeNs()
 {
-    return WORKER_SCHED_RUNTIME_NS;
+    return SCHED_RUNTIME_NS;
 }
 
-SetSchedRuntimeResult SetWorkerSchedRuntime()
+SetSchedRuntimeResult SetCurrentThreadSchedRuntime()
 {
     struct sched_attr attr = {};
     attr.size = SCHED_ATTR_SIZE_VER0;
     attr.sched_flags = 0;
-    attr.sched_runtime = WORKER_SCHED_RUNTIME_NS;
+    attr.sched_runtime = SCHED_RUNTIME_NS;
 #ifdef __NR_sched_setattr
     auto ret = syscall(__NR_sched_setattr, 0, &attr, 0);
     if (ret != 0) {
@@ -50,3 +50,5 @@ SetSchedRuntimeResult SetWorkerSchedRuntime()
     return { false, ENOSYS };
 #endif
 }
+
+}  // namespace datasystem

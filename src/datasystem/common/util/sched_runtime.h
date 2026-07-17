@@ -15,19 +15,23 @@
  */
 
 /**
- * Description: Declarations for worker scheduling runtime configuration.
+ * Description: Linux scheduling runtime configuration for the calling thread.
  */
-#ifndef DATASYSTEM_WORKER_WORKER_SCHED_RUNTIME_H
-#define DATASYSTEM_WORKER_WORKER_SCHED_RUNTIME_H
+#ifndef DATASYSTEM_COMMON_UTIL_SCHED_RUNTIME_H
+#define DATASYSTEM_COMMON_UTIL_SCHED_RUNTIME_H
 
 #include <cstdint>
+
+namespace datasystem {
 
 struct SetSchedRuntimeResult {
     bool success;
     int err;
 };
 
-SetSchedRuntimeResult SetWorkerSchedRuntime();
-uint64_t GetWorkerSchedRuntimeNs();
+uint64_t GetSchedRuntimeNs();
+SetSchedRuntimeResult SetCurrentThreadSchedRuntime();
 
-#endif  // DATASYSTEM_WORKER_WORKER_SCHED_RUNTIME_H
+}  // namespace datasystem
+
+#endif  // DATASYSTEM_COMMON_UTIL_SCHED_RUNTIME_H

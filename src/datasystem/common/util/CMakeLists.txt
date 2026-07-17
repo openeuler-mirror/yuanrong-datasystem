@@ -26,6 +26,7 @@ set(UTIL_SRCS
         safe_shm_lock.cpp
         locks.cpp
         rpc_diagnostic.cpp
+        sched_runtime_linux.cpp
         string_util.cpp)
 
 set(UTIL_LIBS

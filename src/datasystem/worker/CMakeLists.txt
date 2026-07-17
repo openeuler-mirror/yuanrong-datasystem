@@ -36,7 +36,6 @@ set(WORKER_SRCS
         worker_flags.cpp
         data_worker.cpp
         worker_api_c_wrapper.cpp
-        worker_sched_runtime_linux.cpp
         )
 
 set(WORKER_DEPEND_LIBS

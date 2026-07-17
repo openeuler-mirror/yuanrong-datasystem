@@ -24,8 +24,6 @@
 #include <mutex>
 #include <string>
 #include <utility>
-#include <cerrno>
-#include <cstring>
 #include <sys/prctl.h>
 
 #include "datasystem/common/encrypt/secret_manager.h"
@@ -50,7 +48,6 @@
 #include "datasystem/common/util/version.h"
 #include "datasystem/worker/worker_cli.h"
 #include "datasystem/worker/worker_oc_server.h"
-#include "datasystem/worker/worker_sched_runtime.h"
 #include "datasystem/worker/worker_service_accessor.h"
 #include "datasystem/worker/worker_update_flag_check.h"
 // worker_oc_server.h pulls in brpc headers which override LOG/VLOG/DLOG.
@@ -217,32 +214,6 @@ void InitWorkerLogConfig()
         auto val = std::to_string(DEFAULT_MAX_LOG_SIZE_MB);
         SetCommandLineOption("max_log_size", val, errMsg);
     }
-}
-
-constexpr size_t ERR_MSG_BUF_SIZE = 256;
-
-std::string SchedStrError(int err)
-{
-    char buf[ERR_MSG_BUF_SIZE] = { 0 };
-#if defined(__GLIBC__) && defined(_GNU_SOURCE)
-    return std::string(strerror_r(err, buf, sizeof(buf)));
-#else
-    auto ret = strerror_r(err, buf, sizeof(buf));
-    if (ret != 0) {
-        return FormatString("Unknown error %d", err);
-    }
-    return std::string(buf);
-#endif
-}
-
-void LogSetWorkerSchedRuntimeResult(const SetSchedRuntimeResult &result)
-{
-    if (!result.success) {
-        LOG(WARNING) << FormatString("Failed to set worker sched runtime to %llu ns, errno: %d, error: %s",
-            static_cast<unsigned long long>(GetWorkerSchedRuntimeNs()), result.err, SchedStrError(result.err));
-        return;
-    }
-    LOG(INFO) << "Set worker sched runtime to " << GetWorkerSchedRuntimeNs() << " ns.";
 }
 
 DataWorker *DataWorker::GetInstance()
@@ -424,16 +395,11 @@ void DataWorker::RunEventLoopAndShutdown(DynamicFlagConfig &flags)
 
 Status DataWorker::DoInit(DynamicFlagConfig &flags, const char *crashReporterLabel)
 {
-    auto setSchedRuntimeResult = SetWorkerSchedRuntime();
     auto rc = InitWorker(flags, false);
     if (rc.IsError()) {
         LOG(ERROR) << "Worker runtime error:" << rc.ToString();
-        LogSetWorkerSchedRuntimeResult(setSchedRuntimeResult);
         LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
         return rc;
-    }
-    if (!IsTermSignalReceived()) {
-        LogSetWorkerSchedRuntimeResult(setSchedRuntimeResult);
     }
 
     worker::WorkerServiceAccessor::Instance().Register(worker_.get());
