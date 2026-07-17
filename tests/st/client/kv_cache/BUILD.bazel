@@ -228,6 +228,18 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "routing_failure_switch_test",
+    srcs = ["routing_failure_switch_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/routing:routing",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+    ],
+)
+
+ds_cc_test(
     name = "kv_client_dist_master_test",
     srcs = ["kv_client_dist_master_test.cpp"],
     tags = ["manual"],
