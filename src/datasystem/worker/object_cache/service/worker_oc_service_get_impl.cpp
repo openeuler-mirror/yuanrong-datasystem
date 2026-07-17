@@ -2945,7 +2945,7 @@ Status WorkerOcServiceGetImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
         access.Result(authRc).Record();
         return authRc;
     }
-    if (!Validator::IsBatchSizeUnderLimit(req.object_keys_size())) {
+    if (!Validator::IsExistBatchSizeUnderLimit(req.object_keys_size())) {
         LOG(ERROR) << "invalid object size";
         Status rc(StatusCode::K_INVALID, __LINE__, __FILE__, "invalid object size");
         access.Result(rc).Record();

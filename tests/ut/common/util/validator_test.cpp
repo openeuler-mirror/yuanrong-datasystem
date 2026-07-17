@@ -121,9 +121,25 @@ TEST_F(ValidatorTest, TestValidatorThreadNum)
     EXPECT_EQ(Validator::ValidateThreadNum("spill_thread_num", static_cast<uint32_t>(4097)), false);
 }
 
+TEST_F(ValidatorTest, IsBatchSizeUnderLimit)
+{
+    EXPECT_TRUE(Validator::IsBatchSizeUnderLimit(OBJECT_KEYS_MAX_SIZE_LIMIT));
+    EXPECT_FALSE(Validator::IsBatchSizeUnderLimit(OBJECT_KEYS_MAX_SIZE_LIMIT + 1));
+}
+
+TEST_F(ValidatorTest, IsExistBatchSizeUnderLimit)
+{
+    constexpr size_t kOneMillionContextBlockCount = 1024 * 1024 / 32;
+    EXPECT_TRUE(Validator::IsExistBatchSizeUnderLimit(kOneMillionContextBlockCount));
+    EXPECT_TRUE(Validator::IsExistBatchSizeUnderLimit(EXIST_KEYS_MAX_SIZE_LIMIT));
+    EXPECT_FALSE(Validator::IsExistBatchSizeUnderLimit(EXIST_KEYS_MAX_SIZE_LIMIT + 1));
+}
+
 TEST_F(ValidatorTest, IsIdFormat)
 {
     EXPECT_TRUE(Validator::IsIdFormat("woqednuielwhdu329UG-!@#%;"));
+    EXPECT_TRUE(Validator::IsIdFormat("Qwen2.5-7B-Instruct"));
+    EXPECT_TRUE(Validator::IsIdFormat("Qwen2.5_7B-Instruct"));
     EXPECT_FALSE(Validator::IsIdFormat("$tj9420j"));
 }
 

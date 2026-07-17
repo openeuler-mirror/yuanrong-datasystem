@@ -6,7 +6,7 @@ yr.datasystem.kv_client.KVClient.exist
     批量查询一组键是否存在。
 
     参数：
-        - **keys** (str) - 待查询的键列表，最大支持10000个键。
+        - **keys** (str) - 待查询的键列表，最大支持100000个键。
 
     异常：
         - **RuntimeError** - 如果查询键是否存在失败，将抛出运行时错误。

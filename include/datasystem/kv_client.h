@@ -411,7 +411,7 @@ public:
 
     /// \brief Check whether the keys exist in the data system.
     ///
-    /// \param[in] keys The keys to be checked. Constraint: The number of keys cannot exceed 10000.
+    /// \param[in] keys The keys to be checked. Constraint: The number of keys cannot exceed 100000.
     /// \param[in] exists The existence of the corresponding key.
     ///
     /// \return K_OK if at least one key is successfully processed, the error code otherwise.

@@ -130,7 +130,7 @@ Hetero接口
     * - :cpp:func:`HeteroClient::HealthCheck`
       - 检查连接的 Worker 是否健康。
     * - :cpp:func:`HeteroClient::Exist`
-      - 批量查询一组key是否存在，并返回每个key的存在性状态。支持最多10000个key的查询。
+      - 批量查询一组key是否存在，并返回每个key的存在性状态。支持最多100000个key的查询。
     * - :cpp:func:`HeteroClient::GetMetaInfo`
       - 批量获取指定租户的key的数据大小和位置。
     * - :cpp:func:`HeteroClient::GenerateKey`
