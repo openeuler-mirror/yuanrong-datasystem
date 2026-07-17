@@ -253,11 +253,12 @@
     window, allowing teardown to proceed between large-batch write groups without permitting the active connection to
     be closed during a write or publish operation. During rolling upgrade, workers must support routed MultiCreate and
     MultiPublish authentication before clients enable routed MSet traffic.
-  - transport-layer Get keeps flow-stage summaries plus endpoint, retry, redirect, and replica details in
-    `[TransportGet]` debug logs. Like the gateway Get path, it does not remap existing status codes; when every key
-    fails, it returns the first failure in input order without logging that user-visible error again. Transport-specific
-    route, location, missing-result, and data-response errors use concise messages. Partial success still returns
-    `K_OK`, and debug-only diagnostics avoid hot-path log volume.
+  - transport-layer Get records redirect-follow events at INFO level with the target endpoint and key count so
+    scale-transition routing can be diagnosed. Other flow-stage summaries plus endpoint, retry, and replica details
+    remain in `[TransportGet]` debug logs. Like the gateway Get path, it does not remap existing status codes; when every
+    key fails, it returns the first failure in input order without logging that user-visible error again.
+    Transport-specific route, location, missing-result, and data-response errors use concise messages. Partial success
+    still returns `K_OK`.
   - `QueryAndGet` returns at most five copy locations per object. The primary address from object metadata is returned
     first, followed by non-primary locations, so replica retry always starts with the primary copy.
   - `tests/st/client/kv_cache/kv_client_transport_get_test.cpp` covers single-key and same-owner multi-key transport

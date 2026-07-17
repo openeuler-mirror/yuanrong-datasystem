@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-/** Description: Implements batched object metadata access and one-layer redirect handling. */
+/** Description: Implements batched object metadata access and deadline-bounded redirect handling. */
 
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
 
@@ -32,6 +32,11 @@ namespace client {
 
 namespace {
 struct RedirectBatch {
+    HostPort address;
+    ObjectMetadataBatch items;
+};
+
+struct PendingMetadataBatch {
     HostPort address;
     ObjectMetadataBatch items;
 };
@@ -98,6 +103,18 @@ void SetBatchError(const ObjectMetadataBatch &items, const Status &status)
 {
     for (auto *item : items) {
         item->status = status;
+    }
+}
+
+void QueueRedirectBatches(std::vector<RedirectBatch> &redirectBatches, std::deque<PendingMetadataBatch> &pending)
+{
+    for (auto &batch : redirectBatches) {
+        if (batch.items.empty()) {
+            continue;
+        }
+        LOG(INFO) << "[TransportGet][Metadata] Follow redirect, target: " << batch.address.ToString()
+                  << ", key count: " << batch.items.size();
+        pending.push_back({ std::move(batch.address), std::move(batch.items) });
     }
 }
 }  // namespace
@@ -242,7 +259,7 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
     CHECK_FAIL_RETURN_STATUS(!items.empty(), K_INVALID, "Metadata query items are empty");
     int64_t backoffMs = 1;
     size_t attempt = 0;
-    // The context keeps prepared UB buffers reusable across RPC retries and one redirect layer.
+    // The context keeps prepared UB buffers reusable across RPC retries and the deadline-bounded redirect chain.
     while (true) {
         ++attempt;
         RETURN_IF_NOT_OK(retry_->CheckDeadline());
@@ -361,15 +378,6 @@ Status ObjectMetadataClient::BuildUbInlineData(ObjectMetadataItem &item,
     return Status::OK();
 }
 
-Status ObjectMetadataClient::ResolveRedirectBatch(const HostPort &address, const ObjectMetadataBatch &items,
-                                                  InlineRequestContext &context)
-{
-    master::QueryAndGetRspPb response;
-    std::vector<RpcMessage> payloads;
-    RETURN_IF_NOT_OK(QueryWithRetry(address, items, false, response, payloads, context));
-    return ApplyResults(items, response, payloads, context);
-}
-
 Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items)
 {
     RETURN_IF_NOT_OK(ValidateAndResetItems(items));
@@ -379,23 +387,39 @@ Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMe
     master::QueryAndGetRspPb response;
     std::vector<RpcMessage> payloads;
     RETURN_IF_NOT_OK(QueryWithRetry(address, items, true, response, payloads, context));
-
     ObjectMetadataBatch localItems;
     std::vector<RedirectBatch> redirectBatches;
     RETURN_IF_NOT_OK(PartitionInitialResponse(items, response, localItems, redirectBatches));
     VLOG(1) << "[TransportGet][Metadata] Query resolved, meta owner: " << address.ToString()
             << ", local keys: " << localItems.size() << ", redirect groups: " << redirectBatches.size();
     RETURN_IF_NOT_OK(ApplyResults(localItems, response, payloads, context));
+    if (redirectBatches.empty()) {
+        return Status::OK();
+    }
 
-    for (const auto &batch : redirectBatches) {
-        VLOG(1) << "[TransportGet][Metadata] Follow redirect, target: " << batch.address.ToString()
-                << ", key count: " << batch.items.size();
-        Status rc = ResolveRedirectBatch(batch.address, batch.items, context);
-        if (rc.IsError()) {
-            VLOG(1) << "[TransportGet][Metadata] Redirect query failed, target: " << batch.address.ToString()
-                    << ", key count: " << batch.items.size() << ", status: " << rc.ToString();
-            SetBatchError(batch.items, rc);
+    std::deque<PendingMetadataBatch> pending;
+    QueueRedirectBatches(redirectBatches, pending);
+    while (!pending.empty()) {
+        PendingMetadataBatch current = std::move(pending.front());
+        pending.pop_front();
+        response.Clear();
+        payloads.clear();
+        Status rc = QueryWithRetry(current.address, current.items, true, response, payloads, context);
+        localItems.clear();
+        redirectBatches.clear();
+        if (rc.IsOk()) {
+            rc = PartitionInitialResponse(current.items, response, localItems, redirectBatches);
         }
+        if (rc.IsOk()) {
+            VLOG(1) << "[TransportGet][Metadata] Query resolved, meta owner: " << current.address.ToString()
+                    << ", local keys: " << localItems.size() << ", redirect groups: " << redirectBatches.size();
+            rc = ApplyResults(localItems, response, payloads, context);
+        }
+        if (rc.IsError()) {
+            SetBatchError(current.items, rc);
+            continue;
+        }
+        QueueRedirectBatches(redirectBatches, pending);
     }
     return Status::OK();
 }

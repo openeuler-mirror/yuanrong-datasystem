@@ -53,7 +53,7 @@ public:
     virtual ~ObjectMetadataClient() = default;
 
     /**
-     * @brief Query a metadata-owner group and resolve one redirect layer.
+     * @brief Query a metadata-owner group and resolve redirects within the API deadline.
      * @param[in] address Initial metadata owner.
      * @param[in,out] items Ordered object metadata states belonging to address.
      * @return K_OK after every item has an independent result; a group-wide error otherwise.
@@ -80,8 +80,6 @@ private:
     Status QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items, bool allowRedirect,
                           master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
                           InlineRequestContext &context);
-    Status ResolveRedirectBatch(const HostPort &address, const ObjectMetadataBatch &items,
-                                InlineRequestContext &context);
     Status InvokeQueryAndGet(const HostPort &address, master::QueryAndGetReqPb &request,
                              master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,
                              InlineRequestContext &context);

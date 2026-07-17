@@ -1848,13 +1848,13 @@ TEST(ObjectMetadataClientTest, RestoresOrderAcrossPartialRedirectsAndDuplicateKe
         } else if (address == MakeAddress(42)) {
             EXPECT_EQ(request.object_keys_size(), 1);
             EXPECT_EQ(request.object_keys(0), "b");
-            EXPECT_FALSE(request.redirect());
+            EXPECT_TRUE(request.redirect());
             AddLocation(response, "b", MakeAddress(53));
         } else {
             EXPECT_EQ(address, MakeAddress(43));
             EXPECT_EQ(request.object_keys_size(), 1);
             EXPECT_EQ(request.object_keys(0), "c");
-            EXPECT_FALSE(request.redirect());
+            EXPECT_TRUE(request.redirect());
             AddLocation(response, "c", MakeAddress(54));
         }
         return Status::OK();
@@ -1941,16 +1941,23 @@ TEST(ObjectMetadataClientTest, RetriesMetaMovingWithTheSameKeyGroup)
     EXPECT_TRUE(results[1].status.IsOk());
 }
 
-TEST(ObjectMetadataClientTest, RejectsRedirectReturnedByRedirectTarget)
+TEST(ObjectMetadataClientTest, FollowsTwoRedirects)
 {
     ApiDeadlineGuard deadline(1000);
     auto manager = std::make_shared<FakeDataPlaneManager>();
-    manager->queryAndGetHandler = [](const HostPort &address, const master::QueryAndGetReqPb &,
-                                     master::QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
-        auto *redirect = response.add_info();
-        redirect->set_redirect_meta_address(
-            (address == MakeAddress(41) ? MakeAddress(42) : MakeAddress(43)).ToString());
-        redirect->add_change_meta_ids("key");
+    std::vector<HostPort> calls;
+    manager->queryAndGetHandler = [&calls](const HostPort &address, const master::QueryAndGetReqPb &request,
+                                           master::QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        calls.push_back(address);
+        EXPECT_TRUE(request.redirect());
+        if (address == MakeAddress(43)) {
+            AddLocation(response, "key", MakeAddress(51));
+        } else {
+            auto *redirect = response.add_info();
+            redirect->set_redirect_meta_address(
+                (address == MakeAddress(41) ? MakeAddress(42) : MakeAddress(43)).ToString());
+            redirect->add_change_meta_ids("key");
+        }
         return Status::OK();
     };
     ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>());
@@ -1959,7 +1966,8 @@ TEST(ObjectMetadataClientTest, RejectsRedirectReturnedByRedirectTarget)
 
     ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch).IsOk());
     ASSERT_EQ(results.size(), 1u);
-    EXPECT_EQ(results[0].status.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_EQ(calls, std::vector<HostPort>({ MakeAddress(41), MakeAddress(42), MakeAddress(43) }));
 }
 
 TEST(ObjectMetadataClientTest, RebuildsUnavailableSharedRpcConnection)
