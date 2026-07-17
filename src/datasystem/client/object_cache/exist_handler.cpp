@@ -28,6 +28,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/status_helper.h"
@@ -120,30 +121,40 @@ Status FillExistResults(const std::vector<std::string> &keys, const std::vector<
     return Status::OK();
 }
 
-ExistCallResult DoExistTransportCall(const std::shared_ptr<IExistTransport> &transport, const HostPort &worker,
+ExistCallResult DoExistTransportCall(client::TransportLayer *transport,
+                                     const std::shared_ptr<IExistTransport> &testTransport, const HostPort &worker,
                                      const std::vector<std::string> &keys, const ExistHandlerRequest &request,
                                      int32_t requestTimeoutMs)
 {
     client::TransportExistRequest rpcRequest(keys, request.queryL2Cache, request.isLocal, requestTimeoutMs,
                                              request.clientId, request.tenantId, request.token);
     client::TransportExistResult result;
-    Status rc = transport->Exist(worker, rpcRequest, result);
+    Status rc;
+    if (transport != nullptr) {
+        rc = transport->Exist(worker, rpcRequest, result);
+    } else if (testTransport != nullptr) {
+        rc = testTransport->Exist(worker, rpcRequest, result);
+    } else {
+        return { Status(K_RUNTIME_ERROR, "Exist transport is unavailable"), {} };
+    }
     if (rc.IsError()) {
         return { rc, {} };
     }
     return { Status::OK(), std::move(result.exists) };
 }
 
-ExistCallResult DoExistTransportCallWithConnectionRetry(const std::shared_ptr<IExistTransport> &transport,
+ExistCallResult DoExistTransportCallWithConnectionRetry(client::TransportLayer *transport,
+                                                        const std::shared_ptr<IExistTransport> &testTransport,
                                                         const HostPort &worker, const std::vector<std::string> &keys,
                                                         const ExistHandlerRequest &request)
 {
-    ExistCallResult result = DoExistTransportCall(transport, worker, keys, request, request.requestTimeoutMs);
+    ExistCallResult result =
+        DoExistTransportCall(transport, testTransport, worker, keys, request, request.requestTimeoutMs);
     if (!IsExistConnectionError(result.rc) || request.requestTimeoutMs < EXIST_CONNECTION_PROBE_TIMEOUT_MS) {
         return result;
     }
     for (int32_t connectionRetries = 0; connectionRetries < EXIST_MAX_CONNECTION_PROBE_RETRY; ++connectionRetries) {
-        result = DoExistTransportCall(transport, worker, keys, request,
+        result = DoExistTransportCall(transport, testTransport, worker, keys, request,
             GetExistConnectionProbeTimeoutMs(request.requestTimeoutMs));
         if (!IsExistConnectionError(result.rc)) {
             return result;
@@ -154,7 +165,7 @@ ExistCallResult DoExistTransportCallWithConnectionRetry(const std::shared_ptr<IE
     return result;
 }
 
-Status RunExistRedirectGroups(const std::shared_ptr<IExistTransport> &transport,
+Status RunExistRedirectGroups(client::TransportLayer *transport, const std::shared_ptr<IExistTransport> &testTransport,
                               const std::vector<ExistRedirectGroup> &redirectGroups,
                               const ExistHandlerRequest &request, const std::shared_ptr<ThreadPool> &taskPool,
                               const std::unordered_map<std::string, std::vector<size_t>> &keyIndexes,
@@ -165,8 +176,9 @@ Status RunExistRedirectGroups(const std::shared_ptr<IExistTransport> &transport,
     RETURN_RUNTIME_ERROR_IF_NULL(taskPool);
     for (const auto &group : redirectGroups) {
         try {
-            futures.emplace_back(taskPool->Submit([transport, worker = group.worker, keys = group.keys, &request]() {
-                return DoExistTransportCallWithConnectionRetry(transport, worker, keys, request);
+            futures.emplace_back(taskPool->Submit([transport, testTransport, worker = group.worker,
+                                                   keys = group.keys, &request]() {
+                return DoExistTransportCallWithConnectionRetry(transport, testTransport, worker, keys, request);
             }));
         } catch (const std::exception &e) {
             for (auto &f : futures) {
@@ -301,16 +313,54 @@ Status ExistRedirectResolver::ParseAddressOnlyRedirect(const Status &rc, HostPor
     return Status::OK();
 }
 
+ExistHandler::ExistHandler(std::shared_ptr<client::Routing> routing, client::TransportLayer *transport,
+                           std::shared_ptr<ThreadPool> taskPool)
+    : clientRouting_(std::move(routing)),
+      testRouting_(nullptr),
+      transportLayer_(transport),
+      testTransport_(nullptr),
+      taskPool_(std::move(taskPool))
+{
+}
+
 ExistHandler::ExistHandler(std::shared_ptr<IExistRouting> routing, std::shared_ptr<IExistTransport> transport,
                            std::shared_ptr<ThreadPool> taskPool)
-    : routing_(std::move(routing)), transport_(std::move(transport)), taskPool_(std::move(taskPool))
+    : clientRouting_(nullptr),
+      testRouting_(std::move(routing)),
+      transportLayer_(nullptr),
+      testTransport_(std::move(transport)),
+      taskPool_(std::move(taskPool))
 {
+}
+
+Status ExistHandler::SelectWorkers(const std::vector<std::string> &keys, client::SelectStrategy strategy,
+                                   std::unordered_map<HostPort, std::vector<std::string>> &groups)
+{
+    if (clientRouting_ != nullptr) {
+        RETURN_RUNTIME_ERROR_IF_NULL(clientRouting_);
+        return clientRouting_->SelectWorkers(keys, strategy, groups);
+    }
+    RETURN_RUNTIME_ERROR_IF_NULL(testRouting_);
+    return testRouting_->SelectWorkers(keys, strategy, groups);
+}
+
+void ExistHandler::UpdateRoutingState(const HostPort &addr, StatusCode status)
+{
+    if (clientRouting_ != nullptr) {
+        clientRouting_->UpdateState(addr, status);
+        return;
+    }
+    if (testRouting_ != nullptr) {
+        testRouting_->UpdateState(addr, status);
+    }
 }
 
 Status ExistHandler::Run(const ExistHandlerRequest &request, std::vector<bool> &exists)
 {
-    RETURN_RUNTIME_ERROR_IF_NULL(routing_);
-    RETURN_RUNTIME_ERROR_IF_NULL(transport_);
+    CHECK_FAIL_RETURN_STATUS(clientRouting_ != nullptr || testRouting_ != nullptr, K_RUNTIME_ERROR,
+                             "Exist routing is unavailable");
+    CHECK_FAIL_RETURN_STATUS(transportLayer_ != nullptr || testTransport_ != nullptr, K_RUNTIME_ERROR,
+                             "Exist transport is unavailable");
     auto keyIndexes = BuildExistKeyIndexes(request.keys);
     exists.assign(request.keys.size(), false);
     Status rc;
@@ -329,7 +379,7 @@ Status ExistHandler::RunSelectedWorkers(const ExistHandlerRequest &request,
                                         std::vector<bool> &exists)
 {
     std::unordered_map<HostPort, std::vector<std::string>> groups;
-    RETURN_IF_NOT_OK(routing_->SelectWorkers(request.keys, client::SelectStrategy::HASH_RING_AFFINITY, groups));
+    RETURN_IF_NOT_OK(SelectWorkers(request.keys, client::SelectStrategy::HASH_RING_AFFINITY, groups));
     std::vector<std::pair<HostPort, std::vector<std::string>>> orderedGroups(groups.begin(), groups.end());
     std::sort(orderedGroups.begin(), orderedGroups.end(), [](const auto &lhs, const auto &rhs) {
         return lhs.first.ToString() < rhs.first.ToString();
@@ -339,8 +389,8 @@ Status ExistHandler::RunSelectedWorkers(const ExistHandlerRequest &request,
         HostPort worker = group.first;
         int32_t redirectRetries = 0;
         while (true) {
-            ExistCallResult result =
-                DoExistTransportCallWithConnectionRetry(transport_, worker, group.second, request);
+            ExistCallResult result = DoExistTransportCallWithConnectionRetry(transportLayer_, testTransport_, worker,
+                                                                             group.second, request);
             Status rc = result.rc;
             if (rc.IsOk()) {
                 RETURN_IF_NOT_OK(FillExistResults(group.second, result.exists, keyIndexes, exists));
@@ -357,7 +407,7 @@ Status ExistHandler::RunSelectedWorkers(const ExistHandlerRequest &request,
                 continue;
             }
             if (IsExistConnectionError(rc)) {
-                routing_->UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
+                UpdateRoutingState(worker, K_CLIENT_WORKER_DISCONNECT);
             }
             return rc;
         }
@@ -382,8 +432,8 @@ Status ExistHandler::HandleRedirect(const Status &rc, HostPort &worker, const st
     if (!resolution.missingKeys.empty()) {
         resolution.redirectGroups.emplace_back(ExistRedirectGroup{ worker, std::move(resolution.missingKeys) });
     }
-    RETURN_IF_NOT_OK(RunExistRedirectGroups(transport_, resolution.redirectGroups, request, taskPool_, keyIndexes,
-        exists));
+    RETURN_IF_NOT_OK(RunExistRedirectGroups(transportLayer_, testTransport_, resolution.redirectGroups, request,
+                                            taskPool_, keyIndexes, exists));
     redirected = true;
     return Status::OK();
 }
