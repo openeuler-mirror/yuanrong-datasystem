@@ -50,7 +50,8 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
         return nullptr;
     }
     LOG(INFO) << "BrpcChannel created: " << cfg.endpoint << " timeout=" << cfg.timeout_ms
-              << "ms retry=" << cfg.max_retry << " cb=" << (opts.enable_circuit_breaker ? "on" : "off");
+              << "ms connect_timeout=" << cfg.connect_timeout_ms << "ms retry=" << cfg.max_retry
+              << " cb=" << (opts.enable_circuit_breaker ? "on" : "off");
     return ch;
 }
 
