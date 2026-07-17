@@ -37,8 +37,12 @@ C++
    Status
    Future
    enum-StatusCode
+   IServiceDiscovery
    ServiceDiscovery
+   ICoordinatorDiscovery
+   CoordinatorServiceDiscovery
    struct-ServiceDiscoveryOptions
+   struct-CoordinatorServiceDiscoveryOptions
    enum-ServiceAffinityPolicy
 
 KV接口
@@ -222,17 +226,25 @@ Stream接口
     :widths: 30 70
     :header-rows: 0
 
-    * - :cpp:func:`ServiceDiscovery::ServiceDiscovery`
-      - 构造服务发现实例。
-    * - :cpp:func:`ServiceDiscovery::Init`
-      - 连接 ETCD 并完成服务发现初始化。
-    * - :cpp:func:`ServiceDiscovery::SelectWorker`
+    * - :cpp:class:`IServiceDiscovery`
+      - Worker 服务发现统一接口，可通过 ``ConnectOptions.serviceDiscovery`` 注入客户端。
+    * - :cpp:class:`ServiceDiscovery`
+      - 基于 ETCD 发现并选择 Worker。
+    * - :cpp:class:`ICoordinatorDiscovery`
+      - 用户可实现的 Coordinator 地址发现接口。
+    * - :cpp:class:`CoordinatorServiceDiscovery`
+      - 基于 Coordinator 发现并选择 Worker。
+    * - :cpp:class:`ServiceDiscoveryOptions`
+      - ETCD 服务发现配置参数。
+    * - :cpp:class:`CoordinatorServiceDiscoveryOptions`
+      - Coordinator 服务发现配置参数。
+    * - :cpp:func:`IServiceDiscovery::Init`
+      - 初始化服务发现。
+    * - :cpp:func:`IServiceDiscovery::SelectWorker`
       - 根据亲和性策略选择一个 Worker 地址。
-    * - :cpp:func:`ServiceDiscovery::SelectSameNodeWorker`
+    * - :cpp:func:`IServiceDiscovery::SelectSameNodeWorker`
       - 选择同节点 Worker 地址。
-    * - :cpp:func:`ServiceDiscovery::GetAllWorkers`
-      - 获取所有 Worker 地址，按同节点/其他节点分组。
-    * - :cpp:func:`ServiceDiscovery::GetAffinityPolicy`
-      - 获取当前亲和性策略。
-    * - :cpp:func:`ServiceDiscovery::HasHostAffinity`
-      - 检查是否启用了节点亲和性。
+    * - :cpp:func:`IServiceDiscovery::GetAllWorkers`
+      - 获取所有 Worker 地址，按同节点和其他节点分组。
+    * - :cpp:func:`ICoordinatorDiscovery::GetCoordinators`
+      - 获取 Coordinator 地址列表。

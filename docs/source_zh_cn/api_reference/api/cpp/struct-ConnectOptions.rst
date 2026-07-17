@@ -58,6 +58,14 @@ ConnectOptions
         
         如果为 true，开启 RH2D 功能，该功能需要服务端同步开启 ``enable_remote_h2d`` 能力。默认值：false
 
+    .. cpp:member:: std::shared_ptr<IServiceDiscovery> serviceDiscovery = nullptr;
+
+        Worker 服务发现实现。可以配置基于 ETCD 的 :cpp:class:`ServiceDiscovery`、基于 Coordinator 的
+        :cpp:class:`CoordinatorServiceDiscovery`，或用户自定义的 :cpp:class:`IServiceDiscovery` 实现。
+        配置该成员前，调用方应显式调用服务发现对象的 ``Init()`` 并检查返回状态；客户端初始化流程不保证
+        代替调用方调用 ``Init()``。未配置时，客户端使用 ``host`` 和 ``port`` 指定的 Worker 地址。
+        默认值：``nullptr``。
+
     .. cpp:member:: uint64_t fastTransportMemSize = 256 * 1024 * 1024;
 
         client 进程级 fast transport（URMA）传输内存池大小，单位为字节。默认值：256MB，取值范围为 ``(0, 2GB]``。同一进程内各 client 需保持一致，由首个启用 fast transport 的 client 生效。

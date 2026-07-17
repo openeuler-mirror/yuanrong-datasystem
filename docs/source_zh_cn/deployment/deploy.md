@@ -30,7 +30,7 @@ openYuanrong datasystem进程部署所需的系统环境依赖如下：
 |[CANN](#安装cann非必须)|8.5|运行异构相关特性的依赖库|
 |[Python](#安装python)|3.9-3.13|openYuanrong datasystem dscli的使用依赖Python环境|
 |[dscli](#安装dscli)|-|用于部署openYuanrong datasystem的命令行工具|
-|[ETCD](#安装并部署etcd)|3.5|openYuanrong datasystem集群管理依赖组件|
+|[ETCD](#安装并部署etcd)|3.5|使用 ETCD 集群管理方式时的依赖组件；使用 Coordinator 或 Metastore 时无需部署|
 |[SSH互信配置](#ssh互信配置)|-|仅多机部署需要，配置SSH互信用于机器间互相访问|
 
 下面给出以上依赖的安装方法。
@@ -152,6 +152,71 @@ etcdctl --endpoints "127.0.0.1:2379" get key
 ```
 命令行操作能正常写入/读取数据说明部署ETCD成功。
 
+### 安装并部署Coordinator
+
+`datasystem_coordinator` 和 `dscli` 随 openYuanrong datasystem 完整发行版安装，无需额外安装第三方协调组件。安装 openYuanrong datasystem 和 dscli 的方法参见[安装dscli](#安装dscli)。
+
+Coordinator 支持快速部署和通过配置项部署两种方式。
+
+#### 快速部署
+
+指定 Coordinator 服务地址并启动：
+
+```bash
+dscli start --coordinator_args --coordinator_address "127.0.0.1:31511"
+# [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100
+```
+
+输出 OK 说明 Coordinator 部署成功。
+
+通过服务地址停止 Coordinator：
+
+```bash
+dscli stop --coordinator_address "127.0.0.1:31511"
+```
+
+#### 通过配置项部署
+
+生成配置模板：
+
+```bash
+dscli generate_config -o ./
+# [INFO] Configuration file cluster_config.json has been generated to /home/test/cluster_config.json
+# [INFO] Configuration file worker_config.json has been generated to /home/test/worker_config.json
+# [INFO] Configuration file coordinator_config.json has been generated to /home/test/coordinator_config.json
+# [INFO] Configuration generation completed successfully
+```
+
+按需修改 `coordinator_config.json` 中的 Coordinator 服务地址。`service_type` 必须为 `coordinator`，以便 `dscli start -f` 和 `dscli stop -f` 识别需要操作的服务类型：
+
+```json
+{
+    "service_type": {
+        "value": "coordinator"
+    },
+    "coordinator_address": {
+        "value": "127.0.0.1:31511"
+    }
+}
+```
+
+使用配置文件启动 Coordinator：
+
+```bash
+dscli start -f ./coordinator_config.json
+# [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100
+```
+
+输出 OK 说明 Coordinator 部署成功。
+
+使用同一配置文件停止 Coordinator：
+
+```bash
+dscli stop -f ./coordinator_config.json
+```
+
+Coordinator 的完整启停方式和配置项说明参见 [使用Coordinator部署](../deployment/dscli.md#openyuanrong-datasystem集群使用coordinator部署)和 [Coordinator配置项](../deployment/dscli.md#coordinator配置项)。
+
 ### SSH互信配置
 SSH互信可以让服务器之间无需密码即可登录，多机集群部署必须配置SSH互信，步骤如下：
 
@@ -197,49 +262,91 @@ ssh username@hostname
 
 ### 集群部署
 
-openYuanrong datasystem集群依赖ETCD，部署前需要先部署ETCD，部署ETCD可参考：[安装并部署ETCD](#安装并部署etcd)。
+本节介绍 Worker 对接 ETCD 或 Coordinator 的单机和多机部署方式。部署 Worker 前，需要先准备且仅准备一种集群管理后端：
+
+- 对接 ETCD 时，先完成[安装并部署ETCD](#安装并部署etcd)。
+- 对接 Coordinator 时，先完成[安装并部署Coordinator](#安装并部署coordinator)。
+
+Worker 的 `coordinator_address`、`etcd_address`、`metastore_address` 必须且只能配置一个；本节仅介绍对接 ETCD 和 Coordinator 的部署方式。
 
 #### 单机部署
 
-单机部署有两种方式：快速部署以及通过配置项部署
+单机部署支持快速部署和通过配置项部署两种方式。
 
-- 快速部署
+##### 快速部署
+
+- 对接 ETCD
+
     ```bash
-    dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+    dscli start --worker_args --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
     ```
-    输出OK说明部署成功。
 
-    更多快速部署的使用方式请参考：[dscli单机快速部署](../deployment/dscli.md#单机部署)
+- 对接 Coordinator
 
-- 通过配置项部署
-    
-    需要指定配置项部署时，先获取配置模板文件：
     ```bash
-    dscli generate_config -o ./
-    # [INFO] Worker configuration file has been generated to /home/test
-    ```
-    配置模板文件完成后，通过如下命令部署集群：
-    ```bash
-    dscli start -f ./worker_config.json
+    dscli start --worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
     ```
-    输出OK说明部署成功。
 
-    更多配置项部署的使用方式请参考：[dscli单机配置项部署](../deployment/dscli.md#单机部署)
+输出 OK 说明 Worker 部署成功。更多快速部署方式参见 dscli 的 [ETCD部署](../deployment/dscli.md#openyuanrong-datasystem集群使用etcd部署)和 [Coordinator部署](../deployment/dscli.md#openyuanrong-datasystem集群使用coordinator部署)章节。
 
-#### 多机部署
+##### 通过配置项部署
 
-在当前目录生成worker_config.json和cluster_config.json文件：
+生成配置模板：
 
 ```bash
 dscli generate_config -o ./
-# [INFO] Cluster configuration file has been generated to /home/test
-# [INFO] Worker configuration file has been generated to /home/test
+# [INFO] Configuration file cluster_config.json has been generated to /home/test/cluster_config.json
+# [INFO] Configuration file worker_config.json has been generated to /home/test/worker_config.json
+# [INFO] Configuration file coordinator_config.json has been generated to /home/test/coordinator_config.json
 # [INFO] Configuration generation completed successfully
 ```
 
-编辑cluster_config.json文件：
+根据集群管理后端修改 `worker_config.json`，并确保另外两个后端地址为空。
+
+- 对接 ETCD
+
+    ```json
+    {
+        "etcd_address": {
+            "value": "127.0.0.1:2379"
+        }
+    }
+    ```
+
+- 对接 Coordinator
+
+    ```json
+    {
+        "coordinator_address": {
+            "value": "127.0.0.1:31511"
+        }
+    }
+    ```
+
+配置完成后，启动 Worker：
+
+```bash
+dscli start -f ./worker_config.json
+# [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
+```
+
+输出 OK 说明 Worker 部署成功。更多配置项部署方式参见 dscli 的 [ETCD部署](../deployment/dscli.md#openyuanrong-datasystem集群使用etcd部署)和 [Coordinator部署](../deployment/dscli.md#openyuanrong-datasystem集群使用coordinator部署)章节。
+
+#### 多机部署
+
+在当前目录生成 `cluster_config.json`、`worker_config.json` 和 `coordinator_config.json`：
+
+```bash
+dscli generate_config -o ./
+# [INFO] Configuration file cluster_config.json has been generated to /home/test/cluster_config.json
+# [INFO] Configuration file worker_config.json has been generated to /home/test/worker_config.json
+# [INFO] Configuration file coordinator_config.json has been generated to /home/test/coordinator_config.json
+# [INFO] Configuration generation completed successfully
+```
+
+编辑 `cluster_config.json`：
 
 ```json
 {
@@ -248,7 +355,7 @@ dscli generate_config -o ./
         "ssh_private_key": "~/.ssh/id_rsa",
         "ssh_user_name": "test_user"
     },
-    // 集群配置项文件，在第一步生成
+    // Worker配置文件，在第一步生成
     "worker_config_path": "./worker_config.json",
     "worker_nodes": [
         "127.0.0.1",
@@ -258,24 +365,46 @@ dscli generate_config -o ./
 }
 ```
 
-部署集群：
+根据集群管理后端修改 `worker_config.json`，该配置会应用到所有 Worker。
+
+- 对接 ETCD
+
+    ```json
+    {
+        "etcd_address": {
+            "value": "127.0.0.1:2379"
+        }
+    }
+    ```
+
+- 对接 Coordinator
+
+    ```json
+    {
+        "coordinator_address": {
+            "value": "127.0.0.1:31511"
+        }
+    }
+    ```
+
+确保另外两个后端地址为空，然后部署 Worker 集群：
 
 ```bash
-dscli up -f ./cluster_config.json                     
+dscli up -f ./cluster_config.json
 # [INFO] Start worker service @ 127.0.0.1:31501 success.
 # [INFO] Start worker service @ 127.0.0.2:31501 success.
 ```
 
-当输出如上信息时说明集群部署成功。
+当输出如上信息时，说明 Worker 集群部署成功。
 
 > 注意事项：
-> 
-> - openYuanrong datasystem集群依赖ETCD，部署前需要先部署ETCD，部署ETCD可参考：[安装并部署ETCD](#安装并部署etcd)。
-> - 多机集群部署依赖多机之间配置SSH互信，请参考：[SSH互信配置](#ssh互信配置)。
-> - 需要部署的机器上都已安装dscli，dscli安装可参考：[安装dscli](#安装dscli)。
+>
+> - 对接 Coordinator 时，本节只部署 Worker，不会启动 Coordinator。请提前按照[安装并部署Coordinator](#安装并部署coordinator)完成 Coordinator 部署。
+> - 多机集群部署依赖节点间的 SSH 互信，具体操作参见[SSH互信配置](#ssh互信配置)。
+> - 所有部署节点都需要安装 dscli，安装方法参见[安装dscli](#安装dscli)。
 >
 
-更多配置项部署的使用方式请参考：[dscli多机部署](../deployment/dscli.md#多机部署)
+更多配置项部署方式参见 dscli 的 [ETCD部署](../deployment/dscli.md#openyuanrong-datasystem集群使用etcd部署)和 [Coordinator部署](../deployment/dscli.md#openyuanrong-datasystem集群使用coordinator部署)章节。
 
 ### 快速验证
 
