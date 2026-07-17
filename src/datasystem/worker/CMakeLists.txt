@@ -14,9 +14,9 @@ set(WORKER_HEALTH_CHECK_DEPEND_LIBS
 add_library(worker_health_check STATIC worker_health_check.cpp)
 target_link_libraries(worker_health_check PRIVATE ${WORKER_HEALTH_CHECK_DEPEND_LIBS})
 
-add_library(worker_topology_references STATIC worker_topology_references.cpp)
-target_include_directories(worker_topology_references PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(worker_topology_references PUBLIC cluster_topology common_util)
+add_library(metadata_route_resolver STATIC metadata_route_resolver.cpp)
+target_include_directories(metadata_route_resolver PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(metadata_route_resolver PUBLIC cluster_topology common_util)
 
 add_subdirectory(object_cache)
 add_subdirectory(stream_cache)
@@ -72,9 +72,9 @@ set(WORKER_DEPEND_LIBS
         worker_client_manager
         worker_update_flag_check
         worker_health_check
+        metadata_route_resolver
         coordinator_watch_service_impl
         topology_recovery_reporter
-        worker_topology_references
         )
 
 if (WITH_TESTS)

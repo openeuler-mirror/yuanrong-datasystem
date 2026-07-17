@@ -109,6 +109,13 @@ bool AllMembersExiting(const TopologySnapshot &latest, const std::vector<Members
 }
 }  // namespace
 
+bool TopologyControllerOptions::IsValid() const noexcept
+{
+    return nodeDeadTimeout.count() > 0 && failureBatchWindow.count() > 0 && ordinaryBatchWindow.count() > 0
+           && reconcileTick.count() > 0 && maxDerivedOperationsPerTick > 0 && maxMembersPerBatch > 0
+           && maxProgressReadsPerTick > 0 && now;
+}
+
 TopologyController::TopologyController(ICoordinationBackend &backend, TopologyRepository &repository,
                                        const TopologyKeyHelper &keys, const IPlanningAlgorithm &algorithm,
                                        CoordinationEventDispatcher &dispatcher, TopologyControllerOptions options)
@@ -132,11 +139,7 @@ TopologyController::~TopologyController()
 Status TopologyController::Start()
 {
     std::lock_guard<std::mutex> lock(stateMutex_);
-    CHECK_FAIL_RETURN_STATUS(!started_ && options_.nodeDeadTimeout.count() > 0
-                                 && options_.failureBatchWindow.count() > 0 && options_.ordinaryBatchWindow.count() > 0
-                                 && options_.reconcileTick.count() > 0 && options_.maxDerivedOperationsPerTick > 0
-                                 && options_.maxMembersPerBatch > 0 && options_.maxProgressReadsPerTick > 0
-                                 && options_.now,
+    CHECK_FAIL_RETURN_STATUS(!started_ && options_.IsValid(),
                              K_INVALID, "invalid or already started topology Controller");
     std::vector<WatchKey> watches;
     RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::CONTROLLER, "", keys_, 0, watches));

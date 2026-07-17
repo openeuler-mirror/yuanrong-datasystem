@@ -17,7 +17,7 @@
 /**
  * Description: Tests worker-initiated topology recovery candidate reporting.
  */
-#include "datasystem/worker/coordinator/topology_recovery_reporter.h"
+#include "datasystem/cluster/coordination_backend/topology_recovery_reporter.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -33,7 +33,7 @@
 
 #include "gtest/gtest.h"
 
-namespace datasystem::worker {
+namespace datasystem::cluster {
 namespace {
 using namespace std::chrono_literals;
 
@@ -500,4 +500,4 @@ TEST(TopologyRecoveryReporterTest, RejectsInvalidRetryAndDeadlineOptions)
 }
 
 }  // namespace
-}  // namespace datasystem::worker
+}  // namespace datasystem::cluster

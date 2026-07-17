@@ -1336,8 +1336,10 @@ std::string WorkerLocalMasterOCApi::GetHostPort()
 }
 
 WorkerMasterOcApiManager::WorkerMasterOcApiManager(HostPort &hostPort, std::shared_ptr<AkSkManager> akSkManager,
+                                                   const worker::MetadataRouteResolver &routeResolver,
                                                    master::MasterOCServiceImpl *masterOCService)
-    : WorkerMasterApiManagerBase<WorkerMasterOCApi>(hostPort, akSkManager), masterOCService_(masterOCService)
+    : WorkerMasterApiManagerBase<WorkerMasterOCApi>(hostPort, akSkManager, routeResolver),
+      masterOCService_(masterOCService)
 {
 }
 

@@ -17,7 +17,7 @@
 /**
  * Description: Component tests for Worker-initiated recovery across Coordinator lifetimes.
  */
-#include "datasystem/worker/coordinator/topology_recovery_reporter.h"
+#include "datasystem/cluster/coordination_backend/topology_recovery_reporter.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -42,7 +42,7 @@
 #include "datasystem/coordinator/topology_recovery_manager.h"
 #include "ut/common.h"
 
-namespace datasystem::worker {
+namespace datasystem::cluster {
 namespace {
 using namespace std::chrono_literals;
 
@@ -386,4 +386,4 @@ TEST(CoordinatorTopologyRecoveryComponentTest, CoordinatorSwitchBetweenEvidenceA
 }
 
 }  // namespace
-}  // namespace datasystem::worker
+}  // namespace datasystem::cluster

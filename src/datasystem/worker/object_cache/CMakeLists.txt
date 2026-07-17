@@ -1,4 +1,5 @@
 set(WORKER_OC_SRCS
+        object_endpoint_policy.cpp
         worker_master_oc_api.cpp
         worker_worker_oc_api.cpp
         worker_worker_peer_state_codec.cpp
@@ -11,7 +12,6 @@ set(WORKER_OC_SRCS
         master_worker_oc_service_impl.cpp
         worker_oc_eviction_manager.cpp
         worker_oc_spill.cpp
-        object_meta_route_helper.cpp
         obj_cache_hashmap.cpp
         obj_cache_shm_unit.cpp
         async_send_manager.cpp
@@ -90,8 +90,8 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         master_object_protos
         cluster_topology_scope
         cluster_topology
+        metadata_route_resolver
         worker_client_manager
-        worker_topology_references
         worker_health_check
         )
 

@@ -112,6 +112,12 @@ TopologyTaskJanitor::TopologyTaskJanitor(TopologyRepository &repository, const I
 {
 }
 
+bool TopologyTaskJanitorOptions::IsValid() const noexcept
+{
+    return interval.count() > 0 && scanLimit > 0 && scanLimit <= MAX_SCAN_LIMIT && deleteBatch > 0
+           && deleteBatch <= MAX_DELETE_BATCH && deleteBatch <= scanLimit;
+}
+
 TopologyTaskJanitor::~TopologyTaskJanitor()
 {
     LOG_IF_ERROR(Stop(std::chrono::steady_clock::time_point::max()),
@@ -121,10 +127,8 @@ TopologyTaskJanitor::~TopologyTaskJanitor()
 Status TopologyTaskJanitor::Start()
 {
     std::lock_guard<std::mutex> lock(lifecycleMutex_);
-    const bool valid = !started_ && options_.interval.count() > 0 && options_.scanLimit > 0
-                       && options_.scanLimit <= MAX_SCAN_LIMIT && options_.deleteBatch > 0
-                       && options_.deleteBatch <= MAX_DELETE_BATCH && options_.deleteBatch <= options_.scanLimit;
-    CHECK_FAIL_RETURN_STATUS(valid, K_INVALID, "invalid or already started topology task Janitor");
+    CHECK_FAIL_RETURN_STATUS(!started_ && options_.IsValid(), K_INVALID,
+                             "invalid or already started topology task Janitor");
     started_ = true;
     stopping_ = false;
     threadExited_ = false;

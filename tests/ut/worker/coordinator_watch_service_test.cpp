@@ -19,6 +19,10 @@
  */
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <condition_variable>
+#include <future>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -68,12 +72,12 @@ TEST(CoordinatorWatchServiceBrpcTest, HandleEventReturnsNotReadyWithoutClusterMa
 TEST(CoordinatorWatchServiceBrpcTest, ValidatesWholeBatchBeforeDelivering)
 {
     std::vector<cluster::CoordinationEvent> delivered;
-    coordinator::CoordinatorWatchServiceImpl svc(
-        HostPort("127.0.0.1", 0),
+    coordinator::CoordinatorWatchServiceImpl svc(HostPort("127.0.0.1", 0));
+    DS_ASSERT_OK(svc.BindEventHandler(
         [&delivered](const std::string &, int64_t, cluster::CoordinationEvent &&event) {
             delivered.emplace_back(std::move(event));
             return Status::OK();
-        });
+        }));
     coordinator::EventReqPb req;
     req.set_coordinator_id(std::string(16, 'a'));
     req.set_watch_id(7);
@@ -92,14 +96,14 @@ TEST(CoordinatorWatchServiceBrpcTest, DeliversIdentityBoundResetWithoutKey)
     std::string observedId;
     int64_t observedWatchId = 0;
     cluster::CoordinationEventType observedType = cluster::CoordinationEventType::UNSPECIFIED;
-    coordinator::CoordinatorWatchServiceImpl svc(
-        HostPort("127.0.0.1", 0),
+    coordinator::CoordinatorWatchServiceImpl svc(HostPort("127.0.0.1", 0));
+    DS_ASSERT_OK(svc.BindEventHandler(
         [&](const std::string &coordinatorId, int64_t watchId, cluster::CoordinationEvent &&event) {
             observedId = coordinatorId;
             observedWatchId = watchId;
             observedType = event.type;
             return Status::OK();
-        });
+        }));
     coordinator::EventReqPb req;
     req.set_coordinator_id(std::string(16, 'b'));
     req.set_watch_id(9);
@@ -115,12 +119,12 @@ TEST(CoordinatorWatchServiceBrpcTest, DeliversIdentityBoundResetWithoutKey)
 TEST(CoordinatorWatchServiceBrpcTest, DeliversEveryValidatedBatchEventInOrder)
 {
     std::vector<cluster::CoordinationEvent> delivered;
-    coordinator::CoordinatorWatchServiceImpl svc(
-        HostPort("127.0.0.1", 0),
+    coordinator::CoordinatorWatchServiceImpl svc(HostPort("127.0.0.1", 0));
+    DS_ASSERT_OK(svc.BindEventHandler(
         [&delivered](const std::string &, int64_t, cluster::CoordinationEvent &&event) {
             delivered.emplace_back(std::move(event));
             return Status::OK();
-        });
+        }));
     coordinator::EventReqPb req;
     req.set_coordinator_id(std::string(16, 'c'));
     req.set_watch_id(11);
@@ -143,12 +147,12 @@ TEST(CoordinatorWatchServiceBrpcTest, DeliversEveryValidatedBatchEventInOrder)
 TEST(CoordinatorWatchServiceBrpcTest, RejectsOversizedBatchBeforeDelivery)
 {
     size_t delivered = 0;
-    coordinator::CoordinatorWatchServiceImpl svc(
-        HostPort("127.0.0.1", 0),
+    coordinator::CoordinatorWatchServiceImpl svc(HostPort("127.0.0.1", 0));
+    DS_ASSERT_OK(svc.BindEventHandler(
         [&delivered](const std::string &, int64_t, cluster::CoordinationEvent &&) {
             ++delivered;
             return Status::OK();
-        });
+        }));
     coordinator::EventReqPb req;
     req.set_coordinator_id(std::string(16, 'd'));
     req.set_watch_id(13);
@@ -170,11 +174,11 @@ TEST(CoordinatorWatchServiceBrpcTest, RejectsOversizedBatchBeforeDelivery)
 
 TEST(CoordinatorWatchServiceBrpcTest, PropagatesTemporaryRouteRejection)
 {
-    coordinator::CoordinatorWatchServiceImpl svc(
-        HostPort("127.0.0.1", 0),
+    coordinator::CoordinatorWatchServiceImpl svc(HostPort("127.0.0.1", 0));
+    DS_ASSERT_OK(svc.BindEventHandler(
         [](const std::string &, int64_t, cluster::CoordinationEvent &&) {
             return Status(K_NOT_READY, "watch registration is in progress");
-        });
+        }));
     coordinator::EventReqPb req;
     req.set_coordinator_id(std::string(16, 'e'));
     req.set_watch_id(15);
@@ -182,6 +186,44 @@ TEST(CoordinatorWatchServiceBrpcTest, PropagatesTemporaryRouteRejection)
     coordinator::EventRspPb rsp;
 
     EXPECT_EQ(svc.HandleEvent(req, rsp).GetCode(), K_NOT_READY);
+}
+
+TEST(CoordinatorWatchServiceBrpcTest, UnbindRejectsNewEventsAndDrainsInFlightHandler)
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool entered = false;
+    bool release = false;
+    coordinator::CoordinatorWatchServiceImpl svc(HostPort("127.0.0.1", 0));
+    DS_ASSERT_OK(svc.BindEventHandler(
+        [&](const std::string &, int64_t, cluster::CoordinationEvent &&) {
+            std::unique_lock<std::mutex> lock(mutex);
+            entered = true;
+            changed.notify_all();
+            changed.wait(lock, [&release] { return release; });
+            return Status::OK();
+        }));
+    coordinator::EventReqPb req;
+    req.set_coordinator_id(std::string(16, 'f'));
+    req.set_watch_id(17);
+    req.add_events()->set_type(coordinator::EventPb::RESET);
+    coordinator::EventRspPb rsp;
+
+    auto delivery = std::async(std::launch::async, [&svc, &req, &rsp] { return svc.HandleEvent(req, rsp); });
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(changed.wait_for(lock, std::chrono::seconds(1), [&entered] { return entered; }));
+    }
+    EXPECT_EQ(svc.UnbindEventHandlerAndWait(std::chrono::steady_clock::now()).GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    coordinator::EventRspPb rejectedRsp;
+    EXPECT_EQ(svc.HandleEvent(req, rejectedRsp).GetCode(), K_NOT_READY);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        release = true;
+    }
+    changed.notify_all();
+    DS_ASSERT_OK(delivery.get());
+    DS_ASSERT_OK(svc.UnbindEventHandlerAndWait(std::chrono::steady_clock::now()));
 }
 
 }  // namespace

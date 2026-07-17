@@ -66,6 +66,149 @@ TEST(TopologySnapshotTest, BuildsStableIndexesAndCommittedOwnerView)
     EXPECT_EQ(member->identity.address, "127.0.0.1:1");
 }
 
+TEST(TopologySnapshotTest, BuildsCanonicalStableActiveAndFailedProjections)
+{
+    TopologyState state;
+    state.clusterHasInit = true;
+    state.version = 9;
+    state.members = { MakeMember('c', "127.0.0.1:3", MemberState::FAILED, { 30 }),
+                      MakeMember('b', "127.0.0.1:2", MemberState::PRE_LEAVING, { 20 }),
+                      MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10 }) };
+    state.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 9 };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+
+    DS_ASSERT_OK(TopologySnapshot::Create(std::move(state), 9, std::string(64, 'd'), snapshot));
+
+    ASSERT_EQ(snapshot->ActiveMembers().size(), 1);
+    ASSERT_EQ(snapshot->FailedMembers().size(), 1);
+    EXPECT_EQ(snapshot->ActiveMembers().front()->identity.address, "127.0.0.1:1");
+    EXPECT_EQ(snapshot->FailedMembers().front()->identity.address, "127.0.0.1:3");
+    EXPECT_EQ(snapshot->ActiveMembers().front(), &snapshot->Members().front());
+    EXPECT_EQ(&snapshot->ActiveMembers(), &snapshot->ActiveMembers());
+}
+
+TEST(TopologySnapshotTest, FindsNextCommittedMemberWithWrapAndPreservesOutputOnFailure)
+{
+    TopologyState state;
+    state.version = 4;
+    state.members = { MakeMember('c', "127.0.0.1:3", MemberState::ACTIVE, { 30 }),
+                      MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10 }),
+                      MakeMember('b', "127.0.0.1:2", MemberState::PRE_LEAVING, { 20 }) };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(std::move(state), 4, std::string(64, 'd'), snapshot));
+
+    const Member *next = nullptr;
+    DS_ASSERT_OK(snapshot->FindNextCommittedMember("127.0.0.1:1", next));
+    ASSERT_NE(next, nullptr);
+    EXPECT_EQ(next->identity.address, "127.0.0.1:2");
+    DS_ASSERT_OK(snapshot->FindNextCommittedMember("127.0.0.1:3", next));
+    EXPECT_EQ(next->identity.address, "127.0.0.1:1");
+
+    const Member *sentinel = next;
+    EXPECT_EQ(snapshot->FindNextCommittedMember("127.0.0.1:9", next).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(next, sentinel);
+}
+
+TEST(TopologySnapshotTest, FindsNextActiveMemberAcrossNonActiveBoundaryAndRejectsSelfOnly)
+{
+    TopologyState state;
+    state.version = 4;
+    state.members = { MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10 }),
+                      MakeMember('b', "127.0.0.1:2", MemberState::PRE_LEAVING, { 20 }),
+                      MakeMember('c', "127.0.0.1:3", MemberState::ACTIVE, { 30 }) };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(std::move(state), 4, std::string(64, 'd'), snapshot));
+
+    const Member *next = nullptr;
+    DS_ASSERT_OK(snapshot->FindNextActiveMember("127.0.0.1:2", next));
+    ASSERT_NE(next, nullptr);
+    EXPECT_EQ(next->identity.address, "127.0.0.1:3");
+    DS_ASSERT_OK(snapshot->FindNextActiveMember("127.0.0.1:3", next));
+    EXPECT_EQ(next->identity.address, "127.0.0.1:1");
+
+    TopologyState single;
+    single.version = 5;
+    single.members = { MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10 }) };
+    DS_ASSERT_OK(TopologySnapshot::Create(std::move(single), 5, std::string(64, 'e'), snapshot));
+    const Member sentinel;
+    next = &sentinel;
+    EXPECT_EQ(snapshot->FindNextActiveMember("127.0.0.1:1", next).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(next, &sentinel);
+}
+
+TEST(TopologySnapshotTest, ValidatesExactScaleOutMigrationFenceAndVersionDirection)
+{
+    TopologyState state;
+    state.version = 8;
+    state.members = { MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10 }),
+                      MakeMember('b', "127.0.0.1:2", MemberState::JOINING, { 20 }) };
+    state.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 8 };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 8, std::string(64, 'd'), snapshot));
+
+    TopologyMigrationFence fence{ 8, 8, state.members[0].identity, state.members[1].identity };
+    DS_ASSERT_OK(snapshot->ValidateMigrationFence(fence));
+
+    fence.topologyVersion = 9;
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_TRY_AGAIN);
+    fence.topologyVersion = 7;
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+}
+
+TEST(TopologySnapshotTest, RejectsWrongMigrationEpochIdentityAndParticipantState)
+{
+    TopologyState state;
+    state.version = 8;
+    state.members = { MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10 }),
+                      MakeMember('b', "127.0.0.1:2", MemberState::JOINING, { 20 }) };
+    state.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 8 };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 8, std::string(64, 'd'), snapshot));
+    TopologyMigrationFence fence{ 8, 8, state.members[0].identity, state.members[1].identity };
+
+    fence.batchEpoch = 7;
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+    fence.batchEpoch = 8;
+    fence.source.id = std::string(16, 'x');
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+    fence.source = state.members[0].identity;
+    fence.target.address = "127.0.0.1:9";
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+    fence.target = state.members[1].identity;
+    std::swap(fence.source, fence.target);
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+}
+
+TEST(TopologySnapshotTest, AcceptsScaleInFenceAndRejectsFailureBatch)
+{
+    TopologyState scaleIn;
+    scaleIn.version = 12;
+    scaleIn.members = { MakeMember('a', "127.0.0.1:1", MemberState::LEAVING, { 10 }),
+                        MakeMember('b', "127.0.0.1:2", MemberState::ACTIVE, { 20 }),
+                        MakeMember('c', "127.0.0.1:3", MemberState::LEAVING, { 30 }),
+                        MakeMember('d', "127.0.0.1:4", MemberState::PRE_LEAVING, { 40 }) };
+    scaleIn.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_IN, 12 };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(scaleIn, 12, std::string(64, 'd'), snapshot));
+    TopologyMigrationFence fence{ 12, 12, scaleIn.members[0].identity, scaleIn.members[1].identity };
+    DS_ASSERT_OK(snapshot->ValidateMigrationFence(fence));
+    fence.target = scaleIn.members[2].identity;
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+    fence.target = scaleIn.members[0].identity;
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+    fence.target = scaleIn.members[3].identity;
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+
+    TopologyState failure;
+    failure.version = 13;
+    failure.members = { MakeMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10 }),
+                        MakeMember('b', "127.0.0.1:2", MemberState::FAILED, { 20 }) };
+    failure.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 13 };
+    DS_ASSERT_OK(TopologySnapshot::Create(failure, 13, std::string(64, 'e'), snapshot));
+    fence = { 13, 13, failure.members[0].identity, failure.members[1].identity };
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+}
+
 TEST(TopologySnapshotTest, RejectsInvalidIdentityTokenAndBatchStateWithoutPublishing)
 {
     TopologyState state;
@@ -125,6 +268,8 @@ TEST(TopologySnapshotTest, BuildsTenThousandMemberFortyThousandTokenIndexes)
     DS_ASSERT_OK(TopologySnapshot::Create(std::move(state), 1, std::string(64, 'a'), snapshot));
     ASSERT_EQ(snapshot->Members().size(), LARGE_TOPOLOGY_MEMBER_COUNT);
     ASSERT_EQ(snapshot->CommittedMembers().size(), LARGE_TOPOLOGY_MEMBER_COUNT);
+    ASSERT_EQ(snapshot->ActiveMembers().size(), LARGE_TOPOLOGY_MEMBER_COUNT);
+    EXPECT_EQ(&snapshot->ActiveMembers(), &snapshot->ActiveMembers());
     const auto tokenCount =
         std::accumulate(snapshot->Members().begin(), snapshot->Members().end(), size_t{ 0 },
                         [](size_t count, const auto &member) { return count + member.tokens.size(); });

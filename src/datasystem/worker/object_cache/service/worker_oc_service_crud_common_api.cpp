@@ -76,40 +76,17 @@ void InitRemoveMetaRpcDeadline(bool topologyOperation)
     reqTimeoutDuration.InitUs(std::min(rpcTimeoutUs, ApiDeadline::Instance().ApiRemainingUs()));
 }
 
-bool IsEndpointViewLagStatus(const Status &status)
+void AppendRemoveMetaResponse(const master::RemoveMetaRspPb &response, std::vector<std::string> &failedIds,
+                              std::vector<std::string> &needMigrateIds, std::vector<std::string> &needWaitIds,
+                              std::vector<std::string> &needMigrateL2CacheIds)
 {
-    return status.GetCode() == K_NOT_READY || status.GetCode() == K_NOT_FOUND;
+    failedIds.insert(failedIds.end(), response.failed_ids().begin(), response.failed_ids().end());
+    needMigrateIds.insert(needMigrateIds.end(), response.need_data_ids().begin(), response.need_data_ids().end());
+    needWaitIds.insert(needWaitIds.end(), response.need_wait_ids().begin(), response.need_wait_ids().end());
+    needMigrateL2CacheIds.insert(needMigrateL2CacheIds.end(), response.need_l2cache_ids().begin(),
+                                 response.need_l2cache_ids().end());
 }
 
-Status CheckTopologyEndpointConnection(const cluster::MembershipEndpointView *membership, const HostPort &nodeAddr,
-                                       bool allowDirectoryLag)
-{
-    CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership endpoint view is not provided.");
-    cluster::MemberEndpoint endpoint;
-    Status rc = membership->ResolveByAddress(nodeAddr.ToString(), endpoint);
-    if (rc.IsError()) {
-        if (allowDirectoryLag && IsEndpointViewLagStatus(rc)) {
-            return Status::OK();
-        }
-        RETURN_STATUS(rc.GetCode(), "The node " + nodeAddr.ToString() + " could not be found in topology membership.");
-    }
-    if (allowDirectoryLag && endpoint.localAvailability == cluster::EndpointAvailability::UNKNOWN) {
-        return Status::OK();
-    }
-    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE, K_MASTER_TIMEOUT,
-                             "Disconnected from remote node " + nodeAddr.ToString());
-    return Status::OK();
-}
-
-Status CheckTopologyMetaOwnerConnection(const std::string &objectKey, const cluster::PlacementFacade *placement,
-                                        const cluster::MembershipEndpointView *membership,
-                                        const worker::MetadataRouteOptions &routeOptions)
-{
-    CHECK_FAIL_RETURN_STATUS(placement != nullptr, K_NOT_READY, "Topology placement facade is not provided.");
-    HostPort address;
-    RETURN_IF_NOT_OK(ResolveMetaOwner(objectKey, placement, routeOptions, address));
-    return CheckTopologyEndpointConnection(membership, address, false);
-}
 }  // namespace
 
 AsyncPersistenceDelManager::AsyncPersistenceDelManager(std::shared_ptr<ThreadPool> oldVerDelAsyncPool,
@@ -187,10 +164,10 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       workerDevOcManager_(initParam.workerDevOcManager),
       asyncSendManager_(initParam.asyncSendManager),
       metadataSize_(initParam.metadataSize),
-      topologyEngine_(initParam.topologyEngine),
-      topologyPlacement_(initParam.topologyPlacement),
-      topologyMembership_(initParam.topologyMembership),
-      topologyRouteOptions_(initParam.topologyRouteOptions),
+      metadataRouteResolver_(initParam.metadataRouteResolver),
+      endpointPolicy_(initParam.endpointPolicy),
+      exitRequested_(initParam.exitRequested),
+      allowDirectoryLag_(initParam.allowDirectoryLag),
       asyncPersistenceDelManager_(initParam.asyncPersistenceDelManager)
 {
     supportL2Storage_ = GetCurrentStorageType();
@@ -438,7 +415,8 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
                                                redirectInfo.change_meta_ids().end() };
         HostPort redirectMasterAddr;
         RETURN_IF_NOT_OK(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()));
-        auto status = CheckTopologyEndpointConnection(topologyMembership_, redirectMasterAddr, false);
+        CHECK_FAIL_RETURN_STATUS(endpointPolicy_ != nullptr, K_NOT_READY, "Object endpoint policy is unavailable");
+        auto status = endpointPolicy_->CheckEndpoint(redirectMasterAddr, false);
         if (status.IsError()) {
             LOG(WARNING) << "remove meta failed: " << status.ToString();
             failedIds.insert(failedIds.end(), redirectIds.begin(), redirectIds.end());
@@ -470,6 +448,24 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
     return Status::OK();
 }
 
+void WorkerOcServiceCrudCommonApi::HandleRemoveMetaResponse(
+    const Status &result, const std::list<std::string> &objectKeysRemoveList,
+    master::RemoveMetaRspPb &response, const master::RemoveMetaReqPb::Cause removeCause,
+    const std::string &localAddress, const std::unordered_map<std::string, uint64_t> &batchKeyVersions,
+    std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
+    std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds,
+    const std::string &topologyOperationId)
+{
+    if (result.IsError()) {
+        LOG(WARNING) << "remove meta failed: " << result.ToString();
+        failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
+    } else {
+        AppendRemoveMetaResponse(response, failedIds, needMigrateIds, needWaitIds, needMigrateL2CacheIds);
+    }
+    RemoveMetadataFromRedirectMaster(response, removeCause, localAddress, batchKeyVersions, failedIds, needMigrateIds,
+                                     needWaitIds, needMigrateL2CacheIds, topologyOperationId);
+}
+
 void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string> &objectKeys,
     const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
     const master::RemoveMetaReqPb::Cause removeCause, const std::string &localAddress,
@@ -486,8 +482,12 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
         objectKeysRemoveList.emplace_back(objectKey);
         ++count;
         if (count >= objBatch) {
-            auto status = CheckTopologyMetaOwnerConnection(objectKey, topologyPlacement_, topologyMembership_,
-                                                           topologyRouteOptions_);
+            if (endpointPolicy_ == nullptr) {
+                LOG(ERROR) << "CLUSTER_RUNTIME_DEPENDENCY_MISSING component=object_endpoint_policy";
+                failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
+                return;
+            }
+            auto status = endpointPolicy_->CheckMetaOwner(objectKey, false);
             if (status.IsError()) {
                 LOG(WARNING) << "remove meta failed: " << status.ToString();
                 failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
@@ -499,19 +499,9 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
             master::RemoveMetaRspPb response;
             auto result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true, localAddress,
                                      batchKeyVersions, response, topologyOperationId);
-            if (result.IsError()) {
-                LOG(WARNING) << "remove meta failed: " << result.ToString();
-                failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
-            } else {
-                failedIds.insert(failedIds.end(), response.failed_ids().begin(), response.failed_ids().end());
-                needMigrateIds.insert(needMigrateIds.end(), response.need_data_ids().begin(),
-                                      response.need_data_ids().end());
-                needWaitIds.insert(needWaitIds.end(), response.need_wait_ids().begin(), response.need_wait_ids().end());
-                needMigrateL2CacheIds.insert(needMigrateL2CacheIds.end(), response.need_l2cache_ids().begin(),
-                                             response.need_l2cache_ids().end());
-            }
-            RemoveMetadataFromRedirectMaster(response, removeCause, localAddress, batchKeyVersions, failedIds,
-                                             needMigrateIds, needWaitIds, needMigrateL2CacheIds, topologyOperationId);
+            HandleRemoveMetaResponse(result, objectKeysRemoveList, response, removeCause, localAddress,
+                                     batchKeyVersions, failedIds, needMigrateIds, needWaitIds, needMigrateL2CacheIds,
+                                     topologyOperationId);
             objectKeysRemoveList.clear();
             count = 0;
         }
@@ -523,19 +513,8 @@ void WorkerOcServiceCrudCommonApi::BatchRemoveMeta(const std::vector<std::string
         master::RemoveMetaRspPb response;
         Status result = RemoveMeta(objectKeysRemoveList, workerMasterApi, removeCause, version, true,
                                    localAddress, batchKeyVersions, response, topologyOperationId);
-        if (result.IsError()) {
-            LOG(WARNING) << "remove meta failed: " << result.ToString();
-            failedIds.insert(failedIds.end(), objectKeysRemoveList.begin(), objectKeysRemoveList.end());
-        } else {
-            failedIds.insert(failedIds.end(), response.failed_ids().begin(), response.failed_ids().end());
-            needMigrateIds.insert(needMigrateIds.end(), response.need_data_ids().begin(),
-                                  response.need_data_ids().end());
-            needWaitIds.insert(needWaitIds.end(), response.need_wait_ids().begin(), response.need_wait_ids().end());
-            needMigrateL2CacheIds.insert(needMigrateL2CacheIds.end(), response.need_l2cache_ids().begin(),
-                                         response.need_l2cache_ids().end());
-        }
-        RemoveMetadataFromRedirectMaster(response, removeCause, localAddress, batchKeyVersions, failedIds,
-                                         needMigrateIds, needWaitIds, needMigrateL2CacheIds, topologyOperationId);
+        HandleRemoveMetaResponse(result, objectKeysRemoveList, response, removeCause, localAddress, batchKeyVersions,
+                                 failedIds, needMigrateIds, needWaitIds, needMigrateL2CacheIds, topologyOperationId);
     }
 }
 
@@ -546,8 +525,13 @@ void WorkerOcServiceCrudCommonApi::GroupAndRemoveMeta(
     std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds,
     const std::string &topologyOperationId)
 {
-    auto grouped = BuildMetaOwnerRouteGroups(objKeys, topologyPlacement_, topologyRouteOptions_);
-    grouped.AppendFailuresToGroup();
+    if (metadataRouteResolver_ == nullptr) {
+        LOG(ERROR) << "CLUSTER_RUNTIME_DEPENDENCY_MISSING component=metadata_route_resolver";
+        failedIds.insert(failedIds.end(), objKeys.begin(), objKeys.end());
+        return;
+    }
+    auto grouped = metadataRouteResolver_->GroupOwners(objKeys);
+    AppendRouteFailures(grouped);
     auto &objKeysGrpByMaster = grouped.groups;
     for (const auto &item : objKeysGrpByMaster) {
         const HostPort &masterAddr = item.first;

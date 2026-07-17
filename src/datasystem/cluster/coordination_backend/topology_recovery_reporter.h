@@ -2,8 +2,12 @@
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  */
-#ifndef DATASYSTEM_WORKER_COORDINATOR_TOPOLOGY_RECOVERY_REPORTER_H
-#define DATASYSTEM_WORKER_COORDINATOR_TOPOLOGY_RECOVERY_REPORTER_H
+
+/**
+ * Description: Coordinator-backed Worker topology recovery reporter.
+ */
+#ifndef DATASYSTEM_CLUSTER_COORDINATION_BACKEND_TOPOLOGY_RECOVERY_REPORTER_H
+#define DATASYSTEM_CLUSTER_COORDINATION_BACKEND_TOPOLOGY_RECOVERY_REPORTER_H
 
 #include <chrono>
 #include <condition_variable>
@@ -16,15 +20,25 @@
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/util/thread_pool.h"
 
-namespace datasystem::worker {
+namespace datasystem::cluster {
 
+/**
+ * @brief Bounded RPC, jitter and retry policy for one recovery reporter.
+ */
 struct TopologyRecoveryReporterOptions {
+    /** Maximum duration of one report RPC. */
     std::chrono::milliseconds reportTimeout{ 500 };
+    /** Initial retry delay for transient Coordinator failures. */
     std::chrono::milliseconds minRetryBackoff{ 100 };
+    /** Maximum retry delay for transient Coordinator failures. */
     std::chrono::milliseconds maxRetryBackoff{ 5'000 };
+    /** Maximum deterministic per-Worker startup jitter. */
     std::chrono::milliseconds maxInitialJitter{ 1'000 };
 };
 
+/**
+ * @brief Asynchronously report one Worker's last-good topology after Coordinator restart.
+ */
 class TopologyRecoveryReporter final {
 public:
     using SnapshotProvider = std::function<Status(uint64_t &, std::string &)>;
@@ -45,7 +59,15 @@ public:
      * @brief Invoke idempotent Shutdown before releasing the reporter.
      */
     ~TopologyRecoveryReporter();
+
+    /**
+     * @brief Disable copying the reporter's thread and lifecycle state.
+     */
     TopologyRecoveryReporter(const TopologyRecoveryReporter &) = delete;
+
+    /**
+     * @brief Disable copy assignment of the reporter's thread and lifecycle state.
+     */
     TopologyRecoveryReporter &operator=(const TopologyRecoveryReporter &) = delete;
 
     /**
@@ -143,6 +165,6 @@ private:
     std::string jitteredCoordinatorId_;
 };
 
-}  // namespace datasystem::worker
+}  // namespace datasystem::cluster
 
-#endif  // DATASYSTEM_WORKER_COORDINATOR_TOPOLOGY_RECOVERY_REPORTER_H
+#endif  // DATASYSTEM_CLUSTER_COORDINATION_BACKEND_TOPOLOGY_RECOVERY_REPORTER_H

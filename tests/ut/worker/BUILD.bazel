@@ -5,6 +5,38 @@ load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
 
 package(default_visibility = ["//visibility:public"])
 
+ds_cc_test(
+    name = "metadata_route_resolver_test",
+    srcs = ["metadata_route_resolver_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:metadata_route_resolver",
+        "//src/datasystem/worker:worker_master_api_manager_base",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test_library(
+    name = "test_metadata_route",
+    hdrs = ["object_cache/test_metadata_route.h"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:metadata_route_resolver",
+        "//tests/ut/cluster/testing:fake_coordinator_service_proxy",
+    ],
+)
+
+ds_cc_test(
+    name = "object_endpoint_policy_test",
+    srcs = ["object_cache/object_endpoint_policy_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:metadata_route_resolver",
+        "//src/datasystem/worker/object_cache:object_endpoint_policy",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # 驱逐管理器测试公共辅助库
 ds_cc_test_library(
     name = "eviction_manager_common",
@@ -54,11 +86,13 @@ ds_cc_test(
     name = "worker_oc_eviction_test",
     srcs = ["object_cache/worker_oc_eviction_test.cpp"],
     deps = [
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
         "//tests/ut:ut_common",
+        "//tests/ut/worker:test_metadata_route",
         "//tests/ut/worker:eviction_manager_common",
     ],
 )
@@ -67,6 +101,7 @@ ds_cc_test(
     name = "rebalance_worker_test",
     srcs = ["object_cache/rebalance_worker_test.cpp"],
     deps = [
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/shared_memory:common_shared_memory",
@@ -77,6 +112,7 @@ ds_cc_test(
         "//src/datasystem/worker/object_cache:rebalance_candidate_provider",
         "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
         "//tests/ut:ut_common",
+        "//tests/ut/worker:test_metadata_route",
         "//tests/ut/worker:eviction_manager_common",
     ],
 )
@@ -86,11 +122,13 @@ ds_cc_test(
     name = "worker_oc_service_impl_test",
     srcs = ["object_cache/worker_oc_service_impl_test.cpp"],
     deps = [
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",
+        "//tests/ut/worker:test_metadata_route",
     ],
 )
 
@@ -99,6 +137,7 @@ ds_cc_test(
     name = "metadata_recovery_manager_test",
     srcs = ["object_cache/metadata_recovery_manager_test.cpp"],
     deps = [
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
@@ -106,6 +145,7 @@ ds_cc_test(
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_master_oc_api_header",
         "//tests/ut:ut_common",
+        "//tests/ut/worker:test_metadata_route",
     ],
 )
 
@@ -114,11 +154,13 @@ ds_cc_test(
     name = "worker_oc_service_impl_header_test",
     srcs = ["object_cache/worker_oc_service_impl_header_test.cpp"],
     deps = [
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/object_cache:lock",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/common/binmock:binmock",
         "//tests/ut:ut_common",
+        "//tests/ut/worker:test_metadata_route",
     ],
 )
 
@@ -163,6 +205,7 @@ ds_cc_test(
     name = "migrate_data_direct_test",
     srcs = ["object_cache/migrate_data_direct_test.cpp"],
     deps = [
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/cluster:cluster_topology",
@@ -172,6 +215,7 @@ ds_cc_test(
         "//tests/common/binmock",
         "//tests/ut:ut_common",
         "//tests/ut/worker:eviction_manager_common",
+        "//tests/ut/worker:test_metadata_route",
     ],
 )
 
@@ -180,6 +224,7 @@ ds_cc_test(
     name = "migrate_data_handler_test",
     srcs = ["object_cache/migrate_data_handler_test.cpp"],
     deps = [
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/common/rpc:mem_view",
         "//src/datasystem/common/util:memory",
@@ -193,6 +238,7 @@ ds_cc_test(
         "//tests/common/binmock",
         "//tests/ut:ut_common",
         "//tests/ut/worker:eviction_manager_common",
+        "//tests/ut/worker:test_metadata_route",
     ],
 )
 
@@ -210,7 +256,7 @@ ds_cc_test(
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache:object_kv",
-        "//src/datasystem/worker/object_cache:object_meta_route_helper",
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_get_impl",
         "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl_header",
         "//src/datasystem/worker/object_cache:worker_worker_transport_api_header",
@@ -226,6 +272,7 @@ ds_cc_test(
     name = "worker_oc_spill_eviction_test",
     srcs = ["object_cache/worker_oc_spill_eviction_test.cpp"],
     deps = [
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/shared_memory:common_shared_memory",
@@ -237,6 +284,7 @@ ds_cc_test(
         "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
         "//tests/ut:ut_common",
         "//tests/ut/worker:eviction_manager_common",
+        "//tests/ut/worker:test_metadata_route",
     ],
 )
 
@@ -425,7 +473,7 @@ ds_cc_test(
     name = "topology_recovery_reporter_test",
     srcs = ["topology_recovery_reporter_test.cpp"],
     deps = [
-        "//src/datasystem/worker/coordinator:topology_recovery_reporter",
+        "//src/datasystem/cluster/coordination_backend:topology_recovery_reporter",
         "//tests/ut:ut_common",
     ],
 )
@@ -441,11 +489,13 @@ test_suite(
         "coordinator_watch_service_test",
         "topology_recovery_reporter_test",
         "lock_map_test",
+        "metadata_route_resolver_test",
         "metadata_recovery_manager_test",
         "migrate_data_direct_test",
         "migrate_data_handler_test",
         "migrate_data_service_test",
         "node_selector_test",
+        "object_endpoint_policy_test",
         "rebalance_worker_test",
         "shared_page_queue_group_test",
         "shared_page_queue_test",

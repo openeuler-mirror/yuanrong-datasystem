@@ -47,6 +47,7 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "eviction_manager_common.h"
+#include "test_metadata_route.h"
 
 DS_DECLARE_string(spill_directory);
 DS_DECLARE_uint64(spill_file_open_limit);
@@ -76,7 +77,8 @@ public:
         gRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
         akSkManager_ = std::make_shared<AkSkManager>(0);
         DS_ASSERT_OK(akSkManager_->SetClientAkSk(accessKey_, secretKey_));
-        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, workerAddr_, workerAddr_);
+        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, workerAddr_, workerAddr_,
+                                                                     GetTestMetadataRoute());
         DS_ASSERT_OK(evictionManager_->Init(gRefTable_, akSkManager_));
 
         handler_ = WorkerOcSpill::Instance();

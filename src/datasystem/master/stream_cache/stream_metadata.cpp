@@ -37,7 +37,6 @@
 #include "datasystem/master/stream_cache/sc_notify_worker_manager.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
@@ -61,7 +60,7 @@ Status SleepForClearRemotePub(std::chrono::milliseconds duration)
 StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &streamFields,
                                RocksStreamMetaStore *streamMetaStore, std::shared_ptr<AkSkManager> akSkManager,
                                std::shared_ptr<RpcSessionManager> rpcSessionManager,
-                               worker::WorkerTopologyReferences *topologyEngine,
+                               const cluster::MembershipEndpointView *membership,
                                SCNotifyWorkerManager *notifyWorkerManager)
     : streamName_(std::move(streamName)),
       streamFields_(streamFields),
@@ -70,7 +69,7 @@ StreamMetadata::StreamMetadata(std::string streamName, const StreamFields &strea
       alive_(true),
       akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
-      topologyEngine_(topologyEngine),
+      topologyMembership_(membership),
       notifyWorkerManager_(notifyWorkerManager)
 {
 }
@@ -850,10 +849,14 @@ Status StreamMetadata::AutoCleanupIfNeededNotLocked(const HostPort &srcHost)
 
 Status StreamMetadata::CheckWorkerStatus(const HostPort &workerHostPort)
 {
-    if (topologyEngine_ == nullptr) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
+    if (topologyMembership_ == nullptr) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_READY, "Topology membership view is not available.");
     }
-    auto rc = worker::CheckTopologyMemberConnection(topologyEngine_, workerHostPort);
+    cluster::MemberEndpoint endpoint;
+    auto rc = topologyMembership_->ResolveByAddress(workerHostPort.ToString(), endpoint);
+    if (rc.IsOk() && endpoint.localAvailability == cluster::EndpointAvailability::UNREACHABLE) {
+        rc = Status(K_WORKER_ABNORMAL, "Worker endpoint is unreachable");
+    }
     if (rc.IsError()) {
         RETURN_STATUS_LOG_ERROR(K_WORKER_ABNORMAL, FormatString("The worker %s is abnormal, detail: %s",
                                                                 workerHostPort.ToString(), rc.GetMsg()));

@@ -14,6 +14,7 @@
 #include "datasystem/worker/coordinator/coordinator_watch_service_impl.h"
 
 #include "datasystem/common/coordinator/watch_event.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -50,6 +51,67 @@ Status DecodeEvent(const EventPb &pbEvent, cluster::CoordinationEvent &event)
 }
 }  // namespace
 
+Status CoordinatorWatchServiceImpl::BindEventHandler(EventHandler eventHandler)
+{
+    CHECK_FAIL_RETURN_STATUS(eventHandler != nullptr, K_INVALID, "Coordinator watch handler is empty");
+    std::lock_guard<std::mutex> lock(handlerMutex_);
+    CHECK_FAIL_RETURN_STATUS(eventHandler_ == nullptr, K_INVALID, "Coordinator watch handler is already bound");
+    CHECK_FAIL_RETURN_STATUS(activeHandlerCount_ == 0, K_NOT_READY, "Previous Coordinator watch handler is draining");
+    eventHandler_ = std::move(eventHandler);
+    VLOG(1) << "CLUSTER_WATCH ingress handler bound";
+    return Status::OK();
+}
+
+Status CoordinatorWatchServiceImpl::UnbindEventHandlerAndWait(std::chrono::steady_clock::time_point deadline)
+{
+    std::unique_lock<std::mutex> lock(handlerMutex_);
+    eventHandler_ = nullptr;
+    if (!handlerDrained_.wait_until(lock, deadline, [this] { return activeHandlerCount_ == 0; })) {
+        LOG(WARNING) << "CLUSTER_WATCH ingress drain deadline exceeded, active_handlers=" << activeHandlerCount_;
+        RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "Coordinator watch handler drain deadline exceeded");
+    }
+    VLOG(1) << "CLUSTER_WATCH ingress handler unbound and drained";
+    return Status::OK();
+}
+
+Status CoordinatorWatchServiceImpl::AcquireEventHandler(EventHandler &eventHandler)
+{
+    std::lock_guard<std::mutex> lock(handlerMutex_);
+    CHECK_FAIL_RETURN_STATUS(eventHandler_ != nullptr, StatusCode::K_NOT_READY,
+                             "Coordinator watch handler is not bound");
+    eventHandler = eventHandler_;
+    ++activeHandlerCount_;
+    return Status::OK();
+}
+
+void CoordinatorWatchServiceImpl::ReleaseEventHandler()
+{
+    std::lock_guard<std::mutex> lock(handlerMutex_);
+    --activeHandlerCount_;
+    if (activeHandlerCount_ == 0) {
+        handlerDrained_.notify_all();
+    }
+}
+
+Status CoordinatorWatchServiceImpl::DeliverEventBatch(const EventReqPb &req, const EventHandler &eventHandler)
+{
+    Raii releaseHandler([this] { ReleaseEventHandler(); });
+    Status result = Status::OK();
+    for (const auto &pbEvent : req.events()) {
+        cluster::CoordinationEvent event;
+        result = DecodeEvent(pbEvent, event);
+        if (result.IsError()) {
+            break;
+        }
+        VLOG(1) << "CLUSTER_WATCH watch_id=" << req.watch_id() << " event=" << event.ToString();
+        result = eventHandler(req.coordinator_id(), req.watch_id(), std::move(event));
+        if (result.IsError()) {
+            break;
+        }
+    }
+    return result;
+}
+
 Status CoordinatorWatchServiceImpl::HandleEvent(const EventReqPb &req, EventRspPb &rsp)
 {
     (void)rsp;
@@ -65,20 +127,8 @@ Status CoordinatorWatchServiceImpl::HandleEvent(const EventReqPb &req, EventRspP
                                  K_INVALID, "coordinator watch event key is empty");
     }
     EventHandler eventHandler;
-    {
-        std::lock_guard<std::mutex> lock(handlerMutex_);
-        eventHandler = eventHandler_;
-    }
-    CHECK_FAIL_RETURN_STATUS(eventHandler != nullptr, StatusCode::K_NOT_READY,
-                             "coordinator watch handler is not bound");
-
-    for (const auto &pbEvent : req.events()) {
-        cluster::CoordinationEvent event;
-        RETURN_IF_NOT_OK(DecodeEvent(pbEvent, event));
-        VLOG(1) << "HandleEvent watchId: " << req.watch_id() << " event: " << event.ToString();
-        RETURN_IF_NOT_OK(eventHandler(req.coordinator_id(), req.watch_id(), std::move(event)));
-    }
-    return Status::OK();
+    RETURN_IF_NOT_OK(AcquireEventHandler(eventHandler));
+    return DeliverEventBatch(req, eventHandler);
 }
 }  // namespace coordinator
 }  // namespace datasystem

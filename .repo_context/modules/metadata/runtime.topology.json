@@ -22,7 +22,8 @@
     "src/datasystem/cluster",
     "src/datasystem/protos/cluster_topology.proto",
     "src/datasystem/worker/worker_oc_server.cpp",
-    "src/datasystem/worker/worker_topology_references.cpp"
+    "src/datasystem/worker/metadata_route_resolver.cpp",
+    "src/datasystem/worker/object_cache/object_endpoint_policy.cpp"
   ],
   "key_tests": [
     "tests/ut/cluster",

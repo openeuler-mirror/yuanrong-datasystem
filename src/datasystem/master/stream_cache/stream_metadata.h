@@ -28,6 +28,7 @@
 #include "datasystem/common/stream_cache/consumer_meta.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/file_util.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/master/stream_cache/master_worker_sc_api.h"
 #include "datasystem/master/stream_cache/rpc_session_manager.h"
 #include "datasystem/master/stream_cache/sc_notify_worker_manager.h"
@@ -35,7 +36,6 @@
 #include "datasystem/master/stream_cache/topology_manager.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
@@ -44,7 +44,7 @@ class StreamMetadata : public std::enable_shared_from_this<StreamMetadata> {
 public:
     StreamMetadata(std::string streamName, const StreamFields &streamFields, RocksStreamMetaStore *streamMetaStore,
                    std::shared_ptr<AkSkManager> akSkManager, std::shared_ptr<RpcSessionManager> rpcSessionManager,
-                   worker::WorkerTopologyReferences *topologyEngine, SCNotifyWorkerManager *notifyWorkerManager);
+                   const cluster::MembershipEndpointView *membership, SCNotifyWorkerManager *notifyWorkerManager);
 
     ~StreamMetadata();
 
@@ -514,7 +514,7 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
     RetainDataState retainData_;
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
+    const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     SCNotifyWorkerManager *notifyWorkerManager_{ nullptr };
     std::shared_ptr<SCStreamMetrics> scStreamMetrics_{ nullptr };
 };

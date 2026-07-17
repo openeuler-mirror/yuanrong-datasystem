@@ -50,7 +50,8 @@ public:
         allocate_ = std::make_shared<worker::stream_cache::WorkerSCAllocateMemory>(nullptr);
         HostPort hostPort;
         LOG_IF_ERROR(hostPort.ParseString("127.0.0.1:9000"), "ParseString failed");
-        svc_ = std::make_shared<ClientWorkerSCServiceImpl>(hostPort, hostPort, nullptr, nullptr, allocate_);
+        svc_ = std::make_shared<ClientWorkerSCServiceImpl>(hostPort, hostPort, nullptr, nullptr, allocate_,
+                                                           metadataRoute_, membership_);
         svc_->Init();
         CommonTest::SetUp();
     }
@@ -72,6 +73,9 @@ public:
     }
 
 protected:
+    cluster::TopologySnapshotState snapshots_;
+    cluster::MembershipEndpointView membership_{ snapshots_ };
+    worker::MetadataRouteResolver metadataRoute_{ nullptr, worker::MetadataRouteOptions{} };
     std::shared_ptr<WorkerSCAllocateMemory> allocate_;
     std::shared_ptr<ClientWorkerSCServiceImpl> svc_;
 };

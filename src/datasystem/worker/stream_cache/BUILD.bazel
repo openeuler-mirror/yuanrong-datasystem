@@ -324,7 +324,8 @@ ds_cc_library(
         "client_worker_sc_service_impl.h",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         # "//src/datasystem/common/iam:tenant_auth_manager",
         "//src/datasystem/common/inject:common_inject",
@@ -350,7 +351,8 @@ ds_cc_library(
         "client_worker_sc_service_impl.h",
     ],
     deps = [
-        "//src/datasystem/worker:worker_topology_references",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:metadata_route_resolver",
         "client_worker_sc_service_header",
         "//src/datasystem/protos:stream_posix_brpc",
         "//src/datasystem/common:common_constants",

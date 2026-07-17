@@ -25,8 +25,6 @@
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
-#include "datasystem/worker/object_cache/object_meta_route_helper.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -45,19 +43,25 @@ std::shared_ptr<SelectionStrategy> DataMigrator::GetStrategyByType()
 {
     switch (type_) {
         case MigrateType::SPILL:
-            return std::make_shared<SpillNodeSelector>(topologyEngine_, localAddress_);
+            return std::make_shared<SpillNodeSelector>(localAddress_);
         case MigrateType::SCALE_DOWN:
         default:
-            return std::make_shared<ScaleDownNodeSelector>(topologyEngine_, localAddress_);
+            return std::make_shared<ScaleDownNodeSelector>(membership_, localAddress_);
     }
 }
 
 Status DataMigrator::GetStandbyWorker(std::string &standbyWorker) const
 {
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(membership_.GetSnapshot(snapshot));
+    const cluster::Member *standby = nullptr;
     if (type_ == MigrateType::SCALE_DOWN && !taskId_.empty()) {
-        return worker::GetActiveStandbyTopologyMember(topologyEngine_, localAddress_.ToString(), standbyWorker);
+        RETURN_IF_NOT_OK(snapshot->FindNextActiveMember(localAddress_.ToString(), standby));
+    } else {
+        RETURN_IF_NOT_OK(snapshot->FindNextCommittedMember(localAddress_.ToString(), standby));
     }
-    return worker::GetStandbyTopologyMember(topologyEngine_, localAddress_.ToString(), standbyWorker);
+    standbyWorker = standby->identity.address;
+    return Status::OK();
 }
 
 uint64_t DataMigrator::CalculateTotalSize(const std::unordered_set<ImmutableString> &objectKeys,
@@ -117,8 +121,8 @@ Status DataMigrator::Migrate(const std::vector<std::string> &objectKeys,
 
     PerfPoint point(PerfKey::WORKER_MIGRATE_TASK_SUBMIT);
     std::vector<std::future<MigrateDataHandler::MigrateResult>> futures;
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyEngine_);
-    grouped.AppendFailuresToGroup();
+    auto grouped = metadataRoute_.GroupOwners(objectKeys);
+    AppendRouteFailures(grouped);
     auto &objKeysGrpByMaster = grouped.groups;
     INJECT_POINT("DataMigrator.GetMasterAddr", [&objKeysGrpByMaster, &objectKeys]() {
         objKeysGrpByMaster.clear();
@@ -257,7 +261,7 @@ void DataMigrator::SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector
 {
     for (const auto &[slot, objs] : objectsBySlot) {
         HostPort currentTarget;
-        auto status = worker::ResolveTopologyOwner(topologyEngine_, objs[0], currentTarget);
+        auto status = metadataRoute_.ResolveOwner(objs[0], currentTarget);
         if (status.IsError() || currentTarget == localAddress_) {
             status = currentTarget.ParseString(standbyWorker);
             if (status.IsError()) {
@@ -266,7 +270,7 @@ void DataMigrator::SubmitL2CacheTasksBySlot(const std::map<uint32_t, std::vector
             }
         }
 
-        auto strategy = std::make_shared<ScaleDownNodeSelector>(topologyEngine_, localAddress_);
+        auto strategy = std::make_shared<ScaleDownNodeSelector>(membership_, localAddress_);
         LOG(INFO) << FormatString("[MigrateL2Cache] Slot %u (%zu objects) -> %s", slot, objs.size(),
                                   currentTarget.ToString());
         futures.emplace_back(slot, MigrateToTargetNode(objs, currentTarget, strategy, false, slot));
@@ -416,10 +420,8 @@ Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorke
                                                const HostPort &workerAddr)
 {
     if (type_ == MigrateType::SCALE_DOWN && !taskId_.empty()) {
-        CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr && topologyEngine_->membership != nullptr, K_NOT_READY,
-                                 "Topology membership view is unavailable for ScaleIn migration");
         cluster::MemberEndpoint endpoint;
-        RETURN_IF_NOT_OK(topologyEngine_->membership->ResolveByAddress(workerAddr.ToString(), endpoint));
+        RETURN_IF_NOT_OK(membership_.ResolveByAddress(workerAddr.ToString(), endpoint));
         CHECK_FAIL_RETURN_STATUS(endpoint.topologyState == cluster::MemberState::ACTIVE, K_NOT_READY,
                                  "Topology ScaleIn migration target is not ACTIVE: " + workerAddr.ToString());
     }
@@ -429,7 +431,7 @@ Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorke
                                    workerAddr.ToString(), localAddress_.ToString()));
     }
 
-    RETURN_IF_NOT_OK(worker::CheckTopologyMemberConnection(topologyEngine_, workerAddr));
+    RETURN_IF_NOT_OK(endpointPolicy_.CheckEndpoint(workerAddr, false));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_,
                                                            remoteWorkerStub),
                                      "[Migrate Data] Create remote worker api failed.");
@@ -441,7 +443,7 @@ Status DataMigrator::HandleFailedResult()
     if (type_ == MigrateType::SCALE_DOWN) {
         RETURN_OK_IF_TRUE(taskId_.empty());
     } else if (type_ == MigrateType::SPILL) {
-        if (worker::IsLocalTopologyMemberExiting(topologyEngine_)) {
+        if (exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed)) {
             RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Local node is exiting, no need to execute migrate task"));
         }
     }

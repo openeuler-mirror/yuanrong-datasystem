@@ -17,9 +17,11 @@
 /**
  * Description: ST for SDK coordinator-backed service discovery.
  */
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "common.h"
@@ -39,6 +41,8 @@ constexpr char COORDINATOR_SD_HOST_ID_VALUE_MISSING[] = "coordinator_sd_host_id_
 constexpr char COORDINATOR_SD_MISSING_CLUSTER[] = "coordinator_sd_missing_cluster";
 constexpr int COORDINATOR_SD_SELECT_LOOP_COUNT = 5;
 constexpr int COORDINATOR_SD_CONNECT_TIMEOUT_MS = 60000;
+constexpr auto COORDINATOR_RESTART_WAIT = std::chrono::seconds(10);
+constexpr auto COORDINATOR_RETRY_INTERVAL = std::chrono::milliseconds(100);
 }  // namespace
 
 class CoordinatorServiceDiscoveryTest : public OCClientCommon {
@@ -166,6 +170,38 @@ TEST_F(CoordinatorServiceDiscoveryTest, RandomClientCanSetGet)
     std::string valueGet;
     DS_ASSERT_OK(client->Get(key, valueGet));
     ASSERT_EQ(value, valueGet);
+}
+
+TEST_F(CoordinatorServiceDiscoveryTest, RestartedCoordinatorRecoversMembershipAndRouting)
+{
+    std::shared_ptr<KVClient> originalClient;
+    InitKVClientWithCoordinatorServiceDiscovery(originalClient, ServiceAffinityPolicy::RANDOM);
+    const std::string key = "coordinator_restart_route_key";
+    const std::string value = "coordinator_restart_route_value";
+    DS_ASSERT_OK(originalClient->Set(key, value));
+    DS_ASSERT_OK(cluster_->StartNode(COORDINATOR, 0, ""));
+
+    std::shared_ptr<CoordinatorServiceDiscovery> serviceDiscovery;
+    GetCoordinatorServiceDiscovery("", ServiceAffinityPolicy::RANDOM, serviceDiscovery);
+    const auto deadline = std::chrono::steady_clock::now() + COORDINATOR_RESTART_WAIT;
+    bool membershipRecovered = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::vector<std::string> sameHost;
+        std::vector<std::string> other;
+        auto rc = serviceDiscovery->GetAllWorkers(sameHost, other);
+        membershipRecovered = rc.IsOk() && sameHost.size() + other.size() == cluster_->GetWorkerNum();
+        if (membershipRecovered) {
+            break;
+        }
+        std::this_thread::sleep_for(COORDINATOR_RETRY_INTERVAL);
+    }
+    ASSERT_TRUE(membershipRecovered);
+
+    std::shared_ptr<KVClient> recoveredClient;
+    InitKVClientWithCoordinatorServiceDiscovery(recoveredClient, ServiceAffinityPolicy::RANDOM);
+    std::string actual;
+    DS_ASSERT_OK(recoveredClient->Get(key, actual));
+    EXPECT_EQ(actual, value);
 }
 
 TEST_F(CoordinatorServiceDiscoveryTest, RandomSelectsReadyWorker)

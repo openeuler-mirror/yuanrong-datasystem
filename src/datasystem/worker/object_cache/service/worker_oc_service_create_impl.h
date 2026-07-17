@@ -18,7 +18,6 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CREATE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CREATE_IMPL_H
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -28,8 +27,8 @@ namespace object_cache {
 
 class WorkerOcServiceCreateImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
-                              std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress);
+    WorkerOcServiceCreateImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<AkSkManager> akSkManager,
+                              HostPort &localAddress);
 
     /**
      * @brief Create a new object, allocate memory and return the pointer. for shm use only.
@@ -94,8 +93,6 @@ private:
      * @param[in] resp The MultiCreate response.
      */
     void CheckExistence(const MultiCreateReqPb &req, const std::string &tenantId, MultiCreateRspPb &resp);
-
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::atomic<uint64_t> shmIdCounter{0};
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };

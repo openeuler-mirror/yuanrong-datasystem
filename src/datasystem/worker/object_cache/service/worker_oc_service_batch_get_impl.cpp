@@ -58,6 +58,8 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 namespace {
+constexpr int64_t MIGRATE_DATA_TIMEOUT_MS = 200;
+
 
 
 constexpr double US_PER_MS = 1000.0;
@@ -126,30 +128,6 @@ void CleanupWorkerWorkerOcRpcChannel(
     }
 }
 
-bool IsEndpointViewLagStatus(const Status &status)
-{
-    return status.GetCode() == K_NOT_READY || status.GetCode() == K_NOT_FOUND;
-}
-
-Status CheckTopologyEndpointConnection(const cluster::MembershipEndpointView *membership, const HostPort &nodeAddr,
-                                       bool allowDirectoryLag)
-{
-    CHECK_FAIL_RETURN_STATUS(membership != nullptr, K_NOT_READY, "Topology membership endpoint view is not provided.");
-    cluster::MemberEndpoint endpoint;
-    Status rc = membership->ResolveByAddress(nodeAddr.ToString(), endpoint);
-    if (rc.IsError()) {
-        if (allowDirectoryLag && IsEndpointViewLagStatus(rc)) {
-            return Status::OK();
-        }
-        RETURN_STATUS(rc.GetCode(), "The node " + nodeAddr.ToString() + " could not be found in topology membership.");
-    }
-    if (allowDirectoryLag && endpoint.localAvailability == cluster::EndpointAvailability::UNKNOWN) {
-        return Status::OK();
-    }
-    CHECK_FAIL_RETURN_STATUS(endpoint.localAvailability != cluster::EndpointAvailability::UNREACHABLE, K_MASTER_TIMEOUT,
-                             "Disconnected from remote node " + nodeAddr.ToString());
-    return Status::OK();
-}
 }  // namespace
 
 bool WorkerOcServiceGetImpl::CanUpdateCopyMeta(const std::map<ReadKey, LockedEntity> &entries,
@@ -370,12 +348,12 @@ void WorkerOcServiceGetImpl::MarkNeedDeleteForDisconnectedMasters(
 {
     // If the master is disconnected before updating the location, we have to give up retaining the replica, because the
     // master will only manage the replica through the location.
-    auto grouped = BuildMetaOwnerRouteGroups(successIds, topologyPlacement_, topologyRouteOptions_);
-    grouped.AppendFailuresToGroup();
+    auto grouped = metadataRouteResolver_->GroupOwners(successIds);
+    AppendRouteFailures(grouped);
     auto &objKeysGrpByMaster = grouped.groups;
     needSetDeleteObjectKeys.reserve(successIds.size());
     for (const auto &item : objKeysGrpByMaster) {
-        if (CheckTopologyEndpointConnection(topologyMembership_, item.first, false).IsError()) {
+        if (endpointPolicy_ == nullptr || endpointPolicy_->CheckEndpoint(item.first, false).IsError()) {
             needSetDeleteObjectKeys.insert(item.second.begin(), item.second.end());
         }
     }
@@ -709,21 +687,96 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }                                                                                             \
     } while (0)
 
+Status WorkerOcServiceGetImpl::PrepareBatchGetRemoteRequest(
+    const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
+    std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
+    std::unordered_set<std::string> &failedIds, PerfPoint &point, HostPort &hostAddr,
+    Status &checkConnectStatus, BatchGetObjectRemoteReqPb &reqPb)
+{
+    CHECK_FAIL_RETURN_STATUS(!address.empty(), K_RUNTIME_ERROR,
+                             "Fail to get objects from remote worker, no object copy exists.");
+    CHECK_FAIL_RETURN_STATUS(address != localAddress_.ToString(), K_RUNTIME_ERROR,
+                             "Remote getting from self address is invalid");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddr.ParseString(address),
+                                     FormatString("Parse object address %s failed", address));
+    CHECK_FAIL_RETURN_STATUS(endpointPolicy_ != nullptr, K_NOT_READY, "Object endpoint policy is unavailable");
+    checkConnectStatus = endpointPolicy_->CheckEndpoint(hostAddr, false);
+    CHECK_FAIL_RETURN_STATUS(checkConnectStatus.IsOk(), K_RUNTIME_ERROR,
+                             "Fail to get objects from remote worker, no object copy exists.");
+    INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
+    point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
+    RETURN_IF_NOT_OK(ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
+    VLOG(1) << AppendSrcDstForLog(FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
+                                               IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
+                                      localAddress_.ToString(), address);
+    INJECT_POINT("worker.remote_get_failed");
+    point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
+    return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::SendBatchGetRemoteRequest(
+    const std::string &address, const HostPort &hostAddr, const std::shared_ptr<GetRequest> &request,
+    int64_t migrateDataTimeoutMs, uint64_t rpcSlowerThanUs, PerfPoint &point,
+    BatchGetObjectRemoteReqPb &reqPb, BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads)
+{
+    std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
+                                     "Create remote worker api failed.");
+    std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> clientApi;
+    int64_t timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    timeoutMs = request != nullptr ? timeoutMs : std::min(timeoutMs, migrateDataTimeoutMs);
+    point.RecordAndReset(PerfKey::WORKER_BATCH_GET_SEND_AND_RECV);
+    auto inflightGauge =
+        metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
+    inflightGauge.Inc();
+    LogInflightRemoteGetRequestIfNeeded(inflightGauge);
+    Raii inflightGuard([inflightGauge]() { inflightGauge.Dec(); });
+    Timer timer;
+    constexpr int32_t minRetryOnceRpcMs = 1;  // The first level of retryIntervalsMs.
+    auto rc = RetryOnErrorRepent(
+        timeoutMs,
+        [this, &workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, &hostAddr, &request](int32_t) {
+            PerfPoint rpcPoint(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
+            if (workerStub == nullptr) {
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+                    CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
+                    "Recreate remote worker api failed.");
+            }
+            CLEAN_RPC_AND_RETURN_WHEN_ERROR(workerStub->BatchGetObjectRemote(&clientApi), "open stream");
+            CLEAN_RPC_AND_RETURN_WHEN_ERROR(workerStub->BatchGetObjectRemoteWrite(clientApi, reqPb), "write request");
+            auto readRc = clientApi->Read(rspPb);
+            CLEAN_RPC_AND_RETURN_WHEN_ERROR(TryReconnectRemoteWorker(address, readRc), "read response/reconnect");
+            // Multiple spilled objects can share the payload, so keep compatibility with down-level clients here.
+            CLEAN_RPC_AND_RETURN_WHEN_ERROR(clientApi->ReceivePayload(payloads), "receive payload");
+            return Status::OK();
+        },
+        []() { return Status::OK(); },
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
+          StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED, StatusCode::K_URMA_WAIT_TIMEOUT },
+        minRetryOnceRpcMs);
+    const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
+    const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    SLOW_LOG_IF_OR_VLOG(
+        INFO, rpcSlowerThanUs > 0 && elapsedUs >= rpcSlowerThanUs, 1,
+        AppendSrcDstForLog(
+            FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
+                         IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedMs),
+            localAddress_.ToString(), address));
+    return rc;
+}
+
 Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
     const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
     std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
     std::unordered_set<std::string> &failedIds, std::list<GetObjectInfo> &failedMetas)
 {
-    bool isMigrateData = request == nullptr;
-    const int64_t migrateDataTimeoutMs = 200;
-    auto traceConfig = GetServerLatencyTraceConfig();
+    const auto traceConfig = GetServerLatencyTraceConfig();
     successIds.reserve(successIds.size() + infos.size());
     needRetryIds.reserve(needRetryIds.size() + infos.size());
     failedIds.reserve(failedIds.size() + infos.size());
     bool dataSizeChange;
     Status lastRc;
     Status checkConnectStatus;
-    const int32_t minRetryOnceRpcMs = 1;  // The 1st level of retryIntervalsMs
     do {
         dataSizeChange = false;
         BatchGetObjectRemoteReqPb reqPb;
@@ -732,79 +785,18 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
         if (!infos.empty()) {
             reqPb.mutable_requests()->Reserve(static_cast<int>(infos.size()));
         }
-        auto constructAndSend = [&]() {
-            PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND_PRE);
-            // If address is empty, we fallback to get non-batched object from L2 Cache.
-            CHECK_FAIL_RETURN_STATUS(!address.empty(), K_RUNTIME_ERROR,
-                                     FormatString("Fail to get objects from remote worker, no object copy exists."));
-            CHECK_FAIL_RETURN_STATUS(address != localAddress_.ToString(), K_RUNTIME_ERROR,
-                                     "Remote getting from self address is invalid");
-            // If connection status is faulty, we fallback to get individual object from other AZ.
-            // Otherwise we get from the local AZ.
-            HostPort hostAddr;
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddr.ParseString(address),
-                                             FormatString("Parse object address %s failed", address));
-            checkConnectStatus = CheckTopologyEndpointConnection(topologyMembership_, hostAddr, false);
-            CHECK_FAIL_RETURN_STATUS(checkConnectStatus.IsOk(), K_RUNTIME_ERROR,
-                                     FormatString("Fail to get objects from remote worker, no object copy exists."));
-            INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
-            point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
-            RETURN_IF_NOT_OK(
-                ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
-            VLOG(1) << AppendSrcDstForLog(FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
-                                                       IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
-                                          localAddress_.ToString(), address);
-            INJECT_POINT("worker.remote_get_failed");
-            point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
-            std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
-                                             "Create remote worker api failed.");
-            std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> clientApi;
-            int64_t timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
-            timeoutMs = !isMigrateData ? timeoutMs : std::min(timeoutMs, migrateDataTimeoutMs);
-            point.RecordAndReset(PerfKey::WORKER_BATCH_GET_SEND_AND_RECV);
-            auto inflightGauge =
-                metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_INFLIGHT_REMOTE_GET_REQUEST));
-            inflightGauge.Inc();
-            LogInflightRemoteGetRequestIfNeeded(inflightGauge);
-            Raii inflightGuard([inflightGauge]() { inflightGauge.Dec(); });
-            Timer timer;
-            auto rc = RetryOnErrorRepent(
-                timeoutMs,
-                [this, &workerStub, &reqPb, &rspPb, &clientApi, &address, &payloads, &hostAddr, &request](int32_t) {
-                    PerfPoint point(PerfKey::WORKER_BATCH_REMOTE_GET_RPC);
-                    if (workerStub == nullptr) {
-                        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                            CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
-                            "Recreate remote worker api failed.");
-                    }
-
-                    CLEAN_RPC_AND_RETURN_WHEN_ERROR(workerStub->BatchGetObjectRemote(&clientApi), "open stream");
-                    CLEAN_RPC_AND_RETURN_WHEN_ERROR(workerStub->BatchGetObjectRemoteWrite(clientApi, reqPb),
-                                                    "write request");
-                    auto rc = clientApi->Read(rspPb);
-                    CLEAN_RPC_AND_RETURN_WHEN_ERROR(TryReconnectRemoteWorker(address, rc), "read response/reconnect");
-                    // Fallback to downlevel client as multiple objects can be contained in the payload.
-                    // Only spill case would actually send payload via RPC, so performance-wise it would be acceptable.
-                    CLEAN_RPC_AND_RETURN_WHEN_ERROR(clientApi->ReceivePayload(payloads), "receive payload");
-                    return Status::OK();
-                },
-                []() { return Status::OK(); },
-                { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                  StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_URMA_CONNECT_FAILED, StatusCode::K_URMA_WAIT_TIMEOUT },
-                minRetryOnceRpcMs);
-            const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
-            const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
-            SLOW_LOG_IF_OR_VLOG(
-                INFO, traceConfig.rpcSlowerThanUs > 0 && elapsedUs >= traceConfig.rpcSlowerThanUs, 1,
-                AppendSrcDstForLog(
-                    FormatString("[Get] Remote done, count: %d, path: %s, cost: %.3fms", reqPb.requests_size(),
-                                 IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), elapsedMs),
-                    localAddress_.ToString(), address));
-            return rc;
-        };
         PerfPoint point(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND);
-        Status rc = constructAndSend();
+        Status rc;
+        {
+            PerfPoint detailPoint(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND_PRE);
+            HostPort hostAddr;
+            rc = PrepareBatchGetRemoteRequest(address, infos, request, successIds, needRetryIds, failedIds,
+                                              detailPoint, hostAddr, checkConnectStatus, reqPb);
+            if (rc.IsOk()) {
+                rc = SendBatchGetRemoteRequest(address, hostAddr, request, MIGRATE_DATA_TIMEOUT_MS,
+                                               traceConfig.rpcSlowerThanUs, detailPoint, reqPb, rspPb, payloads);
+            }
+        }
         point.Record();
         point.RecordAndReset(PerfKey::WORKER_BATCH_GET_HANDLE_RESPONSE);
         lastRc = ProcessBatchResponse(address, checkConnectStatus, infos, request, rc, rspPb, payloads, successIds,

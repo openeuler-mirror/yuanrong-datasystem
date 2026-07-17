@@ -18,11 +18,13 @@ namespace datasystem::cluster {
 class PlacementFacade final {
 public:
     /**
-     * @brief Bind non-owned Snapshot and algorithm dependencies.
+     * @brief Bind non-owned Snapshot and algorithm dependencies plus immutable local identity.
      * @param[in] snapshots Snapshot state that outlives this facade.
      * @param[in] algorithm Routing algorithm that outlives this facade.
+     * @param[in] localAddress Canonical local member address.
      */
-    PlacementFacade(const TopologySnapshotState &snapshots, const IRoutingAlgorithm &algorithm);
+    PlacementFacade(const TopologySnapshotState &snapshots, const IRoutingAlgorithm &algorithm,
+                    std::string localAddress);
 
     /**
      * @brief Destroy the stateless foreground facade.
@@ -40,47 +42,53 @@ public:
     PlacementFacade &operator=(const PlacementFacade &) = delete;
 
     /**
-     * @brief Locate by key.
-     * @param[in] placementKey Key.
-     * @param[out] decision Decision.
-     * @return Status.
+     * @brief Locate the committed owner for one key on one Snapshot.
+     * @param[in] placementKey Binary-safe placement key.
+     * @param[out] decision Owner address and topology version; unchanged on failure.
+     * @return K_OK, K_NOT_READY, or placement validation status.
      */
     Status Locate(std::string_view placementKey, PlacementDecision &decision) const;
 
     /**
-     * @brief Locate by token.
-     * @param[in] token Token.
-     * @param[out] decision Decision.
-     * @return Status.
+     * @brief Locate the committed owner for one token on one Snapshot.
+     * @param[in] token Placement token.
+     * @param[out] decision Owner address and topology version; unchanged on failure.
+     * @return K_OK, K_NOT_READY, or placement validation status.
      */
     Status LocateToken(uint32_t token, PlacementDecision &decision) const;
 
     /**
-     * @brief Batch locate on one Snapshot.
-     * @param[in] placementKeys Keys.
-     * @param[out] decision Batch decision.
-     * @return Status.
+     * @brief Locate multiple keys against the same Snapshot.
+     * @param[in] placementKeys Binary-safe placement keys.
+     * @param[out] decision Per-key decision/status items and one topology version; unchanged on batch failure.
+     * @return K_OK after evaluating every key; K_INVALID or K_NOT_READY when the batch itself cannot be evaluated.
      */
     Status LocateBatch(const std::vector<std::string_view> &placementKeys, BatchPlacementDecision &decision) const;
 
     /**
-     * @brief Evaluate local redirect.
-     * @param[in] placementKey Key.
-     * @param[in] localAddress Local address.
-     * @param[out] decision Redirect decision.
-     * @return Status.
+     * @brief Evaluate whether this prebound local member should serve, redirect, or wait.
+     * @param[in] placementKey Binary-safe placement key.
+     * @param[out] decision Local/redirect/wait decision; unchanged on failure.
+     * @return K_OK, K_NOT_READY, or placement validation status.
      */
-    Status EvaluateRedirect(std::string_view placementKey, const std::string &localAddress,
-                            RedirectDecision &decision) const;
+    Status EvaluateRedirect(std::string_view placementKey, RedirectDecision &decision) const;
 
     /**
-     * @brief Check committed local ownership.
-     * @param[in] placementKey Key.
-     * @param[in] localAddress Local address.
-     * @param[out] isLocal Result.
-     * @return Status.
+     * @brief Evaluate multiple redirect decisions against the same Snapshot.
+     * @param[in] placementKeys Binary-safe placement keys.
+     * @param[out] decision Batch decisions and one topology version; unchanged on failure.
+     * @return K_OK, K_NOT_READY, or placement validation status.
      */
-    Status IsLocalOwner(std::string_view placementKey, const std::string &localAddress, bool &isLocal) const;
+    Status EvaluateRedirectBatch(const std::vector<std::string_view> &placementKeys,
+                                 BatchRedirectDecision &decision) const;
+
+    /**
+     * @brief Check committed ownership for the prebound local member.
+     * @param[in] placementKey Binary-safe placement key.
+     * @param[out] isLocal Ownership result; unchanged on failure.
+     * @return K_OK, K_NOT_READY, or placement validation status.
+     */
+    Status IsLocalOwner(std::string_view placementKey, bool &isLocal) const;
 
 private:
     /**
@@ -91,8 +99,19 @@ private:
      * @return Status.
      */
     Status LocateInSnapshot(const TopologySnapshot &snapshot, uint32_t token, PlacementDecision &decision) const;
+
+    /**
+     * @brief Evaluate one redirect decision without reloading Snapshot.
+     * @param[in] snapshot Snapshot shared by one foreground operation.
+     * @param[in] placementKey Binary-safe placement key.
+     * @param[out] decision Local/redirect/wait decision.
+     * @return K_OK or placement validation status.
+     */
+    Status EvaluateRedirectInSnapshot(const TopologySnapshot &snapshot, std::string_view placementKey,
+                                      RedirectDecision &decision) const;
     const TopologySnapshotState &snapshots_;
     const IRoutingAlgorithm &algorithm_;
+    const std::string localAddress_;
 };
 
 }  // namespace datasystem::cluster

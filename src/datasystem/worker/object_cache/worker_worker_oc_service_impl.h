@@ -22,14 +22,13 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_send_lane.h"
-#include "datasystem/cluster/coordination_backend/coordination_backend.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/runtime/control_backend_state.h"
 #include "datasystem/protos/worker_object.irpc.pb.h"
 #include "datasystem/protos/worker_object.service.rpc.pb.h"
 #include "datasystem/protos/worker_object.brpc.pb.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/common/object_cache/shm_guard.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -38,20 +37,20 @@ class WorkerOCServiceImpl;
 class WorkerWorkerOCServiceImpl : public WorkerWorkerOCService, public IWorkerWorkerOCService {
 public:
     using BackendObservationProvider = std::function<cluster::ControlBackendObservation()>;
+    using CoordinationAvailabilityProvider = std::function<bool()>;
 
     /**
      * @brief Construct WorkerWorkerOCServiceImpl.
      * @param[in] clientSvc The implementation of worker service.
      * @param[in] akSkManager Used to do AK/SK authenticate.
-     * @param[in] etcdStore Pointer to the Worker-owned EtcdStore.
-     * @param[in] coordinationBackend Worker coordination backend.
-     * @param[in] topologyEngine Borrowed Worker topology dependencies.
+     * @param[in] membership Read-only topology membership view.
+     * @param[in] coordinationAvailable Callback returning local coordination health.
      * @param[in] backendObservationProvider Callback returning current local backend evidence.
      */
     WorkerWorkerOCServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc,
-                              std::shared_ptr<AkSkManager> akSkManager, EtcdStore *etcdStore,
-                              cluster::ICoordinationBackend *coordinationBackend,
-                              worker::WorkerTopologyReferences *topologyEngine,
+                              std::shared_ptr<AkSkManager> akSkManager,
+                              const cluster::MembershipEndpointView &membership,
+                              CoordinationAvailabilityProvider coordinationAvailable,
                               BackendObservationProvider backendObservationProvider);
 
     ~WorkerWorkerOCServiceImpl() override;
@@ -415,9 +414,8 @@ private:
 
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     std::shared_ptr<AkSkManager> akSkManager_;
-    EtcdStore *etcdStore_;  // pointer to EtcdStore
-    cluster::ICoordinationBackend *coordinationBackend_;
-    worker::WorkerTopologyReferences *topologyEngine_;
+    const cluster::MembershipEndpointView &membership_;
+    CoordinationAvailabilityProvider coordinationAvailable_;
     BackendObservationProvider backendObservationProvider_;
     std::shared_ptr<ThreadPool> communicatorThreadPool_{ nullptr };
 };

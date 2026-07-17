@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_MASTER_OBJECT_CACHE_OC_METADATA_MANAGER_H
 #define DATASYSTEM_MASTER_OBJECT_CACHE_OC_METADATA_MANAGER_H
 
+#include <atomic>
 #include <array>
 #include <cstdint>
 #include <iomanip>
@@ -32,10 +33,11 @@
 #include <google/protobuf/repeated_field.h>
 #include <tbb/concurrent_hash_map.h>
 
-#include "datasystem/common/log/log.h"
 #include "datasystem/cluster/executor/storage_scan_plan.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/common/log/log.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/rpc/rpc_server_stream_base.h"
 #include "datasystem/master/object_cache/device/master_dev_oc_manager.h"
@@ -59,7 +61,6 @@
 #include "datasystem/protos/master_object.service.rpc.pb.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -231,13 +232,21 @@ public:
      * @param[in] etcdStore pointer to EtcdStore owned by WorkerOcServer
      * @param[in] persistApi Provides calls to a persistence service through a cloud client.
      * @param[in] masterAddress The address of master.
-     * @param[in] cm Borrowed Worker topology dependencies.
+     * @param[in] placement Borrowed metadata placement capability.
+     * @param[in] membership Borrowed read-only membership capability.
+     * @param[in] centralizedMetadata Whether metadata uses one configured Master.
+     * @param[in] metadataAddress Configured centralized metadata Master address.
+     * @param[in] localAddress Canonical local member address.
+     * @param[in] exitRequested Process-local exit gate.
      * @param[in] workerId The worker id.
      * @param[in] newNode Whether the local Worker is joining for the first time.
      */
     OCMetadataManager(std::shared_ptr<AkSkManager> akSkManager, RocksStore *rocksStore, EtcdStore *etcdStore,
                       std::shared_ptr<PersistenceApi> persistApi = nullptr, const std::string &masterAddress = "",
-                      worker::WorkerTopologyReferences *cm = nullptr, const std::string &workerId = "",
+                      const cluster::PlacementFacade *placement = nullptr,
+                      const cluster::MembershipEndpointView *membership = nullptr, bool centralizedMetadata = false,
+                      HostPort metadataAddress = HostPort(), std::string localAddress = "",
+                      const std::atomic<bool> *exitRequested = nullptr, const std::string &workerId = "",
                       bool newNode = false);
 
     ~OCMetadataManager();
@@ -540,7 +549,7 @@ public:
      * @param[in] serverApi The WriterReader in server side which holds unary rpc socket.
      * @param[in] needReleaseRpc Whether to release master rpc thread when notify worker detele.
      */
-    void DeleteAllCopyMetaImpl(
+    Status DeleteAllCopyMetaImpl(
         const DeleteAllCopyMetaReqPb &request, DeleteAllCopyMetaRspPb &response,
         const std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> &serverApi,
         bool needReleaseRpc);
@@ -551,7 +560,7 @@ public:
      * @param[out] response The rpc response protobuf.
      * @return Status of the call.
      */
-    void DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &request, DeleteAllCopyMetaRspPb &response);
+    Status DeleteAllCopyMeta(const DeleteAllCopyMetaReqPb &request, DeleteAllCopyMetaRspPb &response);
 
     /**
      * @brief Delete metadata and notify other workers to delete these objects synchronously.
@@ -559,7 +568,7 @@ public:
      * @param[in] serverApi The WriterReader in server side which holds unary rpc socket.
      * @return Status of the call.
      */
-    void DeleteAllCopyMetaWithServerApi(
+    Status DeleteAllCopyMetaWithServerApi(
         const DeleteAllCopyMetaReqPb &request,
         const std::shared_ptr<ServerUnaryWriterReader<DeleteAllCopyMetaRspPb, DeleteAllCopyMetaReqPb>> &serverApi);
 
@@ -582,7 +591,7 @@ public:
      * @param[out] newAddr The new redirection address.
      * @param[out] isMigrating Is meta or refs is migrating.
      */
-    void RedirectObjRefs(std::string &objectKey, bool &needRedirect, std::string &newAddr, bool &isMigrating);
+    Status RedirectObjRefs(std::string &objectKey, bool &needRedirect, std::string &newAddr, bool &isMigrating);
 
     /**
      * @brief Check whether object keys requires redirection. Put ids into resp if need, otherwise put ids into
@@ -592,7 +601,7 @@ public:
      * @param[out] objectKeys The object keys no redirection required.
      */
     template <typename Rsp>
-    void RedirectObjRefs(Rsp &response, bool redirect, std::vector<std::string> &objectKeys)
+    Status RedirectObjRefs(Rsp &response, bool redirect, std::vector<std::string> &objectKeys)
     {
         INJECT_POINT("OCMetadataManager.Redirect.ConstructRsp",
                      [&response, &objectKeys](const std::string &addr1, const std::string &addr2) {
@@ -608,12 +617,13 @@ public:
                                  info2->add_change_meta_ids(objectKeys[i]);
                              }
                          }
+                         return Status::OK();
                      });
         response.set_ref_is_moving(false);
         if (!redirect || !FLAGS_enable_redirect) {
             VLOG(1) << "receive redirect req";
             redirect = false;
-            return;
+            return Status::OK();
         }
         std::vector<std::string> objectKeysNoNeedRedirect;
         std::unordered_map<std::string, std::vector<std::string>> objectKeysNeedRedirectInfo;
@@ -621,10 +631,10 @@ public:
             std::string newAddr;
             bool needRedirect = false;
             bool isMigrating = false;
-            RedirectObjRefs(objectKey, needRedirect, newAddr, isMigrating);
+            RETURN_IF_NOT_OK(RedirectObjRefs(objectKey, needRedirect, newAddr, isMigrating));
             if (isMigrating) {
                 response.set_ref_is_moving(isMigrating);
-                return;
+                return Status::OK();
             }
             if (needRedirect) {
                 objectKeysNeedRedirectInfo[newAddr].emplace_back(objectKey);
@@ -640,6 +650,7 @@ public:
                 info->add_change_meta_ids(objectKey);
             }
         }
+        return Status::OK();
     }
 
     /**
@@ -822,7 +833,7 @@ public:
      * @param[in] needReleaseRpc Whether to release master rpc thread when notify worker detele.
      * @return Status of the call.
      */
-    void GDecreaseRefImplWithRemoteClientId(
+    Status GDecreaseRefImplWithRemoteClientId(
         const GDecreaseReqPb &req, GDecreaseRspPb &resp,
         const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> serverApi, bool needReleaseRpc);
 
@@ -833,23 +844,24 @@ public:
      * @param[in] serverApi The WriterReader in server side which holds unary rpc socket.
      * @param[in] needReleaseRpc Whether to release master rpc thread when notify worker detele.
      */
-    void GDecreaseRefImpl(const GDecreaseReqPb &req, GDecreaseRspPb &resp,
-                          const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi,
-                          bool needReleaseRpc);
+    Status GDecreaseRefImpl(
+        const GDecreaseReqPb &req, GDecreaseRspPb &resp,
+        const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi,
+        bool needReleaseRpc);
 
     /**
      * @brief Send request to master to decrease the global reference count.
      * @param[in] req The rpc request protobuf.
      * @param[out] resp The rpc response protobuf.
      */
-    void GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp);
+    Status GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRspPb &resp);
 
     /**
      * @brief Send request to master to decrease the global reference count.
      * @param[in] req The rpc request protobuf.
      * @param[in] serverApi The WriterReader in server side which holds unary rpc socket.
      */
-    void GDecreaseRefWithServerApi(
+    Status GDecreaseRefWithServerApi(
         const GDecreaseReqPb &req,
         const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi);
 
@@ -1321,6 +1333,15 @@ protected:
 private:
     using PrimaryChangeMap = std::unordered_map<std::string, std::unordered_set<std::string>>;
 
+    /**
+     * @brief Apply one validated ReplacePrimary item under its metadata shard lock.
+     * @param[in] req Batch request containing expected and target primary addresses.
+     * @param[in] info Object identity and expected version.
+     * @param[out] rsp Batch response receiving success or expired object ids.
+     */
+    void ReplacePrimaryObject(const ReplacePrimaryReqPb &req,
+                              const ReplacePrimaryReqPb::ObjectInfoPb &info, ReplacePrimaryRspPb &rsp);
+
     struct QueryAndGetMetaSnapshot {
         uint64_t dataSize = 0;
         int64_t version = 0;
@@ -1450,17 +1471,18 @@ private:
      * @param[in] objectKey The key of object.
      * @param[in] primaryAddress The old primary copy address.
      * @param[in] objLocMap The map record object and locations.
-     * @return The new primary copy
+     * @param[out] selectedAddress The selected primary address; unchanged on failure.
+     * @return K_OK or topology membership query status.
      */
-    std::string SelectPrimaryCopyWhenScaleIn(
+    Status SelectPrimaryCopyWhenScaleIn(
         const std::string &objectKey, const std::string &primaryAddress,
-        const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap);
+        const std::unordered_map<std::string, std::vector<std::pair<std::string, AckState>>> &objLocMap,
+        std::string &selectedAddress);
 
     /**
      * @brief Load meta into the cache from the object meta table.
      * @param[in] metas The meta of Objects.
      * @param[in] expireObjects Expired Objects.
-     * @param[in] objLocMap The map of local objects.
      * @param[in] isFromRocksdb Specifies whether to obtain data from rocksdb.
      * the current node should be used as the object expiration time, because the steady_clock of different machines may
      * be different. The question needs to be optimized later.
@@ -1604,8 +1626,8 @@ private:
      * @param[out] response The rpc response protobuf.
      * @param[in] version Object version to remove.
      */
-    void RemoveMetaLocation(const RemoveMetaReqPb &request, const std::string &address, RemoveMetaRspPb &response,
-                            uint64_t version = UINT64_MAX);
+    Status RemoveMetaLocation(const RemoveMetaReqPb &request, const std::string &address, RemoveMetaRspPb &response,
+                              uint64_t version = UINT64_MAX);
 
     /**
      * @brief Remove object meta info for invalidating buffer operation.
@@ -1613,8 +1635,8 @@ private:
      * @param[in] address The worker address of the object.
      * @param[out] response The rpc response protobuf.
      */
-    void RemoveMetaForInvalidateBuffer(const RemoveMetaReqPb &request, const std::string &address,
-                                       RemoveMetaRspPb &response);
+    Status RemoveMetaForInvalidateBuffer(const RemoveMetaReqPb &request, const std::string &address,
+                                         RemoveMetaRspPb &response);
 
     /**
      * @brief GiveUpPrimaryLocation
@@ -1622,7 +1644,8 @@ private:
      * @param[in] address Request address.
      * @param[out] response Rsp of RemoveMetaRspPb
      */
-    void GiveUpPrimaryLocation(const RemoveMetaReqPb &request, const std::string &address, RemoveMetaRspPb &response);
+    Status GiveUpPrimaryLocation(const RemoveMetaReqPb &request, const std::string &address,
+                                 RemoveMetaRspPb &response);
 
     /**
      * @brief Process one object while its current primary gives up ownership.
@@ -1631,10 +1654,11 @@ private:
      * @param[out] response Remove-meta response being accumulated.
      * @param[out] workerForChangePrimaryIds Replacement primary candidates grouped by worker.
      * @param[in] topologyOperation Whether a fenced topology callback initiated the transition.
+     * @return K_OK or topology membership query status.
      */
-    void ProcessGiveUpPrimaryObject(const std::string &objectKey, const std::string &address,
-                                    RemoveMetaRspPb &response, PrimaryChangeMap &workerForChangePrimaryIds,
-                                    bool topologyOperation);
+    Status ProcessGiveUpPrimaryObject(const std::string &objectKey, const std::string &address,
+                                      RemoveMetaRspPb &response, PrimaryChangeMap &workerForChangePrimaryIds,
+                                      bool topologyOperation);
 
     /**
      * @brief ChangePrimaryCopy
@@ -1648,8 +1672,9 @@ private:
      * @brief RetryForFailedIds
      * @param[in] workerForChangePrimaryIds Need to retry change primary addr.
      * @param[in] rsp Rsp of removemeta.
+     * @return K_OK or topology membership query status.
      */
-    void RetryForFailedIds(
+    Status RetryForFailedIds(
         const std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds,
         RemoveMetaRspPb &rsp);
 
@@ -1932,9 +1957,40 @@ private:
      */
     void StartMetaMonitor();
 
-    bool IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std::string &address);
+    /**
+     * @brief Check whether the primary has no usable non-exiting copy.
+     * @param[in] meta Object metadata.
+     * @param[in] address Current primary address.
+     * @param[out] result Check result; unchanged on failure.
+     * @return K_OK or topology membership query status.
+     */
+    Status IsPrimaryCopyWithCopy(const ObjectMeta &meta, const std::string &address, bool &result);
 
-    std::set<std::string> GetValidTopologyWorkers();
+    /**
+     * @brief Read committed member addresses from one topology Snapshot.
+     * Metadata loading precedes TopologyEngine::Start(), so a not-yet-published Snapshot is represented by an empty
+     * set.
+     * @param[out] workers Committed addresses, or an empty set before the first Snapshot; unchanged on other failures.
+     * @return K_OK, or a non-startup topology membership error.
+     */
+    Status GetValidTopologyWorkers(std::set<std::string> &workers) const;
+
+    /**
+     * @brief Read failed member addresses from one topology Snapshot.
+     * @param[out] workers Failed addresses; unchanged on failure.
+     * @return K_OK or topology Snapshot status.
+     */
+    Status GetFailedTopologyWorkers(std::unordered_set<std::string> &workers) const;
+
+    /**
+     * @brief Check whether one member is in PRE_LEAVING state.
+     * @param[in] address Canonical member address.
+     * @param[out] isPreLeaving Check result; unchanged on failure.
+     * @return K_OK or membership resolution status.
+     */
+    Status IsTopologyMemberPreLeaving(const std::string &address, bool &isPreLeaving) const;
+
+    bool IsLocalExitRequested() const;
 
     /**
      * @brief Check if the object is binary.
@@ -1950,6 +2006,10 @@ private:
                                  uint32_t dataFormat, TbbMetaTable::accessor &accessor, bool &isExpired);
 
     std::string masterAddress_;
+
+    const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
+    const std::string localAddress_;
+    const std::atomic<bool> *exitRequested_{ nullptr };
 
     std::shared_ptr<AkSkManager> akSkManager_;
     std::unique_ptr<object_cache::WorkerLocalWorkerOCApi> localApi_;

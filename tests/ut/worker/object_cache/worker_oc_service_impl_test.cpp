@@ -27,6 +27,9 @@
 #include "../../../common/binmock/binmock.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/object_cache/safe_table.h"
+#include "datasystem/common/rpc/rpc_message.h"
+#include "datasystem/common/util/request_context.h"
+#include "datasystem/protos/master_object.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/worker/cluster_event_type.h"
@@ -35,6 +38,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/cluster/routing/placement_facade.h"
 #include "tests/ut/worker/object_cache/test_placement_facade.h"
+#include "tests/ut/worker/object_cache/test_metadata_route.h"
 #define private public
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #undef private
@@ -48,6 +52,9 @@ namespace ut {
 namespace {
 using WorkerTestPlacementFacade = TestPlacementFacade;
 using ClearDataRetryIds = WorkerOcServiceClearDataFlow::ClearDataRetryIds;
+constexpr int64_t kMetaMovingRetryTimeoutMs = 1'000;
+constexpr size_t kExpectedMetaMovingRpcCalls = 2;
+constexpr uint64_t kMetaMovingSuccessVersion = 7;
 
 class FakeWorkerMasterOCApi final : public worker::WorkerLocalMasterOCApi {
 public:
@@ -85,8 +92,8 @@ private:
 
 class FakeWorkerMasterApiManager final : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
 public:
-    explicit FakeWorkerMasterApiManager(HostPort &workerAddr)
-        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr)
+    FakeWorkerMasterApiManager(HostPort &workerAddr, const worker::MetadataRouteResolver &metadataRoute)
+        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr, metadataRoute)
     {
     }
 
@@ -125,8 +132,11 @@ public:
         objectTable_ = std::make_shared<object_cache::ObjectTable>();
         globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
         localAddress_ = HostPort("127.0.0.1", 18481);
-        evictionManager_ =
-            std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddress_, localAddress_, nullptr);
+        DS_ASSERT_OK(topologyRuntime_.Init(localAddress_));
+        endpointPolicy_ = std::make_unique<ObjectEndpointPolicy>(metadataRoute_,
+                                                                 topologyRuntime_.Engine()->Membership());
+        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddress_, localAddress_,
+                                                                     metadataRoute_, nullptr);
         WorkerOcServiceCrudParam param{
             .workerMasterApiManager = nullptr,
             .workerRequestManager = requestManager_,
@@ -138,19 +148,20 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .topologyEngine = nullptr,
-            .topologyPlacement = nullptr,
-            .topologyMembership = nullptr,
-            .topologyRouteOptions = worker::MetadataRouteOptions{},
+            .metadataRouteResolver = &metadataRoute_,
+            .endpointPolicy = endpointPolicy_.get(),
+            .exitRequested = &exitRequested_,
+            .allowDirectoryLag = false,
         };
-        deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, nullptr, nullptr, localAddress_, nullptr);
-        gRefProc_ = std::make_shared<WorkerOcServiceGlobalReferenceImpl>(
-            param, nullptr, globalRefTable_, nullptr, localAddress_);
-        impl_ = std::make_shared<WorkerOCServiceImpl>(localAddress_, localAddress_, objectTable_, nullptr,
-                                                      evictionManager_,
-                                                      nullptr, nullptr, nullptr);
+        deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, nullptr, localAddress_, nullptr);
+        gRefProc_ =
+            std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_, nullptr, localAddress_);
+        impl_ = std::make_shared<WorkerOCServiceImpl>(
+            localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
+            topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
+            topologyRuntime_.Engine()->IsRestart(), false);
         dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
-            objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, nullptr, nullptr,
+            objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, nullptr, metadataRoute_, *endpointPolicy_,
             localAddress_.ToString());
         impl_->InitServiceImpl();
     }
@@ -191,6 +202,11 @@ public:
 protected:
     static constexpr const char *kRecoverMasterAppRefSubscriber = "WorkerOcServiceImplTest.RecoverMasterAppRef";
 
+    WorkerTestPlacementFacade placement_;
+    worker::MetadataRouteResolver metadataRoute_{ &placement_, worker::MetadataRouteOptions{} };
+    ObjectTopologyTestRuntime topologyRuntime_;
+    std::unique_ptr<ObjectEndpointPolicy> endpointPolicy_;
+    std::atomic<bool> exitRequested_{ false };
     HostPort localAddress_;
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable_;
@@ -201,6 +217,72 @@ protected:
     std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc_;
     std::shared_ptr<WorkerOcServiceClearDataFlow> dataClearImpl_;
 };
+
+TEST_F(WorkerOcServiceImplTest, SingleMetaMovingWithoutRedirectInfoRetries)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(kMetaMovingRetryTimeoutMs);
+    master::CreateMetaReqPb request;
+    master::CreateMetaRspPb response;
+    std::shared_ptr<worker::WorkerMasterOCApi> masterApi;
+    size_t rpcCalls = 0;
+    std::function<Status(master::CreateMetaReqPb &, master::CreateMetaRspPb &)> invoke =
+        [&rpcCalls](master::CreateMetaReqPb &, master::CreateMetaRspPb &rsp) {
+            ++rpcCalls;
+            if (rpcCalls == 1) {
+                rsp.set_meta_is_moving(true);
+            } else {
+                rsp.set_version(kMetaMovingSuccessVersion);
+            }
+            return Status::OK();
+        };
+
+    DS_ASSERT_OK(deleteProc_->RedirectRetryWhenMetaMoving(request, response, masterApi, invoke));
+
+    EXPECT_EQ(rpcCalls, kExpectedMetaMovingRpcCalls);
+    EXPECT_EQ(response.version(), kMetaMovingSuccessVersion);
+}
+
+TEST_F(WorkerOcServiceImplTest, BatchMetaMovingWithoutRedirectInfoRetries)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(kMetaMovingRetryTimeoutMs);
+    master::DeleteAllCopyMetaReqPb request;
+    master::DeleteAllCopyMetaRspPb response;
+    size_t rpcCalls = 0;
+    std::function<Status(master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &)> invoke =
+        [&rpcCalls](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &rsp) {
+            ++rpcCalls;
+            rsp.set_meta_is_moving(rpcCalls == 1);
+            return Status::OK();
+        };
+
+    DS_ASSERT_OK(WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(request, response, invoke));
+
+    EXPECT_EQ(rpcCalls, kExpectedMetaMovingRpcCalls);
+    EXPECT_FALSE(response.meta_is_moving());
+}
+
+TEST_F(WorkerOcServiceImplTest, PayloadMetaMovingWithoutRedirectInfoRetries)
+{
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(kMetaMovingRetryTimeoutMs);
+    master::QueryMetaReqPb request;
+    master::QueryMetaRspPb response;
+    std::vector<RpcMessage> payloads;
+    size_t rpcCalls = 0;
+    std::function<Status(master::QueryMetaReqPb &, master::QueryMetaRspPb &, std::vector<RpcMessage> &)> invoke =
+        [&rpcCalls](master::QueryMetaReqPb &, master::QueryMetaRspPb &rsp, std::vector<RpcMessage> &) {
+            ++rpcCalls;
+            rsp.set_meta_is_moving(rpcCalls == 1);
+            return Status::OK();
+        };
+
+    DS_ASSERT_OK(deleteProc_->RedirectRetryWhenMetasMoving(request, response, payloads, invoke));
+
+    EXPECT_EQ(rpcCalls, kExpectedMetaMovingRpcCalls);
+    EXPECT_FALSE(response.meta_is_moving());
+}
 
 TEST_F(WorkerOcServiceImplTest, TestParallelClearData)
 {
@@ -249,13 +331,11 @@ TEST_F(WorkerOcServiceImplTest, CollectDisconnectedClientRefIdsReturnsOnlyMissin
 
 TEST_F(WorkerOcServiceImplTest, CollectMissingSourceMasterRefsReturnsOnlyLiveLocalRefsOwnedBySourceMaster)
 {
-    WorkerTestPlacementFacade placement;
     const HostPort sourceMaster("127.0.0.1", 18481);
     const HostPort peerMaster("127.0.0.1", 18482);
-    placement.SetOwner("already-on-master", sourceMaster);
-    placement.SetOwner("missing-source-master", sourceMaster);
-    placement.SetOwner("missing-peer-master", peerMaster);
-    impl_->topologyPlacement_ = &placement;
+    placement_.SetOwner("already-on-master", sourceMaster);
+    placement_.SetOwner("missing-source-master", sourceMaster);
+    placement_.SetOwner("missing-peer-master", peerMaster);
 
     auto addWorkerRef = [this](const std::string &objectKey, const std::string &clientId) {
         std::vector<std::string> failIncIds;
@@ -274,10 +354,6 @@ TEST_F(WorkerOcServiceImplTest, CollectMissingSourceMasterRefsReturnsOnlyLiveLoc
     EXPECT_THAT(localRefTable, Contains(Key("already-on-master")));
     EXPECT_THAT(localRefTable, Contains(Key("missing-source-master")));
     EXPECT_THAT(localRefTable, Contains(Key("missing-peer-master")));
-    HostPort masterAddr;
-    DS_ASSERT_OK(impl_->GetMetaAddressNotCheckConnection("missing-source-master", masterAddr));
-    EXPECT_EQ(masterAddr.ToString(), sourceMaster.ToString());
-
     auto missingRefs = impl_->CollectMissingSourceMasterRefs(sourceMaster, localRefTable, sourceMasterRefIds);
 
     EXPECT_THAT(missingRefs, UnorderedElementsAre("missing-source-master"));
@@ -297,7 +373,7 @@ TEST_F(WorkerOcServiceImplTest, GIncreaseMasterRefWithLockFailsWhenMasterReplyHa
     response.add_failed_object_keys(failedObject);
     api->SetResponse(response);
 
-    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_);
+    auto apiManager = std::make_shared<FakeWorkerMasterApiManager>(localAddress_, metadataRoute_);
     apiManager->SetApi(api);
     WorkerOcServiceCrudParam param{
         .workerMasterApiManager = apiManager,
@@ -310,12 +386,12 @@ TEST_F(WorkerOcServiceImplTest, GIncreaseMasterRefWithLockFailsWhenMasterReplyHa
         .asyncSendManager = nullptr,
         .metadataSize = 0,
         .persistenceApi = nullptr,
-        .topologyEngine = nullptr,
-        .topologyPlacement = nullptr,
-        .topologyMembership = nullptr,
-        .topologyRouteOptions = worker::MetadataRouteOptions{},
+        .metadataRouteResolver = &metadataRoute_,
+        .endpointPolicy = endpointPolicy_.get(),
+        .exitRequested = &exitRequested_,
+        .allowDirectoryLag = false,
     };
-    WorkerOcServiceGlobalReferenceImpl gRefProc(param, nullptr, globalRefTable_, nullptr, localAddress_);
+    WorkerOcServiceGlobalReferenceImpl gRefProc(param, globalRefTable_, nullptr, localAddress_);
 
     std::vector<std::string> failedIds;
     auto rc = gRefProc.GIncreaseMasterRefWithLock(masterAddress, { successObject, failedObject }, failedIds);

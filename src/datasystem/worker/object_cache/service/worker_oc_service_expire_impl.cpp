@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <utility>
 
-#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -41,11 +40,38 @@
 using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
+namespace {
+Status WaitExpireTasks(std::vector<std::future<Status>> &futures, ObjectAccessRecorder &access)
+{
+    for (auto &future : futures) {
+        future.wait();
+        Status rc = future.get();
+        if (rc.IsError()) {
+            access.Result(rc).Record();
+            return rc;
+        }
+    }
+    return Status::OK();
+}
+
+void FinishExpireRequest(const worker::MetaOwnerRouteGroups &grouped, std::vector<std::string> &absentObjectKeys,
+                         std::unordered_set<std::string> &failedObjectKeys, ExpireRspPb &rsp,
+                         ObjectAccessRecorder &access, const Status &status, Timer &timer)
+{
+    for (const auto &failure : grouped.failures) {
+        absentObjectKeys.emplace_back(ExtractObjectId(failure.first));
+    }
+    failedObjectKeys.insert(absentObjectKeys.begin(), absentObjectKeys.end());
+    *rsp.mutable_failed_object_keys() = { failedObjectKeys.begin(), failedObjectKeys.end() };
+    access.Result(status).Record();
+    GetWorkerTimeCost().Append("Total Expire", static_cast<int64_t>(timer.ElapsedMilliSecond()));
+    LOG(INFO) << FormatString("The operations of Expire %s", GetWorkerTimeCost().GetInfo());
+}
+}  // namespace
 
 WorkerOcServiceExpireImpl::WorkerOcServiceExpireImpl(WorkerOcServiceCrudParam &initParam,
-                                                     worker::WorkerTopologyReferences *topologyEngine,
                                                      std::shared_ptr<AkSkManager> akSkManager)
-    : WorkerOcServiceCrudCommonApi(initParam), topologyEngine_(topologyEngine), akSkManager_(std::move(akSkManager))
+    : WorkerOcServiceCrudCommonApi(initParam), akSkManager_(std::move(akSkManager))
 {
 }
 
@@ -61,7 +87,8 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
     auto access = AccessRecorder::Object(AccessRecorderKey::DS_POSIX_EXPIRE);
     access.ObjectKeysRef(objectKeys).TtlSecond(req.ttl_second());
 
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyEngine_);
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeys);
     auto &objKeysGrpByMaster = grouped.groups;
 
     std::unordered_set<std::string> objKeysExpireFailed;
@@ -102,23 +129,11 @@ Status WorkerOcServiceExpireImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rs
         }
     }
 
-    for (auto &func : futures) {
-        func.wait();
-        Status futureRc = func.get();
-        if (futureRc.IsError()) {
-            access.Result(futureRc).Record();
-            return futureRc;
-        }
+    Status waitRc = WaitExpireTasks(futures, access);
+    if (waitRc.IsError()) {
+        return waitRc;
     }
-    for (const auto &failure : grouped.failures) {
-        absentObjectKeys.emplace_back(ExtractObjectId(failure.first));
-    }
-
-    objKeysExpireFailed.insert(absentObjectKeys.begin(), absentObjectKeys.end());
-    *rsp.mutable_failed_object_keys() = { objKeysExpireFailed.begin(), objKeysExpireFailed.end() };
-    access.Result(rc).Record();
-    GetWorkerTimeCost().Append("Total Expire", static_cast<int64_t>(timer.ElapsedMilliSecond()));
-    LOG(INFO) << FormatString("The operations of Expire %s", GetWorkerTimeCost().GetInfo());
+    FinishExpireRequest(grouped, absentObjectKeys, objKeysExpireFailed, rsp, access, rc, timer);
     return rc;
 }
 

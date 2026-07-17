@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_CLUSTER_MEMBERSHIP_MEMBERSHIP_ENDPOINT_VIEW_H
 #define DATASYSTEM_CLUSTER_MEMBERSHIP_MEMBERSHIP_ENDPOINT_VIEW_H
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <shared_mutex>
@@ -121,7 +122,9 @@ private:
     EndpointAvailability ResolveLocalAvailability(const Member &member, uint64_t topologyVersion) const;
 
     const TopologySnapshotState &snapshots_;
-    // Protects observationsByAddress_.
+    // Mirrors whether observationsByAddress_ is empty so empty-table readers can avoid mutex_.
+    std::atomic<bool> hasObservations_{ false };
+    // Protects observationsByAddress_; writers update hasObservations_ while holding this mutex.
     mutable std::shared_mutex mutex_;
     std::unordered_map<std::string, EndpointObservation> observationsByAddress_;
 };

@@ -184,7 +184,7 @@ public:
 
     /**
      * @brief Report whether the initial membership lease has been published.
-     * @return True after the initial lease transitions to RECOVERING.
+     * @return True after the initial lease is published, independent of later lifecycle transitions.
      */
     bool IsFirstKeepAliveSent() override;
 
@@ -429,6 +429,8 @@ private:
     Thread keepAliveThread_;
     std::atomic<bool> keepAliveExit_{ false };
     std::atomic<bool> keepAliveTimeout_{ false };
+    // Monotonic publication fact; unlike keepAliveValue_, it does not regress when lifecycle advances to READY.
+    std::atomic<bool> firstKeepAliveSent_{ false };
     static constexpr int64_t MS_PER_SECOND = 1'000;
     int64_t keepAliveTtlMs_{ 0 };
 };

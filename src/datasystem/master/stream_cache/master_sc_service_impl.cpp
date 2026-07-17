@@ -31,10 +31,40 @@ DS_DEFINE_int32(master_sc_thread_num, 128, "Max number of threads for (non rpc) 
 
 namespace datasystem {
 namespace master {
+namespace {
+Status ValidateMigrationRequest(const cluster::MembershipEndpointView *membership, const std::string &localAddress,
+                                uint64_t topologyVersion, uint64_t batchEpoch, const std::string &sourceMemberId,
+                                const std::string &targetMemberId, const std::string &sourceAddress)
+{
+    const bool hasFence = topologyVersion != 0 || batchEpoch != 0 || !sourceMemberId.empty() || !targetMemberId.empty();
+    if (!hasFence) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(topologyVersion > 0 && batchEpoch > 0 && !sourceMemberId.empty()
+                                 && !targetMemberId.empty() && !sourceAddress.empty(),
+                             K_INVALID, "Incomplete topology migration RPC fence");
+    CHECK_FAIL_RETURN_STATUS(membership != nullptr && !localAddress.empty(), K_NOT_READY,
+                             "Topology membership is unavailable for migration fence validation");
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(membership->GetSnapshot(snapshot));
+    cluster::TopologyMigrationFence fence{ topologyVersion, batchEpoch,
+                                           { sourceMemberId, sourceAddress },
+                                           { targetMemberId, localAddress } };
+    return snapshot->ValidateMigrationFence(fence);
+}
+}  // namespace
+
 MasterSCServiceImpl::MasterSCServiceImpl(const HostPort &masterAddress, std::shared_ptr<AkSkManager> akSkManager,
-                                         MetadataManagerHolder *metadataManagerHolder)
+                                         MetadataManagerHolder *metadataManagerHolder,
+                                         const cluster::MembershipEndpointView &topologyMembership,
+                                         std::string localAddress, bool isRestart,
+                                         bool controlBackendAvailableAtStartup)
     : MasterSCService(masterAddress),
       akSkManager_(std::move(akSkManager)),
+      topologyMembership_(&topologyMembership),
+      localAddress_(std::move(localAddress)),
+      isRestart_(isRestart),
+      controlBackendAvailableAtStartup_(controlBackendAvailableAtStartup),
       metadataManagerHolder_(metadataManagerHolder)
 {
 }
@@ -52,7 +82,7 @@ Status MasterSCServiceImpl::Init()
     size_t minThreads = std::min<size_t>(MIN_THREADS, FLAGS_master_sc_thread_num);
     RETURN_IF_EXCEPTION_OCCURS(threadPool_ =
                                    std::make_unique<ThreadPool>(minThreads, FLAGS_master_sc_thread_num, "MScThreads"));
-    RETURN_IF_NOT_OK(SCMigrateMetadataManager::Instance().Init(GetLocalAddr(), akSkManager_, topologyEngine_,
+    RETURN_IF_NOT_OK(SCMigrateMetadataManager::Instance().Init(GetLocalAddr(), akSkManager_, topologyMembership_,
                                                                metadataManagerHolder_));
     VLOG(SC_NORMAL_LOG_LEVEL) << "MasterSCServiceImpl initialization success";
     return Status::OK();
@@ -274,19 +304,20 @@ Status MasterSCServiceImpl::QueryGlobalConsumersNum(const QueryGlobalNumReqPb &r
 
 Status MasterSCServiceImpl::StartCheckMetadata()
 {
-    bool isRestart = false;
-    isRestart = topologyEngine_->restart;
-    if (!isRestart || !topologyEngine_->controlBackendAvailableAtStartup) {
+    if (!isRestart_ || !controlBackendAvailableAtStartup_) {
         return Status::OK();
     }
     std::shared_ptr<const cluster::TopologySnapshot> topologySnapshot;
-    RETURN_IF_NOT_OK(worker::LoadTopologySnapshot(topologyEngine_, topologySnapshot));
+    CHECK_FAIL_RETURN_STATUS(topologyMembership_ != nullptr, K_NOT_READY,
+                             "Topology membership view is not available");
+    RETURN_IF_NOT_OK(topologyMembership_->GetSnapshot(topologySnapshot));
     std::vector<HostPort> nodeAddrs;
-    // Why does it get node list from etcd instead of cluster manager or hashring?
-    // Because in case of centralized master, we have no hashring, and can get list from only etcd and cluster manager.
-    // We want a complete list without absence of any running node. Since the list in cluster manager is from etcd,
-    // getting list directly from etcd can avoid possible delay in rpc resulting in miss of nodes.
-    RETURN_IF_NOT_OK(worker::GetTopologyMemberAddresses(topologyEngine_, nodeAddrs));
+    nodeAddrs.reserve(topologySnapshot->CommittedMembers().size());
+    for (const auto *member : topologySnapshot->CommittedMembers()) {
+        HostPort address;
+        RETURN_IF_NOT_OK(address.ParseString(member->identity.address));
+        nodeAddrs.emplace_back(std::move(address));
+    }
     const size_t maxThreadNum = 20;
     // Add a condition to forbid thread pool size creation with minThreadNum 0 to avoid cpp runtime exception.
     if (nodeAddrs.empty()) {
@@ -328,9 +359,9 @@ Status MasterSCServiceImpl::MigrateSCMetadata(const MigrateSCMetadataReqPb &req,
         }
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(copyReq), "AK/SK failed.");
-    RETURN_IF_NOT_OK(worker::ValidateTopologyMigrationRequest(
-        topologyEngine_, req.topology_version(), req.batch_epoch(), req.source_member_id(),
-        req.target_member_id(), req.source_addr()));
+    RETURN_IF_NOT_OK(ValidateMigrationRequest(topologyMembership_, localAddress_, req.topology_version(),
+                                              req.batch_epoch(), req.source_member_id(), req.target_member_id(),
+                                              req.source_addr()));
     std::shared_ptr<SCMetadataManager> scMetadataManager;
     INJECT_POINT("master.MigrateSCMetadata");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetScMetadataManager(scMetadataManager),

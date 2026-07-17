@@ -46,10 +46,10 @@ ds_cc_library(
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/kvstore/rocksdb:replica",
         "//src/datasystem/common/l2cache:persistence_api_header",
+        "//src/datasystem/common/util:common_util",
         "//src/datasystem/master/object_cache:oc_metadata_manager",
         "//src/datasystem/master/stream_cache:sc_metadata_manager",
         "//src/datasystem/cluster:cluster_topology",
-        "//src/datasystem/worker:worker_topology_references",
     ],
 )
 
@@ -62,9 +62,10 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:utils_cc_proto",
         "//src/datasystem/cluster:cluster_topology",
-        "//src/datasystem/worker:worker_topology_references",
         "@com_google_protobuf//:protobuf",
         "@tbb",
     ],
@@ -84,7 +85,6 @@ ds_cc_library(
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/protos:master_heartbeat_brpc",
         "//src/datasystem/protos:master_heartbeat_zmq_cc_proto",
-        "//src/datasystem/worker:worker_topology_references",
     ],
 )
 

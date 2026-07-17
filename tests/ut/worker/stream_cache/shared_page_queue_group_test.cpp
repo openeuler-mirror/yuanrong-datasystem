@@ -39,7 +39,8 @@ public:
         DS_ASSERT_OK(hostPort.ParseString("127.0.0.1:9000"));
         const int pageGroupCount = 8;
         FLAGS_sc_shared_page_group_count = pageGroupCount;
-        svc_ = std::make_shared<ClientWorkerSCServiceImpl>(hostPort, hostPort, nullptr, nullptr, nullptr);
+        svc_ = std::make_shared<ClientWorkerSCServiceImpl>(hostPort, hostPort, nullptr, nullptr, nullptr,
+                                                           metadataRoute_, membership_);
         svc_->Init();
         pageQueueGroup_ = std::make_unique<SharedPageQueueGroup>(hostPort, nullptr, svc_.get());
         CommonTest::SetUp();
@@ -54,6 +55,9 @@ public:
     }
 
 protected:
+    cluster::TopologySnapshotState snapshots_;
+    cluster::MembershipEndpointView membership_{ snapshots_ };
+    worker::MetadataRouteResolver metadataRoute_{ nullptr, worker::MetadataRouteOptions{} };
     std::unique_ptr<SharedPageQueueGroup> pageQueueGroup_;
     std::shared_ptr<ClientWorkerSCServiceImpl> svc_;
 };

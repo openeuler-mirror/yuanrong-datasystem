@@ -69,15 +69,19 @@ template class MemAllocRequestList<CreateLobPageRspPb, CreateLobPageReqPb>;
 ClientWorkerSCServiceImpl::ClientWorkerSCServiceImpl(HostPort serverAddr, HostPort masterAddr,
                                                      master::MasterSCServiceImpl *masterSCService,
                                                      std::shared_ptr<AkSkManager> akSkManager,
-                                                     std::shared_ptr<WorkerSCAllocateMemory> manager)
+                                                     std::shared_ptr<WorkerSCAllocateMemory> manager,
+                                                     const worker::MetadataRouteResolver &metadataRoute,
+                                                     const cluster::MembershipEndpointView &membership)
     : localWorkerAddress_(std::move(serverAddr)),
       masterAddress_(std::move(masterAddr)),
       scAllocateManager_(std::move(manager)),
       akSkManager_(std::move(akSkManager)),
-      interrupt_(false)
+      interrupt_(false),
+      metadataRoute_(metadataRoute),
+      membership_(membership)
 {
-    workerMasterApiManager_ =
-        std::make_shared<WorkerMasterSCApiManager>(localWorkerAddress_, akSkManager_, masterSCService);
+    workerMasterApiManager_ = std::make_shared<WorkerMasterSCApiManager>(localWorkerAddress_, akSkManager_,
+                                                                        masterSCService, metadataRoute_);
 }
 
 Status ClientWorkerSCServiceImpl::Init()
@@ -232,6 +236,105 @@ Status ClientWorkerSCServiceImpl::CreateProducerHandleSend(std::shared_ptr<Worke
         GetRequestContext()->scTimeoutDuration.CalcRealRemainingTime(), std::move(createProducerFn));
 }
 
+void ClientWorkerSCServiceImpl::CleanupCreateProducer(
+    const std::string &namespaceUri, const std::string &producerId,
+    const std::shared_ptr<StreamManagerWithLock> &streamMgrWithLock,
+    const std::shared_ptr<StreamManager> &streamMgr, bool blockMemoryReclaim, bool rollbackProducer)
+{
+    if (blockMemoryReclaim) {
+        streamMgr->UnblockMemoryReclaim();
+    }
+    // Unblock reclaim first because CloseProducer may trigger early reclaim.
+    if (rollbackProducer) {
+        LOG_IF_ERROR(streamMgr->CloseProducer(producerId, true), "StreamManager rollback close producer failed");
+    }
+    streamMgrWithLock->CleanUp(std::bind(&ClientWorkerSCServiceImpl::EraseFromStreamMgrDictWithoutLck, this,
+                                         namespaceUri, std::placeholders::_1));
+}
+
+Status ClientWorkerSCServiceImpl::PrepareExistingProducerStream(
+    bool streamExisted, const Optional<StreamFields> &streamFields,
+    const std::shared_ptr<StreamManager> &streamMgr, bool &blockMemoryReclaim)
+{
+    if (!streamExisted) {
+        return Status::OK();
+    }
+    streamMgr->BlockMemoryReclaim();
+    blockMemoryReclaim = true;
+    const bool existsLocalConsumer = streamMgr->CheckConsumerExist(localWorkerAddress_.ToString()).IsOk();
+    const bool reserveShm = !StreamManager::EnableSharedPage(streamFields->streamMode_) || existsLocalConsumer;
+    return PostCreateStreamManager(streamMgr, streamFields, reserveShm);
+}
+
+void ClientWorkerSCServiceImpl::CommitCreatedProducer(
+    const std::string &clientId, const std::string &namespaceUri, const std::string &producerId,
+    const std::shared_ptr<StreamManagerWithLock> &streamMgrWithLock, CreatePubSubCtrl::Accessor &createLock)
+{
+    {
+        std::unique_lock<std::shared_timed_mutex> lock(clearMutex_);
+        (void)clientProducers_[clientId].emplace_back(namespaceUri, producerId);
+    }
+    streamMgrWithLock->needCleanUp = false;
+    createStreamLocks_.BlockingErase(createLock);
+}
+
+Status ClientWorkerSCServiceImpl::RegisterFirstProducer(
+    bool firstProducer, const std::string &namespaceUri, const std::string &producerId,
+    const Optional<StreamFields> &streamFields, const CreateProducerReqPb &req,
+    const std::shared_ptr<StreamManager> &streamMgr, bool &rollbackProducer)
+{
+    if (!firstProducer) {
+        return Status::OK();
+    }
+    LOG(INFO) << FormatString("[%s, S:%s, P:%s] First CreateProducer request sending to master.", LogPrefix(),
+                              namespaceUri, producerId);
+    std::shared_ptr<WorkerMasterSCApi> api;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, api),
+                                     "Get WorkerMasterApi failed of " + namespaceUri);
+    Status rc = CreateProducerHandleSend(api, namespaceUri, streamFields);
+    if (rc.IsError() && rc.GetCode() != StatusCode::K_DUPLICATED) {
+        LOG(ERROR) << FormatString("Create Producer [%s] failed in master %s: %s", producerId, api->Address(),
+                                   rc.GetMsg());
+        rollbackProducer = true;
+        return rc;
+    }
+    streamMgr->InitRetainData(req.retain_num_consumer());
+    LOG(INFO) << FormatString("[%s, S:%s, P:%s] CreateProducer success on master %s.", LogPrefix(), namespaceUri,
+                              producerId, api->Address());
+    return Status::OK();
+}
+
+Status ClientWorkerSCServiceImpl::FillCreateProducerResponse(
+    const std::string &namespaceUri, const std::string &producerId, const Optional<StreamFields> &streamFields,
+    const std::shared_ptr<StreamManager> &streamMgr,
+    DataVerificationHeader::SenderProducerNo senderProducerNo, uint64_t streamNo,
+    const CreateProducerReqPb &req, CreateProducerRspPb &rsp)
+{
+    ShmView cursor;
+    RETURN_IF_NOT_OK(streamMgr->AddCursorForProducer(producerId, cursor));
+    if (StreamManager::EnableSharedPage(streamFields->streamMode_)) {
+        ShmView metadata;
+        RETURN_IF_NOT_OK(streamMgr->GetOrCreateShmMeta(TenantAuthManager::Instance()->ExtractTenantId(namespaceUri),
+                                                       metadata));
+        auto *view = rsp.mutable_stream_meta_view();
+        view->set_fd(metadata.fd);
+        view->set_mmap_size(metadata.mmapSz);
+        view->set_size(metadata.sz);
+        view->set_offset(metadata.off);
+    }
+    auto *view = rsp.mutable_page_view();
+    view->set_fd(cursor.fd);
+    view->set_mmap_size(cursor.mmapSz);
+    view->set_offset(cursor.off);
+    view->set_size(cursor.sz);
+    rsp.set_enable_data_verification(FLAGS_enable_stream_data_verification);
+    rsp.set_sender_producer_no(senderProducerNo);
+    rsp.set_stream_no(streamNo);
+    rsp.set_shared_page_size(FLAGS_sc_shared_page_size_mb * MB_TO_BYTES);
+    rsp.set_enable_shared_page(StreamManager::EnableSharedPage(static_cast<StreamMode>(req.stream_mode())));
+    return Status::OK();
+}
+
 Status ClientWorkerSCServiceImpl::CreateProducerImpl(const std::string &namespaceUri, const CreateProducerReqPb &req,
                                                      CreateProducerRspPb &rsp)
 {
@@ -260,30 +363,13 @@ Status ClientWorkerSCServiceImpl::CreateProducerImpl(const std::string &namespac
     bool rollbackProducer = false;
     auto streamMgr = streamMgrWithLock->mgr_;
     uint64_t streamNo = streamMgr->GetStreamNo();
-    // If we hit any error below, we will erase the StreamManager from the tbb provided it is this thread
-    // that creates the stream manager. We will need an exclusive accessor
     Raii raii([this, &namespaceUri, &streamMgrWithLock, &streamMgr, &blockMemoryReclaim, &rollbackProducer,
                &producerId]() {
-        if (blockMemoryReclaim) {
-            streamMgr->UnblockMemoryReclaim();
-        }
-        // Unblock reclaim first, because CloseProducer can trigger early reclaim.
-        if (rollbackProducer) {
-            LOG_IF_ERROR(streamMgr->CloseProducer(producerId, true), "StreamManager rollback close producer failed");
-        }
-        streamMgrWithLock->CleanUp(std::bind(&ClientWorkerSCServiceImpl::EraseFromStreamMgrDictWithoutLck, this,
-                                             namespaceUri, std::placeholders::_1));
+        CleanupCreateProducer(namespaceUri, producerId, streamMgrWithLock, streamMgr, blockMemoryReclaim,
+                              rollbackProducer);
     });
-    if (streamExisted) {
-        // An existing stream was found.
-        // Serialize with EarlyReclaim() so our reserved pages will not be reclaimed.
-        streamMgr->BlockMemoryReclaim();
-        blockMemoryReclaim = true;
-        bool existsLocalConsumer = streamMgr->CheckConsumerExist(localWorkerAddress_.ToString()).IsOk();
-        bool reserveShm = !StreamManager::EnableSharedPage(streamFields->streamMode_) || existsLocalConsumer;
-        RETURN_IF_NOT_OK(PostCreateStreamManager(streamMgr, streamFields, reserveShm));
-    }
-    bool firstProducer = (streamMgr->GetLocalProducerCount() == 0);
+    RETURN_IF_NOT_OK(PrepareExistingProducerStream(streamExisted, streamFields, streamMgr, blockMemoryReclaim));
+    const bool firstProducer = (streamMgr->GetLocalProducerCount() == 0);
     CHECK_FAIL_RETURN_STATUS(firstProducer || streamFields->streamMode_ != StreamMode::SPSC, K_INVALID,
                              FormatString("There can be at most one producer in this stream mode: %d.",
                                           static_cast<int32_t>(streamFields->streamMode_)));
@@ -295,57 +381,12 @@ Status ClientWorkerSCServiceImpl::CreateProducerImpl(const std::string &namespac
     // We will let go the accessor at this point to prevent deadlock. The master may send back a SyncConsumerNode
     // rpc back to this worker if this is the first producer. We are still protected by the createLock
     streamMgrWithLock->Release();
-    if (firstProducer) {
-        LOG(INFO) << FormatString("[%s, S:%s, P:%s] First CreateProducer request sending to master.", LogPrefix(),
-                                  namespaceUri, producerId);
-        auto api = workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, topologyPlacement_, topologyRouteOptions_);
-        CHECK_FAIL_RETURN_STATUS(api != nullptr, K_RUNTIME_ERROR, "Get WorkerMasterApi failed of " + namespaceUri);
-        // Only first producer sends CreateProducer request, so use local address as producer id
-        Status rc = CreateProducerHandleSend(api, namespaceUri, streamFields);
-        if (rc.IsError() && rc.GetCode() != StatusCode::K_DUPLICATED) {
-            LOG(ERROR) << FormatString("Create Producer [%s] failed in master %s: %s", producerId, api->Address(),
-                                       rc.GetMsg());
-            // If fail on master, we should roll back this operation
-            rollbackProducer = true;
-            return rc;
-        }
-        streamMgr->InitRetainData(req.retain_num_consumer());
-        LOG(INFO) << FormatString("[%s, S:%s, P:%s] CreateProducer success on master %s.", LogPrefix(), namespaceUri,
-                                  producerId, api->Address());
-    }
+    RETURN_IF_NOT_OK(RegisterFirstProducer(firstProducer, namespaceUri, producerId, streamFields, req, streamMgr,
+                                           rollbackProducer));
+    RETURN_IF_NOT_OK(FillCreateProducerResponse(namespaceUri, producerId, streamFields, streamMgr, senderProducerNo,
+                                                streamNo, req, rsp));
 
-    ShmView shmViewOfCursor, shmViewOfStreamMeta;
-    RETURN_IF_NOT_OK(streamMgr->AddCursorForProducer(producerId, shmViewOfCursor));
-
-    if (StreamManager::EnableSharedPage(streamFields->streamMode_)) {
-        RETURN_IF_NOT_OK(streamMgr->GetOrCreateShmMeta(TenantAuthManager::Instance()->ExtractTenantId(namespaceUri),
-                                                       shmViewOfStreamMeta));
-        ShmViewPb shmViewOfStreamMetaPb;
-        shmViewOfStreamMetaPb.set_fd(shmViewOfStreamMeta.fd);
-        shmViewOfStreamMetaPb.set_mmap_size(shmViewOfStreamMeta.mmapSz);
-        shmViewOfStreamMetaPb.set_size(shmViewOfStreamMeta.sz);
-        shmViewOfStreamMetaPb.set_offset(shmViewOfStreamMeta.off);
-        rsp.mutable_stream_meta_view()->CopyFrom(shmViewOfStreamMetaPb);
-    }
-
-    ShmViewPb shmViewOfCursorPb;
-    shmViewOfCursorPb.set_fd(shmViewOfCursor.fd);
-    shmViewOfCursorPb.set_mmap_size(shmViewOfCursor.mmapSz);
-    shmViewOfCursorPb.set_offset(shmViewOfCursor.off);
-    shmViewOfCursorPb.set_size(shmViewOfCursor.sz);
-    rsp.mutable_page_view()->CopyFrom(shmViewOfCursorPb);
-    rsp.set_enable_data_verification(FLAGS_enable_stream_data_verification);
-    rsp.set_sender_producer_no(senderProducerNo);
-    rsp.set_stream_no(streamNo);
-    rsp.set_shared_page_size(FLAGS_sc_shared_page_size_mb * MB_TO_BYTES);
-    rsp.set_enable_shared_page(StreamManager::EnableSharedPage(static_cast<StreamMode>(req.stream_mode())));
-
-    {
-        std::unique_lock<std::shared_timed_mutex> lock(clearMutex_);
-        (void)clientProducers_[clientId].emplace_back(namespaceUri, producerId);
-    }
-    streamMgrWithLock->needCleanUp = false;
-    createStreamLocks_.BlockingErase(createLock);
+    CommitCreatedProducer(clientId, namespaceUri, producerId, streamMgrWithLock, createLock);
     LOG(INFO) << FormatString("[%s, S:%s, P:%s] CreateProducer success.", LogPrefix(), namespaceUri, producerId);
     return Status::OK();
 }
@@ -480,8 +521,9 @@ Status ClientWorkerSCServiceImpl::CloseProducerImpl(const std::string &producerI
     bool lastProducer = (streamMgr->GetLocalProducerCount() == 1);
     // We only need to inform master of producer close on last local producer
     if (notifyMaster && lastProducer) {
-        auto api = workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_);
-        if (api != nullptr) {
+        std::shared_ptr<WorkerMasterSCApi> api;
+        auto rc = workerMasterApiManager_->GetWorkerMasterApi(streamName, api);
+        if (rc.IsOk()) {
             std::list<std::string> streamList;
             streamList.emplace_back(streamName);
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
@@ -591,9 +633,9 @@ Status ClientWorkerSCServiceImpl::SendBatchedCloseProducerReq(std::set<std::stri
             // We only send a CloseProducer Request on last producer close
             VLOG(SC_NORMAL_LOG_LEVEL) << FormatString("[S:%s] Sending close producer to master. Attempt: %d",
                                                       streamName, numRetries);
-            auto api =
-                workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_);
-            if (api != nullptr) {
+            std::shared_ptr<WorkerMasterSCApi> api;
+            masterCloseRcPerCall = workerMasterApiManager_->GetWorkerMasterApi(streamName, api);
+            if (masterCloseRcPerCall.IsOk()) {
                 // force close is true
                 std::list<std::string> streamList;
                 streamList.emplace_back(streamName);
@@ -715,7 +757,7 @@ Status ClientWorkerSCServiceImpl::SubscribeHandleSend(std::shared_ptr<StreamMana
     auto subscribeFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_, api),
+            workerMasterApiManager_->GetWorkerMasterApi(streamName, api),
             "Getting master api failed. stream name = " + streamName);
         masterAddress = api->Address();
         master::SubscribeReqPb masterReq;
@@ -924,7 +966,7 @@ Status ClientWorkerSCServiceImpl::CloseConsumerImpl(const std::string &consumerI
             // We don't care about lastAckCursor change when close consumer, so we set it as 0.
             std::shared_ptr<WorkerMasterSCApi> api;
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-                workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_, api),
+                workerMasterApiManager_->GetWorkerMasterApi(streamName, api),
                 "Getting master api failed. stream name = " + streamName);
             masterAddr = api->Address();
             master::CloseConsumerReqPb req;
@@ -1199,7 +1241,7 @@ Status ClientWorkerSCServiceImpl::DeleteStreamHandleSend(const std::string &stre
     auto deleteFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerMasterApiManager_->GetWorkerMasterApi(streamName, topologyPlacement_, topologyRouteOptions_, api),
+            workerMasterApiManager_->GetWorkerMasterApi(streamName, api),
             "Getting master api failed. stream name = " + streamName);
         master::DeleteStreamReqPb masterReq;
         masterReq.set_stream_name(streamName);
@@ -1239,7 +1281,7 @@ Status ClientWorkerSCServiceImpl::QueryGlobalProducersNumImpl(const QueryGlobalN
     auto queryFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, topologyPlacement_, topologyRouteOptions_, api),
+            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, api),
             "Getting master api failed. stream name = " + namespaceUri);
         master::QueryGlobalNumReqPb masterReq;
         masterReq.set_stream_name(namespaceUri);
@@ -1280,7 +1322,7 @@ Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNumImpl(const QueryGlobalN
     auto queryFn = [&] {
         std::shared_ptr<WorkerMasterSCApi> api;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, topologyPlacement_, topologyRouteOptions_, api),
+            workerMasterApiManager_->GetWorkerMasterApi(namespaceUri, api),
             "Getting master api failed. stream name = " + namespaceUri);
         master::QueryGlobalNumReqPb masterReq;
         masterReq.set_stream_name(namespaceUri);
@@ -1633,7 +1675,7 @@ bool ClientWorkerSCServiceImpl::CheckConditionsForStream(const std::string &stre
 {
     if (!masterAddr.empty()) {
         HostPort masterAddress;
-        auto rc = worker::ResolveTopologyOwner(topologyEngine_, streamName, masterAddress);
+        auto rc = metadataRoute_.ResolveOwner(streamName, masterAddress);
         if (rc.IsError()) {
             LOG(ERROR) << rc.ToString();
             return false;
@@ -1648,9 +1690,13 @@ Status ClientWorkerSCServiceImpl::CheckConnection(const std::string &streamName)
 {
     auto func = [&] {
         HostPort owner;
-        Status status = worker::ResolveTopologyOwner(topologyEngine_, streamName, owner);
+        Status status = metadataRoute_.ResolveOwner(streamName, owner);
         if (status.IsOk()) {
-            status = worker::CheckTopologyMemberConnection(topologyEngine_, owner);
+            cluster::MemberEndpoint endpoint;
+            status = membership_.ResolveByAddress(owner.ToString(), endpoint);
+            if (status.IsOk() && endpoint.localAvailability == cluster::EndpointAvailability::UNREACHABLE) {
+                status = Status(K_MASTER_TIMEOUT, "Disconnected from cluster member " + owner.ToString());
+            }
         }
         if (status.IsError()) {
             std::stringstream ss;

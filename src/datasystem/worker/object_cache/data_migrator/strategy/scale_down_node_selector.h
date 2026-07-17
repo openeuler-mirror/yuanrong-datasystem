@@ -17,10 +17,11 @@
 #ifndef DATASYSTEM_MIGRATE_DATA_SCALE_DOWN_NODE_SELECTOR_H
 #define DATASYSTEM_MIGRATE_DATA_SCALE_DOWN_NODE_SELECTOR_H
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
+#include "datasystem/common/util/net_util.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/selection_strategy.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -55,8 +56,8 @@ public:
         FINAL
     };
 
-    ScaleDownNodeSelector(worker::WorkerTopologyReferences *topologyEngine, HostPort &localAddress)
-        : topologyEngine_(topologyEngine),
+    ScaleDownNodeSelector(const cluster::MembershipEndpointView &membership, HostPort &localAddress)
+        : membership_(membership),
           localAddress_(localAddress),
           currentStage_(Stage::FIRST),
           currentDiskStage_(Stage::FIRST)
@@ -113,7 +114,7 @@ private:
     std::unordered_set<std::string> visitedAddresses_;
     std::unordered_set<std::string> visitedAddressesForDisk_;
 
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
+    const cluster::MembershipEndpointView &membership_;
     HostPort &localAddress_;
 
     Stage currentStage_;

@@ -50,6 +50,7 @@
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "eviction_manager_common.h"
+#include "test_metadata_route.h"
 
 using namespace datasystem::object_cache;
 using namespace ::testing;
@@ -104,7 +105,9 @@ TEST_F(WorkerRemoteWorkerRpcDiagnosticTest, MigrateDataDirectSessionNullReportsR
 TEST_F(ScaleDownNodeSelectorTest, TestCheckCondition)
 {
     HostPort address;
-    ScaleDownNodeSelector migrateStrategy(nullptr, address);
+    ObjectTopologyTestRuntime topologyRuntime;
+    DS_ASSERT_OK(topologyRuntime.Init(HostPort("127.0.0.1", 18481)));
+    ScaleDownNodeSelector migrateStrategy(topologyRuntime.Engine()->Membership(), address);
     MigrateDataRspPb rsp;
 
     datasystem::inject::Set("ScaleDownNodeSelector.CheckCondition", "call(0, 0, 60, 0)");
@@ -251,9 +254,10 @@ public:
     virtual void Init()
     {
         hostPort_ = HostPort("127.0.0.1", 18481);
+        DS_ASSERT_OK(topologyRuntime_.Init(hostPort_));
         remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, hostPort_, nullptr);
         objectTable_ = std::make_shared<ObjectTable>();
-        strategy_ = std::make_shared<ScaleDownNodeSelector>(nullptr, hostPort_);
+        strategy_ = std::make_shared<ScaleDownNodeSelector>(topologyRuntime_.Engine()->Membership(), hostPort_);
     }
 
     void CreateObjects(const std::string &prefix, uint64_t dataSize, uint32_t count,
@@ -317,6 +321,7 @@ public:
     Status MockMigrateSmallData2(MigrateDataReqPb &req, const std::vector<MemView> &payloads, MigrateDataRspPb &rsp);
 
 protected:
+    ObjectTopologyTestRuntime topologyRuntime_;
     HostPort hostPort_;
 
     MigrateType type_ = MigrateType::SCALE_DOWN;
@@ -697,7 +702,7 @@ public:
         hostPort_ = HostPort("127.0.0.1", 18481);
         remoteApi_ = std::make_shared<WorkerRemoteWorkerOCApi>(hostPort_, hostPort_, nullptr);
         objectTable_ = std::make_shared<ObjectTable>();
-        strategy_ = std::make_shared<SpillNodeSelector>(nullptr, hostPort_);
+        strategy_ = std::make_shared<SpillNodeSelector>(hostPort_);
         type_ = MigrateType::SPILL;
         AsyncResourceReleaser::Instance().Init(objectTable_);
 

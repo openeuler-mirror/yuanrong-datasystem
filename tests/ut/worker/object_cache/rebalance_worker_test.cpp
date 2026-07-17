@@ -38,6 +38,7 @@
 #include "datasystem/worker/rebalance_executor.h"
 #include "eviction_manager_common.h"
 #include "ut/common.h"
+#include "tests/ut/worker/object_cache/test_metadata_route.h"
 
 using namespace datasystem::object_cache;
 using namespace datasystem::worker;
@@ -75,7 +76,8 @@ public:
         allocator = memory::Allocator::Instance();
         allocator->Init(maxMemorySize);
         akSkManager_ = std::make_shared<AkSkManager>(0);
-        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR);
+        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR,
+                                                                     GetTestMetadataRoute());
         globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
         DS_ASSERT_OK(evictionManager_->Init(globalRefTable_, akSkManager_));
     }
@@ -217,8 +219,11 @@ public:
     {
         CommonTest::SetUp();
         objectTable_ = std::make_shared<ObjectTable>();
-        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR);
-        RebalanceExecutorConfig config{ LOCAL_ADDR, nullptr, nullptr, objectTable_, evictionManager_, nullptr };
+        evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, LOCAL_ADDR, MASTER_ADDR,
+                                                                     GetTestMetadataRoute());
+        RebalanceExecutorConfig config{ LOCAL_ADDR,       &metadataRoute_, &membership_, &endpointPolicy_,
+                                        &exitRequested_, nullptr,         objectTable_,  evictionManager_,
+                                        nullptr };
         executor_ = std::make_unique<RebalanceExecutor>(std::move(config));
     }
 
@@ -310,6 +315,11 @@ protected:
         return result;
     }
 
+    cluster::TopologySnapshotState snapshots_;
+    cluster::MembershipEndpointView membership_{ snapshots_ };
+    worker::MetadataRouteResolver metadataRoute_{ nullptr, worker::MetadataRouteOptions{} };
+    ObjectEndpointPolicy endpointPolicy_{ metadataRoute_, membership_ };
+    std::atomic<bool> exitRequested_{ false };
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::unique_ptr<RebalanceExecutor> executor_;

@@ -27,7 +27,6 @@
 #include <utility>
 #include <vector>
 
-#include "datasystem/worker/worker_topology_references.h"
 
 #include <google/protobuf/repeated_field.h>
 
@@ -93,13 +92,11 @@ void AddReplacePrimaryObjectInfos(master::ReplacePrimaryReqPb &req, const std::v
 }  // namespace
 
 WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam,
-                                                       worker::WorkerTopologyReferences *topologyEngine,
                                                        std::shared_ptr<ThreadPool> memcpyThreadPool,
                                                        std::shared_ptr<AkSkManager> akSkManager,
                                                        const std::string &localAddr,
                                                        std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
-      topologyEngine_(topologyEngine),
       memcpyThreadPool_(std::move(memcpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddr_(localAddr),
@@ -162,7 +159,7 @@ Status WorkerOcServiceMigrateImpl::CheckMigrateDataAdmission(const MigrateDataRe
 Status WorkerOcServiceMigrateImpl::AcquireIncomingMigrationAdmission()
 {
     std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
-    const bool localExiting = worker::IsLocalTopologyMemberExiting(topologyEngine_);
+    const bool localExiting = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
     CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_ && !localExiting, StatusCode::K_NOT_READY,
                              "Target Worker is exiting and cannot accept migrated data");
     ++incomingMigrationCount_;
@@ -476,8 +473,9 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
                                                        std::unordered_set<std::string> &failedIds)
 {
     std::vector<std::string> objectKeyList(objectKeys.begin(), objectKeys.end());
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeyList, topologyPlacement_, topologyRouteOptions_);
-    grouped.AppendFailuresToGroup();
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeyList);
+    AppendRouteFailures(grouped);
     auto &objKeysGrpByMaster = grouped.groups;
     Status lastRc;
     std::unordered_map<std::string, std::unordered_set<std::string>> redirectIds;
@@ -485,7 +483,7 @@ Status WorkerOcServiceMigrateImpl::QueryMasterMetadata(const std::unordered_set<
     for (auto &item : objKeysGrpByMaster) {
         HostPort masterAddr = item.first;
         const auto &ids = item.second;
-        auto workerMasterApi = GetWorkerMasterApi(masterAddr);
+        auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
         if (workerMasterApi == nullptr) {
             std::stringstream ss;
             ss << "[Migrate Data] hash master get failed, Replace primary copy failed: " << masterAddr.ToString();
@@ -824,8 +822,9 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
 {
     auto objectKeys = CollectObjectInfoKeys(needSendMasterIds);
     std::vector<std::string> objectKeyList{ objectKeys.begin(), objectKeys.end() };
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeyList, topologyPlacement_, topologyRouteOptions_);
-    grouped.AppendFailuresToGroup();
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupOwners(objectKeyList);
+    AppendRouteFailures(grouped);
     auto &objKeysGrpByMaster = grouped.groups;
     Status lastRc;
     RedirectMap needRedirectIds;
@@ -840,7 +839,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originA
         AddReplacePrimaryObjectInfos(req, ids, needSendMasterIds);
         VLOG(1) << FormatString("[Migrate Data] Replace %ld objects primary location from %s to %s, master address: %s",
                                 ids.size(), originAddr, localAddr_, masterAddr.ToString());
-        auto workerMasterApi = GetWorkerMasterApi(masterAddr);
+        auto workerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
         if (workerMasterApi == nullptr) {
             std::stringstream ss;
             ss << "[Migrate Data] hash master get failed, Replace primary copy failed: " << masterAddr.ToString();
@@ -985,7 +984,7 @@ Status WorkerOcServiceMigrateImpl::PureQueryMetaToRedirectMaster(
             failedIds.insert(objects.begin(), objects.end());
             continue;
         }
-        auto masterApi = GetWorkerMasterApi(masterAddr);
+        auto masterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
         if (masterApi == nullptr) {
             LOG(ERROR) << "[Migrate Data] Failed to get redirect WorkerMasterApi, masterAddr: " << addr;
             failedIds.insert(objects.begin(), objects.end());
@@ -1196,7 +1195,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryToRedirectMaster(const std::str
             continue;
         }
 
-        auto masterApi = GetWorkerMasterApi(masterAddr);
+        auto masterApi = workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
         if (masterApi == nullptr) {
             std::stringstream ss;
             ss << "[Migrate Data] Failed to get redirect WorkerMasterApi, masterAddr: " << address;

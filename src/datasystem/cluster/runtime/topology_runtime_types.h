@@ -12,7 +12,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <string>
 
 #include "datasystem/cluster/executor/topology_task_executor.h"
@@ -29,23 +28,6 @@ enum class TopologyAvailabilityLevel : uint8_t {
     ROLE_ISOLATED,
     NOT_READY,
     SHUTTING_DOWN,
-};
-
-/**
- * @brief Worker-role identity, budgets, probe and callback limits.
- */
-struct TopologyEngineOptions {
-    std::string clusterName;
-    std::string localAddress;
-    bool isRestart{ false };
-    size_t eventQueueCapacity{ 1'024 };
-    std::chrono::seconds scopeProbeDeadline{ 2 };
-    std::chrono::seconds scopeProbeInterval{ 5 };
-    std::chrono::seconds stopGrace{ 10 };
-    ControlBackendProbe controlBackendProbe;
-    // Non-blocking Host hook that gates business ingress when Worker-role availability changes.
-    std::function<void(TopologyAvailabilityLevel)> availabilityHandler;
-    TopologyTaskExecutorOptions executor;
 };
 
 /**

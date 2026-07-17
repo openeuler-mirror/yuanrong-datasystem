@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_WORKER_WORKER_SERVICE_IMPL_H
 #define DATASYSTEM_WORKER_WORKER_SERVICE_IMPL_H
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <shared_mutex>
@@ -25,12 +26,12 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/event_loop.h"
 #include "datasystem/common/util/net_util.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/protos/share_memory.irpc.pb.h"
 #include "datasystem/protos/share_memory.service.rpc.pb.h"
 #include "datasystem/protos/share_memory.brpc.pb.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace worker {
@@ -45,9 +46,13 @@ public:
      * @param[in] worker The class of worker server.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] workerUuid The worker uuid.
+     * @param[in] membership Read-only cluster membership view that outlives this service.
+     * @param[in] localExiting Worker-owned local exit gate that outlives this service.
      */
     WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, double timeoutMult, CommonServer *worker,
-                      std::shared_ptr<AkSkManager> akSkManager, std::string workerUuid = "");
+                      std::shared_ptr<AkSkManager> akSkManager, std::string workerUuid,
+                      const cluster::MembershipEndpointView &membership,
+                      const std::atomic<bool> &localExiting);
 
     ~WorkerServiceImpl() override;
 
@@ -119,15 +124,6 @@ public:
         workerUuid_ = uuid;
     }
 
-    /**
-     * @brief Assign borrowed Worker topology dependencies.
-     * @param[in] cm Borrowed Worker topology dependencies.
-     */
-    void SetTopologyEngine(worker::WorkerTopologyReferences *cm)
-    {
-        topologyEngine_ = cm;
-    }
-
 private:
     Status ValidateRegisterClientRequest(const RegisterClientReqPb &req, std::string &tenantId) const;
     Status ConsumeRegisterClientFd(const RegisterClientReqPb &req);
@@ -157,21 +153,25 @@ private:
     template <typename Protobuf>
     void SetAvailableWorkers(Protobuf &rsp)
     {
-        if (topologyEngine_ == nullptr) {
-            LOG_FIRST_N(ERROR, 1) << "[Heartbeat] Cluster topology dependencies are unavailable";
-            return;
-        }
-
         constexpr uint32_t num = 3;
         std::vector<std::string> activeWorkers;
-        Status status = worker::GetActiveTopologyPeers(topologyEngine_, num, activeWorkers);
+        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+        Status status = membership_.GetSnapshot(snapshot);
         if (status.IsError()) {
             const int logDuration = 30;
             LOG_EVERY_T(ERROR, logDuration) << "Get available workers failed: " << status.ToString();
             return;
         }
-        for (const auto &addr : activeWorkers) {
-            rsp.add_available_workers(addr);
+        for (const auto *member : snapshot->ActiveMembers()) {
+            if (member->identity.address != localAddress_.ToString()) {
+                activeWorkers.emplace_back(member->identity.address);
+            }
+            if (activeWorkers.size() == num) {
+                break;
+            }
+        }
+        for (const auto &address : activeWorkers) {
+            rsp.add_available_workers(address);
         }
     }
 
@@ -184,7 +184,8 @@ private:
     uint32_t shmWorkerPort_;
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::string workerUuid_;
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
+    const cluster::MembershipEndpointView &membership_;  // Read-only view owned by WorkerOCServer's Engine.
+    const std::atomic<bool> &localExiting_;             // WorkerOCServer-owned local admission gate.
 
     std::shared_timed_mutex mutex_;                           // for unboundedUnixSockFds_
     std::unordered_map<int, uint64_t> unboundedUnixSockFds_;  // This is the fd that is not bound to the client.

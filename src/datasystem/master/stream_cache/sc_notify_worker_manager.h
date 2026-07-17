@@ -25,6 +25,7 @@
 
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -32,7 +33,6 @@
 #include "datasystem/master/stream_cache/rpc_session_manager.h"
 #include "datasystem/master/stream_cache/store/rocks_stream_meta_store.h"
 #include "datasystem/protos/worker_stream.pb.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace master {
@@ -90,12 +90,13 @@ public:
      * @param[in] streamMetaStore The stream rocksdb store object.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] rpcSessionManager Master to Worker session manager.
-     * @param[in] cm The cluster manager instance.
+     * @param[in] membership Process-local membership and endpoint view.
      * @param[in] scMetadataManager The sc metadata manager instance.
      */
     SCNotifyWorkerManager(std::shared_ptr<RocksStreamMetaStore> streamMetaStore,
                           std::shared_ptr<AkSkManager> akSkManager,
-                          std::shared_ptr<RpcSessionManager> rpcSessionManager, worker::WorkerTopologyReferences *cm,
+                          std::shared_ptr<RpcSessionManager> rpcSessionManager,
+                          const cluster::MembershipEndpointView *membership,
                           SCMetadataManager *scMetadataManager);
 
     ~SCNotifyWorkerManager();
@@ -387,7 +388,7 @@ private:
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<RpcSessionManager> rpcSessionManager_{ nullptr };
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };
+    const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     SCMetadataManager *scMetadataManager_;
 };
 }  // namespace master

@@ -117,6 +117,45 @@ public:
      */
     const std::vector<const Member *> &CommittedMembers() const noexcept;
 
+    /**
+     * @brief Return ACTIVE members in canonical address order.
+     * @return Stable Snapshot-lifetime pointer vector with no allocation or IO.
+     */
+    const std::vector<const Member *> &ActiveMembers() const noexcept;
+
+    /**
+     * @brief Return FAILED members in canonical address order.
+     * @return Stable Snapshot-lifetime pointer vector with no allocation or IO.
+     */
+    const std::vector<const Member *> &FailedMembers() const noexcept;
+
+    /**
+     * @brief Select the next committed member in canonical address order with wrap-around.
+     * @param[in] address Existing committed member address to advance from.
+     * @param[out] member Selected stable Snapshot-lifetime pointer; unchanged on failure.
+     * @return K_OK on success; K_NOT_FOUND when address is absent or no distinct candidate exists.
+     */
+    Status FindNextCommittedMember(const std::string &address, const Member *&member) const;
+
+    /**
+     * @brief Select the next ACTIVE member in canonical address order with wrap-around.
+     * @param[in] address Address used as the strict ordering boundary; it need not be ACTIVE.
+     * @param[out] member Selected stable Snapshot-lifetime pointer; unchanged on failure.
+     * @return K_OK on success; K_NOT_FOUND when no distinct ACTIVE candidate exists.
+     */
+    Status FindNextActiveMember(const std::string &address, const Member *&member) const;
+
+    /**
+     * @brief Purely validate one exact-version ScaleOut or ScaleIn migration participant fence.
+     *
+     * This method does not reserve participants, acquire exclusive execution ownership, or mutate Snapshot state.
+     * Callers that require exclusive execution must establish that ownership separately.
+     *
+     * @param[in] fence Version, epoch, source, and target identities from the business RPC adapter.
+     * @return K_OK for the current migration; K_TRY_AGAIN when this Snapshot is behind; K_INVALID otherwise.
+     */
+    Status ValidateMigrationFence(const TopologyMigrationFence &fence) const;
+
 private:
     friend class HashAlgorithm;
 
@@ -152,6 +191,8 @@ private:
     std::unordered_map<std::string_view, size_t> addressIndex_;
     std::unordered_map<std::string_view, size_t> idIndex_;
     std::vector<const Member *> committedMembers_;
+    std::vector<const Member *> activeMembers_;
+    std::vector<const Member *> failedMembers_;
     std::vector<std::pair<uint32_t, const Member *>> committedTokenOwners_;
     std::vector<std::pair<uint32_t, const Member *>> prospectiveTokenOwners_;
 };

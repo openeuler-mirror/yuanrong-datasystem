@@ -18,7 +18,6 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_DELETE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_DELETE_IMPL_H
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/utils/status.h"
 
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -29,8 +28,8 @@ namespace object_cache {
 
 class WorkerOcServiceDeleteImpl : public WorkerOcServiceCrudCommonApi {
 public:
-    WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
-                              std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
+    WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<AkSkManager> akSkManager,
+                              HostPort &localAddress,
                               std::shared_ptr<WorkerOcServiceGetImpl> getProc);
 
     /**
@@ -116,8 +115,6 @@ private:
      * @return Status of the call.
      */
     Status DeleteObjectFromNotification(const std::string &objectKey, uint64_t version, bool async);
-
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
 

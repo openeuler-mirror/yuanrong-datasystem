@@ -122,8 +122,9 @@ TEST_F(AsyncUpdateLocationTest, TestAddTask)
 
 TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
 {
-    auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(akSkManager_, rocksStore_.get(), nullptr, nullptr,
-                                                                     "127.0.0.1:900", nullptr, "locationDbName", false);
+    auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(
+        akSkManager_, rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, false, HostPort(), "",
+        nullptr, "locationDbName", false);
     DS_ASSERT_OK(objectStore_->Init());
     std::string key1 = "test_object_key1";
     std::string key2 = "test_object_key2";
@@ -160,6 +161,18 @@ TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
     master::AckState ackState3;
     DS_ASSERT_OK(ocMetaManager->GetObjectKeyAckState(key3, worker2, ackState3));
     ASSERT_TRUE(ackState3 == master::AckState::ACK);
+}
+
+TEST_F(AsyncUpdateLocationTest, TopologyNotReadyDoesNotBlockLocationRecovery)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    auto ocMetaManager = std::make_shared<OCMetadataManagerHelper>(
+        akSkManager_, rocksStore_.get(), nullptr, nullptr, "127.0.0.1:900", nullptr, &membership, false, HostPort(),
+        "", nullptr, "locationDbName", false);
+    std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> locations;
+
+    DS_ASSERT_OK(ocMetaManager->CallRecoverObjectLocations(locations));
 }
 }  // namespace ut
 }  // namespace datasystem

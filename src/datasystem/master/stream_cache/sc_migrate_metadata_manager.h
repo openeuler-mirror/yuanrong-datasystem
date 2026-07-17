@@ -24,13 +24,13 @@
 
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 #ifdef WITH_TESTS
@@ -108,12 +108,12 @@ public:
      * @brief Initialization.
      * @param[in] localHostPort The local worker rpc service host port.
      * @param[in] akSkManager Used to do AK/SK authenticate.
-     * @param[in] cm Used to get master of objects.
+     * @param[in] membership Process-local membership and endpoint view.
      * @param[in] metadataManagerHolder The metadata manager holder.
      * @return Status of the call.
      */
     Status Init(const HostPort &localHostPort, std::shared_ptr<AkSkManager> akSkManager,
-                worker::WorkerTopologyReferences *cm, MetadataManagerHolder *metadataManagerHolder);
+                const cluster::MembershipEndpointView *membership, MetadataManagerHolder *metadataManagerHolder);
 
     /**
      * @brief Shutdown the oc migrage metadata module.
@@ -243,7 +243,7 @@ private:
 
     HostPort localHostPort_;
     std::shared_ptr<AkSkManager> akSkManager_;
-    worker::WorkerTopologyReferences *cm_{ nullptr };
+    const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::unique_ptr<ThreadPool> threadPool_;
     // tbb::concurrent_hash_map<workerAddr, std::future<std::pair<Result status, Failed stream names>>>
     TbbFutureThreadTable futureThread_;

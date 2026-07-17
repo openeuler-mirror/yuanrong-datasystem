@@ -21,7 +21,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_local.h"
@@ -77,17 +76,6 @@ bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
            && req.read_size() == URMA_WARMUP_OBJECT_SIZE && req.data_size() == URMA_WARMUP_OBJECT_SIZE;
 }
 
-bool IsCoordinationBackendAvailable(EtcdStore *etcdStore, cluster::ICoordinationBackend *coordinationBackend)
-{
-    if (coordinationBackend != nullptr) {
-        return !coordinationBackend->IsKeepAliveTimeout();
-    }
-    if (etcdStore != nullptr) {
-        return !etcdStore->IsKeepAliveTimeout();
-    }
-    LOG(WARNING) << "Coordination backend is unavailable: both EtcdStore and CoordinationBackend are not initialized.";
-    return false;
-}
 }  // namespace
 
 inline std::ostream &operator<<(std::ostream &os, const GetObjectRemoteReqPb &req)
@@ -165,13 +153,12 @@ void LogBatchGetObjectRemoteFinish(const LatencyTraceConfig &config, const Batch
 
 WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, std::shared_ptr<AkSkManager> akSkManager,
-    EtcdStore *etcdStore, cluster::ICoordinationBackend *coordinationBackend,
-    worker::WorkerTopologyReferences *topologyEngine, BackendObservationProvider backendObservationProvider)
+    const cluster::MembershipEndpointView &membership, CoordinationAvailabilityProvider coordinationAvailable,
+    BackendObservationProvider backendObservationProvider)
     : ocClientWorkerSvc_(std::move(clientSvc)),
       akSkManager_(std::move(akSkManager)),
-      etcdStore_(etcdStore),
-      coordinationBackend_(coordinationBackend),
-      topologyEngine_(topologyEngine),
+      membership_(membership),
+      coordinationAvailable_(std::move(coordinationAvailable)),
       backendObservationProvider_(std::move(backendObservationProvider))
 {
 }
@@ -703,8 +690,8 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
             if (batchRh2dContext != nullptr && batchRh2dContext->sendLaneLease != nullptr) {
                 rc = UrmaWritePayloadWithLane(
                     req.urma_info(), localSegAddress, localSegSize,
-                    reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size, entry->GetMetadataSize(), srcChipId,
-                    dstChipId, blocking, eventKeys, batchRh2dContext->sendLaneLease);
+                    reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size, entry->GetMetadataSize(),
+                    srcChipId, dstChipId, blocking, eventKeys, batchRh2dContext->sendLaneLease);
             } else {
                 rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize,
                                       reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size,
@@ -837,7 +824,9 @@ Status WorkerWorkerOCServiceImpl::CheckCoordinatorState(const CheckCoordinatorSt
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    bool isCoordinationAvailable = IsCoordinationBackendAvailable(etcdStore_, coordinationBackend_);
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(coordinationAvailable_), K_NOT_READY,
+                             "Coordination availability provider is not initialized.");
+    bool isCoordinationAvailable = coordinationAvailable_();
     rsp.set_available(isCoordinationAvailable);
     LOG_IF(INFO, isCoordinationAvailable) << "Coordination backend is available";
     return Status::OK();
@@ -847,9 +836,10 @@ Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &re
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    bool isCoordinationAvailable = IsCoordinationBackendAvailable(etcdStore_, coordinationBackend_);
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(coordinationAvailable_), K_NOT_READY,
+                             "Coordination availability provider is not initialized.");
+    bool isCoordinationAvailable = coordinationAvailable_();
     rsp.set_coordinator_available(isCoordinationAvailable);
-    RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(backendObservationProvider_), K_NOT_READY,
                              "Control-backend observation provider is not initialized.");
     RETURN_IF_NOT_OK(FillGetClusterStateRspPbFromControlBackendObservation(backendObservationProvider_(), rsp));
@@ -897,8 +887,7 @@ Status WorkerWorkerOCServiceImpl::CheckConnectionStable(const GetObjectRemoteReq
     if (rc.IsError() && rc.GetCode() == K_URMA_NEED_CONNECT) {
         std::string remoteWorkerId = "UNKNOWN";
         cluster::MemberEndpoint remoteEndpoint;
-        if (!isClientUrmaRequest && topologyEngine_ != nullptr && topologyEngine_->membership != nullptr
-            && topologyEngine_->membership->ResolveByAddress(requestAddressStr, remoteEndpoint).IsOk()
+        if (!isClientUrmaRequest && membership_.ResolveByAddress(requestAddressStr, remoteEndpoint).IsOk()
             && !remoteEndpoint.identity.id.empty()) {
             remoteWorkerId = remoteEndpoint.identity.id;
         }

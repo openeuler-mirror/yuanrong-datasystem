@@ -34,7 +34,9 @@ set(WORKER_SC_DEPEND_LIBS
         master_stream_protos
         common_encrypt
         common_ak_sk
+        cluster_topology
         httpclient
+        metadata_route_resolver
         worker_health_check
         )
 

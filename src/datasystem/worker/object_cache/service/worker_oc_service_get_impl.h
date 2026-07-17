@@ -35,9 +35,10 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_api.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
+class PerfPoint;
+
 namespace object_cache {
 
 using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
@@ -45,8 +46,8 @@ using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
                                public std::enable_shared_from_this<WorkerOcServiceGetImpl> {
 public:
-    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
-                           EtcdStore *etcdStore, std::shared_ptr<ThreadPool> memCpyThreadPool,
+    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdStore *etcdStore,
+                           std::shared_ptr<ThreadPool> memCpyThreadPool,
                            std::shared_ptr<ThreadPool> threadPool,
                            std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                            std::shared_ptr<MigrateDataRateController> rateController);
@@ -771,6 +772,44 @@ private:
                                           std::list<GetObjectInfo> &failedMetas);
 
     /**
+     * @brief Validate one remote batch and construct its RPC request.
+     * @param[in] address Remote Worker address.
+     * @param[in,out] infos Objects remaining in this batch attempt.
+     * @param[in] request Get request instance, or null for metadata migration.
+     * @param[out] successIds Succeeded object keys discovered during request construction.
+     * @param[out] needRetryIds Object reads that need retry.
+     * @param[out] failedIds Object keys that failed request construction.
+     * @param[in,out] point Detailed performance point for the batch attempt.
+     * @param[out] hostAddr Parsed remote Worker address.
+     * @param[out] checkConnectStatus Remote endpoint availability status.
+     * @param[out] reqPb Constructed batch request.
+     * @return K_OK on success; the validation or construction error otherwise.
+     */
+    Status PrepareBatchGetRemoteRequest(
+        const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
+        std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
+        std::unordered_set<std::string> &failedIds, PerfPoint &point, HostPort &hostAddr,
+        Status &checkConnectStatus, BatchGetObjectRemoteReqPb &reqPb);
+
+    /**
+     * @brief Send one constructed remote batch request with the existing retry policy.
+     * @param[in] address Remote Worker address.
+     * @param[in] hostAddr Parsed remote Worker address.
+     * @param[in] request Get request instance, or null for metadata migration.
+     * @param[in] migrateDataTimeoutMs Timeout cap for metadata migration.
+     * @param[in] rpcSlowerThanUs Slow RPC logging threshold in microseconds.
+     * @param[in,out] point Detailed performance point for the batch attempt.
+     * @param[in] reqPb Constructed batch request.
+     * @param[out] rspPb Batch response.
+     * @param[out] payloads Response payloads.
+     * @return K_OK on success; the RPC or retry error otherwise.
+     */
+    Status SendBatchGetRemoteRequest(
+        const std::string &address, const HostPort &hostAddr, const std::shared_ptr<GetRequest> &request,
+        int64_t migrateDataTimeoutMs, uint64_t rpcSlowerThanUs, PerfPoint &point,
+        BatchGetObjectRemoteReqPb &reqPb, BatchGetObjectRemoteRspPb &rspPb, std::vector<RpcMessage> &payloads);
+
+    /**
      * @brief Helper function to construct batch get request.
      * @param[in] address The remote worker address.
      * @param[in] metas The batched object meta info contains remote address and data size and oject lock entries.
@@ -876,14 +915,6 @@ private:
     Status GetObjectFromQueryMetaResultOnLock(const std::shared_ptr<GetRequest> &request,
                                               const master::QueryMetaInfoPb &queryMeta,
                                               std::vector<RpcMessage> &payloads, ReadObjectKV &objectKV);
-
-    /**
-     * @brief Get or Create a worker to Master api object for objKey in format uuid:host:port
-     * @param[in] objKey Object key that contain remote master's ip address
-     * @param[out] masterAddr The ip address of primary worker which stores objectKey's meta data
-     * @return Status of the call.
-     */
-    Status GetMetaAddress(const std::string &objKey, HostPort &masterAddr) const;
 
     /**
      * @brief Check if object is near-death.
@@ -1020,8 +1051,6 @@ private:
 
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
-
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     EtcdStore *etcdStore_;  // pointer to EtcdStore in WorkerOcServer
 

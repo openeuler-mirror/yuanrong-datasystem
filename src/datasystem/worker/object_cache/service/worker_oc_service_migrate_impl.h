@@ -45,7 +45,6 @@
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -65,14 +64,13 @@ public:
     /**
      * @brief Construct WorkerOcServicePublishImpl.
      * @param[in] initParam The parameter used to init WorkerOcServiceCrudCommonApi.
-     * @param[in] topologyEngine Borrowed Worker topology dependencies.
      * @param[in] memcpyThreadPool Memory copy thread pool.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] localAddr Local worker address.
      * @param[in] rateController Shared migration rate controller.
      */
-    WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
-                               std::shared_ptr<ThreadPool> memcpyThreadPool, std::shared_ptr<AkSkManager> akSkManager,
+    WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memcpyThreadPool,
+                               std::shared_ptr<AkSkManager> akSkManager,
                                const std::string &localAddr,
                                std::shared_ptr<MigrateDataRateController> rateController);
 
@@ -462,15 +460,6 @@ private:
     void RollbackObjects(const Container &objectKeys, const ObjectInfoMap &objectInfos);
 
     /**
-     * @brief Get worker master api.
-     * @return Worker master api.
-     */
-    std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApi(const HostPort &masterAddr)
-    {
-        return workerMasterApiManager_->GetWorkerMasterApi(masterAddr);
-    }
-
-    /**
      * @brief Indicate the object is equal to the provided version or not.
      * @param[in] entry Object entry.
      * @param[in] version Version to compare.
@@ -659,8 +648,6 @@ private:
                                             std::unordered_set<std::string> &successIds,
                                             std::unordered_set<std::string> &failedIds,
                                             ObjectInfoMap &needSendMasterIds, Status &status);
-
-    worker::WorkerTopologyReferences *topologyEngine_{ nullptr };  // back pointer to the topology engine
 
     std::shared_ptr<ThreadPool> memcpyThreadPool_{ nullptr };
 

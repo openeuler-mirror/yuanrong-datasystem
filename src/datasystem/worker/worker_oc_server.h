@@ -23,7 +23,7 @@
 #include <future>
 #include <mutex>
 #include <memory>
-#include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -40,26 +40,20 @@
 
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
-#include "datasystem/cluster/algorithm/hash_algorithm.h"
-#include "datasystem/cluster/control/topology_controller.h"
-#include "datasystem/cluster/control/topology_task_janitor.h"
-#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
-#include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
-#include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
+#include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_service_impl.h"
 #include "datasystem/worker/coordinator/coordinator_watch_service_impl.h"
-#include "datasystem/worker/coordinator/topology_recovery_reporter.h"
+#include "datasystem/worker/metadata_route_resolver.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
 #include "datasystem/worker/worker_liveness_check.h"
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/protos/object_posix.brpc.pb.h"
 #include "datasystem/protos/master_heartbeat.brpc.pb.h"
 #include "datasystem/protos/share_memory.brpc.pb.h"
@@ -491,7 +485,7 @@ private:
     /**
      * @brief Submit URMA warmup tasks for newly discovered ready peers.
      */
-    void ScheduleUrmaWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers,
+    void ScheduleUrmaWarmupTasks(const std::vector<const cluster::Member *> &members,
                                  std::unordered_set<std::string> &scheduledPeers,
                                  std::vector<std::future<bool>> &futures);
 
@@ -518,7 +512,7 @@ private:
     /**
      * @brief Submit worker-to-master RPC warmup tasks for newly discovered ready nodes.
      */
-    size_t ScheduleWorkerMasterRpcWarmupTasks(const std::vector<std::pair<std::string, std::string>> &workers,
+    size_t ScheduleWorkerMasterRpcWarmupTasks(const std::vector<const cluster::Member *> &members,
                                               const std::unordered_set<std::string> *warmedAddrs = nullptr,
                                               const std::function<void(const std::string &)> &onSuccess = nullptr);
 
@@ -534,9 +528,27 @@ private:
     void WarmupReadyWorkerMasterRpcOnStartup();
 
     /**
-     * @brief Warm up RPC to a newly ready worker/master seen from ETCD cluster events.
+     * @brief Enqueue bounded master-RPC warmup work for one newly published Snapshot.
+     * @param[in] snapshot Immutable published Snapshot.
      */
-    void TryWarmupWorkerMasterRpcOnClusterEvent(const mvccpb::Event &event);
+    void ScheduleTopologySnapshotWarmup(std::shared_ptr<const cluster::TopologySnapshot> snapshot);
+
+    /**
+     * @brief Drain coalesced topology Snapshot warmup work on one background task.
+     */
+    void DrainTopologySnapshotWarmup();
+
+    /**
+     * @brief Warm changed active members from one topology Snapshot sequentially.
+     * @param[in] snapshot Immutable published Snapshot.
+     */
+    void WarmupTopologySnapshotMembers(const cluster::TopologySnapshot &snapshot);
+
+    /**
+     * @brief Remove warmup cache entries for members absent from the latest Snapshot.
+     * @param[in] activeMembers Active address-to-id index.
+     */
+    void PruneWorkerMasterRpcWarmupCache(const std::unordered_map<std::string, std::string> &activeMembers);
 
     /**
      * @brief Notify shutdown message to etcd.
@@ -555,22 +567,10 @@ private:
     Status CheckScEncryptSecretKey();
 
     /**
-     * @brief Update cluster info in rocksdb.
-     * @param[in] event The event watched from ETCD.
-     */
-    void UpdateClusterInfoInRocksDb(const mvccpb::Event &event);
-
-    /**
      * @brief Init remote coordination backend.
      * @return Status of this call.
      */
     Status InitCoordinationBackend();
-
-    /**
-     * @brief Construct coordination backend.
-     * @return Status of this call.
-     */
-    Status ConstructCoordinationBackend();
 
     /**
      * @brief Construct worker-owned topology runtime components.
@@ -579,33 +579,23 @@ private:
     Status ConstructTopologyRuntime();
 
     /**
-     * @brief Bind the Worker-only recovery reporter before membership starts.
-     * @return K_OK when disabled or after successful Coordinator composition.
+     * @brief Construct and initialize the role-exclusive ETCD Store transferred into the Engine.
+     * @param[out] controllerStore Initialized owned Store; unchanged on failure.
+     * @return K_OK when Coordinator is selected or after ETCD initialization.
      */
-    Status ConstructTopologyRecoveryReporter();
+    Status ConstructControllerEtcdStore(std::unique_ptr<EtcdStore> &controllerStore);
 
     /**
-     * @brief Route one identity-bound Coordinator doorbell to exactly one backend owner.
-     * @param[in] coordinatorId Coordinator process-lifetime identity.
-     * @param[in] watchId Watch identity within that Coordinator lifetime.
-     * @param[in] event Move-only watch doorbell.
+     * @brief Construct business callbacks consumed by the Engine Builder.
+     * @return K_OK after callbacks are ready.
      */
-    Status RouteCoordinatorWatchEvent(const std::string &coordinatorId, int64_t watchId,
-                                      cluster::CoordinationEvent &&event);
+    Status ConstructTopologyCallbacks();
 
     /**
-     * @brief Construct the controller-side coordination backend and detect a restarting member.
-     * @param[out] isRestart True when the authoritative topology already contains the local address.
-     * @return Status of this call.
+     * @brief Build the Coordinator watch RPC bind/drain capability for the Engine.
+     * @return Complete ingress capability bound to coordinatorWatchSvc_.
      */
-    Status ConstructTopologyControllerBackend(bool &isRestart);
-
-    /**
-     * @brief Construct the Worker engine, borrowed business views, controller, and task janitor.
-     * @param[in] isRestart Whether the local member is restarting.
-     * @return Status of this call.
-     */
-    Status ConstructTopologyComponents(bool isRestart);
+    cluster::CoordinatorWatchIngress BuildCoordinatorWatchIngress();
 
     /**
      * @brief Deliver one deduplicated membership generation restart to local business owners.
@@ -620,6 +610,19 @@ private:
      * @return Status of this call.
      */
     Status ResolveLocalMetadataAddress();
+
+    /**
+     * @brief Claim or read the centralized metadata address through the selected native Store/Proxy.
+     * @param[out] address Current centralized metadata address; unchanged on failure.
+     * @return K_OK after a create-or-read transaction or backend status otherwise.
+     */
+    Status ResolveCentralMetadataAddress(std::string &address);
+
+    /**
+     * @brief Check whether this process owns the metadata-master services.
+     * @return True for distributed metadata or for the selected centralized metadata process.
+     */
+    bool IsLocalMetadataMaster() const;
 
     /**
      * @brief Start the worker-owned topology runtime.
@@ -717,22 +720,12 @@ private:
     std::string backendAddress_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorServiceProxy_;
-    std::unique_ptr<cluster::ICoordinationBackend> coordinationBackend_;
-    std::unique_ptr<cluster::HashAlgorithm> topologyAlgorithm_{ nullptr };
     std::unique_ptr<cluster::ITopologyPhaseCallbacks> topologyTaskCallbacks_{ nullptr };
-    std::unique_ptr<cluster::TopologyEngine> topologyEngine_{ nullptr };
-    std::unique_ptr<EtcdStore> controllerEtcdStore_{ nullptr };
-    std::unique_ptr<cluster::ICoordinationBackend> controllerBackend_{ nullptr };
-    std::unique_ptr<cluster::TopologyKeyHelper> controllerKeys_{ nullptr };
-    std::string controllerMembershipPrefix_;
-    std::unique_ptr<cluster::TopologyRepository> controllerRepository_{ nullptr };
-    std::unique_ptr<cluster::CoordinationEventDispatcher> controllerDispatcher_{ nullptr };
-    std::unique_ptr<cluster::TopologyController> topologyController_{ nullptr };
-    cluster::TopologyTaskMaterializer topologyTaskMaterializer_;
-    std::unique_ptr<cluster::TopologyTaskJanitor> topologyTaskJanitor_{ nullptr };
-    std::unique_ptr<WorkerTopologyReferences> topologyReferences_{ nullptr };
+    // Declared before topologyEngine_ so the Engine drains ingress before the service is destroyed.
     std::unique_ptr<coordinator::CoordinatorWatchServiceImpl> coordinatorWatchSvc_{ nullptr };
-    std::unique_ptr<TopologyRecoveryReporter> topologyRecoveryReporter_{ nullptr };
+    std::unique_ptr<cluster::TopologyEngine> topologyEngine_{ nullptr };
+    std::unique_ptr<MetadataRouteResolver> metadataRouteResolver_{ nullptr };
+    std::unique_ptr<object_cache::ObjectEndpointPolicy> objectEndpointPolicy_{ nullptr };
     std::atomic<bool> topologyExitRequested_{ false };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
@@ -792,8 +785,12 @@ private:
     std::condition_variable warmupScanCv_;
     std::mutex masterRpcWarmupScanMutex_;
     std::condition_variable masterRpcWarmupScanCv_;
+    // Protects the master RPC warmup pool, pending Snapshot, scheduling flag, and warmed/warming member indexes.
     std::mutex masterRpcWarmupMutex_;
     std::unordered_set<std::string> warmingMasterRpcAddrs_;
+    std::unordered_map<std::string, std::string> warmedMasterRpcMemberIds_;
+    std::shared_ptr<const cluster::TopologySnapshot> pendingMasterRpcWarmupSnapshot_;
+    bool topologySnapshotWarmupScheduled_{ false };
     std::unique_ptr<Thread> clientsExitChecker_{ nullptr };
     std::atomic<bool> allClientsExited_{ false };
     int64_t lastRequestArrivalTime_{ 0 };
@@ -802,7 +799,6 @@ private:
     std::mutex checkAsyncTasksDoneMutex_;
 
     std::unique_ptr<WorkerLivenessCheck> livenessCheck_;
-    std::shared_ptr<RocksStore> clusterStore_;
     std::unique_ptr<MetaStoreServer> metaStoreServer_;
 #ifdef WITH_TESTS
     std::unique_ptr<st::StOCServiceImpl> utSvc_{ nullptr };

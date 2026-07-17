@@ -315,20 +315,12 @@ TEST_F(STCClientDistMasterTest, DISABLED_LEVEL1_TestRestartWorkerWithSpecKeys)
 
 TEST_F(STCClientDistMasterTest, TestMetaIsMoving)
 {
-    const int addIndex = 3;
     StartClustersAndWaitReady();
-    GetWorkerUuids();
     std::string value = "value1";
     std::string key = "wwwwwww";
-    HostPort workerAddr(HOST_IP, GetFreePort());
-    HostPort masterAddr;
-    std::stringstream call;
-    call << "10*return(" << workerAddr.ToString() << ")";
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, masterAddr));
-    DS_ASSERT_OK(cluster_->AddNode(masterAddr, workerAddr.ToString(), GetFreePort()));
-    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, addIndex));
+    // The moving injection refines an already-computed topology decision. Keep this retry test independent from an
+    // unrelated ScaleOut batch and obsolete hash-target injection.
     for (int i = 0; i < 3; i++) {
-        cluster_->SetInjectAction(WORKER, i, "MurmurHash3.redirect", call.str());
         cluster_->SetInjectAction(WORKER, i, "meta.moving", "1*call()");
         cluster_->SetInjectAction(WORKER, i, "metas.moving", "1*call()");
     }
@@ -339,6 +331,7 @@ TEST_F(STCClientDistMasterTest, TestMetaIsMoving)
         cluster_->SetInjectAction(WORKER, i, "metas.moving", "1*call()");
     }
     DS_ASSERT_OK(client2_->Get(key, valueGet));
+    EXPECT_EQ(valueGet, value);
     for (int i = 0; i < 3; i++) {
         cluster_->SetInjectAction(WORKER, i, "meta.moving", "1*call()");
         cluster_->SetInjectAction(WORKER, i, "metas.moving", "1*call()");

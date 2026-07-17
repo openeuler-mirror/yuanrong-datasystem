@@ -18,7 +18,6 @@
 
 #include <chrono>
 
-#include "datasystem/worker/worker_topology_references.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/util/container_util.h"
@@ -43,11 +42,9 @@ constexpr char PERSISTENCE_DELETE_POOL_NAME[] = "PersistDelete";
 }  // namespace
 
 WorkerOcServiceDeleteImpl::WorkerOcServiceDeleteImpl(WorkerOcServiceCrudParam &initParam,
-                                                     worker::WorkerTopologyReferences *topologyEngine,
                                                      std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress,
                                                      std::shared_ptr<WorkerOcServiceGetImpl> getProc)
     : WorkerOcServiceCrudCommonApi(initParam),
-      topologyEngine_(topologyEngine),
       akSkManager_(std::move(akSkManager)),
       localAddress_(localAddress),
       getProc_(std::move(getProc))
@@ -279,7 +276,8 @@ Status WorkerOcServiceDeleteImpl::DeleteAllCopyMetaFromMaster(const std::vector<
 {
     Status lastRc;
     // Group ObjectKeys by masterId
-    auto grouped = BuildMetaOwnerRouteGroups(needDeleteObjectKey, topologyEngine_);
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupOwners(needDeleteObjectKey);
     auto &objKeysGrpByMasterId = grouped.groups;
 
     for (const auto &kv : grouped.failures) {

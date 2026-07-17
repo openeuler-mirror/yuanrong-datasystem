@@ -34,6 +34,7 @@
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "tests/ut/worker/object_cache/test_placement_facade.h"
+#include "tests/ut/worker/object_cache/test_metadata_route.h"
 
 using namespace ::testing;
 using namespace datasystem::object_cache;
@@ -44,8 +45,8 @@ using MetadataTestPlacementFacade = TestPlacementFacade;
 
 class TestWorkerMasterApiManager : public worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi> {
 public:
-    explicit TestWorkerMasterApiManager(HostPort &workerAddr)
-        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr)
+    TestWorkerMasterApiManager(HostPort &workerAddr, const worker::MetadataRouteResolver &metadataRoute)
+        : WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>(workerAddr, nullptr, metadataRoute)
     {
     }
 
@@ -220,7 +221,8 @@ public:
         localAddress_ = HostPort("127.0.0.1", 18500);
         objectTable_ = std::make_shared<ObjectTable>();
         memCpyThreadPool_ = std::make_shared<ThreadPool>(1);
-        workerMasterApiManager_ = std::make_shared<TestWorkerMasterApiManager>(localAddress_);
+        workerMasterApiManager_ =
+            std::make_shared<TestWorkerMasterApiManager>(localAddress_, GetTestMetadataRoute());
         clusterAccess_.checkConnection = [](const HostPort &) { return Status::OK(); };
         recoveredContentSaver_ = [this](const ObjectMetaPb &meta,
                                          const std::shared_ptr<std::stringstream> &contentStream,
@@ -235,9 +237,8 @@ public:
             return Status::OK();
         };
         manager_ = std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, clusterAccess_,
-                                                             workerMasterApiManager_, 128, nullptr,
-                                                             memCpyThreadPool_, nullptr, worker::MetadataRouteOptions{},
-                                                             recoveredContentSaver_);
+                                                             workerMasterApiManager_, GetTestMetadataRoute(), 128,
+                                                             nullptr, memCpyThreadPool_, recoveredContentSaver_);
     }
 
     void TearDown() override
@@ -276,9 +277,9 @@ TEST_F(MetaDataRecoveryManagerTest, BuildGroupedByMasterUsesTopologyPlacement)
     masterAddr.ParseString("127.0.0.1:18501");
     placement.SetOwner("key-ok", masterAddr);
 
-    MetaDataRecoveryManager manager(localAddress_, objectTable_, clusterAccess_, workerMasterApiManager_, 128,
-                                    nullptr, memCpyThreadPool_, &placement, worker::MetadataRouteOptions{},
-                                    recoveredContentSaver_);
+    worker::MetadataRouteResolver metadataRoute(&placement, worker::MetadataRouteOptions{});
+    MetaDataRecoveryManager manager(localAddress_, objectTable_, clusterAccess_, workerMasterApiManager_,
+                                    metadataRoute, 128, nullptr, memCpyThreadPool_, recoveredContentSaver_);
     auto grouped = manager.BuildGroupedByMaster({ "key-ok", "key-missing" }, "");
 
     ASSERT_NE(grouped.find(masterAddr), grouped.end());

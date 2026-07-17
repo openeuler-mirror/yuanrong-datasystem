@@ -27,6 +27,12 @@ struct TopologyTaskJanitorOptions {
     std::chrono::seconds interval{ 60 };
     size_t scanLimit{ 8'192 };
     size_t deleteBatch{ 128 };
+
+    /**
+     * @brief Validate cleanup cadence and bounded per-pass work limits.
+     * @return True when all limits are non-zero and within production bounds.
+     */
+    bool IsValid() const noexcept;
 };
 
 /**

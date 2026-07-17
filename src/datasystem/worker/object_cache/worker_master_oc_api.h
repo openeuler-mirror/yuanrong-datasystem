@@ -589,8 +589,21 @@ private:
 
 class WorkerMasterOcApiManager : public WorkerMasterApiManagerBase<WorkerMasterOCApi> {
 public:
+    /**
+     * @brief Construct a Worker-to-Master Object API manager with prebound metadata routing.
+     * @param[in] hostPort Local Worker address that outlives the manager.
+     * @param[in] manager Shared authentication manager.
+     * @param[in] routeResolver Metadata resolver that outlives the manager.
+     * @param[in] masterOCService Optional local Master Object service.
+     */
     WorkerMasterOcApiManager(HostPort &hostPort, std::shared_ptr<AkSkManager> manager,
+                             const worker::MetadataRouteResolver &routeResolver,
                              master::MasterOCServiceImpl *masterOCService);
+
+    /**
+     * @brief Release shared authentication and non-owned service dependencies.
+     */
+    ~WorkerMasterOcApiManager() override = default;
 
     /**
      * @brief Create a worker to Master api object for masterAddress

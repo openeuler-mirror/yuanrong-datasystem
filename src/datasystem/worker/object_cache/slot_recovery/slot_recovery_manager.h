@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "datasystem/common/l2cache/persistence_api.h"
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -36,7 +37,6 @@
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -140,14 +140,14 @@ public:
     /**
      * @brief Initialize the manager and subscribe to failed-worker notifications.
      * @param[in] localAddress Local worker address.
-     * @param[in] topologyEngine Cluster manager used to query stable active/failed workers.
+     * @param[in] membership Read-only topology membership view.
      * @param[in] persistApi Persistence API reserved for later recovery execution.
      * @param[in] apiManager Worker-master API manager reserved for later recovery execution.
      * @param[in] etcdStore EtcdStore pointer used to construct default slot-recovery store.
      * @param[in] metadataRecoveryManager Metadata recovery implementation used by recovered slots.
      * @return Status of the call.
      */
-    Status Init(const HostPort &localAddress, worker::WorkerTopologyReferences *topologyEngine,
+    Status Init(const HostPort &localAddress, const cluster::MembershipEndpointView &membership,
                 std::shared_ptr<PersistenceApi> persistApi,
                 std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
                 datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager = nullptr);
@@ -246,9 +246,10 @@ protected:
 
     /**
      * @brief Return a stable active-worker list after filtering out known failed workers.
-     * @return Stable active workers.
+     * @param[out] activeWorkers Stable active workers.
+     * @return K_OK or Snapshot availability status.
      */
-    std::vector<std::string> GetStableActiveWorkers() const;
+    Status GetStableActiveWorkers(std::vector<std::string> &activeWorkers) const;
 
     /**
      * @brief Pick a deterministic subset of active workers to execute cross-incident ETCD updates.
@@ -427,7 +428,7 @@ private:
     Status FinalizeRecoveryMetadataPush(const RecoveryTaskPb &task, std::vector<ObjectMetaPb> &recoveredMetas);
 
     HostPort localAddress_;
-    worker::WorkerTopologyReferences *topologyEngine_;
+    const cluster::MembershipEndpointView *membership_{ nullptr };
     std::shared_ptr<PersistenceApi> persistenceApi_;
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_;
     MetaDataRecoveryManager *metadataRecoveryManager_{ nullptr };

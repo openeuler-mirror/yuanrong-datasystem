@@ -393,6 +393,17 @@ TEST(DsCoordinationBackendSessionTest, MembershipIdentityChangeRewatchesAndDrops
     EXPECT_EQ(eventCount, 1);
 }
 
+TEST(DsCoordinationBackendSessionTest, InitialLeaseFactSurvivesReadyLifecycleTransition)
+{
+    DeterministicCoordinatorProxy proxy;
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    EXPECT_TRUE(backend.IsFirstKeepAliveSent());
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_TRUE(backend.IsFirstKeepAliveSent());
+}
+
 TEST(DsCoordinationBackendSessionTest, InvalidatedPlansRebuildOnTheNextExactRead)
 {
     DeterministicCoordinatorProxy proxy;

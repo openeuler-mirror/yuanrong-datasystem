@@ -50,6 +50,12 @@ struct TopologyControllerOptions {
      * @brief Semantic policy clock; production uses steady time and tests may inject virtual time.
      */
     std::function<std::chrono::steady_clock::time_point()> now{ [] { return std::chrono::steady_clock::now(); } };
+
+    /**
+     * @brief Validate bounded Controller budgets before constructing a one-shot Runtime.
+     * @return True when every required duration, work limit and clock is usable.
+     */
+    bool IsValid() const noexcept;
 };
 
 /**

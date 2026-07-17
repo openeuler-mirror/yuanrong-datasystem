@@ -20,7 +20,6 @@
 #include <cstddef>
 #include <utility>
 
-#include "datasystem/worker/worker_topology_references.h"
 
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
@@ -53,11 +52,10 @@ namespace object_cache {
 static constexpr int RETRY_INTERNAL_MS_META_MOVING = 200;
 static constexpr int THREAD_WAIT_TIME_MS = 10;
 WorkerOcServiceMultiPublishImpl::WorkerOcServiceMultiPublishImpl(
-    WorkerOcServiceCrudParam &initParam, worker::WorkerTopologyReferences *topologyEngine,
-    std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<ThreadPool> threadPool,
+    WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memCpyThreadPool,
+    std::shared_ptr<ThreadPool> threadPool,
     std::shared_ptr<AkSkManager> akSkManager, HostPort &localAddress)
     : WorkerOcServiceCrudCommonApi(initParam),
-      topologyEngine_(topologyEngine),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
       akSkManager_(std::move(akSkManager)),
@@ -394,8 +392,9 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     const MultiPublishReqPb &pubReq, CreateMultiMetaRspPb &totalResp, std::vector<uint64_t> &versions)
 {
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_ROUTER);
-    auto grouped = BuildMetaOwnerRouteGroups(objectKeys, topologyEngine_);
-    const auto &objGroup = grouped.indexedGroups;
+    CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
+    auto grouped = metadataRouteResolver_->GroupIndexedOwners(objectKeys);
+    const auto &objGroup = grouped.groups;
     // Fixme: Currently, even if there is only one object for which the master node has not been identified, we will
     // refuse to process all objects, which is very inefficient.
     CHECK_FAIL_RETURN_STATUS(grouped.failures.empty(), K_RPC_UNAVAILABLE,
@@ -472,27 +471,34 @@ void WorkerOcServiceMultiPublishImpl::ConstructCreateReq(const std::vector<std::
     ConstructCreateReqCommon(*entries[0], pubReq, req);
 }
 
+void WorkerOcServiceMultiPublishImpl::RollbackPersistenceIfFailed(const Status &status,
+                                                                  const std::string &objectKey, uint64_t version)
+{
+    if (status.IsOk()) {
+        return;
+    }
+    LOG(ERROR) << FormatString("Multiple set fails to save object %s to l2cache.", objectKey);
+    std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
+    auto routeRc = workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi);
+    if (routeRc.IsError()) {
+        LOG(ERROR) << "Getting metadata owner failed during rollback: " << routeRc.ToString();
+        return;
+    }
+    master::RollbackMultiMetaReqPb req;
+    master::RollbackMultiMetaRspPb resp;
+    req.set_address(localAddress_.ToString());
+    req.set_persistence_only(true);
+    req.add_object_keys(objectKey);
+    req.add_versions(version);
+    workerMasterApi->RollbackMultiMeta(req, resp);
+}
+
 void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
     const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &objectEntries,
     const std::vector<uint64_t> &versions, uint32_t ttlSecond)
 {
     const auto &keys = objectKeys;
     const auto &entries = objectEntries;
-    auto rollBackPersistenceIfFail = [this, &versions, &keys](const Status &rc, const ObjectKV &kv, size_t idx) {
-        if (rc.IsError()) {
-            LOG(ERROR) << FormatString("Multiple set fails to save object %s to l2cache.", keys[idx]);
-            std::shared_ptr<WorkerMasterOCApi> workerMasterApi =
-                workerMasterApiManager_->GetWorkerMasterApi(kv.GetObjKey(), topologyPlacement_, topologyRouteOptions_);
-            master::RollbackMultiMetaReqPb req;
-            master::RollbackMultiMetaRspPb resp;
-            req.set_address(localAddress_.ToString());
-            req.set_persistence_only(true);
-            req.add_object_keys(kv.GetObjKey());
-            req.add_versions(versions[idx]);
-            workerMasterApi->RollbackMultiMeta(req, resp);
-        }
-    };
-
     for (size_t i = 0; i < keys.size(); i++) {
         ObjectKV objectKV(keys[i], *entries[i]);
         objectKV.GetObjEntry()->SetCreateTime(versions[i]);
@@ -501,7 +507,7 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
         if ((*entries[i])->IsWriteThroughMode()) {
             if (IsSupportL2Storage(supportL2Storage_)) {
                 Status rc = SaveBinaryObjectToPersistence(objectKV);
-                rollBackPersistenceIfFail(rc, objectKV, i);
+                RollbackPersistenceIfFailed(rc, keys[i], versions[i]);
             }
         }
         if ((*entries[i])->IsWriteBackMode() && IsSupportL2Storage(supportL2Storage_)) {

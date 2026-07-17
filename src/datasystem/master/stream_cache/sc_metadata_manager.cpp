@@ -39,7 +39,6 @@
 #include "datasystem/stream/stream_config.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/cluster_event_type.h"
-#include "datasystem/worker/worker_topology_references.h"
 
 DS_DECLARE_string(rocksdb_store_dir);
 DS_DECLARE_int32(sc_regular_socket_num);
@@ -155,10 +154,12 @@ Status WaitDeleteStreamFanout(FanoutCollector &collector, const DeleteStreamFano
 
 SCMetadataManager::SCMetadataManager(const HostPort &masterHostPort, std::shared_ptr<AkSkManager> akSkManager,
                                      std::shared_ptr<RpcSessionManager> rpcSessionManager,
-                                     worker::WorkerTopologyReferences *cm, RocksStore *rocksStore,
-                                     const std::string &workerId)
-    : MetadataRedirectHelper(cm),
+                                     const cluster::PlacementFacade *placement,
+                                     const cluster::MembershipEndpointView *membership, bool centralizedMetadata,
+                                     HostPort metadataAddress, RocksStore *rocksStore, const std::string &workerId)
+    : MetadataRedirectHelper(placement, centralizedMetadata, std::move(metadataAddress)),
       masterAddress_(masterHostPort),
+      topologyMembership_(membership),
       akSkManager_(std::move(akSkManager)),
       rpcSessionManager_(std::move(rpcSessionManager)),
       workerId_(workerId),
@@ -200,11 +201,6 @@ void SCMetadataManager::Shutdown()
     }
 }
 
-void SCMetadataManager::SetTopologyEngineToNullptr()
-{
-    MetadataRedirectHelper::Shutdown();
-}
-
 Status SCMetadataManager::Init()
 {
     RETURN_OK_IF_TRUE(!EnableSCService());
@@ -216,7 +212,7 @@ Status SCMetadataManager::Init()
                                    std::make_unique<ThreadPool>(0, THREAD_POOL_SIZE, "MScAsyncReconcilation", false));
 
     notifyWorkerManager_ = std::make_unique<SCNotifyWorkerManager>(streamMetaStore_, akSkManager_, rpcSessionManager_,
-                                                                   topologyEngine_, this);
+                                                                   topologyMembership_, this);
     RETURN_IF_NOT_OK(notifyWorkerManager_->Init());
     RETURN_IF_NOT_OK(LoadMeta());
     CheckNewNodeMetaEvent::GetInstance().AddSubscriber(eventName_, [this](const HostPort &eventNodeKey) {
@@ -280,14 +276,13 @@ Status SCMetadataManager::SaveMigrationMetadata(const MigrateSCMetadataReqPb &re
         INJECT_POINT("master.sc.fail_save_migration_data", []() { return true; });
         return false;
     };
-    Status status;
     for (auto &streamMeta : req.stream_metas()) {
         if (injectTest()) {
             rsp.add_results(MigrateSCMetadataRspPb::FAILED);
             continue;
         }
 
-        if (SaveMigrationData(streamMeta, status, rsp).IsError()) {
+        if (SaveMigrationData(streamMeta).IsError()) {
             rsp.add_results(MigrateSCMetadataRspPb::FAILED);
             continue;
         }
@@ -296,11 +291,8 @@ Status SCMetadataManager::SaveMigrationMetadata(const MigrateSCMetadataReqPb &re
     return Status::OK();
 }
 
-Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMeta, Status &status,
-                                            MigrateSCMetadataRspPb &rsp)
+Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMeta)
 {
-    (void)status;
-    (void)rsp;
     ReadLockHelper rlocker(LOCK_ARGS(metaDictMutex_));
     const auto &meta = streamMeta.meta();
     const std::string &streamName = meta.stream_name();
@@ -310,7 +302,7 @@ Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMe
     // clang-format off
     if (!streamMetaManagerDict_.emplace(
         streamName, std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
-        akSkManager_, rpcSessionManager_, topologyEngine_, notifyWorkerManager_.get()))) {
+        akSkManager_, rpcSessionManager_, topologyMembership_, notifyWorkerManager_.get()))) {
         TbbMetaHashmap::const_accessor existingAccessor;
         RETURN_IF_NOT_OK(GetStreamMetadataNoLock(streamName, existingAccessor));
         StreamMetadata *existingMetadata = existingAccessor->second.get();
@@ -337,16 +329,25 @@ Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMe
             metadata->InitStreamMetrics(),
             FormatString("[%s, S:%s] Init master sc metrics failed", LogPrefix(), streamName));
     }
+    RETURN_IF_NOT_OK(RestoreMigratedRelations(*metadata, streamMeta, needRevert, raiiP));
+    RETURN_IF_NOT_OK(PersistMigratedStream(*metadata, streamMeta, streamFields, streamName, needRevert, raiiP));
+    needRevert = false;
+    return Status::OK();
+}
+
+Status SCMetadataManager::RestoreMigratedRelations(StreamMetadata &metadata,
+                                                   const MetaForSCMigrationPb &streamMeta,
+                                                   const bool &needRevert, RaiiPlus &rollback)
+{
     std::vector<std::string> producerRelatedNodes = { streamMeta.producer_rel_nodes().begin(),
                                                       streamMeta.producer_rel_nodes().end() };
     std::vector<std::string> consumerRelatedNodes = { streamMeta.consumer_rel_nodes().begin(),
                                                       streamMeta.consumer_rel_nodes().end() };
-    metadata->PreparePubSubRelNodes(producerRelatedNodes, consumerRelatedNodes);
-    // Make use of recovery logic so no notification is sent.
+    metadata.PreparePubSubRelNodes(producerRelatedNodes, consumerRelatedNodes);
     for (const auto &producerMetaPb : streamMeta.producers()) {
-        RETURN_IF_NOT_OK(metadata->RecoveryPubMeta(producerMetaPb));
+        RETURN_IF_NOT_OK(metadata.RecoveryPubMeta(producerMetaPb));
         RETURN_IF_NOT_OK(streamMetaStore_->AddPubNode(producerMetaPb));
-        raiiP.AddTask([this, &needRevert, &producerMetaPb]() {
+        rollback.AddTask([this, &needRevert, producerMetaPb]() {
             if (needRevert) {
                 LOG_IF_ERROR(streamMetaStore_->DelPubNode(producerMetaPb),
                              "Rollback persisted producer failed in migration failure.");
@@ -354,36 +355,41 @@ Status SCMetadataManager::SaveMigrationData(const MetaForSCMigrationPb &streamMe
         });
     }
     for (const auto &consumerMetaPb : streamMeta.consumers()) {
-        RETURN_IF_NOT_OK(metadata->RecoverySubMeta(consumerMetaPb));
+        RETURN_IF_NOT_OK(metadata.RecoverySubMeta(consumerMetaPb));
         RETURN_IF_NOT_OK(streamMetaStore_->AddSubNode(consumerMetaPb));
-        raiiP.AddTask([this, &needRevert, &consumerMetaPb]() {
+        const auto streamName = consumerMetaPb.stream_name();
+        const auto consumerId = consumerMetaPb.consumer_id();
+        rollback.AddTask([this, &needRevert, streamName, consumerId]() {
             if (needRevert) {
-                LOG_IF_ERROR(streamMetaStore_->DelSubNode(consumerMetaPb.stream_name(), consumerMetaPb.consumer_id()),
+                LOG_IF_ERROR(streamMetaStore_->DelSubNode(streamName, consumerId),
                              "Rollback persisted consumer failed in migration failure.");
             }
         });
     }
-    // Recover the lifetime consumer count and retain data state.
+    return Status::OK();
+}
+
+Status SCMetadataManager::PersistMigratedStream(StreamMetadata &metadata,
+                                                const MetaForSCMigrationPb &streamMeta,
+                                                const StreamFields &streamFields, const std::string &streamName,
+                                                const bool &needRevert, RaiiPlus &rollback)
+{
+    const auto &meta = streamMeta.meta();
     const auto &consumerLifeCount = meta.consumer_life_count();
-    RETURN_IF_NOT_OK(metadata->RestoreConsumerLifeCount(consumerLifeCount));
-    auto currentState = metadata->CheckNUpdateNeedRetainData();
+    RETURN_IF_NOT_OK(metadata.RestoreConsumerLifeCount(consumerLifeCount));
+    auto currentState = metadata.CheckNUpdateNeedRetainData();
     VLOG(SC_NORMAL_LOG_LEVEL) << "[RetainData] RetainData state is restored for stream: " << streamName << " to "
                               << currentState;
-
     RETURN_IF_NOT_OK(streamMetaStore_->AddStream(streamName, streamFields));
-    raiiP.AddTask([this, &needRevert, &streamName]() {
+    rollback.AddTask([this, &needRevert, streamName]() {
         if (needRevert) {
             LOG_IF_ERROR(streamMetaStore_->DelStream(streamName),
                          "Rollback persisted stream failed in migration failure.");
         }
     });
     RETURN_IF_NOT_OK(streamMetaStore_->UpdateLifeTimeConsumerCount(streamName, consumerLifeCount));
-    // Migrate the async notifications.
     RETURN_IF_NOT_OK(notifyWorkerManager_->AddAsyncNotifications(streamFields, streamName, streamMeta));
-    // If auto clean up is true and there is no more producer/consumer, delete the stream.
-    RETURN_IF_NOT_OK(metadata->AutoCleanupIfNeeded(HostPort()));
-    needRevert = false;
-    return Status::OK();
+    return metadata.AutoCleanupIfNeeded(HostPort());
 }
 
 Status SCMetadataManager::FillMetadataForMigration(const std::string &streamName, MetaForSCMigrationPb *meta)
@@ -454,7 +460,7 @@ Status SCMetadataManager::CreateProducer(const CreateProducerReqPb &req, CreateP
     const auto &producerMeta = req.producer_meta();
     const std::string &streamName = producerMeta.stream_name();
     bool redirect = req.redirect();
-    FillRedirectResponseInfo(rsp, streamName, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(rsp, streamName, redirect));
     RETURN_OK_IF_TRUE(redirect);
     StreamFields streamFields(req.max_stream_size(), req.page_size(), req.auto_cleanup(), req.retain_num_consumer(),
                               req.encrypt_stream(), req.reserve_size(), req.stream_mode());
@@ -510,7 +516,7 @@ Status SCMetadataManager::CloseProducer(const CloseProducerReqPb &req, CloseProd
         streams.emplace_back(currProducer.stream_name());
     }
     bool redirect = req.redirect();
-    FillRedirectResponseInfos(rsp, streams, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, streams, redirect));
     // For now the close producer request is grouped by stream name, so if redirect is needed for any,
     // all of them will need the redirect, otherwise it will be empty.
     RETURN_OK_IF_TRUE(streams.empty());
@@ -558,7 +564,7 @@ Status SCMetadataManager::Subscribe(const SubscribeReqPb &req, SubscribeRspPb &r
     const auto &consumerMeta = req.consumer_meta();
     const auto &streamName = consumerMeta.stream_name();
     bool redirect = req.redirect();
-    FillRedirectResponseInfo(rsp, streamName, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(rsp, streamName, redirect));
     RETURN_OK_IF_TRUE(redirect);
 
     // Accessor as write lock for this stream.
@@ -592,7 +598,7 @@ Status SCMetadataManager::CloseConsumer(const CloseConsumerReqPb &req, CloseCons
     const auto &consumerMeta = req.consumer_meta();
     const auto &streamName = consumerMeta.stream_name();
     bool redirect = req.redirect();
-    FillRedirectResponseInfo(rsp, streamName, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(rsp, streamName, redirect));
     RETURN_OK_IF_TRUE(redirect);
 
     // Accessor as write lock for this stream.
@@ -675,7 +681,7 @@ Status SCMetadataManager::DeleteStream(const DeleteStreamReqPb &req, DeleteStrea
     (void)rsp;
     const std::string &streamName = req.stream_name();
     bool redirect = req.redirect();
-    FillRedirectResponseInfo(rsp, streamName, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(rsp, streamName, redirect));
     RETURN_OK_IF_TRUE(redirect);
     HostPort srcWorkerAddr;
     HostPb2Host(req.src_node_addr(), srcWorkerAddr);
@@ -735,7 +741,7 @@ Status SCMetadataManager::QueryGlobalProducersNum(const QueryGlobalNumReqPb &req
 {
     const auto &streamName = req.stream_name();
     bool redirect = req.redirect();
-    FillRedirectResponseInfo(rsp, streamName, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(rsp, streamName, redirect));
     RETURN_OK_IF_TRUE(redirect);
     // Accessor as read lock for this stream.
     // A procedure lock for the stream.
@@ -755,7 +761,7 @@ Status SCMetadataManager::QueryGlobalConsumersNum(const QueryGlobalNumReqPb &req
 {
     const auto &streamName = req.stream_name();
     bool redirect = req.redirect();
-    FillRedirectResponseInfo(rsp, streamName, redirect);
+    RETURN_IF_NOT_OK(FillRedirectResponseInfo(rsp, streamName, redirect));
     RETURN_OK_IF_TRUE(redirect);
     // Accessor as read lock for this stream.
     // A procedure lock for the stream.
@@ -803,7 +809,7 @@ Status SCMetadataManager::CreateOrGetStreamMetadata(const std::string &streamNam
         }
         accessor->second =
             std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(), akSkManager_,
-                                             rpcSessionManager_, topologyEngine_, notifyWorkerManager_.get());
+                                             rpcSessionManager_, topologyMembership_, notifyWorkerManager_.get());
         if (FLAGS_log_monitor) {
             RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
                 accessor->second->InitStreamMetrics(),
@@ -846,7 +852,7 @@ Status SCMetadataManager::LoadMeta()
         // clang-format off
         CHECK_FAIL_RETURN_STATUS(streamMetaManagerDict_.emplace(
             streamName, std::make_shared<StreamMetadata>(streamName, streamFields, streamMetaStore_.get(),
-            akSkManager_, rpcSessionManager_, topologyEngine_, notifyWorkerManager_.get())),
+            akSkManager_, rpcSessionManager_, topologyMembership_, notifyWorkerManager_.get())),
             StatusCode::K_RUNTIME_ERROR, "Load meta reconstruction insertion failed");
         // clang-format on
         TbbMetaHashmap::accessor accessor;
@@ -1187,10 +1193,14 @@ void SCMetadataManager::StartClearWorkerMetadata(const HostPort &workerAddr)
 
 Status SCMetadataManager::CheckWorkerStatus(const HostPort &workerHostPort)
 {
-    if (topologyEngine_ == nullptr) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID, "ETCD cluster manager is nullptr.");
+    if (topologyMembership_ == nullptr) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_READY, "Topology membership view is not available.");
     }
-    auto rc = worker::CheckTopologyMemberConnection(topologyEngine_, workerHostPort);
+    cluster::MemberEndpoint endpoint;
+    auto rc = topologyMembership_->ResolveByAddress(workerHostPort.ToString(), endpoint);
+    if (rc.IsOk() && endpoint.localAvailability == cluster::EndpointAvailability::UNREACHABLE) {
+        rc = Status(K_WORKER_ABNORMAL, "Worker endpoint is unreachable");
+    }
     if (rc.IsError()) {
         RETURN_STATUS_LOG_ERROR(K_WORKER_ABNORMAL,
                                 FormatString("The Worker %s is abnormal.", workerHostPort.ToString()));

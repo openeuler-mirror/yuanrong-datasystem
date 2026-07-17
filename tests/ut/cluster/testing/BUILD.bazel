@@ -1,0 +1,12 @@
+load("//bazel:build_defs.bzl", "ds_cc_test_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test_library(
+    name = "fake_coordinator_service_proxy",
+    hdrs = ["fake_coordinator_service_proxy.h"],
+    deps = [
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
