@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <atomic>
+#include <limits>
 #include <memory>
 #include <set>
 #include <string>
@@ -319,6 +321,118 @@ TEST_F(RoutingTest, TestBrokenFilterIntegrationWithRouter)
     HostPort second;
     DS_ASSERT_OK(router->SelectWorker("broken_key", client::SelectStrategy::HASH_RING_AFFINITY, second));
     EXPECT_NE(first.ToString(), second.ToString());
+}
+
+TEST_F(RoutingTest, U7RoutesWithFiveThousandWorkerSnapshot)
+{
+    constexpr size_t workerCount = 5'000;
+    constexpr size_t keyCount = 2'048;
+    constexpr int portBase = 10'000;
+    auto ring = std::make_shared<ClusterTopologyPb>();
+    auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
+    for (size_t i = 0; i < workerCount; ++i) {
+        const std::string address = "127.0.0.1:" + std::to_string(portBase + i);
+        auto &worker = (*ring->mutable_members())[address];
+        worker.set_state(MembershipPb::ACTIVE);
+        worker.add_tokens(static_cast<uint32_t>(
+            (static_cast<uint64_t>(i) * std::numeric_limits<uint32_t>::max()) / workerCount));
+        (*hostIdMap)[address] = "scale-host-" + std::to_string(i);
+    }
+
+    auto router = CreateRouter();
+    router->UpdateHashRing(ring, hostIdMap);
+    ASSERT_EQ(router->GetAvailableWorkers().size(), workerCount);
+
+    std::vector<std::string> keys;
+    keys.reserve(keyCount);
+    for (size_t i = 0; i < keyCount; ++i) {
+        keys.emplace_back("u7-scale-key-" + std::to_string(i));
+    }
+    std::unordered_map<HostPort, std::vector<std::string>> groups;
+    DS_ASSERT_OK(router->SelectWorkers(keys, client::SelectStrategy::HASH_RING_AFFINITY, groups));
+
+    size_t selectedKeyCount = 0;
+    for (const auto &group : groups) {
+        selectedKeyCount += group.second.size();
+        EXPECT_GE(group.first.Port(), portBase);
+        EXPECT_LT(group.first.Port(), portBase + static_cast<int>(workerCount));
+    }
+    EXPECT_EQ(selectedKeyCount, keyCount);
+}
+
+TEST_F(RoutingTest, U7BatchSelectionNeverMixesConcurrentSnapshots)
+{
+    constexpr int generationAPortBase = 11'000;
+    constexpr int generationBPortBase = 21'000;
+    auto buildGeneration = [=](int tokenOwnerPortBase) {
+        auto ring = std::make_shared<ClusterTopologyPb>();
+        for (int portBase : { generationAPortBase, generationBPortBase }) {
+            for (int i = 0; i < 2; ++i) {
+                auto &worker = (*ring->mutable_members())["127.0.0.1:" + std::to_string(portBase + i)];
+                worker.set_state(MembershipPb::ACTIVE);
+                if (portBase == tokenOwnerPortBase) {
+                    worker.add_tokens(i == 0 ? 0u : std::numeric_limits<uint32_t>::max() / 2);
+                }
+            }
+        }
+        return ring;
+    };
+    auto buildHostIdMap = [=] {
+        auto hostIdMap = std::make_shared<std::unordered_map<std::string, std::string>>();
+        for (int portBase : { generationAPortBase, generationBPortBase }) {
+            for (int i = 0; i < 2; ++i) {
+                (*hostIdMap)["127.0.0.1:" + std::to_string(portBase + i)] = "snapshot-host";
+            }
+        }
+        return hostIdMap;
+    };
+
+    auto ringA = buildGeneration(generationAPortBase);
+    auto ringB = buildGeneration(generationBPortBase);
+    auto hostIdMap = buildHostIdMap();
+    auto router = CreateRouter();
+    router->UpdateHashRing(ringA, hostIdMap);
+
+    std::vector<std::string> keys;
+    for (size_t i = 0; i < 512; ++i) {
+        keys.emplace_back("u7-snapshot-key-" + std::to_string(i));
+    }
+
+    std::atomic<bool> stop{ false };
+    std::thread updater([&] {
+        while (!stop.load(std::memory_order_relaxed)) {
+            router->UpdateHashRing(ringB, hostIdMap);
+            router->UpdateHashRing(ringA, hostIdMap);
+        }
+    });
+
+    Status selectionStatus = Status::OK();
+    bool snapshotsConsistent = true;
+    for (size_t iteration = 0; iteration < 200; ++iteration) {
+        std::unordered_map<HostPort, std::vector<std::string>> groups;
+        selectionStatus =
+            router->SelectWorkers(keys, client::SelectStrategy::HASH_RING_AFFINITY, groups);
+        if (selectionStatus.IsError() || groups.size() != 2u) {
+            snapshotsConsistent = false;
+            break;
+        }
+        bool allFromA = true;
+        bool allFromB = true;
+        for (const auto &group : groups) {
+            allFromA = allFromA && group.first.Port() >= generationAPortBase
+                       && group.first.Port() < generationAPortBase + 2;
+            allFromB = allFromB && group.first.Port() >= generationBPortBase
+                       && group.first.Port() < generationBPortBase + 2;
+        }
+        if (!allFromA && !allFromB) {
+            snapshotsConsistent = false;
+            break;
+        }
+    }
+    stop.store(true, std::memory_order_relaxed);
+    updater.join();
+    DS_ASSERT_OK(selectionStatus);
+    EXPECT_TRUE(snapshotsConsistent);
 }
 
 // === Status.WithExtra Tests ===
