@@ -82,17 +82,20 @@ KV 接口支持 Causal 级别数据读写一致性。
 
 ### 服务发现
 
-当客户端使用 `ServiceDiscovery` 连接集群时，可通过 `ServiceAffinityPolicy` 指定 worker 选择策略：
+客户端可以通过 `ConnectOptions.serviceDiscovery` 注入 `IServiceDiscovery` 实现，并通过
+`ServiceAffinityPolicy` 指定 Worker 选择策略：
 
-- `PREFERRED_SAME_NODE`（默认）：优先选择同节点 worker；若无同节点 worker，则随机选择。
-- `REQUIRED_SAME_NODE`：必须选择同节点 worker；若未匹配到同节点 worker，则返回错误。
-- `RANDOM`：随机选择 worker。
+- `PREFERRED_SAME_NODE`（默认）：优先选择同节点 Worker；若无同节点 Worker，则随机选择。
+- `REQUIRED_SAME_NODE`：必须选择同节点 Worker；若未匹配到同节点 Worker，则返回错误。
+- `RANDOM`：随机选择 Worker。
 
-使用该能力时，需要让 worker 和客户端都能读取到同一套 `host_id` 信息：
+使用节点亲和性时，需要让 Worker 和客户端都能读取同一套 `host_id` 信息：在 Worker 侧配置
+`host_id_env_name`，并在客户端服务发现配置中设置相同的 `hostIdEnvName`。
 
-1. 在 worker 侧配置 `host_id_env_name`（例如 `HOST_ID`），并在启动前注入环境变量。
-2. 在客户端 `ServiceDiscoveryOptions` 中配置相同的 `hostIdEnvName`，并按需设置 `affinityPolicy`。
-3. 如果 ETCD 启用了用户名/密码鉴权，还需要在客户端配置 `username` 和 `password`。
+#### 通过 ETCD 发现 Worker
+
+使用 `ServiceDiscovery` 从 ETCD 获取可用 Worker。如果 ETCD 启用了用户名和密码鉴权，还需要配置
+`username` 和 `password`。
 
 ```cpp
 #include "datasystem/datasystem.h"
@@ -111,6 +114,46 @@ ConnectOptions connectOptions;
 connectOptions.serviceDiscovery = serviceDiscovery;
 auto client = std::make_shared<DsClient>(connectOptions);
 ASSERT_TRUE(client->Init().IsOk());
+```
+
+#### 通过 Coordinator 发现 Worker
+
+使用 `CoordinatorServiceDiscovery` 从 Coordinator 获取可用 Worker。当前仅支持配置一个 Coordinator 地址。
+
+```cpp
+#include "datasystem/datasystem.h"
+
+CoordinatorServiceDiscoveryOptions sdOpts;
+sdOpts.serviceAddress = "127.0.0.1:31511";
+sdOpts.hostIdEnvName = "HOST_ID";
+sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+
+auto serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(sdOpts);
+ASSERT_TRUE(serviceDiscovery->Init().IsOk());
+
+ConnectOptions connectOptions;
+connectOptions.serviceDiscovery = serviceDiscovery;
+auto client = std::make_shared<DsClient>(connectOptions);
+ASSERT_TRUE(client->Init().IsOk());
+```
+
+如果 Coordinator 地址由外部服务发现系统提供，可以实现 `ICoordinatorDiscovery` 并注入
+`CoordinatorServiceDiscoveryOptions`。当前 `GetCoordinators` 需要返回且仅返回一个地址。
+
+```cpp
+class CustomCoordinatorDiscovery : public ICoordinatorDiscovery {
+public:
+    Status GetCoordinators(std::vector<std::string> &serviceList) override
+    {
+        serviceList = { "127.0.0.1:31511" };
+        return Status::OK();
+    }
+};
+
+CoordinatorServiceDiscoveryOptions sdOpts;
+sdOpts.coordinatorDiscovery = std::make_shared<CustomCoordinatorDiscovery>();
+auto serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(sdOpts);
+ASSERT_TRUE(serviceDiscovery->Init().IsOk());
 ```
 
 ### 数据溢出到磁盘
