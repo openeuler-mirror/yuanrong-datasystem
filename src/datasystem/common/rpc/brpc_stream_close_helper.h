@@ -64,6 +64,8 @@
 #include <brpc/stream.h>
 #include <chrono>
 #include <condition_variable>
+#include <bthread/mutex.h>
+#include <bthread/condition_variable.h>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -94,8 +96,8 @@ enum class StreamCloseResult {
 // field silently becomes 0/nullptr rather than the declared default.
 struct StreamCloseState {
     brpc::StreamId& streamId;
-    std::mutex& mtx;
-    std::condition_variable& cv;
+    bthread::Mutex& mtx;
+    bthread::ConditionVariable& cv;
     bool& streamEnd;
     bool& readError;
     // Shared flag set by on_closed/on_failed callbacks to notify the deferred

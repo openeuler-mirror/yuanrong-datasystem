@@ -36,6 +36,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <bthread/mutex.h>
+#include <bthread/condition_variable.h>
+#include <butil/time.h>
 #include <deque>
 #include <mutex>
 #include <vector>
@@ -104,7 +107,7 @@ public:
         if (firstResponseTs_.exchange(BrpcTraceNowNs()) == 0) {
             trace_.MarkClientRecv(firstResponseTs_.load());
         }
-        std::lock_guard<std::mutex> lock(readMtx_);
+        std::lock_guard<bthread::Mutex> lock(readMtx_);
         for (size_t i = 0; i < size; ++i) {
             if (messages[i] != nullptr) {
                 pendingMessages_.push_back(std::move(*messages[i]));
@@ -121,7 +124,7 @@ public:
         if (destroyed_->load(std::memory_order_acquire)) {
             return;
         }
-        std::lock_guard<std::mutex> lock(readMtx_);
+        std::lock_guard<bthread::Mutex> lock(readMtx_);
         readError_ = true;
         readCond_.notify_one();
     }
@@ -132,7 +135,7 @@ public:
         if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
         destroyed_->store(true, std::memory_order_release);
         {
-            std::lock_guard<std::mutex> lock(readMtx_);
+            std::lock_guard<bthread::Mutex> lock(readMtx_);
             streamEnd_ = true;
             readReady_ = true;
             readCond_.notify_one();
@@ -155,7 +158,7 @@ public:
         // (stream.cpp:594 -> :596), and the Controller/handler are only safe to release
         // once on_closed (the final callback) has run. Signalling on on_failed would let
         // deferred cleanup free state that on_closed still touches.
-        std::lock_guard<std::mutex> lock(readMtx_);
+        std::lock_guard<bthread::Mutex> lock(readMtx_);
         readError_ = true;
         readCond_.notify_one();
     }
@@ -229,12 +232,18 @@ public:
             RETURN_STATUS(StatusCode::K_RPC_STREAM_END, "Stream already finished");
         }
 
-        std::unique_lock<std::mutex> lock(readMtx_);
+        std::unique_lock<bthread::Mutex> lock(readMtx_);
         // Bound the wait so a peer crash / network partition cannot block the calling
         // bthread forever (which would exhaust the bthread pool under nested RPC load).
         // 30s > kStreamCloseTimeoutSec(5s), well below typical client upper-layer deadlines.
-        if (!readCond_.wait_for(lock, std::chrono::seconds(kStreamReadTimeoutSec),
-            [this] { return readReady_ || readError_ || streamEnd_; })) {
+        auto readDeadline = butil::microseconds_from_now(
+            static_cast<int64_t>(kStreamReadTimeoutSec) * 1000000LL);
+        while (!readReady_ && !readError_ && !streamEnd_) {
+            if (readCond_.wait_until(lock, readDeadline) == ETIMEDOUT) {
+                break;
+            }
+        }
+        if (!readReady_ && !readError_ && !streamEnd_) {
             LOG(ERROR) << "Stream read timed out after " << kStreamReadTimeoutSec
                        << "s, streamId=" << streamId_;
             RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED, "Stream read timeout");
@@ -296,7 +305,7 @@ public:
     {
         brpc::StreamId id = brpc::INVALID_STREAM_ID;
         {
-            std::lock_guard<std::mutex> lock(readMtx_);
+            std::lock_guard<bthread::Mutex> lock(readMtx_);
             id = streamId_;
             streamId_ = brpc::INVALID_STREAM_ID;
         }
@@ -333,8 +342,8 @@ private:
     std::atomic<bool> finished_;
 
     // Read synchronization
-    std::mutex readMtx_;
-    std::condition_variable readCond_;
+    bthread::Mutex readMtx_;
+    bthread::ConditionVariable readCond_;
     std::deque<butil::IOBuf> pendingMessages_;
     bool readReady_;
     bool streamEnd_;

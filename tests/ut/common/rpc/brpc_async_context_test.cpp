@@ -23,6 +23,8 @@
 #include <vector>
 
 #include "datasystem/common/rpc/brpc_async_context.h"
+#include <bthread/mutex.h>
+#include <bthread/condition_variable.h>
 
 namespace datasystem {
 
@@ -154,9 +156,11 @@ TEST(BrpcAsyncContextTest, MakeDoneAndCvWaitWake)
 
     // Waiter thread: blocks on cv.wait() (simulates AsyncRead)
     std::thread waiter([&call, &waiterStarted, &waiterWoken]() {
-        std::unique_lock<std::mutex> lock(call->mtx);
+        std::unique_lock<bthread::Mutex> lock(call->mtx);
         waiterStarted.store(true);
-        call->cv.wait(lock, [&call] { return call->completed; });
+        while (!call->completed) {
+            call->cv.wait(lock);
+        }
         waiterWoken.store(true);
     });
 
@@ -168,7 +172,7 @@ TEST(BrpcAsyncContextTest, MakeDoneAndCvWaitWake)
 
     // Notifier: simulates OnRpcDone (runs on brpc bthread in production)
     {
-        std::lock_guard<std::mutex> lock(call->mtx);
+        std::lock_guard<bthread::Mutex> lock(call->mtx);
         call->completed = true;
         call->cv.notify_one();
     }

@@ -30,6 +30,8 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <bthread/mutex.h>
+#include <bthread/condition_variable.h>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -51,8 +53,8 @@ struct BrpcAsyncCall {
     BrpcAsyncCall() : completed(false), failed(false), createdAt(std::chrono::steady_clock::now()) {}
     ~BrpcAsyncCall() = default;
 
-    std::mutex mtx;
-    std::condition_variable cv;
+    bthread::Mutex mtx;
+    bthread::ConditionVariable cv;
     bool completed;
     bool failed;
     std::chrono::steady_clock::time_point createdAt;
@@ -93,7 +95,7 @@ public:
         int64_t tagId = nextTagId_.fetch_add(1, std::memory_order_relaxed);
         auto call = std::make_shared<BrpcAsyncCall>();
         auto& shard = shards_[GetShardIndex(tagId)];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         shard.pendingCalls[tagId] = call;
         return tagId;
     }
@@ -105,7 +107,7 @@ public:
     std::shared_ptr<BrpcAsyncCall> GetCall(int64_t tagId)
     {
         auto& shard = shards_[GetShardIndex(tagId)];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         auto it = shard.pendingCalls.find(tagId);
         if (it == shard.pendingCalls.end()) {
             return nullptr;
@@ -128,7 +130,7 @@ public:
     std::shared_ptr<BrpcAsyncCall> TakeCall(int64_t tagId)
     {
         auto& shard = shards_[GetShardIndex(tagId)];
-        std::lock_guard<std::mutex> lock(shard.mutex);
+        std::lock_guard<bthread::Mutex> lock(shard.mutex);
         auto it = shard.pendingCalls.find(tagId);
         if (it == shard.pendingCalls.end()) {
             return nullptr;
@@ -149,7 +151,7 @@ public:
         size_t idx = GetShardIndex(tagId);
         {
             auto& shard = shards_[idx];
-            std::lock_guard<std::mutex> lock(shard.mutex);
+            std::lock_guard<bthread::Mutex> lock(shard.mutex);
             shard.pendingCalls.erase(tagId);
             CleanupExpiredInShard(shard);
         }
@@ -158,14 +160,14 @@ public:
         size_t cleanIdx = nextCleanupShard_.fetch_add(1, std::memory_order_relaxed) % kShardCount;
         if (cleanIdx != idx) {
             auto& s = shards_[cleanIdx];
-            std::lock_guard<std::mutex> lock(s.mutex);
+            std::lock_guard<bthread::Mutex> lock(s.mutex);
             CleanupExpiredInShard(s);
         }
     }
 
 private:
     struct Shard {
-        std::mutex mutex;
+        bthread::Mutex mutex;
         std::map<int64_t, std::shared_ptr<BrpcAsyncCall>> pendingCalls;
     };
 
@@ -211,7 +213,7 @@ private:
      */
     static void OnRpcDone(std::shared_ptr<BrpcAsyncCall> call)
     {
-        std::lock_guard<std::mutex> lock(call->mtx);
+        std::lock_guard<bthread::Mutex> lock(call->mtx);
         call->failed = call->cntl.Failed();
         if (call->failed) {
             call->errorCode = call->cntl.ErrorCode();
