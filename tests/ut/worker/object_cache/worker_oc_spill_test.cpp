@@ -19,8 +19,11 @@
  */
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
+#include <algorithm>
 #include <dirent.h>
+#include <functional>
 #include <limits.h>
+#include <sstream>
 #include <unistd.h>
 
 #include "ut/common.h"
@@ -34,14 +37,27 @@
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 
 DS_DECLARE_string(spill_directory);
+DS_DECLARE_uint64(spill_size_limit);
 DS_DECLARE_uint64(spill_file_open_limit);
 DS_DECLARE_uint64(spill_file_max_size_mb);
+DS_DECLARE_uint32(spill_thread_num);
 
 using namespace datasystem::object_cache;
 
 namespace datasystem {
 namespace ut {
 namespace {
+std::vector<uint64_t> ParseSpillIoStats(const std::string &stats)
+{
+    std::vector<uint64_t> values;
+    std::stringstream stream(stats);
+    std::string token;
+    while (std::getline(stream, token, '/')) {
+        values.emplace_back(std::stoull(token));
+    }
+    return values;
+}
+
 bool IsFileOpenInCurrentProcess(const std::string &path)
 {
     char expected[PATH_MAX] = { 0 };
@@ -79,11 +95,14 @@ class SpillFileManagerTest : public CommonTest {
         FLAGS_v = 0;
         LOG_IF_ERROR(inject::Set("worker.Spill.Sync", "return()"), "set inject point failed");
     }
+
+protected:
+    SpillIoCounters spillIoCounters_;
 };
 
 TEST_F(SpillFileManagerTest, TestWriteToFile)
 {
-    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>();
+    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>(0, spillIoCounters_);
     std::string objectKey = "ThisisAObject";
     std::string in = "Test1234567890";
     fileMgr_->Init({ "./spill_TestWriteToFile" });
@@ -97,9 +116,39 @@ TEST_F(SpillFileManagerTest, TestWriteToFile)
     ASSERT_EQ(decSize, in.size());
 }
 
+TEST_F(SpillFileManagerTest, TestSmallObjectSyncFailurePreservesBufferedObjects)
+{
+    std::shared_ptr<SpillFileManager> fileMgr = std::make_shared<SpillFileManager>(0, spillIoCounters_);
+    fileMgr->Init("./spill_TestSmallObjectSyncFailurePreservesBufferedObjects");
+
+    const size_t objectSize = 10 * 1024;
+    const size_t bufferedObjectCount = SpillFileManager::LARGE_OBJ_SIZE_THRESHOLD / objectSize;
+    const std::string data(objectSize, 's');
+    const std::string preservedKey = "preserved_key";
+    const std::string failedKey = "failed_key";
+
+    for (size_t i = 0; i < bufferedObjectCount; i++) {
+        const std::string key = i == 0 ? preservedKey : "buffered_" + std::to_string(i);
+        DS_EXPECT_OK(fileMgr->Spill(key, const_cast<char *>(data.data()), data.size()));
+    }
+
+    ASSERT_TRUE(inject::Set("worker.Spill.Sync", "off").IsOk());
+    ASSERT_TRUE(inject::Set("worker.Spill.SyncError", "return()").IsOk());
+    auto restoreSyncInject = Raii([]() {
+        (void)inject::Set("worker.Spill.Sync", "return()");
+        (void)inject::Clear("worker.Spill.SyncError");
+    });
+    Status rc = fileMgr->Spill(failedKey, const_cast<char *>(data.data()), data.size());
+    ASSERT_TRUE(rc.IsError());
+
+    std::string loaded(objectSize, '\0');
+    DS_EXPECT_OK(fileMgr->LoadFromDisk(preservedKey, loaded.data(), loaded.size()));
+    ASSERT_EQ(loaded, data);
+}
+
 TEST_F(SpillFileManagerTest, TestTenantIsolation1)
 {
-    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>();
+    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>(0, spillIoCounters_);
     fileMgr_->Init({ "./spill_TestTenantIsolation1" });
 
     // No tenant id, big object, spill to file.
@@ -132,7 +181,7 @@ TEST_F(SpillFileManagerTest, TestTenantIsolation1)
 
 TEST_F(SpillFileManagerTest, TestTenantIsolation2)
 {
-    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>();
+    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>(0, spillIoCounters_);
     fileMgr_->Init({ "./spill_TestTenantIsolation2" });
     std::string tenantId = "tenant123";
 
@@ -166,7 +215,7 @@ TEST_F(SpillFileManagerTest, TestTenantIsolation2)
 
 TEST_F(SpillFileManagerTest, TestTenantIsolation3)
 {
-    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>();
+    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>(0, spillIoCounters_);
     fileMgr_->Init({ "./spill_TestTenantIsolation3" });
     std::string tenantId = "/tenant/1/2/3";
     std::string key1 = tenantId + K_SEPARATOR + "key_1";
@@ -188,7 +237,7 @@ TEST_F(SpillFileManagerTest, TestTenantIsolation3)
 
 TEST_F(SpillFileManagerTest, LEVEL1_TestSpillBuffer)
 {
-    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>();
+    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>(0, spillIoCounters_);
     fileMgr_->Init({ "./spill_TestSpillBuffer" });
     std::vector<size_t> sizeArray = { 10, 100, 1024, 10240, 102400 };
     int maxLoop = 100;
@@ -235,7 +284,7 @@ TEST_F(SpillFileManagerTest, LEVEL1_TestSpillBuffer)
 
 TEST_F(SpillFileManagerTest, DISABLED_TestSpillBuffer2)
 {
-    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>();
+    std::shared_ptr<SpillFileManager> fileMgr_ = std::make_shared<SpillFileManager>(0, spillIoCounters_);
     fileMgr_->Init({ "./spill_TestSpillBuffer2" });
     int loop = 100;
     std::vector<size_t> sizeArray = { 10, 100, 1024, 10240, 102400 };
@@ -284,7 +333,7 @@ TEST_F(SpillFileManagerTest, OpenFileLimitTest)
     FLAGS_spill_file_open_limit = 1;
     std::string data = RandomData().GetPartRandomString(20 * 1024 * 1024, 10);
 
-    std::shared_ptr<SpillFileManager> fileMgr = std::make_shared<SpillFileManager>();
+    std::shared_ptr<SpillFileManager> fileMgr = std::make_shared<SpillFileManager>(0, spillIoCounters_);
     fileMgr->Init({ "./spill_OpenFileLimitTest" });
 
     std::string key0 = "key_1";
@@ -363,7 +412,7 @@ TEST_F(SpillFileManagerTest, OffsetReadSpilledObject)
     std::string data1 = RandomData().GetRandomString(dataSize1);
     std::string data2 = RandomData().GetRandomString(dataSize2);
 
-    std::shared_ptr<SpillFileManager> fileMgr = std::make_shared<SpillFileManager>();
+    std::shared_ptr<SpillFileManager> fileMgr = std::make_shared<SpillFileManager>(0, spillIoCounters_);
     fileMgr->Init({ "./spill_OffsetReadSpilledObject" });
 
     int loopCount = 10;
@@ -1066,5 +1115,328 @@ TEST_F(SpillRequestHandlerTest, TestTenantIsolation2)
     ASSERT_EQ(data2, out2);
     DS_EXPECT_OK(handler->Delete(key2));
 }
+
+// ============================================================================
+// Spill IO counters tests
+// ============================================================================
+
+TEST_F(SpillRequestHandlerTest, TestSpillIoCounters_BasicIncrement)
+{
+    // Verify single Spill/Get/Delete increments counters correctly.
+    std::string objectKey = "test_basic_inc";
+    const size_t objSize = 2 * 1024 * 1024;
+    std::string data = RandomData().GetRandomString(objSize);
+    std::string load(objSize, '\0');
+
+    // Spill
+    DS_EXPECT_OK(handler->Spill(objectKey, const_cast<char *>(data.data()), data.size()));
+    std::string afterSpill = handler->GetSpillIoStats();
+    auto spillValues = ParseSpillIoStats(afterSpill);
+    ASSERT_EQ(spillValues.size(), 14u);
+
+    // A partial read must count only the bytes read from the file.
+    const size_t partialSize = objSize / 4;
+    const size_t partialOffset = objSize / 4;
+    std::string partialLoad(partialSize, '\0');
+    DS_EXPECT_OK(handler->Get(objectKey, partialLoad.data(), partialSize, partialOffset));
+    auto afterPartialGet = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(afterPartialGet.size(), 14u);
+    ASSERT_EQ(afterPartialGet[4], spillValues[4] + partialSize);
+    ASSERT_EQ(partialLoad, data.substr(partialOffset, partialSize));
+
+    // Get
+    DS_EXPECT_OK(handler->Get(objectKey, const_cast<char *>(load.data()), load.size()));
+    std::string afterGet = handler->GetSpillIoStats();
+
+    // Delete
+    auto beforeDelete = ParseSpillIoStats(handler->GetSpillIoStats());
+    DS_EXPECT_OK(handler->Delete(objectKey));
+    auto afterDelete = ParseSpillIoStats(handler->GetSpillIoStats());
+
+    ASSERT_FALSE(afterSpill.empty());
+    ASSERT_FALSE(afterGet.empty());
+    ASSERT_EQ(afterDelete.size(), 14u);
+    ASSERT_EQ(afterDelete[5], beforeDelete[5]);
+    ASSERT_EQ(afterDelete[6], beforeDelete[6]);
+    ASSERT_EQ(data, load);
+
+    // An eviction-triggered deletion increments spill eviction counters.
+    std::string evictKey = "test_eviction_delete";
+    DS_EXPECT_OK(handler->Spill(evictKey, const_cast<char *>(data.data()), data.size()));
+    auto beforeEvictionDelete = ParseSpillIoStats(handler->GetSpillIoStats());
+    DS_EXPECT_OK(handler->Delete(evictKey, true));
+    auto afterEvictionDelete = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(afterEvictionDelete[5], beforeEvictionDelete[5] + 1);
+    ASSERT_EQ(afterEvictionDelete[6], beforeEvictionDelete[6] + objSize);
+}
+
+TEST_F(SpillRequestHandlerTest, TestSpillIoCounters_MultipleOperations)
+{
+    // Verify cumulative counters after multiple operations.
+    const int numObjects = 50;
+    const size_t objSize = 2 * 1024 * 1024;
+    std::string dataTemplate = RandomData().GetRandomString(objSize);
+
+    // Spill 50 objects
+    for (int i = 0; i < numObjects; i++) {
+        std::string key = "test_multi_op_" + std::to_string(i);
+        DS_EXPECT_OK(handler->Spill(key, const_cast<char *>(dataTemplate.data()), objSize));
+    }
+
+    // Get 20 out of 50
+    for (int i = 0; i < 20; i++) {
+        std::string key = "test_multi_op_" + std::to_string(i);
+        std::string load(objSize, '\0');
+        DS_EXPECT_OK(handler->Get(key, const_cast<char *>(load.data()), objSize));
+    }
+
+    // Delete 10 out of 50
+    for (int i = 0; i < 10; i++) {
+        std::string key = "test_multi_op_" + std::to_string(i);
+        DS_EXPECT_OK(handler->Delete(key));
+    }
+
+    // Verify GetSpillIoStats returns well-formed output (14 fields, '/' separated)
+    std::string stats = handler->GetSpillIoStats();
+    ASSERT_FALSE(stats.empty());
+    size_t slashCount = std::count(stats.begin(), stats.end(), '/');
+    ASSERT_EQ(slashCount, 13u);  // 14 fields = 13 slashes
+
+    // Cleanup remaining objects
+    for (int i = 10; i < numObjects; i++) {
+        std::string key = "test_multi_op_" + std::to_string(i);
+        DS_EXPECT_OK(handler->Delete(key));
+    }
+}
+
+TEST_F(SpillRequestHandlerTest, TestSpillIoCounters_FailCount)
+{
+    // Verify spillInFailCount increments when spill space is full.
+    uint64_t savedLimit = FLAGS_spill_size_limit;
+    FLAGS_spill_size_limit = static_cast<uint64_t>(1) * 1024 * 1024;  // 1 MB
+    auto guard = Raii([savedLimit]() { FLAGS_spill_size_limit = savedLimit; });
+
+    size_t largeSize = 10 * 1024 * 1024;  // 10 MB > 1 MB limit
+    std::string largeData = RandomData().GetRandomString(largeSize);
+    std::string key = "test_fail_count";
+    auto beforeStats = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(beforeStats.size(), 14u);
+
+    // Attempt to spill — should fail with K_NO_SPACE
+    Status rc = handler->Spill(key, const_cast<char *>(largeData.data()), largeSize);
+    ASSERT_TRUE(rc.IsError());
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_NO_SPACE);
+
+    // Verify stats still well-formed
+    std::string afterStats = handler->GetSpillIoStats();
+    ASSERT_FALSE(afterStats.empty());
+    auto values = ParseSpillIoStats(afterStats);
+    ASSERT_EQ(values.size(), 14u);
+    ASSERT_GE(values[2], beforeStats[2] + 1u);  // cumulative spill-in failures
+    ASSERT_GE(values[9], beforeStats[9] + 1u);  // current-hour spill-in failures
+}
+
+TEST_F(SpillRequestHandlerTest, TestSpillIoCounters_SmallObjectFlushFailCount)
+{
+    const size_t smallSize = 10 * 1024;
+    std::string data(smallSize, 'f');
+
+    // Keys are sharded across SpillFileManager instances. Fill one manager's buffer just below
+    // the threshold so the next key for the same manager must execute ActiveSpillFile::Write.
+    ASSERT_GT(FLAGS_spill_thread_num, 0u);
+    const std::string keyPrefix = "test_small_flush_fail_";
+    const size_t targetManager = std::hash<std::string>{}(keyPrefix) % FLAGS_spill_thread_num;
+    const size_t bufferedObjects = SpillFileManager::LARGE_OBJ_SIZE_THRESHOLD / smallSize;
+    size_t filledObjects = 0;
+    for (size_t i = 0; filledObjects < bufferedObjects; i++) {
+        std::string key = keyPrefix + "buffer_" + std::to_string(i);
+        if (std::hash<std::string>{}(key) % FLAGS_spill_thread_num != targetManager) {
+            continue;
+        }
+        DS_EXPECT_OK(handler->Spill(key, data.data(), data.size()));
+        filledObjects++;
+    }
+    std::string flushKey;
+    for (size_t i = 0;; i++) {
+        std::string key = keyPrefix + "flush_" + std::to_string(i);
+        if (std::hash<std::string>{}(key) % FLAGS_spill_thread_num == targetManager) {
+            flushKey = key;
+            break;
+        }
+    }
+    auto beforeValues = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(beforeValues.size(), 14u);
+
+    ASSERT_TRUE(inject::Set("worker.Spill.Write", "return(K_RUNTIME_ERROR)").IsOk());
+    auto clearInject = Raii([]() { (void)inject::Clear("worker.Spill.Write"); });
+    Status rc = handler->Spill(flushKey, data.data(), data.size());
+    ASSERT_TRUE(rc.IsError());
+
+    auto afterValues = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(afterValues.size(), 14u);
+    ASSERT_GE(afterValues[2], beforeValues[2] + 1u);  // cumulative spill-in failures
+    ASSERT_GE(afterValues[9], beforeValues[9] + 1u);  // current-hour spill-in failures
+}
+
+TEST_F(SpillRequestHandlerTest, TestSpillIoCounters_SyncFailCount)
+{
+    const size_t objSize = 2 * 1024 * 1024;
+    std::string data = RandomData().GetRandomString(objSize);
+    const std::string objectKey = "test_sync_fail_count";
+
+    auto beforeValues = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(beforeValues.size(), 14u);
+    ASSERT_TRUE(inject::Set("worker.Spill.Sync", "off").IsOk());
+    ASSERT_TRUE(inject::Set("worker.Spill.SyncError", "return()").IsOk());
+    auto clearInject = Raii([]() {
+        (void)inject::Set("worker.Spill.Sync", "return()");
+        (void)inject::Clear("worker.Spill.SyncError");
+    });
+
+    Status rc = handler->Spill(objectKey, const_cast<char *>(data.data()), data.size());
+    ASSERT_TRUE(rc.IsError());
+
+    auto afterValues = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(afterValues.size(), 14u);
+    ASSERT_EQ(afterValues[0], beforeValues[0]);  // successful spill count unchanged
+    ASSERT_EQ(afterValues[1], beforeValues[1]);  // successful spill bytes unchanged
+    ASSERT_GE(afterValues[2], beforeValues[2] + 1u);  // sync failure counted
+    ASSERT_GE(afterValues[9], beforeValues[9] + 1u);  // hourly sync failure counted
+}
+
+TEST_F(SpillRequestHandlerTest, TestSpillIoCounters_CurrentHourDelta)
+{
+    // Verify rolling one-hour delta: accumulates within the window, then resets at the window boundary.
+    const size_t objSize = 2 * 1024 * 1024;
+    std::string data = RandomData().GetRandomString(objSize);
+
+    // Call 1: baseline (first call triggers hourly snapshot init)
+    std::string stats1 = handler->GetSpillIoStats();
+    ASSERT_FALSE(stats1.empty());
+
+    // Spill 3 objects → physical SSD IO
+    for (int i = 0; i < 3; i++) {
+        std::string key = "test_delta_" + std::to_string(i);
+        DS_EXPECT_OK(handler->Spill(key, const_cast<char *>(data.data()), objSize));
+    }
+
+    // Call 2: current_hour delta reflects the 3 spills
+    std::string stats2 = handler->GetSpillIoStats();
+    ASSERT_FALSE(stats2.empty());
+    auto values1 = ParseSpillIoStats(stats1);
+    auto values2 = ParseSpillIoStats(stats2);
+    ASSERT_EQ(values1.size(), 14u);
+    ASSERT_EQ(values2.size(), 14u);
+    ASSERT_GE(values2[0], values1[0] + 3u);  // cumulative spill-in count
+    ASSERT_GE(values2[7], 3u);               // rolling-window spill-in count
+    ASSERT_GE(values2[8], 3u * objSize);     // rolling-window spill-in bytes
+
+    // Call 3: no ops between, current_hour delta stays the same (within same hour)
+    std::string stats3 = handler->GetSpillIoStats();
+    ASSERT_FALSE(stats3.empty());
+    ASSERT_EQ(stats2, stats3);  // same rolling window, no new IO → same hour-to-date
+
+    // Advance the clock across the hourly boundary. The boundary sample starts
+    // a new window and must not report the previous hour's delta.
+    constexpr char kClockOffsetPoint[] = "worker.Spill.GetSpillIoStats.clockOffsetMs";
+    ASSERT_TRUE(inject::Set(kClockOffsetPoint, "100*call(3600000)").IsOk());
+    auto clearClockOffset = Raii([&]() { (void)inject::Clear(kClockOffsetPoint); });
+    auto boundaryValues = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(boundaryValues.size(), 14u);
+    ASSERT_EQ(boundaryValues[7], 0u);  // new hour starts at zero
+    ASSERT_EQ(boundaryValues[8], 0u);
+
+    const std::string boundaryKey = "test_delta_boundary";
+    DS_EXPECT_OK(handler->Spill(boundaryKey, const_cast<char *>(data.data()), objSize));
+    auto afterBoundaryValues = ParseSpillIoStats(handler->GetSpillIoStats());
+    ASSERT_EQ(afterBoundaryValues.size(), 14u);
+    ASSERT_GE(afterBoundaryValues[7], 1u);  // subsequent IO belongs to the new hour
+    ASSERT_GE(afterBoundaryValues[8], objSize);
+
+    // Cleanup
+    for (int i = 0; i < 3; i++) {
+        DS_EXPECT_OK(handler->Delete("test_delta_" + std::to_string(i)));
+    }
+    DS_EXPECT_OK(handler->Delete(boundaryKey));
+}
+
+TEST_F(SpillRequestHandlerTest, TestSpillIoCounters_Concurrent)
+{
+    // Verify concurrent Spill/Get/Delete do not corrupt counters.
+    const int numThreads = 4;
+    const int opsPerThread = 100;
+    const size_t objSize = 1024 * 1024;
+    std::string data = RandomData().GetRandomString(objSize);
+    std::atomic<size_t> spilledBytes(0);
+    std::atomic<size_t> gotBytes(0);
+    std::atomic<size_t> deletedBytes(0);
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < numThreads; t++) {
+        threads.emplace_back([this, t, &data, objSize, &spilledBytes, &gotBytes, &deletedBytes]() {
+            for (int i = 0; i < opsPerThread; i++) {
+                std::string key = "test_concurr_" + std::to_string(t) + "_" + std::to_string(i);
+
+                Status rc = handler->Spill(key, const_cast<char *>(data.data()), objSize);
+                if (rc.IsOk()) {
+                    spilledBytes.fetch_add(objSize);
+                }
+
+                std::string load(objSize, '\0');
+                rc = handler->Get(key, const_cast<char *>(load.data()), objSize);
+                if (rc.IsOk()) {
+                    gotBytes.fetch_add(objSize);
+                }
+
+                rc = handler->Delete(key);
+                if (rc.IsOk()) {
+                    deletedBytes.fetch_add(objSize);
+                }
+            }
+        });
+    }
+
+    for (auto &th : threads) {
+        th.join();
+    }
+
+    // Verify stats output is well-formed after concurrent operations
+    std::string stats = handler->GetSpillIoStats();
+    ASSERT_FALSE(stats.empty());
+    size_t slashCount = std::count(stats.begin(), stats.end(), '/');
+    ASSERT_EQ(slashCount, 13u);
+
+    LOG(INFO) << "Concurrent test: spilled=" << spilledBytes.load()
+              << " got=" << gotBytes.load() << " deleted=" << deletedBytes.load();
+}
+TEST_F(SpillRequestHandlerTest, TestSpillIoCounters_NoPhysicalIoForBufferOnly)
+{
+    // Verify small objects in SpillBuffer do NOT trigger physical SSD IO counters.
+    // Only actual file Write/Read/Delete should increment the counters.
+    const size_t smallSize = 512;  // well below LARGE_OBJ_SIZE_THRESHOLD (1MB)
+    std::string data = RandomData().GetRandomString(smallSize);
+    std::string load(smallSize, '\0');
+    std::string key = "test_buf_only";
+
+    // Baseline: read stats before any operation
+    std::string stats1 = handler->GetSpillIoStats();
+    ASSERT_FALSE(stats1.empty());
+
+    // Spill small object → goes to SpillBuffer, no physical SSD write
+    DS_EXPECT_OK(handler->Spill(key, const_cast<char *>(data.data()), data.size()));
+    std::string stats2 = handler->GetSpillIoStats();
+    ASSERT_EQ(stats1, stats2);  // counters unchanged: no physical IO
+
+    // Get from buffer → no physical SSD read
+    DS_EXPECT_OK(handler->Get(key, const_cast<char *>(load.data()), load.size()));
+    std::string stats3 = handler->GetSpillIoStats();
+    ASSERT_EQ(stats1, stats3);  // counters unchanged: no physical IO
+
+    // Delete from buffer before flush → no physical SSD delete
+    DS_EXPECT_OK(handler->Delete(key));
+    std::string stats4 = handler->GetSpillIoStats();
+    ASSERT_EQ(stats1, stats4);  // counters unchanged: no physical IO
+}
+
 }  // namespace ut
 }  // namespace datasystem

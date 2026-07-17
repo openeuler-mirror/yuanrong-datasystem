@@ -271,7 +271,7 @@ Status AsyncSendManager::AfterSendToRemote(const std::string &objectKey, SafeObj
         if (WorkerOcSpill::Instance()->IsSpaceExceedLWM() && entry->IsSpilled()) {
             auto spilledSize = WorkerOcSpill::Instance()->GetSpilledSize();
             LOG(INFO) << "try delete spilled object " << objectKey << ", spilled size:" << spilledSize;
-            rc = WorkerOcSpill::Instance()->Delete(objectKey);
+            rc = WorkerOcSpill::Instance()->Delete(objectKey, true);
             if (rc.IsError() && rc.GetCode() != K_NOT_FOUND) {
                 LOG(ERROR) << "Delete spilled object failed with status:" << rc.ToString();
                 return Status::OK();

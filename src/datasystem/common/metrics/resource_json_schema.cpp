@@ -73,6 +73,14 @@ const std::array<ResourceFieldDesc, DESC_COUNT> DESC_TABLE = {
         { true, true, true, true, true }, '/', true, "oc_hit_num" },
     ResourceFieldDesc{ { "leak_count" }, { true }, '/', true, "brpc_stream_leak_count" },
     ResourceFieldDesc{ { "queue_size" }, { true }, '/', true, "deferred_cleanup_queue_size" },
+    ResourceFieldDesc{ { "cumul_spill_in_count", "cumul_spill_in_bytes", "cumul_spill_in_fail",
+        "cumul_spill_out_count", "cumul_spill_out_bytes",
+        "cumul_spill_evict_count", "cumul_spill_evict_bytes",
+        "current_hour_spill_in_count", "current_hour_spill_in_bytes", "current_hour_spill_in_fail",
+        "current_hour_spill_out_count", "current_hour_spill_out_bytes",
+        "current_hour_spill_evict_count", "current_hour_spill_evict_bytes" },
+        { true, true, true, true, true, true, true, true, true, true, true, true, true, true },
+        '/', true, "spill_io_stats" },
 };
 
 const ResourceFieldDesc NULL_DESC{ {}, {}, '\0', false, "" };

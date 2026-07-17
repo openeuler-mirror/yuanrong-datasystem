@@ -1493,6 +1493,9 @@ void WorkerOCServer::RegisteringWorkerCallbackFunc()
     // The usage of spill
     instance.RegisterCollectHandler(ResMetricName::SPILL_HARD_DISK,
                                     []() { return object_cache::WorkerOcSpill::Instance()->GetSpillUsage(); });
+    // Spill IO statistics (cumulative + rolling one-hour delta)
+    instance.RegisterCollectHandler(ResMetricName::SPILL_IO_STATS,
+                                    []() { return object_cache::WorkerOcSpill::Instance()->GetSpillIoStats(); });
     // The usage of share memory
     instance.RegisterCollectHandler(ResMetricName::SHARED_MEMORY,
                                     []() { return memory::Allocator::Instance()->GetMemoryStatistics(); });

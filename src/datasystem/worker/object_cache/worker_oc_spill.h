@@ -96,9 +96,9 @@ public:
 
     /**
      * @brief Sync data to disk.
-     *
+     * @return Status of the sync operation.
      */
-    void Sync();
+    Status Sync();
 
     /**
      * @brief Get fd.
@@ -125,6 +125,28 @@ struct HoleFileInfo {
     std::string tenantId;
     std::string spillFilename;
     FileInfo *fileinfo;
+};
+
+// Worker-owned physical SSD spill IO counters shared with its file managers.
+struct SpillIoCounters {
+    std::atomic<uint64_t> spillInCount{ 0 };
+    std::atomic<uint64_t> spillInBytes{ 0 };
+    std::atomic<uint64_t> spillInFailCount{ 0 };
+    std::atomic<uint64_t> spillOutCount{ 0 };
+    std::atomic<uint64_t> spillOutBytes{ 0 };
+    std::atomic<uint64_t> spillEvictCount{ 0 };
+    std::atomic<uint64_t> spillEvictBytes{ 0 };
+};
+
+// Snapshot of spill IO counters, used for delta calculation in GetSpillIoStats.
+struct SpillIoSnapshot {
+    uint64_t spillInCount = 0;
+    uint64_t spillInBytes = 0;
+    uint64_t spillInFailCount = 0;
+    uint64_t spillOutCount = 0;
+    uint64_t spillOutBytes = 0;
+    uint64_t spillEvictCount = 0;
+    uint64_t spillEvictBytes = 0;
 };
 
 class Throttle {
@@ -260,7 +282,10 @@ public:
     // large object size threshold 1 MB
     static const size_t LARGE_OBJ_SIZE_THRESHOLD = 1024 * 1024;
 
-    SpillFileManager(uint32_t id = 0) : id_(id){};
+    SpillFileManager(uint32_t id, SpillIoCounters &spillIoCounters)
+        : spillIoCounters_(spillIoCounters), id_(id)
+    {
+    }
 
     ~SpillFileManager();
 
@@ -323,9 +348,10 @@ public:
      * @brief Remove the spilled data from the file.
      * @param[in] objectKey The ID of the object that data to be deleted.
      * @param[out] decSize The size of the object that to be deleted.
+     * @param[in] isEviction Whether the deletion is triggered by spill eviction.
      * @return Status of the call.
      */
-    Status DeleteFromDisk(const std::string &objectKey, uint64_t &decSize);
+    Status DeleteFromDisk(const std::string &objectKey, uint64_t &decSize, bool isEviction = false);
 
     /**
      * @brief Get object location, for testing.
@@ -353,6 +379,27 @@ public:
     constexpr static const float HOLE_SIZE_RATIO_THRESHOLD_30 = 0.3;
 
 private:
+    struct SpillFileContext {
+        std::string objectKey;
+        std::string tenantId;
+        ObjectLocation location;
+        std::shared_ptr<ActiveSpillFile> file;
+        uint64_t size = 0;
+        uint64_t waitLockElapsed = 0;
+        uint64_t writeElapsed = 0;
+        uint64_t syncElapsed = 0;
+    };
+
+    Status FlushSpillBuffer(const std::string &failedObjectKey);
+    Status SpillBufferFailure(const std::string &objectKey, const Status &rc);
+    Status FlushedSpillBufferFailure(const std::string &objectKey, const std::string &path, size_t size,
+                                     const Status &rc);
+    Status SpillToFile(const std::string &objectKey, const std::string &tenantId,
+                       const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads, uint64_t size);
+    Status WriteSpillObject(const std::vector<std::pair<const uint8_t *, uint64_t>> &payloads,
+                            SpillFileContext &context);
+    Status SyncSpillObject(SpillFileContext &context);
+
     /**
      * @brief Find the place to write data of requested size.
      * @param[in] tenantId Tenant ID corresponding to spilled data.
@@ -493,7 +540,7 @@ private:
      * @return Status
      */
     template <typename F1, typename F2>
-    Status LoadFromDiskImpl(const std::string &objectKey, F1 &&readBufferFunc, F2 &&readFileFunc)
+    Status LoadFromDiskImpl(const std::string &objectKey, size_t readSize, F1 &&readBufferFunc, F2 &&readFileFunc)
     {
         std::shared_lock<std::shared_timed_mutex> rLock(fileInfoMutex_);
         uint64_t size = 0;
@@ -522,6 +569,10 @@ private:
         }
         Timer timer;
         Status rc = readFileFunc(file, loc.offset, loc.size);
+        if (rc.IsOk()) {
+            spillIoCounters_.spillOutCount.fetch_add(1, std::memory_order_relaxed);
+            spillIoCounters_.spillOutBytes.fetch_add(readSize, std::memory_order_relaxed);
+        }
         LOG(INFO) << FormatString("Id: %d, Read object [%s], fd: %d, path: %s, offset: %ld, size: %ld, cost: %fms", id_,
                                   objectKey, file->GetFd(), loc.path, loc.offset, loc.size, timer.ElapsedMilliSecond());
         if (isReopen && FdCountExceedLimit()) {
@@ -539,6 +590,9 @@ private:
      * @param fd The fd.
      */
     void DisableReadAheadIfNeed(int fd);
+
+    // Worker-owned counters. The WorkerOcSpill owner outlives all file managers.
+    SpillIoCounters &spillIoCounters_;
 
     // I/O rate limit Throttle
     Throttle throttle_;
@@ -594,9 +648,10 @@ public:
     /**
      * @brief Delete the object that has already spilled to the external storage.
      * @param[in] objectKey The Id of the object to be deleted.
+     * @param[in] isEviction Whether the deletion is triggered by spill eviction.
      * @return Status of the call.
      */
-    Status Delete(const std::string &objectKey);
+    Status Delete(const std::string &objectKey, bool isEviction = false);
 
     /**
      * @brief Get the object spilled data from external storage.
@@ -732,6 +787,15 @@ public:
     std::string GetSpillUsage();
 
     /**
+     * @brief Get spill IO statistics: 7 cumulative counters + 7 rolling one-hour deltas.
+     *        current_hour fields are hour-to-date values in a rolling window anchored at the first reset,
+     *        not calendar-hour values.
+     *        Thread-safe; concurrent calls are serialized for delta state consistency.
+     * @return "cumul.../cumul.../.../currentHour.../currentHour..."
+     */
+    std::string GetSpillIoStats();
+
+    /**
      * @brief Get the size of the spill limit.
      * @note   FlagS_spill_size_limit=0 means spill_size_limit is 95% of the initial disk space
      * @return  uint64_t - The size of the spill limit.
@@ -778,10 +842,21 @@ private:
     // compaction thread
     Thread spillCompactionThread_;
 
+    SpillIoCounters spillIoCounters_;
+
     // Pointer to the SpillFileManager instance.
     std::vector<std::unique_ptr<SpillFileManager>> fileMgr_;
     // The size of all active spilled object data that has not been deleted from file and is still in use
     std::atomic<uint64_t> totalActiveSpilledSize_{ 0 };
+
+    // Protects the previous snapshot and rolling-window reset timestamp used by GetSpillIoStats().
+    std::mutex spillIoStatsMutex_;
+
+    // Previous snapshot for the rolling one-hour delta. Reset after one hour elapses.
+    SpillIoSnapshot prevSnapshot_;
+
+    // Timestamp (ms) of the last rolling-window snapshot reset. 0 means not yet reset.
+    uint64_t lastHourlyResetTimeMs_ = 0;
 
     // The  95% of the disk free space when the worker is started.
     uint64_t initial95SpillFreeSpace_ = 0;
