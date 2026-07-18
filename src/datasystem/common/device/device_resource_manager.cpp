@@ -20,9 +20,19 @@
 #include "datasystem/common/util/memory.h"
 namespace datasystem {
 
+Status DeviceResourceManager::ValidateMemConfig() const
+{
+    const bool usesFfts = policyD2H != MemcopyPolicy::DIRECT || policyH2D != MemcopyPolicy::DIRECT;
+    const bool skipsHostStaging = policyD2H == MemcopyPolicy::HUGE_FFTS && policyH2D == MemcopyPolicy::HUGE_FFTS;
+    CHECK_FAIL_RETURN_STATUS(hostMemSize > 0 || !usesFfts || skipsHostStaging, K_INVALID,
+                             "Host ACL memory size must be greater than zero when FFTS uses host staging");
+    return Status::OK();
+}
+
 Status DeviceResourceManager::DoInit()
 {
     INJECT_POINT_NO_RETURN("AclResourceManager.Init");
+    RETURN_IF_NOT_OK(ValidateMemConfig());
 
     auto devInterImpl = DeviceManagerFactory::GetDeviceManager();
     struct AllocatorFuncRegister regFuncDevDev;
@@ -58,8 +68,16 @@ Status DeviceResourceManager::DoInit()
 
     auto *allocator = Allocator::Instance();
     LOG(INFO) << PrintMemConfig();
-    allocator->InitWithFlexibleRegister(AllocateType::DEV_DEVICE, deviceMemSize, regFuncDevDev);
-    allocator->InitWithFlexibleRegister(AllocateType::DEV_HOST, hostMemSize, regFuncDevHost);
+    auto initAllocator = [allocator](AllocateType type, uint64_t size,
+                                     const AllocatorFuncRegister &funcRegister) -> Status {
+        auto rc = allocator->InitWithFlexibleRegister(type, size, funcRegister);
+        return rc.GetCode() == K_DUPLICATED ? Status::OK() : rc;
+    };
+    RETURN_IF_NOT_OK(initAllocator(AllocateType::DEV_DEVICE, deviceMemSize, regFuncDevDev));
+    // A zero host pool is valid only when the selected policies bypass host staging.
+    if (hostMemSize > 0) {
+        RETURN_IF_NOT_OK(initAllocator(AllocateType::DEV_HOST, hostMemSize, regFuncDevHost));
+    }
 
     hostMemMgr_ = std::make_unique<HostMemMgr>(allocator);
     auto rc = hostMemMgr_->Init();

@@ -6,6 +6,8 @@ add_library(common_acl_device STATIC
     acl_device_manager.cpp
     p2phccl_comm_wrapper.cpp
     ffts_dispatcher.cpp
+    acl_parallel_direct_executor.cpp
+    acl_parallel_ffts_executor.cpp
     acl_resource_manager.cpp
     callback_thread.cpp
 )

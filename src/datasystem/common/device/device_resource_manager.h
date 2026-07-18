@@ -153,6 +153,8 @@ public:
     }
 
 protected:
+    Status ValidateMemConfig() const;
+
     MemcopyPolicy policyD2H = MemcopyPolicy::FFTS;
     MemcopyPolicy policyH2D = MemcopyPolicy::FFTS;
     uint64_t deviceMemSize = 104857600;  // 100MB

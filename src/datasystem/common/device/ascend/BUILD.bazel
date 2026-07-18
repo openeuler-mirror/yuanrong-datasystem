@@ -72,23 +72,63 @@ ds_cc_library(
     ],
 )
 
+# Parallel executor config-loading helpers (narrow header; kept local so env-parsing +
+# Status machinery does not leak into broadly-included utility headers).
+ds_cc_library(
+    name = "acl_parallel_config_util",
+    hdrs = ["acl_parallel_config_util.h"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags_header",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
 # 资源管理器
 ds_cc_library(
+    name = "acl_parallel_direct_executor",
+    srcs = ["acl_parallel_direct_executor.cpp"],
+    hdrs = ["acl_parallel_direct_executor.h"],
+    deps = [
+        "//src/datasystem/common/device:device_batch_copy_helper",
+        "//src/datasystem/common/device:device_manager_base",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+        ":acl_parallel_config_util",
+    ],
+)
+
+ds_cc_library(
     name = "acl_resource_manager",
-    srcs = ["acl_resource_manager.cpp"],
-    hdrs = ["acl_resource_manager.h"],
+    srcs = [
+        "acl_parallel_ffts_executor.cpp",
+        "acl_resource_manager.cpp",
+    ],
+    hdrs = [
+        "acl_parallel_ffts_executor.h",
+        "acl_resource_manager.h",
+    ],
     deps = [
         ":acl_device_manager",
+        ":acl_parallel_config_util",
+        ":acl_parallel_direct_executor",
         ":callback_thread",
         ":cann_types",
         ":ffts_dispatcher",
         "//src/datasystem/common/device:device_batch_copy_helper",
         "//src/datasystem/common/device:device_resource_manager",
         "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:buffer_composer",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/common/util:wait_post",
     ],
@@ -138,6 +178,8 @@ ds_cc_library(
     ],
     hdrs = [
         "acl_device_manager.h",
+        "acl_parallel_direct_executor.h",
+        "acl_parallel_ffts_executor.h",
         "acl_pipeline_task.h",
         "acl_resource_manager.h",
         "callback_thread.h",
@@ -152,6 +194,7 @@ ds_cc_library(
     deps = [
         #"//src/datasystem/client/object_cache/device:object_cache_header",
         "//src/datasystem/common/device:device_manager_factory",
+        ":acl_parallel_direct_executor",
         "//src/datasystem/common/device:device_helper",
         "//src/datasystem/common/device:device_manager_base",
         "//src/datasystem/common/shared_memory:common_shared_memory",
