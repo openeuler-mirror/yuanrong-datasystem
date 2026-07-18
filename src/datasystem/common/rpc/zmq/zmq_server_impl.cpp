@@ -203,7 +203,8 @@ Status ZmqServerImpl::ClientToService(ZmqMsgFrames &&frames)
         // handshake for uds, and the stub client will drive endless retries. Sending
         // K_NOT_FOUND will stop the retry loop in the stub client.
         Status err = Status(meta.method_index() < 0 ? StatusCode::K_NOT_FOUND : StatusCode::K_RUNTIME_ERROR,
-                            "Service not found");
+                            FormatString("Service not found, svc_name: %s, method_index: %d", meta.svc_name(),
+                                         meta.method_index()));
         RETURN_IF_NOT_OK(SendErrorToClient(meta, err));
         return err;
     }

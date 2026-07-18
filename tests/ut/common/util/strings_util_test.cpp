@@ -17,6 +17,9 @@
 /**
  * Description: test strings util function
  */
+#include <map>
+#include <string>
+
 #include <securec.h>
 
 #include "ut/common.h"
@@ -25,6 +28,18 @@
 namespace datasystem {
 namespace ut {
 class StringsUtilTest : public CommonTest {};
+
+TEST_F(StringsUtilTest, TestMapToString)
+{
+    const std::map<std::string, int> emptyMap;
+    EXPECT_EQ(MapToString(emptyMap), "{}");
+
+    const std::map<std::string, int> singleElementMap { { "key1", 1 } };
+    EXPECT_EQ(MapToString(singleElementMap), "{key1: 1}");
+
+    const std::map<std::string, int> multipleElementMap { { "key1", 1 }, { "key2", 2 } };
+    EXPECT_EQ(MapToString(multipleElementMap), "{key1: 1, key2: 2}");
+}
 
 TEST_F(StringsUtilTest, TestStringFormat)
 {

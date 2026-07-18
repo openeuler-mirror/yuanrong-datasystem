@@ -127,8 +127,10 @@ DS_DEFINE_uint64(rebalance_max_migrate_bytes_per_round, 1024ul * 1024ul * 1024ul
 DS_DEFINE_uint32(rebalance_cooldown_s, 60, "Cooldown seconds for workers after a failed or expired rebalance task.");
 DS_DEFINE_uint32(rebalance_task_report_grace_ms, 60000, "rebalance task report grace ms.");
 DS_DEFINE_uint32(node_timeout_s, 60, "maximum time interval before a node is considered lost");
-DS_DEFINE_int32(io_thread_nice, -15,
-                "Nice value applied to selected IO threads with setpriority. Valid range is [-20, 19].");
+DS_DEFINE_int32(io_thread_nice, 0,
+                "Nice value for selected IO threads. Valid range is [-20, 19]. 0 skips nice adjustment and preserves "
+                "the thread's inherited nice value. Only non-zero values call setpriority; negative values usually "
+                "require appropriate privileges.");
 DS_DEFINE_int32(zmq_client_io_context, 5,
                 "Optimize the performance of the client stub. Default value 5. "
                 "The higher the throughput, the higher the value, but should be in range [1, 32]");

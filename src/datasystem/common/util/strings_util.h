@@ -135,9 +135,16 @@ template <typename Map>
 std::string MapToString(const Map &map)
 {
     std::stringstream out;
-    for (auto &item : map) {
-        out << "{" << item.first << ": " << item.second << "} ";
+    out << "{";
+    bool first = true;
+    for (const auto &item : map) {
+        if (!first) {
+            out << ", ";
+        }
+        out << item.first << ": " << item.second;
+        first = false;
     }
+    out << "}";
     return out.str();
 }
 
