@@ -23,6 +23,8 @@
 // spdlog-based macros (otherwise brpc's CHECK_EQ in doubly_buffered_data.h
 // fails to parse). Same pattern as rpc_server.cpp.
 #include "datasystem/common/log/log.h"
+#include <bthread/mutex.h>
+#include <bthread/condition_variable.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -131,14 +133,14 @@ TEST_F(StreamCloseTimeoutTest, NormalStreamCloseSucceeds)
     stub.BidiStreamHello(&cntl, &req, &rsp, nullptr);
 
     // Close the stream and wait for on_closed
-    std::mutex mtx;
-    std::condition_variable cv;
+    bthread::Mutex mtx;
+    bthread::ConditionVariable cv;
     bool streamEnd = false;
     bool readError = false;
 
     std::thread closeThread([&]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        std::lock_guard<std::mutex> lk(mtx);
+        std::lock_guard<bthread::Mutex> lk(mtx);
         streamEnd = true;
         cv.notify_one();
     });
@@ -179,8 +181,8 @@ TEST_F(StreamCloseTimeoutTest, StreamCloseTimesOutWhenPeerHangs)
     stub.BidiStreamHello(&cntl, &req, &rsp, nullptr);
 
     // Don't signal streamEnd/readError — simulate peer hang.
-    std::mutex mtx;
-    std::condition_variable cv;
+    bthread::Mutex mtx;
+    bthread::ConditionVariable cv;
     bool streamEnd = false;
     bool readError = false;
 
@@ -223,8 +225,8 @@ TEST_F(StreamCloseTimeoutTest, DrainLeaksControllerOnTimeout)
     stub.BidiStreamHello(testCntl.get(), &req, &rsp, nullptr);
 
     // Don't signal streamEnd/readError — simulate peer hang.
-    std::mutex mtx;
-    std::condition_variable cv;
+    bthread::Mutex mtx;
+    bthread::ConditionVariable cv;
     bool streamEnd = false;
     bool readError = false;
 
@@ -268,14 +270,14 @@ TEST_F(StreamCloseTimeoutTest, DrainResetsControllerOnNormalClose)
     stub.BidiStreamHello(testCntl.get(), &req, &rsp, nullptr);
 
     // Signal streamEnd from another thread to simulate on_closed
-    std::mutex mtx;
-    std::condition_variable cv;
+    bthread::Mutex mtx;
+    bthread::ConditionVariable cv;
     bool streamEnd = false;
     bool readError = false;
 
     std::thread signalThread([&]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        std::lock_guard<std::mutex> lk(mtx);
+        std::lock_guard<bthread::Mutex> lk(mtx);
         streamEnd = true;
         cv.notify_one();
     });
@@ -321,15 +323,15 @@ TEST_F(StreamCloseTimeoutTest, WaitDoesNotReturnOnFailedOnly)
     datasystem::rpc::brpc::HelloResponse rsp;
     stub.BidiStreamHello(&cntl, &req, &rsp, nullptr);
 
-    std::mutex mtx;
-    std::condition_variable cv;
+    bthread::Mutex mtx;
+    bthread::ConditionVariable cv;
     bool streamEnd = false;
     bool readError = false;
 
     // Fire readError (on_failed analog) at 100ms, but never streamEnd (on_closed).
     std::thread failThread([&mtx, &cv, &readError]() {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        std::lock_guard<std::mutex> lk(mtx);
+        std::lock_guard<bthread::Mutex> lk(mtx);
         readError = true;
         cv.notify_one();
     });

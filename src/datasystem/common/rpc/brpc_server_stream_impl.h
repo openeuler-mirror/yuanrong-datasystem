@@ -33,6 +33,8 @@
 #include <sys/time.h>
 #include <atomic>
 #include <condition_variable>
+#include <bthread/mutex.h>
+#include <bthread/condition_variable.h>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -270,7 +272,7 @@ public:
     {
         brpc::StreamId id = brpc::INVALID_STREAM_ID;
         {
-            std::lock_guard<std::mutex> lock(readMtx_);
+            std::lock_guard<bthread::Mutex> lock(readMtx_);
             id = streamId_;
             streamId_ = brpc::INVALID_STREAM_ID;
         }
@@ -295,7 +297,7 @@ public:
             return 0;  // stream logically closed; ignore racing late data
         }
         {
-            std::lock_guard<std::mutex> lock(readMtx_);
+            std::lock_guard<bthread::Mutex> lock(readMtx_);
             for (size_t i = 0; i < size; ++i) {
                 pendingMessages_.push_back(*messages[i]);
             }
@@ -311,7 +313,7 @@ public:
         if (destroyed_->load(std::memory_order_acquire)) {
             return;
         }
-        std::lock_guard<std::mutex> lock(readMtx_);
+        std::lock_guard<bthread::Mutex> lock(readMtx_);
         readError_ = true;
         readCond_.notify_one();
     }
@@ -322,7 +324,7 @@ public:
         if (closeNotifier_) closeNotifier_->store(true, std::memory_order_relaxed);
         destroyed_->store(true, std::memory_order_release);
         {
-            std::lock_guard<std::mutex> lock(readMtx_);
+            std::lock_guard<bthread::Mutex> lock(readMtx_);
             streamEnd_ = true;
             readCond_.notify_one();
         }
@@ -347,14 +349,14 @@ public:
             RETURN_STATUS(StatusCode::K_RPC_STREAM_END, "Stream already finished");
         }
 
-        std::unique_lock<std::mutex> lock(readMtx_);
+        std::unique_lock<bthread::Mutex> lock(readMtx_);
         if (streamEnd_ && pendingMessages_.empty()) {
             RETURN_STATUS(StatusCode::K_RPC_STREAM_END, "Stream ended");
         }
 
-        readCond_.wait(lock, [this] {
-            return readReady_ || readError_ || streamEnd_;
-        });
+        while (!readReady_ && !readError_ && !streamEnd_) {
+            readCond_.wait(lock);
+        }
 
         if (readError_) {
             RETURN_STATUS(StatusCode::K_RPC_CANCELLED, "Stream error during read");
@@ -440,8 +442,8 @@ private:
     brpc::StreamId streamId_;
     std::atomic<bool> finished_;
 
-    std::mutex readMtx_;
-    std::condition_variable readCond_;
+    bthread::Mutex readMtx_;
+    bthread::ConditionVariable readCond_;
     std::deque<butil::IOBuf> pendingMessages_;
     bool readReady_;
     bool streamEnd_;

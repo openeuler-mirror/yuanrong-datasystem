@@ -42,14 +42,20 @@ StreamCloseResult StreamCloseAndWait(StreamCloseState state, int timeoutSec)
         return StreamCloseResult::kClosed;
     }
     brpc::StreamClose(state.streamId);
-    std::unique_lock<std::mutex> lk(state.mtx);
+    std::unique_lock<bthread::Mutex> lk(state.mtx);
     // Wait for on_closed ONLY (streamEnd), not on_failed (readError). brpc fires
     // on_failed then ALWAYS on_closed as the final callback during stream recycle
     // (stream.cpp:594 -> :596). Returning on on_failed alone let the caller destroy
     // the StreamInputHandler while brpc immediately fired on_closed on the dangling
     // pointer -> UAF. readError_ still unblocks the Read() loop separately.
-    bool closed = state.cv.wait_for(lk, std::chrono::seconds(timeoutSec),
-        [&state] { return state.streamEnd; });
+    auto deadline = butil::microseconds_from_now(
+        static_cast<int64_t>(timeoutSec) * 1000000LL);
+    while (!state.streamEnd) {
+        if (state.cv.wait_until(lk, deadline) == ETIMEDOUT) {
+            break;
+        }
+    }
+    bool closed = state.streamEnd;
     state.streamId = brpc::INVALID_STREAM_ID;
     return closed ? StreamCloseResult::kClosed : StreamCloseResult::kTimeout;
 }
@@ -85,8 +91,8 @@ bool StreamCloseAndDrain(StreamCloseState state,
 
 namespace {
 
-std::mutex g_deferredMutex;
-std::condition_variable g_deferredCv;
+bthread::Mutex g_deferredMutex;
+bthread::ConditionVariable g_deferredCv;
 std::deque<DeferredCleanupItem> g_deferredQueue;
 std::thread g_reaperThread;
 bool g_reaperRunning = false;  // protected by g_deferredMutex
@@ -101,9 +107,10 @@ bool ProcessDeferredQueueBatch()
 {
     std::vector<std::unique_ptr<brpc::Controller>> toDelete;
     {
-        std::unique_lock<std::mutex> lk(g_deferredMutex);
-        g_deferredCv.wait_for(lk, K_REAPER_POLL_INTERVAL,
-            [] { return !g_deferredQueue.empty() || !g_reaperRunning; });
+        std::unique_lock<bthread::Mutex> lk(g_deferredMutex);
+        while (g_deferredQueue.empty() && g_reaperRunning) {
+            g_deferredCv.wait_for(lk, 30 * 1000000L);  // 30s in microseconds
+        }
 
         if (g_deferredQueue.empty() || !g_reaperRunning) {
             g_reaperRunning = false;
@@ -161,7 +168,7 @@ void EnqueueDeferredCleanup(std::unique_ptr<brpc::Controller> cntl,
                             int maxDeferredWaitSec)
 {
     {
-        std::lock_guard<std::mutex> lk(g_deferredMutex);
+        std::lock_guard<bthread::Mutex> lk(g_deferredMutex);
         g_deferredQueue.push_back({std::move(cntl), std::chrono::steady_clock::now(),
                                    std::move(closedFlag), maxDeferredWaitSec});
         EnsureReaperLocked();
@@ -171,7 +178,7 @@ void EnqueueDeferredCleanup(std::unique_ptr<brpc::Controller> cntl,
 
 void StartDeferredCleanupReaper()
 {
-    std::lock_guard<std::mutex> lk(g_deferredMutex);
+    std::lock_guard<bthread::Mutex> lk(g_deferredMutex);
     if (!g_deferredQueue.empty()) {
         EnsureReaperLocked();
     }
@@ -185,7 +192,7 @@ void StopDeferredCleanupReaper()
     // in-flight brpc IO bthreads if brpc has not been shut down, and
     // deleting them here would UAF.
     {
-        std::lock_guard<std::mutex> lk(g_deferredMutex);
+        std::lock_guard<bthread::Mutex> lk(g_deferredMutex);
         g_reaperRunning = false;
         g_deferredQueue.clear();
     }
@@ -201,7 +208,7 @@ void StopDeferredCleanupReaper()
 
 uint64_t GetDeferredCleanupQueueSize()
 {
-    std::lock_guard<std::mutex> lk(g_deferredMutex);
+    std::lock_guard<bthread::Mutex> lk(g_deferredMutex);
     return g_deferredQueue.size();
 }
 

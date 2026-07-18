@@ -27,6 +27,8 @@
  */
 
 #include "datasystem/common/rpc/brpc_stream_close_helper.h"
+#include <bthread/mutex.h>
+#include <bthread/condition_variable.h>
 
 #include <brpc/controller.h>
 #include <gtest/gtest.h>
@@ -44,8 +46,8 @@ protected:
     }
 
     brpc::StreamId streamId;
-    std::mutex mtx;
-    std::condition_variable cv;
+    bthread::Mutex mtx;
+    bthread::ConditionVariable cv;
     bool streamEnd;
     bool readError;
 };
