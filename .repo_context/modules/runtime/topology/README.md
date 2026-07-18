@@ -23,13 +23,35 @@
   Janitor, and optional Coordinator recovery reporter. It does not own standalone Observer.
 - Every ETCD Worker may run a `TopologyController`. Controllers contend through the single authoritative topology-key
   CAS; controller identity is not persisted, and deterministic batch/task identities make duplicate reconciliation safe.
-- `TopologyRepository` stores one `ClusterTopologyPb` authority record and derived task/notify records. Derived records
-  cannot replace topology authority; final progress and batch transitions are fenced by topology version and batch epoch.
+- `TopologyRepository` stores one `ClusterTopologyPb` authority record and derived task/notify records. Derived
+  records cannot replace topology authority; final progress and batch transitions are fenced by topology version and
+  batch epoch.
 - `cluster_topology.proto` owns these topology records under protobuf package `datasystem`; coordinator and other
   unrelated protobuf contracts remain separate schemas.
 - `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop and one
   dedicated backend instance. Worker watches exact topology plus its own notify key; Controller watches topology,
   membership, and derived task/notify directories; Observer watches exact topology only.
+- Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and
+  queue overflow/coalescing, membership observations with bounded samples and digests, member join/leave/failure
+  transitions, batch start/deadline/finalization, task notify/callback/progress, and Worker/Observer snapshot
+  publication.
+
+  | Keyword | Main source | Trigger and useful fields |
+  | --- | --- | --- |
+  | `CLUSTER_WATCH` | Controller/Worker/Observer loops | watch registration, resync, or fatal watch exits; includes role/scope/status. |
+  | `CLUSTER_WATCH_EVENT` | Controller/Worker/Observer watch callbacks | topology, membership, task, notify, or observer watch ingress; includes action/revision/key. |
+  | `CLUSTER_WATCH_QUEUE` | `CoordinationEventDispatcher` | queued event overflow/coalescing and reset doorbells; includes event counters and depth. |
+  | `CLUSTER_MEMBERSHIP` | Controller membership reconciliation | membership read failures or per-cycle membership summary; includes version and member counts. |
+  | `CLUSTER_MEMBERSHIP_OBSERVED` | Controller membership reconciliation | changed membership digest/sample after membership watch dirties state. |
+  | `CLUSTER_MEMBER_TRANSITION` | Controller planner | member state changes such as INITIAL/JOINING/LEAVING/FAILED. |
+  | `CLUSTER_FAILURE_DETECT` | Failure classifier/controller | endpoint or membership failures promoted to topology change candidates. |
+  | `CLUSTER_CHANGE_BATCH` | Controller batch commit path | batch start, deadline expiration, finalization, and preemption; includes batch type/epoch/version. |
+  | `CLUSTER_MEMBER_JOIN_SUMMARY` | Controller scale-out commit | summarized joining members admitted into a scale-out batch. |
+  | `CLUSTER_MEMBER_LEAVE_SUMMARY` | Controller scale-in/failure commit | summarized leaving or failed members in a removal batch. |
+  | `CLUSTER_CHANGE` | Controller decisions | scale-in wait, completion, abort, or no-op decisions with version and batch context. |
+  | `CLUSTER_RECONCILE` | Controller serialized loop | successful reconciliation after queued events or commits; includes elapsed time and queue counters. |
+  | `CLUSTER_RING` | Controller topology publication | ring build/publication diagnostics with topology version and membership counts. |
+  | `CLUSTER_TASK` | Materializer/executor | task materialization, notify, callback submission/finish/failure, and progress outcomes. |
 - Foreground routing uses `PlacementFacade` and one immutable snapshot per single-key or batch decision. Batch-level
   failures leave the output unchanged; one item vector returns each per-key status beside its decision so successful
   results from the same snapshot survive without an extra aligned-vector allocation. Routing never performs backend IO
@@ -69,9 +91,9 @@
   `/datasystem/{cluster_name}/...`; an empty name uses `/datasystem/...` without an empty path segment. Multi-cluster
   deployments sharing one backend must use non-empty distinct names. The five logical paths are topology,
   tasks/migrate, tasks/delete, notify, and cluster membership.
-- `TopologyKeyHelper` is the only table/key builder. `EtcdStore::CreateTableWithExactPrefix` registers these paths without
-  legacy `FLAGS_cluster_name` prefix rewriting. `TopologyEngine::Builder` owns registration for both ETCD role Stores;
-  Worker business composition does not construct topology keys or table mappings.
+- `TopologyKeyHelper` is the only table/key builder. `EtcdStore::CreateTableWithExactPrefix` registers these paths
+  without legacy `FLAGS_cluster_name` prefix rewriting. `TopologyEngine::Builder` owns registration for both ETCD role
+  Stores; Worker business composition does not construct topology keys or table mappings.
 - There is no persisted Worker-local topology authority. ETCD restart recovery reads the latest legal topology and
   reconstructs deterministic work. The in-memory Coordinator backend recovers only the latest topology from Workers;
   task/notify records are treated as absent and regenerated. Candidate arbitration is cluster-scoped and resource
@@ -88,8 +110,8 @@
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
   Object and stream callbacks treat per-item migration failures as retryable task failures, so a successful RPC status
   alone cannot advance the batch while selected metadata is still missing at the target.
-- Failure preempts an ordinary batch by fencing its old execution round, preserving `JOINING`/`LEAVING` facts, completing
-  the Failure batch first, and replanning ordinary work from the latest topology.
+- Failure preempts an ordinary batch by fencing its old execution round, preserving `JOINING`/`LEAVING` facts,
+  completing the Failure batch first, and replanning ordinary work from the latest topology.
 
 ## Key Entry Points
 

@@ -19,6 +19,9 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
+namespace {
+constexpr size_t SINGLE_NOT_READY_GET_ATTEMPT = 1;
+}
 
 std::string FakeCoordinationBackend::FullKey(const std::string &table, const std::string &key) const
 {
@@ -58,8 +61,8 @@ Status FakeCoordinationBackend::Get(const std::string &table, const std::string 
         failNextGet_ = false;
         return Status(K_RPC_UNAVAILABLE, "injected exact-read backend failure");
     }
-    if (notReadyNextGet_) {
-        notReadyNextGet_ = false;
+    if (notReadyGetAttempts_ > 0) {
+        --notReadyGetAttempts_;
         return Status(K_NOT_READY, "injected recovering backend");
     }
     if (blockNextGet_) {
@@ -249,8 +252,13 @@ void FakeCoordinationBackend::FailNextGet()
 
 void FakeCoordinationBackend::ReturnNotReadyOnNextGet()
 {
+    ReturnNotReadyOnNextGets(SINGLE_NOT_READY_GET_ATTEMPT);
+}
+
+void FakeCoordinationBackend::ReturnNotReadyOnNextGets(size_t count)
+{
     std::lock_guard<std::mutex> lock(mutex_);
-    notReadyNextGet_ = true;
+    notReadyGetAttempts_ = count;
 }
 
 void FakeCoordinationBackend::EmitEvent(CoordinationEvent event)

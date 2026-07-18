@@ -227,6 +227,17 @@ private:
      */
     Status CommitUncommittedCleanup(const TopologySnapshot &latest, const FailureClassification &classification);
 
+    Status CommitScaleOutUncommittedCleanup(const TopologySnapshot &latest,
+                                            const FailureClassification &classification);
+
+    Status CommitFailureUncommittedCleanup(const TopologySnapshot &latest,
+                                           const FailureClassification &classification);
+
+    Status CommitInitialCleanup(const TopologySnapshot &latest, const FailureClassification &classification);
+
+    Status CommitAndLogMemberTransition(const TopologySnapshot &latest, const TopologyState &next,
+                                        const std::vector<MemberIdentity> &members, const char *action);
+
     /**
      * @brief Persist READY/EXITING membership facts as INITIAL/PRE_LEAVING.
      * @param[in] latest Snapshot.
@@ -234,6 +245,21 @@ private:
      * @return Operation status.
      */
     Status CommitMembershipFacts(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
+
+    void CollectMembershipFacts(const std::vector<MembershipRecord> &memberships,
+                                std::unordered_set<std::string> &exiting,
+                                std::vector<MembershipRecord> &ready);
+
+    void ApplyExitingMembershipFacts(TopologyState &next, const std::unordered_set<std::string> &exiting,
+                                     std::unordered_set<std::string> &known,
+                                     std::vector<MemberIdentity> &admittedLeaving, size_t &changed) const;
+
+    Status ApplyReadyMembershipFacts(TopologyState &next, const std::vector<MembershipRecord> &ready,
+                                     std::unordered_set<std::string> &known,
+                                     std::vector<MemberIdentity> &admittedJoining, size_t &changed) const;
+
+    void LogMembershipFactsCommit(uint64_t committedVersion, const std::vector<MemberIdentity> &admittedLeaving,
+                                  const std::vector<MemberIdentity> &admittedJoining) const;
 
     /**
      * @brief Finalize a completed or expired batch.
@@ -297,6 +323,22 @@ private:
      */
     Status TryStartNextBatch(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
+    void CollectNextBatchCandidates(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships,
+                                    std::vector<MemberIdentity> &leaving,
+                                    std::vector<MemberIdentity> &joining) const;
+
+    Status CommitBootstrapBatchStart(const TopologySnapshot &latest, const TopologyState &state,
+                                     const std::vector<MemberIdentity> &joining);
+
+    Status CommitOrdinaryBatchStart(const TopologySnapshot &latest, const TopologyState &state,
+                                    const std::vector<MemberIdentity> &participants, TopologyChangeType type);
+
+    Status CommitStartedBatch(const TopologySnapshot &latest, const TopologyState &next,
+                              const std::vector<MemberIdentity> &participants);
+
+    void LogBatchStart(const TopologySnapshot &latest, const TopologySnapshot &committed,
+                       const std::vector<MemberIdentity> &participants) const;
+
     /**
      * @brief CAS and exact-read the committed state.
      * @param[in] expectedVersion Expected version.
@@ -333,6 +375,7 @@ private:
     std::optional<std::chrono::steady_clock::time_point> batchDeadline_;
     std::optional<TopologyChangeType> deadlineBatchType_;
     uint64_t deadlineBatchEpoch_{ 0 };
+    uint64_t loggedExpiredBatchEpoch_{ 0 };
     uint64_t loggedScaleInWaitEpoch_{ 0 };
     size_t admissionCursor_{ 0 };
     uint64_t derivedBatchEpoch_{ 0 };
@@ -347,6 +390,7 @@ private:
     std::unordered_map<std::string, int64_t> pendingRestartTimestampByAddress_;
     // State-thread-owned admission quarantine for exhausted READY process generations.
     std::unordered_map<std::string, int64_t> quarantinedReadyTimestampByAddress_;
+    std::string lastMembershipObservationDigest_;
     TopologyControllerDiagnostics diagnostics_;
 };
 
