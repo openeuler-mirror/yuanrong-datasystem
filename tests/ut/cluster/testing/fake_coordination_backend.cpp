@@ -19,6 +19,9 @@
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
+namespace {
+constexpr size_t SINGLE_NOT_READY_GET_ATTEMPT = 1;
+}
 
 std::string FakeCoordinationBackend::FullKey(const std::string &table, const std::string &key) const
 {
@@ -257,7 +260,7 @@ void FakeCoordinationBackend::FailNextGet()
 
 void FakeCoordinationBackend::ReturnNotReadyOnNextGet()
 {
-    ReturnNotReadyOnNextGets(1);
+    ReturnNotReadyOnNextGets(SINGLE_NOT_READY_GET_ATTEMPT);
 }
 
 void FakeCoordinationBackend::ReturnNotReadyOnNextGets(size_t count)
