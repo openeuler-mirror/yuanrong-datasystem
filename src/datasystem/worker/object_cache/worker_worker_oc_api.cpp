@@ -228,9 +228,11 @@ Status WorkerRemoteWorkerOCApi::MigrateData(MigrateDataReqPb &req, const std::ve
         return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "MigrateData",
                            localHostPort_, hostPort_);
     }
+    RpcOptions opts;
+    opts.SetTimeout(kWorkerWorkerRpcMaxTimeoutMs);  // 120s cap, same as GetObjectRemote
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = brpcSession_ ? brpcSession_->MigrateData(req, rsp, payloads)
-                           : rpcSession_->MigrateData(req, rsp, payloads);
+    auto rc = brpcSession_ ? brpcSession_->MigrateData(opts, req, rsp, payloads)
+                           : rpcSession_->MigrateData(opts, req, rsp, payloads);
     return WithRpcDiag(rc, "MigrateData", localHostPort_, hostPort_);
 }
 

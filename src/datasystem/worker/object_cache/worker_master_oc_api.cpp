@@ -540,11 +540,12 @@ Status WorkerRemoteMasterOCApi::GIncreaseMasterRef(master::GIncreaseReqPb &incRe
     if (remainingTime > INT_MAX) {
         remainingTime = INT_MAX;
     }
-    RpcOptions opts;
-    opts.SetTimeout(remainingTime);
+    auto timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     auto rc = RetryOnErrorRepent(
-        GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(),
-        [this, &opts, &incReq, &incRsp](int32_t) {
+        timeoutMs,
+        [this, &incReq, &incRsp](int32_t rpcTimeout) {
+            RpcOptions opts;
+            opts.SetTimeout(rpcTimeout);
             INJECT_POINT("WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc");
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(incReq));
             return (brpcSession_ ? brpcSession_->GIncreaseRef(opts, incReq, incRsp)
