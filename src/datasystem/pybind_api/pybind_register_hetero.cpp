@@ -23,6 +23,7 @@
 
 #include <pybind11/detail/common.h>
 
+#include "datasystem/common/device/device_manager_factory.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/hetero_client.h"
@@ -72,6 +73,79 @@ private:
     std::shared_future<AsyncResult> future_;
     std::string traceId_;
 };
+
+namespace {
+// Discover the caller's current device from its thread-local device context (e.g. the ACL
+// context vLLM binds per rank worker). Every destination/source address in one multi-buffer
+// request must reside on the same device, and that device is the local process device for
+// both direct and Remote H2D paths, so it can be queried once instead of being passed in.
+int32_t ResolveCurrentDeviceIdx()
+{
+    auto *deviceManager = DeviceManagerFactory::GetDeviceManager();
+    if (deviceManager == nullptr) {
+        throw std::runtime_error(
+            "No accelerator device detected. Bind a device context on the calling thread before calling "
+            "mget_h2d_from_multi_buffers/mset_d2h_from_multi_buffers, or use mget_h2d/mset_d2h with an "
+            "explicit DeviceBlobList.deviceIdx.");
+    }
+    int32_t deviceIdx = -1;
+    auto rc = deviceManager->GetDeviceIdx(deviceIdx);
+    if (rc.IsError() || deviceIdx < 0) {
+        throw std::runtime_error(FormatString(
+            "Failed to query the current device index via aclrtGetDevice (rc=%s). Bind a device context on the "
+            "calling thread before calling mget_h2d_from_multi_buffers/mset_d2h_from_multi_buffers.",
+            rc.ToString()));
+    }
+    return deviceIdx;
+}
+
+std::vector<DeviceBlobList> BuildDeviceBlobLists(const std::vector<std::string> &objectKeys, const py::list &devPtrs,
+                                                 const py::list &sizes)
+{
+    if (objectKeys.empty() || devPtrs.size() == 0 || sizes.size() == 0) {
+        throw py::value_error("keys, dev_ptrs and sizes must not be empty");
+    }
+    auto objectCount = objectKeys.size();
+    if (objectCount != devPtrs.size() || objectCount != sizes.size()) {
+        throw py::value_error("keys, dev_ptrs and sizes must have the same outer size");
+    }
+
+    // All addresses in this request belong to the calling thread's current device. Query it once
+    // while the GIL is held (the call does not touch Python) and stamp it into every blob list.
+    int32_t deviceIdx = ResolveCurrentDeviceIdx();
+
+    std::vector<DeviceBlobList> devBlobLists;
+    devBlobLists.reserve(objectKeys.size());
+    for (size_t i = 0; i < objectKeys.size(); ++i) {
+        auto devPtrGroupObj = devPtrs[i];
+        auto sizeGroupObj = sizes[i];
+        if (!py::isinstance<py::list>(devPtrGroupObj) || !py::isinstance<py::list>(sizeGroupObj)) {
+            throw py::type_error(FormatString("dev_ptrs[%zu] and sizes[%zu] must be lists", i, i));
+        }
+        auto devPtrGroup = py::reinterpret_borrow<py::list>(devPtrGroupObj);
+        auto sizeGroup = py::reinterpret_borrow<py::list>(sizeGroupObj);
+        if (devPtrGroup.size() == 0) {
+            throw py::value_error(FormatString("dev_ptrs[%zu] must not be empty", i));
+        }
+        if (devPtrGroup.size() != sizeGroup.size()) {
+            throw py::value_error(FormatString("dev_ptrs[%zu] and sizes[%zu] must have the same size", i, i));
+        }
+
+        DeviceBlobList devBlobList;
+        devBlobList.deviceIdx = deviceIdx;
+        devBlobList.srcOffset = 0;
+        auto blobCount = devPtrGroup.size();
+        devBlobList.blobs.reserve(static_cast<size_t>(blobCount));
+        for (size_t j = 0; j < blobCount; ++j) {
+            auto devPtr = py::cast<uint64_t>(devPtrGroup[j]);
+            auto size = py::cast<uint64_t>(sizeGroup[j]);
+            devBlobList.blobs.emplace_back(Blob{ reinterpret_cast<void *>(devPtr), size });
+        }
+        devBlobLists.emplace_back(std::move(devBlobList));
+    }
+    return devBlobLists;
+}
+} // namespace
 
 PybindDefineRegisterer g_pybind_define_f_AsyncResultFuture("AsyncResultFuture", PRIORITY_LOW, [](const py::module *m) {
     py::class_<AsyncResultFuture>(*m, "AsyncResultFuture")
@@ -146,6 +220,17 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                  return std::make_pair(status, std::move(failedKeys));
              })
 
+        .def("mget_h2d_from_multi_buffers",
+             [](HeteroClient &client, const std::vector<std::string> &objectKeys, const py::list &devPtrs,
+                const py::list &sizes, uint64_t subTimeoutMs) {
+                 auto devBlobLists = BuildDeviceBlobLists(objectKeys, devPtrs, sizes);
+                 py::gil_scoped_release release;
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                 std::vector<std::string> failedKeys;
+                 auto status = client.MGetH2D(objectKeys, devBlobLists, failedKeys, subTimeoutMs);
+                 return std::make_pair(status, std::move(failedKeys));
+             })
+
         .def("pre_register_device_memory",
              [](HeteroClient &client, const std::vector<uint64_t> &devPtrs, const std::vector<uint64_t> &sizes) {
                  std::vector<void *> ptrs;
@@ -164,6 +249,15 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                  py::gil_scoped_release release;
                  TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
                  return client.MSetD2H(objectKeys, devBlobList, setParam);
+             })
+
+        .def("mset_d2h_from_multi_buffers",
+             [](HeteroClient &client, const std::vector<std::string> &objectKeys, const py::list &devPtrs,
+                const py::list &sizes, const SetParam &setParam) {
+                 auto devBlobLists = BuildDeviceBlobLists(objectKeys, devPtrs, sizes);
+                 py::gil_scoped_release release;
+                 TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                 return client.MSetD2H(objectKeys, devBlobLists, setParam);
              })
 
         .def("async_mset_d2h",
@@ -264,6 +358,22 @@ PybindDefineRegisterer g_pybind_define_f_HeteroClient("HeteroClient", PRIORITY_L
                  std::vector<bool> exists;
                  Status rc = client.Exist(keys, exists);
                  return std::make_pair(rc, std::move(exists));
+             })
+
+        .def("batch_is_exist",
+             [](HeteroClient &client, const std::vector<std::string> &keys) {
+                 std::vector<bool> exists;
+                 Status rc;
+                 {
+                     py::gil_scoped_release release;
+                     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();
+                     rc = client.Exist(keys, exists);
+                 }
+                 py::list result(exists.size());
+                 for (size_t i = 0; i < exists.size(); ++i) {
+                     result[i] = py::int_(exists[i] ? 1 : 0);
+                 }
+                 return std::make_pair(std::move(rc), std::move(result));
              })
 
         .def("get_meta_info", [](HeteroClient &client, const std::vector<std::string> &keys, bool isDevKey) {

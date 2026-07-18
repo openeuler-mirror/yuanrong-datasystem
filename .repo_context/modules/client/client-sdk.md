@@ -177,6 +177,12 @@
 - `DsTensorClient` is a Python-side convenience layer built on top of `HeteroClient` and tensor pointer extraction.
   The former page-attention-specific APIs and `PageAttnUtils` binding have been removed; callers use the remaining
   generic D2H, H2D, and D2D tensor operations.
+- Python `HeteroClient` exposes synchronous `mget_h2d_from_multi_buffers` and `mset_d2h_from_multi_buffers` fast paths
+  for callers that already own per-key device address and size arrays. The pybind boundary builds request-local
+  `DeviceBlobList` descriptors directly from the nested Python lists, without first materializing nested C++ address
+  and size vectors, and then reuses the existing C++ `MGetH2D` or `MSetD2H` implementation. Python `batch_is_exist`
+  returns native integer indicators for batch consumers while the existing `exist` boolean contract remains unchanged;
+  the public C++ API and descriptor ownership rules do not change.
 
 ### Verified Python/C++ differences to remember
 
