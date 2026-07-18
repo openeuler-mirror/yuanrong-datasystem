@@ -30,7 +30,6 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/logging.h"
-#include "datasystem/common/log/spdlog/provider.h"
 
 DS_DECLARE_string(log_dir);
 
@@ -40,7 +39,22 @@ void FailureWriter(const char *data)
 {
     // Null `data` is a hint to flush any buffered data before the program may be terminated.
     if (!data) {
-        Provider::Instance().FlushLogs();
+        // This callback runs from absl's failure signal handler, i.e. inside a real
+        // signal handler on the alternate stack. It MUST be async-signal-safe.
+        //
+        // Previously this called Provider::FlushLogs(), which takes a std::shared_mutex
+        // and posts a flush request into spdlog's shared async thread_pool. Neither is
+        // async-signal-safe: if the signal was delivered while the spdlog async worker
+        // thread held the sink mutex or the provider shared_mutex (very likely under brpc,
+        // where 64 bthreads continuously post LOG() to the same thread_pool), the
+        // re-entrant flush touches sinks that may be mid-teardown during process exit,
+        // making fwrite hit a closed/invalid FILE* and raising a secondary SIGSEGV that
+        // recursively re-enters the handler and ends in raise(SIGABRT). See issue #772.
+        //
+        // The normal shutdown path (~Logging -> ShutdownLoggingWrapper) already drains
+        // and flushes spdlog before the registry is destroyed, so the final-flush hint
+        // from the signal handler adds no reliable benefit here and is not worth the
+        // re-entrancy hazard. Do nothing instead of re-entering spdlog from the handler.
         return;
     }
 
