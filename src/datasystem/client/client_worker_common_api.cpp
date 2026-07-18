@@ -382,8 +382,18 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
         HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
         BrpcChannelConfig cfg;
         cfg.endpoint = brpcAddr.ToString();
-        cfg.timeout_ms = timeoutMs;
-        cfg.connect_timeout_ms = timeoutMs;
+        // The channel is long-lived: it carries GetSocketPath, RegisterClient,
+        // DisconnectClient and later data-plane RPCs. Its timeout_ms (per-RPC,
+        // applies after the TCP connection is established) must follow the
+        // user-configured request budget, NOT the one-shot connect-attempt
+        // budget passed in as timeoutMs. connect_timeout_ms (the TCP connect()
+        // phase) follows the connect budget. Mixing them lets a half-dead
+        // worker (TCP alive but handler hung) pin GetSocketPath for the full
+        // connect_timeout (e.g. ~998ms) instead of the configured request
+        // timeout (e.g. 20ms), because brpc's controller set_timeout_ms only
+        // governs post-connect RPCs, not the connect() phase.
+        cfg.timeout_ms = requestTimeoutMs_;
+        cfg.connect_timeout_ms = connectTimeoutMs_;
         // Disable brpc-level blind retry on client->worker channels.
         // These channels carry non-idempotent RPCs (Delete, CloseProducer,
         // CloseConsumer, etc.) that must not be re-driven silently.
@@ -395,7 +405,11 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
         // brpc Channel::Init() is non-blocking — health check runs periodically.
         // Wait for the TCP connection to establish before returning.
         (void)WaitForBrpcSocketAvailable(brpcAddr);
-        brpcCommonStub_ = std::make_unique<WorkerService_BrpcGenericStub>(brpcChannel_.get(), timeoutMs);
+        // The stub default timeout follows the request budget so RPCs that do
+        // not override RpcOptions (e.g. DisconnectClient, which sets its own)
+        // still respect the user-configured request timeout rather than the
+        // one-shot connect-attempt budget.
+        brpcCommonStub_ = std::make_unique<WorkerService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs_);
     } else {
         auto channel = std::make_shared<RpcChannel>(hostPort_, cred_);
         commonWorkerSession_ = std::make_unique<WorkerService_Stub>(channel);
@@ -513,6 +527,16 @@ Status ClientWorkerRemoteCommonApi::FetchSocketPath(int32_t timeoutMs, int64_t r
     RETURN_IF_NOT_OK(SetToken(req));
     req.set_tenant_id(tenantId_);
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
+    // remainingMs is the total retry budget for the connect attempt (from
+    // attemptTimeoutMs). The per-RPC timeout cap (maxRpcTimeoutMs below) must
+    // follow the user-configured request budget requestTimeoutMs_, NOT the
+    // attempt budget. Otherwise a half-dead worker (TCP alive but handler hung)
+    // pins each GetSocketPath RPC for the full attemptTimeout (e.g. ~998ms
+    // instead of the configured request timeout e.g. 20ms), because RetryOnError
+    // forwards maxRpcTimeoutMs to opts.SetTimeout which becomes the brpc
+    // controller timeout. RetryOnError internally clamps the per-call timeout to
+    // min(remaining, maxRpcTimeoutMs), so a larger request budget never exceeds
+    // the attempt window.
     auto rc = RetryOnError(
         remainingMs,
         [this, &req, &reply](int32_t realRpcTimeout) {
@@ -527,7 +551,7 @@ Status ClientWorkerRemoteCommonApi::FetchSocketPath(int32_t timeoutMs, int64_t r
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE },
-        CalculateSingleRpcTimeout(timeoutMs));
+        CalculateSingleRpcTimeout(requestTimeoutMs_));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Get socket path failed.");
     return Status::OK();
 }
@@ -757,7 +781,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
           StatusCode::K_RPC_UNAVAILABLE },
-        CalculateSingleRpcTimeout(timeoutMs));
+        CalculateSingleRpcTimeout(requestTimeoutMs_));
     if (rc.GetCode() == K_SERVER_FD_CLOSED) {
         auto msg = rc.GetMsg();
         rc = Status(K_TRY_AGAIN, std::move(msg));
@@ -832,7 +856,9 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
     // ZMQ connection teardown is synchronous and needs headroom for in-flight
     // frames; keep the legacy 10 min timeout.  brpc connections use a short
     // 1 s timeout — the DisconnectClient RPC is a lightweight handshake.
-    int rpcTimeoutMs = FLAGS_use_brpc ? 1000 : 10 * 60 * 1000;
+    static constexpr int32_t BRPC_DISCONNECT_RPC_TIMEOUT_MS = 1000;           // 1s, brpc lightweight handshake
+    static constexpr int32_t ZMQ_DISCONNECT_RPC_TIMEOUT_MS = 10 * 60 * 1000;  // 10min, ZMQ sync teardown needs headroom
+    int rpcTimeoutMs = FLAGS_use_brpc ? BRPC_DISCONNECT_RPC_TIMEOUT_MS : ZMQ_DISCONNECT_RPC_TIMEOUT_MS;
 #ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.Disconnect.ShutdownQuickily", [&rpcTimeoutMs](int time) {
         rpcTimeoutMs = time;
