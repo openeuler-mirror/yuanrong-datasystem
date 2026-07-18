@@ -826,11 +826,16 @@ Status WorkerRemoteMasterOCApi::GetP2PMeta(
 
 Status WorkerRemoteMasterOCApi::SendRootInfo(SendRootInfoReqPb &req, SendRootInfoRspPb &resp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "SendRootInfo", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
-    auto remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return (brpcSession_ ? brpcSession_->SendRootInfo(req, resp) : rpcSession_->SendRootInfo(req, resp));
+    return (brpcSession_ ? brpcSession_->SendRootInfo(opts, req, resp) : rpcSession_->SendRootInfo(opts, req, resp));
 }
 
 Status WorkerRemoteMasterOCApi::RecvRootInfo(
@@ -890,11 +895,16 @@ Status WorkerRemoteMasterOCApi::RecvRootInfo(
 
 Status WorkerRemoteMasterOCApi::AckRecvFinish(AckRecvFinishReqPb &req, AckRecvFinishRspPb &resp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "AckRecvFinish", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
-    auto remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return (brpcSession_ ? brpcSession_->AckRecvFinish(req, resp) : rpcSession_->AckRecvFinish(req, resp));
+    return (brpcSession_ ? brpcSession_->AckRecvFinish(opts, req, resp) : rpcSession_->AckRecvFinish(opts, req, resp));
 }
 
 Status WorkerRemoteMasterOCApi::GetDataInfo(
@@ -974,11 +984,17 @@ Status WorkerRemoteMasterOCApi::GetDataInfo(
 
 Status WorkerRemoteMasterOCApi::RemoveP2PLocation(RemoveP2PLocationReqPb &req, RemoveP2PLocationRspPb &resp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "RemoveP2PLocation", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
-    auto remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
     opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    auto rc = (brpcSession_ ? brpcSession_->RemoveP2PLocation(req, resp) : rpcSession_->RemoveP2PLocation(req, resp));
+    auto rc = (brpcSession_ ? brpcSession_->RemoveP2PLocation(opts, req, resp)
+                            : rpcSession_->RemoveP2PLocation(opts, req, resp));
     return WithRpcDiag(rc, "RemoveP2PLocation", localHostPort_, hostPort_);
 }
 
@@ -1038,8 +1054,14 @@ Status WorkerRemoteMasterOCApi::ReplacePrimary(master::ReplacePrimaryReqPb &req,
 
 Status WorkerRemoteMasterOCApi::PureQueryMeta(master::PureQueryMetaReqPb &req, master::PureQueryMetaRspPb &rsp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "PureQueryMeta", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
-    opts.SetTimeout(RPC_TIMEOUT);
+    opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     auto rc = brpcSession_ ? brpcSession_->PureQueryMeta(opts, req, rsp)
                    : rpcSession_->PureQueryMeta(opts, req, rsp);
@@ -1049,9 +1071,15 @@ Status WorkerRemoteMasterOCApi::PureQueryMeta(master::PureQueryMetaReqPb &req, m
 Status WorkerRemoteMasterOCApi::CheckObjectDataLocation(master::CheckObjectDataLocationReqPb &req,
                                                         master::CheckObjectDataLocationRspPb &rsp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "CheckObjectDataLocation", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
     auto status = RetryOnErrorRepent(
-        RPC_TIMEOUT,
+        remainingTime,
         [this, &opts, &req, &rsp](int32_t rpcTimeout) {
             opts.SetTimeout(rpcTimeout);
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
@@ -1084,8 +1112,14 @@ Status WorkerRemoteMasterOCApi::RollbackMultiMeta(master::RollbackMultiMetaReqPb
 
 Status WorkerRemoteMasterOCApi::Expire(master::ExpireReqPb &req, master::ExpireRspPb &rsp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "Expire", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
-    opts.SetTimeout(RPC_TIMEOUT);
+    opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     auto rc = (brpcSession_ ? brpcSession_->Expire(opts, req, rsp) : rpcSession_->Expire(opts, req, rsp));
     return WithRpcDiag(rc, "Expire", localHostPort_, hostPort_);
@@ -1093,8 +1127,14 @@ Status WorkerRemoteMasterOCApi::Expire(master::ExpireReqPb &req, master::ExpireR
 
 Status WorkerRemoteMasterOCApi::GetMetaInfo(GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "GetMetaInfo", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
-    opts.SetTimeout(RPC_TIMEOUT);
+    opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     auto rc = (brpcSession_ ? brpcSession_->GetMetaInfo(opts, req, rsp) : rpcSession_->GetMetaInfo(opts, req, rsp));
     return WithRpcDiag(rc, "GetMetaInfo", localHostPort_, hostPort_);
