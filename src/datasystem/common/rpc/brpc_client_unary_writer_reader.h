@@ -81,56 +81,11 @@ public:
     Status Read(R &pb)
     {
         bool expected = false;
-        if (readOnce_.compare_exchange_strong(expected, true)) {
-            BrpcPerfTrace trace(Trace::Instance().GetTraceID(), method_ == nullptr ? "unknown" : method_->full_name());
-            trace.MarkClientStart();
-            brpc::Controller cntl;
-            if (timeoutMs_ > 0) {
-                cntl.set_timeout_ms(timeoutMs_);
-            }
-            AttachTraceIDToAttachment(cntl.request_attachment());
-            if (!payloadBuf_.empty()) {
-                cntl.request_attachment().append(payloadBuf_);
-                payloadBuf_.clear();
-            }
-            trace.MarkClientSend();
-            channel_->CallMethod(method_, &cntl, &request_, &response_, nullptr);
-            trace.MarkClientRecv();
-            if (cntl.Failed()) {
-                butil::IOBuf errorAttachment = cntl.response_attachment();
-                MergeBrpcServerTraceTrailer(errorAttachment, trace);
-                trace.MarkClientEnd();
-                RecordBrpcRpcTrace(trace);
-                Status embedded = TryExtractStatusFromResponse(response_);
-                const auto &errorText = cntl.ErrorText();
-                VLOG(1)
-                    << "[BRPC_UNARY_READ_FAILED] method="
-                    << (method_ == nullptr ? "UNKNOWN" : method_->full_name())
-                    << ", errorCode=" << cntl.ErrorCode()
-                    << ", containsDsErr=" << (errorText.find("\x01" "DS_ERR:") != std::string::npos)
-                    << ", embeddedStatus=" << embedded.ToString()
-                    << ", localSide=" << cntl.local_side() << ", remoteSide=" << cntl.remote_side()
-                    << ", errorTextLen=" << errorText.size()
-                    << ", errorText=" << FormatStringForLog(errorText);
-                VLOG(kBrpcDetailLogLevel)
-                    << "[BRPC_UNARY_READ_FAILED_DETAIL] method="
-                    << (method_ == nullptr ? "UNKNOWN" : method_->full_name())
-                    << ", timeoutMs=" << timeoutMs_ << ", responseDebug=" << response_.ShortDebugString();
-                if (embedded.IsError()) {
-                    return embedded;
-                }
-                return TryExtractStatusFromControllerError(errorText, cntl.ErrorCode());
-            }
-            responseAttachment_ = std::move(cntl.response_attachment());
-            MergeBrpcServerTraceTrailer(responseAttachment_, trace);
-            pb.CopyFrom(response_);
-            trace.MarkClientEnd();
-            RecordBrpcRpcTrace(trace);
-        } else {
+        if (!readOnce_.compare_exchange_strong(expected, true)) {
             RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
                 "BrpcClientUnaryWriterReader::Read called more than once");
         }
-        return Status::OK();
+        return DoRead(pb);
     }
 
     Status ReceivePayload(std::vector<RpcMessage> &payload)
@@ -211,6 +166,56 @@ public:
     }
 
 private:
+    Status DoRead(R &pb)
+    {
+        BrpcPerfTrace trace(Trace::Instance().GetTraceID(), method_ == nullptr ? "unknown" : method_->full_name());
+        trace.MarkClientStart();
+        brpc::Controller cntl;
+        if (timeoutMs_ > 0) {
+            cntl.set_timeout_ms(timeoutMs_);
+        }
+        AttachTraceIDToAttachment(cntl.request_attachment());
+        if (!payloadBuf_.empty()) {
+            cntl.request_attachment().append(payloadBuf_);
+            payloadBuf_.clear();
+        }
+        trace.MarkClientSend();
+        channel_->CallMethod(method_, &cntl, &request_, &response_, nullptr);
+        trace.MarkClientRecv();
+        if (cntl.Failed()) {
+            return HandleReadFailure(cntl, trace);
+        }
+        responseAttachment_ = std::move(cntl.response_attachment());
+        MergeBrpcServerTraceTrailer(responseAttachment_, trace);
+        pb.CopyFrom(response_);
+        trace.MarkClientEnd();
+        RecordBrpcRpcTrace(trace);
+        return Status::OK();
+    }
+
+    Status HandleReadFailure(brpc::Controller &cntl, BrpcPerfTrace &trace)
+    {
+        butil::IOBuf errorAttachment = cntl.response_attachment();
+        MergeBrpcServerTraceTrailer(errorAttachment, trace);
+        trace.MarkClientEnd();
+        RecordBrpcRpcTrace(trace);
+        Status embedded = TryExtractStatusFromResponse(response_);
+        const auto &errorText = cntl.ErrorText();
+        VLOG(1) << "[BRPC_UNARY_READ_FAILED] method="
+                << (method_ == nullptr ? "UNKNOWN" : method_->full_name())
+                << ", errorCode=" << cntl.ErrorCode()
+                << ", containsDsErr=" << (errorText.find("\x01" "DS_ERR:") != std::string::npos)
+                << ", embeddedStatus=" << embedded.ToString()
+                << ", localSide=" << cntl.local_side() << ", remoteSide=" << cntl.remote_side()
+                << ", errorTextLen=" << errorText.size()
+                << ", errorText=" << FormatStringForLog(errorText);
+        VLOG(kBrpcDetailLogLevel) << "[BRPC_UNARY_READ_FAILED_DETAIL] method="
+                                  << (method_ == nullptr ? "UNKNOWN" : method_->full_name())
+                                  << ", timeoutMs=" << timeoutMs_
+                                  << ", responseDebug=" << response_.ShortDebugString();
+        return embedded.IsError() ? embedded : TryExtractStatusFromControllerError(errorText, cntl.ErrorCode());
+    }
+
     void AppendMemViewToRequestAttachment(const std::vector<MemView> &payload)
     {
         int64_t count = static_cast<int64_t>(payload.size());
