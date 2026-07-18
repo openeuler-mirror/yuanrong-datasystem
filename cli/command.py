@@ -26,6 +26,21 @@ import yr.datasystem.cli.common.util as util
 from yr.datasystem.cli import __version__
 
 
+COMMAND_MODULES = (
+    "start",
+    "stop",
+    "up",
+    "down",
+    "runscript",
+    "generate_helm_chart",
+    "generate_cpp_template",
+    "generate_docker_entryfile",
+    "generate_config",
+    "collect_log",
+    "query",
+)
+
+
 class BaseCommand:
     """Base command class."""
 
@@ -145,19 +160,7 @@ def main():
     )
 
     commands = {}
-    modules = [
-        "start",
-        "stop",
-        "up",
-        "down",
-        "runscript",
-        "generate_helm_chart",
-        "generate_cpp_template",
-        "generate_docker_entryfile",
-        "generate_config",
-        "collect_log",
-    ]
-    for m in modules:
+    for m in COMMAND_MODULES:
         module = import_module(f"yr.datasystem.cli.{m}")
         command_cls = getattr(module, "Command", None)
         if command_cls is None or not issubclass(command_cls, BaseCommand):

@@ -35,6 +35,7 @@
   - owns lease-backed worker liveness writes through `EtcdStore::InitKeepAlive`, `RunKeepAliveTask`, `UpdateNodeState`, and `InformEtcdReconciliationDone`;
   - owns ETCD watch streams and local event compensation through `EtcdWatch`;
   - supports ETCD auth token acquisition/refresh and TLS channel creation;
+  - supports deadline-aware `GetAll` for bounded read-only operator queries;
   - exposes ETCD election helpers through `EtcdElector`;
   - implements a built-in ETCD-compatible Metastore server for KV, Lease, Watch, and Maintenance services.
 - Pending verification:

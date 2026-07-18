@@ -841,7 +841,8 @@ Status EtcdStore::GetAll(const std::string &tableName, std::vector<std::pair<std
 }
 
 Status EtcdStore::GetAll(const std::string &tableName, int64_t reqRevision,
-                         std::vector<std::pair<std::string, std::string>> &outKeyValues, int64_t &rspRevision)
+                         std::vector<std::pair<std::string, std::string>> &outKeyValues, int64_t &rspRevision,
+                         int32_t timeoutMs)
 {
     std::shared_lock<std::shared_timed_mutex> lck(mutex_);
     TableMap::const_iterator iter = tableMap_.find(tableName);
@@ -853,8 +854,8 @@ Status EtcdStore::GetAll(const std::string &tableName, int64_t reqRevision,
     req.set_range_end(StringPlusOne(etcdKey));
     req.set_revision(reqRevision);
     etcdserverpb::RangeResponse rsp;
-    RETURN_IF_NOT_OK(
-        rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range, GetAuthToken()));
+    RETURN_IF_NOT_OK(rpcSession_->SendRpc("GetAll::etcd_kv_Range", req, rsp, &etcdserverpb::KV::Stub::Range,
+                                          GetAuthToken(), 0, timeoutMs));
     for (auto &result : rsp.kvs()) {
         std::string key = RemovePrefix(result.key(), iter->second + "/");
         outKeyValues.emplace_back(std::make_pair(key, result.value()));

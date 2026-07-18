@@ -7,9 +7,11 @@ add_library(ds_client_py MODULE
         pybind_register_perf.cpp
         pybind_register_hetero.cpp
         pybind_register_context.cpp
-        pybind_register_service_discovery.cpp)
+        pybind_register_service_discovery.cpp
+        pybind_register_cluster_query.cpp)
 
 target_link_libraries(ds_client_py PRIVATE
+        cluster_query_client
         datasystem
         pybind11::module)
 

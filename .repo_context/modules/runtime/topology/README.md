@@ -57,6 +57,11 @@
   Engine and every borrowed dependency for retry. Engine Start is one-shot;
   component destructors safely stop and join as a final fallback and never call `std::terminate`, detach a live thread,
   or kill the process. The process manager owns the outer hard termination bound.
+- Coordinator exposes `GetClusterRawSnapshot` as a cold, read-only diagnostic RPC. The handler validates a logical
+  cluster name, reads the exact topology key and membership prefix through the existing `CoordinatorStore::Range`, and
+  returns only raw KV facts. It bypasses the ordinary recovery read gate, but never decodes topology, derives
+  health/ranges/routes, retries, or mutates state. Those operations belong to the dscli-local `client/cluster_query`
+  layer.
 
 ## Persistence And Recovery
 
@@ -99,6 +104,8 @@
 - Worker composition: `src/datasystem/worker/worker_oc_server.cpp`
 - Worker metadata routing adapter: `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
 - Standalone observer consumer: `src/datasystem/client/router_client.cpp`
+- Read-only operator query: `src/datasystem/client/cluster_query/*` and
+  `src/datasystem/coordinator/coordinator_service_impl.cpp`
 
 ## Invariants And Risks
 
@@ -120,6 +127,8 @@
   - `ctest -R 'ClusterTopology|TopologyRepository|TopologyObserver|PlacementFacade'`
   - `ctest -R 'TopologyController|TopologyTaskExecutor|TopologyEngine|TopologyDfx|TopologyShutdown'`
 - Business adapter coverage lives in `ds_ut_object`, `ds_ut_stream`, and selected Worker/object/stream ST binaries.
+- Operator-query coverage includes `CoordinatorStoreTest` raw RPC cases, `ClusterQueryProjectorTest`, Python
+  `test_cli_query.py`, and a packaged-wheel real-backend smoke test.
 - State machine, CAS/fence, crash points, retry, resource limits, and Shutdown belong in UT/LLT/component tests. ST only
   proves representative process, ETCD watch/lease, network, and real callback wiring.
 

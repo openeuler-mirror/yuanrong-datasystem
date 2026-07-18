@@ -135,6 +135,15 @@ public:
     Status ReportTopologyRecoveryCandidate(const ReportTopologyRecoveryCandidateReqPb &req,
                                            ReportTopologyRecoveryCandidateRspPb &rsp) override;
 
+    /**
+     * @brief Read raw topology and membership facts without recovery gating or domain projection.
+     * @param[in] req Validated logical cluster name.
+     * @param[out] rsp Raw key/value groups including each entry's modification revision.
+     * @return Store, validation, or response-size status.
+     */
+    Status GetClusterRawSnapshot(const GetClusterRawSnapshotReqPb &req,
+                                 GetClusterRawSnapshotRspPb &rsp) override;
+
 private:
     /**
      * @brief Construct the Store, watch, TTL, and topology recovery component tree.

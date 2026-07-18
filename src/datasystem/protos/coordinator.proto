@@ -93,6 +93,16 @@ message KeyValue {
   int64 mod_revision = 4;
 }
 
+message GetClusterRawSnapshotReqPb {
+  string cluster_name = 1;
+}
+
+message GetClusterRawSnapshotRspPb {
+  ResponseHeader header = 1;
+  repeated KeyValue topology_kvs = 2;
+  repeated KeyValue membership_kvs = 3;
+}
+
 message WorkerServiceInfoPb {
   enum StatePb {
     UNSPECIFIED = 0;
@@ -177,6 +187,7 @@ service CoordinatorService {
   rpc GetCoordinatorId(GetCoordinatorIdReqPb) returns (GetCoordinatorIdRspPb) {}
   rpc ReportTopologyRecoveryCandidate(ReportTopologyRecoveryCandidateReqPb)
       returns (ReportTopologyRecoveryCandidateRspPb) {}
+  rpc GetClusterRawSnapshot(GetClusterRawSnapshotReqPb) returns (GetClusterRawSnapshotRspPb) {}
 }
 
 message EventPb {

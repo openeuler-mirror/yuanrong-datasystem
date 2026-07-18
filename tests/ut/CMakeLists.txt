@@ -32,6 +32,7 @@ set(DS_UT_DEPEND_LIBS
         master_object_cache
         worker_object_cache
         cluster_topology
+        cluster_query_projector
         worker_client_manager
         datasystem_worker_static
         )

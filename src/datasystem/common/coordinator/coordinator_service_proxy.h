@@ -251,6 +251,16 @@ public:
                                            int32_t timeoutMs) override;
 
     /**
+     * @brief Read raw topology and membership facts for one logical cluster.
+     * @param[in] req Logical cluster name only.
+     * @param[out] rsp Raw facts observed by the Coordinator.
+     * @param[in] timeoutMs RPC deadline in milliseconds.
+     * @return RPC or response validation status.
+     */
+    Status GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &req,
+                                 coordinator::GetClusterRawSnapshotRspPb &rsp, int32_t timeoutMs);
+
+    /**
      * @copydoc ICoordinatorServiceProxy::GetObservedCoordinatorId
      */
     void GetObservedCoordinatorId(std::string &coordinatorId) const override;

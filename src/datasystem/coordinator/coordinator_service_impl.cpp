@@ -25,6 +25,7 @@
 #include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/coordinator/topology_recovery_manager.h"
@@ -35,6 +36,8 @@ namespace datasystem {
 namespace coordinator {
 namespace {
 constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
+constexpr size_t MAX_CLUSTER_RAW_SNAPSHOT_BYTES = 16 * 1'024 * 1'024;
+constexpr size_t MAX_CLUSTER_RAW_MEMBERSHIPS = 10'000;
 
 Status CheckCoordinatorStore(const std::shared_ptr<CoordinatorStore> &store)
 {
@@ -48,6 +51,25 @@ void FillKeyValuePb(const KeyValueEntry &entry, KeyValue *kv)
     kv->set_value(entry.value);
     kv->set_version(entry.version);
     kv->set_mod_revision(entry.modRevision);
+}
+
+void FillKeyValuePbs(const std::vector<KeyValueEntry> &entries,
+                     google::protobuf::RepeatedPtrField<KeyValue> *output)
+{
+    for (const auto &entry : entries) {
+        FillKeyValuePb(entry, output->Add());
+    }
+}
+
+Status BuildClusterReadKeys(const std::string &clusterName, std::string &topologyKey,
+                            std::string &membershipKey, std::string &membershipEnd)
+{
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(clusterName, keys));
+    topologyKey = keys->TopologyTable() + "/";
+    membershipKey = keys->MembershipTable() + "/";
+    membershipEnd = StringPlusOne(membershipKey);
+    return Status::OK();
 }
 
 CoordinatorRecoveryStatePb ToPbRecoveryState(TopologyRecoveryState state)
@@ -356,6 +378,33 @@ Status CoordinatorServiceImpl::ReportTopologyRecoveryCandidate(const ReportTopol
     rsp.set_result(ToPbReportResult(decision.result));
     rsp.set_recovery_state(ToPbRecoveryState(decision.state));
     rsp.set_payload_required(decision.payloadRequired);
+    return Status::OK();
+}
+
+Status CoordinatorServiceImpl::GetClusterRawSnapshot(const GetClusterRawSnapshotReqPb &req,
+                                                      GetClusterRawSnapshotRspPb &rsp)
+{
+    RETURN_IF_NOT_OK(CheckCoordinatorStore(store_));
+    std::string topologyKey;
+    std::string membershipKey;
+    std::string membershipEnd;
+    RETURN_IF_NOT_OK(BuildClusterReadKeys(req.cluster_name(), topologyKey, membershipKey, membershipEnd));
+    GetClusterRawSnapshotRspPb localRsp;
+    std::vector<KeyValueEntry> topologyKvs;
+    std::vector<KeyValueEntry> membershipKvs;
+    int64_t ignoredRevision = 0;
+    // Diagnostics intentionally bypass recovery gating so operators can inspect the raw facts used during recovery.
+    // This endpoint remains read-only and does not project health, hash ranges, or routes on the Coordinator.
+    RETURN_IF_NOT_OK(store_->Range(topologyKey, "", topologyKvs, ignoredRevision));
+    RETURN_IF_NOT_OK(store_->Range(membershipKey, membershipEnd, membershipKvs, ignoredRevision));
+    CHECK_FAIL_RETURN_STATUS(membershipKvs.size() <= MAX_CLUSTER_RAW_MEMBERSHIPS, K_OUT_OF_RANGE,
+                             "raw cluster membership count exceeds limit");
+    FillKeyValuePbs(topologyKvs, localRsp.mutable_topology_kvs());
+    FillKeyValuePbs(membershipKvs, localRsp.mutable_membership_kvs());
+    FillResponseHeader(localRsp.mutable_header());
+    CHECK_FAIL_RETURN_STATUS(localRsp.ByteSizeLong() <= MAX_CLUSTER_RAW_SNAPSHOT_BYTES, K_OUT_OF_RANGE,
+                             "raw cluster snapshot exceeds response limit");
+    rsp = std::move(localRsp);
     return Status::OK();
 }
 

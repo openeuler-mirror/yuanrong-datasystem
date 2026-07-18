@@ -26,6 +26,7 @@
     - [dscli generate_cpp_template](#dscli-generate_cpp_template)
     - [dscli generate_config](#dscli-generate_config)
     - [dscli collect_log](#dscli-collect_log)
+    - [dscli query](#dscli-query)
 - [配置项说明](#配置项说明)
     - [集群配置项](#集群配置项)
     - [命令行参数配置项](#命令行参数配置项)
@@ -960,6 +961,96 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--cluster_config_path &lt;FILE&gt; |-f &lt;FILE&gt; | 集群配置文件（JSON）的路径                                           |
 |--log_path &lt;PATH&gt;            |-d &lt;PATH&gt; | 对于每个需要采集日志的集群节点，指定存放日志的远程路径                  |
 |--output_path &lt;...&gt;          |-o &lt;...&gt;  | 存储日志的本地目录，默认路径为当前目录下名为'log_\<timestamp\>'的文件夹 |
+
+### dscli query
+
+`dscli query` 通过只读接口查询协调后端，并在命令行进程本地完成拓扑解码、健康状态派生、
+哈希区间计算和 key 路由。命令不会读取 `worker_config.json`，也不会自动探测后端类型；
+用户必须显式传入 ETCD 或 Coordinator 地址。
+Coordinator 地址使用 ZMQ 服务端口。整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
+当前 ETCD 查询仅支持未启用认证和 TLS 的集群。
+
+查询 ETCD 集群节点：
+
+```bash
+dscli query cluster \
+  --etcd_address 192.0.2.10:2379,192.0.2.11:2379 \
+  --cluster_name cluster-a
+```
+
+成功输出示例：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "cluster-a",
+  "status": "OK",
+  "topology_version": 7,
+  "nodes": [
+    {
+      "worker_address": "192.0.2.20:31501",
+      "health": "HEALTHY",
+      "state": "ACTIVE",
+      "hash_ranges": ["(3000000000,1000000000]"]
+    },
+    {
+      "worker_address": "192.0.2.21:31501",
+      "health": "DRAINING",
+      "state": "PRE_LEAVING",
+      "hash_ranges": ["(1000000000,3000000000]"]
+    }
+  ]
+}
+```
+
+哈希区间采用左开右闭 `(start,end]`。当 `start > end` 时表示跨越 `UINT32_MAX` 到 `0` 的环回区间；
+单 token 全环固定输出 `[0,4294967295]`。`INITIAL`、`JOINING` 和 `FAILED` 节点不拥有 committed 区间。
+
+查询一批 key 当前路由到的 Worker：
+
+```bash
+dscli query route \
+  --coordinator_address 192.0.2.10:31511 \
+  --keys key-1 key-2 key-1
+```
+
+成功输出按 Worker 地址分组，同一组内保留输入顺序和重复 key：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "",
+  "status": "OK",
+  "topology_version": 7,
+  "routes": [
+    {
+      "worker_address": "192.0.2.20:31501",
+      "keys": ["key-1", "key-1"],
+      "health": "HEALTHY"
+    },
+    {
+      "worker_address": "192.0.2.21:31501",
+      "keys": ["key-2"],
+      "health": "HEALTHY"
+    }
+  ]
+}
+```
+
+一次最多 100000 个 key，单 key 最大 1 MiB，总 key 数据最大 4 MiB。
+
+失败时不输出不完整的节点或路由，只输出最小错误对象并返回退出码 1：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "",
+  "status": "RPC unavailable",
+  "error": "failed to connect to coordination backend"
+}
+```
+
+查询不会猜测或输出部分节点、部分路由。只有 `status=OK` 且退出码为 0 的结果可用于自动化。
 
 ## 配置项说明
 
