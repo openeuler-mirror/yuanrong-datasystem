@@ -2023,7 +2023,8 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
                                          "Check device failed.");
     }
     BlobListInfo blobInfo;
-    RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, devBlobList, blobInfo));
+    const auto memoryAlignment = workerApi_[LOCAL_WORKER]->GetMemoryAlignment();
+    RETURN_IF_NOT_OK(PrepareDataSizeList(dataSizeList, devBlobList, blobInfo, memoryAlignment));
     LOG(INFO) << blobInfo.ToString(true);
     exists.resize(objectKeys.size(), false);
     RETURN_IF_NOT_OK(MultiCreate(objectKeys, dataSizeList, param, false, bufferList, exists));
@@ -2047,7 +2048,7 @@ Status ObjectClientImpl::DeviceDataCreate(const std::vector<std::string> &object
         return Status::OK();
     }
     point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY);
-    ComposeBufferData(bufferList, filterDevBlobList);
+    ComposeBufferData(bufferList, filterDevBlobList, memoryAlignment);
     std::vector<Buffer *> bufferRawPtrList;
     bufferRawPtrList.reserve(bufferList.size());
     for (auto &buff : bufferList) {

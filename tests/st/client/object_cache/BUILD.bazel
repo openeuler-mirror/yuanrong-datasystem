@@ -298,6 +298,7 @@ ds_cc_test(
     srcs = ["register_client_non_shm_rsp_test.cpp"],
     tags = ["manual"],
     deps = OC_CLIENT_COMMON_DEPS + [
+        "//src/datasystem/client:client_worker_common_api",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/util:version",
         "//src/datasystem/common/rpc:rpc_channel",

@@ -13,6 +13,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "client_worker_common_api_test",
+    srcs = ["client_worker_common_api_test.cpp"],
+    deps = [
+        "//src/datasystem/client:client_worker_common_api",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "mmap_manager_test",
     srcs = ["mmap_manager_test.cpp"],
     deps = [

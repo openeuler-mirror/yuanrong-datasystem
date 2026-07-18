@@ -135,6 +135,22 @@ TEST_F(ValidatorTest, IsExistBatchSizeUnderLimit)
     EXPECT_FALSE(Validator::IsExistBatchSizeUnderLimit(EXIST_KEYS_MAX_SIZE_LIMIT + 1));
 }
 
+TEST_F(ValidatorTest, ValidateMemoryAlignmentAcceptsPowerOfTwoUpTo4096)
+{
+    EXPECT_TRUE(Validator::ValidateMemoryAlignment("memory_alignment", 64));
+    EXPECT_TRUE(Validator::ValidateMemoryAlignment("memory_alignment", 512));
+    EXPECT_TRUE(Validator::ValidateMemoryAlignment("memory_alignment", 4096));
+}
+
+TEST_F(ValidatorTest, ValidateMemoryAlignmentRejectsInvalidValues)
+{
+    EXPECT_FALSE(Validator::ValidateMemoryAlignment("memory_alignment", 0));
+    EXPECT_FALSE(Validator::ValidateMemoryAlignment("memory_alignment", 6));
+    EXPECT_FALSE(Validator::ValidateMemoryAlignment("memory_alignment", 513));
+    EXPECT_FALSE(Validator::ValidateMemoryAlignment("memory_alignment", 1023));
+    EXPECT_FALSE(Validator::ValidateMemoryAlignment("memory_alignment", 4097));
+}
+
 TEST_F(ValidatorTest, IsIdFormat)
 {
     EXPECT_TRUE(Validator::IsIdFormat("woqednuielwhdu329UG-!@#%;"));

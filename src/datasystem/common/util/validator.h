@@ -1153,13 +1153,13 @@ public:
      */
     static bool ValidateMemoryAlignment(const char *flagName, uint32_t value)
     {
-        auto maxAlignment = 512U;
-        auto divisor = 2;
-        auto isEven = (value % divisor) == 0;
-        if (value > 0U && value <= maxAlignment && isEven) {
+        constexpr uint32_t maxAlignment = 4096U;
+        const bool isPowerOfTwo = value != 0U && (value & (value - 1U)) == 0U;
+        if (value <= maxAlignment && isPowerOfTwo) {
             return true;
         }
-        LOG(ERROR) << FormatString("The value of %s(%u) should be even in (0 , %u].", flagName, value, maxAlignment);
+        LOG(ERROR) << FormatString("The value of %s(%u) should be a power of two in (0, %u].", flagName, value,
+                                   maxAlignment);
         return false;
     }
 };

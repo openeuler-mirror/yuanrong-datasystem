@@ -60,22 +60,35 @@ struct BlobListInfo {
 };
 
 /**
+ * @brief Get the composed blob header size aligned to memoryAlignment.
+ * @param[in] blobCount The number of blobs in one composed object.
+ * @param[in] memoryAlignment The payload alignment.
+ * @pre memoryAlignment must be a non-zero power of two.
+ * @pre `(blobCount + 2) * sizeof(uint64_t)` must fit in size_t, and adding the alignment padding must fit in
+ *      uint64_t.
+ * @return The aligned header size.
+ */
+uint64_t GetComposedBufferHeaderSize(size_t blobCount, uint32_t memoryAlignment);
+
+/**
  * @brief Prepare the data sizes by user data list
  * @param[out] sizeList The list of all data sizes
  * @param[in] devBlobList The user data list
  * @param[in] blobInfo The information of blob
+ * @param[in] memoryAlignment The payload alignment.
  * @return K_OK on any object success; the error code otherwise.
  */
 Status PrepareDataSizeList(std::vector<size_t> &sizeList, const std::vector<DeviceBlobList> &devBlobList,
-                           BlobListInfo &blobInfo);
+                           BlobListInfo &blobInfo, uint32_t memoryAlignment);
 
 /**
  * @brief Compose buffer list by user data list
  * @param[out] bufferList Compose the user data to bufferList
  * @param[in] devBlobList The user data list
+ * @param[in] memoryAlignment The payload alignment.
  */
 void ComposeBufferData(std::vector<std::shared_ptr<Buffer>> &bufferList,
-                       const std::vector<DeviceBlobList> &devBlobList);
+                       const std::vector<DeviceBlobList> &devBlobList, uint32_t memoryAlignment);
 
 }  // namespace object_cache
 }  // namespace datasystem
