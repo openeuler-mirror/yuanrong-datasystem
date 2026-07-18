@@ -192,17 +192,21 @@ Status WorkerRemoteMasterSCApi::DeleteStream(master::DeleteStreamReqPb &req, mas
 Status WorkerRemoteMasterSCApi::QueryGlobalProducersNum(master::QueryGlobalNumReqPb &req,
                                                         master::QueryGlobalNumRsqPb &rsp)
 {
+    RpcOptions opts;
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return brpcSession_ ? brpcSession_->QueryGlobalProducersNum(req, rsp)
-                        : rpcSession_->QueryGlobalProducersNum(req, rsp);
+    return brpcSession_ ? brpcSession_->QueryGlobalProducersNum(opts, req, rsp)
+                        : rpcSession_->QueryGlobalProducersNum(opts, req, rsp);
 }
 
 Status WorkerRemoteMasterSCApi::QueryGlobalConsumersNum(master::QueryGlobalNumReqPb &req,
                                                         master::QueryGlobalNumRsqPb &rsp)
 {
+    RpcOptions opts;
+    SET_RPC_TIMEOUT(&GetRequestContext()->scTimeoutDuration, opts);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    return brpcSession_ ? brpcSession_->QueryGlobalConsumersNum(req, rsp)
-                        : rpcSession_->QueryGlobalConsumersNum(req, rsp);
+    return brpcSession_ ? brpcSession_->QueryGlobalConsumersNum(opts, req, rsp)
+                        : rpcSession_->QueryGlobalConsumersNum(opts, req, rsp);
 }
 
 std::string WorkerRemoteMasterSCApi::LogPrefix() const

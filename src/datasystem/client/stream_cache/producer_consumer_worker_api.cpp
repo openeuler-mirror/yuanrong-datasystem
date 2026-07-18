@@ -77,7 +77,7 @@ Status ProducerConsumerWorkerApi::DoGetDataPageRpc(ClientWorkerApi &workerApi, G
 {
     auto pair = workerApi.GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
     RpcOptions opts;
-    opts.SetTimeout(pair.first);
+    opts.SetTimeout(currDefaultRpcTimeout);  // per-call budget from RetryOnError, avoid pair.first amplification
     GetRequestContext()->reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
     req.set_timeout_ms(pair.second);
     RETURN_IF_NOT_OK(workerApi.signature_->GenerateSignature(req));
@@ -143,7 +143,7 @@ Status ProducerConsumerWorkerApi::DoAllocBigShmMemoryRpc(ClientWorkerApi &worker
 {
     auto pair = workerApi.GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
     RpcOptions opts;
-    opts.SetTimeout(pair.first);
+    opts.SetTimeout(currDefaultRpcTimeout);  // per-call budget from RetryOnError, avoid pair.first amplification
     GetRequestContext()->reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
     req.set_sub_timeout(pair.second);
     // Even without AKSK authentication, this field should still be set in this scenario because worker
@@ -275,7 +275,7 @@ Status ProducerConsumerWorkerApi::DoCreateShmPageRpc(ClientWorkerApi &workerApi,
 {
     auto pair = workerApi.GetRpcTimeout(timeoutMs, currDefaultRpcTimeout);
     RpcOptions opts;
-    opts.SetTimeout(pair.first);
+    opts.SetTimeout(currDefaultRpcTimeout);  // per-call budget from RetryOnError, avoid pair.first amplification
     GetRequestContext()->reqTimeoutDuration.Init(workerApi.ClientGetRequestTimeout(opts.GetTimeout()));
     req.set_sub_timeout(pair.second);
     // Even without AKSK authentication, this field should still be set in this scenario because worker
