@@ -22,6 +22,7 @@
 #define OS_XPRT_PIPLN_TYPES
 
 #include <algorithm>
+#include <cstring>
 #include <sstream>
 #ifdef BUILD_PIPLN_H2D
 #include <ub/umdk/urma/urma_api.h>
@@ -35,6 +36,8 @@
 #define CHUNKTAG_ID_LEN 4
 #define CHUNKTAG_SIZE_START_INDEX 15
 #define CHUNKTAG_SIZE_LEN 1
+#define CHUNKTAG_RESERVE_INDEX 16
+#define CHUNKTAG_RESERVE_LEN 48
 
 enum PiplnDoneStep {
     PIPLN_DONE_NO_STEP = 0,
@@ -64,7 +67,17 @@ struct ChunkTag {
     uint64_t chunkType : 1;
     uint64_t chunkId : 4;
     uint64_t chunkSize : 1;
-    uint64_t rsv : 48;
+    uint64_t rsv : 48;  // temporary used for object total value size
+
+    static inline uint64_t GetReservePart(ChunkTag tag)
+    {
+        return tag.rsv;
+    }
+
+    static inline void SetReservePart(ChunkTag &tag, uint64_t rsv)
+    {
+        tag.rsv = rsv;
+    }
 
     static inline uint64_t GetRange(uint64_t tag, int start, int length)
     {
@@ -83,6 +96,7 @@ struct ChunkTag {
         tag.chunkType = GetRange(num, CHUNKTAG_TYPE_START_INDEX, CHUNKTAG_TYPE_LEN);
         tag.chunkId = GetRange(num, CHUNKTAG_ID_START_INDEX, CHUNKTAG_ID_LEN);
         tag.chunkSize = GetRange(num, CHUNKTAG_SIZE_START_INDEX, CHUNKTAG_SIZE_LEN);
+        tag.rsv = 0;
         return tag;
     }
 
@@ -129,7 +143,7 @@ struct ChunkTag {
     {
         std::stringstream ss;
         ss << "isLast:" << (IsLastChunk(tag)) << " idx:" << tag.chunkId
-           << " size:" << (chunkSize ? chunkSize : tag.chunkSize) << " reqId:" << tag.reqId;
+           << " size:" << (chunkSize ? chunkSize : tag.chunkSize) << " reqId:" << tag.reqId << " rsv:" << tag.rsv;
         return ss.str();
     }
 };
@@ -161,25 +175,26 @@ struct PiplnSndArgs {
 #endif
 }  // namespace OsXprtPipln
 
-#define PIPLN_DEBUG_LOG_DATA_LENGTH 30
+#define PIPLN_DEBUG_LOG_DATA_LENGTH 40
 #define PIPLN_DEBUG_LOG_DATA_LEVEL 3
-#define PIPLN_DEBUG_LOG_DATA(tag, key, reqId, shmUnit, dataOffset, size)                                              \
-    if (FLAGS_v > PIPLN_DEBUG_LOG_DATA_LEVEL) {                                                                       \
-        std::string buf;                                                                                              \
-        char *dataSrc = ((char *)(shmUnit)->GetPointer()) + (size_t)(dataOffset);                                     \
-        buf.resize(PIPLN_DEBUG_LOG_DATA_LENGTH + 1);                                                                  \
-        std::memcpy(&buf[0], dataSrc, std::min<size_t>(PIPLN_DEBUG_LOG_DATA_LENGTH, (size)));                         \
-        LOG(INFO) << "[" << (tag) << "] " << (key) << "(reqId:" << (reqId) << ") pointer " << (shmUnit)->GetPointer() \
-                  << " shmUnit " << (shmUnit).get() << " shmOffset " << (shmUnit)->GetOffset() << " data " << buf;    \
+#define PIPLN_DEBUG_LOG_DATA(tag, key, reqId, shmUnit, dataOffset, size)                                    \
+    if (FLAGS_v > PIPLN_DEBUG_LOG_DATA_LEVEL) {                                                             \
+        std::string buf;                                                                                    \
+        char *dataSrc = ((char *)(shmUnit)->GetPointer()) + (size_t)(dataOffset);                           \
+        buf.resize(PIPLN_DEBUG_LOG_DATA_LENGTH + 1);                                                        \
+        std::memcpy(&buf[0], dataSrc, std::min<size_t>(PIPLN_DEBUG_LOG_DATA_LENGTH, (size)));               \
+        LOG(INFO) << PIPLN_LOG_PREFIX "[" << (tag) << "] " << (key) << "(reqId:" << (reqId) << ") pointer " \
+                  << (shmUnit)->GetPointer() << " shmUnit " << (shmUnit).get() << " shmOffset "             \
+                  << (shmUnit)->GetOffset() << " data " << buf;                                             \
     }
 
-#define PIPLN_DEBUG_LOG_DATA_RAW(tag, key, reqId, dataSrc, size)                                                \
-    if (FLAGS_v > PIPLN_DEBUG_LOG_DATA_LEVEL) {                                                                 \
-        std::string buf;                                                                                        \
-        buf.resize(PIPLN_DEBUG_LOG_DATA_LENGTH + 1);                                                            \
-        std::memcpy(&buf[0], (char *)(dataSrc), std::min<size_t>(PIPLN_DEBUG_LOG_DATA_LENGTH, (size)));         \
-        LOG(INFO) << "[" << (tag) << "] " << (key) << "(reqId:" << (reqId) << ") pointer " << (void *)(dataSrc) \
-                  << " data " << buf;                                                                           \
+#define PIPLN_DEBUG_LOG_DATA_RAW(tag, key, reqId, dataSrc, size)                                            \
+    if (FLAGS_v > PIPLN_DEBUG_LOG_DATA_LEVEL) {                                                             \
+        std::string buf;                                                                                    \
+        buf.resize(PIPLN_DEBUG_LOG_DATA_LENGTH + 1);                                                        \
+        std::memcpy(&buf[0], (char *)(dataSrc), std::min<size_t>(PIPLN_DEBUG_LOG_DATA_LENGTH, (size)));     \
+        LOG(INFO) << PIPLN_LOG_PREFIX "[" << (tag) << "] " << (key) << "(reqId:" << (reqId) << ") pointer " \
+                  << (void *)(dataSrc) << " data " << buf;                                                  \
     }
 
 #endif

@@ -60,7 +60,7 @@ Status ParsePiplnH2DRequest(const GetReqPb &req, H2DChunkManager &mgr, const std
                            .size = 0 };
     uint32_t workerReqId = (uint32_t)(GenerateReqId() & URMA_REQID_MASK);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.AddKey(objectKey, workerReqId, devShmInfo, infoIdx),
-                                     PIPLN_LOG_PREFIX " objectKey is " + objectKey);
+                                     PIPLN_LOG_PREFIX "objectKey is " + objectKey);
     mgr.AddReqIdMap(workerReqId, clntReqId);
     mgr.RegisterPipelineProducer(gQueueProducer, pipelineQueueId);
     return Status::OK();
@@ -139,8 +139,8 @@ Status WaitPipelineRH2DDone(H2DChunkManager &mgr)
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     auto rpcThresholdUs = GetServerLatencyTraceConfig().rpcSlowerThanUs;
     SLOW_LOG_IF_OR_VLOG(INFO, rpcThresholdUs > 0 && elapsedUs >= rpcThresholdUs, 1,
-                        "[PIPLN RH2D] worker wait done, keyCount: " << mgr.KeyNum() << ", costUs: " << elapsedUs
-                                                                    << ", status: " << rc.ToString());
+                        PIPLN_LOG_PREFIX "worker wait done, keyCount: " << mgr.KeyNum() << ", costUs: " << elapsedUs
+                                                                        << ", status: " << rc.ToString());
     return rc;
 }
 #undef ADD_FAILED_KEY
@@ -162,13 +162,13 @@ Status TriggerLocalPipelineRH2D(H2DChunkManager &mgr, const std::string &objectK
     PIPLN_DEBUG_LOG_DATA("TriggerLocalPipelineRH2D", objectKey, reqId, shmUnit, dataOffset, dataSize);
     Status rc = mgr.DoPiplnStep2_ProduceLocalChunk(reqId, shmUnit->GetFd(), shmUnit->GetMmapSize(),
                                                    shmUnit->GetOffset() + dataOffset, dataSize);
-    VLOG(2) << PIPLN_LOG_PREFIX " Local data path: key=" << objectKey << ", reqId=" << reqId << ", size=" << dataSize;
+    VLOG(2) << PIPLN_LOG_PREFIX "Local data path: key=" << objectKey << ", reqId=" << reqId << ", size=" << dataSize;
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     auto processThresholdUs = GetServerLatencyTraceConfig().processSlowerThanUs;
     SLOW_LOG_IF_OR_VLOG(INFO, processThresholdUs > 0 && elapsedUs >= processThresholdUs, 1,
-                        "[PIPLN RH2D] worker trigger local done, reqId: " << reqId << ", dataSize: " << dataSize
-                                                                          << ", costUs: " << elapsedUs
-                                                                          << ", status: " << rc.ToString());
+                        PIPLN_LOG_PREFIX "worker trigger local done, reqId: " << reqId << ", dataSize: " << dataSize
+                                                                              << ", costUs: " << elapsedUs
+                                                                              << ", status: " << rc.ToString());
     RETURN_IF_NOT_OK(rc);
 
     return Status::OK();
@@ -212,11 +212,11 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
     const auto receiverUs = static_cast<uint64_t>(receiverTimer.ElapsedMicroSecond());
     auto processThresholdUs = GetServerLatencyTraceConfig().processSlowerThanUs;
     SLOW_LOG_IF_OR_VLOG(INFO, processThresholdUs > 0 && receiverUs >= processThresholdUs, 1,
-                        "[PIPLN RH2D] worker start receiver done, reqId: "
+                        PIPLN_LOG_PREFIX " worker start receiver done, reqId: "
                             << reqId << ", dataSize: " << size << ", remoteAddress: " << remoteAddress
                             << ", costUs: " << receiverUs << ", status: " << receiverRc.ToString());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(receiverRc, PIPLN_LOG_PREFIX "failed to start receiver");
-    VLOG(2) << PIPLN_LOG_PREFIX " Remote data path: key=" << key << ", reqId=" << reqId << ", size=" << size
+    VLOG(2) << PIPLN_LOG_PREFIX "Remote data path: key=" << key << ", reqId=" << reqId << ", size=" << size
             << ", remote=" << remoteAddress;
 
     // set field to trigger sender
@@ -237,15 +237,15 @@ Status InitOsPiplnRH2DEnv(void *ctx, void *jfc, void *jfce, uint32_t jettySize)
     } else if (FLAGS_pipeline_h2d_thread_num < MIN_PIPLN_THREAD_NUM
                || FLAGS_pipeline_h2d_thread_num > MAX_PIPLN_THREAD_NUM) {
         actualThreadNum = DEFAULT_PIPLN_THREAD_NUM;
-        LOG(WARNING) << PIPLN_LOG_PREFIX " Invalid thread num: pipeline_h2d_thread_num="
-                     << FLAGS_pipeline_h2d_thread_num << ", use default=" << actualThreadNum;
+        LOG(WARNING) << PIPLN_LOG_PREFIX "Invalid thread num: pipeline_h2d_thread_num=" << FLAGS_pipeline_h2d_thread_num
+                     << ", use default=" << actualThreadNum;
     } else {
         actualThreadNum = FLAGS_pipeline_h2d_thread_num;
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         H2DChunkManager::InitOsPiplnRH2DEnv((urma_context_t *)ctx, (urma_jfc_t *)jfc, (urma_jfce_t *)jfce, jettySize,
                                             actualThreadNum, g_isClientMode),
-        PIPLN_LOG_PREFIX " failed to init os pipeline env");
+        PIPLN_LOG_PREFIX "failed to init os pipeline env");
     return Status::OK();
 }
 
@@ -271,7 +271,7 @@ Status DoPiplnStep1_StartSender(PiplnSndArgs &args)
     };
     mgr.AddKey("", args.clientKey, dev);
     PIPLN_DEBUG_LOG_DATA_RAW("Before StartSender", "unkwon", args.clientKey, args.localAddr, args.len);
-    VLOG(2) << PIPLN_LOG_PREFIX " Worker2 sending: key=" << args.clientKey << ", server key=" << args.serverKey
+    VLOG(2) << PIPLN_LOG_PREFIX "Worker2 sending: key=" << args.clientKey << ", server key=" << args.serverKey
             << ", size=" << args.len;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.DoPiplnStep1_StartSender(args), "failed to start sender");
     point.RecordAndReset(PerfKey::PIPLN_RH2D_SENDER_WAIT_DONE);
@@ -280,9 +280,9 @@ Status DoPiplnStep1_StartSender(PiplnSndArgs &args)
     const auto waitUs = static_cast<uint64_t>(waitTimer.ElapsedMicroSecond());
     auto rpcThresholdUs = GetServerLatencyTraceConfig().rpcSlowerThanUs;
     SLOW_LOG_IF_OR_VLOG(INFO, rpcThresholdUs > 0 && waitUs >= rpcThresholdUs, 1,
-                        "[PIPLN RH2D] sender wait done, clientReqId: " << args.clientKey << ", dataSize: " << args.len
-                                                                       << ", costUs: " << waitUs
-                                                                       << ", status: " << waitRc.ToString());
+                        PIPLN_LOG_PREFIX " sender wait done, clientReqId: " << args.clientKey << ", dataSize: "
+                                                                            << args.len << ", costUs: " << waitUs
+                                                                            << ", status: " << waitRc.ToString());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(waitRc, "failed to wait send done");
     return Status::OK();
 }
@@ -349,9 +349,9 @@ Status MaybeTriggerLocalPipelineRH2D(H2DChunkManager &mgr, const std::string &ke
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     auto processThresholdUs = GetServerLatencyTraceConfig().processSlowerThanUs;
     SLOW_LOG_IF_OR_VLOG(INFO, processThresholdUs > 0 && elapsedUs >= processThresholdUs, 1,
-                        "[PIPLN RH2D] worker maybe trigger local done, reqId: " << reqId << ", dataSize: " << dataSize
-                                                                                << ", costUs: " << elapsedUs
-                                                                                << ", status: " << rc.ToString());
+                        PIPLN_LOG_PREFIX " worker maybe trigger local done, reqId: "
+                            << reqId << ", dataSize: " << dataSize << ", costUs: " << elapsedUs
+                            << ", status: " << rc.ToString());
     RETURN_IF_NOT_OK(rc);
 
     return Status::OK();
@@ -363,8 +363,8 @@ Status HoldOnePiplnRH2DQueue(uint32_t &queueId)
         return Status::OK();
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(gQueueProducer->HoldAvailableQueue(queueId),
-                                     "[PIPLN RH2D] hold one pipeline queue failed");
-    VLOG(1) << "[PIPLN RH2D] HoldAvailableQueue: queueId=" << queueId;
+                                     PIPLN_LOG_PREFIX " hold one pipeline queue failed");
+    VLOG(1) << PIPLN_LOG_PREFIX " HoldAvailableQueue: queueId=" << queueId;
     return Status::OK();
 }
 
@@ -374,9 +374,9 @@ Status ReleaseAvailableQueue(uint32_t queueId)
         return Status::OK();
     }
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
-    VLOG(1) << PIPLN_LOG_PREFIX " ReleaseAvailableQueue: queueId=" << queueId;
+    VLOG(1) << PIPLN_LOG_PREFIX "ReleaseAvailableQueue: queueId=" << queueId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(gQueueProducer->ReleaseAvailableQueue(queueId),
-                                     PIPLN_LOG_PREFIX " release pipeline queue failed");
+                                     PIPLN_LOG_PREFIX "release pipeline queue failed");
     return Status::OK();
 }
 
@@ -398,7 +398,7 @@ static Status SetPiplnDataShmInfo(RegisterClientRspPb &resp, const std::string &
         std::shared_ptr<memory::ArenaGroup> arenaGroup;
         Status rc = arenaManager->GetArenaGroup(key, arenaGroup);
         if (rc.IsError() || arenaGroup == nullptr) {
-            LOG(WARNING) << PIPLN_LOG_PREFIX " Skip shm query: tenant=" << key.tenantId << ", error=" << rc.ToString();
+            LOG(WARNING) << PIPLN_LOG_PREFIX "Skip shm query: tenant=" << key.tenantId << ", error=" << rc.ToString();
             continue;
         }
 
@@ -410,7 +410,7 @@ static Status SetPiplnDataShmInfo(RegisterClientRspPb &resp, const std::string &
             std::pair<void *, uint64_t> ptrMmapSz;
             Status rc = allocator->FdToPointer(key, fd, ptrMmapSz);
             if (rc.IsError()) {
-                LOG(WARNING) << PIPLN_LOG_PREFIX " Query data shm failed: fd=" << fd << ", tenant=" << key.tenantId
+                LOG(WARNING) << PIPLN_LOG_PREFIX "Query data shm failed: fd=" << fd << ", tenant=" << key.tenantId
                              << ", error=" << rc.ToString();
                 continue;
             }
@@ -424,7 +424,7 @@ static Status SetPiplnDataShmInfo(RegisterClientRspPb &resp, const std::string &
         }
     }
 
-    LOG(INFO) << PIPLN_LOG_PREFIX " RegisterClient returns " << addedFds.size() << " shm fds for cudaHostRegister";
+    LOG(INFO) << PIPLN_LOG_PREFIX "RegisterClient returns " << addedFds.size() << " shm fds for cudaHostRegister";
     return Status::OK();
 }
 
@@ -447,10 +447,10 @@ Status SetPiplnQueueShmInfo(RegisterClientRspPb &resp, uint32_t queueId, const s
         info->set_offset(offset);
         info->set_mmap_size(mmapSize);
         info->set_shm_id(shmId);
-        LOG(INFO) << PIPLN_LOG_PREFIX " RegisterClient assigns queueId=" << queueId;
+        LOG(INFO) << PIPLN_LOG_PREFIX "RegisterClient assigns queueId=" << queueId;
         SetPiplnDataShmInfo(resp, tenantId);
     } else {
-        LOG(ERROR) << PIPLN_LOG_PREFIX " SetPiplnQueueShmInfo failed: " << ret.GetMsg();
+        LOG(ERROR) << PIPLN_LOG_PREFIX "SetPiplnQueueShmInfo failed: " << ret.GetMsg();
     }
     return Status::OK();
 }
@@ -468,7 +468,7 @@ Status MarkPipelineStep1Ok(H2DChunkManager &mgr, const std::string &key)
     // for three step pipeline, reqInfo->syncHandle is not nullptr
     if (reqInfo->doneStep == PIPLN_DONE_NO_STEP && reqInfo->syncHandle)
         reqInfo->doneStep = PIPLN_DONE_ONE_STEP;
-    VLOG(1) << key << PIPLN_LOG_PREFIX " MarkPipelineStep1Ok reqInfo->doneStep " << reqInfo->doneStep;
+    VLOG(1) << key << PIPLN_LOG_PREFIX "MarkPipelineStep1Ok reqInfo->doneStep " << reqInfo->doneStep;
 
     return Status::OK();
 }

@@ -186,6 +186,7 @@ KVClient
             - **devBlob** - 目标设备内存描述数组。每个 key 对应一个连续 ``Blob``，用于指定 H2D 的目标设备地址及容量。
             - **outFailedKeys** - 传出参数，返回获取或 H2D 失败的 key 列表。
             - **h2dStream** - 可选的外部 CUDA stream 句柄。默认值为 ``nullptr``，表示使用内部 stream 并等待 H2D 完成。
+            - **readOnlyBuffers** - 可选的返回 ReadOnlyBuffer 列表的指针，当 h2dStream 不为空时，要求 readOnlyBuffers 不能为空。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示操作成功。

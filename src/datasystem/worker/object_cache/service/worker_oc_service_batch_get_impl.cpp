@@ -111,7 +111,7 @@ void CleanupWorkerWorkerOcRpcChannel(
     std::unique_ptr<ClientUnaryWriterReader<BatchGetObjectRemoteReqPb, BatchGetObjectRemoteRspPb>> &clientApi,
     std::shared_ptr<WorkerRemoteWorkerOCApi> &workerStub, Status rc, const std::string &stage)
 {
-    LOG(WARNING) << PIPLN_LOG_PREFIX" Remote get " << stage << " failed: address=" << address
+    LOG(WARNING) << PIPLN_LOG_PREFIX "Remote get " << stage << " failed: address=" << address
                  << ", error=" << rc.ToString() << ". Clean RPC channel.";
 
     // Drop current per-call stream and shared stub before removing the cached stub.
@@ -121,10 +121,10 @@ void CleanupWorkerWorkerOcRpcChannel(
 
     auto removeRc = RpcStubCacheMgr::Instance().Remove(hostAddr, StubType::WORKER_WORKER_OC_SVC);
     if (removeRc.IsError()) {
-        LOG(WARNING) << PIPLN_LOG_PREFIX" Remove RPC stub failed: address=" << address
+        LOG(WARNING) << PIPLN_LOG_PREFIX "Remove RPC stub failed: address=" << address
                      << ", error=" << removeRc.ToString();
     } else {
-        LOG(WARNING) << PIPLN_LOG_PREFIX" Remove RPC stub success: address=" << address;
+        LOG(WARNING) << PIPLN_LOG_PREFIX "Remove RPC stub success: address=" << address;
     }
 }
 

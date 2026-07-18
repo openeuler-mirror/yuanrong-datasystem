@@ -317,6 +317,14 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "dyn_bitmap_test",
+    srcs = ["dyn_bitmap_test.cpp"],
+    deps = [
+        "//tests/ut:ut_common",
+    ],
+)
+
 test_suite(
     name = "all_util_tests",
     tests = [
@@ -349,5 +357,6 @@ test_suite(
         "uri_test",
         "uuid_test",
         "validator_test",
+        "dyn_bitmap_test",
     ],
 )

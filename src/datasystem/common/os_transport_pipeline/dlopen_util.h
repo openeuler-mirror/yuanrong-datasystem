@@ -50,13 +50,13 @@ struct LibLoaderBase {
     std::string libName_;
 };
 
-#define CALL_DYN_FUNC_BASE(type, ret, funcName, ...)                   \
-    {                                                                  \
-        auto &func = OsXprtPipln::type::Instance()->funcName##Func_;   \
-        if (func)                                                      \
-            ret = static_cast<decltype(ret)>(func(__VA_ARGS__));       \
-        else                                                           \
-            ret = static_cast<decltype(ret)>(-1);                      \
+#define CALL_DYN_FUNC_BASE(type, ret, funcName, ...)                 \
+    {                                                                \
+        auto &func = OsXprtPipln::type::Instance()->funcName##Func_; \
+        if (func)                                                    \
+            ret = static_cast<decltype(ret)>(func(__VA_ARGS__));     \
+        else                                                         \
+            ret = static_cast<decltype(ret)>(-1);                    \
     }
 
 #define DO_LOAD_DYNLIB(type) type::Instance()->Load();
@@ -65,9 +65,9 @@ struct LibLoaderBase {
 
 #define DO_LOAD_OS_TRANSPORT() static_cast<void>(0)
 #define DO_UNLOAD_OS_TRANSPORT() static_cast<void>(0)
-#define CALL_OS_XPRT_FUNC(ret, funcName, ...)                                      \
-    do {                                                                           \
-        ret = static_cast<decltype(ret)>(OS_XPRT_DIRECT_##funcName(__VA_ARGS__));  \
+#define CALL_OS_XPRT_FUNC(ret, funcName, ...)                                     \
+    do {                                                                          \
+        ret = static_cast<decltype(ret)>(OS_XPRT_DIRECT_##funcName(__VA_ARGS__)); \
     } while (0)
 
 #define OS_XPRT_DIRECT_DoLogReg os_transport_log_reg
@@ -75,7 +75,6 @@ struct LibLoaderBase {
 #define OS_XPRT_DIRECT_DoRecv os_transport_recv
 #define OS_XPRT_DIRECT_DoSend os_transport_send
 #define OS_XPRT_DIRECT_DoDestroy os_transport_destroy
-#define OS_XPRT_DIRECT_DoWait wait_and_free_sync
 #define OS_XPRT_DIRECT_DoWaitTimeout wait_and_free_sync_timeout
 #define OS_XPRT_DIRECT_DoNotify os_transport_wake_up_task
 #define OS_XPRT_DIRECT_DoCancel os_transport_cancel_tasks
@@ -90,7 +89,6 @@ struct CudaRTLibLoader : public LibLoaderBase {
     static CudaRTLibLoader *Instance();
 
     // cuda toolkit
-    REG_METHOD(cudaIpcOpenMemHandle, cudaError_t, void **, cudaIpcMemHandle_t, unsigned int);
     REG_METHOD(cudaStreamCreateWithFlags, cudaError_t, cudaStream_t *, unsigned int);
     REG_METHOD(cudaEventCreate, cudaError_t, cudaEvent_t *, unsigned int);
     REG_METHOD(cudaMemcpyAsync, cudaError_t, void *, const void *, size_t, cudaMemcpyKind, cudaStream_t);
@@ -98,8 +96,6 @@ struct CudaRTLibLoader : public LibLoaderBase {
     REG_METHOD(cudaStreamDestroy, cudaError_t, cudaStream_t);
     REG_METHOD(cudaEventSynchronize, cudaError_t, cudaEvent_t);
     REG_METHOD(cudaEventDestroy, cudaError_t, cudaEvent_t);
-    REG_METHOD(cudaIpcCloseMemHandle, cudaError_t, void *);
-    REG_METHOD(cudaIpcGetMemHandle, cudaError_t, cudaIpcMemHandle_t *, void *);
     REG_METHOD(cudaGetErrorString, const char *, cudaError_t);
     REG_METHOD(cudaHostRegister, cudaError_t, void *, size_t, unsigned int);
     REG_METHOD(cudaHostUnregister, cudaError_t, void *);
@@ -114,7 +110,6 @@ struct CudaRTLibLoader {
         static struct CudaRTLibLoader dummy;
         return &dummy;
     }
-    REG_METHOD(cudaSetDevice, cudaError_t, int);
 };
 #endif
 #define CALL_CUDA_RT_FUNC(ret, funcName, ...) CALL_DYN_FUNC_BASE(CudaRTLibLoader, ret, funcName, __VA_ARGS__);

@@ -35,6 +35,10 @@ class CudaRH2DDriver : public BaseRH2DDriver {
 public:
     CudaRH2DDriver(const DevShmInfo &devInfo, bool isClient) : BaseRH2DDriver(devInfo, isClient)
     {
+        stream_ = (cudaStream_t)devInfo.h2dStream;
+        if (stream_) {
+            UseExternalStream_ = true;
+        }
     }
     virtual ~CudaRH2DDriver()
     {
@@ -50,13 +54,13 @@ public:
     static void UnRegisterHostMemory(void *ptr);
 
 private:
-    bool UseExternalStream() const;
     cudaEvent_t GetSelfEvent(bool createIfNotExists);
     void RemoveSelfEvent();
     void RemoveSelfStream();
 
     cudaStream_t stream_ = nullptr;
     cudaEvent_t event_ = nullptr;
+    bool UseExternalStream_ = false;
 };
 }  // namespace OsXprtPipln
 

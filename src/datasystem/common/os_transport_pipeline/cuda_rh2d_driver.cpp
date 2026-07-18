@@ -65,11 +65,6 @@ static Status CallCudaRTHook(const std::function<cudaError_t(void)> &hook, const
                                  #funcName " failed: " + CudaErrToString(ret, #funcName)); \
     } while (0)
 
-bool CudaRH2DDriver::UseExternalStream() const
-{
-    return h2dStream != nullptr;
-}
-
 Status CudaRH2DDriver::Init()
 {
     if (!isClient) {
@@ -153,7 +148,7 @@ Status CudaRH2DDriver::SubmitIO(void *srcData, size_t srcSize, size_t destOffset
     size_t destAddr = reinterpret_cast<size_t>(targetAddr) + destOffset;
     CUDA_RETURN_IF_NOT_OK(cudaMemcpyAsync, (void *)destAddr, srcData, srcSize, cudaMemcpyHostToDevice, stream_);
 
-    if (!UseExternalStream()) {
+    if (!UseExternalStream_) {
         cudaEvent_t event = GetSelfEvent(false /* createIfNotExists */);
         if (event == nullptr) {
             return Status(StatusCode::K_RUNTIME_ERROR, "no event for internal stream Submit");
@@ -170,7 +165,7 @@ Status CudaRH2DDriver::SubmitIO(void *srcData, size_t srcSize, size_t destOffset
 
 Status CudaRH2DDriver::WaitIO()
 {
-    if (!isClient || UseExternalStream()) {
+    if (!isClient || UseExternalStream_) {
         return Status::OK();
     }
     cudaEvent_t event = GetSelfEvent(false /* createIfNotExists */);
@@ -184,7 +179,7 @@ Status CudaRH2DDriver::WaitIO()
 
 Status CudaRH2DDriver::Release()
 {
-    if (isClient && !UseExternalStream()) {
+    if (isClient && !UseExternalStream_) {
         RemoveSelfEvent();
         RemoveSelfStream();
     }

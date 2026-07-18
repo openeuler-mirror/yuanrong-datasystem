@@ -339,14 +339,15 @@ public:
     /**
      * @brief Invoke worker client to get an object.
      * @param[in] objectKeys The vector of the object key.
-     * @param[in] devShmChunk share memory ptr and size pair.
-     * @param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer number
-     * required. 0 means no waiting time allowed.
+     * @param[in] devBlob share memory ptr and size pair.
+     * @param[out] buffers buffer for values.
+     * @param[in] h2dStream cuda stream for cuda task submmiting.
      * @return Status of the result.
      */
-    std::shared_future<AsyncResult> GetWithOsTransportPipeline(
-        const std::vector<std::string> &objectKeys, const std::vector<Blob> &devBlob,
-        void *h2dStream = nullptr);
+    std::shared_future<AsyncResult> GetWithOsTransportPipeline(const std::vector<std::string> &objectKeys,
+                                                               const std::vector<Blob> &devBlob,
+                                                               std::vector<std::shared_ptr<Buffer>> &buffers,
+                                                               void *h2dStream = nullptr);
 
     /**
      * @brief Some data in an object can be read based on the specified key and parameters.
@@ -1714,22 +1715,22 @@ private:
      * @param rsp Get response
      * @param piplnRh2dParam Use chunkManager and payload member
      * @param version Key value version
-     * @param buffers Value buffers
      * @param failedKeys Failed to fetch value keys
      * @return std::vector<std::pair<std::string *, uint32_t>> need to wait keys
      */
     std::vector<std::pair<std::string *, uint32_t>> PostProcessPipelineKeys(
-        std::vector<std::string> &objectKeys, GetRspPb &rsp, PiplnRh2dParam &piplnRh2dParam, uint32_t version,
-        std::vector<std::shared_ptr<Buffer>> &buffers, std::vector<std::string> &failedKeys);
+        std::vector<std::string> &objectKeys, GetRspPb &rsp, PiplnRh2dParam &piplnRh2dParam, uint32_t version,std::vector<std::string> &failedKeys);
     /**
      * @brief post process rh2d response
      *
      * @param promise Pipeline rh2d promise
      * @param piplnRh2dParam Pipeline rh2d params
      * @param rsp Get response
+     * @param buffers buffer list of values
      * @return K_OK on success; the error code otherwise.
      */
-    Status PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp);
+    Status PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp,
+                            std::vector<std::shared_ptr<Buffer>> &buffers);
 
     Status SetShmObjectBufferWithMetric(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
                                         uint32_t version, const std::vector<ReadParam> &readParams, size_t index,
