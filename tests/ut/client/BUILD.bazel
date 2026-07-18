@@ -100,6 +100,21 @@ ds_cc_test(
     ],
 )
 
+# Hardware-independent state-machine coverage. It links the real URMA build configuration but
+# constructs no provider handle and therefore needs no configured device at runtime.
+ds_cc_test(
+    name = "urma_jetty_gate_test",
+    srcs = ["urma_jetty_gate_test.cpp"],
+    # The test is hardware-independent, but it still requires an explicit real URMA ABI
+    # configuration; keep it out of configuration-agnostic wildcard test runs.
+    tags = ["manual", "urma"],
+    deps = [
+        "//src/datasystem/common/rdma:common_rdma",
+        "//src/datasystem/common/rdma:urma_manager",
+        "//src/datasystem/common/rdma:urma_resource_header",
+    ],
+)
+
 ds_cc_test(
     name = "urma_chip_inflight_test",
     srcs = ["urma_chip_inflight_test.cpp"],

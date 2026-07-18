@@ -212,8 +212,8 @@ TEST(UrmaSendJettyFaultTest, RepeatedCqeStatus9RefillsWithoutExceedingUniqueJett
         EXPECT_FALSE(failedJetty->IsValid());
         resource.ReleaseJetty(failedJetty);
         ExpectReplacementAfterRetire(resource, failedJetty);
-        // Count unique registry entries, not pool+retiring+pending counters: retiring-to-pending can transiently
-        // represent one Jetty in both counters.
+        // Count unique registry identities. The implementation now installs one pending-retire record
+        // synchronously, so a retired Jetty is not double-counted as both "retiring" and "pending".
         EXPECT_LE(GetRegisteredJettyCount(resource),
                   FLAGS_urma_send_jetty_lane_pool_size + FLAGS_urma_send_jetty_lane_refill_extra_size);
     }
