@@ -284,23 +284,26 @@ uint16_t Trace::GetLatencyTickDroppedCount() const
 
 void Trace::SetLatencySummary(std::string summary)
 {
-    latencySummary_ = std::move(summary);
+    latencySummarySize_ = std::min(summary.size(), LATENCY_SUMMARY_MAX_SIZE);
+    std::copy_n(summary.data(), latencySummarySize_, latencySummary_.data());
+    latencySummary_[latencySummarySize_] = '\0';
 }
 
 std::string Trace::GetLatencySummary() const
 {
-    return latencySummary_;
+    return std::string(latencySummary_.data(), latencySummarySize_);
 }
 
 void Trace::ClearLatencySummary()
 {
-    latencySummary_.clear();
+    latencySummary_[0] = '\0';
+    latencySummarySize_ = 0;
 }
 
 std::string Trace::ConsumeLatencySummary()
 {
-    std::string summary = std::move(latencySummary_);
-    latencySummary_.clear();
+    std::string summary(latencySummary_.data(), latencySummarySize_);
+    ClearLatencySummary();
     return summary;
 }
 

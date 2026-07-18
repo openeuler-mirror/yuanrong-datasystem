@@ -31,6 +31,9 @@ namespace datasystem {
 
 constexpr size_t SHORT_TRACEID_SIZE = 16;
 constexpr uint16_t LATENCY_TICK_MAX_NUM = 16;
+// FormatLatencySummary is bounded by LATENCY_SUMMARY_PHASE_MAX. Keep Trace heap-free so its thread-local fallback
+// remains safe when process-static SDK clients are destroyed during process teardown.
+constexpr size_t LATENCY_SUMMARY_MAX_SIZE = 2048;
 
 enum class LatencyTickKey : uint16_t {
     UNKNOWN = 0,
@@ -361,7 +364,8 @@ private:
     LatencyTick latencyTicks_[LATENCY_TICK_MAX_NUM] = {};
     uint16_t latencyTickCount_ = 0;
     uint16_t latencyTickDroppedCount_ = 0;
-    std::string latencySummary_;
+    std::array<char, LATENCY_SUMMARY_MAX_SIZE + 1> latencySummary_{};
+    size_t latencySummarySize_ = 0;
     DownstreamPhaseResult downstreamPhases_{};
 };
 

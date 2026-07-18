@@ -450,8 +450,7 @@ void SCMetadataManager::HandleMetaDataMigrationSuccess(const std::string &stream
 
 void SCMetadataManager::HandleMetaDataMigrationFailed(const MetaForSCMigrationPb &streamMeta)
 {
-    (void)streamMeta;
-    // Placeholder, do nothing
+    migratingItems_.erase(streamMeta.meta().stream_name());
 }
 
 Status SCMetadataManager::CreateProducer(const CreateProducerReqPb &req, CreateProducerRspPb &rsp)

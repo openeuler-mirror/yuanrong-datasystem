@@ -4228,6 +4228,7 @@ void OCMetadataManager::HandleMetaDataMigrationFailed(
     const MetaForMigrationPb &objMeta,
     const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap)
 {
+    Raii cleanMigratingMarker([this, &objMeta]() { migratingItems_.erase(objMeta.object_key()); });
     expiredObjectManager_->InsertObject(objMeta.object_key(), GetSystemClockTimeStampUs(), objMeta.remain_ttl_second(),
                                         objMeta.enable_ttl());
     for (auto &async_op : objMeta.async_ops()) {

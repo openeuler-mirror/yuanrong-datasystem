@@ -31,6 +31,20 @@ using namespace ::testing;
 namespace datasystem {
 namespace ut {
 
+class SCMetadataManagerForMigrationTest : public SCMetadataManager {
+public:
+    SCMetadataManagerForMigrationTest()
+        : SCMetadataManager(HostPort(), nullptr, nullptr, nullptr, nullptr, false, HostPort(), nullptr,
+                            "migration-test")
+    {
+    }
+
+    void MarkMigrating(const std::string &streamName)
+    {
+        migratingItems_.insert({ streamName, true });
+    }
+};
+
 class SCMigrateMetadataManagerTest : public CommonTest {
 public:
     void SetUp() override
@@ -146,6 +160,20 @@ TEST_F(SCMigrateMetadataManagerTest, TopologyMigrationDeadlineKeepsOwnedFutureFo
 TEST_F(SCMigrateMetadataManagerTest, TopologyMigrationRejectsPartialItemFailure)
 {
     VerifyTopologyMigrationRejectsPartialItemFailure();
+}
+
+TEST_F(SCMigrateMetadataManagerTest, MigrationFailureClearsMovingMarker)
+{
+    SCMetadataManagerForMigrationTest metadataManager;
+    const std::string streamName = "failed-stream";
+    metadataManager.MarkMigrating(streamName);
+    ASSERT_TRUE(metadataManager.ItemIsMigrating(streamName));
+    MetaForSCMigrationPb metadata;
+    metadata.mutable_meta()->set_stream_name(streamName);
+
+    metadataManager.HandleMetaDataMigrationFailed(metadata);
+
+    EXPECT_FALSE(metadataManager.ItemIsMigrating(streamName));
 }
 
 }  // namespace ut
