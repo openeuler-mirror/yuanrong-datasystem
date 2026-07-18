@@ -20,6 +20,7 @@
 #include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/cluster/coordination_backend/topology_recovery_reporter.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
@@ -30,7 +31,7 @@
 namespace datasystem::cluster {
 namespace {
 constexpr auto BACKEND_EVIDENCE_MAX_AGE = std::chrono::seconds(5);
-constexpr size_t DIGEST_DIAGNOSTIC_PREFIX_SIZE = 12;
+constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 
 Status RegisterEtcdTopologyTables(EtcdStore &store, const TopologyKeyHelper &keys)
 {
@@ -453,8 +454,7 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
         RETURN_STATUS(K_NOT_READY, "Coordinator topology watch registration is in progress");
     }
     if (memberOwns == controllerOwns) {
-        constexpr uint64_t OWNER_LOG_INTERVAL = 1'024;
-        LOG_FIRST_AND_EVERY_N(WARNING, OWNER_LOG_INTERVAL)
+        LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
             << "CLUSTER_WATCH cluster=" << options_.clusterName << " watch_id=" << watchId
             << " owner_state=" << (memberOwns ? "multiple" : "missing") << " action=rewatch";
         member->InvalidateWatches();
@@ -462,12 +462,20 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
         return Status::OK();
     }
     auto *owner = memberOwns ? member : controller;
+    LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+        << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName
+        << " role=worker ingress=coordinator owner_role=" << (memberOwns ? "member" : "controller")
+        << " watch_id=" << watchId
+        << " coordinator_id_prefix=" << TopologyDiagnosticPrefix(coordinatorId)
+        << " event=" << event.ToString();
     owner->HandleWatchEvent(coordinatorId, watchId, std::move(event));
     return Status::OK();
 }
 
 Status TopologyEngine::EnqueueCoordinationEvent(CoordinationEvent &&event)
 {
+    LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
+        << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName << " role=worker event=" << event.ToString();
     auto rc = dispatcher_.SubmitCoordination(std::move(event));
     if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN && rc.GetCode() != K_NOT_READY) {
         RecordError(rc);
@@ -703,14 +711,22 @@ Status TopologyEngine::MarkReady()
                              "cluster topology Engine is not running");
     CHECK_FAIL_RETURN_STATUS(HasEstablishedMemberLease(), K_NOT_READY,
                              "cluster topology member lease is not established");
-    return memberBackend_->UpdateNodeState(MemberLifecycleState::READY);
+    auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::READY);
+    LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+              << " role=worker action=mark_ready address=" << options_.localAddress
+              << " status=" << rc.ToString();
+    return rc;
 }
 
 Status TopologyEngine::MarkExiting()
 {
     CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
                              "cluster topology Engine is not running");
-    return memberBackend_->UpdateNodeState(MemberLifecycleState::EXITING);
+    auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::EXITING);
+    LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+              << " role=worker action=mark_exiting address=" << options_.localAddress
+              << " status=" << rc.ToString();
+    return rc;
 }
 
 Status TopologyEngine::NotifyReconciliationDone()
@@ -719,7 +735,11 @@ Status TopologyEngine::NotifyReconciliationDone()
                              "cluster topology Engine is not running");
     HostPort localAddress;
     RETURN_IF_NOT_OK(localAddress.ParseString(options_.localAddress));
-    return memberBackend_->InformReconciliationDone(localAddress);
+    auto rc = memberBackend_->InformReconciliationDone(localAddress);
+    LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+              << " role=worker action=reconciliation_done address=" << options_.localAddress
+              << " status=" << rc.ToString();
+    return rc;
 }
 
 bool TopologyEngine::IsRestart() const noexcept
@@ -803,7 +823,7 @@ TopologyDiagnostics TopologyEngine::GetDiagnostics() const
         std::lock_guard<std::mutex> lock(stateMutex_);
         diagnostics.topologyVersion = backendObservation_.topologyVersion;
         diagnostics.topologyRevision = backendObservation_.topologyRevision;
-        diagnostics.topologyDigestPrefix = backendObservation_.topologyDigest.substr(0, DIGEST_DIAGNOSTIC_PREFIX_SIZE);
+        diagnostics.topologyDigestPrefix = TopologyDiagnosticPrefix(backendObservation_.topologyDigest);
         diagnostics.backendHealthy = backendObservation_.state == ControlBackendState::AVAILABLE;
         diagnostics.controlBackendState = backendObservation_.state;
         diagnostics.isolationReason = isolationReason_;
@@ -842,14 +862,35 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     RETURN_IF_NOT_OK(rc);
     std::shared_ptr<const TopologySnapshot> published;
     RETURN_IF_NOT_OK(snapshots_.Load(published));
-    VLOG(1) << "CLUSTER_RING cluster=" << options_.clusterName << " version=" << published->Version()
-            << " digest_prefix=" << published->CanonicalDigest().substr(0, DIGEST_DIAGNOSTIC_PREFIX_SIZE)
-            << " status=published";
+    VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
+        << "CLUSTER_RING cluster=" << options_.clusterName << " version=" << published->Version()
+        << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest()) << " status=published";
     RETURN_IF_NOT_OK(PublishBackendEvidence(*published));
     if (newlyPublished) {
-        NotifySnapshotPublished(std::move(published));
+        LogAndNotifyPublishedSnapshot(std::move(published));
     }
     return Status::OK();
+}
+
+void TopologyEngine::LogAndNotifyPublishedSnapshot(std::shared_ptr<const TopologySnapshot> published)
+{
+    const auto activeBatch = published->GetActiveBatch();
+    const auto batchType = activeBatch.has_value() ? TopologyChangeTypeName(activeBatch->type) : "none";
+    const auto batchEpoch = activeBatch.has_value() ? activeBatch->epoch : TOPOLOGY_NO_ACTIVE_BATCH_EPOCH;
+    const Member *local = nullptr;
+    const auto localStatus = published->FindMemberByAddress(options_.localAddress, local);
+    LOG(INFO) << "CLUSTER_RING cluster=" << options_.clusterName << " role=worker status=published"
+              << " version=" << published->Version()
+              << " authority_revision=" << published->AuthorityRevision()
+              << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest())
+              << " batch_type=" << batchType << " batch_epoch=" << batchEpoch
+              << " member_count=" << published->Members().size()
+              << " active_count=" << published->ActiveMembers().size()
+              << " failed_count=" << published->FailedMembers().size()
+              << " local_member_found=" << localStatus.IsOk()
+              << " local_state=" << (localStatus.IsOk() ? MemberStateName(local->state) : "missing")
+              << " local_member_id_prefix=" << (localStatus.IsOk() ? MemberIdForLog(local->identity.id) : "");
+    NotifySnapshotPublished(std::move(published));
 }
 
 Status TopologyEngine::ReloadTopologyAndNotify()
@@ -1067,7 +1108,8 @@ void TopologyEngine::Run()
         }
         if (dispatcher_.ConsumeResyncRequired()) {
             LOG(WARNING) << "CLUSTER_WATCH cluster=" << options_.clusterName
-                         << " role=worker scope=all status=resync";
+                         << " role=worker scope=all status=resync queued_events="
+                         << dispatcher_.GetStats().queueDepth;
             auto rebuild = ReloadTopology(true);
             if (rebuild.IsError()) {
                 RecordError(rebuild);

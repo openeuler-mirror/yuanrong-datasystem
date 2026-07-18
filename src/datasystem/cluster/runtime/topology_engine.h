@@ -438,6 +438,8 @@ private:
      */
     Status PublishBackendEvidence(const TopologySnapshot &snapshot);
 
+    void LogAndNotifyPublishedSnapshot(std::shared_ptr<const TopologySnapshot> published);
+
     /**
      * @brief Dispatch one queued event on the Worker state thread.
      * @param[in] event Move-only runtime event to process.

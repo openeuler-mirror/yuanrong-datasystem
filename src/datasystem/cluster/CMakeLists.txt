@@ -38,6 +38,7 @@ add_library(cluster_topology STATIC
         control/topology_task_janitor.cpp
         executor/topology_task_executor.cpp
         membership/membership_endpoint_view.cpp
+        model/topology_diagnostics.cpp
         model/topology_snapshot.cpp
         repository/topology_repository.cpp
         repository/topology_repository_codec.cpp
