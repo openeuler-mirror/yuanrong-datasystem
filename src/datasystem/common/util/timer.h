@@ -100,12 +100,18 @@ inline timeval MsToTimeval(int64_t timeMs)
 }
 
 class Timer {
+private:
+    typedef std::chrono::steady_clock steadyClock;
+    typedef std::chrono::duration<double, std::ratio<1> > second;
+    typedef std::chrono::duration<double, std::milli> millisecond;
+    typedef std::chrono::duration<double, std::micro> microsecond;
+
 public:
-    Timer() : beg_(clock::now()), timeoutMs_(0)
+    Timer() : beg_(steadyClock::now()), timeoutMs_(0)
     {
     }
 
-    Timer(int64_t timeoutMs) : beg_(clock::now()), timeoutMs_(timeoutMs)
+    Timer(int64_t timeoutMs) : beg_(steadyClock::now()), timeoutMs_(timeoutMs)
     {
     }
 
@@ -113,7 +119,9 @@ public:
 
     void Reset()
     {
-        beg_ = clock::now();
+        beg_ = steadyClock::now();
+        end_ = {};
+        stopped_ = false;
     }
 
     void AdjustTimeoutAndReset(int64_t timeoutMs)
@@ -127,6 +135,24 @@ public:
         timeoutMs_ = 0;
     }
 
+    void Stop()
+    {
+        if (!stopped_) {
+            end_ = steadyClock::now();
+            stopped_ = true;
+        }
+    }
+
+    uint64_t GetStartTimeStampUs() const
+    {
+        return ToMicroSecond(beg_);
+    }
+
+    uint64_t GetEndTimeStampUs() const
+    {
+        return ToMicroSecond(end_);
+    }
+
     bool IsTimeout()
     {
         return timeoutMs_ == 0 ? false : ElapsedMilliSecond() - timeoutMs_ >= 0;
@@ -134,30 +160,36 @@ public:
 
     double ElapsedSecond() const
     {
-        return std::chrono::duration_cast<second>(clock::now() - beg_).count();
+        return std::chrono::duration_cast<second>(GetEndTime() - beg_).count();
     }
 
     double ElapsedMilliSecond() const
     {
-        return std::chrono::duration_cast<millisecond>(clock::now() - beg_).count();
+        return std::chrono::duration_cast<millisecond>(GetEndTime() - beg_).count();
     }
 
     double ElapsedMicroSecond() const
     {
-        return std::chrono::duration_cast<microsecond>(clock::now() - beg_).count();
+        return std::chrono::duration_cast<microsecond>(GetEndTime() - beg_).count();
     }
 
     double ElapsedSecondAndReset()
     {
-        double elapsed = std::chrono::duration_cast<second>(clock::now() - beg_).count();
-        beg_ = clock::now();
+        const auto end = steadyClock::now();
+        double elapsed = std::chrono::duration_cast<second>(end - beg_).count();
+        beg_ = end;
+        end_ = {};
+        stopped_ = false;
         return elapsed;
     }
 
     double ElapsedMilliSecondAndReset()
     {
-        double elapsed = std::chrono::duration_cast<millisecond>(clock::now() - beg_).count();
-        beg_ = clock::now();
+        const auto end = steadyClock::now();
+        double elapsed = std::chrono::duration_cast<millisecond>(end - beg_).count();
+        beg_ = end;
+        end_ = {};
+        stopped_ = false;
         return elapsed;
     }
 
@@ -168,12 +200,21 @@ public:
     }
 
 private:
-    typedef std::chrono::steady_clock clock;
-    typedef std::chrono::duration<double, std::ratio<1> > second;
-    typedef std::chrono::duration<double, std::milli> millisecond;
-    typedef std::chrono::duration<double, std::micro> microsecond;
-    std::chrono::time_point<clock> beg_;
+    static uint64_t ToMicroSecond(const std::chrono::time_point<steadyClock> &timePoint)
+    {
+        return static_cast<uint64_t>(
+            std::chrono::time_point_cast<std::chrono::microseconds>(timePoint).time_since_epoch().count());
+    }
+
+    std::chrono::time_point<steadyClock> GetEndTime() const
+    {
+        return stopped_ ? end_ : steadyClock::now();
+    }
+
+    std::chrono::time_point<steadyClock> beg_;
+    std::chrono::time_point<steadyClock> end_{};
     int64_t timeoutMs_;
+    bool stopped_{ false };
 };
 }  // namespace datasystem
 

@@ -780,8 +780,9 @@ Status UrmaManager::ServerEventHandleThreadMain()
     while (!serverStop_.load()) {
         std::unordered_set<uint64_t> successCompletedReqs;
         std::unordered_map<uint64_t, int> failedCompletedReqs;
+        UrmaWriteTrace pollTrace;
         Status rc = PollJfcWait(urmaResource_->GetJfc(), MAX_POLL_JFC_TRY_CNT, successCompletedReqs,
-                                failedCompletedReqs, FLAGS_urma_poll_size);
+                                failedCompletedReqs, pollTrace, FLAGS_urma_poll_size);
         if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN) {
             LOG_FIRST_AND_EVERY_N(ERROR, K_URMA_ERROR_LOG_EVERY_N)
                 << "[URMA_POLL_ERROR] PollJfcWait failed: " << rc.ToString()
@@ -800,12 +801,12 @@ Status UrmaManager::ServerEventHandleThreadMain()
             }
         }
         // notify threads waiting on any finishedRequests
-        CheckAndNotify();
+        CheckAndNotify(pollTrace);
     }
     return Status::OK();
 }
 
-Status UrmaManager::CheckAndNotify()
+Status UrmaManager::CheckAndNotify(const UrmaWriteTrace &pollTrace)
 {
     // if no finished requests, no need to notify
     if (finishedRequests_.empty()) {
@@ -820,6 +821,7 @@ Status UrmaManager::CheckAndNotify()
         std::shared_ptr<UrmaEvent> event;
         // Get the event for request Id
         if (GetEvent(requestId, event).IsOk()) {
+            event->SetPollTrace(pollTrace);
             auto failedIt = failedRequests_.find(requestId);
             if (failedIt != failedRequests_.end()) {
                 event->SetFailed(failedIt->second);
@@ -930,7 +932,7 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
                                 const std::shared_ptr<UrmaSendLaneLease> &laneLease, const std::string &remoteAddress,
                                 uint64_t dataSize, UrmaEvent::OperationType operationType,
                                 std::atomic<int> *srcChipInflightCounter,
-                                std::shared_ptr<EventWaiter> waiter)
+                                std::shared_ptr<EventWaiter> waiter, std::shared_ptr<UrmaEvent> *event)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR, "URMA send lane lease is null");
     auto jetty = laneLease->GetJetty();
@@ -957,6 +959,9 @@ Status UrmaManager::CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaCo
             std::make_shared<UrmaEvent>(requestId, laneLease, remoteAddress,
                                         connection->GetUrmaJfrInfo().uniqueInstanceId, dataSize, operationType,
                                         srcChipInflightCounter, waiter);
+        if (event != nullptr) {
+            *event = mapAccessor->second;
+        }
     }
     return Status::OK();
 }
@@ -997,6 +1002,7 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
                                              uint64_t wakeSchedLatencyUs, const Status &waitRc) const
 {
     auto config = GetServerLatencyTraceConfig();
+    const auto trace = event->GetWriteTrace();
     SLOW_LOG_IF_OR_VLOG(
         INFO, (config.rpcSlowerThanUs > 0 && totalElapsedUs >= config.rpcSlowerThanUs) || FLAGS_enable_perf_trace_log,
         1,
@@ -1008,6 +1014,10 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
             << ", cpuid:" << sched_getcpu() << ", status: " << waitRc.ToString()
             << ", urma_inflight_wr_count: " << tbbEventMap_.size() << ", wakeSchedLatencyUs:" << wakeSchedLatencyUs
             << ", srcChipInflight:" << GetSrcChipInflightWrCountsString()
+            << ", trace_us:{post:" << trace.postUs << ", wait:" << trace.waitUs
+            << ", poll_begin:" << trace.pollBeginUs << ", sleep_start:" << trace.sleepStartUs
+            << ", sleep_end:" << trace.sleepEndUs
+            << ", poll_end:" << trace.pollEndUs << ", notify:" << trace.notifyUs << ", awake:" << trace.awakeUs
             << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
 }
 
@@ -1039,16 +1049,18 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     }
 
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
-    auto startWaitTimeUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+    Timer waitTimer;
+    event->SetWriteWaitTimeUs(waitTimer.GetStartTimeStampUs());
     Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
-    auto endWaitTimeUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+    waitTimer.Stop();
+    const auto endWaitTimeUs = waitTimer.GetEndTimeStampUs();
     constexpr double US_TO_MS = 1000.0;
     auto totalElapsedUs = endWaitTimeUs - event->GetCreateTimeUs();
     auto wakeSchedLatencyUs = event->GetWakeSchedLatencyUs();
     auto urmaElapsedUs = totalElapsedUs >= wakeSchedLatencyUs ? totalElapsedUs - wakeSchedLatencyUs : 0;
     auto totalElapsedMs = static_cast<double>(urmaElapsedUs) / US_TO_MS;
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
-    auto waitElapsedMs = static_cast<double>(endWaitTimeUs - startWaitTimeUs) / US_TO_MS;
+    auto waitElapsedMs = waitTimer.ElapsedMicroSecond() / US_TO_MS;
     GetWorkerTimeCost().Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
     if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
         LOG_IF_ERROR(RetireEventLane(event), FormatString("Failed to retire URMA lane for request: %zu", requestId));
@@ -1181,11 +1193,14 @@ Status UrmaManager::CheckCompletionRecordStatus(urma_cr_t completeRecords[], int
 
 Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
                                 std::unordered_set<uint64_t> &successCompletedReqs,
-                                std::unordered_map<uint64_t, int> &failedCompletedReqs, const uint64_t numPollCRS)
+                                std::unordered_map<uint64_t, int> &failedCompletedReqs, UrmaWriteTrace &pollTrace,
+                                const uint64_t numPollCRS)
 {
     urma_cr_t completeRecords[numPollCRS];
     urma_jfc_t *ev_jfc = nullptr;
     int cnt;
+    uint64_t sleepStartUsForNextPoll = 0;
+    uint64_t sleepEndUsForNextPoll = 0;
 
     if (IsEventModeEnabled()) {
         // wait for the event
@@ -1228,7 +1243,8 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
 
     // trys maxTryCount times to get an event
     for (uint64_t i = 0; i < maxTryCount; ++i) {
-        const auto pollStartUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+        Timer timer;
+        const auto pollStartUs = timer.GetStartTimeStampUs();
         const auto pollGapAfterLastEndUs = pollLastEndUs_ == 0 ? 0 : pollStartUs - pollLastEndUs_;
         const auto pollStartIntervalUs = pollLastStartUs_ == 0 ? 0 : pollStartUs - pollLastStartUs_;
         if (pollGapAfterLastEndUs > URMA_LOG_LIMIT_US || pollStartIntervalUs > URMA_LOG_LIMIT_US) {
@@ -1236,11 +1252,11 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
                       << pollGapAfterLastEndUs << "us, lastPollStartToThisPollStart " << pollStartIntervalUs
                       << "us, cpuid: " << sched_getcpu() << ", suggest: " << URMA_ELAPSED_THREAD_SCHED_SUGGEST;
         }
-        Timer timer;
         cnt = ds_urma_poll_jfc(urmaJfc, numPollCRS, completeRecords);
+        timer.Stop();
         auto pollElapsedUs = timer.ElapsedMicroSecond();
-        pollLastStartUs_ = pollStartUs;
-        pollLastEndUs_ = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+        pollLastStartUs_ = timer.GetStartTimeStampUs();
+        pollLastEndUs_ = timer.GetEndTimeStampUs();
         LOG_IF(INFO, pollElapsedUs > URMA_LOG_LIMIT_US)
             << "[URMA_ELAPSED_POLL_JFC]: urma_poll_jfc cost " << pollElapsedUs << "us, cpuid: " << sched_getcpu()
             << ", suggest: " << URMA_ELAPSED_POLL_JFC_SUGGEST;
@@ -1257,7 +1273,10 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
             } else {
                 nanosleep(&ts, nullptr);
             }
+            sleepTimer.Stop();
             auto sleepElapsedUs = sleepTimer.ElapsedMicroSecond();
+            sleepStartUsForNextPoll = sleepTimer.GetStartTimeStampUs();
+            sleepEndUsForNextPoll = sleepTimer.GetEndTimeStampUs();
             LOG_IF(INFO, sleepElapsedUs > URMA_LOG_LIMIT_US)
                 << "[URMA_ELAPSED_THREAD_SHED]: urma_poll_jfc thread wake up after nanosleep(1us) cost "
                 << sleepElapsedUs << "us, cpuid: " << sched_getcpu()
@@ -1267,6 +1286,10 @@ Status UrmaManager::PollJfcWait(urma_jfc_t *urmaJfc, const uint64_t maxTryCount,
                                     FormatString("[URMA_POLL_JFC]: call urma_poll_jfc failed, ret:%d, suggest: %s", cnt,
                                                  URMA_ERROR_SUGGEST));
         } else if (cnt > 0) {
+            pollTrace.pollBeginUs = timer.GetStartTimeStampUs();
+            pollTrace.sleepStartUs = sleepStartUsForNextPoll;
+            pollTrace.sleepEndUs = sleepEndUsForNextPoll;
+            pollTrace.pollEndUs = timer.GetEndTimeStampUs();
             return CheckCompletionRecordStatus(completeRecords, cnt, successCompletedReqs, failedCompletedReqs);
         }
         if (serverStop_.load()) {
@@ -1565,8 +1588,9 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             cleanupSubmittedEvents();
             return injectRc;
         }
+        std::shared_ptr<UrmaEvent> event;
         auto createRc = CreateEvent(key, args.connection, laneLease, args.remoteAddress, writeSize,
-                                    UrmaEvent::OperationType::WRITE, srcChipInflightCounter, args.waiter);
+                                    UrmaEvent::OperationType::WRITE, srcChipInflightCounter, args.waiter, &event);
         if (createRc.IsError()) {
             if (ownsLaneLease) {
                 LOG_IF_ERROR(ApplySendLaneAction(laneLease->RequestRetire(), laneLease->GetJetty()),
@@ -1577,6 +1601,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         }
         urma_status_t ret;
         Timer t;
+        event->SetWritePostTimeUs(t.GetStartTimeStampUs());
         METRIC_TIMER(metrics::KvMetricId::URMA_WRITE_LATENCY);
         auto jettyId = jetty->GetJettyId();
         LOG_EVERY_T(INFO, LOG_TIME_LIMIT_LEVEL1)
@@ -1614,6 +1639,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
                                                  "ret: %d, suggest: %s",
                                                  key, ret, URMA_ERROR_SUGGEST));
         }
+        t.Stop();
         auto elapsedUs = t.ElapsedMicroSecond();
         auto vlogLevel = elapsedUs > URMA_WRITE_VLOG0_LIMIT_US ? 0 : 1;
         VLOG(vlogLevel) << "[UrmaWrite] URMA finish write, cpuid:" << sched_getcpu() << ", elapsed:" << elapsedUs
