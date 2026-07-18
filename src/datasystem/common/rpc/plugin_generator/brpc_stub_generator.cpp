@@ -377,7 +377,8 @@ std::string RpcGenerator::BuildBrpcStubNoStreamImpl(const google::protobuf::Meth
         "    rpcTrace.MarkClientSend();\n"
         "    channel_->CallMethod(svcDesc_->method($methodIndex$),\n"
         "                         &cntl, &rq, &reply, nullptr);\n"
-        "    rpcTrace.MarkClientRecv();\n";
+        "    rpcTrace.MarkClientRecv();\n"
+        "    ::datasystem::MergeBrpcServerTraceTrailer(cntl.response_attachment(), rpcTrace);\n";
     if (HasPayloadRecvOption(method)) {
         impl += BuildRecvPayloadFramingSnippet();
     }

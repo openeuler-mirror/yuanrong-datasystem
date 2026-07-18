@@ -44,6 +44,44 @@ Large data usually bypasses brpc:
 - Do not rely on brpc attachment as a true zero-copy large-data channel. The attachment framing path can avoid some application-level copies through `RpcMessage::ZeroCopyBuffer`, but brpc attachment serialization still differs from shm/RDMA bypass semantics.
 - Keep production streaming assumptions narrow. The only production streaming RPC verified here is `MasterWorkerSCService.QueryMetadata`; test protos contain additional stream examples.
 
+## BRPC Latency Metric Semantics
+
+`BrpcPerfTrace` uses `steady_clock` timestamps in nanoseconds and exports histogram samples in truncated microseconds.
+The following semantics apply to the generated non-streaming unary RPC paths that return a complete server trace
+trailer. Let `C*` denote client timestamps and `S*` server timestamps.
+
+| Metric | Formula | Meaning and boundary | Accuracy / interpretation |
+| --- | --- | --- | --- |
+| `brpc_rpc_e2e_latency` | `CEnd - CStart` | Client-observed elapsed time for the whole synchronous RPC wrapper. | Accurate end-to-end client latency; includes client preparation and response handling, so it is not a pure transport metric. |
+| `brpc_client_req_framework_latency` | `CSend - CStart` | Local work before entering `channel_->CallMethod()`. | Accurate for its instrumented wrapper boundary. Depending on the call path, it can include Datasystem request attachment preparation. |
+| `brpc_remote_processing_latency` | `CRecv - CSend` | Client wait from entering `CallMethod()` until it returns with a response or error. | Accurate client-side RPC wait time. Includes brpc protocol work, network transit, brpc scheduling, and server work; it does not mean server processing alone. |
+| `brpc_client_rsp_framework_latency` | `CEnd - CRecv` | Local work after `CallMethod()` returns. | Includes Datasystem response attachment decoding, response copying, and trace-trailer parsing where applicable; it is not purely brpc work. |
+| `brpc_server_req_queue_latency` | `SExecStart - SRecv` | Server generated-adapter work before calling the Datasystem service implementation. | This is handler pre-processing, not a direct measurement of the brpc socket-to-handler queue. For payload requests it includes Datasystem attachment decoding; ordinary unary requests are usually near zero. |
+| `brpc_server_exec_latency` | `SExecEnd - SExecStart` | Time spent in the Datasystem service implementation (`impl_.Method(...)`). | Accurate for the generated call boundary. Any business lock wait, thread-pool wait, storage I/O, or downstream RPC performed synchronously by the implementation is included. |
+| `brpc_server_rsp_queue_latency` | `SSend - SExecEnd` | Server generated-adapter work after the service implementation returns and before appending the trace trailer. | The name is historical: it is not a direct brpc kernel/socket send-queue measurement. Payload responses include Datasystem attachment encoding; ordinary unary responses are usually near zero. |
+| `brpc_rpc_network_residual_latency` | `max(0, (CRecv - CSend) - (SSend - SRecv))` | The part of client RPC wait not covered by the server generated handler. | A clock-sync-free residual estimate, not a pure network RTT. It includes both network directions, brpc request/response protobuf protocol processing, brpc scheduling/queueing outside the generated handler, and other handler-external overhead. |
+
+### Ownership Of Serialization And Queuing
+
+The word `brpc` below means code executed by the brpc library, not Datasystem's generated protocol adapter code.
+
+| Operation | Owner | Included in the latency decomposition |
+| --- | --- | --- |
+| Protobuf request/response binary serialization, protocol framing/unframing, and filling the request/response protobuf objects | brpc, which invokes protobuf facilities | Outside the generated server handler and therefore normally part of `brpc_rpc_network_residual_latency`; client-side wrapper work remains in the two client framework metrics. |
+| Socket I/O, connection reuse/backpressure, event-loop and bthread scheduling | brpc / operating system | Normally part of `brpc_rpc_network_residual_latency` when it occurs outside `SRecv` through `SSend`. |
+| Datasystem attachment payload framing and parsing (`[count][size][data]`) | Datasystem generated adapter | Server request parsing is in `brpc_server_req_queue_latency`; response encoding is in `brpc_server_rsp_queue_latency`; client response parsing is in `brpc_client_rsp_framework_latency`. These response phases are metrics only, not BRPC slow-log fields. |
+| Server trace trailer append/consume | Datasystem trace code | Server append is included before `SSend`; client consume is included after `CRecv`. |
+
+The server writes `SRecv`, `SExecStart`, `SExecEnd`, and `SSend` as a versioned response-attachment trailer. The
+client removes and merges this trailer before recording the metrics, so subtracting the two local durations does not
+require client and server wall clocks to be synchronized.
+
+If either endpoint timestamp of a phase is absent or non-monotonic, its delta is zero and is not added to the
+histogram. Consequently, an empty/zero-count histogram means that no positive valid sample was recorded; it does not
+establish that the measured operation took zero microseconds. Streaming RPCs do not currently return the complete
+server trace trailer. Their server phase metrics are therefore recorded independently by the server at stream end;
+the client-side network-residual metric is not available for those paths.
+
 ## Direction Map
 
 ### client -> worker

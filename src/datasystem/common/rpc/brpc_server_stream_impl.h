@@ -59,7 +59,7 @@ template <typename W>
 class BrpcServerWriterImpl {
 public:
     BrpcServerWriterImpl(brpc::Controller *cntl, const google::protobuf::Message *request,
-                         std::string methodName = "unknown")
+                         std::string methodName)
         : cntl_(cntl),
           request_(request),
           streamId_(brpc::INVALID_STREAM_ID),
@@ -206,6 +206,7 @@ private:
         if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
             // Stream RPC tracing is one summary sample per stream, not one sample per message.
             trace_.MarkServerSend();
+            // StreamWrite responses cannot carry the unary trace trailer.
             RecordBrpcRpcTrace(trace_);
         }
     }
@@ -218,7 +219,7 @@ template <typename R>
 class BrpcServerReaderImpl : public brpc::StreamInputHandler,
                             public std::enable_shared_from_this<BrpcServerReaderImpl<R>> {
 public:
-    explicit BrpcServerReaderImpl(brpc::Controller *cntl, std::string methodName = "client_streaming")
+    explicit BrpcServerReaderImpl(brpc::Controller *cntl, std::string methodName)
         : cntl_(cntl),
           streamId_(brpc::INVALID_STREAM_ID),
           finished_(false),
@@ -465,6 +466,7 @@ private:
         if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
             // Stream RPC tracing is one summary sample per stream, not one sample per message.
             trace_.MarkServerSend();
+            // The client-streaming adapter has no trailer merge path yet.
             RecordBrpcRpcTrace(trace_);
         }
     }

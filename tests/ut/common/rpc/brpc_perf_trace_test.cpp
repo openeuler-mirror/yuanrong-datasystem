@@ -22,6 +22,7 @@
 #include <thread>
 #include <type_traits>
 
+#include <butil/iobuf.h>
 #include <nlohmann/json.hpp>
 #include "gtest/gtest.h"
 #include "ut/common.h"
@@ -164,6 +165,74 @@ TEST_F(BrpcPerfTraceTest, record_unary_rpc_observes_zmq_equivalent_phase_metrics
     EXPECT_EQ(HistogramField(summary, "brpc_rpc_e2e_latency", "total", "avg_us"), 13'000u);
     EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_latency", "total", "count"), 1u);
     EXPECT_EQ(HistogramField(summary, "brpc_rpc_network_residual_latency", "total", "avg_us"), 3'000u);
+}
+
+TEST_F(BrpcPerfTraceTest, server_trace_trailer_round_trips_without_payload_corruption)
+{
+    BrpcPerfTrace serverTrace("trace-2", "WorkerService.GetObject");
+    serverTrace.MarkServerRecv(10'000'000ULL);
+    serverTrace.MarkServerExecStart(11'000'000ULL);
+    serverTrace.MarkServerExecEnd(16'000'000ULL);
+    serverTrace.MarkServerSend(17'000'000ULL);
+
+    butil::IOBuf attachment;
+    attachment.append("payload", 7);
+    AppendBrpcServerTraceTrailer(serverTrace, attachment);
+
+    BrpcServerTraceSummary summary;
+    ASSERT_TRUE(ConsumeBrpcServerTraceTrailer(attachment, summary));
+    EXPECT_EQ(summary.serverRecvTs, 10'000'000ULL);
+    EXPECT_EQ(summary.serverExecStartTs, 11'000'000ULL);
+    EXPECT_EQ(summary.serverExecEndTs, 16'000'000ULL);
+    EXPECT_EQ(summary.serverSendTs, 17'000'000ULL);
+    EXPECT_EQ(attachment.to_string(), "payload");
+}
+
+TEST_F(BrpcPerfTraceTest, server_trace_trailer_preserves_large_payload)
+{
+    BrpcPerfTrace serverTrace("trace-large", "WorkerService.GetObject");
+    serverTrace.MarkServerRecv(10'000'000ULL);
+    serverTrace.MarkServerExecStart(11'000'000ULL);
+    serverTrace.MarkServerExecEnd(16'000'000ULL);
+    serverTrace.MarkServerSend(17'000'000ULL);
+
+    const std::string payload(128 * 1024, 'x');
+    butil::IOBuf attachment;
+    attachment.append(payload);
+    AppendBrpcServerTraceTrailer(serverTrace, attachment);
+
+    BrpcServerTraceSummary summary;
+    ASSERT_TRUE(ConsumeBrpcServerTraceTrailer(attachment, summary));
+    EXPECT_EQ(summary.serverExecEndTs, 16'000'000ULL);
+    EXPECT_EQ(attachment.size(), payload.size());
+    EXPECT_EQ(attachment.to_string(), payload);
+}
+
+TEST_F(BrpcPerfTraceTest, client_summary_uses_server_trace_trailer_for_residual_latency)
+{
+    BrpcPerfTrace serverTrace("trace-3", "WorkerService.GetObject");
+    serverTrace.MarkServerRecv(100'000'000ULL);
+    serverTrace.MarkServerExecStart(101'000'000ULL);
+    serverTrace.MarkServerExecEnd(106'000'000ULL);
+    serverTrace.MarkServerSend(107'000'000ULL);
+
+    butil::IOBuf attachment;
+    AppendBrpcServerTraceTrailer(serverTrace, attachment);
+
+    BrpcServerTraceSummary summary;
+    ASSERT_TRUE(ConsumeBrpcServerTraceTrailer(attachment, summary));
+
+    BrpcPerfTrace clientTrace("trace-3", "WorkerService.GetObject");
+    clientTrace.MarkClientStart(1'000'000'000ULL);
+    clientTrace.MarkClientSend(1'002'000'000ULL);
+    clientTrace.MarkClientRecv(1'012'000'000ULL);
+    clientTrace.MarkClientEnd(1'013'000'000ULL);
+    clientTrace.MergeServerTraceSummary(summary);
+    RecordBrpcRpcTrace(clientTrace);
+
+    auto summaryJson = DumpSummaryJson();
+    EXPECT_EQ(HistogramField(summaryJson, "brpc_server_exec_latency", "total", "avg_us"), 5'000u);
+    EXPECT_EQ(HistogramField(summaryJson, "brpc_rpc_network_residual_latency", "total", "avg_us"), 3'000u);
 }
 
 TEST_F(BrpcPerfTraceTest, partial_trace_does_not_emit_huge_missing_phase_latency)

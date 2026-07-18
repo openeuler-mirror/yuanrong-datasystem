@@ -76,7 +76,7 @@ public:
      * @param request Pointer to the deserialized request protobuf.
      */
     BrpcServerWriterReaderImpl(brpc::Controller *cntl, const google::protobuf::Message *request,
-                               std::string methodName = "unknown")
+                               std::string methodName)
         : cntl_(cntl),
           request_(nullptr),
           streamId_(brpc::INVALID_STREAM_ID),
@@ -293,6 +293,7 @@ private:
         if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
             // Stream RPC tracing is one summary sample per stream, not one sample per message.
             trace_.MarkServerSend();
+            // Bidi stream responses use StreamWrite and cannot return a unary trailer.
             RecordBrpcRpcTrace(trace_);
         }
     }
