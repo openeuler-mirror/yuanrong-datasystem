@@ -20,12 +20,38 @@
  */
 #include "datasystem/common/rpc/brpc_factory.h"
 
+#include <gflags/gflags.h>
+#include <mutex>
+
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {
+namespace {
+
+// Enable brpc wire-level delivery of timeout_ms so the server-side
+// BuildScTimeoutDurationInitSnippet (brpc_service_generator.cpp) can read
+// cntl->timeout_ms() and initialize reqTimeoutDuration from the client
+// budget instead of falling back to the 60s DEFAULT_TIMEOUT.
+// brpc's baidu_std_protocol_deliver_timeout_ms defaults to false;
+// this sets it true exactly once, before any brpc channel is initialized.
+// Called from BrpcChannelFactory::Create, which is the common entry point
+// for all brpc-outgoing paths (worker, client SDK, etc.).
+void EnsureBrpcDeliverTimeoutMs()
+{
+    static std::once_flag once;
+    std::call_once(once, []() {
+        const std::string prev = gflags::SetCommandLineOption(
+            "baidu_std_protocol_deliver_timeout_ms", "true");
+        LOG(INFO) << "baidu_std_protocol_deliver_timeout_ms=" << prev
+                  << " -> true (enabled for deadline propagation)";
+    });
+}
+
+}  // namespace
 
 std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfig &cfg)
 {
+    EnsureBrpcDeliverTimeoutMs();
     auto ch = std::make_unique<brpc::Channel>();
     brpc::ChannelOptions opts;
     opts.timeout_ms = cfg.timeout_ms;

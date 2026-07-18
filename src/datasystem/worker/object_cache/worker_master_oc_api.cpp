@@ -52,6 +52,12 @@ static constexpr int64_t WORKER_ADD_MILLISECOND = 5 * 1000;
 static constexpr int64_t RETRY_WAIT_MAX_TIME_MS = 2;
 static constexpr int64_t RESOURCE_REPORT_RPC_TIMEOUT_MS = 3 * 1000;
 
+// Hard cap on worker->master RPCs so a slow master cannot pin a worker bthread
+// for the 10min MAX_RPC_TIMEOUT_MS, even on degenerate paths where
+// reqTimeoutDuration is uninitialized (returns 60s default).
+// Applied to both seal and non-seal CreateMeta paths.
+static constexpr int64_t WORKER_TO_MASTER_RPC_HARD_CAP_MS = 3 * 1000;  // 3s
+
 #define CHECK_AND_SET_TIMEOUT(timeoutDuration_, request_, opts_)                              \
     do {                                                                                      \
         int64_t remainingUs_ = (timeoutDuration_)->CalcRemainingAfterDeductionUs();           \
@@ -197,6 +203,12 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
     if (request.meta().life_state() == static_cast<uint32_t>(ObjectLifeState::OBJECT_SEALED)) {
         CHECK_AND_SET_TIMEOUT_WITH_RPC_DIAG(
             "CreateMeta", &GetRequestContext()->reqTimeoutDuration, request, opts, localHostPort_, hostPort_);
+        // Apply the same 3s hard cap as the non-seal path so a slow master
+        // on an uninitialized or degenerate timeout path cannot pin a seal
+        // bthread for the 10min default.
+        if (opts.GetTimeout() <= 0 || opts.GetTimeout() > WORKER_TO_MASTER_RPC_HARD_CAP_MS) {
+            opts.SetTimeout(WORKER_TO_MASTER_RPC_HARD_CAP_MS);
+        }
         RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
         Timer sealTimer;
         Status rc = (brpcSession_ ? brpcSession_->CreateMeta(opts, request, response)
@@ -205,7 +217,16 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
         return WithRpcDiag(rc, "CreateMeta", localHostPort_, hostPort_);
     }
 
-    int64_t timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    // Hard cap on degenerate/uninitialized paths so a slow master cannot pin
+    // a worker bthread for the 10min MAX_RPC_TIMEOUT_MS when reqTimeoutDuration
+    // was never initialized (returns the 60s default).  When the client budget
+    // has been correctly propagated (remainingMs ~ 20ms), the cap does not fire
+    // — the client budget is trusted as-is.  Only the degenerate remainingMs<=0
+    // path gets the hard cap.
+    int64_t remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    int64_t timeoutMs = remainingMs > 0
+        ? remainingMs
+        : WORKER_TO_MASTER_RPC_HARD_CAP_MS;
     INJECT_POINT("WorkerMasterOCApi.CreateMeta.timeoutMs", [&timeoutMs](int time) {
         timeoutMs = time;
         return Status::OK();

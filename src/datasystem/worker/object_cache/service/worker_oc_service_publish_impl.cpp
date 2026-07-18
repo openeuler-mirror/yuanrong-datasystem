@@ -209,6 +209,24 @@ Status WorkerOcServicePublishImpl::RequestingToMaster(ObjectKV &objectKV, const 
         safeObj->stateInfo.SetCacheInvalid(false);
     }
     CHECK_FAIL_RETURN_STATUS(!safeObj->IsSealed(), StatusCode::K_OC_ALREADY_SEALED, "already be sealed.");
+
+    // Deadline gate: if the client's request budget is already exhausted, do not
+    // fire the master CreateMeta/UpdateMeta RPC — its result would be an orphan
+    // (the client already gave up on the Publish). Skipping avoids burning a
+    // master round-trip and avoids half-created metadata that
+    // RollbackPublishFailure must then unwind. reqTimeoutDuration is initialized
+    // from the brpc controller deadline in the plain-unary CallMethod prologue
+    // (brpc_service_generator), so it reflects the client-configured request
+    // budget propagated through the worker. Use the real remaining (not the
+    // network-latency-deducted one): this is a hard "budget exhausted" check.
+    int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
+    if (remainingUs <= 0) {
+        LOG(INFO) << FormatString("[ObjectKey %s] deadline gate: skip master RPC, client budget exhausted "
+                                  "(remaining %ld us).", objectKey, remainingUs);
+        return Status(StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                      FormatString("Request timeout before master RPC, remaining %ld us.", remainingUs));
+    }
+
     INJECT_POINT("worker.publish.before_request_to_master");
 
     Status rc;
