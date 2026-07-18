@@ -37,6 +37,19 @@ ds_cc_test(
         "//tests/st:st_common",
     ],
 )
+
+ds_cc_test(
+    name="worker_create_meta_deadline_diag_test",
+    srcs=["worker_create_meta_deadline_diag_test.cpp"],
+    tags=["manual", "level0"],
+    deps=[
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/worker/object_cache:worker_master_oc_api",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
 ds_cc_test(
     name="worker_populate_startup_test",
     srcs=["worker_populate_startup_test.cpp"],
