@@ -52,6 +52,7 @@ constexpr int64_t RETRY_QUEUE_SETTLE_MS = 20;
 constexpr int64_t MAX_RETRY_SHUTDOWN_MS = 1000;
 constexpr uint16_t OVERSIZED_RECOVERY_TEST_PORT = 18486;
 constexpr uint16_t WATCH_RANGE_VALIDATION_TEST_PORT = 18487;
+constexpr uint16_t RAW_SNAPSHOT_TEST_PORT = 18488;
 
 class MockWatchDispatcher : public WatchDispatcher {
 public:
@@ -283,6 +284,30 @@ protected:
 
 class CoordinatorIdTest : public CommonTest {
 };
+
+TEST_F(CoordinatorIdTest, RawSnapshotReturnsMembershipWithoutTopology)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", RAW_SNAPSHOT_TEST_PORT));
+    DS_ASSERT_OK(service.Init());
+    coordinator::PutReqPb putReq;
+    putReq.set_key("/datasystem/cluster/127.0.0.1:31501");
+    putReq.set_value("raw-membership");
+    coordinator::PutRspPb putRsp;
+    DS_ASSERT_OK(service.Put(putReq, putRsp));
+
+    coordinator::GetClusterRawSnapshotReqPb request;
+    coordinator::GetClusterRawSnapshotRspPb response;
+    DS_ASSERT_OK(service.GetClusterRawSnapshot(request, response));
+    ASSERT_TRUE(response.topology_kvs().empty());
+    ASSERT_EQ(response.membership_kvs_size(), 1);
+    ASSERT_EQ(response.membership_kvs(0).key(), putReq.key());
+    ASSERT_EQ(response.membership_kvs(0).value(), putReq.value());
+    ASSERT_EQ(response.membership_kvs(0).mod_revision(), putRsp.revision());
+
+    request.set_cluster_name("invalid/name");
+    ASSERT_EQ(service.GetClusterRawSnapshot(request, response).GetCode(), K_INVALID);
+    DS_ASSERT_OK(service.Shutdown());
+}
 
 TEST_F(CoordinatorIdTest, AddsStableCoordinatorIdToResponses)
 {

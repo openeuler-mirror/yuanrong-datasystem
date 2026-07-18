@@ -22,6 +22,7 @@ pybind_library(
     srcs = [
         "pybind_register.cpp",
         "pybind_register_common.cpp",
+        "pybind_register_cluster_query.cpp",
         "pybind_register_context.cpp",
         "pybind_register_hetero.cpp",
         "pybind_register_kv.cpp",
@@ -35,6 +36,7 @@ pybind_library(
     ],
     strip_include_prefix = "/src",
     deps = [
+        "//src/datasystem/client/cluster_query:cluster_query_client",
         "//src/datasystem/client:datasystem",
         "//src/datasystem/client/perf_client:perf_client_lib",
         "//src/datasystem/client/stream_cache:consumer",

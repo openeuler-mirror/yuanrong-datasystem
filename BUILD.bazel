@@ -86,6 +86,8 @@ cc_shared_library(
         "//src/datasystem/client:listen_worker",
         "//src/datasystem/client:mmap_manager",
         "//src/datasystem/client/context",
+        "//src/datasystem/client/cluster_query:cluster_query_client",
+        "//src/datasystem/client/cluster_query:cluster_query_projector",
         "//src/datasystem/client/hetero_cache:hetero_client",
         "//src/datasystem/client/kv_cache:kv_client",
         "//src/datasystem/client/kv_cache:read_only_buffer",
@@ -296,6 +298,7 @@ cc_shared_library(
         "//src/datasystem/client:listen_worker",
         "//src/datasystem/client:mmap_manager",
         "//src/datasystem/client/context",
+        "//src/datasystem/client/cluster_query:cluster_query_client",
         "//src/datasystem/client/hetero_cache:hetero_client",
         "//src/datasystem/client/kv_cache:kv_client",
         "//src/datasystem/client/kv_cache:read_only_buffer",
@@ -670,4 +673,3 @@ copy_file(
         "//bazel:__pkg__",
     ],
 )
-

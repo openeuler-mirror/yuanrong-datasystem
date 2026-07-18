@@ -388,6 +388,23 @@ Status CoordinatorServiceProxyBase::ReportTopologyRecoveryCandidate(
     return Status::OK();
 }
 
+Status CoordinatorServiceProxyBase::GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &req,
+                                                          coordinator::GetClusterRawSnapshotRspPb &rsp,
+                                                          int32_t timeoutMs)
+{
+    auto inFlight = BeginRpc(timeoutMs);
+    coordinator::GetClusterRawSnapshotRspPb localRsp;
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    RETURN_IF_NOT_OK(CallRaw(options, req, localRsp,
+                             [](auto &stub, auto &opts, const auto &request, auto &response) {
+        return stub.GetClusterRawSnapshot(opts, request, response);
+    }));
+    RETURN_IF_NOT_OK(inFlight.Accept(localRsp.header(), nullptr));
+    rsp = std::move(localRsp);
+    return Status::OK();
+}
+
 void CoordinatorServiceProxyBase::GetObservedCoordinatorId(std::string &coordinatorId) const
 {
     std::lock_guard<std::mutex> lock(identityMutex_);

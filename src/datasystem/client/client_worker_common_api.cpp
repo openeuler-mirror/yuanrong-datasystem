@@ -505,7 +505,7 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
 {
     Timer timer(timeoutMs);
     GetSocketPathRspPb reply;
-    RETURN_IF_NOT_OK(FetchSocketPath(timeoutMs, timer.GetRemainingTimeMs(), reply));
+    RETURN_IF_NOT_OK(FetchSocketPath(timer.GetRemainingTimeMs(), reply));
 
     isConnectSuccess = false;
     shmEnableType = ShmEnableType::NONE;
@@ -521,7 +521,7 @@ Status ClientWorkerRemoteCommonApi::CreateConnectionForTransferShmFd(int32_t tim
                             socketFd);
 }
 
-Status ClientWorkerRemoteCommonApi::FetchSocketPath(int32_t timeoutMs, int64_t remainingMs, GetSocketPathRspPb &reply)
+Status ClientWorkerRemoteCommonApi::FetchSocketPath(int64_t remainingMs, GetSocketPathRspPb &reply)
 {
     GetSocketPathReqPb req;
     RETURN_IF_NOT_OK(SetToken(req));

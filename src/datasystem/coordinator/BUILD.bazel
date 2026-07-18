@@ -25,6 +25,7 @@ ds_cc_library(
     deps = [
         ":coordinator_watch_dispatcher_impl",
         ":coordinator_topology_recovery_manager",
+        "//src/datasystem/cluster:cluster_topology_keyspace",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/flags:dynamic_flag_config",
@@ -35,6 +36,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
         "//src/datasystem/server:common_server",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
         "//src/datasystem/protos:coordinator_brpc",

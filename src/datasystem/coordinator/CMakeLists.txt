@@ -8,6 +8,7 @@ target_include_directories(coordinator_service_impl PUBLIC ${PROTO_BUILD_DIR} ${
 target_link_libraries(coordinator_service_impl PUBLIC
     coordinator_protos
     common_coordinator_store
+    cluster_topology_keyspace
     common_util
     common_rpc_zmq
     common_log

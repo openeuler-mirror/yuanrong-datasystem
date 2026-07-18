@@ -35,6 +35,7 @@ src/datasystem/
   - util.h
   - utilC.h
 - client/
+  - cluster_query/
   - context/
   - hetero_cache/
   - kv_cache/
@@ -177,6 +178,7 @@ src/datasystem/
   - export_symbols.lds
   - pybind_register.cpp
   - pybind_register.h
+  - pybind_register_cluster_query.cpp
   - pybind_register_common.cpp
   - pybind_register_context.cpp
   - pybind_register_hetero.cpp
@@ -340,6 +342,7 @@ cli/
 - generate_cpp_template.py
 - generate_docker_entryfile.py
 - generate_helm_chart.py
+- query.py
 - runscript.py
 - start.py
 - stop.py
@@ -457,6 +460,7 @@ tests/
     - README.md
     - start_worker.sh
     - test_multi_key_prefetch.py
+  - test_cli_query.py
   - test_device_oc_client.py
   - test_ds_client.py
   - test_ds_tensor_client.py
@@ -545,6 +549,7 @@ tests/
   - CMakeLists.txt
 - ut/
   - client/
+    - cluster_query/
     - routing/
     - BUILD.bazel
     - mmap_manager_test.cpp

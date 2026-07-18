@@ -635,7 +635,7 @@ private:
      * @param[out] reply Worker socket-path response.
      * @return Status of the call.
      */
-    Status FetchSocketPath(int32_t timeoutMs, int64_t remainingMs, GetSocketPathRspPb &reply);
+    Status FetchSocketPath(int64_t remainingMs, GetSocketPathRspPb &reply);
 
     /**
      * @brief Establish the shared-memory handshake connection with retries.

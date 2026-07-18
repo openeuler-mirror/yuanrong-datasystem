@@ -1,0 +1,40 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "cluster_query_projector",
+    srcs = ["cluster_query_projector.cpp"],
+    hdrs = [
+        "cluster_query_projector.h",
+        "cluster_query_types.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/cluster:cluster_membership_codec",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "cluster_query_client",
+    srcs = ["cluster_query_client.cpp"],
+    hdrs = ["cluster_query_client.h"],
+    deps = [
+        ":cluster_query_projector",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/cluster:cluster_membership_codec",
+        "//src/datasystem/cluster:cluster_topology_keyspace",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/kvstore:kv_store",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:net_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:validator",
+        "//src/datasystem/protos:coordinator_cc_proto",
+    ],
+)

@@ -315,10 +315,12 @@ public:
      * over the newest key-value store.
      * @param[out] outKeyValues The output key-values in table.
      * @param[out] rspRevision rspRevision is the key-value store revision when the request was applied.
+     * @param[in] timeoutMs RPC timeout in milliseconds.
      * @return Status of the call.
      */
     Status GetAll(const std::string &tableName, int64_t reqRevision,
-                  std::vector<std::pair<std::string, std::string>> &outKeyValues, int64_t &rspRevision);
+                  std::vector<std::pair<std::string, std::string>> &outKeyValues, int64_t &rspRevision,
+                  int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT);
 
     /**
      * @brief Prefix search in specific table.

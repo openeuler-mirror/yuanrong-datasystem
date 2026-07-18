@@ -85,6 +85,10 @@
     at upgrade without changing the policy contract.
   - Stream uses its own `client::stream_cache::StreamClientImpl`.
   - Python bindings are not a separate reimplementation; they bind to C++ classes and helper types through `libds_client_py`.
+  - `src/datasystem/client/cluster_query` is a dscli-only read facade with protobuf hidden behind its native
+    boundary. It reads one explicitly selected ETCD or Coordinator backend, decodes raw facts locally, and
+    projects node health, committed hash ranges, and key routes from one immutable `TopologySnapshot`. It is linked only
+    into `libds_client_py`; it is not part of the public C++ `datasystem` SDK ABI or the Worker request path.
   - Python package `yr.datasystem` lazily exposes public SDK symbols, `DsTensorClient`, and optional transfer-engine
     bindings so importing `TransferEngine` alone does not eagerly load `libds_client_py` or its `libbrpc` dependency.
 - Pending verification:
@@ -123,6 +127,7 @@
 | `StreamClient` | `src/datasystem/client/stream_cache/stream_client.cpp` -> `client::stream_cache::StreamClientImpl` | separate stream cache implementation family |
 | `Context` | `src/datasystem/client/context/context.cpp` | thread-local trace and tenant context helpers |
 | `IServiceDiscovery` / `ServiceDiscovery` / `CoordinatorServiceDiscovery` | `src/datasystem/client/service_discovery.cpp` | SDK worker selection for C++ callers using `ConnectOptions.serviceDiscovery`; both implementations accept an optional `clusterName`. ETCD discovery maps the logical membership table to the legacy physical prefix `/<clusterName>/datasystem/cluster` (or `/datasystem/cluster` when empty), while Coordinator discovery reads `/datasystem/<clusterName>/cluster` (or `/datasystem/cluster` when empty); `hostIdEnvName` is read from the process env first and then recovered from `<log_dir>/env` |
+| `dscli query` | `cli/query.py` -> native query facade | Explicit backend, 5-second budget, local projection |
 
 ## Connection And Auth Model
 
@@ -167,6 +172,8 @@
 - `DsClient` in Python mirrors the C++ aggregate pattern by composing Python `KVClient`, `HeteroClient`, and `ObjectClient`.
 - `KVClient`, `ObjectClient`, `StreamClient`, and `HeteroClient` wrap `yr.datasystem.lib.libds_client_py` objects.
 - `libds_client_py` is populated by `src/datasystem/pybind_api/pybind_register*.cpp`.
+- `pybind_register_cluster_query.cpp` exposes internal query functions and converts already-projected native results to
+  Python dictionaries. `cli/query.py` owns only argument validation, JSON serialization, and exit codes.
 - `DsTensorClient` is a Python-side convenience layer built on top of `HeteroClient` and tensor pointer extraction.
   The former page-attention-specific APIs and `PageAttnUtils` binding have been removed; callers use the remaining
   generic D2H, H2D, and D2D tensor operations.
@@ -199,6 +206,8 @@
   - `bazel/BUILD.bazel`
 - Notable facts:
   - client sources build both `datasystem_static` and `datasystem` shared library
+  - `cluster_query_client` is a separate internal static target from `src/datasystem/client/cluster_query`; CMake and
+    Bazel link it into `ds_client_py`/`libds_client_py` without appending its sources to `CLIENT_SRCS`.
   - `ds_router_client` is a separate client-facing library built from `router_client.cpp`
   - Python bindings are built from `src/datasystem/pybind_api` when Python API build is enabled; for Bazel wheel builds on `0.8.2`, `libds_client_py` must link from its own deps instead of `dynamic_deps = ["//:datasystem"]`, otherwise the installed wheel can fail at import time with unresolved Abseil log symbols.
   - transfer engine is only added from the root build when transfer-engine, hetero, and NPU-related conditions are satisfied
