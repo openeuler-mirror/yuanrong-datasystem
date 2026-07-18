@@ -380,6 +380,53 @@ zmq_cc_proto_library(
     ],
 )
 
+# --- ut_object brpc adapter ---
+genrule(
+    name = "ut_object_brpc_gen",
+    srcs = ["ut_object.proto"],
+    tools = [
+        "@com_google_protobuf//:protoc",
+        "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
+    ],
+    outs = [
+        "ut_object.brpc.pb.h", "ut_object.brpc.pb.cc",
+        "ut_object.brpc.stub.pb.h", "ut_object.brpc.stub.pb.cc",
+        "ut_object.irpc.pb.h",
+    ],
+    cmd = """
+        PROTOC=$(location @com_google_protobuf//:protoc)
+        PLUGIN=$(location //src/datasystem/common/rpc/plugin_generator:rpc_plugin)
+        OUT_DIR=$$(dirname $(location ut_object.brpc.pb.h))
+        PROTO_ROOT=$$(cd $$(dirname $(location ut_object.proto))/../../.. && pwd)
+        PROTOC_REAL=$$(readlink -f $$PROTOC)
+        GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
+        TMPD=$$(mktemp -d)
+        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/ut_object.proto
+        cp $$TMPD/datasystem/protos/ut_object.brpc.pb.h $$TMPD/datasystem/protos/ut_object.brpc.pb.cc $$TMPD/datasystem/protos/ut_object.brpc.stub.pb.h $$TMPD/datasystem/protos/ut_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/ut_object.irpc.pb.h $$OUT_DIR/
+        rm -rf $$TMPD
+    """,
+)
+
+cc_library(
+    name = "ut_object_brpc",
+    srcs = [":ut_object_brpc_gen"],
+    hdrs = [":ut_object_brpc_gen"],
+    strip_include_prefix = ".",
+    include_prefix = "datasystem/protos",
+    deps = [
+        ":ut_object_cc_proto",
+        "@com_github_apache_brpc//:brpc",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//src/datasystem/common/rpc:rpc_server_stream_base",
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//src/datasystem/common/rpc:rpc_unary_client_impl",
+        "@com_google_protobuf//:protobuf",
+    ],
+)
+
 proto_library(
     name = "zmq_perf_proto",
     srcs = ["zmq_perf.proto"],

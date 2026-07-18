@@ -11,10 +11,10 @@
 #include <algorithm>
 #include <unordered_set>
 
-#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
+
 TopologyFailureClassifier::TopologyFailureClassifier(std::chrono::seconds nodeDeadTimeout)
     : nodeDeadTimeout_(nodeDeadTimeout)
 {
@@ -48,11 +48,7 @@ Status TopologyFailureClassifier::Observe(const TopologySnapshot &topology,
             continue;
         }
         if (present.count(member.identity.address) > 0) {
-            auto missing = missingSince_.find(member.identity.address);
-            if (missing != missingSince_.end()) {
-                observed.restored.push_back({ member.identity, member.state, DurationMs(missing->second, now) });
-                missingSince_.erase(missing);
-            }
+            missingSince_.erase(member.identity.address);
             continue;
         }
         if (member.state == MemberState::INITIAL) {
@@ -61,11 +57,7 @@ Status TopologyFailureClassifier::Observe(const TopologySnapshot &topology,
             observed.removeJoining.push_back(member.identity);
         } else {
             auto [iter, inserted] = missingSince_.emplace(member.identity.address, now);
-            const auto missingMs = inserted ? 0 : DurationMs(iter->second, now);
-            if (inserted) {
-                observed.newlyMissing.push_back({ member.identity, member.state, missingMs });
-            } else if (now - iter->second >= nodeDeadTimeout_) {
-                observed.confirmedMissing.push_back({ member.identity, member.state, missingMs });
+            if (!inserted && now - iter->second >= nodeDeadTimeout_) {
                 observed.confirmedFailure.push_back(member.identity);
             }
         }

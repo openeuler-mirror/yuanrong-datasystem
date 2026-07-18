@@ -10,7 +10,6 @@
 
 #include <utility>
 
-#include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem::cluster {
@@ -62,9 +61,6 @@ Status CoordinationEventDispatcher::Submit(RuntimeEvent event, bool allowCoalesc
     if (queue_.size() >= capacity_) {
         ++stats_.overflow;
         resyncRequired_ = resyncRequired_ || allowCoalesce;
-        LOG(WARNING) << "CLUSTER_WATCH_QUEUE action=overflow queue_depth=" << queue_.size()
-                     << " capacity=" << capacity_ << " allow_coalesce=" << allowCoalesce
-                     << " overflow=" << stats_.overflow << " resync_required=" << resyncRequired_;
         RETURN_STATUS(K_TRY_AGAIN, "cluster runtime event queue overflow");
     }
     queue_.emplace_back(std::move(event));

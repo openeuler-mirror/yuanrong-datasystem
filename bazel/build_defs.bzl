@@ -38,11 +38,16 @@ def ds_cc_test(
         linkopts = linkopts + [
             "-pthread",
         ],
-        tags = tags + ["ds_test"] + select({
-            "//:is_asan": ["asan", "sanitizer"],
-            "//:is_tsan": ["tsan", "sanitizer"],
-            "//conditions:default": [],
-        }),
+        # NOTE: Bazel's cc_test.tags attribute is non-configurable, so select()
+        # cannot be used here. Commit 34c515c3 tried to auto-add asan/tsan/sanitizer
+        # tags via select() on is_asan/is_tsan, but that breaks the entire load
+        # phase ("attribute 'tags' is not configurable") for every ds_cc_test,
+        # making all bazel tests unrunnable. Reverted to the pre-34c515c3 form.
+        # The sanitizer auto-tagging intent still stands; it must be implemented
+        # without select() in tags (e.g. CI-side selection via --config=asan, or
+        # per-target sanitizer aliases). is_asan/is_tsan config_settings and the
+        # .bazelrc defines are kept for that future implementation.
+        tags = tags + ["ds_test"],
         timeout = timeout,
         **kwargs
     )

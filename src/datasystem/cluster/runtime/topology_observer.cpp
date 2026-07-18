@@ -10,7 +10,6 @@
 
 #include <exception>
 
-#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/runtime/topology_role_watch_plan.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
@@ -18,7 +17,7 @@
 namespace datasystem::cluster {
 namespace {
 constexpr auto OBSERVER_IDLE_WAIT = std::chrono::seconds(1);
-constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
+constexpr size_t DIGEST_DIAGNOSTIC_PREFIX_SIZE = 12;
 }
 
 TopologyObserver::TopologyObserver(ICoordinationBackend &backend, TopologyReader &reader, const TopologyKeyHelper &keys)
@@ -37,65 +36,34 @@ Status TopologyObserver::Start()
     std::lock_guard<std::mutex> lock(stateMutex_);
     CHECK_FAIL_RETURN_STATUS(!started_, K_INVALID, "cluster topology Observer already started");
     RETURN_IF_NOT_OK(dispatcher_.Start());
-    RETURN_IF_NOT_OK(RegisterWatchEvents());
-    RETURN_IF_NOT_OK(ReloadInitialSnapshot());
-    return StartStateThread();
-}
-
-void TopologyObserver::InstallEventHandler()
-{
-    backend_.SetEventHandler([this](CoordinationEvent &&event) {
-        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
-            << "CLUSTER_WATCH_EVENT cluster=" << keys_.ClusterName() << " role=observer event="
-            << event.ToString();
-        auto rc = dispatcher_.SubmitCoordination(std::move(event));
-        if (rc.IsError()) {
-            LOG(WARNING) << "CLUSTER_WATCH_QUEUE cluster=" << keys_.ClusterName()
-                         << " role=observer action=submit_failed status=" << rc.ToString();
-        }
-    });
-}
-
-void TopologyObserver::CleanupAfterStartFailure(const char *cleanupMessage)
-{
-    dispatcher_.ShutdownIngress();
-    LOG_IF_ERROR(backend_.ShutdownEventSources(), cleanupMessage);
-    backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
-}
-
-Status TopologyObserver::RegisterWatchEvents()
-{
     std::vector<WatchKey> watches;
     RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::OBSERVER, "", keys_, 0, watches));
-    InstallEventHandler();
+    backend_.SetEventHandler(
+        [this](CoordinationEvent &&event) { (void)dispatcher_.SubmitCoordination(std::move(event)); });
     auto watchStatus = backend_.WatchEvents(watches);
     if (watchStatus.IsError()) {
-        CleanupAfterStartFailure("Shut down topology Observer event sources after Start failure");
+        dispatcher_.ShutdownIngress();
+        LOG_IF_ERROR(backend_.ShutdownEventSources(), "Shut down topology Observer event sources after Start failure");
+        backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
         return watchStatus;
     }
     LOG(INFO) << "CLUSTER_WATCH cluster=" << keys_.ClusterName() << " role=observer scope_count=" << watches.size()
               << " revision=0 status=registered";
-    return Status::OK();
-}
-
-Status TopologyObserver::ReloadInitialSnapshot()
-{
     auto readStatus = Reload(true);
     if (readStatus.IsError()) {
         RecordReadFailure(readStatus);
-        CleanupAfterStartFailure("Shut down topology Observer event sources after initial read failure");
+        dispatcher_.ShutdownIngress();
+        LOG_IF_ERROR(backend_.ShutdownEventSources(),
+                     "Shut down topology Observer event sources after initial read failure");
+        backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
         return readStatus;
+    } else {
+        std::shared_ptr<const TopologySnapshot> snapshot;
+        if (snapshots_.Load(snapshot).IsOk()) {
+            diagnostics_.topologyVersion = snapshot->Version();
+            diagnostics_.lastError.clear();
+        }
     }
-    std::shared_ptr<const TopologySnapshot> snapshot;
-    if (snapshots_.Load(snapshot).IsOk()) {
-        diagnostics_.topologyVersion = snapshot->Version();
-        diagnostics_.lastError.clear();
-    }
-    return Status::OK();
-}
-
-Status TopologyObserver::StartStateThread()
-{
     started_ = true;
     stopping_ = false;
     threadExited_ = false;
@@ -107,7 +75,10 @@ Status TopologyObserver::StartStateThread()
         started_ = false;
         threadExited_ = true;
         diagnostics_.running = false;
-        CleanupAfterStartFailure("Shut down topology Observer event sources after thread Start failure");
+        dispatcher_.ShutdownIngress();
+        LOG_IF_ERROR(backend_.ShutdownEventSources(),
+                     "Shut down topology Observer event sources after thread Start failure");
+        backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("start cluster topology Observer failed: ") + error.what());
     }
     LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << keys_.ClusterName() << " role=observer state=ready";
@@ -131,30 +102,13 @@ Status TopologyObserver::Reload(bool fullRebuildAllowed)
     RETURN_IF_NOT_OK(reader_.Read(OBSERVER_READ_TIMEOUT_MS, snapshot));
     SnapshotUpdateOutcome outcome;
     auto rc = snapshots_.Publish(snapshot, outcome);
-    bool newlyPublished = rc.IsOk() && outcome == SnapshotUpdateOutcome::PUBLISHED;
     if (rc.IsError() && outcome == SnapshotUpdateOutcome::VERSION_GAP && fullRebuildAllowed) {
         rc = snapshots_.PublishAfterFullRebuild(snapshot);
-        newlyPublished = rc.IsOk();
     }
     RETURN_IF_NOT_OK(rc);
-    VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
-        << "CLUSTER_RING cluster=" << keys_.ClusterName() << " version=" << snapshot->Version()
-        << " digest_prefix=" << TopologyDiagnosticPrefix(snapshot->CanonicalDigest()) << " status=published";
-    if (newlyPublished) {
-        const auto activeBatch = snapshot->GetActiveBatch();
-        const auto batchType =
-            activeBatch.has_value() ? TopologyChangeTypeName(activeBatch->type) : "none";
-        const auto batchEpoch =
-            activeBatch.has_value() ? activeBatch->epoch : TOPOLOGY_NO_ACTIVE_BATCH_EPOCH;
-        LOG(INFO) << "CLUSTER_RING cluster=" << keys_.ClusterName() << " role=observer status=published"
-                  << " version=" << snapshot->Version()
-                  << " authority_revision=" << snapshot->AuthorityRevision()
-                  << " digest_prefix=" << TopologyDiagnosticPrefix(snapshot->CanonicalDigest())
-                  << " batch_type=" << batchType << " batch_epoch=" << batchEpoch
-                  << " member_count=" << snapshot->Members().size()
-                  << " active_count=" << snapshot->ActiveMembers().size()
-                  << " failed_count=" << snapshot->FailedMembers().size();
-    }
+    VLOG(1) << "CLUSTER_RING cluster=" << keys_.ClusterName() << " version=" << snapshot->Version()
+            << " digest_prefix=" << snapshot->CanonicalDigest().substr(0, DIGEST_DIAGNOSTIC_PREFIX_SIZE)
+            << " status=published";
     return Status::OK();
 }
 
@@ -174,8 +128,7 @@ void TopologyObserver::Run()
         } else if (rc.IsOk()) {
             if (dispatcher_.ConsumeResyncRequired()) {
                 LOG(WARNING) << "CLUSTER_WATCH cluster=" << keys_.ClusterName()
-                             << " role=observer scope=topology status=resync queued_events="
-                             << dispatcher_.GetStats().queueDepth;
+                             << " role=observer scope=topology status=resync";
             }
             rc = Reload(true);
         }
