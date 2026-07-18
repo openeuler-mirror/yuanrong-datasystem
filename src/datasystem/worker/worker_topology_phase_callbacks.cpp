@@ -21,6 +21,7 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
@@ -41,6 +42,46 @@ constexpr auto SCALE_IN_DRAIN_WAIT_POLL = std::chrono::milliseconds(100);
 int64_t RemainingCallbackBudgetUs(std::chrono::steady_clock::time_point deadline)
 {
     return std::chrono::duration_cast<std::chrono::microseconds>(deadline - std::chrono::steady_clock::now()).count();
+}
+
+
+/**
+ * @brief Remove cached worker<->worker RPC stubs pointing at a failed member.
+ *
+ * After node_dead_timeout_s the topology controller confirms a failed member and runs
+ * OnFailure on every surviving worker. Each survivor's RpcStubCacheMgr may still hold
+ * WORKER_WORKER_OC_SVC / WORKER_WORKER_SC_SVC / WORKER_WORKER_TRANS_SVC stubs to the dead
+ * peer; without removal they keep reconnecting and retransmitting TCP SYNs (Issue #766).
+ * brpc Channel and ZMQ socket destruction are both driven by RpcStubCacheMgr::Remove.
+ *
+ * @param[in] action Topology callback facts carrying the failed member identity.
+ * @return K_OK on success; K_INVALID if the failed address is absent/unparseable;
+ *         the first non K_NOT_FOUND error from any Remove otherwise. K_NOT_FOUND is
+ *         benign (no cached stub in that direction) and is reported as K_OK.
+ */
+Status EraseFailedWorkerWorkerStub(const cluster::TopologyPhaseAction &action)
+{
+    if (!action.failed.has_value() || action.failed->address.empty()) {
+        return Status(K_INVALID, "failure cleanup lacks a failed member address");
+    }
+    HostPort failedAddr;
+    auto rc = failedAddr.ParseString(action.failed->address);
+    if (rc.IsError() || failedAddr.Empty()) {
+        return Status(K_INVALID, "failed member address is invalid: " + action.failed->address);
+    }
+    for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC,
+                       StubType::WORKER_WORKER_TRANS_SVC }) {
+        auto removeRc = RpcStubCacheMgr::Instance().Remove(failedAddr, type);
+        // K_NOT_FOUND: no cached stub for this worker<->worker direction; not an error.
+        if (removeRc.IsError() && removeRc.GetCode() != StatusCode::K_NOT_FOUND) {
+            LOG(ERROR) << "Remove cached worker<->worker stub failed, address=" << action.failed->address
+                       << ", type=" << static_cast<int>(type) << ", rc=" << removeRc.ToString();
+            if (rc.IsOk()) {  // preserve first real error
+                rc = removeRc;
+            }
+        }
+    }
+    return rc;
 }
 }  // namespace
 
@@ -254,6 +295,13 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
                                                                       context.deadline, context.cancellation),
                           firstError);
     }
+    // Drop cached worker<->worker RPC stubs to the failed member so that no
+    // healthy worker keeps reconnecting (and retransmitting TCP SYNs) to a
+    // dead peer after node_dead_timeout_s. Issue #766: survivors leaked the
+    // TCP link info and kept retrying the 25 kill-9'd workers.
+    // Unconditional: every worker owns its own RpcStubCacheMgr regardless of
+    // metadata mode. Remove is idempotent (K_NOT_FOUND is benign).
+    RecordFailureStep("cleanup-rpc-stub", EraseFailedWorkerWorkerStub(context.action), firstError);
 }
 
 }  // namespace datasystem::worker
