@@ -58,7 +58,7 @@ namespace datasystem {
 std::mutex RocksStore::lck;
 static constexpr size_t ROCKSDB_MAX_LOG_FILE_SIZE = 10u * 1024u * 1024u;  // 10MB
 static constexpr size_t ROCKSDB_MAX_LOG_FILE_NUM = 3;
-bool RocksStore::disableRocksDB = false;
+std::atomic<bool> RocksStore::disableRocksDB{ false };
 
 namespace {
 void InitRocksOptions(rocksdb::Options &options)
@@ -96,7 +96,7 @@ std::shared_ptr<RocksStore> RocksStore::GetInstance(
 {
 #ifdef WITH_TESTS
     INJECT_POINT("master.disableRocksDb", []() {
-        RocksStore::disableRocksDB = true;
+        RocksStore::disableRocksDB.store(true, std::memory_order_relaxed);
         return nullptr;
     });
 #endif
@@ -105,6 +105,18 @@ std::shared_ptr<RocksStore> RocksStore::GetInstance(
     InitRocksOptions(options);
 
     std::lock_guard<std::mutex> lock(lck);
+    // Production path: rocksdb_write_mode=none means RocksDB is not used at all. Map it to
+    // disableRocksDB so GetInstance returns a shell instance without DB::Open, avoiding the
+    // startup-time LOCK file contention that surfaces as K_KVSTORE_ERROR (worker exit 255)
+    // during rolling restarts when a prior worker has not released the flock yet.
+    // disableRocksDB is std::atomic<bool> (relaxed order): the write happens once at startup
+    // under lck; all later readers (RETURN_OK_IF_TRUE(disableRocksDB)) are atomic loads, so no
+    // data race / TSAN noise even though they run outside lck.
+    // The exact-string compare "none" relies on Validator::ValidateRocksdbModeType having
+    // rejected any other spelling at flag-parse time, so by here the value is canonical.
+    if (FLAGS_rocksdb_write_mode == "none") {
+        RocksStore::disableRocksDB.store(true, std::memory_order_relaxed);
+    }
     std::shared_ptr<RocksStore> instance(new RocksStore);
     if (disableRocksDB) {
         LOG(INFO) << "Rocksdb is disabled";

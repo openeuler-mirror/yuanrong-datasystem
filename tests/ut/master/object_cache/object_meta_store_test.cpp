@@ -17,6 +17,7 @@
 
 #include <unistd.h>
 #include <cstdint>
+#include <filesystem>
 #include <list>
 #include <memory>
 #include <string>
@@ -25,6 +26,8 @@
 #include <gtest/gtest.h>
 
 #include "ut/common.h"
+#include "datasystem/common/flags/flags.h"
+#include "datasystem/common/kvstore/rocksdb/rocks_store.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/master/object_cache/store/object_meta_store.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
@@ -36,6 +39,7 @@
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(rocksdb_write_mode);
 
 using namespace datasystem::master;
 namespace datasystem {
@@ -124,6 +128,71 @@ TEST_F(ObjectMetaStoreTest, TestCreateQueryRemoveMeta)
     // Remove not exist
     EXPECT_EQ(this->StoreRemove(removeIds), Status::OK());
     sleep(1);
+}
+
+// Verify that rocksdb_write_mode=none makes RocksStore::GetInstance return a shell instance
+// WITHOUT calling DB::Open (no LOCK file is created) and that subsequent Put/Get calls do not
+// crash (they are short-circuited by RETURN_OK_IF_TRUE(disableRocksDB)). This is the contract
+// that lets a worker start without RocksDB during rolling restarts without hitting LOCK
+// contention (K_KVSTORE_ERROR, exit 255).
+class RocksStoreNoneModeTest : public testing::Test {
+public:
+    void SetUp() override
+    {
+        // Save the original flag value to restore in TearDown (avoid hardcoding a mode that
+        // could differ from the process default and pollute other tests).
+        origMode_ = FLAGS_rocksdb_write_mode;
+        std::string err;
+        ASSERT_TRUE(SetCommandLineOption("rocksdb_write_mode", "none", err)) << err;
+        backStorePath_ = "rocks_none_mode_" + random_.GetRandomString(8);
+    }
+
+    void TearDown() override
+    {
+        std::string err;
+        SetCommandLineOption("rocksdb_write_mode", origMode_, err);
+        // disableRocksDB is process-level; clear it so other tests get a real DB again.
+        RocksStore::ResetDisableRocksDBForTest();
+        DS_ASSERT_OK(RemoveAll(backStorePath_));
+    }
+
+    std::string origMode_;
+    std::string backStorePath_;
+    static RandomData random_;
+};
+
+RandomData RocksStoreNoneModeTest::random_;
+
+TEST_F(RocksStoreNoneModeTest, NoneModeSkipsDbOpenAndDoesNotCreateLockFile)
+{
+    // none mode -> GetInstance must NOT call DB::Open. The shell instance is returned (non-null)
+    // and no RocksDB artifacts (LOCK file, the db directory, or any other file) are created.
+    std::shared_ptr<RocksStore> store = RocksStore::GetInstance(backStorePath_);
+    ASSERT_NE(store, nullptr);
+
+    // The store directory itself must not exist: DB::Open (with create_if_missing=true) is what
+    // creates it, and we skipped it. Asserting the whole path is absent is stronger than just LOCK.
+    std::error_code ec;
+    bool dirExists = std::filesystem::exists(backStorePath_, ec);
+    EXPECT_FALSE(dirExists)
+        << "rocksdb_write_mode=none must skip DB::Open, so no db directory should be created";
+    // belt-and-suspenders: even if the directory somehow existed, it must be empty.
+    if (dirExists) {
+        size_t n = std::distance(std::filesystem::directory_iterator(backStorePath_, ec),
+                                 std::filesystem::directory_iterator());
+        EXPECT_EQ(n, 0u) << "rocksdb_write_mode=none must leave the store dir empty (no LOCK/CURRENT/MANIFEST)";
+    }
+
+    // Subsequent data operations must not crash; they are no-ops via disableRocksDB guard.
+    EXPECT_EQ(store->CreateTable("t1", rocksdb::ColumnFamilyOptions()), Status::OK());
+    EXPECT_EQ(store->Put("t1", "k", "v"), Status::OK());
+    std::string val;
+    EXPECT_EQ(store->Get("t1", "k", val), Status::OK());
+    EXPECT_EQ(store->Delete("t1", "k"), Status::OK());
+
+    // After operations, the directory must STILL not exist (no-op operations must not create it).
+    EXPECT_FALSE(std::filesystem::exists(backStorePath_, ec))
+        << "no-op Put/Get/Delete in none mode must not create any rocksdb directory";
 }
 
 }  // namespace ut

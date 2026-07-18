@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_KVSTORE_ROCKS_STORE_H
 #define DATASYSTEM_COMMON_KVSTORE_ROCKS_STORE_H
 
+#include <atomic>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -284,6 +285,18 @@ public:
         return asyncThreadPool_->AreAllQueuesEmpty();
     }
 
+#ifdef WITH_TESTS
+    /**
+     * @brief Test-only helper to reset the process-level disableRocksDB flag.
+     * Needed because rocksdb_write_mode=none sets disableRocksDB=true in GetInstance and it must be
+     * cleared between unit tests to avoid polluting other tests that expect a real DB.
+     */
+    static void ResetDisableRocksDBForTest()
+    {
+        disableRocksDB.store(false, std::memory_order_relaxed);
+    }
+#endif
+
 private:
     // Make the constructor private to force the user to call GetInstance to open a read-only RocksDB database.
     RocksStore();
@@ -311,7 +324,7 @@ private:
     std::string dbPath_;
     std::unordered_map<std::string, rocksdb::ColumnFamilyHandle *> tables_;
     static std::mutex lck;
-    static bool disableRocksDB;
+    static std::atomic<bool> disableRocksDB;
     std::vector<std::string> clusterInfoTable_ = { ROCKS_CLUSTER_TABLE, ROCKS_HASHRING_TABLE, HEALTH_TABLE };
     std::unique_ptr<OrderedThreadPool> asyncThreadPool_;
     RocksdbWriteMode mode_;
