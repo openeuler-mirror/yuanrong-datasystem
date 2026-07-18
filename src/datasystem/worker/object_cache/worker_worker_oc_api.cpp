@@ -250,6 +250,7 @@ Status WorkerRemoteWorkerOCApi::MigrateDataProbe(MigrateDataReqPb &req, MigrateD
     RpcOptions opts;
     opts.SetTimeout(timeoutMs);
     std::vector<MemView> emptyPayloads;
+    INJECT_POINT("worker.migrate_data_probe.return");
     auto rc = brpcSession_ ? brpcSession_->MigrateData(opts, req, rsp, emptyPayloads)
                            : rpcSession_->MigrateData(opts, req, rsp, emptyPayloads);
     return WithRpcDiag(rc, "MigrateDataProbe", localHostPort_, hostPort_);

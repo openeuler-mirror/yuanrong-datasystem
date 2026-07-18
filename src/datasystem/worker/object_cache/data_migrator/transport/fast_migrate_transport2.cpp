@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/rpc_util.h"
 
@@ -51,6 +52,7 @@ void FastMigrateTransport2::ProcessMigrateResponse(const NotifyRemoteGetReqPb &r
 
 Status FastMigrateTransport2::MigrateDataToRemote(const Request &req, Response &rsp)
 {
+    INJECT_POINT("FastMigrateTransport2.MigrateDataToRemote.delay");
     NotifyRemoteGetReqPb reqPb;
     reqPb.set_addr(req.localAddr);
     uint64_t totalDataBytes = 0;

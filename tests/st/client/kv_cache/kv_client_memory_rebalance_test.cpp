@@ -30,6 +30,7 @@
 #include "client/kv_cache/kv_client_common.h"
 #include "cluster/external_cluster.h"
 #include "common.h"
+#include "common_distributed_ext.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/kv_client.h"
@@ -61,6 +62,7 @@ constexpr char MEMORY_LIMIT_SOURCE_THRESHOLD_CASE_NAME[] = "UsageRateUsesMemoryL
 constexpr char SOURCE_CLOCK_OFFSET_CASE_NAME[] = "SourceClockOffsetUsesRelativeTaskTimeout";
 constexpr char DISABLED_TEST_PREFIX[] = "DISABLED_";
 const std::string SOURCE_SEND_POINT = "TcpMigrateTransport.MigrateDataToRemote.delay";
+const std::string FAST_MIGRATE_SEND_POINT = "FastMigrateTransport2.MigrateDataToRemote.delay";
 const std::string TARGET_MIGRATE_POINT = "worker.migrate_service.return";
 const std::string TARGET_MEMORY_AVAILABLE_POINT = "worker.migrate_service.memory_available";
 const std::string ASSIGN_TASK_POINT = "MemoryRebalanceScheduler.AssignTask";
@@ -68,6 +70,9 @@ const std::string EXPIRE_TASK_POINT = "MemoryRebalanceScheduler.ExpireTask";
 const std::string REPLACE_PRIMARY_POINT = "OCMetadataManager.ReplacePrimary";
 const std::string REPORT_RESULT_POINT = "MasterOCServiceImpl.ReportRebalanceResult";
 const std::string SOURCE_CLOCK_OFFSET_POINT = "RebalanceExecutor.NowMsForExpiryCheck.addOffsetMs";
+const std::string ADMISSION_CLOSED_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed";
+const std::string DRAIN_TIMED_OUT_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.timedOut";
+const std::string MIGRATE_DATA_AFTER_ADMISSION = "WorkerOcServiceMigrateImpl.MigrateData.afterAdmission";
 
 struct ObjectBatch {
    std::vector<std::string> keys;
@@ -110,6 +115,11 @@ bool IsSourceClockOffsetCase()
    return IsCurrentTestName(SOURCE_CLOCK_OFFSET_CASE_NAME);
 }
 
+bool IsUrmaScaleInCase()
+{
+    return IsCurrentTestName("RebalanceTargetActiveScaleInUrmaDoesNotLoseData");
+}
+
 std::string BuildRebalanceInjectActions()
 {
    std::string actions = "NodeSelector.setInterval:call(200);"
@@ -131,7 +141,7 @@ void SleepMs(int timeoutMs)
 }
 }  // namespace
 
-class LEVEL1_KVClientMemoryRebalanceTest : public KVClientCommon {
+class LEVEL1_KVClientMemoryRebalanceTest : public KVClientCommon, public CommonDistributedExt {
 public:
    LEVEL1_KVClientMemoryRebalanceTest() = default;
    ~LEVEL1_KVClientMemoryRebalanceTest() override = default;
@@ -158,6 +168,14 @@ public:
            "-rebalance_cooldown_s=1 -rebalance_task_report_grace_ms=500 "
            "-data_migrate_rate_limit_mb=1024" +
            watermarkParams;
+        if (IsUrmaScaleInCase()) {
+#ifdef USE_URMA
+            opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=false";
+#else
+            // Worker binary not built with URMA framework; test will GTEST_SKIP in the body.
+            opts.workerGflagParams += " -enable_urma=false";
+#endif
+        }
        opts.injectActions = BuildRebalanceInjectActions();
    }
 
@@ -285,7 +303,7 @@ protected:
    void WaitAllNodesActiveInHashRing(uint32_t expectedWorkerNum, int timeoutMs = HASH_RING_TIMEOUT_MS)
    {
        if (!db_) {
-           InitTestEtcdInstance();
+           KVClientCommon::InitTestEtcdInstance();
        }
        Status lastStatus;
        ClusterTopologyPb lastRing;
@@ -386,6 +404,11 @@ protected:
    std::shared_ptr<KVClient> client0_;
    std::shared_ptr<KVClient> client1_;
    std::shared_ptr<KVClient> client2_;
+
+   BaseCluster *GetCluster() override
+   {
+       return cluster_.get();
+   }
 };
 
 TEST_F(LEVEL1_KVClientMemoryRebalanceTest, DISABLED_SingleWorkerHighWaterTriggersRebalance)
@@ -588,16 +611,31 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, BusyGuardSelfHealProbesAfterBudgetEla
     constexpr char PROBE_POINT[] = "MigrateDataHandler.SelfHealBusyRate.probe";
     SetInjectActionForAll(PROBE_POINT, "100000*call()");
     SetInjectActionForAll("migrate.limiter.is_busy_node", "100000*return()");
-    for (auto target : { WORKER1, WORKER2 }) {
-        SetInjectAction(target, "worker.migrate_service.return", "1*sleep(3100)");
-    }
+    // Probe-only inject: 3 K_NOT_READY returns on MigrateDataProbe (not MigrateData).
+    // worker.migrate_data_probe.return lives on the caller side (WorkerRemoteWorkerOCApi::MigrateDataProbe),
+    // which runs on the source worker (WORKER0), so the action must be set on WORKER0, not the targets.
+    // SelfHealBusyRate fires 3 probes, all return K_NOT_READY -> rate=0 -> budget elapsed -> give up
+    // -> SendDataToRemote returns without sending MigrateData -> handler reports FAILED -> master cooldowns
+    // source+target 1s -> next Schedule dispatches a new task with a fresh handler (selfHealAttempted_=false).
+    // Probe 4: inject exhausted -> target responds -> rate>0 -> self-heal succeeds -> migration proceeds.
+    SetInjectAction(WORKER0, "worker.migrate_data_probe.return", "3*return(K_NOT_READY)");
 
     auto probeBaseline = GetTotalInjectCount(PROBE_POINT);
     auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+    auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
     auto sourceBatch = WriteObjects(client0_, "rebalance_busy_after_budget", 9, 'b');
 
     WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
-    WaitForTotalInjectCount(PROBE_POINT, probeBaseline + 1, AllWorkers(), 15000);
+    // 3 probes from handler 1 (budget elapsed) + 1 from retry handler 2 = 4 total.
+    WaitForTotalInjectCount(PROBE_POINT, probeBaseline + 4, AllWorkers(), 15000);
+    // Clear the busy-node inject so handler 2's subsequent batches skip self-heal.
+    // Then wait for handler 2's MigrateData RPC to start sending (target is alive,
+    // RPC completes in ~50ms) and sleep briefly to let it finish before TearDown
+    // kills the target. Without this, TearDown kills the target mid-RPC, the RPC
+    // retries for 120s, and StopRebalanceExecutor()'s join hangs to the 80s timeout.
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER0, "migrate.limiter.is_busy_node"));
+    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 1, 5000);
+    SleepMs(500);
     AssertReadable(client0_, sourceBatch);
 }
 
@@ -689,6 +727,130 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceLowRateTest, LowRateMigrateSucceedsAfterBus
     WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 2, 30'000);
     AssertReadable(client1_, sourceBatch);
     AssertReadable(client2_, pressureBatch);
+}
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceTargetActiveScaleInDoesNotLoseData)
+{
+    SetInjectActionForAll(REPLACE_PRIMARY_POINT, "100000*call()");
+    auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
+    auto replacePrimaryBaseline = GetTotalInjectCount(REPLACE_PRIMARY_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    auto sourceBatch = WriteObjects(client0_, "rebalance_target_scalein", 9, 't');
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 1);
+    WaitForTotalInjectCount(REPLACE_PRIMARY_POINT, replacePrimaryBaseline + 1);
+
+    client1_.reset();
+    VoluntaryScaleDownInject(static_cast<int>(WORKER1));
+    WaitAllNodesActiveInHashRing(2);
+    AssertReadable(client0_, sourceBatch);
+    AssertReadable(client2_, sourceBatch);
+}
+
+// Verifies the NotifyRemoteGet admission fix on the URMA write path
+// (FastMigrateTransport2).
+//
+// CI builds with -M on auto-fallback to URMA mock when liburma.so is absent,
+// so this test runs as a normal level1 case. For local debugging with
+// explicit mock: build.sh -d -t build -U on.
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceTargetActiveScaleInUrmaDoesNotLoseData)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Worker not built with URMA framework; skip URMA write-path test";
+#endif
+    // Block Source at the send point so the test can order Target scale-down
+    // before NotifyRemoteGet is sent.
+    SetInjectAction(WORKER0, FAST_MIGRATE_SEND_POINT, "pause()");
+    auto sourceSendBaseline = GetInjectCount(WORKER0, FAST_MIGRATE_SEND_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+    auto admissionClosedBaseline = GetInjectCount(WORKER1, ADMISSION_CLOSED_POINT);
+
+    auto sourceBatch = WriteObjects(client0_, "rebalance_target_scalein_urma", 9, 'u');
+
+    // T1: Source completed probe and is paused before NotifyRemoteGet.
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+    WaitForInjectCount(WORKER0, FAST_MIGRATE_SEND_POINT, sourceSendBaseline + 1);
+
+    // T2: Target begins voluntary scale-down and closes admission.
+    client1_.reset();
+    SetInjectAction(WORKER1, ADMISSION_CLOSED_POINT, "100000*call()");
+    VoluntaryScaleDownInject(static_cast<int>(WORKER1));
+    WaitForInjectCount(WORKER1, ADMISSION_CLOSED_POINT, admissionClosedBaseline + 1);
+
+    // T3: Release Source. NotifyRemoteGet arrives after admission is closed
+    // and must be rejected with K_NOT_READY, so Source does not delete data.
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER0, FAST_MIGRATE_SEND_POINT));
+
+    WaitAllNodesActiveInHashRing(2);
+    AssertReadable(client0_, sourceBatch);
+    AssertReadable(client2_, sourceBatch);
+}
+
+// Verifies that an admitted MigrateData whose drain times out returns
+// K_NOT_READY to Source so Source keeps its local copy and no data is lost.
+//
+// T1: Source sends MigrateData to Target; Target acquires admission and
+//     pauses at the afterAdmission inject point.
+// T2: Target voluntary scale-down starts; admission closes and drain begins.
+// T3: Drain times out (TOPOLOGY_STOP_GRACE = 10s) because the admitted RPC is
+//     still paused. PreShutDown continues (does not early-return) to publish
+//     EXITING and wait for topology removal.
+// T4: Release the inject. MigrateData hits checkpoint A (admission closed)
+//     or checkpoint B (drain timed out) and returns K_NOT_READY.
+// T5: Source receives K_NOT_READY and keeps its local copy. Data is safe.
+TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceDrainTimeoutKeepsSourceData)
+{
+    SetInjectAction(WORKER1, MIGRATE_DATA_AFTER_ADMISSION, "pause()");
+    SetInjectAction(WORKER2, MIGRATE_DATA_AFTER_ADMISSION, "pause()");
+    SetInjectAction(WORKER1, ADMISSION_CLOSED_POINT, "100000*call()");
+    SetInjectAction(WORKER2, ADMISSION_CLOSED_POINT, "100000*call()");
+    SetInjectAction(WORKER1, DRAIN_TIMED_OUT_POINT, "100000*call()");
+    SetInjectAction(WORKER2, DRAIN_TIMED_OUT_POINT, "100000*call()");
+    auto baseline1 = GetInjectCount(WORKER1, MIGRATE_DATA_AFTER_ADMISSION);
+    auto baseline2 = GetInjectCount(WORKER2, MIGRATE_DATA_AFTER_ADMISSION);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    auto sourceBatch = WriteObjects(client0_, "rebalance_drain_timeout", 9, 'd');
+
+    // T1: Source sends MigrateData; Target acquires admission and pauses.
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+    ASSERT_TRUE(WaitFor([&] {
+        return GetInjectCountIfAlive(WORKER1, MIGRATE_DATA_AFTER_ADMISSION) > baseline1
+            || GetInjectCountIfAlive(WORKER2, MIGRATE_DATA_AFTER_ADMISSION) > baseline2;
+    })) << "Neither WORKER1 nor WORKER2 hit the afterAdmission inject point";
+
+    uint32_t target = (GetInjectCountIfAlive(WORKER1, MIGRATE_DATA_AFTER_ADMISSION) > baseline1)
+                          ? WORKER1
+                          : WORKER2;
+    // Clear the pause() inject on the non-target worker so that a subsequent
+    // rebalance task dispatched to it (after the target exits) does not pin an
+    // Execute task inside RebalanceExecutor::executorPool_ — which would block
+    // StopRebalanceExecutor() during TearDown and hang worker Shutdown.
+    uint32_t nonTarget = (target == WORKER1) ? WORKER2 : WORKER1;
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, nonTarget, MIGRATE_DATA_AFTER_ADMISSION));
+    auto admissionClosedBaseline = GetInjectCount(target, ADMISSION_CLOSED_POINT);
+    auto drainTimedOutBaseline = GetInjectCount(target, DRAIN_TIMED_OUT_POINT);
+
+    // T2: Target voluntary scale-down; admission closes and drain begins.
+    if (target == WORKER1) {
+        client1_.reset();
+    } else {
+        client2_.reset();
+    }
+    VoluntaryScaleDownInject(static_cast<int>(target));
+    WaitForInjectCount(target, ADMISSION_CLOSED_POINT, admissionClosedBaseline + 1);
+
+    // T3: Wait for drain to time out (TOPOLOGY_STOP_GRACE = 10s).
+    WaitForInjectCount(target, DRAIN_TIMED_OUT_POINT, drainTimedOutBaseline + 1);
+
+    // T4: Release Target's MigrateData. It returns K_NOT_READY.
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, target, MIGRATE_DATA_AFTER_ADMISSION));
+
+    // T5: Source keeps its local copy; data is readable after Target exits.
+    WaitAllNodesActiveInHashRing(2);
+    AssertReadable(client0_, sourceBatch);
 }
 
 class LEVEL1_KVClientMemoryRebalanceEvictSpillRegressionTest : public KVClientCommon {

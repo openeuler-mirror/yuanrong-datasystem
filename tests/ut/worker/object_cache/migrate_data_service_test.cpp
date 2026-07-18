@@ -38,6 +38,7 @@
 
 #include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -67,6 +68,20 @@ using namespace datasystem::worker;
 
 namespace datasystem {
 namespace ut {
+
+constexpr int64_t K_INJECT_WAIT_POLL_MS = 1;
+bool WaitForInjectPointExecuteCount(const std::string &name, uint64_t expectedCount,
+                                    std::chrono::milliseconds timeout)
+{
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (inject::GetExecuteCount(name) >= expectedCount) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(K_INJECT_WAIT_POLL_MS));
+    }
+    return inject::GetExecuteCount(name) >= expectedCount;
+}
 
 using MigrateTestPlacementFacade = TestPlacementFacade;
 
@@ -355,21 +370,17 @@ public:
         }
     }
 
-    void VerifyRequestHoldsMigrationAdmission(std::function<Status()> request)
+    void VerifyRequestHoldsMigrationAdmission(const std::string &injectPoint, std::function<Status()> request)
     {
         constexpr std::chrono::seconds schedulingTimeout(1);
         constexpr std::chrono::seconds closeBudget(2);
         constexpr std::chrono::milliseconds observationWindow(50);
-        std::promise<void> requestAdmittedPromise;
-        auto requestAdmittedFuture = requestAdmittedPromise.get_future();
-        std::promise<void> releaseRequestPromise;
-        auto releaseRequestFuture = releaseRequestPromise.get_future().share();
-        impl_->SetAfterAdmissionTestHook([&requestAdmittedPromise, releaseRequestFuture] {
-            requestAdmittedPromise.set_value();
-            releaseRequestFuture.wait();
-        });
+        // Block the RPC at the afterAdmission inject point so the test can assert
+        // that CloseIncomingMigrationAdmissionAndWait waits while admission is held.
+        DS_ASSERT_OK(inject::Set(injectPoint, "pause()"));
         auto requestFuture = std::async(std::launch::async, std::move(request));
-        const bool requestAdmitted = requestAdmittedFuture.wait_for(schedulingTimeout) == std::future_status::ready;
+        // Wait until the RPC hits the inject point - admission is acquired and held.
+        const bool requestAdmitted = WaitForInjectPointExecuteCount(injectPoint, 1, schedulingTimeout);
 
         auto closeFuture = std::async(std::launch::async, [this, closeBudget] {
             return impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now() + closeBudget);
@@ -385,14 +396,40 @@ public:
         } while (lateAdmission.IsOk() && std::chrono::steady_clock::now() < gateDeadline);
         const auto closeStateWhileRequestPaused = closeFuture.wait_for(observationWindow);
 
-        releaseRequestPromise.set_value();
+        DS_ASSERT_OK(inject::Clear(injectPoint));
         (void)requestFuture.get();
         const auto closeStatus = closeFuture.get();
-        impl_->SetAfterAdmissionTestHook({});
         EXPECT_TRUE(requestAdmitted);
         EXPECT_EQ(lateAdmission.GetCode(), StatusCode::K_NOT_READY);
         EXPECT_EQ(closeStateWhileRequestPaused, std::future_status::timeout);
         DS_EXPECT_OK(closeStatus);
+    }
+
+    void VerifyRequestReturnsFailureWhenDrainTimesOut(const std::string &injectPoint, std::function<Status()> request)
+    {
+        constexpr std::chrono::seconds schedulingTimeout(1);
+        // Intentionally short: the pause() inject holds admission indefinitely, so drain
+        // is guaranteed to time out regardless of the budget. drainTimedOut_ is set inside
+        // the same lock as wait_until, so scheduling latency does not affect correctness.
+        constexpr std::chrono::milliseconds closeBudget(100);
+        // Block the RPC at the afterAdmission inject point so drain will time out.
+        DS_ASSERT_OK(inject::Set(injectPoint, "pause()"));
+        auto requestFuture = std::async(std::launch::async, std::move(request));
+        // Wait until the RPC hits the inject point - admission is acquired and held.
+        const bool requestAdmitted = WaitForInjectPointExecuteCount(injectPoint, 1, schedulingTimeout);
+
+        auto closeFuture = std::async(std::launch::async, [this, closeBudget] {
+            return impl_->CloseIncomingMigrationAdmissionAndWait(
+                std::chrono::steady_clock::now() + closeBudget);
+        });
+        const auto closeStatus = closeFuture.get();
+        EXPECT_EQ(closeStatus.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+
+        DS_ASSERT_OK(inject::Clear(injectPoint));
+        const auto requestStatus = requestFuture.get();
+
+        EXPECT_TRUE(requestAdmitted);
+        EXPECT_EQ(requestStatus.GetCode(), StatusCode::K_NOT_READY);
     }
 
     Status PureQueryMeta(const std::shared_ptr<worker::WorkerMasterOCApi> &api, master::PureQueryMetaReqPb &req,
@@ -516,7 +553,7 @@ TEST_F(MigrateDataServiceTest, SocketMigrationHoldsAdmissionUntilRequestReturns)
     MigrateDataReqPb req;
     req.set_type(MigrateType::SCALE_DOWN);
     MigrateDataRspPb rsp;
-    VerifyRequestHoldsMigrationAdmission([this, &req, &rsp] {
+    VerifyRequestHoldsMigrationAdmission("WorkerOcServiceMigrateImpl.MigrateData.afterAdmission", [this, &req, &rsp] {
         return impl_->MigrateData(req, rsp, {});
     });
 }
@@ -526,7 +563,8 @@ TEST_F(MigrateDataServiceTest, DirectMigrationHoldsAdmissionUntilRequestReturns)
     MigrateDataDirectReqPb req;
     req.add_objects()->set_object_key("guarded-direct-object");
     MigrateDataDirectRspPb rsp;
-    VerifyRequestHoldsMigrationAdmission([this, &req, &rsp] {
+    VerifyRequestHoldsMigrationAdmission("WorkerOcServiceMigrateImpl.MigrateDataDirect.afterAdmission",
+                                          [this, &req, &rsp] {
         return impl_->MigrateDataDirect(req, rsp);
     });
 }
@@ -538,6 +576,29 @@ TEST_F(MigrateDataServiceTest, CloseMigrationAdmissionReturnsDeadlineExceeded)
     EXPECT_EQ(rc.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(impl_->AcquireIncomingMigrationAdmission().GetCode(), StatusCode::K_NOT_READY);
     impl_->ReleaseIncomingMigrationAdmission();
+}
+
+TEST_F(MigrateDataServiceTest, MigrateDataReturnsFailureWhenDrainTimesOut)
+{
+    MigrateDataReqPb req;
+    req.set_type(MigrateType::SCALE_DOWN);
+    req.add_objects()->set_object_key("drain-timeout-socket");
+    MigrateDataRspPb rsp;
+    VerifyRequestReturnsFailureWhenDrainTimesOut("WorkerOcServiceMigrateImpl.MigrateData.afterAdmission",
+                                                   [this, &req, &rsp] {
+        return impl_->MigrateData(req, rsp, {});
+    });
+}
+
+TEST_F(MigrateDataServiceTest, MigrateDataDirectReturnsFailureWhenDrainTimesOut)
+{
+    MigrateDataDirectReqPb req;
+    req.add_objects()->set_object_key("drain-timeout-direct");
+    MigrateDataDirectRspPb rsp;
+    VerifyRequestReturnsFailureWhenDrainTimesOut("WorkerOcServiceMigrateImpl.MigrateDataDirect.afterAdmission",
+                                                   [this, &req, &rsp] {
+        return impl_->MigrateDataDirect(req, rsp);
+    });
 }
 
 TEST_F(MigrateDataServiceTest, TestLockNeedMigrateObjects)

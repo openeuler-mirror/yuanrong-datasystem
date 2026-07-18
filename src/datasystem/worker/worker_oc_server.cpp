@@ -2164,7 +2164,8 @@ Status WorkerOCServer::StartPreShutdownWorkers(bool scaleIn, const std::string &
         topologyExitRequested_.store(true);
         if (objCacheClientWorkerSvc_ != nullptr) {
             const auto deadline = std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE;
-            RETURN_IF_NOT_OK(objCacheClientWorkerSvc_->CloseIncomingMigrationAdmissionAndWait(deadline));
+            LOG_IF_ERROR(objCacheClientWorkerSvc_->CloseIncomingMigrationAdmissionAndWait(deadline),
+                         "CloseIncomingMigrationAdmissionAndWait failed");
         }
     }
     if (EnableOCService() || EnableSCService()) {
