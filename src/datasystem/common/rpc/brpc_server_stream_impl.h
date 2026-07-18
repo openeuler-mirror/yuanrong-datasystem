@@ -262,6 +262,16 @@ public:
     // stub calls this right after make_shared<BrpcServerReaderImpl>.
     void Init()
     {
+        // Skip if on_closed already fired between ctor and Init() — arming now
+        // would create a keepalive that on_closed already cleared (leak).
+        if (destroyed_->load(std::memory_order_acquire)) {
+            return;
+        }
+        // Skip if StreamAccept failed — brpc will never fire on_closed for an
+        // invalid stream, so arming would leak.
+        if (streamId_ == brpc::INVALID_STREAM_ID) {
+            return;
+        }
         keepalive_ = this->shared_from_this();
     }
 
