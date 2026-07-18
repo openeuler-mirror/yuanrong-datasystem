@@ -21,8 +21,12 @@
 #define DATASYSTEM_COMMON_RPC_BRPC_PERF_TRACE_H
 
 #include <atomic>
+#include <array>
 #include <chrono>
+#include <cstring>
 #include <string>
+
+#include <butil/iobuf.h>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -32,6 +36,15 @@ namespace datasystem {
 
 inline constexpr uint64_t BRPC_NS_PER_US = 1000ULL;
 inline constexpr uint64_t BRPC_RPC_FRAMEWORK_SLOW_LOG_THRESHOLD_NS = 1ULL * 1000ULL * 1000ULL;
+inline constexpr std::array<char, 8> BRPC_TRACE_TRAILER_MAGIC = { 'B', 'R', 'P', 'C', 'T', 'R', 'C', '1' };
+inline constexpr uint32_t BRPC_TRACE_TRAILER_VERSION = 1U;
+
+struct BrpcServerTraceSummary {
+    uint64_t serverRecvTs { 0 };
+    uint64_t serverExecStartTs { 0 };
+    uint64_t serverExecEndTs { 0 };
+    uint64_t serverSendTs { 0 };
+};
 
 inline uint64_t BrpcTraceNowNs()
 {
@@ -70,6 +83,13 @@ public:
     }
     void MarkServerExecEnd(uint64_t ts = BrpcTraceNowNs()) { serverExecEndTs_.store(ts, std::memory_order_relaxed); }
     void MarkServerSend(uint64_t ts = BrpcTraceNowNs()) { serverSendTs_.store(ts, std::memory_order_relaxed); }
+    void MergeServerTraceSummary(const BrpcServerTraceSummary &summary)
+    {
+        MarkServerRecv(summary.serverRecvTs);
+        MarkServerExecStart(summary.serverExecStartTs);
+        MarkServerExecEnd(summary.serverExecEndTs);
+        MarkServerSend(summary.serverSendTs);
+    }
 
     const std::string &TraceId() const { return traceId_; }
     const std::string &MethodName() const { return methodName_; }
@@ -94,6 +114,114 @@ private:
     std::atomic<uint64_t> serverExecEndTs_ { 0 };
     std::atomic<uint64_t> serverSendTs_ { 0 };
 };
+
+inline void AppendUint32ToIOBuf(butil::IOBuf &buf, uint32_t value)
+{
+    buf.append(reinterpret_cast<const char *>(&value), sizeof(value));
+}
+
+inline void AppendUint64ToIOBuf(butil::IOBuf &buf, uint64_t value)
+{
+    buf.append(reinterpret_cast<const char *>(&value), sizeof(value));
+}
+
+inline bool ReadUint32FromBuffer(const char *data, size_t dataSize, size_t &offset, uint32_t &value)
+{
+    if (offset + sizeof(value) > dataSize) {
+        return false;
+    }
+    std::memcpy(&value, data + offset, sizeof(value));
+    offset += sizeof(value);
+    return true;
+}
+
+inline bool ReadUint64FromBuffer(const char *data, size_t dataSize, size_t &offset, uint64_t &value)
+{
+    if (offset + sizeof(value) > dataSize) {
+        return false;
+    }
+    std::memcpy(&value, data + offset, sizeof(value));
+    offset += sizeof(value);
+    return true;
+}
+
+inline bool HasCompleteServerTrace(const BrpcPerfTrace &trace)
+{
+    return trace.ServerRecvTs() != 0 && trace.ServerExecStartTs() != 0 && trace.ServerExecEndTs() != 0
+           && trace.ServerSendTs() != 0;
+}
+
+inline void AppendBrpcServerTraceTrailer(const BrpcPerfTrace &trace, butil::IOBuf &attachment)
+{
+    if (!HasCompleteServerTrace(trace)) {
+        return;
+    }
+    butil::IOBuf payload;
+    AppendUint32ToIOBuf(payload, BRPC_TRACE_TRAILER_VERSION);
+    AppendUint64ToIOBuf(payload, trace.ServerRecvTs());
+    AppendUint64ToIOBuf(payload, trace.ServerExecStartTs());
+    AppendUint64ToIOBuf(payload, trace.ServerExecEndTs());
+    AppendUint64ToIOBuf(payload, trace.ServerSendTs());
+    const uint32_t payloadSize = static_cast<uint32_t>(payload.size());
+    attachment.append(payload);
+    AppendUint32ToIOBuf(attachment, payloadSize);
+    attachment.append(BRPC_TRACE_TRAILER_MAGIC.data(), BRPC_TRACE_TRAILER_MAGIC.size());
+}
+
+inline bool ConsumeBrpcServerTraceTrailer(butil::IOBuf &attachment, BrpcServerTraceSummary &summary)
+{
+    constexpr size_t expectedPayloadSize = sizeof(uint32_t) + 4 * sizeof(uint64_t);
+    const size_t footerSize = sizeof(uint32_t) + BRPC_TRACE_TRAILER_MAGIC.size();
+    if (attachment.size() < footerSize) {
+        return false;
+    }
+    std::array<char, footerSize> footer {};
+    const size_t footerOffset = attachment.size() - footerSize;
+    if (attachment.copy_to(footer.data(), footer.size(), footerOffset) != footer.size()) {
+        return false;
+    }
+    if (std::memcmp(footer.data() + sizeof(uint32_t), BRPC_TRACE_TRAILER_MAGIC.data(),
+                    BRPC_TRACE_TRAILER_MAGIC.size())
+        != 0) {
+        return false;
+    }
+    uint32_t payloadSize = 0;
+    std::memcpy(&payloadSize, footer.data(), sizeof(payloadSize));
+    if (payloadSize > footerOffset) {
+        return false;
+    }
+    const size_t payloadOffset = footerOffset - payloadSize;
+    if (payloadSize != expectedPayloadSize) {
+        return false;
+    }
+    std::array<char, expectedPayloadSize> payload {};
+    if (attachment.copy_to(payload.data(), payloadSize, payloadOffset) != payloadSize) {
+        return false;
+    }
+    size_t offset = 0;
+    uint32_t version = 0;
+    BrpcServerTraceSummary parsed;
+    if (!ReadUint32FromBuffer(payload.data(), payloadSize, offset, version) || version != BRPC_TRACE_TRAILER_VERSION
+        || !ReadUint64FromBuffer(payload.data(), payloadSize, offset, parsed.serverRecvTs)
+        || !ReadUint64FromBuffer(payload.data(), payloadSize, offset, parsed.serverExecStartTs)
+        || !ReadUint64FromBuffer(payload.data(), payloadSize, offset, parsed.serverExecEndTs)
+        || !ReadUint64FromBuffer(payload.data(), payloadSize, offset, parsed.serverSendTs) || offset != payloadSize) {
+        return false;
+    }
+    attachment.pop_back(payloadSize + footerSize);
+    summary = parsed;
+    return true;
+}
+
+inline bool MergeBrpcServerTraceTrailer(butil::IOBuf &attachment, BrpcPerfTrace &trace)
+{
+    BrpcServerTraceSummary summary;
+    if (!ConsumeBrpcServerTraceTrailer(attachment, summary)) {
+        return false;
+    }
+    trace.MergeServerTraceSummary(summary);
+    return true;
+}
 
 inline uint64_t PositiveDelta(uint64_t endTs, uint64_t startTs)
 {
@@ -158,10 +286,8 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
                     << " e2e_us=" << BrpcNsToUs(e2eNs)
                     << " client_req_framework_us=" << BrpcNsToUs(clientReqFrameworkNs)
                     << " remote_processing_us=" << BrpcNsToUs(remoteProcessingNs)
-                    << " client_rsp_framework_us=" << BrpcNsToUs(clientRspFrameworkNs)
                     << " server_req_queue_us=" << BrpcNsToUs(serverReqQueueNs)
                     << " server_exec_us=" << BrpcNsToUs(serverExecNs)
-                    << " server_rsp_queue_us=" << BrpcNsToUs(serverRspQueueNs)
                     << " network_residual_us=" << BrpcNsToUs(networkResidualNs);
 }
 

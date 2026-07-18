@@ -97,6 +97,8 @@ public:
             channel_->CallMethod(method_, &cntl, &request_, &response_, nullptr);
             trace.MarkClientRecv();
             if (cntl.Failed()) {
+                butil::IOBuf errorAttachment = cntl.response_attachment();
+                MergeBrpcServerTraceTrailer(errorAttachment, trace);
                 trace.MarkClientEnd();
                 RecordBrpcRpcTrace(trace);
                 Status embedded = TryExtractStatusFromResponse(response_);
@@ -120,6 +122,7 @@ public:
                 return TryExtractStatusFromControllerError(errorText, cntl.ErrorCode());
             }
             responseAttachment_ = std::move(cntl.response_attachment());
+            MergeBrpcServerTraceTrailer(responseAttachment_, trace);
             pb.CopyFrom(response_);
             trace.MarkClientEnd();
             RecordBrpcRpcTrace(trace);

@@ -433,14 +433,23 @@ void RpcGenerator::ImplementBrpcCallMethodPlain(io::Printer &printer,
         "$indent$if (req == nullptr || rsp == nullptr) {\n"
         "$indent$    cntl->SetFailed(\"Request/response type mismatch for $methodName$\");\n"
         "$indent$    return;\n"
-        "$indent$}\n";
+        "$indent$}\n"
+        "$indent$::datasystem::BrpcPerfTrace rpcTrace(::datasystem::Trace::Instance().GetTraceID(),\n"
+        "$indent$    method->full_name());\n"
+        "$indent$rpcTrace.MarkServerRecv();\n"
+        "$indent$";
     impl += BuildScTimeoutDurationInitSnippet();
     impl +=
+        "$indent$rpcTrace.MarkServerExecStart();\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp);\n"
+        "$indent$rpcTrace.MarkServerExecEnd();\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
         "$indent$}\n";
+    impl +=
+        "$indent$rpcTrace.MarkServerSend();\n"
+        "$indent$::datasystem::AppendBrpcServerTraceTrailer(rpcTrace, cntl->response_attachment());\n";
     printer.Print(vars, impl.c_str());
 }
 
@@ -468,6 +477,9 @@ void RpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
         "$indent$    cntl->SetFailed(\"Request/response type mismatch for $methodName$\");\n"
         "$indent$    return;\n"
         "$indent$}\n"
+        "$indent$::datasystem::BrpcPerfTrace rpcTrace(::datasystem::Trace::Instance().GetTraceID(),\n"
+        "$indent$    method->full_name());\n"
+        "$indent$rpcTrace.MarkServerRecv();\n"
         "$indent$std::vector<::datasystem::RpcMessage> payload;\n"
         "$indent$butil::IOBuf &attachment = cntl->request_attachment();\n"
         "$indent$do {\n"
@@ -486,14 +498,19 @@ void RpcGenerator::ImplementBrpcCallMethodSendPayload(io::Printer &printer,
         "{ break; }\n"
         "$indent$        attachment.pop_front(static_cast<size_t>(sz));\n"
         "$indent$    }\n"
-        "$indent$} while (false);\n";
+        "$indent$} while (false);\n"
+        "$indent$";
     impl += BuildScTimeoutDurationInitSnippet();
     impl +=
+        "$indent$rpcTrace.MarkServerExecStart();\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp, std::move(payload));\n"
+        "$indent$rpcTrace.MarkServerExecEnd();\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
-        "$indent$}\n";
+        "$indent$}\n"
+        "$indent$rpcTrace.MarkServerSend();\n"
+        "$indent$::datasystem::AppendBrpcServerTraceTrailer(rpcTrace, cntl->response_attachment());\n";
     printer.Print(vars, impl.c_str());
 }
 
@@ -520,10 +537,16 @@ void RpcGenerator::ImplementBrpcCallMethodRecvPayload(io::Printer &printer,
         "$indent$    cntl->SetFailed(\"Request/response type mismatch for $methodName$\");\n"
         "$indent$    return;\n"
         "$indent$}\n"
-        "$indent$std::vector<::datasystem::RpcMessage> outPayload;\n";
+        "$indent$std::vector<::datasystem::RpcMessage> outPayload;\n"
+        "$indent$::datasystem::BrpcPerfTrace rpcTrace(::datasystem::Trace::Instance().GetTraceID(),\n"
+        "$indent$    method->full_name());\n"
+        "$indent$rpcTrace.MarkServerRecv();\n"
+        "$indent$";
     impl += BuildScTimeoutDurationInitSnippet();
     impl +=
+        "$indent$rpcTrace.MarkServerExecStart();\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp, outPayload);\n"
+        "$indent$rpcTrace.MarkServerExecEnd();\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
@@ -536,7 +559,9 @@ void RpcGenerator::ImplementBrpcCallMethodRecvPayload(io::Printer &printer,
         "$indent$        buf.append(reinterpret_cast<const void*>(&sz), sizeof(sz));\n"
         "$indent$        buf.append(msg.Data(), msg.Size());\n"
         "$indent$    }\n"
-        "$indent$}\n";
+        "$indent$}\n"
+        "$indent$rpcTrace.MarkServerSend();\n"
+        "$indent$::datasystem::AppendBrpcServerTraceTrailer(rpcTrace, cntl->response_attachment());\n";
     printer.Print(vars, impl.c_str());
 }
 
@@ -569,6 +594,9 @@ std::string RpcGenerator::BuildSendRecvPayloadImpl()
         "$indent$    cntl->SetFailed(\"Request/response type mismatch for $methodName$\");\n"
         "$indent$    return;\n"
         "$indent$}\n"
+        "$indent$::datasystem::BrpcPerfTrace rpcTrace(::datasystem::Trace::Instance().GetTraceID(),\n"
+        "$indent$    method->full_name());\n"
+        "$indent$rpcTrace.MarkServerRecv();\n"
         "$indent$std::vector<::datasystem::RpcMessage> payload;\n"
         "$indent$std::vector<::datasystem::RpcMessage> outPayload;\n"
         "$indent$// Deserialize request_attachment -> payload\n"
@@ -589,7 +617,9 @@ std::string RpcGenerator::BuildSendRecvPayloadImpl()
         "$indent$        reqBuf.pop_front(static_cast<size_t>(sz));\n"
         "$indent$    }\n"
         "$indent$} while (false);\n"
+        "$indent$rpcTrace.MarkServerExecStart();\n"
         "$indent$::datasystem::Status st = impl_.$methodName$(*req, *rsp, std::move(payload), outPayload);\n"
+        "$indent$rpcTrace.MarkServerExecEnd();\n"
         "$indent$if (st.IsError()) {\n"
         "$indent$    cntl->SetFailed(st.GetMsg() + \"\\x01\" \"DS_ERR:\" + "
         "std::to_string(static_cast<int>(st.GetCode())) + \"\\x02\");\n"
@@ -603,7 +633,9 @@ std::string RpcGenerator::BuildSendRecvPayloadImpl()
         "$indent$        rspBuf.append(reinterpret_cast<const void*>(&sz), sizeof(sz));\n"
         "$indent$        rspBuf.append(msg.Data(), msg.Size());\n"
         "$indent$    }\n"
-        "$indent$}\n";
+        "$indent$}\n"
+        "$indent$rpcTrace.MarkServerSend();\n"
+        "$indent$::datasystem::AppendBrpcServerTraceTrailer(rpcTrace, cntl->response_attachment());\n";
 }
 
 // --- Pattern 4: unary_socket ---
@@ -627,7 +659,7 @@ void RpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
         "$indent$google::protobuf::Closure* asyncDone = done_guard.release();\n"
         "$indent$auto serverApi =\n"
         "$indent$    std::make_shared<::datasystem::BrpcServerUnaryWriterReader<$outputTypeName$, $inputTypeName$>>(\n"
-        "$indent$        cntl, request, response, asyncDone);\n";
+        "$indent$        cntl, request, response, asyncDone, \"$methodFullName$\");\n";
     if (HasPayloadRecvOption(method)) {
         impl +=
         "$indent$// Defer done_->Run() so SendPayload()/SendAndTagPayload() can write\n"

@@ -82,8 +82,8 @@ public:
      * @param response  Pointer to the response protobuf to be filled.
      */
     BrpcServerUnaryWriterReader(brpc::Controller *cntl, const google::protobuf::Message *request,
-                                google::protobuf::Message *response, google::protobuf::Closure *done = nullptr,
-                                std::string methodName = "unknown")
+                                google::protobuf::Message *response, google::protobuf::Closure *done,
+                                std::string methodName)
         : ServerUnaryWriterReader<W, R>(std::unique_ptr<ServerUnaryWriterReaderImpl<W, R>>(nullptr)),
           cntl_(cntl),
           request_(nullptr),
@@ -416,7 +416,9 @@ public:
     void RecordTraceOnce()
     {
         if (!traceRecorded_.exchange(true, std::memory_order_acq_rel)) {
-            RecordBrpcRpcTrace(trace_);
+            if (cntl_ != nullptr) {
+                AppendBrpcServerTraceTrailer(trace_, cntl_->response_attachment());
+            }
         }
     }
 
