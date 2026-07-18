@@ -23,6 +23,14 @@
 
 namespace datasystem::cluster {
 namespace {
+constexpr size_t RECOVERY_DISPATCHER_CAPACITY = 32;
+constexpr std::chrono::milliseconds RECOVERY_RECONCILE_TICK{ 10 };
+constexpr size_t INJECTED_NOT_READY_GET_ATTEMPTS = 5;
+constexpr size_t BOOTSTRAP_SUCCESS_GET_ATTEMPTS = 1;
+constexpr size_t EXPECTED_RECOVERY_GET_ATTEMPTS =
+    INJECTED_NOT_READY_GET_ATTEMPTS + BOOTSTRAP_SUCCESS_GET_ATTEMPTS;
+constexpr std::chrono::milliseconds RECOVERY_WAIT_TIMEOUT{ 150 };
+constexpr std::chrono::seconds RECOVERY_STOP_TIMEOUT{ 1 };
 
 std::string EncodeMembership(MemberLifecycleState state, int64_t timestamp = 0)
 {
@@ -147,6 +155,26 @@ TEST(TopologyControllerTest, BootstrapsAllReadyInitialMembers)
                               [](const auto &member) { return member.state == MemberState::ACTIVE; });
     }));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, RecoveryNotReadyDoesNotBackoffTopologyBootstrap)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("bootstrap-recovering", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    TopologyControllerOptions options;
+    options.reconcileTick = RECOVERY_RECONCILE_TICK;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.ReturnNotReadyOnNextGets(INJECTED_NOT_READY_GET_ATTEMPTS);
+
+    DS_ASSERT_OK(controller.Start());
+    EXPECT_TRUE(
+        backend.WaitForGetAttempts(EXPECTED_RECOVERY_GET_ATTEMPTS,
+                                   std::chrono::steady_clock::now() + RECOVERY_WAIT_TIMEOUT));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
 }
 
 TEST(TopologyControllerTest, ConvertsExitingMembershipToOneScaleInBatch)
