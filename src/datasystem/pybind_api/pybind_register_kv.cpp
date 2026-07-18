@@ -36,6 +36,30 @@ using datasystem::object_cache::FullParam;
 namespace datasystem {
 namespace {
 constexpr char K_MSETTX_DEPRECATED_MSG[] = "MSetTx is a deprecated API and is no longer supported.";
+
+ConnectOptions BuildKvConnectOptions(const std::string &host, int32_t port, int32_t connectTimeoutMs,
+                                     const std::string &token, const std::string &clientPublicKey,
+                                     const std::string &clientPrivateKey, const std::string &serverPublicKey,
+                                     const std::string &accessKey, const std::string &secretKey,
+                                     const std::string &tenantId, bool enableCrossNodeConnection,
+                                     int32_t reqTimeoutMs, uint64_t fastTransportMemSize,
+                                     std::shared_ptr<IServiceDiscovery> serviceDiscovery)
+{
+    return ConnectOptions{ .host = host,
+                           .port = port,
+                           .connectTimeoutMs = connectTimeoutMs,
+                           .requestTimeoutMs = reqTimeoutMs,
+                           .token = token,
+                           .clientPublicKey = clientPublicKey,
+                           .clientPrivateKey = clientPrivateKey,
+                           .serverPublicKey = serverPublicKey,
+                           .accessKey = accessKey,
+                           .secretKey = secretKey,
+                           .tenantId = tenantId,
+                           .enableCrossNodeConnection = enableCrossNodeConnection,
+                           .serviceDiscovery = serviceDiscovery,
+                           .fastTransportMemSize = fastTransportMemSize };
+}
 }  // namespace
 
 class StateValueBuffer;
@@ -202,19 +226,21 @@ PybindDefineRegisterer g_pybind_define_f_KVClient("KVClient", PRIORITY_LOW, [](c
                          const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
                          const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
                          uint64_t fastTransportMemSize) {
-            ConnectOptions connectOpts{ .host = host,
-                                        .port = port,
-                                        .connectTimeoutMs = connectTimeoutMs,
-                                        .requestTimeoutMs = reqTimeoutMs,
-                                        .token = token,
-                                        .clientPublicKey = clientPublicKey,
-                                        .clientPrivateKey = clientPrivateKey,
-                                        .serverPublicKey = serverPublicKey,
-                                        .accessKey = accessKey,
-                                        .secretKey = secretKey,
-                                        .tenantId = tenantId,
-                                        .enableCrossNodeConnection = enableCrossNodeConnection,
-                                        .fastTransportMemSize = fastTransportMemSize };
+            auto connectOpts =
+                BuildKvConnectOptions(host, port, connectTimeoutMs, token, clientPublicKey, clientPrivateKey,
+                                      serverPublicKey, accessKey, secretKey, tenantId, enableCrossNodeConnection,
+                                      reqTimeoutMs, fastTransportMemSize, nullptr);
+            return std::make_unique<ObjectClientImpl>(connectOpts);
+        }))
+        .def(py::init([](const std::string &host, int32_t port, int32_t connectTimeoutMs, const std::string &token,
+                         const std::string &clientPublicKey, const std::string &clientPrivateKey,
+                         const std::string &serverPublicKey, const std::string &accessKey, const std::string &secretKey,
+                         const std::string &tenantId, const bool enableCrossNodeConnection, int32_t reqTimeoutMs,
+                         uint64_t fastTransportMemSize, std::shared_ptr<IServiceDiscovery> serviceDiscovery) {
+            auto connectOpts =
+                BuildKvConnectOptions(host, port, connectTimeoutMs, token, clientPublicKey, clientPrivateKey,
+                                      serverPublicKey, accessKey, secretKey, tenantId, enableCrossNodeConnection,
+                                      reqTimeoutMs, fastTransportMemSize, serviceDiscovery);
             return std::make_unique<ObjectClientImpl>(connectOpts);
         }))
         .def("Init",

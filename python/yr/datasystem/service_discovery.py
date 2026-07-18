@@ -78,56 +78,43 @@ class ServiceDiscoveryOptions:
         self.affinity_policy = ServiceAffinityPolicy.PREFERRED_SAME_NODE
 
 
-class ServiceDiscovery:
+class CoordinatorServiceDiscoveryOptions:
     """
-    The `ServiceDiscovery` class provides the ability to discover available workers in the cluster.
-
-    When the SDK does not know which worker to connect to, it can use this feature to obtain
-    an available worker for connection.
+    The `CoordinatorServiceDiscoveryOptions` class defines the options for CoordinatorServiceDiscovery.
 
     Args:
-        options(ServiceDiscoveryOptions): The options for service discovery.
-
-    Raises:
-        TypeError: Raise a type error if the input parameter is invalid.
-
-    Examples:
-        >>> from yr.datasystem import ServiceDiscovery, ServiceDiscoveryOptions, ServiceAffinityPolicy
-        >>> options = ServiceDiscoveryOptions()
-        >>> options.etcd_address = "127.0.0.1:2379"
-        >>> options.affinity_policy = ServiceAffinityPolicy.PREFERRED_SAME_NODE
-        >>> sd = ServiceDiscovery(options)
-        >>> sd.init()
-        >>> status, worker_ip, worker_port, is_same_node = sd.select_worker()
+        service_address(str): The coordinator service address.
+        cluster_name(str): The name of the cluster. Default is empty string.
+        host_id_env_name(str): The environment variable name for the host ID. Default is empty string.
+        affinity_policy(ServiceAffinityPolicy): The affinity policy for worker selection.
+            Default is PREFERRED_SAME_NODE.
     """
 
-    def __init__(self, options: ServiceDiscoveryOptions):
+    def __init__(self):
+        self.service_address = ""
+        self.cluster_name = ""
+        self.host_id_env_name = ""
+        self.affinity_policy = ServiceAffinityPolicy.PREFERRED_SAME_NODE
+
+
+class _ServiceDiscoveryBase:
+    def __init__(self, native_discovery):
+        self._sd = native_discovery
+        self._initialized = False
+
+    @property
+    def native_discovery(self):
         """
-        Constructor of the ServiceDiscovery class.
-
-        Args:
-            options(ServiceDiscoveryOptions): The options for service discovery.
-
-        Raises:
-            TypeError: Raise a type error if the input parameter is invalid.
+        Return the underlying native IServiceDiscovery object.
         """
-        args = [["options", options, ServiceDiscoveryOptions]]
-        validator.check_args_types(args)
+        return self._sd
 
-        cpp_options = ds.ServiceDiscoveryOptions()
-        cpp_options.etcd_address = options.etcd_address
-        cpp_options.cluster_name = options.cluster_name
-        cpp_options.etcd_ca = options.etcd_ca
-        cpp_options.etcd_cert = options.etcd_cert
-        cpp_options.etcd_key = options.etcd_key
-        cpp_options.etcd_dns_name = options.etcd_dns_name
-        cpp_options.username = options.username
-        cpp_options.password = options.password
-        cpp_options.token_refresh_interval_sec = options.token_refresh_interval_sec
-        cpp_options.host_id_env_name = options.host_id_env_name
-        cpp_options.affinity_policy = options.affinity_policy.value
-
-        self._sd = ds.ServiceDiscovery(cpp_options)
+    @property
+    def initialized(self):
+        """
+        Return whether init() has completed successfully.
+        """
+        return self._initialized
 
     def init(self):
         """
@@ -139,6 +126,7 @@ class ServiceDiscovery:
         status = self._sd.init()
         if status.is_error():
             raise RuntimeError(status.to_string())
+        self._initialized = True
 
     def select_worker(self) -> Tuple["Status", str, int, bool]:
         """
@@ -214,3 +202,96 @@ class ServiceDiscovery:
                   False if the policy is RANDOM or hostId is missing.
         """
         return self._sd.has_host_affinity()
+
+
+class ServiceDiscovery(_ServiceDiscoveryBase):
+    """
+    The `ServiceDiscovery` class provides the ability to discover available workers in the cluster.
+
+    When the SDK does not know which worker to connect to, it can use this feature to obtain
+    an available worker for connection.
+
+    Args:
+        options(ServiceDiscoveryOptions): The options for service discovery.
+
+    Raises:
+        TypeError: Raise a type error if the input parameter is invalid.
+
+    Examples:
+        >>> from yr.datasystem import ServiceDiscovery, ServiceDiscoveryOptions, ServiceAffinityPolicy
+        >>> options = ServiceDiscoveryOptions()
+        >>> options.etcd_address = "127.0.0.1:2379"
+        >>> options.affinity_policy = ServiceAffinityPolicy.PREFERRED_SAME_NODE
+        >>> sd = ServiceDiscovery(options)
+        >>> sd.init()
+        >>> status, worker_ip, worker_port, is_same_node = sd.select_worker()
+    """
+
+    def __init__(self, options: ServiceDiscoveryOptions):
+        """
+        Constructor of the ServiceDiscovery class.
+
+        Args:
+            options(ServiceDiscoveryOptions): The options for service discovery.
+
+        Raises:
+            TypeError: Raise a type error if the input parameter is invalid.
+        """
+        args = [["options", options, ServiceDiscoveryOptions]]
+        validator.check_args_types(args)
+
+        cpp_options = ds.ServiceDiscoveryOptions()
+        cpp_options.etcd_address = options.etcd_address
+        cpp_options.cluster_name = options.cluster_name
+        cpp_options.etcd_ca = options.etcd_ca
+        cpp_options.etcd_cert = options.etcd_cert
+        cpp_options.etcd_key = options.etcd_key
+        cpp_options.etcd_dns_name = options.etcd_dns_name
+        cpp_options.username = options.username
+        cpp_options.password = options.password
+        cpp_options.token_refresh_interval_sec = options.token_refresh_interval_sec
+        cpp_options.host_id_env_name = options.host_id_env_name
+        cpp_options.affinity_policy = options.affinity_policy.value
+
+        super().__init__(ds.ServiceDiscovery(cpp_options))
+
+
+class CoordinatorServiceDiscovery(_ServiceDiscoveryBase):
+    """
+    The `CoordinatorServiceDiscovery` class discovers available workers through a coordinator backend.
+
+    Args:
+        options(CoordinatorServiceDiscoveryOptions): The options for coordinator-backed service discovery.
+
+    Raises:
+        TypeError: Raise a type error if the input parameter is invalid.
+
+    Examples:
+        >>> from yr.datasystem import CoordinatorServiceDiscovery, CoordinatorServiceDiscoveryOptions
+        >>> options = CoordinatorServiceDiscoveryOptions()
+        >>> options.service_address = "127.0.0.1:31501"
+        >>> options.cluster_name = "cluster-a"
+        >>> sd = CoordinatorServiceDiscovery(options)
+        >>> sd.init()
+    """
+
+    def __init__(self, options: CoordinatorServiceDiscoveryOptions):
+        """
+        Constructor of the CoordinatorServiceDiscovery class.
+
+        Args:
+            options(CoordinatorServiceDiscoveryOptions): The options for service discovery.
+
+        Raises:
+            TypeError: Raise a type error if the input parameter is invalid.
+        """
+        args = [["options", options, CoordinatorServiceDiscoveryOptions]]
+        validator.check_args_types(args)
+
+        cpp_options = ds.CoordinatorServiceDiscoveryOptions()
+        cpp_options.service_address = options.service_address
+        cpp_options.cluster_name = options.cluster_name
+        cpp_options.host_id_env_name = options.host_id_env_name
+        cpp_options.affinity_policy = options.affinity_policy.value
+
+        super().__init__(ds.CoordinatorServiceDiscovery(cpp_options))

@@ -41,6 +41,8 @@ __all__ = [
     "Future",
     "ServiceDiscovery",
     "ServiceDiscoveryOptions",
+    "CoordinatorServiceDiscovery",
+    "CoordinatorServiceDiscoveryOptions",
     "ServiceAffinityPolicy",
 ]
 
@@ -83,6 +85,8 @@ _LAZY_EXPORTS = {
     "Context": ("yr.datasystem.util", "Context"),
     "ServiceDiscovery": ("yr.datasystem.service_discovery", "ServiceDiscovery"),
     "ServiceDiscoveryOptions": ("yr.datasystem.service_discovery", "ServiceDiscoveryOptions"),
+    "CoordinatorServiceDiscovery": ("yr.datasystem.service_discovery", "CoordinatorServiceDiscovery"),
+    "CoordinatorServiceDiscoveryOptions": ("yr.datasystem.service_discovery", "CoordinatorServiceDiscoveryOptions"),
     "ServiceAffinityPolicy": ("yr.datasystem.service_discovery", "ServiceAffinityPolicy"),
     "DsTensorClient": ("yr.datasystem.ds_tensor_client", "DsTensorClient"),
     "CopyRange": ("yr.datasystem.ds_tensor_client", "CopyRange"),

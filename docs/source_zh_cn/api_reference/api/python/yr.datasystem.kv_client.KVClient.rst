@@ -1,22 +1,25 @@
 yr.datasystem.kv_client.KVClient
 ================================
 
-.. py:class:: yr.datasystem.kv_client.KVClient(host, port, connect_timeout_ms=9000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, req_timeout_ms=0)
+.. py:class:: yr.datasystem.kv_client.KVClient(host="", port=0, connect_timeout_ms=9000, token="", client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, req_timeout_ms=0, fast_transport_mem_size=268435456, service_discovery=None)
 
     KV缓存客户端。
 
     参数：
-        - **host** (str) - 数据系统Worker的主机IP地址。
-        - **port** (int) - 数据系统Worker的服务端口号。
+        - **host** (str) - 数据系统Worker的主机IP地址。使用 ``service_discovery`` 时可不填写。
+        - **port** (int) - 数据系统Worker的服务端口号。使用 ``service_discovery`` 时可不填写。
         - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``9000`` 。
+        - **token** (str) - 认证使用的 Token。默认值： ``""`` 。
         - **client_public_key** (str) - 用于curve认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于curve认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于curve认证的服务端公钥。默认值： ``""`` 。
         - **access_key** (str) - AK/SK授权使用的访问密钥。默认值： ``""`` 。
         - **secret_key** (str) - AK/SK授权的密钥。默认值： ``""`` 。
         - **tenant_id** (str) - 租户ID。默认值： ``""`` 。
-        - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统Worker连接异常时自动切换到备用节点。默认值： ``False`` 。
+        - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统Worker连接异常时自动切换到备用节点。与 ``service_discovery`` 配合使用时，已有 KVClient 实例要在当前 Worker 故障后切换到其他已发现 Worker，需要开启该参数。默认值： ``False`` 。
         - **req_timeout_ms** (int) - 请求超时时间，单位为毫秒。当 req_timeout_ms<=0 时，req_timeout_ms 与 connect_timeout_ms 相同。默认值： ``0`` 。
+        - **fast_transport_mem_size** (int) - 客户端 fast transport 内存池大小，单位为字节。默认值： ``268435456`` 。
+        - **service_discovery** (:doc:`yr.datasystem.service_discovery.ServiceDiscovery <yr.datasystem.service_discovery.ServiceDiscovery>` | :doc:`yr.datasystem.service_discovery.CoordinatorServiceDiscovery <yr.datasystem.service_discovery.CoordinatorServiceDiscovery>`) - 服务发现实例。提供后，原生 KVClient 通过该实例发现可用 Worker，传入的 ``host`` 和 ``port`` 会被忽略。创建 KVClient 前需先调用 ``service_discovery.init()``。默认值： ``None`` 。
 
     输出：
         KVClient
