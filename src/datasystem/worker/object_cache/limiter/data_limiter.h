@@ -99,11 +99,14 @@ public:
 
     /**
      * @brief Get available bandwidth.
+     * Lazily prunes sliding-window entries older than 1 second before reading, so the window
+     * drains even when no new writes arrive (e.g. during self-heal probes with bytes_send==0).
      * @return Available bandwidth of this node.
      */
     uint64_t GetAvailableBandwidth()
     {
         std::lock_guard<std::shared_timed_mutex> l(mutex_);
+        PruneExpiredLocked(std::chrono::steady_clock::now());
         if (currentBandwidth >= maxBandwidth) {
             return 0;
         }
@@ -125,6 +128,19 @@ private:
         std::chrono::time_point<std::chrono::steady_clock> timestamp;
         uint64_t bytes;
     };
+
+    /**
+     * @brief Pop sliding-window entries older than 1 second and decrement currentBandwidth.
+     *        Caller must hold mutex_.
+     * @param[in] now Current steady-clock timestamp.
+     */
+    void PruneExpiredLocked(const std::chrono::time_point<std::chrono::steady_clock> &now)
+    {
+        while (!window.empty() && window.front().timestamp + std::chrono::seconds(1) < now) {
+            currentBandwidth -= window.front().bytes;
+            window.pop_front();
+        }
+    }
 
     std::shared_timed_mutex mutex_;
     std::deque<TimestampedData> window;
@@ -152,7 +168,12 @@ public:
     uint64_t CalculateNewRate(const std::string &workerAddr);
 
     /**
-     * @brief Peek available bandwidth without writing to rateMap_ or sliding window.
+     * @brief Peek available bandwidth without writing to rateMap_ or pushing new data into the sliding window.
+     *
+     * Unlike CalculateNewRate, this does not update rateMap_, does not register the 60s expiry timer,
+     * and does not call SlidingWindowUpdateRate (no new bytes pushed). It does, however, lazily prune
+     * sliding-window entries older than 1 second via GetAvailableBandwidth, so the read reflects the
+     * current 1-second window state rather than a stale snapshot.
      * @param[in] workerAddr Worker address for rate lookup.
      * @return Available rate in bytes per second (0 if saturated).
      */
