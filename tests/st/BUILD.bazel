@@ -47,6 +47,7 @@ ds_cc_test_library(
         "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/master:metadata_manager_holder",
         "//src/datasystem/master/object_cache:oc_metadata_manager",
+        "//src/datasystem/protos:ut_object_brpc",
         "//src/datasystem/protos:ut_object_zmq_cc_proto",
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",

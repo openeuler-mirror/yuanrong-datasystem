@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <type_traits>
 
-#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
@@ -25,7 +24,6 @@ constexpr int BITS_PER_BYTE = 8;
 constexpr int U64_MOST_SIGNIFICANT_SHIFT = 56;
 constexpr int U32_MOST_SIGNIFICANT_SHIFT = 24;
 constexpr uint64_t BYTE_MASK = 0xff;
-constexpr int TOPOLOGY_TASK_MATERIALIZE_LOG_INTERVAL = 128;
 
 void AppendU64(std::string &seed, uint64_t value)
 {
@@ -290,10 +288,8 @@ Status TopologyTaskMaterializer::BuildExpected(const TopologySnapshot &latest, c
             },
             task);
     }
-    LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_TASK_MATERIALIZE_LOG_INTERVAL)
-        << "CLUSTER_TASK action=materialize type=" << static_cast<uint32_t>(type)
-        << " type_name=" << TopologyChangeTypeName(type) << " epoch=" << epoch
-        << " task_count=" << built.tasks.size() << " notify_count=" << built.notifiesByAddress.size();
+    VLOG(1) << "CLUSTER_TASK action=materialize type=" << static_cast<uint32_t>(type) << " epoch=" << epoch
+            << " task_count=" << built.tasks.size() << " notify_count=" << built.notifiesByAddress.size();
     expected = std::move(built);
     return Status::OK();
 }

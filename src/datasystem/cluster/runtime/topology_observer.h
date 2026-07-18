@@ -97,16 +97,6 @@ private:
      */
     Status Reload(bool fullRebuildAllowed);
 
-    Status RegisterWatchEvents();
-
-    Status ReloadInitialSnapshot();
-
-    Status StartStateThread();
-
-    void InstallEventHandler();
-
-    void CleanupAfterStartFailure(const char *cleanupMessage);
-
     /**
      * @brief Record one exact-read failure in Observer diagnostics.
      * @param[in] status Failure status to retain.

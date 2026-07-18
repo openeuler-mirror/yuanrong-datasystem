@@ -20,24 +20,12 @@
 namespace datasystem::cluster {
 
 /**
- * @brief One member absence observation with elapsed monotonic duration.
- */
-struct MemberAbsenceObservation {
-    MemberIdentity identity;
-    MemberState state{ MemberState::INITIAL };
-    int64_t missingMs{ 0 };
-};
-
-/**
  * @brief Disjoint actions produced by one successful membership observation.
  */
 struct FailureClassification {
     std::vector<MemberIdentity> removeInitial;
     std::vector<MemberIdentity> removeJoining;
     std::vector<MemberIdentity> confirmedFailure;
-    std::vector<MemberAbsenceObservation> newlyMissing;
-    std::vector<MemberAbsenceObservation> restored;
-    std::vector<MemberAbsenceObservation> confirmedMissing;
 };
 
 /**

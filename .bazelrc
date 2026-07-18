@@ -94,9 +94,3 @@ build:test --define=with_tests=true
 build:test --cxxopt=-DWITH_TESTS
 test --define=with_tests=true
 test --cxxopt=-DWITH_TESTS
-
-# Wire TSan suppression file for known false positives (gcc 10.3 + TBB + std::queue)
-test:tsan --test_env=TSAN_OPTIONS=halt_on_error=0:exitcode=0:suppressions=tests/sanitizer/tsan_suppressions.txt
-
-# Wire TSan suppression file for known false positives (gcc 10.3 + TBB + std::queue)
-test:tsan --test_env=TSAN_OPTIONS=halt_on_error=0:exitcode=0:suppressions=tests/sanitizer/tsan_suppressions.txt

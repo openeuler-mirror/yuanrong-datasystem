@@ -59,7 +59,6 @@ public:
     void FailNextWatch();
     void FailNextGet();
     void ReturnNotReadyOnNextGet();
-    void ReturnNotReadyOnNextGets(size_t count);
     void EmitEvent(CoordinationEvent event);
     std::vector<WatchKey> WatchKeys() const;
     std::vector<std::string> LifecycleCalls() const;
@@ -84,7 +83,7 @@ private:
     bool failNextCasBeforeCommit_{ false };
     bool failNextWatch_{ false };
     bool failNextGet_{ false };
-    size_t notReadyGetAttempts_{ 0 };
+    bool notReadyNextGet_{ false };
     // Uses mutex_ to signal changes to getBlocked_ and releaseGet_.
     std::condition_variable getCv_;
     size_t getAttempts_{ 0 };
