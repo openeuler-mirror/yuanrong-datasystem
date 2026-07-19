@@ -266,12 +266,6 @@ TEST(TopologyEngineTest, BuilderRejectsIncompleteAndConflictingConfiguration)
     conflict.UseCoordinator(proxy, ingress.Contract());
     EXPECT_EQ(conflict.Build(output).GetCode(), K_INVALID);
     EXPECT_EQ(output.get(), existingAddress);
-
-    EtcdStore memberStore("127.0.0.1:1");
-    TopologyEngine::Builder incompleteEtcd;
-    incompleteEtcd.SetLocalAddress(LOCAL_ADDRESS).SetPhaseCallbacks(callbacks).UseEtcd(memberStore, nullptr);
-    EXPECT_EQ(incompleteEtcd.Build(output).GetCode(), K_INVALID);
-    EXPECT_EQ(output.get(), existingAddress);
 }
 
 TEST(TopologyEngineTest, BuilderAcceptsEmptyClusterAndDerivesMissingTopologyAsFreshStart)

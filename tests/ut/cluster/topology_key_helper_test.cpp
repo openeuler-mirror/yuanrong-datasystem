@@ -20,7 +20,6 @@
 #include <string>
 #include <vector>
 
-#include "datasystem/common/kvstore/coordination_keys.h"
 #include "gtest/gtest.h"
 
 #include "ut/common.h"
@@ -39,6 +38,7 @@ TEST(TopologyKeyHelperTest, BuildsFiveClusterScopedKeyspaces)
     DS_ASSERT_OK(TopologyKeyHelper::Create("cluster_a-1.0", keys));
     ASSERT_NE(keys, nullptr);
     EXPECT_EQ(keys->ClusterName(), "cluster_a-1.0");
+    EXPECT_EQ(keys->EtcdMembershipTablePrefix(), "/cluster_a-1.0/datasystem/cluster");
     EXPECT_EQ(ExactPath(keys->TopologyTable(), TopologyKeyHelper::TopologyKey()), "/datasystem/cluster_a-1.0/topology");
 
     std::string key;
@@ -60,6 +60,7 @@ TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
     DS_ASSERT_OK(TopologyKeyHelper::Create("", keys));
     ASSERT_NE(keys, nullptr);
     EXPECT_TRUE(keys->ClusterName().empty());
+    EXPECT_EQ(keys->EtcdMembershipTablePrefix(), "/datasystem/cluster");
     EXPECT_EQ(ExactPath(keys->TopologyTable(), TopologyKeyHelper::TopologyKey()), "/datasystem/topology");
 
     std::string key;
@@ -75,10 +76,31 @@ TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
     EXPECT_EQ(ExactPath(keys->MembershipTable(), key), "/datasystem/cluster/" + address);
 }
 
-TEST(TopologyKeyHelperTest, BuildsLegacyEtcdMembershipTable)
+TEST(TopologyKeyHelperTest, ClassifiesEtcdWatchKeysWithoutLogicalPhysicalAmbiguity)
 {
-    EXPECT_EQ(EtcdMembershipTable(""), "/datasystem/cluster");
-    EXPECT_EQ(EtcdMembershipTable("cluster_a-1.0"), "/cluster_a-1.0/datasystem/cluster");
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("watch", keys));
+    const std::string localAddress = "127.0.0.1:1";
+
+    EXPECT_EQ(keys->ClassifyEtcdWatchKey(keys->TopologyTable() + "/", localAddress),
+              TopologyEtcdKeyKind::TOPOLOGY);
+    EXPECT_EQ(keys->ClassifyEtcdWatchKey(keys->NotifyTable() + "/" + localAddress, localAddress),
+              TopologyEtcdKeyKind::LOCAL_NOTIFY);
+    EXPECT_EQ(keys->ClassifyEtcdWatchKey(keys->EtcdMembershipTablePrefix() + "/127.0.0.1:2", localAddress),
+              TopologyEtcdKeyKind::MEMBERSHIP);
+    EXPECT_EQ(keys->ClassifyEtcdWatchKey(
+                  keys->MigrateTaskTable() + "/m-e1-0123456789abcdef0123456789abcdef", localAddress),
+              TopologyEtcdKeyKind::MIGRATE_TASK);
+    EXPECT_EQ(keys->ClassifyEtcdWatchKey(
+                  keys->DeleteTaskTable() + "/d-e1-0123456789abcdef0123456789abcdef", localAddress),
+              TopologyEtcdKeyKind::DELETE_TASK);
+
+    EXPECT_EQ(keys->ClassifyEtcdWatchKey(keys->NotifyTable() + "/127.0.0.1:2", localAddress),
+              TopologyEtcdKeyKind::UNKNOWN);
+    EXPECT_EQ(keys->ClassifyEtcdWatchKey(keys->MembershipTable() + "/127.0.0.1:2", localAddress),
+              TopologyEtcdKeyKind::UNKNOWN);
+    EXPECT_EQ(keys->ClassifyEtcdWatchKey(keys->DeleteTaskTable() + "-other/task", localAddress),
+              TopologyEtcdKeyKind::UNKNOWN);
 }
 
 TEST(TopologyKeyHelperTest, EnforcesClusterNameContractWithoutNormalization)

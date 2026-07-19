@@ -93,12 +93,11 @@ public:
         Builder &SetLocalAddress(std::string localAddress);
 
         /**
-         * @brief Select ETCD using the two existing role-specific Store resources.
-         * @param[in] memberStore Shared non-owned member-role Store.
-         * @param[in] controllerStore Owned controller-role Store.
+         * @brief Select ETCD using the Worker-owned Store and one unified watch stream.
+         * @param[in] store Shared non-owned Store.
          * @return This Builder.
          */
-        Builder &UseEtcd(EtcdStore &memberStore, std::unique_ptr<EtcdStore> controllerStore);
+        Builder &UseEtcd(EtcdStore &store);
 
         /**
          * @brief Select Coordinator and bind its Worker watch RPC ingress.
@@ -170,7 +169,7 @@ public:
         Status Validate() const;
 
         /**
-         * @brief Register backend-local table mappings and construct two role backends plus one shared algorithm.
+         * @brief Register backend-local tables and construct role adapters plus one shared algorithm.
          * @return K_OK on success or the dependency construction status.
          */
         Status CreateOwnedDependencies();
@@ -312,6 +311,7 @@ private:
         std::string clusterName;
         std::string localAddress;
         bool isRestart{ false };
+        bool unifiedEtcdWatch{ false };
         size_t eventQueueCapacity{ 1'024 };
         std::chrono::seconds scopeProbeDeadline{ 2 };
         std::chrono::seconds scopeProbeInterval{ 5 };
@@ -354,6 +354,13 @@ private:
      */
     Status RouteCoordinatorWatchEvent(const std::string &coordinatorId, int64_t watchId,
                                       CoordinationEvent &&event);
+
+    /**
+     * @brief Route one unified ETCD watch event to Worker and/or Controller consumers.
+     * @param[in] event Physical-key backend event to consume.
+     * @return K_OK on delivery or routing/ingress status otherwise.
+     */
+    Status RouteUnifiedEtcdWatchEvent(CoordinationEvent &&event);
 
     /**
      * @brief Bind Coordinator ingress before role watches are established.
@@ -489,7 +496,6 @@ private:
     void RecordError(const Status &status);
 
     RuntimeOptions options_;
-    std::unique_ptr<EtcdStore> controllerEtcdStore_;
     std::unique_ptr<ICoordinationBackend> memberBackend_;
     std::unique_ptr<ICoordinationBackend> controllerBackend_;
     std::unique_ptr<HashAlgorithm> algorithm_;

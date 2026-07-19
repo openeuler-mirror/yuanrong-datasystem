@@ -18,7 +18,6 @@
 
 #include "cluster/test_port_allocator.h"
 #include "datasystem/cluster/repository/topology_key_helper.h"
-#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/file_util.h"
@@ -96,7 +95,7 @@ Status RegisterTopologyTables(EtcdStore &store, const std::string &clusterName)
     RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(clusterName, keys));
     auto rc = store.CreateTableWithExactPrefix(keys->TopologyTable(), keys->TopologyTable());
     RETURN_IF_NOT_OK_EXCEPT(rc, K_DUPLICATED);
-    rc = store.CreateTableWithExactPrefix(keys->MembershipTable(), EtcdMembershipTable(keys->ClusterName()));
+    rc = store.CreateTableWithExactPrefix(keys->MembershipTable(), keys->EtcdMembershipTablePrefix());
     return rc.GetCode() == K_DUPLICATED ? Status::OK() : rc;
 }
 

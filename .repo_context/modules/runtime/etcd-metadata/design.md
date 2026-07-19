@@ -98,6 +98,8 @@
 - Watch model:
   - real ETCD watch events are filtered by local mod revision.
   - compensation can synthesize PUT/DELETE events based on current prefix search results.
+  - Worker topology uses one Worker-owned Store and one stream carrying the union of Worker and Controller watch
+    targets; Engine routes events to separate role dispatchers.
 - CAS model:
   - process function transforms old value to new value.
   - ETCD transaction compares key version before writing the whole new value.
