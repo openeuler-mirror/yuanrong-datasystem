@@ -22,6 +22,7 @@
 DS_DECLARE_int32(zmq_client_io_context);
 DS_DECLARE_int32(zmq_client_io_thread);
 DS_DECLARE_int32(io_thread_nice);
+DS_DECLARE_bool(enable_sched_runtime);
 DS_DECLARE_int32(zmq_chunk_sz);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint64(stream_idle_time_s);

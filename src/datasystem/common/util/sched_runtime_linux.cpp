@@ -34,8 +34,11 @@ uint64_t GetSchedRuntimeNs()
     return SCHED_RUNTIME_NS;
 }
 
-SetSchedRuntimeResult SetCurrentThreadSchedRuntime()
+SetSchedRuntimeResult SetCurrentThreadSchedRuntime(bool enabled)
 {
+    if (!enabled) {
+        return { false, true, 0 };
+    }
     struct sched_attr attr = {};
     attr.size = SCHED_ATTR_SIZE_VER0;
     attr.sched_flags = 0;
@@ -43,11 +46,11 @@ SetSchedRuntimeResult SetCurrentThreadSchedRuntime()
 #ifdef __NR_sched_setattr
     auto ret = syscall(__NR_sched_setattr, 0, &attr, 0);
     if (ret != 0) {
-        return { false, errno };
+        return { false, false, errno };
     }
-    return { true, 0 };
+    return { true, false, 0 };
 #else
-    return { false, ENOSYS };
+    return { false, false, ENOSYS };
 #endif
 }
 

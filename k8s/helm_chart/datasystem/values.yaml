@@ -496,6 +496,8 @@ global:
     ocShmTransferThresholdKB: 500
     # Option to turn on urma for OC worker to worker data transfer, default false.
     enableUrma: false
+    # Enable selected worker threads to set the Linux scheduler runtime. Default true.
+    enableSchedRuntime: true
     # Shared memory distribution policy.
     # Optional values:
     #   - none: do not perform NUMA distribution pre-touch.
