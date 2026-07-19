@@ -131,6 +131,8 @@ DS_DEFINE_int32(io_thread_nice, 0,
                 "Nice value for selected IO threads. Valid range is [-20, 19]. 0 skips nice adjustment and preserves "
                 "the thread's inherited nice value. Only non-zero values call setpriority; negative values usually "
                 "require appropriate privileges.");
+DS_DEFINE_bool(enable_sched_runtime, true,
+               "Enable selected threads to set the Linux scheduler runtime. Default is true.");
 DS_DEFINE_int32(zmq_client_io_context, 5,
                 "Optimize the performance of the client stub. Default value 5. "
                 "The higher the throughput, the higher the value, but should be in range [1, 32]");

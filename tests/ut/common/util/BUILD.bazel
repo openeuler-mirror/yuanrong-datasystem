@@ -204,6 +204,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "sched_runtime_test",
+    srcs = ["sched_runtime_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:common_util",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "safe_object_test",
     srcs = ["safe_object_test.cpp"],
     deps = [
@@ -348,6 +357,7 @@ test_suite(
         "random_data_test",
         "rpc_diagnostic_test",
         "rpc_util_test",
+        "sched_runtime_test",
         "safe_object_test",
         "shm_lock_test",
         "skip_list_test",
