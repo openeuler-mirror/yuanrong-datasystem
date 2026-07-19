@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import time
 
 from deploy_common import (
     DEFAULT_TIMEOUT,
@@ -23,17 +24,38 @@ from deploy_common import (
     cmd_exec_impl,
     cmd_install_impl,
     cmd_kill_impl,
-    cmd_stop_impl,
     do_for_all_pods,
     find_default_whl,
     get_pods,
     resolve_procmon_dir,
     start_service,
+    stop_service,
 )
 
 
 PROCESS_NAME = 'datasystem_worker'
 ADDRESS_KEY = 'worker_address'
+
+
+def _print_timings(action, timings):
+    """Print per-pod duration stats for a start/stop action.
+
+    ``timings`` is a list of ``(pod_name, elapsed_seconds, succeeded)``
+    tuples populated from worker threads (list.append is GIL-atomic in
+    CPython, so concurrent appends from the thread pool are safe).
+    """
+    if not timings:
+        return
+    print(f'\n{action} per-pod timings:')
+    for pod_name, elapsed, ok in sorted(timings, key=lambda x: x[0]):
+        print(f'  {pod_name:<40} {elapsed:7.2f}s  {"OK" if ok else "FAIL"}')
+    elapsed_all = [t for _, t, _ in timings]
+    ok_count = sum(1 for _, _, ok in timings if ok)
+    fail_count = len(timings) - ok_count
+    print(f'  min={min(elapsed_all):.2f}s  max={max(elapsed_all):.2f}s  '
+          f'avg={sum(elapsed_all) / len(elapsed_all):.2f}s  '
+          f'total={sum(elapsed_all):.2f}s  '
+          f'(succeeded={ok_count}, failed={fail_count})')
 
 
 def start_worker(pod, namespace, config, worker_port, remote_config,
@@ -65,6 +87,8 @@ def cmd_start(args, pods):
     else:
         print('\nNo config overrides specified')
 
+    timings = []
+
     def do_op(pod):
         cfg = json.loads(json.dumps(config_template))
         cfg[ADDRESS_KEY]['value'] = f'{pod["ip"]}:{args.port}'
@@ -73,20 +97,43 @@ def cmd_start(args, pods):
             numactl_opts = f'-N {args.numa_nodes}'
         if args.cpu_bind:
             numactl_opts = f'-C {args.cpu_bind}'
-        return start_worker(pod, args.namespace, cfg, args.port,
-                            args.remote_config,
-                            enable_procmon=args.enable_procmon,
-                            procmon_remote_dir=args.procmon_dir,
-                            numactl_opts=numactl_opts,
-                            timeout=args.timeout)
+        t0 = time.monotonic()
+        ok = False
+        try:
+            ok = start_worker(pod, args.namespace, cfg, args.port,
+                              args.remote_config,
+                              enable_procmon=args.enable_procmon,
+                              procmon_remote_dir=args.procmon_dir,
+                              numactl_opts=numactl_opts,
+                              timeout=args.timeout)
+            return ok
+        finally:
+            elapsed = time.monotonic() - t0
+            timings.append((pod['name'], elapsed, bool(ok)))
 
-    return do_for_all_pods(pods, do_op, 'Starting workers')
+    rc = do_for_all_pods(pods, do_op, 'Starting workers')
+    _print_timings('start', timings)
+    return rc
 
 
 def cmd_stop(args, pods):
     """Stop workers gracefully using dscli."""
-    return cmd_stop_impl(pods, args.namespace, args.remote_config,
-                         'workers', args.timeout)
+    timings = []
+
+    def do_op(pod):
+        t0 = time.monotonic()
+        ok = False
+        try:
+            ok = stop_service(pod, args.namespace, args.remote_config,
+                              timeout=args.timeout)
+            return ok
+        finally:
+            elapsed = time.monotonic() - t0
+            timings.append((pod['name'], elapsed, bool(ok)))
+
+    rc = do_for_all_pods(pods, do_op, 'Stopping workers')
+    _print_timings('stop', timings)
+    return rc
 
 
 def cmd_kill(args, pods):

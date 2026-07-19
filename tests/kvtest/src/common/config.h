@@ -81,6 +81,7 @@ struct Config {
     std::vector<std::string> notifyPipeline = {"getBuffer"};
     std::string cpuAffinity;  // optional, e.g. "0-7" or "0,2,4,6", empty = auto-detect
     int numaNode = -1;        // NUMA node to bind, -1 = disabled, non-negative = bind to that node
+    bool randomNumaNode = false;  // true = let kvtest pick a NUMA node at random at startup; mutually exclusive with numaNode >= 0
     // Cache mode fields
     int keyPoolSize = 0;             // 0 = disabled (normal pipeline mode)
     int inferenceDelayMs = 0;        // simulate inference delay on cache miss

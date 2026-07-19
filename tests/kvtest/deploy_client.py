@@ -993,7 +993,8 @@ def cmd_gen_config(args):
     # CPU / NUMA affinity (all modes)
     if args.cpu_affinity:
         cfg['cpu_affinity'] = args.cpu_affinity
-    if args.numa_node >= 0:
+    cfg['random_numa_node'] = bool(args.random_numa_node)
+    if args.numa_node is not None:
         cfg['numa_node'] = args.numa_node
 
     # Data verification (pipeline/cache get paths). Only emit the verify block
@@ -1184,8 +1185,14 @@ def _add_gen_config_args(p):
     # CPU / NUMA affinity
     p.add_argument('--cpu-affinity', default='',
                    help='CPU affinity, e.g. "0-7" or "0,2,4,6" (default: auto-detect)')
-    p.add_argument('--numa-node', type=int, default=-1,
-                   help='NUMA node to bind (default: -1, disabled); requires libnuma')
+    numa_group = p.add_mutually_exclusive_group()
+    numa_group.add_argument('--numa-node', type=int, default=None,
+                            help='NUMA node to bind (default: disabled); requires libnuma. '
+                                 'Mutually exclusive with --random-numa-node.')
+    numa_group.add_argument('--random-numa-node', action='store_true',
+                            dest='random_numa_node',
+                            help='Let kvtest pick a NUMA node at random at startup. '
+                                 'Mutually exclusive with --numa-node. Default: off.')
     # Data verification (pipeline/cache get paths)
     p.add_argument('--verify-level',
                    choices=['off', 'size', 'sample', 'full'], default='size',
