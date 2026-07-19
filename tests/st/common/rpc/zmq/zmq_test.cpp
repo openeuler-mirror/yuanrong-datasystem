@@ -20,6 +20,8 @@
 #include <cstdlib>
 #include <random>
 
+#include "gmock/gmock.h"
+
 #include "common.h"
 #include "zmq_test.h"
 #include "zmq_curve_test_common.h"
@@ -439,6 +441,21 @@ protected:
     std::unique_ptr<RpcServer> rpc;
     std::unique_ptr<arbitrary::workspace::SimpleServiceImpl> demo;
 };
+
+TEST_F(ZmqTest, ServiceNotFoundContainsServiceAndMethod)
+{
+    HostPort serverAddress("127.0.0.1", GetServerPort());
+    auto channel = std::make_shared<datasystem::RpcChannel>(serverAddress, datasystem::RpcCredential());
+    auto simpleStub = std::make_unique<arbitrary::workspace::SimpleService::Stub>(channel);
+    arbitrary::workspace::SayHelloPb request;
+    arbitrary::workspace::ReplyHelloPb reply;
+
+    auto rc = simpleStub->HelloWorld(opt_, request, reply);
+
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_RUNTIME_ERROR);
+    EXPECT_THAT(rc.GetMsg(), testing::HasSubstr("svc_name: SimpleService"));
+    EXPECT_THAT(rc.GetMsg(), testing::HasSubstr("method_index: 0"));
+}
 
 TEST_F(ZmqTest, NonExistingUnixPath)
 {

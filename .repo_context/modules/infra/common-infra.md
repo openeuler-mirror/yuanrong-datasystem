@@ -97,8 +97,8 @@ Detailed follow-up docs now exist for:
 - Verified:
   - `rpc` contains both generation tooling and the main ZMQ transport implementation.
   - selected ZMQ, message-queue, and URMA IO threads can be deprioritized together via `io_thread_nice`, which
-    defaults to `10` and is applied with `setpriority(2)` in `ZmqFrontend`, `ZmqServerImpl` proxy execution,
-    `ZmqEpoll`, `MsgQueMgr`, and `UrmaManager` server event handling.
+    defaults to `0`; `0` skips `setpriority(2)`, while non-zero explicit values are applied in `ZmqServerImpl` proxy
+    execution, `ZmqEpoll`, `MsgQueMgr`, and `UrmaManager` server event handling.
   - `shared_memory` contains allocator, jemalloc integration, arenas, shm units, and several mmap backends; when UB
     numa affinity is enabled it also records per-allocation NUMA ownership. Shared-memory pre-touch distribution is
     controlled by `shared_memory_distribution_policy` with values `none`, `interleave_all_numa`,
