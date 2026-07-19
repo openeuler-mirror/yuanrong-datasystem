@@ -12,7 +12,7 @@
  */
 
 /**
- * Description: Validated cluster topology keyspace builder.
+ * Description: Validated cluster topology keyspace and ETCD watch-key classifier.
  */
 #include "datasystem/cluster/repository/topology_key_helper.h"
 
@@ -20,6 +20,7 @@
 #include <cctype>
 #include <utility>
 
+#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -50,6 +51,21 @@ bool IsValidClusterName(const std::string &name)
         }
     }
     return true;
+}
+
+bool MatchesExactPhysicalKey(const std::string &physicalKey, const std::string &table,
+                             const std::string &relativeKey) noexcept
+{
+    const size_t separator = table.size();
+    return physicalKey.size() == separator + 1 + relativeKey.size()
+           && physicalKey.compare(0, separator, table) == 0 && physicalKey[separator] == '/'
+           && physicalKey.compare(separator + 1, relativeKey.size(), relativeKey) == 0;
+}
+
+bool MatchesPhysicalTablePrefix(const std::string &physicalKey, const std::string &table) noexcept
+{
+    return physicalKey.size() >= table.size() + 1 && physicalKey.compare(0, table.size(), table) == 0
+           && physicalKey[table.size()] == '/';
 }
 
 bool IsLowerHex(char value)
@@ -114,6 +130,9 @@ TopologyKeyHelper::TopologyKeyHelper(std::string clusterName) : clusterName_(std
     deleteTaskTable_ = root + "/tasks/delete";
     notifyTable_ = root + "/notify";
     membershipTable_ = root + "/cluster";
+    const std::string legacyMembershipTable = "/" + std::string(COORDINATION_CLUSTER_TABLE);
+    etcdMembershipTablePrefix_ =
+        clusterName_.empty() ? legacyMembershipTable : "/" + clusterName_ + legacyMembershipTable;
 }
 
 const std::string &TopologyKeyHelper::ClusterName() const noexcept
@@ -144,6 +163,32 @@ const std::string &TopologyKeyHelper::NotifyTable() const noexcept
 const std::string &TopologyKeyHelper::MembershipTable() const noexcept
 {
     return membershipTable_;
+}
+
+const std::string &TopologyKeyHelper::EtcdMembershipTablePrefix() const noexcept
+{
+    return etcdMembershipTablePrefix_;
+}
+
+TopologyEtcdKeyKind TopologyKeyHelper::ClassifyEtcdWatchKey(const std::string &physicalKey,
+                                                            const std::string &localAddress) const noexcept
+{
+    if (MatchesExactPhysicalKey(physicalKey, topologyTable_, TopologyKey())) {
+        return TopologyEtcdKeyKind::TOPOLOGY;
+    }
+    if (MatchesExactPhysicalKey(physicalKey, notifyTable_, localAddress)) {
+        return TopologyEtcdKeyKind::LOCAL_NOTIFY;
+    }
+    if (MatchesPhysicalTablePrefix(physicalKey, etcdMembershipTablePrefix_)) {
+        return TopologyEtcdKeyKind::MEMBERSHIP;
+    }
+    if (MatchesPhysicalTablePrefix(physicalKey, migrateTaskTable_)) {
+        return TopologyEtcdKeyKind::MIGRATE_TASK;
+    }
+    if (MatchesPhysicalTablePrefix(physicalKey, deleteTaskTable_)) {
+        return TopologyEtcdKeyKind::DELETE_TASK;
+    }
+    return TopologyEtcdKeyKind::UNKNOWN;
 }
 
 const std::string &TopologyKeyHelper::TopologyKey() noexcept

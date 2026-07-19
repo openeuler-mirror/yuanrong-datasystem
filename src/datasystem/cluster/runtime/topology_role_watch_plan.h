@@ -14,7 +14,7 @@
 
 namespace datasystem::cluster {
 
-enum class TopologyRuntimeRole : uint8_t { WORKER, CONTROLLER, OBSERVER };
+enum class TopologyRuntimeRole : uint8_t { WORKER, CONTROLLER, OBSERVER, UNIFIED_ETCD };
 
 /**
  * @brief Pure role-to-watch plan.

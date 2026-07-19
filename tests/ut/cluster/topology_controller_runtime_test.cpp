@@ -289,6 +289,31 @@ TEST(TopologyControllerRuntimeTest, DefaultsJanitorOffAndSupportsExplicitJanitor
     EXPECT_EQ(janitorBackend.FullShutdownCalls(), EXPECTED_FULL_SHUTDOWN_CALLS);
 }
 
+TEST(TopologyControllerRuntimeTest, ExternalEventSourceSkipsBackendWatchAndAcceptsDoorbells)
+{
+    InstrumentedBackend backend;
+    HashAlgorithm algorithm;
+    auto options = MakeOptions("external-event-source");
+    options.controller.reconcileTick = TEST_SLOW_RECONCILE_TICK;
+    options.controller.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    PutEmptyTopology(backend, options.clusterName);
+    std::unique_ptr<TopologyControllerRuntime> runtime;
+    DS_ASSERT_OK(TopologyControllerRuntime::Create(std::move(options), backend, algorithm, runtime));
+
+    DS_ASSERT_OK(runtime->Start());
+    EXPECT_FALSE(backend.Backend().HasEventHandler());
+    EXPECT_TRUE(backend.Backend().WatchKeys().empty());
+    const auto attemptsBeforeEvent = backend.Backend().GetAttemptCount();
+    DS_ASSERT_OK(runtime->SubmitCoordinationEvent(
+        { CoordinationEventType::PUT, "/datasystem/external-event-source/topology/", "", 1, 1 }));
+    ASSERT_TRUE(backend.Backend().WaitForGetAttempts(attemptsBeforeEvent + 1,
+                                                     std::chrono::steady_clock::now() + TEST_WAIT));
+
+    DS_ASSERT_OK(runtime->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+    EXPECT_EQ(backend.ShutdownEventSourceCalls(), 0U);
+    EXPECT_EQ(backend.FullShutdownCalls(), EXPECTED_FULL_SHUTDOWN_CALLS);
+}
+
 TEST(TopologyControllerRuntimeTest, ControllerStartFailureDoesNotStartJanitorOrFullShutdown)
 {
     InstrumentedBackend backend;

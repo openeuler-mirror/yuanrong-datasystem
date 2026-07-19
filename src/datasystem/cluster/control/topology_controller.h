@@ -29,6 +29,8 @@
 
 namespace datasystem::cluster {
 
+enum class TopologyEventSourceMode : uint8_t { SELF_MANAGED, EXTERNAL };
+
 /**
  * @brief Fixed Controller budgets and bounded work limits.
  */
@@ -40,6 +42,7 @@ struct TopologyControllerOptions {
     size_t maxMembersPerBatch{ 2'500 };
     size_t maxDerivedOperationsPerTick{ 256 };
     size_t maxProgressReadsPerTick{ 256 };
+    TopologyEventSourceMode eventSourceMode{ TopologyEventSourceMode::SELF_MANAGED };
 
     /**
      * @brief Host hook for a newly observed RESTARTING member process.
@@ -120,6 +123,13 @@ public:
      * @return Operation status.
      */
     Status Stop(std::chrono::steady_clock::time_point deadline);
+
+    /**
+     * @brief Submit one externally owned watch doorbell.
+     * @param[in] event Backend event.
+     * @return Queue status.
+     */
+    Status SubmitCoordinationEvent(CoordinationEvent &&event);
 
     /**
      * @brief Return a no-IO diagnostic snapshot.

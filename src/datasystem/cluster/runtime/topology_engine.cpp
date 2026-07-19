@@ -21,7 +21,6 @@
 #include "datasystem/cluster/coordination_backend/topology_recovery_reporter.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
-#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
@@ -38,7 +37,7 @@ Status RegisterEtcdTopologyTables(EtcdStore &store, const TopologyKeyHelper &key
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.MigrateTaskTable(), keys.MigrateTaskTable()));
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.DeleteTaskTable(), keys.DeleteTaskTable()));
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.NotifyTable(), keys.NotifyTable()));
-    return store.CreateTableWithExactPrefix(keys.MembershipTable(), EtcdMembershipTable(keys.ClusterName()));
+    return store.CreateTableWithExactPrefix(keys.MembershipTable(), keys.EtcdMembershipTablePrefix());
 }
 
 bool IsCanonicalAddress(const std::string &address)
@@ -142,7 +141,6 @@ struct TopologyEngine::Builder::Config {
     std::string localAddress;
     BackendKind backendKind{ BackendKind::NONE };
     EtcdStore *memberStore{ nullptr };
-    std::unique_ptr<EtcdStore> controllerStore;
     ICoordinatorServiceProxy *coordinatorProxy{ nullptr };
     CoordinatorWatchIngress ingress;
     ITopologyPhaseCallbacks *callbacks{ nullptr };
@@ -182,16 +180,14 @@ TopologyEngine::Builder &TopologyEngine::Builder::SetLocalAddress(std::string lo
     return *this;
 }
 
-TopologyEngine::Builder &TopologyEngine::Builder::UseEtcd(
-    EtcdStore &memberStore, std::unique_ptr<EtcdStore> controllerStore)
+TopologyEngine::Builder &TopologyEngine::Builder::UseEtcd(EtcdStore &store)
 {
     if (config_ == nullptr) {
         return *this;
     }
     config_->backendSelectionInvalid = config_->backendKind != Config::BackendKind::NONE;
     config_->backendKind = Config::BackendKind::ETCD;
-    config_->memberStore = &memberStore;
-    config_->controllerStore = std::move(controllerStore);
+    config_->memberStore = &store;
     config_->coordinatorProxy = nullptr;
     config_->ingress = {};
     return *this;
@@ -208,7 +204,6 @@ TopologyEngine::Builder &TopologyEngine::Builder::UseCoordinator(
     config_->coordinatorProxy = &proxy;
     config_->ingress = std::move(ingress);
     config_->memberStore = nullptr;
-    config_->controllerStore.reset();
     return *this;
 }
 
@@ -270,8 +265,8 @@ Status TopologyEngine::Builder::Validate() const
                                  && !config_->backendSelectionInvalid,
                              K_INVALID, "invalid cluster topology Engine Builder settings");
     if (config_->backendKind == Config::BackendKind::ETCD) {
-        CHECK_FAIL_RETURN_STATUS(config_->memberStore != nullptr && config_->controllerStore != nullptr,
-                                 K_INVALID, "ETCD topology Engine requires two role Store resources");
+        CHECK_FAIL_RETURN_STATUS(config_->memberStore != nullptr, K_INVALID,
+                                 "ETCD topology Engine requires one shared Store resource");
     } else if (config_->backendKind == Config::BackendKind::COORDINATOR) {
         CHECK_FAIL_RETURN_STATUS(config_->coordinatorProxy != nullptr && config_->ingress.bind != nullptr
                                      && config_->ingress.unbindAndDrain != nullptr,
@@ -287,12 +282,11 @@ Status TopologyEngine::Builder::CreateOwnedDependencies()
     RETURN_IF_NOT_OK(TopologyKeyHelper::Create(config_->clusterName, config_->keys));
     if (config_->backendKind == Config::BackendKind::ETCD) {
         RETURN_IF_NOT_OK(RegisterEtcdTopologyTables(*config_->memberStore, *config_->keys));
-        RETURN_IF_NOT_OK(RegisterEtcdTopologyTables(*config_->controllerStore, *config_->keys));
     }
     config_->algorithm = std::make_unique<HashAlgorithm>();
     if (config_->backendKind == Config::BackendKind::ETCD) {
         config_->memberBackend = std::make_unique<EtcdCoordinationBackend>(config_->memberStore);
-        config_->controllerBackend = std::make_unique<EtcdCoordinationBackend>(config_->controllerStore.get());
+        config_->controllerBackend = std::make_unique<EtcdCoordinationBackend>(config_->memberStore);
     } else {
         config_->memberBackend =
             std::make_unique<DsCoordinationBackend>(config_->coordinatorProxy, config_->localAddress);
@@ -351,6 +345,7 @@ TopologyEngine::RuntimeOptions TopologyEngine::ConsumeRuntimeOptions(Builder::Co
     options.clusterName = config.clusterName;
     options.localAddress = config.localAddress;
     options.isRestart = config.isRestart;
+    options.unifiedEtcdWatch = config.backendKind == Builder::Config::BackendKind::ETCD;
     options.controlBackendProbe = std::move(config.controlBackendProbe);
     options.availabilityHandler = std::move(config.availabilityHandler);
     options.snapshotPublishedHandler = std::move(config.snapshotPublishedHandler);
@@ -359,7 +354,6 @@ TopologyEngine::RuntimeOptions TopologyEngine::ConsumeRuntimeOptions(Builder::Co
 
 TopologyEngine::TopologyEngine(std::unique_ptr<Builder::Config> config)
     : options_(ConsumeRuntimeOptions(*config)),
-      controllerEtcdStore_(std::move(config->controllerStore)),
       memberBackend_(std::move(config->memberBackend)),
       controllerBackend_(std::move(config->controllerBackend)),
       algorithm_(std::move(config->algorithm)),
@@ -383,6 +377,8 @@ Status TopologyEngine::InitializeOwnedComponents(
     runtimeOptions.clusterName = options_.clusterName;
     runtimeOptions.controller.nodeDeadTimeout = nodeDeadTimeout;
     runtimeOptions.controller.membershipRestartHandler = std::move(membershipRestartHandler);
+    runtimeOptions.controller.eventSourceMode =
+        options_.unifiedEtcdWatch ? TopologyEventSourceMode::EXTERNAL : TopologyEventSourceMode::SELF_MANAGED;
     runtimeOptions.janitor = TopologyTaskJanitorOptions{};
     RETURN_IF_NOT_OK(TopologyControllerRuntime::Create(
         std::move(runtimeOptions), *controllerBackend_, *algorithm_, controllerRuntime_));
@@ -475,6 +471,27 @@ Status TopologyEngine::EnqueueCoordinationEvent(CoordinationEvent &&event)
     return rc;
 }
 
+Status TopologyEngine::RouteUnifiedEtcdWatchEvent(CoordinationEvent &&event)
+{
+    CHECK_FAIL_RETURN_STATUS(controllerRuntime_ != nullptr, K_NOT_READY,
+                             "unified ETCD Controller runtime is not ready");
+    const auto kind = keys_->ClassifyEtcdWatchKey(event.key, options_.localAddress);
+    if (kind == TopologyEtcdKeyKind::TOPOLOGY) {
+        CoordinationEvent controllerEvent = event;
+        auto memberStatus = EnqueueCoordinationEvent(std::move(event));
+        auto controllerStatus = controllerRuntime_->SubmitCoordinationEvent(std::move(controllerEvent));
+        return memberStatus.IsError() ? memberStatus : controllerStatus;
+    }
+    if (kind == TopologyEtcdKeyKind::LOCAL_NOTIFY) {
+        return EnqueueCoordinationEvent(std::move(event));
+    }
+    if (kind == TopologyEtcdKeyKind::MEMBERSHIP || kind == TopologyEtcdKeyKind::MIGRATE_TASK
+        || kind == TopologyEtcdKeyKind::DELETE_TASK) {
+        return controllerRuntime_->SubmitCoordinationEvent(std::move(event));
+    }
+    RETURN_STATUS(K_INVALID, "unified ETCD watch received an unregistered physical key");
+}
+
 Status TopologyEngine::Start()
 {
     {
@@ -500,7 +517,7 @@ Status TopologyEngine::Start()
     if (rc.IsOk()) {
         rc = StartMemberRole();
     }
-    if (rc.IsOk()) {
+    if (rc.IsOk() && !options_.unifiedEtcdWatch) {
         rc = controllerRuntime_->Start();
     }
     if (rc.IsError()) {
@@ -523,22 +540,37 @@ Status TopologyEngine::Start()
 Status TopologyEngine::StartMemberRole()
 {
     std::vector<WatchKey> watches;
-    RETURN_IF_NOT_OK(
-        TopologyRoleWatchPlan::Build(TopologyRuntimeRole::WORKER, options_.localAddress, *keys_, 0, watches));
+    const auto role =
+        options_.unifiedEtcdWatch ? TopologyRuntimeRole::UNIFIED_ETCD : TopologyRuntimeRole::WORKER;
+    RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(role, options_.localAddress, *keys_, 0, watches));
     RETURN_IF_NOT_OK(dispatcher_.Start());
-    memberBackend_->SetEventHandler(
-        [this](CoordinationEvent &&event) { (void)EnqueueCoordinationEvent(std::move(event)); });
+    if (options_.unifiedEtcdWatch) {
+        memberBackend_->SetEventHandler([this](CoordinationEvent &&event) {
+            auto rc = RouteUnifiedEtcdWatchEvent(std::move(event));
+            if (rc.IsError() && rc.GetCode() != K_TRY_AGAIN && rc.GetCode() != K_NOT_READY) {
+                LOG(ERROR) << "Route unified ETCD topology watch event failed: " << rc.ToString();
+            }
+        });
+    } else {
+        memberBackend_->SetEventHandler(
+            [this](CoordinationEvent &&event) { (void)EnqueueCoordinationEvent(std::move(event)); });
+    }
     // A Coordinator rejects topology watches without a live owning membership, which also fences delayed watches
     // after lease deletion. Publish the lease first, then use watch initial snapshots and ReloadTopology to catch up.
     RETURN_IF_NOT_OK(memberBackend_->InitKeepAlive(
         keys_->MembershipTable(), options_.localAddress, options_.isRestart, true));
+    if (options_.unifiedEtcdWatch) {
+        RETURN_IF_NOT_OK(controllerRuntime_->Start());
+    }
     auto rc = memberBackend_->WatchEvents(watches);
     if (rc.IsError()) {
         LOG_IF_ERROR(memberBackend_->Delete(keys_->MembershipTable(), options_.localAddress),
                      "CLUSTER_MEMBERSHIP_STARTUP_CLEANUP_FAILED");
         return rc;
     }
-    LOG(INFO) << "CLUSTER_WATCH cluster=" << options_.clusterName << " role=worker scope_count=" << watches.size()
+    LOG(INFO) << "CLUSTER_WATCH cluster=" << options_.clusterName
+              << " role=" << (options_.unifiedEtcdWatch ? "unified_etcd" : "worker")
+              << " scope_count=" << watches.size()
               << " revision=0 status=registered";
 
     auto readStatus = ReloadTopology(true);
@@ -634,7 +666,9 @@ Status TopologyEngine::ShutdownComponents(std::chrono::steady_clock::time_point 
     PreserveFirstError(controllerRuntime_->Stop(deadline), firstError);
     if (firstError.IsOk()) {
         PreserveFirstError(memberBackend_->Shutdown(), firstError);
-        PreserveFirstError(controllerBackend_->Shutdown(), firstError);
+        if (!options_.unifiedEtcdWatch) {
+            PreserveFirstError(controllerBackend_->Shutdown(), firstError);
+        }
     }
     return firstError;
 }

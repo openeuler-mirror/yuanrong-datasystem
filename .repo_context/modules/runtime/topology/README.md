@@ -27,9 +27,11 @@
   cannot replace topology authority; final progress and batch transitions are fenced by topology version and batch epoch.
 - `cluster_topology.proto` owns these topology records under protobuf package `datasystem`; coordinator and other
   unrelated protobuf contracts remain separate schemas.
-- `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop and one
-  dedicated backend instance. Worker watches exact topology plus its own notify key; Controller watches topology,
-  membership, and derived task/notify directories; Observer watches exact topology only.
+- `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop. ETCD
+  Workers use the Worker-owned `EtcdStore` and one unified watch stream for exact topology/local notify plus membership
+  and derived task directories; Engine routes physical-key doorbells to the Worker and Controller dispatchers, and a
+  topology event wakes both. Coordinator keeps role-specific backend watch registrations. Observer watches exact
+  topology only.
 - Foreground routing uses `PlacementFacade` and one immutable snapshot per single-key or batch decision. Batch-level
   failures leave the output unchanged; one item vector returns each per-key status beside its decision so successful
   results from the same snapshot survive without an extra aligned-vector allocation. Routing never performs backend IO
@@ -51,10 +53,10 @@
   repository `ApiDeadline`; metadata-removal batches cap their thread-local RPC budget by that remaining deadline
   instead of restarting the default RPC timeout for every batch.
 - `WorkerOCServer` owns only the `TopologyEngine` composition root plus the Store/Proxy and callback resources borrowed
-  by it. Shutdown drains business RPC ingress and calls Engine once; Engine unbinds Coordinator watch ingress, closes
-  the member-role event source, drains Reporter and Worker execution, then Runtime stops Janitor/Controller and the
-  Controller closes its own role event source before Engine fully shuts down both backends. A deadline failure preserves
-  Engine and every borrowed dependency for retry. Engine Start is one-shot;
+  by it. Shutdown drains business RPC ingress and calls Engine once. In ETCD mode Engine closes the shared watch and
+  keepalive event sources once, drains Worker execution, stops the externally-fed Controller/Janitor, and fully shuts
+  down the Store once. Coordinator mode unbinds ingress and preserves role-specific event-source shutdown. A deadline
+  failure preserves Engine and every borrowed dependency for retry. Engine Start is one-shot;
   component destructors safely stop and join as a final fallback and never call `std::terminate`, detach a live thread,
   or kill the process. The process manager owns the outer hard termination bound.
 - Coordinator exposes `GetClusterRawSnapshot` as a cold, read-only diagnostic RPC. The handler validates a logical
@@ -69,9 +71,11 @@
   `/datasystem/{cluster_name}/...`; an empty name uses `/datasystem/...` without an empty path segment. Multi-cluster
   deployments sharing one backend must use non-empty distinct names. The five logical paths are topology,
   tasks/migrate, tasks/delete, notify, and cluster membership.
-- `TopologyKeyHelper` is the only table/key builder. `EtcdStore::CreateTableWithExactPrefix` registers these paths without
-  legacy `FLAGS_cluster_name` prefix rewriting. `TopologyEngine::Builder` owns registration for both ETCD role Stores;
-  Worker business composition does not construct topology keys or table mappings.
+- `TopologyKeyHelper` is the only topology keyspace builder. It owns logical tables, the legacy-compatible ETCD
+  membership prefix, and allocation-free raw ETCD watch-key classification. `EtcdStore::CreateTableWithExactPrefix`
+  registers these paths without legacy `FLAGS_cluster_name` prefix rewriting. `TopologyEngine::Builder` owns
+  registration for the shared ETCD Store; Worker business composition does not construct topology keys or table
+  mappings. `TopologyEngine` maps classified key kinds to Worker/Controller delivery policy.
 - There is no persisted Worker-local topology authority. ETCD restart recovery reads the latest legal topology and
   reconstructs deterministic work. The in-memory Coordinator backend recovers only the latest topology from Workers;
   task/notify records are treated as absent and regenerated. Candidate arbitration is cluster-scoped and resource

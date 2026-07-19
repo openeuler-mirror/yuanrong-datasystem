@@ -1001,19 +1001,6 @@ Status WorkerOCServer::InitCoordinationBackend()
     return Status::OK();
 }
 
-Status WorkerOCServer::ConstructControllerEtcdStore(std::unique_ptr<EtcdStore> &controllerStore)
-{
-    if (!FLAGS_coordinator_address.empty()) {
-        return Status::OK();
-    }
-    auto candidate = std::make_unique<EtcdStore>(backendAddress_);
-    RETURN_IF_NOT_OK(candidate->Init());
-    RETURN_IF_NOT_OK(candidate->Authenticate(
-        FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
-    controllerStore = std::move(candidate);
-    return Status::OK();
-}
-
 Status WorkerOCServer::ConstructTopologyCallbacks()
 {
     const bool centralizedMetadata = !FLAGS_enable_distributed_master;
@@ -1053,8 +1040,6 @@ cluster::CoordinatorWatchIngress WorkerOCServer::BuildCoordinatorWatchIngress()
 
 Status WorkerOCServer::ConstructTopologyRuntime()
 {
-    std::unique_ptr<EtcdStore> controllerStore;
-    RETURN_IF_NOT_OK(ConstructControllerEtcdStore(controllerStore));
     RETURN_IF_NOT_OK(ConstructTopologyCallbacks());
     if (!FLAGS_coordinator_address.empty()) {
         coordinatorWatchSvc_ = std::make_unique<coordinator::CoordinatorWatchServiceImpl>(hostPort_);
@@ -1082,7 +1067,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
     if (coordinatorServiceProxy_ != nullptr) {
         builder.UseCoordinator(*coordinatorServiceProxy_, BuildCoordinatorWatchIngress());
     } else {
-        builder.UseEtcd(*etcdStore_, std::move(controllerStore));
+        builder.UseEtcd(*etcdStore_);
     }
     RETURN_IF_NOT_OK(builder.Build(topologyEngine_));
     const bool isRestart = topologyEngine_->IsRestart();

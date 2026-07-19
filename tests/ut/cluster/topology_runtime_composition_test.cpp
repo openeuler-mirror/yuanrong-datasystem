@@ -32,6 +32,16 @@ struct HasPublicReadyMutation<
     T, std::void_t<decltype(std::declval<T &>().SetReady()), decltype(std::declval<T &>().RequestScaleIn())>>
     : std::true_type {};
 
+template <typename T, typename = void>
+struct HasSingleEtcdStoreSelection : std::false_type {};
+
+template <typename T>
+struct HasSingleEtcdStoreSelection<
+    T, std::void_t<decltype(std::declval<T &>().UseEtcd(std::declval<EtcdStore &>()))>> : std::true_type {};
+
+static_assert(HasSingleEtcdStoreSelection<TopologyEngine::Builder>::value,
+              "ETCD topology composition must borrow exactly one Store");
+
 TEST(TopologyRuntimeCompositionTest, KeepsBackendEventsAndMembershipMutationsInsideOwners)
 {
     EXPECT_FALSE(HasPublicEventSubmit<TopologyEngine>::value);

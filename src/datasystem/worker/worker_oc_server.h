@@ -579,13 +579,6 @@ private:
     Status ConstructTopologyRuntime();
 
     /**
-     * @brief Construct and initialize the role-exclusive ETCD Store transferred into the Engine.
-     * @param[out] controllerStore Initialized owned Store; unchanged on failure.
-     * @return K_OK when Coordinator is selected or after ETCD initialization.
-     */
-    Status ConstructControllerEtcdStore(std::unique_ptr<EtcdStore> &controllerStore);
-
-    /**
      * @brief Construct business callbacks consumed by the Engine Builder.
      * @return K_OK after callbacks are ready.
      */
