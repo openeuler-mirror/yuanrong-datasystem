@@ -19,10 +19,6 @@
  */
 #include "datasystem/common/rdma/urma_manager.h"
 
-#include <sys/mman.h>
-#ifndef USE_URMA_MOCK
-#include <ub/umdk/urma/urma_opcode.h>
-#endif
 #include <algorithm>
 #include <chrono>
 #include <cerrno>
@@ -31,6 +27,12 @@
 #include <cstring>
 #include <unordered_map>
 #include <vector>
+
+#include <sys/mman.h>
+
+#ifndef USE_URMA_MOCK
+#include <ub/umdk/urma/urma_opcode.h>
+#endif
 
 #include "datasystem/common/constants.h"
 #include "datasystem/common/flags/flags.h"
@@ -757,8 +759,8 @@ Status UrmaManager::PerfThreadMain()
 
 Status UrmaManager::ServerEventHandleThreadMain()
 {
-    const auto setSchedRuntimeResult = SetCurrentThreadSchedRuntime();
-    if (!setSchedRuntimeResult.success) {
+    const auto setSchedRuntimeResult = SetCurrentThreadSchedRuntime(FLAGS_enable_sched_runtime);
+    if (!setSchedRuntimeResult.success && !setSchedRuntimeResult.skipped) {
         char errMsg[256] = { 0 };
 #if defined(__GLIBC__) && defined(_GNU_SOURCE)
         const char *error = strerror_r(setSchedRuntimeResult.err, errMsg, sizeof(errMsg));
@@ -769,7 +771,7 @@ Status UrmaManager::ServerEventHandleThreadMain()
         LOG(WARNING) << FormatString("Failed to set UrmaPollJfc sched runtime to %llu ns, errno: %d, error: %s",
                                      static_cast<unsigned long long>(GetSchedRuntimeNs()), setSchedRuntimeResult.err,
                                      error);
-    } else {
+    } else if (setSchedRuntimeResult.success) {
         LOG(INFO) << "Set UrmaPollJfc sched runtime to " << GetSchedRuntimeNs() << " ns.";
     }
     if (!Thread::SetCurrentThreadNice(FLAGS_io_thread_nice)) {

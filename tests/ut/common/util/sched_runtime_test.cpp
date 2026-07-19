@@ -14,25 +14,21 @@
  * limitations under the License.
  */
 
-/**
- * Description: Linux scheduling runtime configuration for the calling thread.
- */
-#ifndef DATASYSTEM_COMMON_UTIL_SCHED_RUNTIME_H
-#define DATASYSTEM_COMMON_UTIL_SCHED_RUNTIME_H
+#include "datasystem/common/util/sched_runtime.h"
 
-#include <cstdint>
+#include "ut/common.h"
 
 namespace datasystem {
+namespace ut {
 
-struct SetSchedRuntimeResult {
-    bool success;
-    bool skipped;
-    int err;
-};
+TEST(SchedRuntimeTest, DisabledSettingSkipsSchedulerSyscall)
+{
+    const auto result = SetCurrentThreadSchedRuntime(false);
 
-uint64_t GetSchedRuntimeNs();
-SetSchedRuntimeResult SetCurrentThreadSchedRuntime(bool enabled);
+    EXPECT_TRUE(result.skipped);
+    EXPECT_FALSE(result.success);
+    EXPECT_EQ(result.err, 0);
+}
 
+}  // namespace ut
 }  // namespace datasystem
-
-#endif  // DATASYSTEM_COMMON_UTIL_SCHED_RUNTIME_H

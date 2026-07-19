@@ -527,6 +527,10 @@
         "value": "0",
         "description": "Nice value for selected IO threads. Valid range is [-20, 19]. 0 skips nice adjustment and preserves the thread's inherited nice value. Only non-zero values call setpriority; negative values usually require appropriate privileges."
     },
+    "enable_sched_runtime": {
+        "value": "true",
+        "description": "Enable selected worker threads to set the Linux scheduler runtime. Default is true. Set false to retain the inherited scheduler runtime."
+    },
     "zmq_chunk_sz": {
         "value": "1048576",
         "description": "Parallel payload split chunk size. Default to 1048756 bytes."

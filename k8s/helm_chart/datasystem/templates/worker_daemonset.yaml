@@ -236,6 +236,7 @@ spec:
         - -zmq_client_io_context={{ $.Values.global.rpc.zmqClientIoContext }}
         - -zmq_client_io_thread={{ $.Values.global.rpc.zmqClientIoThread }}
         - -io_thread_nice={{ $.Values.global.rpc.ioThreadNice }}
+        - -enable_sched_runtime={{ $.Values.global.performance.enableSchedRuntime }}
         - -zmq_chunk_sz={{ $.Values.global.rpc.zmqChunkSz | int64 }}
         - -use_brpc={{ $.Values.global.rpc.brpc.useBrpc }}
         - -brpc_server_num_threads={{ $.Values.global.rpc.brpc.brpcServerNumThreads }}

@@ -662,7 +662,7 @@ private:
     Status CreateEvent(uint64_t requestId, const std::shared_ptr<UrmaConnection> &connection,
                        const std::shared_ptr<UrmaSendLaneLease> &laneLease, const std::string &remoteAddress,
                        uint64_t dataSize, UrmaEvent::OperationType operationType,
-                       std::atomic<int> *srcChipInflightCounter,
+                       std::atomic<int> *srcChipInflightCounter = nullptr,
                        std::shared_ptr<EventWaiter> waiter = nullptr);
     void ReleaseEventLane(const std::shared_ptr<UrmaEvent> &event);
     void ReleaseAndDeleteEvent(uint64_t requestId);
