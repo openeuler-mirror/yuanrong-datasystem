@@ -31,6 +31,11 @@ constexpr size_t MAX_DOORBELLS_PER_RECONCILE = 1'024;
 constexpr uint32_t MAX_RECONCILE_BACKOFF_SHIFT = 5;
 constexpr size_t DIGEST_DIAGNOSTIC_PREFIX_SIZE = 12;
 
+bool IsTransientReconcileStatus(StatusCode code)
+{
+    return code == K_TRY_AGAIN || code == K_NOT_READY;
+}
+
 Status BuildMemberId(const MembershipRecord &membership, std::string &memberId)
 {
     const auto seed = std::to_string(membership.address.size()) + ":" + membership.address + ":"
@@ -335,8 +340,14 @@ void TopologyController::Run()
             continue;
         }
         rc = ReconcileOnce();
+        if (IsTransientReconcileStatus(rc.GetCode())) {
+            consecutiveReconcileFailures_ = 0;
+            reconcileNotBefore_ = {};
+        }
         if (rc.GetCode() == K_TRY_AGAIN) {
             VLOG(1) << "Cluster topology Controller CAS contention: " << rc.ToString();
+        } else if (rc.GetCode() == K_NOT_READY) {
+            VLOG(1) << "Cluster topology Controller recovery is not ready: " << rc.ToString();
         } else if (rc.IsError()) {
             const uint32_t shift = std::min(consecutiveReconcileFailures_, MAX_RECONCILE_BACKOFF_SHIFT);
             reconcileNotBefore_ = now + options_.reconcileTick * (uint64_t{ 1 } << shift);
@@ -371,7 +382,7 @@ Status TopologyController::ReconcileOnce()
     const bool backendUnavailable =
         rc.GetCode() == K_RPC_UNAVAILABLE || rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_CANCELLED;
     diagnostics_.backendState = backendUnavailable ? ControlBackendState::UNAVAILABLE : ControlBackendState::AVAILABLE;
-    diagnostics_.controlFrozen = rc.IsError() && rc.GetCode() != K_TRY_AGAIN;
+    diagnostics_.controlFrozen = rc.IsError() && !IsTransientReconcileStatus(rc.GetCode());
     return rc;
 }
 
