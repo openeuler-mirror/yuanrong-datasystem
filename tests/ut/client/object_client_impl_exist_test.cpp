@@ -274,6 +274,36 @@ TEST_F(ExistHandlerTest, ExistReroutesAfterDeadlineExceeded)
     EXPECT_EQ(routing_->selectWorkersCount, 2);
 }
 
+TEST_F(ExistHandlerTest, ExistReroutesAfterWorkerNotReady)
+{
+    HostPort workerA = MakeWorker(18481);
+    HostPort workerB = MakeWorker(18482);
+    routing_->groupSequence = {
+        { { workerA, { "k1" } } },
+        { { workerB, { "k1" } } },
+    };
+    transport_->resultsByWorker[workerA] = {
+        { Status(K_NOT_READY, "Worker not ready"), {} },
+    };
+    transport_->resultsByWorker[workerB] = {
+        { Status::OK(), { true } },
+    };
+    std::vector<bool> exists;
+
+    Status rc = RunFlow({ "k1" }, exists);
+
+    ASSERT_TRUE(rc.IsOk());
+    EXPECT_EQ(exists, std::vector<bool>({ true }));
+    ASSERT_EQ(routing_->updatedWorkers.size(), 1ul);
+    EXPECT_EQ(routing_->updatedWorkers[0], workerA);
+    EXPECT_EQ(routing_->updatedStatuses[0], K_CLIENT_WORKER_DISCONNECT);
+    ASSERT_EQ(transport_->workers.size(), 2ul);
+    EXPECT_EQ(transport_->workers[0], workerA);
+    EXPECT_EQ(transport_->workers[1], workerB);
+    EXPECT_EQ(transport_->subTimeouts, std::vector<int64_t>({ 1000, 1000 }));
+    EXPECT_EQ(routing_->selectWorkersCount, 2);
+}
+
 TEST_F(ExistHandlerTest, ExistSplitsRedirectedKeysByOwnerAndKeepsInputOrder)
 {
     HostPort oldWorker = MakeWorker(18481);
