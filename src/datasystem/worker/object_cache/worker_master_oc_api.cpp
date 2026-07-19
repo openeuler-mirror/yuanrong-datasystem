@@ -1077,8 +1077,14 @@ Status WorkerRemoteMasterOCApi::ReleaseMetaData(ReleaseMetaDataReqPb &req, Relea
 
 Status WorkerRemoteMasterOCApi::ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "ReplacePrimary", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
-    opts.SetTimeout(RPC_TIMEOUT);
+    opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     auto rc = (brpcSession_ ? brpcSession_->ReplacePrimary(opts, req, rsp)
                               : rpcSession_->ReplacePrimary(opts, req, rsp));
