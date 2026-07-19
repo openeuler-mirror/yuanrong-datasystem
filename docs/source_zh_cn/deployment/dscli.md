@@ -869,7 +869,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | urma_connection_size | int | `0` | [已废弃] 仅为兼容旧配置而保留，内部已忽略。当前 JFS/JFR 按连接独占创建 |
 | urma_event_mode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | urma_poll_size | int | `8` | 一次可轮询的完整记录数量，该设备最多可轮询16条记录 |
-| urma_max_wirte_size_mb | int | `2` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
+| urma_max_write_size_mb | int | `2` | URMA 单次写入大小上限，单位为 MB，取值范围：[1, 2048] |
 | urma_register_whole_arena | bool | `true` | 是否在初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |
 | enable_rdma | bool | `false` | 是否开启RDMA以实现对象worker之间的数据传输 |
 | rdma_register_whole_arena | bool | `true` | 是否在RDMA初始化时将整个arena注册为一个段，如果设置为`false`，将每个对象分别注册为一个段 |

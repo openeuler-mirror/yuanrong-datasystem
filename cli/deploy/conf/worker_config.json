@@ -559,7 +559,7 @@
         "value": "8",
         "description": "Number of complete record to poll at a time, 16 is the max this device can poll"
     },
-    "urma_max_wirte_size_mb": {
+    "urma_max_write_size_mb": {
         "value": "2",
         "description": "Maximum URMA write size, unit is MB. Valid range is [1, 2048]."
     },

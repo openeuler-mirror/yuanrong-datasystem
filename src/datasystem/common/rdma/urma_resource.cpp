@@ -42,7 +42,7 @@
 #include "datasystem/utils/status.h"
 
 DS_DECLARE_bool(urma_event_mode);
-DS_DECLARE_uint64(urma_max_wirte_size_mb);
+DS_DECLARE_uint64(urma_max_write_size_mb);
 
 namespace datasystem {
 namespace {
@@ -267,7 +267,7 @@ Status UrmaJetty::Create(UrmaResource &resource, JettyType jettyType, std::share
     urma_jfs_cfg_t jfsConfig{};
     jfsConfig.depth = isSendJetty ? JETTY_SIZE : RECV_JETTY_JFS_DEPTH;
     jfsConfig.trans_mode = URMA_TM_RM;
-    jfsConfig.priority = resource.GetJfsPriority();
+    jfsConfig.priority = resource.GetJettyPriority();
     const auto maxSge = 13;
     jfsConfig.max_sge = maxSge;
     jfsConfig.max_inline_data = 0;
@@ -479,8 +479,8 @@ Status UrmaConnection::ModifyJettyToError(UrmaResource &resource)
         jetty = jetty_;
         if (!jetty->MarkInvalid()) {
             LOG(WARNING) << "[URMA_MODIFY_JETTY_TO_ERROR_SKIP] Jetty " << jetty->GetJettyId()
-                      << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
-                      << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
+                         << " is already invalid, remoteAddress=" << urmaJfrInfo_.localAddress.ToString()
+                         << ", remoteInstanceId=" << urmaJfrInfo_.uniqueInstanceId;
             return Status::OK();
         }
         LOG(INFO) << "[URMA_MODIFY_JETTY_TO_ERROR] Mark Jetty " << jetty->GetJettyId()
@@ -531,8 +531,7 @@ Status UrmaConnection::ImportRemoteSeg(const UrmaImportSegmentPb &importSegmentI
     if (importSegmentInfo.has_seg_ctx() && !importSegmentInfo.seg_ctx().seg_blob().empty()) {
         const auto &segBlob = importSegmentInfo.seg_ctx().seg_blob();
         if (segBlob.size() < sizeof(urma_seg_t)) {
-            RETURN_STATUS(K_RUNTIME_ERROR,
-                          FormatString("Invalid delegated seg blob size=%zu", segBlob.size()));
+            RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Invalid delegated seg blob size=%zu", segBlob.size()));
         }
         segCtxBuf = std::make_unique<char[]>(segBlob.size());
         if (memcpy_s(segCtxBuf.get(), segBlob.size(), segBlob.data(), segBlob.size()) != EOK) {
@@ -624,31 +623,6 @@ urma_jfc_t *UrmaResource::GetJfc() const
     return jfc_ == nullptr ? nullptr : jfc_->Raw();
 }
 
-bool UrmaResource::GetJfsPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const
-{
-    constexpr uint8_t defaultPriorityForCTP = 6;
-    constexpr uint32_t defaultSLForCTP = 6;
-    urma_tp_type_en tpTypeEn;
-    tpTypeEn.value = 0;
-    tpTypeEn.bs.ctp = 1;
-
-    for (uint32_t i = 0; i <= URMA_MAX_PRIORITY; ++i) {
-        auto &priorityInfo = urmaDeviceAttribute_.dev_cap.priority_info[i];
-        VLOG(1) << "Checking priority " << i << " with tp_type: " << priorityInfo.tp_type.value
-                << " expect tp_type: " << tpTypeEn.value;
-        if (priorityInfo.tp_type.value == tpTypeEn.value) {
-            priority = i;
-            sl = priorityInfo.SL;
-            return true;
-        }
-    }
-    // Older URMA versions may not populate priority_info, so fall back
-    // to the default priority and SL for CTP.
-    priority = defaultPriorityForCTP;
-    sl = defaultSLForCTP;
-    return false;
-}
-
 bool UrmaResource::GetJettyPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) const
 {
     constexpr uint8_t defaultPriorityForCTP = 6;
@@ -677,7 +651,7 @@ bool UrmaResource::GetJettyPriorityInfoForCTP(uint8_t &priority, uint32_t &sl) c
 uint64_t UrmaResource::GetMaxWriteSize() const
 {
     constexpr uint64_t mbToBytes = 1024ul * 1024ul;
-    const uint64_t maxSize = FLAGS_urma_max_wirte_size_mb * mbToBytes;
+    const uint64_t maxSize = FLAGS_urma_max_write_size_mb * mbToBytes;
     return std::min<uint64_t>(maxSize, urmaDeviceAttribute_.dev_cap.max_write_size);
 }
 
