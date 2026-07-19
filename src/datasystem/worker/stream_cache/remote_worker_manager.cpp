@@ -968,9 +968,18 @@ Status RemoteWorker::ParsePendingFlushList(const PendingFlushList &pendingFlushL
     return Status::OK();
 }
 
+// Per-RPC timeout for background stream page push between workers.
+// The RPC round-trip (Write -> remote processing -> Read response) normally
+// completes in <100ms. 10s provides ample headroom for remote-worker
+// queuing / network congestion without letting a stuck peer block the
+// flush thread indefinitely (the previous implicit 60s via RpcOptions()).
+static constexpr int32_t kStreamPagePushRpcTimeoutMs = 10'000;
+
 int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_Stub> &stub,
                                        std::vector<PushReq> &requests, std::vector<std::vector<MemView>> &payloads)
 {
+    RpcOptions opts;
+    opts.SetTimeout(kStreamPagePushRpcTimeoutMs);
     int numReqSent = 0;
     for (size_t i = 0; i < requests.size(); ++i) {
         Status &status = requests.at(i).rc_;
@@ -980,11 +989,11 @@ int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCServi
             if constexpr (std::is_same_v<std::decay_t<decltype(pushReqPb)>, PushReqPb>) {
                 VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("Calling PushElementsCursorsAsyncWrite for %s with %zu PV",
                                                          pushReqPb.stream_name(), pushReqPb.element_meta_size());
-                status = stub->PushElementsCursorsAsyncWrite(pushReqPb, requests.at(i).tag_, payloads.at(i));
+                status = stub->PushElementsCursorsAsyncWrite(opts, pushReqPb, requests.at(i).tag_, payloads.at(i));
             } else {
                 VLOG(SC_DEBUG_LOG_LEVEL) << FormatString(
                     "Calling PushSharedPageCursorsAsyncWrite for shared page with %zu PV", pushReqPb.metas_size());
-                status = stub->PushSharedPageCursorsAsyncWrite(pushReqPb, requests.at(i).tag_, payloads.at(i));
+                status = stub->PushSharedPageCursorsAsyncWrite(opts, pushReqPb, requests.at(i).tag_, payloads.at(i));
             }
         };
 
@@ -1038,6 +1047,8 @@ void RemoteWorker::BatchFlushAsyncRead(const std::shared_ptr<WorkerWorkerSCServi
 int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCService_BrpcGenericStub> &stub,
                                        std::vector<PushReq> &requests, std::vector<std::vector<MemView>> &payloads)
 {
+    RpcOptions opts;
+    opts.SetTimeout(kStreamPagePushRpcTimeoutMs);
     int numReqSent = 0;
     for (size_t i = 0; i < requests.size(); ++i) {
         Status &status = requests.at(i).rc_;
@@ -1047,11 +1058,11 @@ int RemoteWorker::BatchFlushAsyncWrite(const std::shared_ptr<WorkerWorkerSCServi
             if constexpr (std::is_same_v<std::decay_t<decltype(pushReqPb)>, PushReqPb>) {
                 VLOG(SC_DEBUG_LOG_LEVEL) << FormatString("Calling PushElementsCursorsAsyncWrite for %s with %zu PV",
                                                          pushReqPb.stream_name(), pushReqPb.element_meta_size());
-                status = stub->PushElementsCursorsAsyncWrite(pushReqPb, requests.at(i).tag_, payloads.at(i));
+                status = stub->PushElementsCursorsAsyncWrite(opts, pushReqPb, requests.at(i).tag_, payloads.at(i));
             } else {
                 VLOG(SC_DEBUG_LOG_LEVEL) << FormatString(
                     "Calling PushSharedPageCursorsAsyncWrite for shared page with %zu PV", pushReqPb.metas_size());
-                status = stub->PushSharedPageCursorsAsyncWrite(pushReqPb, requests.at(i).tag_, payloads.at(i));
+                status = stub->PushSharedPageCursorsAsyncWrite(opts, pushReqPb, requests.at(i).tag_, payloads.at(i));
             }
         };
 
