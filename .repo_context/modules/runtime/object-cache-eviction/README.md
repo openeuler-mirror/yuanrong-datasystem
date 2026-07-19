@@ -1,0 +1,177 @@
+# Object Cache Eviction
+
+## Scope
+
+- Path(s):
+  - `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`
+  - `src/datasystem/worker/object_cache/eviction_list.*`
+  - `src/datasystem/worker/object_cache/worker_oc_spill.*`
+  - `src/datasystem/worker/object_cache/obj_cache_shm_unit.cpp`
+  - `src/datasystem/worker/stream_cache/worker_sc_allocate_memory.cpp`
+  - `src/datasystem/worker/object_cache/worker_master_oc_api.*`
+  - `src/datasystem/master/object_cache/oc_metadata_manager.*`
+  - `src/datasystem/protos/master_object.proto`
+- Why this module exists:
+  - 记录 worker object cache 在内存水位、spill 空间水位、L2 缓存语义、master 元数据删除之间的 eviction 决策。
+  - 固化 `NONE_L2_CACHE_EVICT`、L2 已落盘对象、spill 对象、远端迁移对象的不同处置路径。
+  - 给性能、并发、可用性和恢复相关改动提供统一入口。
+- Primary source files to verify against:
+  - `worker_oc_eviction_manager.cpp`
+  - `worker_oc_eviction_manager.h`
+  - `eviction_list.cpp`
+  - `eviction_list.h`
+  - `worker_oc_spill.cpp`
+  - `worker_oc_spill.h`
+  - `oc_metadata_manager.cpp`
+  - `master_object.proto`
+
+## Responsibilities
+
+- Verified:
+  - `EvictWhenMemoryExceedThrehold` 在 object 或 stream 分配前/重试期间按高水位触发 memory eviction。
+  - `WorkerOcEvictionManager::Init` 创建 memory eviction、spill eviction、master metadata task、spill task 和定时检查线程池。
+  - `EvictionList` 使用带计数的 clock/second-chance 队列选择候选对象，不是严格 LRU。
+  - `GetObjectNextAction` 根据 primary copy、cache type、spill 状态、L2 是否可用、远端迁移能力和本地 spill 能力选择 `DELETE`、`FREE_MEMORY`、`SPILL`、`MIGRATE`、`END_LIFE` 或 `RETAIN`。
+  - `DELETE` 路径本地擦除 object table 后异步批量 `RemoveMeta`。
+  - `DeleteNoneL2CacheEvictableObject` 仍同步调用 master `DeleteAllCopyMeta`，该路径仅保留给
+    `EvictSpilledObjects` 和 `SpillImpl` no-space fallback；当前分支该 fallback 使用
+    `ids_with_version` 并设置 `async_delete=true`，但 worker 侧 RPC 仍同步等待返回。
+  - 当前分支已将 memory eviction 主 loop 中的所有 `Action::END_LIFE` 投递到独立 fixed-1 primary end-life lane；`EvictSpilledObjects` 和 `SpillImpl` no-space fallback 仍保持同步。
+  - primary end-life lane 使用 `objectKey -> entry->GetCreateTime()` pending 去重，pending 上限使用源码内固定常量，不新增用户可见配置；成功前不得 erase 本地对象。
+  - primary end-life lane 需要 drain 内部 queue，并将同一个 master 的 key 聚合为 batch `DeleteAllCopyMeta`；不同 master 必须拆成不同请求，batch 使用 repeated `ids_with_version` 并设置 `async_delete=true`。
+  - primary end-life 的 `DeleteAllCopyMeta` 必须检查 `failed_object_keys`、`outdated_objs`、
+    `objs_without_meta`、redirect info、`meta_is_moving` 和 `last_rc`，并对每个 batch 使用 5s API
+    总超时预算。
+  - pending 上限只限制 key 数，不限制对象字节数；primary lane 必须在发送 `DeleteAllCopyMeta` 前用触发本次
+    eviction 的 `needSize` 复查 low watermark，并按对象大小控制 batch 预计释放量，已达低水位则跳过本次
+    end-life、清 pending 并回补 eviction list，避免大对象 queued primary 后续造成过度释放。
+  - primary end-life lane guard 不能直接复用当前 `IsObjectEvictable()`；accepted lane tasks 已从 `memEvictionList_` 移除，需要不依赖 list membership 的窄 guard。
+  - `GetMetaAddress()` 快速失败需要区分 `K_RPC_UNAVAILABLE` 的 master/connection unavailable 和 `K_NOT_FOUND` 的 route/meta-address unavailable；两者都不得发 RPC 或本地 erase。
+  - spill 写入由 `spill_thread_num` 控制并行度；spill 文件淘汰由单线程 `SpillEvictionThread` 控制。
+  - `eviction_thread_num` 保留为废弃兼容参数但运行时忽略；`MemEvictionThread` 固定为内部单线程，`isDone_` 门闩仍保证同一 manager 同时只有一个 `EvictionTask` 运行。
+  - 保留 `eviction_thread_num` 时必须同步标注源码、dscli 默认配置、k8s deployment、k8s daemonset Helm values/template、部署文档和示例为 deprecated/ignored，避免运维误以为它仍控制并发。
+- Verified in current branch:
+  - primary end-life lane 已实现，并已通过 focused UT 覆盖 pending 上限、low watermark 跳过和
+    `DeleteAllCopyMeta` per-key 失败解析。
+
+## Companion Docs
+
+- Matching metadata JSON:
+  - `.repo_context/modules/metadata/runtime.object-cache-eviction.json`
+- Matching `design.md`:
+  - `.repo_context/modules/runtime/object-cache-eviction/design.md`
+- Matching feature playbook:
+  - `.repo_context/playbooks/features/runtime/object-cache-eviction/implementation.md`
+- Related formal design material:
+  - Detailed Chinese design notes are kept out of the repository and carried in the PR description or local workspace
+    notes.
+- Reason if either is intentionally omitted:
+  - 不省略。该模块处在内存热路径、后台线程、RPC 元数据、spill 持久状态和恢复语义交叉处，需要设计文档和实施 playbook。
+
+## Module Boundary Assessment
+
+- Canonical module boundary:
+  - `runtime.object-cache-eviction` owns worker object cache eviction decision, scheduling, local memory/spill cleanup, and master metadata cleanup integration.
+- Candidate sibling submodules considered:
+  - `runtime.worker-runtime`: worker 生命周期父模块，保留启动和服务面，不承载 eviction 状态机细节。
+  - `infra.l2cache`: L2 backend 和持久化能力父模块；eviction 只消费 write mode/L2 状态，不拥有 backend 实现。
+  - `infra.slot`: 分布式磁盘 slot 的持久格式和恢复；eviction 只通过 object 状态和 L2 可见性做决策。
+  - `runtime.hash-ring` / `runtime.cluster-manager`: 负责 worker 路由和扩缩容；eviction 通过 `EtcdClusterManager` 和 `NodeSelector` 获取 master 地址或远端迁移能力。
+- Why they stay inside the parent module or split out:
+  - eviction 有独立线程、队列、水位、对象锁、RPC 和 spill 文件生命周期，因此从 worker runtime 拆成 sibling module。
+  - L2、slot、hash ring 仍作为依赖模块记录，避免把 backend 持久格式和路由协议混入 eviction 文档。
+
+## Key Entry Points
+
+- Public APIs:
+  - `WorkerOcEvictionManager::Init`
+  - `WorkerOcEvictionManager::Add`
+  - `WorkerOcEvictionManager::Erase`
+  - `WorkerOcEvictionManager::Evict`
+  - `WorkerOcEvictionManager::TryEvictSpilledObjects`
+  - `EvictWhenMemoryExceedThrehold`
+- Internal services / executables:
+  - `MemEvictionThread`: 执行 memory eviction task。
+  - `SpillEvictionThread`: 执行 spill 文件淘汰 task。
+  - `MasterTaskThread`: 异步提交 `RemoveMetaFromMasterForEviction`。
+  - `SpillThread`: 写本地 spill 文件或提交远端迁移 batch。
+  - `scheduleEvictThread`: 每 10 秒检查 object/stream 水位并触发 eviction。
+- Config flags or environment variables:
+  - `eviction_reserve_mem_threshold_mb`: 参与 object/stream 高水位阈值计算，默认 10240 MB。
+  - `spill_directory`: 为空时禁用本地 spill。
+  - `spill_size_limit`: spill 目录容量限制，0 表示使用启动时目录空闲空间的 95%。
+  - `spill_thread_num`: `SpillThread` 和 `SpillFileManager` 并行度，默认 8。
+  - `spill_file_max_size_mb`: 单个 spill 文件大小上限，默认 200 MB。
+  - `spill_file_open_limit`: spill 文件打开 fd 上限，默认 512。
+  - `spill_to_remote_worker`: 允许将本地内存压力迁移到其他 worker 内存，默认 false。
+
+## Main Dependencies
+
+- Upstream callers:
+  - object cache shared-memory allocation path: `AllocateMemoryForObject`
+  - stream cache allocation path: `WorkerSCAllocateMemory::AllocateMemoryForStream`
+  - object create/get/update paths that call `Add` / `Erase`
+- Downstream modules:
+  - worker object table and `SafeObjType` object lock
+  - `ObjectGlobalRefTable<ClientKey>`
+  - `WorkerOcSpill`
+  - `WorkerMasterOCApi`
+  - `OCMetadataManager`
+  - `ExpiredObjectManager`
+  - `DataMigrator` and `NodeSelector`
+  - `EtcdClusterManager`
+- External dependencies:
+  - worker-to-master RPC
+  - local filesystem for spill
+  - shared-memory allocator
+
+## Build And Test
+
+- Build commands:
+  - `bash build.sh -t build`
+- Fast verification commands:
+  - `ctest -R EvictionManagerTest`
+  - `ctest -R SpillEvictionTest`
+  - `ctest -R KVCacheClientEvictTest`
+- Representative tests:
+  - `tests/ut/worker/object_cache/worker_oc_eviction_test.cpp`
+  - `tests/ut/worker/object_cache/worker_oc_spill_eviction_test.cpp`
+  - `tests/st/client/kv_cache/kv_cache_client_evict_test.cpp`
+
+## Review And Bugfix Notes
+
+- Common change risks:
+  - 未来若把 `END_LIFE` 的同步 master RPC 放回 memory eviction 主 loop，会再次放大 master/RPC 抖动对
+    eviction 吞吐的影响；当前剩余同步点在 primary end-life lane 和 spill/no-space fallback 的对象写锁内。
+  - `eviction_thread_num` 仅作为 deprecated/ignored 兼容参数存在；如果未来重新设计 memory eviction 并发，不能通过重新启用该 flag 绕过 `isDone_`，需要重新设计候选队列、水位和失败回填的一致性。
+  - 调整 `eviction_thread_num` 兼容语义必须同时覆盖 `cli/deploy/conf/worker_config.json`、`k8s_deployment/helm_chart/worker.config`、`k8s/helm_chart/datasystem/values.yaml`、`k8s/helm_chart/datasystem/templates/worker_daemonset.yaml`、`docs/source_zh_cn/deployment/dscli.md`、`docs/source_zh_cn/deployment/k8s_configuration.md` 和示例文档。
+  - `DELETE` 和 `END_LIFE` 语义不同：前者只移除本 worker copy metadata，后者删除所有 copy metadata 并结束对象生命周期。
+  - spill 写入会释放对象写锁再执行 I/O，之后按 create time 重新加锁校验版本；不要绕过版本校验。
+  - 当前分支的 primary end-life lane 已使用 `ids_with_version` 并处理 `failed_object_keys` / `outdated_objs`；
+    `EvictSpilledObjects` 和 `SpillImpl` fallback 保留的同步 `DeleteNoneL2CacheEvictableObject` 也使用
+    `ids_with_version` 并设置 `async_delete=true`。
+  - primary end-life 异步化的正式方案不缩短对象锁时间，不做锁外 RPC，不引入前台可见 pending 状态；该方案只隔离主 memory eviction loop，不改变 spill eviction 和 spill no-space fallback 的同步语义。
+- Important invariants:
+  - 对象被选为候选后必须先取得对象写锁；拿不到锁时从 eviction list 暂时移除并以 `READD_COUNTER` 回填。
+  - `IsObjectEvictable` 必须确认对象仍在 eviction list 且 binary 对象仍有 shm。
+  - `SPILL` 成功后才释放内存并标记 spill state；重加锁失败时需要回滚 spill 文件。
+  - spill eviction 只删除 write-through、write-back 且 writeback done、或 `NONE_L2_CACHE_EVICT` 对象。
+  - master metadata 删除失败的对象必须回到 eviction list，避免静默丢失候选。
+- Observability or debugging hooks:
+  - Logs: `Eviction start`, `Evict is going on`, `EvictionList size before/after evict`, `Spill eviction list size before/after evict`。
+  - Perf keys: `WORKER_EVICT_LIST_ADD`, `WORKER_EVICT_LIST_ERASE`, `WORKER_EVICT_LIST_FIND`, `WORKER_EVICT_ONE_OBJECT`, `WORKER_EVICT_DELETE`, `WORKER_EVICT_FREE`。
+  - Inject points include `worker.Evict`, `worker.SubmitSpillTask`, `worker.DeleteAllCopyMeta`, `evictAction.setDelete`, `worker.MigrateData.setMaxRetryCount`。
+
+## Design Notes To Revisit
+
+- 当前正式方案：memory eviction 主 loop 的 `END_LIFE` 进入独立 primary end-life lane，fixed 1 线程，
+  pending 上限固定常量，write-back 仅在 lane 重新锁住对象、`DeleteAllCopyMeta` 成功且本地删除成功后移除
+  async send queue，metadata 已删除但本地 cleanup 失败的 key 记录为 local-cleanup retry，pending duplicate
+  直接视为已有 task 接管，lane drain 内部 queue 并按 master 聚合 batch
+  `DeleteAllCopyMeta`，batch 使用 repeated
+  `ids_with_version`，lane 用固定短重试和不依赖 eviction list membership 的窄 guard helper 复核状态，发送
+  `DeleteAllCopyMeta` 前复查 low watermark 并按对象大小控制 batch 预计释放量以避免大对象过度释放，5s
+  `DeleteAllCopyMeta` 总预算，`failed_object_keys`、`outdated_objs`、`objs_without_meta`、redirect info 或
+  `meta_is_moving` 均不得本地 erase，失败统一用 `READD_COUNTER` 回补 eviction list 但不主动触发 `Evict()`。
+- 如果未来要让 memory eviction 真正并发，需要先设计候选队列并发、对象锁竞争、低水位判断和 batch flush 的一致性，不能把废弃兼容参数 `eviction_thread_num` 重新作为调优入口。
+- 如果未来扩展到 `EvictSpilledObjects` 或 `SpillImpl` fallback 异步化，需要单独定义 spill eviction list erase、compact 触发和 spill 成功收尾语义。

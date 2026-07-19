@@ -21,6 +21,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | find build, sanitizer, or coverage entrypoints | `modules/quality/build-test-debug.md` | `build.sh`, `CMakeLists.txt` |
 | understand public SDK APIs and Python bindings | `modules/client/client-sdk.md` | `include/datasystem/*`, `src/datasystem/client`, `src/datasystem/pybind_api`, `python/yr/datasystem` |
 | understand worker startup and runtime services | `modules/runtime/worker-runtime.md` | `src/datasystem/worker/*` |
+| understand worker object cache eviction, END_LIFE, spill eviction, or master metadata cleanup from eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*`, `src/datasystem/master/object_cache/oc_metadata_manager.*` |
 | understand cluster metadata, ETCD, Metastore, and hash-ring coordination | `modules/runtime/cluster-management.md` | `docs/source_zh_cn/design_document/cluster_management.md`, `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `cli/*.py` |
 | understand shared infra used across modules | `modules/infra/common-infra.md` | `src/datasystem/common/*` |
 | understand l2 cache architecture, backend boundaries, or when a change needs design-first handling | `modules/infra/l2cache/design.md` | `src/datasystem/common/l2cache/*`, `src/datasystem/worker/worker_oc_server.cpp` |
@@ -62,6 +63,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | module metadata registry | `modules/metadata/README.md` | `modules/metadata/*.json` |
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |
 | worker runtime | `modules/runtime/worker-runtime.md` | `src/datasystem/worker` |
+| object cache eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/eviction_list.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*` |
 | cluster coordination | `modules/runtime/cluster-management.md` | `src/datasystem/worker/cluster_manager`, `src/datasystem/worker/hash_ring`, `cli/start.py`, `cli/up.py` |
 | common infrastructure | `modules/infra/common-infra.md` | `src/datasystem/common` |
 | l2 cache and secondary storage | `modules/infra/l2cache/README.md` | `src/datasystem/common/l2cache`, `src/datasystem/worker/object_cache/slot_recovery*` |

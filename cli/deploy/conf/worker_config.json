@@ -149,7 +149,7 @@
     },
     "eviction_thread_num": {
         "value": "1",
-        "description": "Thread number of eviction for object cache."
+        "description": "Deprecated and ignored. Memory eviction uses a fixed single thread; this parameter is kept for compatibility."
     },
     "eviction_reserve_mem_threshold_mb": {
         "value": "10240",
