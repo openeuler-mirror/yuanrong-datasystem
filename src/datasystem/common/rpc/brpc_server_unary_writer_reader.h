@@ -59,6 +59,8 @@ namespace datasystem {
 
 namespace {
 constexpr int kTagPayloadFrameWarnInterval = 100;
+constexpr int64_t MICROSECONDS_PER_MILLISECOND = 1000;
+constexpr int64_t CEIL_MILLISECONDS_ADJUSTMENT_US = MICROSECONDS_PER_MILLISECOND - 1;
 }  // namespace
 
 /**
@@ -102,23 +104,27 @@ public:
         request_ = dynamic_cast<const R *>(request);
         response_ = dynamic_cast<W *>(response);
 
-        // P3: Store scTimeoutDuration per-adapter so it survives bthread M:N
-        // migration.  Under brpc, a bthread may yield and resume on a different
-        // pthread whose thread_local scTimeoutDuration copy is stale.  Service
-        // implementations should use GetScTimeoutDuration() instead of the
-        // thread_local after yield points (sub-RPC calls).
+        // Store the per-RPC timeout in the adapter so it survives bthread M:N
+        // migration. Server-side brpc restores timeout_ms from RpcMeta but does
+        // not reconstruct deadline_us, so both sources must be considered.
         if (cntl_ != nullptr) {
             int64_t deadlineUs = cntl_->deadline_us();
+            int64_t remainingMs = 0;
             if (deadlineUs > 0) {
                 struct timeval tv;
                 gettimeofday(&tv, nullptr);
                 int64_t nowUs = static_cast<int64_t>(tv.tv_sec) * 1000000L + tv.tv_usec;
-                int64_t remainingMs = (deadlineUs - nowUs + 999) / 1000;
-                if (remainingMs > 0) {
-                    scTimeoutDuration_.Init(remainingMs);
-                } else {
-                    scTimeoutDuration_.Init();
+                int64_t remainingUs = deadlineUs - nowUs;
+                if (remainingUs <= 0) {
+                    scTimeoutDuration_.InitUs(remainingUs);
+                    return;
                 }
+                remainingMs = (remainingUs + CEIL_MILLISECONDS_ADJUSTMENT_US) / MICROSECONDS_PER_MILLISECOND;
+            } else if (cntl_->timeout_ms() > 0) {
+                remainingMs = cntl_->timeout_ms();
+            }
+            if (remainingMs > 0) {
+                scTimeoutDuration_.Init(remainingMs);
             } else {
                 scTimeoutDuration_.Init();
             }

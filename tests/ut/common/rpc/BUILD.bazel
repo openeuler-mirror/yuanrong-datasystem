@@ -73,6 +73,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "brpc_server_unary_writer_reader_test",
+    srcs = ["brpc_server_unary_writer_reader_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rpc:brpc_server_unary_writer_reader",
+        "@com_github_apache_brpc//:brpc",
+        "//src/datasystem/protos:utils_cc_proto",
+    ],
+)
+
+ds_cc_test(
     name = "brpc_status_util_test",
     srcs = ["brpc_status_util_test.cpp"],
     tags = ["level0", "ut", "asan", "tsan"],
