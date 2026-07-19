@@ -4493,6 +4493,7 @@ int ObjectClientImpl::QueryGlobalRefNum(const std::string &objectKey)
 Status ObjectClientImpl::Delete(const std::vector<std::string> &objectKeys, std::vector<std::string> &failedObjectKeys)
 {
     PerfPoint perfPoint(PerfKey::HETERO_CLIENT_DELETE);
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
@@ -4557,6 +4558,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::shared_ptr<Buffer>> &buffer
                                          FormatString("The buffer size cannot exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     RETURN_IF_NOT_OK(IsClientReady());
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     std::shared_ptr<IClientWorkerApi> workerApi;
     std::unique_ptr<Raii> raii;
     RETURN_IF_NOT_OK(GetAvailableWorkerApi(workerApi, raii));
@@ -5110,6 +5112,7 @@ Status ObjectClientImpl::MSet(const std::vector<std::string> &keys, const std::v
     RETURN_IF_NOT_OK(CheckMultiSetInputParamValidationNtx(keys, vals, outFailedKeys, deduplicateKeys, deduplicateVals));
     RETURN_IF_NOT_OK(IsClientReady());
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
+    GetRequestContext()->reqTimeoutDuration.InitUs(ApiDeadline::Instance().ApiRemainingUs());
     if (!enableLocalCache_) {
         const auto &filteredKeys = deduplicateKeys.empty() ? keys : deduplicateKeys;
         const auto &filteredValues = deduplicateVals.empty() ? vals : deduplicateVals;
@@ -5255,6 +5258,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::AsyncDeleteDevObjects(const st
 
 Status ObjectClientImpl::DeleteDevObjects(const std::vector<std::string> &objKeys, std::vector<std::string> &failList)
 {
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsBatchSizeUnderLimit(objKeys.size()), K_INVALID,
@@ -5761,6 +5765,7 @@ Status ObjectClientImpl::Expire(const std::vector<std::string> &keys, uint32_t t
                                 std::vector<std::string> &failedKeys)
 {
     PerfPoint perfPoint(PerfKey::CLIENT_EXPIRE_OBJECT);
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
@@ -5776,6 +5781,7 @@ Status ObjectClientImpl::Expire(const std::vector<std::string> &keys, uint32_t t
 Status ObjectClientImpl::GetMetaInfo(const std::vector<std::string> &keys, const bool isDevKey,
                                      std::vector<MetaInfo> &metaInfos, std::vector<std::string> &failKeys)
 {
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(keys.size() <= QUERY_SIZE_OBJECT_LIMIT, K_INVALID,
