@@ -219,7 +219,7 @@ public:
 
     /// \brief Copy values of keys to device memory through RH2D.
     ///
-    /// \param[in] keys The keys.
+    /// \param[in] keys The keys. Duplicate keys are not allowed.
     /// \param[in] devBlob Device memory pointer and size list. Each key maps to one continuous Blob.
     /// \param[out] outFailedKeys failed H2D keys.
     /// \param[in] h2dStream Optional opaque CUDA stream handle. For CUDA, pass cudaStream_t cast to void *.
@@ -230,7 +230,7 @@ public:
     /// This could be released after h2dStream is synchronized
     ///
     /// \return K_OK on success; the error code otherwise.
-    ///         K_INVALID: the key is empty.
+    ///         K_INVALID: the key is empty or duplicated.
     ///         K_NOT_FOUND: the key not found.
     ///         K_RUNTIME_ERROR: Cannot get value from worker.
     ///         K_NOT_SUPPORT: client or worker don't support MGetH2D

@@ -331,6 +331,23 @@ public:
     std::shared_ptr<KVClient> client_;
 };
 
+#ifdef BUILD_PIPLN_H2D
+TEST_F(KVCacheClientTest, MGetH2DRejectsDuplicateKeys)
+{
+    const std::string duplicatedKey = GetStringUuid();
+    std::vector<std::string> keys{ duplicatedKey, GetStringUuid(), duplicatedKey };
+    uint8_t destination = 0;
+    std::vector<Blob> blobs(keys.size(), Blob{ .pointer = &destination, .size = sizeof(destination) });
+    std::vector<std::string> failedKeys;
+
+    auto rc = client_->MGetH2D(keys, blobs, failedKeys);
+
+    ASSERT_EQ(rc.GetCode(), K_INVALID);
+    ASSERT_NE(rc.GetMsg().find("The input parameter contains duplicate key at index 2."), std::string::npos);
+    ASSERT_EQ(rc.GetMsg().find(duplicatedKey), std::string::npos);
+}
+#endif
+
 TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_UnmapOldWorkerSharedMemoryAfterSwitch)
 {
     InitSwitchableClient();

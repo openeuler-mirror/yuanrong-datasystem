@@ -504,6 +504,8 @@ Status ChunkManager::WaitPiplnStep12Done()
     Status firstError = Status::OK();
     for (auto &info : reqInfos_) {
         int64_t remainingTimeMs = datasystem::GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+        // should not wait negative time, if remainingTimeMs < 0, means timeout
+        remainingTimeMs = std::max<int64_t>(remainingTimeMs, 0);
         if (isClient_) {
             // client wait step 2 cancel or done
             bool done = info.second.WaitCancelOrDone(remainingTimeMs);

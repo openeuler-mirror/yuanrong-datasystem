@@ -3158,6 +3158,15 @@ Status ObjectClientImpl::CheckPipelineRH2DArgs(const std::vector<std::string> &o
     CHECK_FAIL_RETURN_STATUS(Validator::IsBatchSizeUnderLimit(objectKeys.size()), K_INVALID,
                              FormatString("The objectKeys size exceed %d.", OBJECT_KEYS_MAX_SIZE_LIMIT));
     RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
+    if (objectKeys.size() > 1) {
+        std::unordered_set<std::string_view> uniqueKeys;
+        uniqueKeys.reserve(objectKeys.size());
+        for (size_t i = 0; i < objectKeys.size(); ++i) {
+            const bool inserted = uniqueKeys.emplace(objectKeys[i]).second;
+            CHECK_FAIL_RETURN_STATUS(inserted, K_INVALID,
+                                     FormatString("The input parameter contains duplicate key at index %zu.", i));
+        }
+    }
     for (size_t i = 0; i < devBlob.size(); ++i) {
         CHECK_FAIL_RETURN_STATUS(devBlob[i].pointer != nullptr, K_INVALID,
                                  FormatString("device blob pointer is null, key index: %zu", i));
