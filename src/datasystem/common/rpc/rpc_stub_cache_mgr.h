@@ -197,6 +197,11 @@ public:
         return lruCache_->Size();
     }
 
+    bool IsInit() const
+    {
+        return init_;
+    }
+
 protected:
     using LruForRpcStubCacheMgr =
         LruCache<HashKeyForRpcStubCacheMgr, std::shared_ptr<RpcStubCacheMgrObj>, LruCountPolicy>;
