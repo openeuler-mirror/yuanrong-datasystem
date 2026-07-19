@@ -52,6 +52,7 @@
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/cluster_manager/cluster_node.h"
 #include "datasystem/worker/hash_ring/hash_ring_event.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 
 DS_DECLARE_int32(heartbeat_interval_ms);
@@ -77,6 +78,31 @@ static constexpr int TOTAL_WAIT_NODE_TABLE_TIME_SEC = 60;  // total time of wait
 static constexpr int WAIT_NODE_TABLE_INTERVAL_MS = 10;     // interval of waiting node table complete.
 static constexpr int NO_PROGRESS_TIMEOUT_SEC = 10;        // terminate wait early if no new nodes discovered.
 static const std::string ETCD_CLUSTER_SUBSCRIBER = "EtcdClusterManager";
+
+// Issue #766: when a worker is confirmed dead, remove cached worker<->worker RPC stubs
+// so survivors stop reconnecting and retransmitting TCP SYNs.
+static void CleanupRpcStubsForDeadWorker(const std::string &workerAddr)
+{
+    // RpcStubCacheMgr may not be initialized when this is called from early
+    // init (AddNewNode) or late shutdown (CleanupWorker) paths.
+    if (!RpcStubCacheMgr::Instance().IsInit()) {
+        return;
+    }
+    HostPort failedAddr;
+    auto rc = failedAddr.ParseString(workerAddr);
+    if (rc.IsError() || failedAddr.Empty()) {
+        return;
+    }
+    for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC,
+                       StubType::WORKER_WORKER_TRANS_SVC }) {
+        auto removeRc = RpcStubCacheMgr::Instance().Remove(failedAddr, type);
+        // K_NOT_FOUND: no cached stub for this worker<->worker direction; not an error.
+        if (removeRc.IsError() && removeRc.GetCode() != StatusCode::K_NOT_FOUND) {
+            LOG(ERROR) << "Remove cached worker<->worker stub failed, address=" << workerAddr
+                       << ", type=" << static_cast<int>(type) << ", rc=" << removeRc.ToString();
+        }
+    }
+}
 
 EtcdClusterManager::ClusterNode::ClusterNode(const std::string &timeEpoch, const std::string &additionEventType)
     : timeEpoch_(timeEpoch), additionEventType_(additionEventType), state_(NodeState::ACTIVE)
@@ -362,6 +388,7 @@ Status EtcdClusterManager::HandleFailedNodeToActive(const HostPort &eventNodeKey
         RETURN_IF_NOT_OK(ProcessNetworkRecovery(eventNodeKey, failedNode, eventNode));
     } else {
         RemoveDeadWorkerEvent::GetInstance().NotifyAll(eventNodeKey.ToString());
+        CleanupRpcStubsForDeadWorker(eventNodeKey.ToString());
     }
     INJECT_POINT("EtcdClusterManager.HandleFailedNodeToActive.sleep");
 
@@ -395,6 +422,9 @@ Status EtcdClusterManager::AddNewNode(const HostPort &eventNodeKey, std::unique_
     std::shared_lock<std::shared_timed_mutex> lock(mutex_);
     LOG(INFO) << "Adding the ClusterNode to active nodes: " << eventNode->ToString(eventNodeKey);
     RemoveDeadWorkerEvent::GetInstance().NotifyAll(eventNodeKey.ToString());
+    // Note: do NOT call CleanupRpcStubsForDeadWorker here. AddNewNode fires when a
+    // node is being added (alive), not when it is confirmed dead. Removing stubs for a
+    // live node would break in-flight worker<->worker RPCs.
     if (!clusterNodeTable_.emplace(eventNodeKey, std::move(eventNode))) {
         RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "Failed to add new node into cluster node tracking.");
     }
@@ -601,6 +631,7 @@ Status EtcdClusterManager::HandleExitingNodeRemoveEvent(const HostPort &eventNod
                  "Node timeout event process failed");
     ChangePrimaryCopy::GetInstance().NotifyAll(workerAddr, true);
     RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
+    CleanupRpcStubsForDeadWorker(workerAddr);
     (void)clusterNodeTable_.erase(accessor);
     HostPort addr = eventNodeKey;
     ClearWorkerMeta::GetInstance().NotifyAll(addr);
@@ -636,6 +667,7 @@ Status EtcdClusterManager::HandleOtherAzNodeRemoveEvent(const HostPort &eventNod
         LOG_IF_ERROR(NodeTimeoutEvent::GetInstance().NotifyAll(workerAddr, false, true, true),
                      "Node timeout event process failed");
         RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
+        CleanupRpcStubsForDeadWorker(workerAddr);
         HostPort addr = eventNodeKey;
         EraseFailedNodeApiEvent::GetInstance().NotifyAll(addr);
         otherClusterNodeTable_.erase(accessor);
@@ -1257,6 +1289,10 @@ void EtcdClusterManager::CleanupWorker(const std::string &workerAddr, bool isFai
     }
     // 2. clear ocnotify api
     RemoveDeadWorkerEvent::GetInstance().NotifyAll(workerAddr);
+    // Note: do NOT call CleanupRpcStubsForDeadWorker here. CleanupWorker may fire on
+    // false positives (nodes temporarily absent from ETCD but still alive). Only clean
+    // up stubs at confirmed-dead sites (HandleFailedNodeToActive else branch,
+    // HandleExitingNodeRemoveEvent, HandleOtherAzNodeRemoveEvent).
     // 3. clear workerapi
     EraseFailedNodeApiEvent::GetInstance().NotifyAll(addr);
 }
