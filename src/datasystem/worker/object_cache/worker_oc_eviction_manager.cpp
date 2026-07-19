@@ -876,7 +876,8 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
     if (candidates.empty()) {
         return;
     }
-    Raii unlockRaii([&candidates] { UnlockPrimaryEndLifeCandidates(candidates); });
+    // Release W-lock before the master RPC so concurrent Get RLocks are not blocked for the
+    // RPC duration. Drain-vs-drain exclusion uses pendingPrimaryEndLifeObjects_ + single-thread pool.
     std::vector<PrimaryEndLifeCandidate> needDeleteMetaCandidates;
     needDeleteMetaCandidates.reserve(candidates.size());
     for (const auto &candidate : candidates) {
@@ -884,6 +885,8 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
             needDeleteMetaCandidates.emplace_back(candidate);
         }
     }
+    // Phase 1: Unlock → master RPC (unlocked).
+    UnlockPrimaryEndLifeCandidates(candidates);
     std::unordered_set<std::string> failedKeys;
     Status rc;
     if (!needDeleteMetaCandidates.empty()) {
@@ -893,20 +896,65 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
         LOG(WARNING) << FormatString("Primary end-life DeleteAllCopyMeta failed, count %zu, status: %s.",
                                      needDeleteMetaCandidates.size(), rc.ToString());
     }
-    for (const auto &candidate : candidates) {
+    // Phase 2: Re-acquire WLock per candidate for local Erase only.
+    ProcessPrimaryEndLifeLocalErase(candidates, rc, failedKeys);
+}
+
+void WorkerOcEvictionManager::ProcessPrimaryEndLifeLocalErase(std::vector<PrimaryEndLifeCandidate> &candidates,
+                                                              Status &rc, std::unordered_set<std::string> &failedKeys)
+{
+    for (auto &candidate : candidates) {
         PrimaryEndLifeTask finishTask = candidate.task;
         bool failed = !candidate.task.metaDeleted && (rc.IsError() || failedKeys.count(candidate.task.objectKey) > 0);
         if (!failed) {
-            bool removeAsyncSend = candidate.entry != nullptr && (*candidate.entry)->IsWriteBackL2CacheEvictMode();
-            Status deleteRc = DeletePrimaryEndLifeLocal(candidate);
-            failed = deleteRc.IsError();
-            finishTask.metaDeleted = failed;
-            if (!failed && removeAsyncSend) {
-                RemovePrimaryEndLifeAsyncSend(candidate.task.objectKey);
+            Status reacquireRc = ReacquireAndValidateForLocalDelete(candidate);
+            if (reacquireRc.IsError()) {
+                candidate.entry.reset();
+                failed = true;
+                finishTask.metaDeleted = true;
+            } else {
+                Raii wUnlockRaii([&candidate]() {
+                    if (candidate.entry != nullptr) {
+                        candidate.entry->WUnlock();
+                    }
+                });
+                bool removeAsyncSend = candidate.entry != nullptr && (*candidate.entry)->IsWriteBackL2CacheEvictMode();
+                Status deleteRc = DeletePrimaryEndLifeLocal(candidate);
+                failed = deleteRc.IsError();
+                finishTask.metaDeleted = failed;
+                if (!failed && removeAsyncSend) {
+                    RemovePrimaryEndLifeAsyncSend(candidate.task.objectKey);
+                }
             }
         }
         FinishPrimaryEndLifeTask(finishTask, failed);
     }
+}
+
+Status WorkerOcEvictionManager::ReacquireAndValidateForLocalDelete(PrimaryEndLifeCandidate &candidate)
+{
+    // Re-lookup entry from table (may have been erased during RPC window).
+    std::shared_ptr<SafeObjType> entry;
+    RETURN_IF_NOT_OK(objectTable_->Get(candidate.task.objectKey, entry));
+    // TryWLock with bounded retry, matching TryLockPrimaryEndLifeTask's policy.
+    Status rc;
+    for (uint32_t i = 0; i < PRIMARY_END_LIFE_LOCK_RETRY_TIMES; ++i) {
+        rc = entry->TryWLock();
+        if (rc.IsOk() || rc.GetCode() != K_TRY_AGAIN) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS));
+    }
+    RETURN_IF_NOT_OK(rc);
+    // If version changed during the RPC window, skip local Erase.
+    if ((*entry)->GetCreateTime() != candidate.task.version) {
+        entry->WUnlock();
+        RETURN_STATUS(StatusCode::K_NOT_FOUND,
+                      FormatString("[ObjectKey %s] Version changed during end-life RPC window, skip local erase.",
+                                   candidate.task.objectKey));
+    }
+    candidate.entry = entry;
+    return Status::OK();
 }
 
 Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeTask> &tasks,
@@ -1106,7 +1154,9 @@ uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseSize(const SafeObjType
 void WorkerOcEvictionManager::UnlockPrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeCandidate> &candidates)
 {
     for (const auto &candidate : candidates) {
-        candidate.entry->WUnlock();
+        if (candidate.entry != nullptr) {
+            candidate.entry->WUnlock();
+        }
     }
 }
 

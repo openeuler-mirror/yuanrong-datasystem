@@ -141,12 +141,14 @@ void LogBatchGetObjectRemoteFinish(const LatencyTraceConfig &config, const Batch
 {
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    // Per-phase breakdown: RemoteLockEntry / RemoteTryRLatch / RemoteWriteFastTransport.
     SLOW_LOG_IF_OR_VLOG(
         INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
         AppendSrcDstForLog(
             FormatString("[Get/RemotePull] finish, count: %d, firstObjectKey: %s, payload size: %zu, start "
-                         "remainingTime: %zu, cost: %.3fms",
-                         req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedMs),
+                         "remainingTime: %zu, cost: %.3fms, breakdown: %s",
+                         req.requests_size(), firstObjectKey, payload.size(), realRemainingTime, elapsedMs,
+                         GetWorkerTimeCost().GetInfo()),
             callerAddress, FLAGS_worker_address));
 }
 }  // namespace
@@ -545,7 +547,10 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
         pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_PAYLOAD_SHM_UNIT);
         ShmGuard shmGuard(entry->GetShmUnit(), entry->GetDataSize(), entry->GetMetadataSize());
         if (WorkerOcServiceCrudCommonApi::ShmEnable()) {
+            // Timing: SHM read-latch contention → breakdown "RemoteTryRLatch: Nms".
+            Timer latchTimer;
             RETURN_IF_NOT_OK(shmGuard.TryRLatch());
+            GetWorkerTimeCost().Append("RemoteTryRLatch", latchTimer.ElapsedMilliSecond());
         }
         INJECT_POINT("worker.LoadObjectData.AddPayload");
         pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_PAYLOAD);
@@ -558,10 +563,15 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
         Status fastTransportStatus = Status::OK();
         std::string fastTransportName;
 
-        RETURN_IF_NOT_OK(WriteViaFastTransport(req, rsp, entry, shmUnit, localSegAddress, localSegSize, offset, size,
-                                               blocking, eventKeys, batchPtr, isFastTransportEnabled,
-                                               isPipelineH2DRequest, batchRh2dContext, fastTransportStatus,
-                                               fastTransportName));
+        // Timing: URMA/UCP transport latency → breakdown "RemoteWriteFastTransport: Nms".
+        {
+            Timer writeTimer;
+            RETURN_IF_NOT_OK(WriteViaFastTransport(req, rsp, entry, shmUnit, localSegAddress, localSegSize, offset,
+                                                   size, blocking, eventKeys, batchPtr, isFastTransportEnabled,
+                                                   isPipelineH2DRequest, batchRh2dContext, fastTransportStatus,
+                                                   fastTransportName));
+            GetWorkerTimeCost().Append("RemoteWriteFastTransport", writeTimer.ElapsedMilliSecond());
+        }
         if (isQueryAndGet && req.has_urma_info()) {
             CHECK_FAIL_RETURN_STATUS(isUrmaFastTransport, K_NOT_SUPPORTED,
                                      "QueryAndGet UB transport is unavailable");
@@ -776,7 +786,8 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
                                                       RemoteH2DRootInfoPb *batchRootInfo, Status *fallbackStatus,
                                                       BatchRh2dContext *batchRh2dContext, bool isQueryAndGet)
 {
-    ScopedRequestContext ctx;
+    // Outer scope (BatchGetObjectRemote/GetObjectRemote) already created ScopedRequestContext.
+    // No nested scope here: workerTimeCost is a value member not inherited by inner scopes.
     PerfPoint batchImplPoint(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE_IMPL);
     (void)eventKeys;
     (void)blocking;
@@ -801,7 +812,12 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemoteImpl(const GetObjectRemoteReqPb
     });
     RETURN_IF_NOT_OK(rc);
 
-    RETURN_IF_NOT_OK(LockEntryForRemoteGet(objectKey, tryLock, version, safeEntry));
+    // Timing: SafeObject RLock blocked by drain WLock → breakdown "RemoteLockEntry: Nms".
+    {
+        Timer lockEntryTimer;
+        RETURN_IF_NOT_OK(LockEntryForRemoteGet(objectKey, tryLock, version, safeEntry));
+        GetWorkerTimeCost().Append("RemoteLockEntry", lockEntryTimer.ElapsedMilliSecond());
+    }
     Raii raii([safeEntry]() { safeEntry->RUnlock(); });
     auto &entry = *safeEntry;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!entry->stateInfo.IsCacheInvalid() && !entry->IsInvalid(), K_INVALID,
