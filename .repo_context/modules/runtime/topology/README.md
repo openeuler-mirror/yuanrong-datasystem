@@ -87,7 +87,9 @@
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
   Object and stream callbacks treat per-item migration failures as retryable task failures, so a successful RPC status
-  alone cannot advance the batch while selected metadata is still missing at the target.
+  alone cannot advance the batch while selected metadata is still missing at the target. A completed failed attempt
+  also clears its source-side migrating marker after restoring source state, allowing the next bounded retry to serve
+  the metadata from the source instead of reporting a stale moving state.
 - Failure preempts an ordinary batch by fencing its old execution round, preserving `JOINING`/`LEAVING` facts, completing
   the Failure batch first, and replanning ordinary work from the latest topology.
 
@@ -118,6 +120,8 @@
   preempt ordinary work. Scale-in waits for an already-running scale-out batch to finish.
 - All callbacks must be deadline-aware, cooperatively cancellable, idempotent by operation ID, and safe under duplicate
   delivery. Process termination is supplied by Kubernetes or the process manager after bounded drain.
+- Worker task notifications are derived, idempotent records. A notification observed after its active batch finalizes,
+  or while a different batch is authoritative, is a stale no-op rather than a runtime failure.
 - Background reconciliation must remain resource bounded and must always converge to a state that permits a later batch.
 
 ## Tests

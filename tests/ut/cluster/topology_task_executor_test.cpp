@@ -598,6 +598,27 @@ TEST(TopologyTaskExecutorTest, DuplicateNotifyAfterProgressIsIdempotent)
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
+TEST(TopologyTaskExecutorTest, IgnoresNotifyAfterBatchFinalizes)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologyPlanBuilder builder(scenario.algorithm);
+    TopologyState final;
+    DS_ASSERT_OK(builder.BuildScaleOutFinal(scenario.plan.next, final));
+    std::shared_ptr<const TopologySnapshot> finalized;
+    DS_ASSERT_OK(TopologySnapshot::Create(final, 2, std::string(64, 'b'), finalized));
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(scenario.snapshots.Publish(finalized, outcome));
+
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+    DS_ASSERT_OK(executor.Start());
+    DS_ASSERT_OK(executor.HandleNotify(scenario.expected.notifiesByAddress.at(task.executorAddress)));
+    EXPECT_EQ(scenario.callbacks.scaleOutCalls.load(), 0);
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyTaskExecutorTest, RejectsCompletionWhoseOperationIdDoesNotMatchFence)
 {
     ExecutorScenario scenario;

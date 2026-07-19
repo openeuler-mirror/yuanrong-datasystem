@@ -66,6 +66,11 @@ namespace datasystem {
 namespace object_cache {
 class WorkerWorkerOCServiceImpl;
 }
+#ifdef WITH_TESTS
+namespace ut {
+class OCMetadataManagerForMigrationTest;
+}
+#endif
 
 namespace master {
 enum MULTI_SET_STATE { IDLE = 0, PENDING = 1 };
@@ -1353,6 +1358,9 @@ private:
     friend class OCGlobalCacheDeleteManager;
     friend class ExpiredObjectManager;
     friend class OCMigrateMetadataManager;
+#ifdef WITH_TESTS
+    friend class ::datasystem::ut::OCMetadataManagerForMigrationTest;
+#endif
 
     struct ChangedMeta {
         const std::string &newAddress;

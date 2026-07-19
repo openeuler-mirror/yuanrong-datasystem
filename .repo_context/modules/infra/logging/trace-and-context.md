@@ -30,6 +30,8 @@
   - `SetRequestLogTrace()` / `IsRequestLogTrace()` explicitly mark whether current trace participates in request-log sampling.
   - `SetRequestSampleDecision()` and `GetRequestSampleDecision()` store and read request-log sampling decision in the same thread-local trace context.
   - `TraceGuard` clears trace or sub-trace state on scope exit unless the guard was created with `keep=true`.
+  - `Trace` remains trivially destructible and stores latency summaries in a bounded inline buffer. This preserves safe
+    teardown when a process-static SDK client is destroyed after the main thread's thread-local trace state.
 
 ## Main Types And APIs
 
@@ -76,3 +78,4 @@
 - Common risks:
   - replacing `SetTraceUUID()` with unconditional regeneration can break correlation across a request chain;
   - forgetting `TraceGuard` or equivalent cleanup can leak trace/sub-trace state into unrelated work on reused threads.
+  - adding heap-owning members to `Trace` can reintroduce process-teardown use-after-free for process-static SDK clients.

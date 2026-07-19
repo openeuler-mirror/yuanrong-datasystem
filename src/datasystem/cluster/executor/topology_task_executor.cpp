@@ -267,8 +267,11 @@ Status TopologyTaskExecutor::HandleNotify(const TopologyTaskNotify &notify)
 {
     std::shared_ptr<const TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
-    CHECK_FAIL_RETURN_STATUS(snapshot->GetActiveBatch().has_value() && snapshot->GetActiveBatch()->type == notify.type,
-                             K_INVALID, "notify does not match active topology batch");
+    if (!snapshot->GetActiveBatch().has_value() || snapshot->GetActiveBatch()->type != notify.type) {
+        VLOG(1) << "CLUSTER_TASK action=ignore_stale_notify type=" << static_cast<uint32_t>(notify.type)
+                << " topology_version=" << snapshot->Version();
+        return Status::OK();
+    }
     VLOG(1) << "CLUSTER_TASK action=notify type=" << static_cast<uint32_t>(notify.type)
             << " epoch=" << snapshot->GetActiveBatch()->epoch << " task_count=" << notify.taskIds.size();
     {

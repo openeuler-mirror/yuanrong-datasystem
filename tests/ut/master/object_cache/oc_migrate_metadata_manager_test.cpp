@@ -16,6 +16,24 @@
 
 namespace datasystem::ut {
 
+class OCMetadataManagerForMigrationTest : public master::OCMetadataManager {
+public:
+    OCMetadataManagerForMigrationTest() : OCMetadataManager(nullptr, nullptr, nullptr, nullptr, "", nullptr, nullptr,
+                                                            false, HostPort(), "", nullptr, "migration-test")
+    {
+    }
+
+    void MarkMigrating(const std::string &objectKey)
+    {
+        migratingItems_.insert({ objectKey, true });
+    }
+
+    void PrepareFailureDependencies()
+    {
+        expiredObjectManager_ = std::make_unique<master::ExpiredObjectManager>("", this);
+    }
+};
+
 class OCMigrateMetadataManagerTest : public CommonTest {
 public:
     void VerifyTopologyMigrationRejectsPartialItemFailure()
@@ -44,6 +62,22 @@ protected:
 TEST_F(OCMigrateMetadataManagerTest, TopologyMigrationRejectsPartialItemFailure)
 {
     VerifyTopologyMigrationRejectsPartialItemFailure();
+}
+
+TEST_F(OCMigrateMetadataManagerTest, MigrationFailureClearsMovingMarker)
+{
+    auto metadataManager = std::make_shared<OCMetadataManagerForMigrationTest>();
+    metadataManager->PrepareFailureDependencies();
+    const std::string objectKey = "failed-object";
+    metadataManager->MarkMigrating(objectKey);
+    ASSERT_TRUE(metadataManager->ItemIsMigrating(objectKey));
+    master::MetaForMigrationPb metadata;
+    metadata.set_object_key(objectKey);
+
+    metadataManager->HandleMetaDataMigrationFailed(metadata);
+
+    EXPECT_FALSE(metadataManager->ItemIsMigrating(objectKey));
+    metadataManager->Shutdown();
 }
 
 }  // namespace datasystem::ut

@@ -15,6 +15,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -50,8 +51,31 @@ namespace datasystem {
 namespace st {
 namespace {
 constexpr int EMBEDDED_CHILD_GET_TIMEOUT_MS = 30'000;
+constexpr int EMBEDDED_CHILD_GET_ATTEMPT_TIMEOUT_MS = 5'000;
 constexpr auto EMBEDDED_CHILD_WAIT_TIMEOUT = std::chrono::seconds(45);
 constexpr auto EMBEDDED_CHILD_POLL_INTERVAL = std::chrono::milliseconds(100);
+
+Status WaitForEmbeddedKey(KVClient &client, const std::string &key, std::string &val)
+{
+    const auto deadline = std::chrono::steady_clock::now()
+                          + std::chrono::milliseconds(EMBEDDED_CHILD_GET_TIMEOUT_MS);
+    Status rc(K_NOT_FOUND, "Timed out waiting for the embedded key");
+    // The embedded client's RPC deadline is shorter than the cluster convergence window, so wait in bounded attempts.
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto remainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     deadline - std::chrono::steady_clock::now())
+                                     .count();
+        const auto timeoutMs = static_cast<int32_t>(std::max<int64_t>(
+            1, std::min<int64_t>(EMBEDDED_CHILD_GET_ATTEMPT_TIMEOUT_MS, remainingMs)));
+        rc = client.Get(key, val, timeoutMs);
+        if (rc.IsOk()
+            || (rc.GetCode() != K_NOT_FOUND && rc.GetCode() != K_RPC_DEADLINE_EXCEEDED
+                && rc.GetCode() != K_RPC_UNAVAILABLE)) {
+            return rc;
+        }
+    }
+    return rc;
+}
 
 void KillAndReapChildren(std::vector<pid_t> &children)
 {
@@ -543,7 +567,7 @@ TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest)
         DS_ASSERT_OK(StartEmbeddedNode(0));
         KVClient* client = &KVClient::EmbeddedInstance();
         std::string val;
-        DS_ASSERT_OK(client->Get("killpid1", val, EMBEDDED_CHILD_GET_TIMEOUT_MS));
+        DS_ASSERT_OK(WaitForEmbeddedKey(*client, "killpid1", val));
         DS_ASSERT_OK(client->ShutDown());
         _exit(EXIT_SUCCESS);
     }
@@ -552,7 +576,7 @@ TEST_F(KVClientEmbeddedDfxTest, EmbeddedClusterKillScaleDownTest)
         DS_ASSERT_OK(StartEmbeddedNode(1));
         KVClient* client = &KVClient::EmbeddedInstance();
         std::string val;
-        DS_ASSERT_OK(client->Get("testfinish", val, EMBEDDED_CHILD_GET_TIMEOUT_MS));
+        DS_ASSERT_OK(WaitForEmbeddedKey(*client, "testfinish", val));
         sleep(1);  // Wait for the peer client to shut down.
         DS_ASSERT_OK(client->ShutDown());
         _exit(EXIT_SUCCESS);

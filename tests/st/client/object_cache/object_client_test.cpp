@@ -22,6 +22,7 @@
 
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/string_intern/string_pool.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/timer.h"
@@ -2031,9 +2032,10 @@ TEST_F(ObjectClientTest, EXCLUSIVE_TestParallelPut)
 
 TEST_F(ObjectClientTest, TestTraceDestructorHeapUseAfterFree)
 {
-    // The order in which objects are destructed is that threadload static precedes static-modified objects.
+    // The main thread's thread-local Trace is destroyed before this process-static client.
     static std::shared_ptr<ObjectClient> client;
     InitTestClient(0, client);
+    Trace::Instance().SetLatencySummary(std::string(LATENCY_SUMMARY_MAX_SIZE, 'x'));
 }
 
 TEST_F(ObjectClientTest, TestClientWorkerVersionDiff)

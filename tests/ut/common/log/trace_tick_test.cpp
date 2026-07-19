@@ -18,11 +18,15 @@
 #include "datasystem/common/log/latency_phase.h"
 
 #include <thread>
+#include <type_traits>
 
 #include "ut/common.h"
 
 namespace datasystem {
 namespace ut {
+static_assert(std::is_trivially_destructible<Trace>::value,
+              "thread-local Trace must remain safe during process-static client destruction");
+
 class TraceTickTest : public CommonTest {
 protected:
     void SetUp() override
@@ -112,6 +116,14 @@ TEST_F(TraceTickTest, InvalidateClearsTicks)
     Trace::Instance().Invalidate();
     EXPECT_EQ(Trace::Instance().GetLatencyTickCount(), 0u);
     EXPECT_EQ(Trace::Instance().GetLatencyTickDroppedCount(), 0u);
+}
+
+TEST_F(TraceTickTest, LatencySummaryTruncatesAtInlineCapacity)
+{
+    const std::string summary(LATENCY_SUMMARY_MAX_SIZE + 1, 'x');
+    Trace::Instance().SetLatencySummary(summary);
+
+    EXPECT_EQ(Trace::Instance().GetLatencySummary(), summary.substr(0, LATENCY_SUMMARY_MAX_SIZE));
 }
 
 TEST_F(TraceTickTest, DownstreamPhaseBasicAndOverflow)
