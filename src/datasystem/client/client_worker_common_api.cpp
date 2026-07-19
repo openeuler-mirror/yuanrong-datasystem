@@ -643,9 +643,7 @@ Status ClientWorkerRemoteCommonApi::Disconnect(bool isDestruct)
     req.set_client_id(clientId_);
     RETURN_IF_NOT_OK(SetToken(req));
     RETURN_IF_NOT_OK(signature_->GenerateSignature(req));
-    // Millions of objects will cost worker dozens of seconds to process, set 10 min RPC timeout to prevent the client
-    // from timeout error while the worker doesn't finish processing.
-    int rpcTimeoutMs = 10 * 60 * 1000;
+    int rpcTimeoutMs = connectTimeoutMs_;
 #ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.Disconnect.ShutdownQuickily", [&rpcTimeoutMs](int time) {
         rpcTimeoutMs = time;
