@@ -68,6 +68,7 @@ DS_DECLARE_string(etcd_ca);
 DS_DECLARE_string(etcd_cert);
 DS_DECLARE_string(etcd_key);
 DS_DECLARE_string(rocksdb_store_dir);
+DS_DECLARE_string(rocksdb_write_mode);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_uint32(max_log_size);
 DS_DECLARE_int32(logfile_mode);
@@ -183,6 +184,12 @@ Status DisableTHP()
 Status PreInitRocksDB()
 {
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_rocksdb_store_dir, "~/.datasystem/rocksdb", "/master"));
+    // rocksdb_write_mode=none means RocksDB is not used at all. Skip pre-init entirely so that
+    // no pre-start directory is created and no DB::Open is attempted, leaving the
+    // rocksdb_store_dir free of any rocksdb artifacts on a fresh start.
+    if (FLAGS_rocksdb_write_mode == "none") {
+        return Status::OK();
+    }
     std::string preInitRocksDir = FLAGS_rocksdb_store_dir + "/pre-start";
     RETURN_IF_NOT_OK(RemoveAll(preInitRocksDir));
     if (!FileExist(preInitRocksDir)) {
