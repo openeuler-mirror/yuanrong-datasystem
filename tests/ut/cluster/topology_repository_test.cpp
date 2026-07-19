@@ -111,6 +111,54 @@ TEST(TopologyRepositoryTest, TaskMaterializationAcceptsAndPreservesMonotonicProg
     EXPECT_TRUE(std::get<TopologyMigrateTask>(observed).sourceRanges.front().finished);
 }
 
+TEST(TopologyRepositoryTest, ScaleInMetadataDoneMarkersArePerSourceBatchAndIdempotent)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("repo", keys));
+    TopologyRepository repository(backend, *keys);
+    const std::string sourceId(16, 'a');
+    const std::string firstTaskId = "m-e7-0123456789abcdef0123456789abcdef";
+    const std::string secondTaskId = "m-e7-fedcba9876543210fedcba9876543210";
+    size_t count = 1;
+
+    DS_ASSERT_OK(repository.CountScaleInMetadataDone(7, sourceId, count));
+    EXPECT_EQ(count, 0);
+    DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, firstTaskId, "operation-a" }));
+    DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, firstTaskId, "operation-a" }));
+    DS_ASSERT_OK(repository.CountScaleInMetadataDone(7, sourceId, count));
+    EXPECT_EQ(count, 1);
+    DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, secondTaskId, "operation-b" }));
+    DS_ASSERT_OK(repository.CountScaleInMetadataDone(7, sourceId, count));
+    EXPECT_EQ(count, 2);
+    DS_ASSERT_OK(repository.CountScaleInMetadataDone(8, sourceId, count));
+    EXPECT_EQ(count, 0);
+}
+
+TEST(TopologyRepositoryTest, ScaleInMetadataDoneTombstoneMakesConcurrentRewriteRetryable)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("repo", keys));
+    TopologyRepository repository(backend, *keys);
+    const std::string sourceId(16, 'a');
+    const std::string taskId = "m-e7-0123456789abcdef0123456789abcdef";
+    DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, taskId, "operation-a" }));
+    std::vector<ScaleInMetadataDoneJanitorCandidate> markers;
+    DS_ASSERT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(8, markers));
+    ASSERT_EQ(markers.size(), 1);
+    Status concurrentWrite;
+    backend.SetBeforeDeleteHandler([&] {
+        concurrentWrite = repository.MarkScaleInMetadataDone({ 7, sourceId, taskId, "operation-a" });
+    });
+
+    bool deleted = false;
+    DS_ASSERT_OK(repository.DeleteScaleInMetadataDoneIfMatches(markers.front(), deleted));
+    EXPECT_TRUE(deleted);
+    EXPECT_EQ(concurrentWrite.GetCode(), K_TRY_AGAIN);
+    DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, taskId, "operation-a" }));
+}
+
 TEST(TopologyRepositoryTest, ResolvesCasUnknownByExactTopologyReadBack)
 {
     FakeCoordinationBackend backend;

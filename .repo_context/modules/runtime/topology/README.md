@@ -23,8 +23,9 @@
   Janitor, and optional Coordinator recovery reporter. It does not own standalone Observer.
 - Every ETCD Worker may run a `TopologyController`. Controllers contend through the single authoritative topology-key
   CAS; controller identity is not persisted, and deterministic batch/task identities make duplicate reconciliation safe.
-- `TopologyRepository` stores one `ClusterTopologyPb` authority record and derived task/notify records. Derived records
-  cannot replace topology authority; final progress and batch transitions are fenced by topology version and batch epoch.
+- `TopologyRepository` stores one `ClusterTopologyPb` authority record plus derived task/notify records and ScaleIn
+  metadata-done markers. Derived records cannot replace topology authority; final progress and batch transitions are
+  fenced by topology version and batch epoch.
 - `cluster_topology.proto` owns these topology records under protobuf package `datasystem`; coordinator and other
   unrelated protobuf contracts remain separate schemas.
 - `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop. ETCD
@@ -44,14 +45,16 @@
   source whose metadata handoff has completed redirects missing metadata to the prospective owner.
 - Business migration/recovery is invoked through one opaque task callback. `IKeyFilter` and `StorageScanPlan` keep token
   representation internal, while callbacks receive stable operation identity, deadline, and cooperative cancellation.
-- Scale-in cleanup preparation only materializes the task scope. The final no-IO authorization runs under the same
-  Snapshot publication lock used by topology installation; the bounded idempotent cleanup effect runs on the existing
-  callback pool after releasing that lock and retains the original attempt deadline/cancellation. A stale fence
-  therefore has no destructive effect. Authorization establishes that the old task was legal before a later Snapshot
-  publication; Apply may finish afterward, remains idempotent under the preserved LEAVING/FAILED member fact, and must
-  complete before ScaleIn progress allows final member removal. Worker callbacks install their remaining budget in the
-  repository `ApiDeadline`; metadata-removal batches cap their thread-local RPC budget by that remaining deadline
-  instead of restarting the default RPC timeout for every batch.
+- Scale-in execution is metadata-first. The first callback migrates source metadata and writes one metadata-done marker
+  per task under the source/batch gate; only after all expected source markers exist does the executor re-enter the task
+  to drain Worker-local data and prepare cleanup. Scale-in cleanup preparation only materializes the task scope. The
+  final no-IO authorization runs under the same Snapshot publication lock used by topology installation; the bounded
+  idempotent cleanup effect runs on the existing callback pool after releasing that lock and retains the original attempt
+  deadline/cancellation. A stale fence therefore has no destructive effect. Authorization establishes that the old task
+  was legal before a later Snapshot publication; Apply may finish afterward, remains idempotent under the preserved
+  LEAVING/FAILED member fact, and must complete before ScaleIn progress allows final member removal. Worker callbacks
+  install their remaining budget in the repository `ApiDeadline`; metadata-removal batches cap their thread-local RPC
+  budget by that remaining deadline instead of restarting the default RPC timeout for every batch.
 - `WorkerOCServer` owns only the `TopologyEngine` composition root plus the Store/Proxy and callback resources borrowed
   by it. Shutdown drains business RPC ingress and calls Engine once. In ETCD mode Engine closes the shared watch and
   keepalive event sources once, drains Worker execution, stops the externally-fed Controller/Janitor, and fully shuts
@@ -70,7 +73,7 @@
 - Keyspace supports an optional cluster scope. A non-empty validated name uses
   `/datasystem/{cluster_name}/...`; an empty name uses `/datasystem/...` without an empty path segment. Multi-cluster
   deployments sharing one backend must use non-empty distinct names. The five logical paths are topology,
-  tasks/migrate, tasks/delete, notify, and cluster membership.
+  tasks/migrate, tasks/delete, notify, cluster membership, and ScaleIn metadata-done markers.
 - `TopologyKeyHelper` is the only topology keyspace builder. It owns logical tables, the legacy-compatible ETCD
   membership prefix, and allocation-free raw ETCD watch-key classification. `EtcdStore::CreateTableWithExactPrefix`
   registers these paths without legacy `FLAGS_cluster_name` prefix rewriting. `TopologyEngine::Builder` owns
@@ -85,7 +88,9 @@
   role plans using O(1) RESET doorbells; lease threads never wait for watch-registration RPCs.
 - Task cleanup first CASes the exact task value to a repository-internal deletion tombstone, then performs physical
   deletion. The tombstone is never exposed as a task and temporarily fences same-ID rematerialization, closing the
-  conditional-cleanup/delete race without extending `ICoordinationBackend`.
+  conditional-cleanup/delete race without extending `ICoordinationBackend`. The same janitor pass also removes stale
+  ScaleIn metadata-done markers whose epoch is older than the active batch, or no newer than the final topology version
+  when no batch is active.
 - Failure metadata recovery is at-least-once, idempotent, and best effort. Normal recovery failure is not retried; a
   coordinator crash before final topology CAS may repeat it.
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart

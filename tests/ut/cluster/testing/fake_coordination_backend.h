@@ -69,6 +69,7 @@ public:
     size_t GetAttemptCount() const;
     bool WaitForGetAttempts(size_t expected, std::chrono::steady_clock::time_point deadline);
     void ReleaseBlockedGet();
+    void SetBeforeCasHandler(std::function<void()> handler);
     void SetBeforeDeleteHandler(std::function<void()> handler);
 
 private:
@@ -91,6 +92,7 @@ private:
     bool blockNextGet_{ false };
     bool getBlocked_{ false };
     bool releaseGet_{ false };
+    std::function<void()> beforeCasHandler_;
     std::function<void()> beforeDeleteHandler_;
 };
 

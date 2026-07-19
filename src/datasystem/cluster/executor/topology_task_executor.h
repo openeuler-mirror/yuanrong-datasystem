@@ -197,13 +197,20 @@ private:
      */
     Status ValidateFence(const TopologyExecutionFence &fence, std::shared_ptr<const TopologySnapshot> &latest) const;
 
+    Status BuildScaleInMetadataGateForNotify(const TopologyTaskNotify &notify, const TopologySnapshot &snapshot,
+                                             uint64_t epoch, std::string &gate) const;
+
+    Status RefreshNotifyEpochLocked(uint64_t epoch);
+
+    Status SubmitNotifiedTasks(const TopologyTaskNotify &notify, uint64_t epoch);
+
     /**
      * @brief Apply admission and enqueue callback.
      * @param[in] task Exact task.
      * @param[in] fence Validated fence consumed by the callback work item.
      * @return Status.
      */
-    Status SubmitCallback(const TopologyTask &task, TopologyExecutionFence fence);
+    Status SubmitCallback(const TopologyTask &task, TopologyExecutionFence fence, bool allowScaleInDataDrain = false);
 
     /**
      * @brief Admit one callback while mutex_ is held.
@@ -214,7 +221,8 @@ private:
      * @return Admission status.
      */
     Status AdmitCallbackLocked(const TopologyTask &task, const TopologyExecutionFence &fence,
-                               const std::string &operation, std::shared_ptr<CancellationToken> &cancellation);
+                               const std::string &operation, bool allowScaleInDataDrain,
+                               std::shared_ptr<CancellationToken> &cancellation);
 
     /**
      * @brief Validate the total callback window while mutex_ is held.
@@ -317,6 +325,48 @@ private:
     Status CompleteProgress(TopologyCallbackCompletion &completion, const std::string &operation);
 
     /**
+     * @brief Record ScaleIn metadata completion and defer data drain until the source gate is complete.
+     * @param[in] completion Metadata callback completion.
+     * @param[in] operation Stable operation id.
+     * @return Completion status.
+     */
+    Status CompleteScaleInMetadata(TopologyCallbackCompletion &completion, const std::string &operation);
+
+    /**
+     * @brief Check whether all admitted metadata callbacks for a ScaleIn source are complete.
+     * @param[in] operation Stable operation id whose gate should be checked.
+     * @param[out] ready True when data drain may start.
+     * @return K_OK or K_INVALID when the operation has no ScaleIn gate.
+     */
+    Status IsScaleInMetadataGateReadyForOperationLocked(const std::string &operation, bool &ready) const;
+
+    /**
+     * @brief Return true when no admitted metadata callback is pending in a ScaleIn source gate.
+     * @param[in] gate Stable source/batch gate key.
+     * @return Gate readiness.
+     */
+    bool IsScaleInMetadataGateReadyLocked(const std::string &gate) const;
+
+    /**
+     * @brief Return true when one ScaleIn operation is in the data-drain stage.
+     * @param[in] operation Stable operation id.
+     * @return Stage state.
+     */
+    bool IsScaleInDataDrainReady(const std::string &operation) const;
+
+    /**
+     * @brief Schedule all metadata-complete operations in the same ScaleIn source gate.
+     * @param[in] gate Stable source/batch gate key.
+     */
+    void ScheduleScaleInDataDrainReadyLocked(const std::string &gate);
+
+    /**
+     * @brief Erase all ScaleIn gate ledgers for one operation while mutex_ is held.
+     * @param[in] operation Stable operation id.
+     */
+    void EraseScaleInOperationLocked(const std::string &operation);
+
+    /**
      * @brief Classify and record callback/progress failure.
      * @param[in] fence Fence.
      * @param[in] operation Stable operation id.
@@ -389,6 +439,12 @@ private:
     std::unordered_map<std::string, TopologyTask> pendingByOperation_;
     // Operations whose business callback finished and only need an idempotent progress CAS retry.
     std::unordered_set<std::string> progressReadyByOperation_;
+    // Operations admitted for metadata migration but not yet metadata-complete, grouped by ScaleIn source and batch.
+    std::unordered_map<std::string, std::unordered_set<std::string>> scaleInMetadataPendingByGate_;
+    // Operation-to-gate ownership for ScaleIn callbacks admitted from a validated fence.
+    std::unordered_map<std::string, std::string> scaleInMetadataGateByOperation_;
+    // ScaleIn operations whose metadata callback has completed and whose next callback should drain local data.
+    std::unordered_set<std::string> scaleInMetadataDoneByOperation_;
     // Failure callbacks whose best-effort business step failed but must still advance task progress.
     std::unordered_set<std::string> bestEffortFailureByOperation_;
     TopologyTaskExecutorDiagnostics diagnostics_;

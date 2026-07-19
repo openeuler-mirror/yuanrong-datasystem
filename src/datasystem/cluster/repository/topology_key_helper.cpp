@@ -32,6 +32,7 @@ constexpr size_t MAX_CLUSTER_NAME_SIZE = 128;
 constexpr size_t TASK_DIGEST_SIZE = 32;
 constexpr size_t TASK_KIND_PREFIX_SIZE = 3;
 constexpr size_t MIN_TASK_ID_SIZE = TASK_KIND_PREFIX_SIZE + 1 + 1 + TASK_DIGEST_SIZE;
+constexpr size_t MAX_SOURCE_ID_SIZE = 128;
 constexpr char ROOT_PREFIX[] = "/datasystem";
 const std::string EMPTY_KEY;
 
@@ -106,6 +107,15 @@ Status ValidateAddress(const std::string &address)
     return Status::OK();
 }
 
+Status ValidateSourceId(const std::string &sourceId)
+{
+    CHECK_FAIL_RETURN_STATUS(!sourceId.empty() && sourceId.size() <= MAX_SOURCE_ID_SIZE, K_INVALID,
+                             "invalid ScaleIn metadata source id");
+    CHECK_FAIL_RETURN_STATUS(sourceId.find('/') == std::string::npos, K_INVALID,
+                             "ScaleIn metadata source id must not contain slash");
+    return Status::OK();
+}
+
 }  // namespace
 
 Status TopologyKeyHelper::Create(std::string clusterName, std::unique_ptr<TopologyKeyHelper> &helper)
@@ -133,6 +143,7 @@ TopologyKeyHelper::TopologyKeyHelper(std::string clusterName) : clusterName_(std
     const std::string legacyMembershipTable = "/" + std::string(COORDINATION_CLUSTER_TABLE);
     etcdMembershipTablePrefix_ =
         clusterName_.empty() ? legacyMembershipTable : "/" + clusterName_ + legacyMembershipTable;
+    scaleInMetadataDoneTable_ = root + "/scale-in-metadata-done";
 }
 
 const std::string &TopologyKeyHelper::ClusterName() const noexcept
@@ -191,6 +202,11 @@ TopologyEtcdKeyKind TopologyKeyHelper::ClassifyEtcdWatchKey(const std::string &p
     return TopologyEtcdKeyKind::UNKNOWN;
 }
 
+const std::string &TopologyKeyHelper::ScaleInMetadataDoneTable() const noexcept
+{
+    return scaleInMetadataDoneTable_;
+}
+
 const std::string &TopologyKeyHelper::TopologyKey() noexcept
 {
     return EMPTY_KEY;
@@ -217,6 +233,25 @@ Status TopologyKeyHelper::MembershipKey(const std::string &address, std::string 
 {
     RETURN_IF_NOT_OK(ValidateAddress(address));
     key = address;
+    return Status::OK();
+}
+
+Status TopologyKeyHelper::ScaleInMetadataDoneKey(uint64_t batchEpoch, const std::string &sourceId,
+                                                 const std::string &taskId, std::string &key)
+{
+    std::string prefix;
+    RETURN_IF_NOT_OK(ScaleInMetadataDonePrefix(batchEpoch, sourceId, prefix));
+    RETURN_IF_NOT_OK(TaskKey(taskId, key));
+    key = prefix + key;
+    return Status::OK();
+}
+
+Status TopologyKeyHelper::ScaleInMetadataDonePrefix(uint64_t batchEpoch, const std::string &sourceId,
+                                                    std::string &prefix)
+{
+    CHECK_FAIL_RETURN_STATUS(batchEpoch > 0, K_INVALID, "invalid ScaleIn metadata batch epoch");
+    RETURN_IF_NOT_OK(ValidateSourceId(sourceId));
+    prefix = "e" + std::to_string(batchEpoch) + "/" + sourceId + "/";
     return Status::OK();
 }
 

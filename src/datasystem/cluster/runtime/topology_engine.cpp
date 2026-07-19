@@ -37,6 +37,8 @@ Status RegisterEtcdTopologyTables(EtcdStore &store, const TopologyKeyHelper &key
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.MigrateTaskTable(), keys.MigrateTaskTable()));
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.DeleteTaskTable(), keys.DeleteTaskTable()));
     RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.NotifyTable(), keys.NotifyTable()));
+    RETURN_IF_NOT_OK(
+        store.CreateTableWithExactPrefix(keys.ScaleInMetadataDoneTable(), keys.ScaleInMetadataDoneTable()));
     return store.CreateTableWithExactPrefix(keys.MembershipTable(), keys.EtcdMembershipTablePrefix());
 }
 

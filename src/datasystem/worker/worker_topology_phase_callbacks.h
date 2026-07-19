@@ -81,11 +81,18 @@ public:
     Status OnScaleOut(const cluster::TopologyCallbackContext &context) override;
 
     /**
-     * @brief Quiesce the source and migrate metadata/data for one ScaleIn task scope.
+     * @brief Migrate metadata for one ScaleIn task scope.
      * @param[in] context Fenced callback context.
      * @return Callback status.
      */
     Status OnScaleIn(const cluster::TopologyCallbackContext &context) override;
+
+    /**
+     * @brief Drain local data for one ScaleIn task after the source metadata gate is complete.
+     * @param[in] context Fenced callback context.
+     * @return Callback status.
+     */
+    Status OnScaleInDataDrain(const cluster::TopologyCallbackContext &context) override;
 
     /**
      * @brief Prepare ScaleIn cleanup authorization and an idempotent bounded effect after migration succeeds.

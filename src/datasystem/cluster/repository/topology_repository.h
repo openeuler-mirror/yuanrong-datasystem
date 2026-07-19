@@ -41,6 +41,16 @@ struct NotifyJanitorCandidate {
     TopologyTaskNotify notify;
     std::string matchToken;
 };
+struct ScaleInMetadataDoneJanitorCandidate {
+    std::string key;
+    std::string matchToken;
+};
+struct ScaleInMetadataDoneRecord {
+    uint64_t batchEpoch{ 0 };
+    std::string sourceId;
+    std::string taskId;
+    std::string businessOperationId;
+};
 
 class TopologyRepository final {
 public:
@@ -119,6 +129,22 @@ public:
     Status MarkTaskScopeFinished(const TopologyExecutionFence &fence, TaskProgressOutcome &outcome);
 
     /**
+     * @brief Idempotently mark one ScaleIn task's metadata migration complete.
+     * @param[in] record Complete marker identity.
+     * @return K_OK when created or already identical.
+     */
+    Status MarkScaleInMetadataDone(const ScaleInMetadataDoneRecord &record);
+
+    /**
+     * @brief Count metadata-done markers for one ScaleIn source in one batch.
+     * @param[in] batchEpoch Active ScaleIn batch epoch.
+     * @param[in] sourceId Stable source member ID.
+     * @param[out] count Marker count for the source/batch scope.
+     * @return Backend or validation status.
+     */
+    Status CountScaleInMetadataDone(uint64_t batchEpoch, const std::string &sourceId, size_t &count) const;
+
+    /**
      * @brief Exact-read one member notify.
      * @param[in] address Canonical member address.
      * @param[out] notify Decoded notify.
@@ -145,6 +171,15 @@ public:
     Status ListNotifyCandidatesForJanitor(size_t limit, std::vector<NotifyJanitorCandidate> &notifies) const;
 
     /**
+     * @brief List a bounded ETCD-janitor ScaleIn metadata marker snapshot.
+     * @param[in] limit Maximum result count.
+     * @param[out] markers Raw byte-match candidates.
+     * @return Backend status.
+     */
+    Status ListScaleInMetadataDoneCandidatesForJanitor(
+        size_t limit, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const;
+
+    /**
      * @brief CAS-rewrite complete notify references.
      * @param[in] address Canonical member address.
      * @param[in] expected Complete sorted notify.
@@ -167,6 +202,14 @@ public:
      * @return Backend status.
      */
     Status DeleteNotifyIfMatches(const NotifyJanitorCandidate &candidate, bool &deleted);
+
+    /**
+     * @brief Conditionally delete one byte-identical stale ScaleIn metadata marker.
+     * @param[in] candidate Match token plus exact marker key.
+     * @param[out] deleted True only when deleted by this call.
+     * @return Backend status.
+     */
+    Status DeleteScaleInMetadataDoneIfMatches(const ScaleInMetadataDoneJanitorCandidate &candidate, bool &deleted);
 
 private:
     /**

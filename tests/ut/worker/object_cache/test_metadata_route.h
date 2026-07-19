@@ -54,6 +54,11 @@ public:
         return Status::OK();
     }
 
+    Status OnScaleInDataDrain(const cluster::TopologyCallbackContext &) override
+    {
+        return Status::OK();
+    }
+
     Status PrepareScaleInCleanup(const cluster::TopologyCallbackContext &,
                                  std::unique_ptr<cluster::TopologyPreparedCleanup> &cleanup) override
     {

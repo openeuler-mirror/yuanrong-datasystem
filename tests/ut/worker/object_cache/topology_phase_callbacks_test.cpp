@@ -17,6 +17,7 @@
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/worker_topology_phase_callbacks.h"
 
 #include "gtest/gtest.h"
 
@@ -54,6 +55,8 @@ using ScaleInCleanup = Status (object_cache::WorkerOCServiceImpl::*)(
 using FailureDataCleanup = Status (object_cache::WorkerOcServiceClearDataFlow::*)(
     const cluster::TopologyPhaseAction &, const cluster::IKeyFilter &, const std::string &,
     std::chrono::steady_clock::time_point, const cluster::CancellationToken &);
+using ScaleInWorkerDataDrain = Status (worker::WorkerTopologyPhaseCallbacks::*)(
+    const cluster::TopologyCallbackContext &);
 
 TEST(TopologyBusinessContractTest, ExposesOnlyOpaqueTaskLevelBusinessEntryPoints)
 {
@@ -87,6 +90,9 @@ TEST(TopologyBusinessContractTest, ExposesOnlyOpaqueTaskLevelBusinessEntryPoints
     EXPECT_TRUE((std::is_same_v<decltype(static_cast<FailureDataCleanup>(
                                     &object_cache::WorkerOcServiceClearDataFlow::SubmitTopologyFailureCleanup)),
                                 FailureDataCleanup>));
+    EXPECT_TRUE((std::is_same_v<decltype(static_cast<ScaleInWorkerDataDrain>(
+                                    &worker::WorkerTopologyPhaseCallbacks::OnScaleInDataDrain)),
+                                ScaleInWorkerDataDrain>));
 }
 
 TEST(TopologyBusinessContractTest, RemoveMetaCarriesTopologyOperationIdentity)

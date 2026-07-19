@@ -80,6 +80,14 @@ Status FakeCoordinationBackend::Get(const std::string &table, const std::string 
 Status FakeCoordinationBackend::CAS(const std::string &table, const std::string &key, const ProcessFunction &process,
                                     RangeSearchResult &result)
 {
+    std::function<void()> beforeCas;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        beforeCas = std::move(beforeCasHandler_);
+    }
+    if (beforeCas != nullptr) {
+        beforeCas();
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     auto fullKey = FullKey(table, key);
     auto iter = values_.find(fullKey);
@@ -319,6 +327,12 @@ void FakeCoordinationBackend::ReleaseBlockedGet()
     std::lock_guard<std::mutex> lock(mutex_);
     releaseGet_ = true;
     getCv_.notify_all();
+}
+
+void FakeCoordinationBackend::SetBeforeCasHandler(std::function<void()> handler)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    beforeCasHandler_ = std::move(handler);
 }
 
 void FakeCoordinationBackend::SetBeforeDeleteHandler(std::function<void()> handler)

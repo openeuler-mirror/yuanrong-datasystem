@@ -33,6 +33,12 @@
 namespace datasystem::worker {
 namespace {
 constexpr auto SCALE_IN_DRAIN_WAIT_POLL = std::chrono::milliseconds(100);
+constexpr size_t TASK_DIAGNOSTIC_PREFIX_SIZE = 12;
+
+std::string DiagnosticPrefix(const std::string &value)
+{
+    return value.substr(0, TASK_DIAGNOSTIC_PREFIX_SIZE);
+}
 
 /**
  * @brief Calculate one callback's remaining monotonic budget.
@@ -106,13 +112,19 @@ Status WorkerTopologyPhaseCallbacks::OnScaleIn(const cluster::TopologyCallbackCo
 {
     RETURN_IF_NOT_OK(CheckContext(context));
     ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
+    return MigrateMetadata(context);
+}
+
+Status WorkerTopologyPhaseCallbacks::OnScaleInDataDrain(const cluster::TopologyCallbackContext &context)
+{
+    RETURN_IF_NOT_OK(CheckContext(context));
+    ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
     CHECK_FAIL_RETURN_STATUS(readinessCheck_ != nullptr, K_NOT_READY, "Worker readiness check is not initialized");
     RETURN_IF_NOT_OK(readinessCheck_(context.deadline, context.cancellation));
     auto *objectCacheService = GetObjectCacheService();
     CHECK_FAIL_RETURN_STATUS(objectCacheService != nullptr, K_NOT_READY,
                              "Worker object-cache service is not initialized");
-    RETURN_IF_NOT_OK(DrainScaleInData(context, *objectCacheService));
-    return MigrateMetadata(context);
+    return DrainScaleInData(context, *objectCacheService);
 }
 
 Status WorkerTopologyPhaseCallbacks::PrepareScaleInCleanup(const cluster::TopologyCallbackContext &context,
@@ -187,14 +199,23 @@ Status WorkerTopologyPhaseCallbacks::AcquireScaleInDrain(const cluster::Topology
 void WorkerTopologyPhaseCallbacks::CompleteScaleInDrain(const cluster::TopologyCallbackContext &context,
                                                         const Status &status)
 {
+    const auto &source = context.action.source;
     {
         std::lock_guard<std::mutex> lock(scaleInDrainMutex_);
         scaleInDrainState_.running = false;
         scaleInDrainState_.complete = status.IsOk();
     }
     scaleInDrainChanged_.notify_all();
-    LOG(INFO) << "CLUSTER_SCALE_IN_DRAIN source=" << context.action.source->address
-              << " batch_epoch=" << context.action.batchEpoch << " task_id=" << context.action.taskId
+    LOG(INFO) << "CLUSTER_SCALE_IN action=data_drain"
+              << " epoch=" << context.action.batchEpoch
+              << " source=" << (source.has_value() ? source->address : "")
+              << " source_id_prefix=" << (source.has_value() ? DiagnosticPrefix(source->id) : "")
+              << " target=" << (context.action.target.has_value() ? context.action.target->address : "")
+              << " target_id_prefix="
+              << (context.action.target.has_value() ? DiagnosticPrefix(context.action.target->id) : "")
+              << " executor=" << context.action.executor.address
+              << " operation_prefix=" << DiagnosticPrefix(context.businessOperationId)
+              << " task_prefix=" << DiagnosticPrefix(context.action.taskId)
               << " status=" << status.ToString();
 }
 

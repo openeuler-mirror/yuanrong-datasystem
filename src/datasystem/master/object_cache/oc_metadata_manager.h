@@ -1540,7 +1540,7 @@ private:
      */
     void SendChangePrimaryCopy(
         std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds,
-        RemoveMetaRspPb &rsp);
+        RemoveMetaRspPb &rsp, const std::string &topologyOperationId);
 
     /**
      * @brief Obtains the information about expired objects.
@@ -1674,7 +1674,8 @@ private:
      * @param[in] objectKey object key.
      * @return Status of the call.
      */
-    Status ChangePrimaryCopy(const std::string &primaryAddr, const std::string &objectKey);
+    Status ChangePrimaryCopy(const std::string &primaryAddr, const std::string &objectKey,
+                             const std::string &topologyOperationId);
 
     /**
      * @brief RetryForFailedIds
@@ -1684,7 +1685,7 @@ private:
      */
     Status RetryForFailedIds(
         const std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds,
-        RemoveMetaRspPb &rsp);
+        RemoveMetaRspPb &rsp, const std::string &topologyOperationId);
 
     /**
      * @brief Notify worker to delete objects.
