@@ -456,13 +456,21 @@ TEST_F(EvictionManagerAndMasterTest, TestEndLifeEvictionUsesAsyncDeleteAllCopyMe
     // END_LIFE eviction should delete the local object without waiting for remote DeleteNotification.
     FLAGS_spill_directory = "";
     std::shared_ptr<ObjectTable> objectTable = GetObjectTable();
+    const bool oldEnableDistributedMaster = FLAGS_enable_distributed_master;
+    FLAGS_enable_distributed_master = false;
+    Raii resetDistributedMaster([oldEnableDistributedMaster]() {
+        FLAGS_enable_distributed_master = oldEnableDistributedMaster;
+    });
+    DS_ASSERT_OK(inject::Set("EtcdClusterManager.checkConnection", "return(K_OK)"));
+    Raii clearCheckConnection([]() {
+        (void)inject::Clear("EtcdClusterManager.checkConnection");
+    });
 
+    InitClusterManager(worker0Addr_);
+    DS_ASSERT_OK(cm_->CheckWaitNodeTableComplete());
     object_cache::WorkerOcEvictionManager evictionManager(objectTable, worker0Addr_, metaAddr_, nullptr);
+    evictionManager.SetClusterManager(cm_.get());
     DS_ASSERT_OK(evictionManager.Init(std::make_shared<ObjectGlobalRefTable<ClientKey>>(), akSkManager_));
-
-    // Inject to use master address directly for non-distributed master mode
-    datasystem::inject::Set("WorkerOcEvictionManager.GetMetaAddressForObject",
-                            FormatString("return(%s)", metaAddr_.ToString()));
 
     auto masterClient = CreateClient(0);
     const std::string objectKey = "end_life_async_delete";

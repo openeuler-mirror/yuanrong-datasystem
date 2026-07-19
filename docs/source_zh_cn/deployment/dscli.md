@@ -761,7 +761,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | spill_file_max_size_mb | int | `200` | 单个溢出文件的最大大小（以MB为单位）；对于小于此值的对象，会聚合存储于同一个文件中；对于超过此值的对象，将以单个对象单独存为一个文件 |
 | spill_file_open_limit | int | `512` | 溢出文件的最大打开文件描述符数量。若已打开文件数超过此值，系统将临时关闭部分文件以防止超出系统最大限制。在系统资源有限的情况下，应适当调低此数值 |
 | spill_enable_readahead | bool | `true` | 是否启用磁盘预读功能，当预读功能被禁用时，可以缓解KV语义 `Read` 接口偏移读取导致的读放大问题 |
-| eviction_thread_num | int | `1` | 后台驱逐线程池大小。用于将缓存数据从共享内存中驱逐，经由溢出队列异步写入到磁盘中 |
+| eviction_thread_num | int | `1` | 已废弃，仅为兼容旧配置保留；该参数不再控制驱逐线程数，内存驱逐固定使用单线程 |
 
 #### 日志与可观测相关配置
 

@@ -144,7 +144,7 @@ spillFileMaxSizeMb: 200
 spillFileOpenLimit: 512
 # Disable readahead can mitigate the read amplification problem for offset read, default is true
 spillEnableReadahead: true
-# Thread number of eviction for object cache.
+# Deprecated and ignored. Memory eviction uses a fixed single thread.
 evictionThreadNum: 1
 # It indicates that when node resources are insufficient, it supports spilling memory to the memory of other nodes.
 # When enabled, if local node memory reaches the high watermark, the system attempts to migrate objects to other workers' shared memory. If no worker has available memory, objects spill to disk.

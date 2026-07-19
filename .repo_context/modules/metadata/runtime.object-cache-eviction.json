@@ -1,0 +1,72 @@
+{
+  "id": "runtime.object-cache-eviction",
+  "title": "Object Cache Eviction",
+  "status": "active",
+  "domain": "runtime",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/runtime/object-cache-eviction/README.md",
+    "design": ".repo_context/modules/runtime/object-cache-eviction/design.md",
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/runtime/object-cache-eviction/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/worker/object_cache/worker_oc_eviction_manager.cpp",
+    "src/datasystem/worker/object_cache/worker_oc_eviction_manager.h",
+    "src/datasystem/worker/object_cache/eviction_list.cpp",
+    "src/datasystem/worker/object_cache/eviction_list.h",
+    "src/datasystem/worker/object_cache/worker_oc_spill.cpp",
+    "src/datasystem/worker/object_cache/worker_oc_spill.h",
+    "src/datasystem/master/object_cache/oc_metadata_manager.cpp",
+    "src/datasystem/protos/master_object.proto"
+  ],
+  "key_tests": [
+    "tests/ut/worker/object_cache/worker_oc_eviction_test.cpp",
+    "tests/ut/worker/object_cache/worker_oc_spill_eviction_test.cpp",
+    "tests/st/worker/object_cache/worker_oc_eviction_test.cpp",
+    "tests/st/client/kv_cache/kv_cache_client_evict_test.cpp"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.worker-runtime",
+      "runtime.cluster-management",
+      "infra.l2cache",
+      "infra.slot"
+    ],
+    "split_signals": [
+      "background_hot_path",
+      "shared_memory_lifecycle",
+      "master_metadata_cleanup",
+      "spill_lifecycle",
+      "operator_config_surface"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "object cache eviction",
+      "WorkerOcEvictionManager",
+      "EvictionList",
+      "Action::END_LIFE",
+      "DeleteAllCopyMeta",
+      "primary copy eviction",
+      "NONE_L2_CACHE_EVICT",
+      "WRITE_BACK_L2_CACHE_EVICT",
+      "spill eviction"
+    ],
+    "intent_examples": [
+      "understand worker object cache memory eviction",
+      "change primary copy end-life eviction behavior",
+      "review eviction thread, spill thread, or master metadata cleanup",
+      "debug DeleteAllCopyMeta during eviction",
+      "review deprecated eviction-related deployment flags"
+    ]
+  }
+}
