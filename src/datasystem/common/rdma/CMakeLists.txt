@@ -24,6 +24,8 @@ if (BUILD_WITH_URMA)
     )
     list(APPEND URMA_DEPEND_LIBS dl)
     list(APPEND URMA_DEPEND_LIBS ${TBB_LIBRARY})
+    list(APPEND URMA_DEPEND_LIBS string_ref)
+    list(APPEND URMA_DEPEND_LIBS common_util)
 endif()
 
 if (BUILD_HETERO)
