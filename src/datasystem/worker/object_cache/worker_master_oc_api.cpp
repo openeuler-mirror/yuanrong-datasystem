@@ -217,16 +217,21 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
         return WithRpcDiag(rc, "CreateMeta", localHostPort_, hostPort_);
     }
 
-    // Hard cap on degenerate/uninitialized paths so a slow master cannot pin
-    // a worker bthread for the 10min MAX_RPC_TIMEOUT_MS when reqTimeoutDuration
-    // was never initialized (returns the 60s default).  When the client budget
-    // has been correctly propagated (remainingMs ~ 20ms), the cap does not fire
-    // — the client budget is trusted as-is.  Only the degenerate remainingMs<=0
-    // path gets the hard cap.
+    // Hard cap so a slow master cannot pin a worker bthread for MAX_RPC_TIMEOUT_MS
+    // when the client budget is exhausted (remainingMs <= 0) OR when reqTimeoutDuration
+    // is uninitialized/degenerate (returns the 60s default, a positive value that would
+    // otherwise bypass the cap). When the client budget propagated correctly
+    // (remainingMs ~ 20ms) the cap does not fire — the client budget is trusted as-is.
+    // The cap applies to both the RetryOnError total budget (timeoutMs) and, inside the
+    // retry lambda, to the per-RPC opts.SetTimeout set by CHECK_AND_SET_TIMEOUT (which
+    // would otherwise also read 60s from an uninitialized reqTimeoutDuration).
     int64_t remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     int64_t timeoutMs = remainingMs > 0
         ? remainingMs
         : WORKER_TO_MASTER_RPC_HARD_CAP_MS;
+    if (timeoutMs <= 0 || timeoutMs > WORKER_TO_MASTER_RPC_HARD_CAP_MS) {
+        timeoutMs = WORKER_TO_MASTER_RPC_HARD_CAP_MS;
+    }
     INJECT_POINT("WorkerMasterOCApi.CreateMeta.timeoutMs", [&timeoutMs](int time) {
         timeoutMs = time;
         return Status::OK();
@@ -235,6 +240,12 @@ Status WorkerRemoteMasterOCApi::CreateMeta(master::CreateMetaReqPb &request, mas
         timeoutMs,
         [this, &opts, &request, &response](int32_t) {
             CHECK_AND_SET_TIMEOUT(&GetRequestContext()->reqTimeoutDuration, request, opts);
+            // Mirror the seal-path cap: an uninitialized reqTimeoutDuration makes
+            // CHECK_AND_SET_TIMEOUT set opts to ~60s; clamp the per-RPC timeout so
+            // a single slow master RPC cannot block a worker bthread past the hard cap.
+            if (opts.GetTimeout() <= 0 || opts.GetTimeout() > WORKER_TO_MASTER_RPC_HARD_CAP_MS) {
+                opts.SetTimeout(WORKER_TO_MASTER_RPC_HARD_CAP_MS);
+            }
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
             Timer timer;
             Status rc = (brpcSession_ ? brpcSession_->CreateMeta(opts, request, response)

@@ -68,6 +68,7 @@ ds_cc_test(
     deps = [
         "//src/datasystem/common/rpc:brpc_factory",
         "@com_github_apache_brpc//:brpc",
+        "@com_github_gflags_gflags//:gflags",
     ],
 )
 

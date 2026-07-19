@@ -30,9 +30,12 @@
  */
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include <brpc/channel.h>
 #include <brpc/server.h>
 #include <butil/endpoint.h>
+#include <gflags/gflags.h>
 
 #include "datasystem/common/rpc/brpc_factory.h"
 
@@ -146,6 +149,32 @@ TEST_F(BrpcFactoryTest, CreateControllerZeroFieldsDoNotOverride)
     // flip it to 0 (which would mean "fire backup immediately"). We only assert
     // that the value is NOT 0, i.e. we did not accidentally enable it.
     EXPECT_NE(cntl->backup_request_ms(), 0);
+}
+
+// BrpcChannelFactory::Create must enable brpc's wire-level timeout delivery so
+// the server-side CallMethod prologue (brpc_service_generator.cpp
+// BuildScTimeoutDurationInitSnippet) can read cntl->timeout_ms() and initialize
+// reqTimeoutDuration from the client budget instead of the 60s DEFAULT_TIMEOUT.
+// This is the root-cause layer for issue #773 (brpc server deadline_us() is -1
+// because brpc never reconstructs _deadline_us from RpcMeta; without
+// deliver_timeout_ms the server never sees the client budget and the worker
+// retry loop runs with 60s, ignoring the client 20ms deadline). The flag is
+// defined in brpc's baidu_rpc_protocol.cpp and defaults to false, so it must be
+// flipped to true exactly once before the first brpc channel is used. We assert
+// the flag is true after Create() runs, regardless of the channel outcome.
+TEST_F(BrpcFactoryTest, CreateEnablesBrpcDeliverTimeoutMsFlag)
+{
+    BrpcChannelConfig cfg;
+    cfg.endpoint = "127.0.0.1:" + std::to_string(kFactoryTestPort);
+    cfg.timeout_ms = 3000;
+    cfg.connect_timeout_ms = 3000;
+    auto channel = BrpcChannelFactory::Create(cfg);
+    ASSERT_NE(channel, nullptr);
+
+    std::string flagVal;
+    ASSERT_TRUE(gflags::GetCommandLineOption("baidu_std_protocol_deliver_timeout_ms", &flagVal));
+    EXPECT_EQ(flagVal, "true")
+        << "baidu_std_protocol_deliver_timeout_ms must be true for deadline propagation";
 }
 
 }  // namespace test
