@@ -156,6 +156,32 @@ auto serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(sdOpts);
 ASSERT_TRUE(serviceDiscovery->Init().IsOk());
 ```
 
+Python KVClient 使用 `service_discovery` 参数接入服务发现，不需要预先指定 Worker 的 `host` 和 `port`。
+当同时传入 `service_discovery` 与 `host`/`port` 时，KVClient 会使用 `service_discovery` 并忽略 `host`/`port`。
+若期望同一个 KVClient 在当前连接的 Worker 故障后切换到其他已发现 Worker，需要同时设置
+`enable_cross_node_connection=True`。
+
+```python
+from yr.datasystem import (
+    CoordinatorServiceDiscovery,
+    CoordinatorServiceDiscoveryOptions,
+    KVClient,
+    ServiceAffinityPolicy,
+)
+
+options = CoordinatorServiceDiscoveryOptions()
+options.service_address = "127.0.0.1:31511"
+options.cluster_name = "cluster-a"
+options.host_id_env_name = "HOST_ID"
+options.affinity_policy = ServiceAffinityPolicy.PREFERRED_SAME_NODE
+
+service_discovery = CoordinatorServiceDiscovery(options)
+service_discovery.init()
+
+client = KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
+client.init()
+```
+
 ### 数据溢出到磁盘
 
 KV 数据存储在数据系统的共享内存中，当内存不足时，支持自动将数据溢出到磁盘并从内存中删除数据。当数据需要读取时，自动从磁盘中加载到共享内存。

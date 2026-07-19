@@ -18,6 +18,11 @@ Python
    yr.datasystem.kv_client.ReadOnlyBuffer
    yr.datasystem.kv_client.SetParam
    yr.datasystem.kv_client.ReadParam
+   yr.datasystem.service_discovery.ServiceAffinityPolicy
+   yr.datasystem.service_discovery.ServiceDiscoveryOptions
+   yr.datasystem.service_discovery.ServiceDiscovery
+   yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions
+   yr.datasystem.service_discovery.CoordinatorServiceDiscovery
    yr.datasystem.object_client.ObjectClient
    yr.datasystem.object_client.Buffer
    yr.datasystem.object_client.ConsistencyType
@@ -172,6 +177,25 @@ KV接口
      - 为一组键设置过期生命周期，返回函数操作状态及设置失败的键列表。
    * - :doc:`yr.datasystem.kv_client.KVClient.health_check <yr.datasystem.kv_client.KVClient.health_check>`
      - 查看连接的 Worker 的健康状态。
+
+
+服务发现接口
+-----------------
+
+.. list-table::
+   :header-rows: 0
+   :widths: 30 70
+
+   * - :doc:`yr.datasystem.service_discovery.ServiceAffinityPolicy <yr.datasystem.service_discovery.ServiceAffinityPolicy>`
+     - 服务发现选择 Worker 时使用的节点亲和性策略。
+   * - :doc:`yr.datasystem.service_discovery.ServiceDiscoveryOptions <yr.datasystem.service_discovery.ServiceDiscoveryOptions>`
+     - 通过 ETCD 发现 Worker 时使用的配置。
+   * - :doc:`yr.datasystem.service_discovery.ServiceDiscovery <yr.datasystem.service_discovery.ServiceDiscovery>`
+     - 通过 ETCD 获取可用 Worker。
+   * - :doc:`yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions <yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions>`
+     - 通过 Coordinator 发现 Worker 时使用的配置。
+   * - :doc:`yr.datasystem.service_discovery.CoordinatorServiceDiscovery <yr.datasystem.service_discovery.CoordinatorServiceDiscovery>`
+     - 通过 Coordinator 获取可用 Worker。
 
 
 对象缓存接口

@@ -19,11 +19,12 @@ from __future__ import absolute_import
 from collections import namedtuple
 from enum import Enum
 from typing import List
+import warnings
 
 from yr.datasystem.lib import libds_client_py as ds
 from yr.datasystem.object_client import WriteMode, CacheType
 from yr.datasystem.util import Validator as validator
-from yr.datasystem.service_discovery import ServiceDiscovery
+from yr.datasystem.service_discovery import CoordinatorServiceDiscovery, ServiceDiscovery
 
 DEFAULT_FAST_TRANSPORT_MEM_SIZE = 256 * 1024 * 1024
 MAX_FAST_TRANSPORT_MEM_SIZE = 2 * 1024 * 1024 * 1024
@@ -185,9 +186,11 @@ class KVClient:
             with connect_timeout_ms.
             fast_transport_mem_size(int): The memory pool size in bytes used by client fast transport. Default is
             256MB. The valid range is [1, 2GB].
-            service_discovery(ServiceDiscovery): The service discovery instance for discovering available workers.
-                If provided, the client will use service discovery to find worker addresses instead of
-                using the provided host and port.
+            service_discovery(ServiceDiscovery|CoordinatorServiceDiscovery): The service discovery instance for
+            discovering available workers. If provided, the native client will use service discovery to find worker
+            addresses instead of using the provided host and port. Call service_discovery.init() before creating
+            KVClient. To allow an initialized client to switch to another discovered worker after the connected worker
+            fails, set enable_cross_node_connection to True.
 
         Raises:
             RuntimeError: Raise a runtime error if the client fails to connect to the worker.
@@ -206,10 +209,9 @@ class KVClient:
         ]
 
         if service_discovery is not None:
-            args.insert(0, ["service_discovery", service_discovery, ServiceDiscovery])
+            args.insert(0, ["service_discovery", service_discovery, ServiceDiscovery, CoordinatorServiceDiscovery])
             if host or port:
-                import warnings
-                warnings.warn("host and port are ignored when service_discovery is provided")
+                warnings.warn("host and port are ignored when service_discovery is provided", stacklevel=2)
         else:
             args.insert(0, ["host", host, str])
             args.insert(1, ["port", port, int])
@@ -220,15 +222,23 @@ class KVClient:
             "fast_transport_mem_size", fast_transport_mem_size, 1, MAX_FAST_TRANSPORT_MEM_SIZE
         )
 
-        if service_discovery is not None:
-            _, host, port, _ = service_discovery.select_worker()
-        else:
+        if service_discovery is None:
             host_provided = bool(host)
             port_provided = port > 0
             if host_provided != port_provided:
                 raise RuntimeError("host and port must be provided together, or use service_discovery")
+        else:
+            if not service_discovery.initialized:
+                raise RuntimeError("service_discovery is not initialized, call init() before creating KVClient")
+            if not enable_cross_node_connection:
+                warnings.warn(
+                    "service_discovery is set but enable_cross_node_connection is False. "
+                    "Failover to another discovered worker will not occur on connection failure.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
-        self._client = ds.KVClient(
+        client_args = [
             host,
             port,
             connect_timeout_ms,
@@ -242,7 +252,10 @@ class KVClient:
             enable_cross_node_connection,
             req_timeout_ms,
             fast_transport_mem_size
-        )
+        ]
+        if service_discovery is not None:
+            client_args.append(service_discovery.native_discovery)
+        self._client = ds.KVClient(*client_args)
 
     def init(self):
         """ Init a client to connect to a worker.
