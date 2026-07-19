@@ -120,10 +120,14 @@ ds_cc_test(
 # Worker OC 服务实现测试
 ds_cc_test(
     name = "worker_oc_service_impl_test",
-    srcs = ["object_cache/worker_oc_service_impl_test.cpp"],
+    srcs = [
+        "object_cache/test_placement_facade.h",
+        "object_cache/worker_oc_service_impl_test.cpp",
+    ],
     deps = [
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//tests/common/binmock:binmock",
@@ -135,7 +139,10 @@ ds_cc_test(
 # 元数据恢复管理器测试
 ds_cc_test(
     name = "metadata_recovery_manager_test",
-    srcs = ["object_cache/metadata_recovery_manager_test.cpp"],
+    srcs = [
+        "object_cache/metadata_recovery_manager_test.cpp",
+        "object_cache/test_placement_facade.h",
+    ],
     deps = [
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/common/shared_memory:common_shared_memory",
@@ -245,7 +252,10 @@ ds_cc_test(
 # 迁移数据服务测试
 ds_cc_test(
     name = "migrate_data_service_test",
-    srcs = ["object_cache/migrate_data_service_test.cpp"],
+    srcs = [
+        "object_cache/migrate_data_service_test.cpp",
+        "object_cache/test_placement_facade.h",
+    ],
     deps = [
         "//src/datasystem/common/object_cache:shm_guard",
         "//src/datasystem/common/flags:ds_flags",

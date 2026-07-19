@@ -260,7 +260,10 @@ ds_cc_library(
         "//src/datasystem/worker/stream_cache:worker_sc_allocate_memory",
         "//src/datasystem/worker/stream_cache/metrics:sc_metrics_monitor",
     ] + select({
-        "//:with_tests": ["//tests/st:st_common"],
+        "//:with_tests": [
+            "//src/datasystem/protos:ut_object_brpc",
+            "//tests/st:st_common",
+        ],
         "//conditions:default": [],
     }),
     alwayslink = True,

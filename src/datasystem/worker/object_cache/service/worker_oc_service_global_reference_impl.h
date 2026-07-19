@@ -18,6 +18,8 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_GLOBAL_REFERENCE_IMPL_H
 
+#include <unordered_set>
+
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
@@ -143,7 +145,17 @@ private:
      * @return Status of the call.
      */
     Status GIncreaseMasterRef(const GIncreaseReqPb &req, const std::vector<std::string> &firstIncIds,
-                              std::vector<std::string> &failIncIds);
+                              std::vector<std::string> &failIncIds, bool waitWhenRefMoving = true);
+
+    Status TryGIncreaseRef(const GIncreaseReqPb &req, const std::vector<std::string> &pendingObjectKeys,
+                           std::vector<std::string> &failIncIds, std::vector<std::string> &retryIncIds);
+
+    Status RetryGIncreaseRef(const GIncreaseReqPb &req, const std::vector<std::string> &objectKeys,
+                             std::vector<std::string> &failIncIds);
+
+    Status PrepareNextRefMovingRetry(const std::vector<std::string> &retryObjectKeys,
+                                     std::vector<std::string> &pendingObjectKeys, int &retryCount,
+                                     const std::string &lostKeysMsg);
 
     /**
      * @brief Build master increase-ref request for one target master.
@@ -164,7 +176,7 @@ private:
      */
     Status SendGIncreaseMasterRefToMaster(const HostPort &masterAddr, const std::string &remoteClientId,
                                           const std::vector<std::string> &currentIncIds,
-                                          std::vector<std::string> &failIncIds);
+                                          std::vector<std::string> &failIncIds, bool waitWhenRefMoving);
 
     /**
      * @brief GIncreaseMasterRef
@@ -174,7 +186,7 @@ private:
      * @return Status
      */
     Status GIncreaseMasterRef(const std::vector<std::string> &firstIncIds, const HostPort &masteraddr,
-                              std::vector<std::string> &failIncIds);
+                              std::vector<std::string> &failIncIds, bool waitWhenRefMoving = true);
 
     /**
      * @brief Send request to master to decrease the objects.
@@ -185,7 +197,31 @@ private:
      * @return Status of the call.
      */
     Status GDecreaseMasterRef(const std::string &remoteClientId, const std::vector<std::string> &finishDecIds,
-                              std::unordered_set<std::string> &unAliveIds, std::vector<std::string> &failDecIds);
+                              std::unordered_set<std::string> &unAliveIds, std::vector<std::string> &failDecIds,
+                              bool waitWhenRefMoving = true);
+
+    // Call only while lockedEntries is still protected by the caller's RAII unlock guard.
+    Status ClearObjectsAfterGDecrease(const std::map<std::string, std::shared_ptr<SafeObjType>> &lockedEntries,
+                                      const std::unordered_set<std::string> &unAliveIds,
+                                      const std::unordered_set<std::string> &retryDecIdSet,
+                                      std::vector<std::string> &failDecIds, const Status &lastErr,
+                                      bool injectSetNull);
+
+    Status TryGDecreaseRefWithRemoteClientId(const std::vector<std::string> &pendingObjectKeys,
+                                             const std::string &remoteClientId,
+                                             std::unordered_set<std::string> &accumulatedFailDecIds,
+                                             std::vector<std::string> &failDecIds,
+                                             std::vector<std::string> &retryDecIds);
+
+    Status TryGDecreaseRefWithLock(const std::vector<std::string> &pendingObjectKeys, const ClientKey &clientId,
+                                   std::unordered_set<std::string> &accumulatedFailDecIds,
+                                   std::vector<std::string> &failDecIds,
+                                   std::vector<std::string> &retryDecIds);
+
+    Status SendGDecreaseMasterRefToMaster(const HostPort &masterAddr, const std::string &remoteClientId,
+                                          const std::vector<std::string> &currentIncIds,
+                                          std::unordered_set<std::string> &unAliveIds,
+                                          std::vector<std::string> &failDecIds, bool waitWhenRefMoving);
 
     /**
      * @brief notify master when worker references an object for first time
@@ -194,7 +230,8 @@ private:
      * @param[out] failIncIds Object keys that are failed to update
      */
     Status UpdateMasterForFirstIds(const GIncreaseReqPb &req, const std::vector<std::string> &firstIncIds,
-                                   std::vector<std::string> &failIncIds);
+                                   std::vector<std::string> &failIncIds,
+                                   std::vector<std::string> *retryIncIds = nullptr);
 
     /**
      * @brief notify master when all references for an object in the worker are deleted
@@ -205,7 +242,8 @@ private:
      */
     Status UpdateMasterForFinishedIds(const ClientKey &clientId, const std::vector<std::string> &finishDecIds,
                                       std::unordered_set<std::string> &unAliveIds,
-                                      std::vector<std::string> &failDecIds);
+                                      std::vector<std::string> &failDecIds,
+                                      std::vector<std::string> *retryDecIds = nullptr);
 
     /**
      * @brief Batch lock global reference lock for objects via objectKeys.
@@ -232,6 +270,21 @@ private:
      */
     static void BatchGRefUnlock(const std::map<std::string, std::shared_ptr<SafeObjType>> &lockedEntries);
 
+    static constexpr const char *REF_MOVING_RETRY_STATUS_MESSAGE = "GRef metadata is moving.";
+    static constexpr int64_t REF_MOVING_RETRY_SLEEP_TIME_MS = 200;
+
+    static bool IsRefMovingRetry(const Status &status);
+
+    Status SleepForRefMovingRetry() const;
+
+    Status RollbackIncreaseRefForRetry(const ClientKey &clientId, const std::vector<std::string> &objectKeys,
+                                       std::vector<std::string> &retryIncIds,
+                                       std::vector<std::string> &failIncIds);
+
+    Status RollbackDecreaseRefForRetry(const ClientKey &clientId, const std::vector<std::string> &objectKeys,
+                                       std::vector<std::string> &retryDecIds,
+                                       std::vector<std::string> &failDecIds);
+
     /**
      * @brief Wait and redirect the GInc and GDec req if refs is moving
      * @param req Request of redirect
@@ -243,7 +296,8 @@ private:
     template <typename Req, typename Rsp>
     Status WaitForRedirectWhenRefMoving(Req &req, Rsp &rsp, std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                                         std::function<Status(Req &, Rsp &)> fun,
-                                        std::function<void(Rsp &, Rsp &)> mergeFun = [](Rsp &, Rsp &) {})
+                                        std::function<void(Rsp &, Rsp &)> mergeFun = [](Rsp &, Rsp &) {},
+                                        bool waitWhenRefMoving = true)
     {
         while (true) {
             CHECK_FAIL_RETURN_STATUS(fun != nullptr && mergeFun != nullptr, K_RUNTIME_ERROR, "function is nullptr");
@@ -276,9 +330,11 @@ private:
                 GetWorkerTimeCost().Append("Redirect", elapsedMs);
                 return Status::OK();
             }
-            static const int64_t sleepTimeMs = 200;
             rsp.Clear();
-            SleepForMetaMovingRetry(std::min(sleepTimeMs, remainingTimeMs));
+            if (!waitWhenRefMoving) {
+                return Status(K_TRY_AGAIN, REF_MOVING_RETRY_STATUS_MESSAGE);
+            }
+            SleepForMetaMovingRetry(std::min(REF_MOVING_RETRY_SLEEP_TIME_MS, remainingTimeMs));
         }
     }
 

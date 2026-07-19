@@ -478,6 +478,12 @@ Status ObjectClientImpl::ParseEmbeddedConfig(const EmbeddedConfig &config)
                                              K_RUNTIME_ERROR, "connectTimeoutMs to int failed");
         connectTimeoutMs_ = result;
     }
+    if (args.find("requestTimeoutMs") != args.end()) {
+        int result = 0;
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Uri::StrToInt(args.at("requestTimeoutMs").c_str(), result),
+                                             K_RUNTIME_ERROR, "requestTimeoutMs to int failed");
+        requestTimeoutMs_ = result;
+    }
     return Status::OK();
 }
 

@@ -53,8 +53,8 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
-# Sanitizer config settings — used by build_defs.bzl ds_cc_test to auto-tag
-# tests for sanitizer-aware test selection (build_bazel.sh _bazel_test_query_expr).
+# Sanitizer config settings are kept for sanitizer build configs. Test tags stay static because
+# Bazel does not allow configurable tags on cc_test.
 config_setting(
     name = "is_asan",
     define_values = {"asan": "1"},
