@@ -1,0 +1,4 @@
+interface:
+  display_name: "DataSystem Trace Triage"
+  short_description: "分析慢时延/错误trace包，聚合时间、worker、流程、breakdown、rpc slow和URMA字段"
+  default_prompt: "Use $ds-trace-triage to analyze DataSystem slow/error traces with source-backed breakdown."

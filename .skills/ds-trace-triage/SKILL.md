@@ -1,0 +1,135 @@
+---
+name: ds-trace-triage
+description: >
+  Analyze DataSystem trace bundles for slow latency or errors. Use for gzip/tar
+  trace packages, worker/client trace IDs, RPC deadline exceeded, rpc slow,
+  client summary, RemotePull, Get/Set/Create/Publish, URMA_ELAPSED_*,
+  worker/time/flow/breakdown aggregation, and CodeGraph-backed source mapping.
+---
+
+# DataSystem Trace Triage
+
+Use this skill when the input is a small or medium trace corpus and the goal is
+root-cause analysis rather than broad access/resource trending.
+
+## Required workflow
+
+1. Pin the source:
+   ```bash
+   git fetch main master
+   git rev-parse main/master
+   ```
+2. Build or refresh CodeGraph on a clean `main/master` worktree when source
+   causality is requested:
+   ```bash
+   /home/t14s/.local/bin/codegraph init <clean-worktree>
+   /home/t14s/.local/bin/codegraph index <clean-worktree>
+   ```
+3. Run the deterministic parser first:
+   ```bash
+   python3 scripts/ds_trace_triage.py <trace_dir_or_tar_gz> \
+       --code-ref "$(git rev-parse main/master)" \
+       --output-json /tmp/ds_trace_summary.json \
+       --output-md /tmp/ds_trace_summary.md
+   ```
+4. Read the JSON/Markdown summary and then inspect selected full logs for the
+   top slow/error traces. Keep aggregate distributions first, then per-trace
+   evidence.
+5. Cross-check any source-level conclusion with CodeGraph plus direct source
+   reads. CodeGraph is discovery, not sole proof.
+
+## Self verification and CI
+
+The script has a built-in fixture:
+
+```bash
+python3 scripts/ds_trace_triage.py --self-test
+python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
+```
+
+Add those commands to CI as a low-cost parser contract. They verify gzip-tar
+handling, trace grouping, access latency, breakdown, rpc slow, URMA elapsed,
+worker aggregation, and error classification.
+
+The self-test must keep covering the historical contract learned from the trace
+threads: `latencySummary` raw text and key/value fields, RPC slow server/network
+subfields, `URMA_ELAPSED_TOTAL/POLL_JFC/NOTIFY/THREAD_SHED`, and classification
+counts. When DataSystem log wording changes, update the fixture and tests in the
+same patch as parser logic.
+
+## Report expectations
+
+Always cover:
+
+- time: first/last timestamp, burst windows if visible
+- worker: entry/provider/target concentration where logs expose it
+- flow: Get/Set/Create/Publish/RemotePull/GetObjMetaInfo/RPC methods
+- latency: access latency percentiles and top slow traces
+- breakdown: `ProcessGetObjectRequest`, QueryMeta/CreateMeta, SafeObject locks,
+  client summary and worker summary fields
+- rpc slow: method, count, e2e/client/server/network fields when present
+- URMA: `URMA_ELAPSED_TOTAL`, `URMA_ELAPSED_POLL_JFC`,
+  `URMA_ELAPSED_NOTIFY`, `URMA_ELAPSED_THREAD_SHED`, `URMA_PERF`
+- errors: non-zero access status, deadline exceeded, not found, object in use,
+  URMA timeout, fallback rejection, etcd abnormal
+- source: pinned ref, key files/functions, and evidence boundary
+
+Machine-readable summaries should expose these buckets when the input contains
+them:
+
+- `dimensions.latency_summary_us`: parsed `latencySummary:{...}` fields, while
+  `traces[*].latency_summary_raw` preserves the original summary line text
+- `dimensions.rpc_slow`: method plus `e2e_us`, framework, server queue/exec, and
+  `network_residual_us`
+- `dimensions.urma_elapsed`: total, poll JFC, notify, and thread scheduling
+- `dimensions.classifications`: parser-assigned root-cause families such as
+  `client_deadline_with_urma_wait`, `client_deadline_20ms`,
+  `write_memory_copy_dominant`, `remote_fast_transport_wait`, and `rpc_slow`
+
+## Error-trace tactics
+
+Use several independent cuts before deciding root cause:
+
+- **Status/error family cut**: group non-zero access status and repeated text
+  such as deadline exceeded, not found, object in use, fallback rejected, and
+  URMA wait timeout.
+- **Deadline-budget cut**: align access latency with configured timeout,
+  `reqTimeoutDuration.CalcRemainingTime()`, RPC slow e2e, and worker completion
+  time. A client timeout can coexist with a later worker-side slow completion.
+- **Worker ownership cut**: separate client, entry worker, provider/data worker,
+  master, and fallback target. Do not label a target worker unless the log
+  explicitly prints it.
+- **Transport cut**: split TCP/UB/URMA/RDMA/fallback evidence. Tracker defaults
+  or response-only fields are not proof of request-side transport.
+- **URMA lifecycle cut**: compare `URMA_ELAPSED_TOTAL`, poll JFC, notify, thread
+  scheduling, data size, CPU, inflight, source chip, and target address.
+- **Source-evolution cut**: re-run CodeGraph on current `main/master`, then
+  verify direct source for timeout propagation and current data-plane branches.
+
+## Historical trace-thread lessons
+
+The workflow is calibrated from eight Codex trace-analysis threads:
+
+- `019f753c`: 248 Get traces showed RemotePull/URMA completion wait dominating
+  `ProcessGetObjectRequest`; avoid treating QueryMeta as the bottleneck when
+  URMA and worker completion distributions align.
+- `019f75a9` and `019f7606`: after hardware-port isolation, seconds-scale URMA
+  tails disappeared and residual failures clustered around 20ms client/worker
+  RPC deadline. Keep these as separate families.
+- `019f7686`: ZMQ/brpc slow reports need subfield parsing, especially
+  `server_exec_us` and `network_residual_us`, plus source mapping for
+  `GetObjMetaInfo`, `ProcessGetObjectRequest`, `BatchGetObjectRemote`, and
+  `UrmaGatherWrite`.
+- `019f76d0`: write traces require original `latencySummary` preservation;
+  `client.process.memory_copy` can dominate Set/Create/Publish without a
+  standalone slow log when below threshold.
+- `019f7970`: interactive report fixes taught that table and card filters,
+  category downloads, edge-role filtering, and complete evidence exports should
+  be independently validated.
+- `019f79c0`: generated HTML/index artifacts need inline JS syntax checks,
+  deduped quoted metadata, and live verification; bad report registration can
+  break the whole homepage.
+- `019f7b27`: failure traces should be split into issue-grade families:
+  DataWorker UB/URMA server exec, RPC network residual, client deadline with
+  fast server completion, EntryWorker processing late, remote_get/brpc mismatch,
+  and QueryMeta/log-mixing anomalies.
