@@ -146,7 +146,7 @@ add_ds_ut_executable(ds_ut_object
         ${DS_UT_OBJECT_SRCS}
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
-if (BUILD_WITH_URMA)
+if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
     add_ds_ut_executable(ds_ut_urma_remote_jetty_reuse
             client/urma_remote_jetty_reuse_test.cpp
             $<TARGET_OBJECTS:_ds_ut_main_obj>)
@@ -156,6 +156,13 @@ if (BUILD_WITH_URMA)
     add_ds_ut_executable(ds_ut_urma_send_jetty_fault
             client/urma_send_jetty_fault_test.cpp
             $<TARGET_OBJECTS:_ds_ut_main_obj>)
+endif()
+if (BUILD_WITH_URMA_MOCK)
+        foreach(_urma_ut_target ds_ut_urma_remote_jetty_reuse ds_ut_urma_send_jetty_lifecycle
+                                ds_ut_urma_send_jetty_fault)
+                target_compile_definitions(${_urma_ut_target} PRIVATE USE_URMA USE_URMA_MOCK)
+                target_link_libraries(${_urma_ut_target} PRIVATE common_urma_mock_obj)
+        endforeach()
 endif()
 add_executable(ds_ut_slot_store
         common/l2cache/slot_store_test.cpp
@@ -219,7 +226,7 @@ target_link_libraries(ds_ut_object PRIVATE
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
-if (BUILD_WITH_URMA)
+if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
     target_link_libraries(ds_ut_urma_remote_jetty_reuse PRIVATE
             ${DS_UT_HEAVY_LINK_START}
             ${DS_UT_DEPEND_LIBS}
@@ -280,7 +287,7 @@ add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_store_perf_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(cluster_topology_contract_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
-if (BUILD_WITH_URMA)
+if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
     add_datasystem_test(ds_ut_urma_remote_jetty_reuse
             TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
     add_datasystem_test(ds_ut_urma_send_jetty_lifecycle
