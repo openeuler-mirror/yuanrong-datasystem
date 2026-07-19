@@ -1,4 +1,5 @@
 build --cxxopt=-std=c++17
+build --workspace_status_command=./bazel/workspace_status.sh
 build --cxxopt=-Wextra
 build --cxxopt=-fsigned-char
 build --cxxopt=-fno-common

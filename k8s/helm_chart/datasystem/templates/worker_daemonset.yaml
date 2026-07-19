@@ -53,7 +53,7 @@ spec:
               - matchExpressions:
                   - key: {{ $spec.name }}
                     operator: In
-                    values: 
+                    values:
                     - {{ $spec.affinityLabel }}
       {{- end }}
       {{- end }}
@@ -240,7 +240,7 @@ spec:
         - -enable_urma={{ $.Values.global.performance.enableUrma }}
         - -shared_memory_distribution_policy={{ $.Values.global.performance.sharedMemoryDistributionPolicy }}
         - -urma_poll_size={{ $.Values.global.performance.urmaPollSize }}
-        - -urma_max_wirte_size_mb={{ $.Values.global.performance.urmaMaxWirteSizeMb }}
+        - -urma_max_write_size_mb={{ $.Values.global.performance.urmaMaxWriteSizeMb }}
         - -urma_register_whole_arena={{ $.Values.global.performance.urmaRegisterWholeArena }}
         - -urma_connection_size={{ $.Values.global.performance.urmaConnectionSize }}
         - -urma_event_mode={{ $.Values.global.performance.urmaEventMode }}

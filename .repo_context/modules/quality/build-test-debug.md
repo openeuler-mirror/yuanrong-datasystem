@@ -117,6 +117,14 @@ Backed by `bazel/BUILD.bazel` and `bazel/datasystem_sdk.bzl`:
 - the SDK directory includes `cpp/BUILD.bazel`, all SDK headers under `cpp/include/datasystem/`, and `cpp/lib/libdatasystem.so`.
 - `//bazel:datasystem_wheel` includes the `yr/datasystem/datasystem_worker` binary in the wheel payload alongside the Python package, CLI/config assets, and `yr/datasystem/lib/` shared libraries.
 
+Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and `src/datasystem/common/util/BUILD.bazel`:
+
+- Bazel builds run `bazel/workspace_status.sh` through `--workspace_status_command` to expose `STABLE_GIT_HASH`
+  and `STABLE_GIT_BRANCH`;
+- `//src/datasystem/common/util:git_version_def` generates `git_version_def.h`, which defines `GIT_HASH` and
+  `GIT_BRANCH` for Bazel-built code while CMake builds continue using compile definitions from `CMakeLists.txt`;
+- worker startup logging and `datasystem::GetGitHash()` share the same generated Git version macros in Bazel builds.
+
 ## Environment Notes
 
 Backed by `build.sh` and current docs:
