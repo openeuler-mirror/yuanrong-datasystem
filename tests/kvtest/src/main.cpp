@@ -382,7 +382,7 @@ static int RunServerMode(const Config &cfg) {
     std::cerr << "Output directory: " << cfg.outputDir << std::endl;
 
     // Apply CPU/NUMA affinity before creating any threads
-    ApplyAffinityFromConfig(cfg.cpuAffinity, cfg.numaNode);
+    ApplyAffinityFromConfig(cfg.cpuAffinity, cfg.numaNode, cfg.randomNumaNode);
 
     std::cerr << "Initializing ServiceDiscovery..." << std::endl;
 

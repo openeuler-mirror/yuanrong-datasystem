@@ -148,6 +148,7 @@ bool LoadConfig(const std::string &path, Config &cfg) {
         if (j.contains("mget_batch_size")) cfg.mgetBatchSize = j["mget_batch_size"];
         if (j.contains("cpu_affinity")) cfg.cpuAffinity = j["cpu_affinity"].get<std::string>();
         if (j.contains("numa_node")) cfg.numaNode = j["numa_node"].get<int>();
+        if (j.contains("random_numa_node")) cfg.randomNumaNode = j["random_numa_node"].get<bool>();
         if (j.contains("key_pool_size")) cfg.keyPoolSize = j["key_pool_size"];
         if (j.contains("inference_delay_ms")) cfg.inferenceDelayMs = j["inference_delay_ms"];
         if (j.contains("warmup_retry_count")) cfg.warmupRetryCount = j["warmup_retry_count"];
@@ -476,6 +477,12 @@ bool LoadConfig(const std::string &path, Config &cfg) {
                 return false;
             }
         }
+    }
+
+    if (cfg.randomNumaNode && cfg.numaNode >= 0) {
+        SLOG_ERROR("random_numa_node and numa_node are mutually exclusive, got "
+                  << "random_numa_node=true and numa_node=" << cfg.numaNode);
+        return false;
     }
 
     auto joinStr = [](const std::vector<std::string> &v) -> std::string {
