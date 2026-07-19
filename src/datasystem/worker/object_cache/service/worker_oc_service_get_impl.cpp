@@ -1531,7 +1531,10 @@ Status WorkerOcServiceGetImpl::RetrieveRemotePayload(
         entry->SetShmUnit(shmUnit);
     }
 
-    void *dest = reinterpret_cast<uint8_t *>(entry->GetShmUnit()->GetPointer()) + metaSz + objectKV.GetReadOffset();
+    void *rawPtr = entry->GetShmUnit()->GetPointer();
+    CHECK_FAIL_RETURN_STATUS(rawPtr != nullptr, K_RUNTIME_ERROR,
+                             "ShmUnit pointer is null before receiving remote payload");
+    void *dest = reinterpret_cast<uint8_t *>(rawPtr) + metaSz + objectKV.GetReadOffset();
     // Newer version of worker can connect to us using direct tcp connection
     // and is able to write directly into shared memory.
     if (clientApi->IsV2Client()) {
@@ -1564,10 +1567,23 @@ Status WorkerOcServiceGetImpl::RetrieveRemotePayload(
         };
         status = f();
     }
+    // Test hook: simulate a payload-receive failure after the data transfer branch above. Uses a
+    // call() action so it sets status to an error WITHOUT returning early, letting the cleanup
+    // block below run and null the ShmUnit pointer. This reproduces the stale-shmUnit state
+    // exercised by retry-to-primary (GetObjectFromRemoteWorkerWithoutDump). See issue #783.
+    INJECT_POINT("WorkerOcServiceGetImpl.RetrieveRemotePayload.fail_after_transfer", [&status](const std::string &) {
+        status = Status(K_RUNTIME_ERROR, "injected payload receive failure");
+        return Status::OK();
+    });
     // Clean up on error
     if (status.IsError()) {
         entry->GetShmUnit()->SetHardFreeMemory();
         entry->GetShmUnit()->FreeMemory();
+        // FreeMemory nulls the ShmUnit pointer but leaves the freed unit on the entry.
+        // Drop it so a retry (e.g. retry-to-primary in GetObjectFromRemoteWorkerWithoutDump)
+        // reallocates instead of reusing a unit whose pointer is null, which would write to a
+        // near-null address and crash the worker. See issue #783.
+        entry->SetShmUnit(nullptr);
         LOG(ERROR) << "Fail to operate entry memory copy because of " << status.ToString();
         if (clientApi->IsV2Client()) {
             clientApi->CleanupOnError(status);
