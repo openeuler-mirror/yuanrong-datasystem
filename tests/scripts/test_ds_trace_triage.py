@@ -234,6 +234,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"flow-stage-chart\"" in html
     assert "id=\"flow-stage-table\"" in html
     assert "Client→Entry→Meta/Data 流程" in html
+    assert "edge.summary" in html
+    assert "edge.reason" in html
+    assert "rollup" in html
     assert "id=\"worker-chart\"" in html
     assert "id=\"worker-table-pager\"" in html
     assert "id=\"ub-edge-table-pager\"" in html
@@ -367,6 +370,12 @@ def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
     assert write_stages["write.entry_to_meta_publish"]["confidence"] == "missing"
     assert report["dimensions"]["coverage"]["surfaces"]["urma_elapsed"]["status"] == "present"
     assert report["dimensions"]["coverage"]["surfaces"]["rpc_slow"]["status"] == "missing"
+    flow_edges = {edge["name"]: edge for edge in report["dimensions"]["flow_stages"]["edges"]}
+    data_edge = flow_edges["entry worker -> data worker"]
+    assert data_edge["rollup"]["p99_ms"] == 231.321
+    assert "10.0.0.1:31501" in data_edge["rollup"]["top_ips"]
+    assert "p99=231.321ms" in data_edge["summary"]
+    assert data_edge["reason"]
     first_bucket = report["dimensions"]["time_buckets"]["1000ms"][0]
     assert first_bucket["stage_breakdown_ms"]["read.entry_to_data_worker"]["p99"] == 231.321
     assert first_bucket["stage_breakdown_ms"]["read.data_worker_ub_write"]["p99"] == 231.001

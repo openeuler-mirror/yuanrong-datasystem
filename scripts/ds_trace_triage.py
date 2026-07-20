@@ -27,6 +27,7 @@ from pathlib import Path
 TRACE_ID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
 TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 WORKER_RE = re.compile(r"(kv[^/\s|]*worker[^/\s|]*)", re.I)
+IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b")
 NOISE_ON_LABEL = "有底噪(dizao)"
 NOISE_OFF_LABEL = "无底噪(wudizao)"
 DEFAULT_SITE_HTML_MAX_BYTES = 2 * 1024 * 1024
@@ -756,7 +757,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         ub_summary=ub_summary,
     )
     source_appendix = _build_source_appendix(coverage)
-    flow_stages = _build_flow_stages(coverage, flow_counts, ub_summary)
+    flow_stages = _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows)
 
     return {
         "schema_version": 1,
@@ -984,7 +985,62 @@ def _build_source_appendix(coverage):
     return rows
 
 
-def _build_flow_stages(coverage, flow_counts, ub_summary):
+def _ips_from_text(text):
+    return [match.group(0) for match in IP_RE.finditer(text or "")]
+
+
+def _flow_stage_rollup(trace_rows, stage_names):
+    values = []
+    trace_ids = []
+    workers = Counter()
+    ips = Counter()
+    top_trace = None
+    top_value = None
+    for trace_id, trace in trace_rows.items():
+        stage_values = [
+            stage.get("duration_ms") for stage in trace.get("stage_breakdown", [])
+            if stage.get("stage") in stage_names and stage.get("duration_ms") is not None
+        ]
+        if not stage_values:
+            continue
+        value = max(stage_values)
+        values.append(value)
+        trace_ids.append(trace_id)
+        if top_value is None or value > top_value:
+            top_value = value
+            top_trace = trace_id
+        workers.update(trace.get("workers", {}))
+        for event in trace.get("ub_events", []):
+            if event.get("src_addr"):
+                ips[event["src_addr"]] += 1
+            if event.get("target_addr"):
+                ips[event["target_addr"]] += 1
+            ips.update(_ips_from_text(event.get("raw", "")))
+        for evidence in trace.get("evidence", []):
+            ips.update(_ips_from_text(evidence.get("text", "")))
+    pct = _percentiles(values)
+    return {
+        "trace_count": len(set(trace_ids)),
+        "p50_ms": pct.get("p50"),
+        "p99_ms": pct.get("p99"),
+        "max_ms": pct.get("max"),
+        "top_trace": top_trace,
+        "top_workers": [worker for worker, _ in workers.most_common(3)],
+        "top_ips": [ip for ip, _ in ips.most_common(4)],
+    }
+
+
+def _flow_edge_summary(rollup, fallback):
+    if not rollup.get("trace_count"):
+        return fallback
+    parts = [f"p99={rollup.get('p99_ms', '')}ms", f"max={rollup.get('max_ms', '')}ms"]
+    if rollup.get("top_ips"):
+        parts.append("IP " + ", ".join(rollup["top_ips"][:2]))
+    return " / ".join(parts)
+
+
+def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
+    trace_rows = trace_rows or {}
     surfaces = coverage.get("surfaces", {})
 
     def surface_status(name):
@@ -999,11 +1055,24 @@ def _build_flow_stages(coverage, flow_counts, ub_summary):
                       if any(op in name for op in ("SET", "CREATE", "PUBLISH")))
     ub_edges = ub_summary.get("edges", {})
     ub_transfer_count = ub_summary.get("transfer_path", {}).get("UB", 0)
+    rollups = {
+        "client_entry": _flow_stage_rollup(trace_rows, {
+            "read.client_to_entry_worker",
+            "write.client_to_entry_createbuffer",
+            "write.client_to_entry_publish",
+        }),
+        "entry_meta": _flow_stage_rollup(trace_rows, {
+            "read.entry_to_meta_worker",
+            "write.entry_to_meta_publish",
+        }),
+        "entry_data": _flow_stage_rollup(trace_rows, {"read.entry_to_data_worker"}),
+        "data_ub": _flow_stage_rollup(trace_rows, {"read.data_worker_ub_write"}),
+    }
     nodes = [
-        {"id": "client", "label": "Client", "role": "client"},
-        {"id": "entry", "label": "Entry Worker", "role": "entry_worker"},
-        {"id": "meta", "label": "Meta Worker", "role": "meta_worker"},
-        {"id": "data", "label": "Data Worker", "role": "data_worker"},
+        {"id": "client", "label": "Client", "role": "client", "top_ips": rollups["client_entry"].get("top_ips", [])[:2]},
+        {"id": "entry", "label": "Entry Worker", "role": "entry_worker", "top_workers": rollups["client_entry"].get("top_workers", [])[:2], "top_ips": rollups["entry_data"].get("top_ips", [])[:2]},
+        {"id": "meta", "label": "Meta Worker", "role": "meta_worker", "top_ips": rollups["entry_meta"].get("top_ips", [])[:2]},
+        {"id": "data", "label": "Data Worker", "role": "data_worker", "top_workers": rollups["data_ub"].get("top_workers", [])[:2], "top_ips": rollups["data_ub"].get("top_ips", [])[:2]},
         {"id": "ub", "label": "UB/URMA", "role": "transport"},
     ]
     edges = [
@@ -1014,6 +1083,9 @@ def _build_flow_stages(coverage, flow_counts, ub_summary):
             "operation": "read/write request",
             "evidence": f"{surface_status('client_access')['events']} access events, {read_count} read flows, {write_count} write flows",
             "status": surface_status("client_access")["status"],
+            "summary": _flow_edge_summary(rollups["client_entry"], "client access upper bound"),
+            "rollup": rollups["client_entry"],
+            "reason": "客户侧端到端窗口，作为上界，不和内部 RPC/UB 子阶段相加。",
             "report_reading": "客户看到的耗时和错误起点，先用于表象定界。",
         },
         {
@@ -1023,6 +1095,9 @@ def _build_flow_stages(coverage, flow_counts, ub_summary):
             "operation": "GetObjMetaInfo / QueryMeta",
             "evidence": f"{surface_status('latency_summary')['events']} latencySummary events",
             "status": surface_status("latency_summary")["status"],
+            "summary": _flow_edge_summary(rollups["entry_meta"], "QueryMeta/CreateMeta evidence"),
+            "rollup": rollups["entry_meta"],
+            "reason": "元数据 RPC 阶段；若 p99/max 高，优先复核 QueryMeta/CreateMeta slow log 和 MetaWorker。",
             "report_reading": "只有出现 QueryMeta/GetObjMetaInfo 耗时或 RPC slow 时才归因到元数据路径。",
         },
         {
@@ -1032,6 +1107,9 @@ def _build_flow_stages(coverage, flow_counts, ub_summary):
             "operation": "RemotePull / BatchGetObjectRemote",
             "evidence": f"{len(ub_edges)} UB edge buckets, {ub_transfer_count} UB transfer markers",
             "status": "present" if ub_edges or ub_transfer_count else "missing",
+            "summary": _flow_edge_summary(rollups["entry_data"], "RemotePull/BatchGetObjectRemote evidence"),
+            "rollup": rollups["entry_data"],
+            "reason": "EntryWorker 等待 DataWorker 远端数据；常用于解释 client deadline 后服务端仍继续完成。",
             "report_reading": "读取主路径的远端数据获取窗口，用来解释 client deadline 后 worker 继续完成。",
         },
         {
@@ -1041,6 +1119,9 @@ def _build_flow_stages(coverage, flow_counts, ub_summary):
             "operation": "UB write completion",
             "evidence": f"{surface_status('urma_elapsed')['events']} URMA elapsed events",
             "status": surface_status("urma_elapsed")["status"],
+            "summary": _flow_edge_summary(rollups["data_ub"], "URMA elapsed evidence"),
+            "rollup": rollups["data_ub"],
+            "reason": "DataWorker UB/URMA write completion；看 total、request id、src/target、dataSize、cpuid 和 inflight。",
             "report_reading": "DataWorker 侧 payload write/wait/notify 时序，不要只凭 total 单字段下根因。",
         },
         {
@@ -1050,6 +1131,9 @@ def _build_flow_stages(coverage, flow_counts, ub_summary):
             "operation": "completion visible to Entry Worker",
             "evidence": "align RemotePull finish, BatchGetObjectRemote, URMA request id when sampled",
             "status": "present" if ub_edges or surface_status("urma_elapsed")["status"] == "present" else "missing",
+            "summary": _flow_edge_summary(rollups["data_ub"], "completion alignment"),
+            "rollup": rollups["data_ub"],
+            "reason": "用 UB completion 与 EntryWorker RemotePull finish 对齐，确认时间差是否在传输后可见阶段。",
             "report_reading": "用于关联 DataWorker completion 与 EntryWorker RemotePull finish 的时间差。",
         },
         {
@@ -1059,6 +1143,9 @@ def _build_flow_stages(coverage, flow_counts, ub_summary):
             "operation": "CreateBuffer / Publish",
             "evidence": f"{write_count} write flows, {surface_status('latency_summary')['events']} latencySummary events",
             "status": "present" if write_count or surface_status("latency_summary")["status"] == "present" else "missing",
+            "summary": _flow_edge_summary(rollups["entry_meta"], "publish metadata evidence"),
+            "rollup": rollups["entry_meta"],
+            "reason": "写路径元数据发布阶段；需要和 createbuffer/client publish 区分。",
             "report_reading": "写流程需要拆开 createbuffer、client publish、entry publish、meta publish。",
         },
     ]
@@ -1650,12 +1737,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     item.validation,
     item.report_reading
   ]));
-  renderTable('flow-stage-table', ['stage','operation','evidence','status','report reading'], (flowStages.edges || []).map(edge => [
+  renderTable('flow-stage-table', ['stage','summary','operation','IPs','reason','status'], (flowStages.edges || []).map(edge => [
     edge.name,
+    edge.summary || '',
     edge.operation,
-    edge.evidence,
-    edge.status,
-    edge.report_reading
+    (edge.rollup?.top_ips || []).join(', '),
+    edge.reason || edge.report_reading,
+    edge.status
   ]));
   renderTable('error-table', ['error','count'], errorRows);
   renderTable('latency-table', ['metric','distribution'], [
@@ -1859,8 +1947,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }) : noDataOption('No time bucket stage data'));
   chart('flow-stage-chart', {
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
-      ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.evidence)}`
-      : escapeHtml(p.data.label || p.data.name)},
+      ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
+      : `${escapeHtml(p.data.label || p.data.name)}<br>${escapeHtml((p.data.top_ips || []).join(', '))}`},
     series:[{
       type:'graph',
       layout:'none',
@@ -1868,11 +1956,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
       label:{show:true},
-      edgeLabel:{show:true, formatter:p => p.data.status === 'present' ? 'present' : 'missing', fontSize:11},
+      edgeLabel:{show:true, formatter:p => p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:11, width:120, overflow:'break'},
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(flowStages.nodes || []).map((node, idx) => ({
         name:node.id,
-        label:node.label,
+        label:[node.label, ...(node.top_workers || []), ...(node.top_ips || [])].slice(0, 3).join('\\n'),
+        top_ips:node.top_ips || [],
         x:[80,280,480,480,680][idx] || 80,
         y:[170,170,80,260,260][idx] || 170,
         symbolSize:72,
@@ -1884,8 +1973,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         name:edge.name,
         operation:edge.operation,
         evidence:edge.evidence,
+        summary:edge.summary,
+        reason:edge.reason,
+        rollup:edge.rollup,
         status:edge.status,
-        lineStyle:{color:edge.status === 'present' ? '#2563eb' : '#cbd5e1', type:edge.status === 'present' ? 'solid' : 'dashed'}
+        lineStyle:{color:edge.rollup?.max_ms >= 20 ? '#dc2626' : edge.rollup?.max_ms >= 5 ? '#ea580c' : edge.status === 'present' ? '#2563eb' : '#cbd5e1', width:edge.rollup?.max_ms >= 20 ? 4 : 2, type:edge.status === 'present' ? 'solid' : 'dashed'}
       }))
     }]
   });
