@@ -1329,6 +1329,7 @@ h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-siz
 .subtitle,.note,.insight{color:var(--muted);line-height:1.65}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
+.log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
 th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
@@ -1474,6 +1475,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     table.innerHTML = `<thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>` +
       `<tbody>${rows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
   }
+  const palette = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
+  function axisBase(title, extra) {
+    return Object.assign({
+      title:{text:title, left:'center', top:4, textStyle:{fontSize:14}},
+      color:palette,
+      grid:{left:58,right:24,top:72,bottom:76,containLabel:true},
+      legend:{top:30,type:'scroll'},
+      toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}},
+      tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
+      dataZoom:[{type:'inside'},{type:'slider', height:18, bottom:18}]
+    }, extra || {});
+  }
+  function noDataOption(title) {
+    return {title:{text:title, left:'center', top:'center', textStyle:{fontSize:14,color:'#94a3b8'}}};
+  }
   function chart(id, option) {
     const node = document.getElementById(id);
     if (!node) return;
@@ -1496,8 +1512,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function highlightLogLine(line) {
     const text = escapeHtml(line);
     return text
-      .replace(/(ERROR|deadline exceeded|RPC timed out|status=1001|URMA_ELAPSED_TOTAL|latencySummary|Remote done|BatchGetObjectRemote|ProcessGetObjectRequest)/gi, '<span class="bad">$1</span>')
-      .replace(/(cost(?:Us)?[:=]?\\s*\\d+|totalCost:\\s*[\\d.]+ms|server_exec_us=\\d+|network_residual_us=\\d+)/gi, '<span class="warn">$1</span>');
+      .replace(/\\b(ERROR|FATAL|K_RUNTIME_ERROR|K_TRY_AGAIN|status[:=]?\\s*1001)\\b/gi, '<span class="log-tag log-error">$1</span>')
+      .replace(/(\\[?URMA_ELAPSED_(?:TOTAL|POLL_JFC|NOTIFY|THREAD_SHED)\\]?|URMA_WAIT_TIMEOUT|urma_[a-z_]+|request id[:=]?\\s*\\d+|dataSize[:=]?\\s*\\d+|cpuid[:=]?\\s*\\d+|inflight[_a-z]*[:=]?\\s*\\d+)/gi, '<span class="log-tag log-urma">$1</span>')
+      .replace(/(\\[?(?:ZMQ_)?RPC_FRAMEWORK_SLOW\\]?|server_exec_us=\\d+|network_residual_us=\\d+|client_req_framework_us=\\d+|client_rsp_framework_us=\\d+|remote_processing_us=\\d+)/gi, '<span class="log-tag log-rpc">$1</span>')
+      .replace(/(latencySummary|client\\.rpc\\.[a-z_]+|worker\\.rpc\\.[a-z_]+|worker\\.process\\.[a-z_]+|client\\.process\\.[a-z_]+)/gi, '<span class="log-tag log-latency">$1</span>')
+      .replace(/(deadline exceeded|RPC timed out|\\btimeout\\b|20ms deadline)/gi, '<span class="log-tag log-deadline">$1</span>')
+      .replace(/(cost(?:Us)?[:=]?\\s*[\\d.]+\\s*(?:us|ms)?|totalCost:\\s*[\\d.]+ms|[A-Za-z0-9_.-]+:\\s*\\d{4,})/gi, '<span class="log-tag log-slow">$1</span>')
+      .replace(/(RemotePull|Remote done|BatchGetObjectRemote|ProcessGetObjectRequest|CreateBuffer|Publish|QueryMeta|GetObjMetaInfo)/gi, '<span class="log-tag log-field">$1</span>');
   }
   const access = dim.latency_ms?.access || {};
   const totalErrors = Object.values(dim.errors || {}).reduce((a,b) => a + b, 0);
@@ -1638,13 +1659,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       ['missing_evidence', JSON.stringify(item.missing_evidence || [])]
     ]);
     const stageRows = (item.stage_breakdown || []).filter(s => s.duration_ms !== undefined);
-    chart('selected-trace-chart', {
-      title:{text:'Selected Trace Stage Breakdown', left:'center'},
-      tooltip:{trigger:'axis'},
-      xAxis:{type:'category', data:stageRows.map(s => s.stage), axisLabel:{rotate:25}},
+    chart('selected-trace-chart', stageRows.length ? axisBase('Selected Trace Stage Breakdown', {
+      xAxis:{type:'category', data:stageRows.map(s => s.stage), axisLabel:{rotate:25, width:120, overflow:'truncate'}},
       yAxis:{type:'value', name:'ms'},
-      series:[{type:'bar', data:stageRows.map(s => s.duration_ms), itemStyle:{color:'#5470c6'}}]
-    });
+      series:[{name:'duration_ms',type:'bar',barMaxWidth:42,data:stageRows.map(s => ({value:s.duration_ms, itemStyle:{color:s.duration_ms >= 20 ? '#dc2626' : s.duration_ms >= 5 ? '#ea580c' : '#2563eb'}})), label:{show:true, position:'top'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]}}]
+    }) : noDataOption('No selected trace stage data'));
     document.getElementById('selected-trace-log').innerHTML = (item.evidence || [])
       .map(e => highlightLogLine(`${e.member}:${e.line} ${e.text}`)).join('\\n');
   }
@@ -1722,14 +1741,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }
     navLinks.forEach(link => link.classList.toggle('active', link === active));
   });
-  chart('classification-chart', {title:{text:'Classification', left:'center'}, tooltip:{trigger:'item'}, series:[{type:'pie', radius:'60%', data:classificationRows.map(([name,value]) => ({name,value}))}]});
-  chart('cohort-chart', {title:{text:'Input Cohort Comparison', left:'center'}, tooltip:{trigger:'axis'}, legend:{top:25}, xAxis:{type:'category', data:cohortRows.map(r => r[0]), axisLabel:{rotate:20}}, yAxis:{type:'value'}, series:[
-    {name:'traces',type:'bar',data:cohortRows.map(r => r[1].trace_count || 0)},
-    {name:'errors',type:'bar',data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0))}
-  ]});
-  chart('error-chart', {title:{text:'Errors', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25}}, yAxis:{type:'value'}, series:[{type:'bar', data:errorRows.map(r => r[1]), itemStyle:{color:'#c23531'}}]});
-  chart('latency-chart', {title:{text:'Latency Percentiles', left:'center'}, tooltip:{trigger:'axis'}, legend:{top:25}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',data:[access[k] || 0]}))});
-  chart('flow-chart', {title:{text:'Flow', left:'center'}, tooltip:{trigger:'item'}, series:[{type:'pie', radius:['35%','65%'], data:flowRows.map(([name,value]) => ({name,value}))}]});
+  chart('classification-chart', classificationRows.length ? {title:{text:'Classification', left:'center'}, color:palette, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['38%','66%'], center:['50%','48%'], avoidLabelOverlap:true, data:classificationRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No classification data'));
+  chart('cohort-chart', cohortRows.length ? axisBase('Input Cohort Comparison', {xAxis:{type:'category', data:cohortRows.map(r => r[0]), axisLabel:{rotate:20, width:110, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
+    {name:'traces',type:'bar',barMaxWidth:42,data:cohortRows.map(r => r[1].trace_count || 0), label:{show:true, position:'top'}},
+    {name:'errors',type:'bar',barMaxWidth:42,data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0)), label:{show:true, position:'top'}, itemStyle:{color:'#dc2626'}}
+  ]}) : noDataOption('No cohort data'));
+  chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
+  chart('latency-chart', axisBase('Latency Percentiles', {legend:{top:30}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',barMaxWidth:42,data:[access[k] || 0], markLine:k === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]} : undefined}))}));
+  chart('flow-chart', flowRows.length ? {title:{text:'Flow', left:'center'}, color:palette, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['35%','65%'], center:['50%','47%'], data:flowRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No flow data'));
   chart('flow-stage-chart', {
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.evidence)}`
@@ -1762,8 +1781,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       }))
     }]
   });
-  chart('worker-chart', {title:{text:'Top Workers by Errors', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:workerRows.slice(0,15).map(r => r[0]), axisLabel:{rotate:40}}, yAxis:{type:'value'}, series:[{type:'bar', data:workerRows.slice(0,15).map(r => r[1].error_count || 0), itemStyle:{color:'#fac858'}}]});
-  chart('ub-edge-chart', {title:{text:'UB Edge Count', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:ubRows.slice(0,15).map(r => r[0]), axisLabel:{rotate:45}}, yAxis:{type:'value'}, series:[{type:'bar', data:ubRows.slice(0,15).map(r => r[1].count || 0), itemStyle:{color:'#91cc75'}}]});
+  chart('worker-chart', workerRows.length ? axisBase('Top Workers by Errors', {xAxis:{type:'category', data:workerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{name:'errors',type:'bar',barMaxWidth:42,data:workerRows.slice(0,20).map(r => ({value:r[1].error_count || 0, itemStyle:{color:(r[1].error_count || 0) ? '#dc2626' : '#94a3b8'}})), label:{show:true, position:'top'}}]}) : noDataOption('No worker data'));
+  chart('ub-edge-chart', ubRows.length ? axisBase('UB Edge Count', {xAxis:{type:'category', data:ubRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:150, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{name:'UB edges',type:'bar',barMaxWidth:42,data:ubRows.slice(0,20).map(r => r[1].count || 0), itemStyle:{color:'#059669'}, label:{show:true, position:'top'}}]}) : noDataOption('No UB edge data'));
   renderTracePage();
   renderSelectedTrace();
   document.getElementById('trace-data').textContent = JSON.stringify(traces, null, 2);

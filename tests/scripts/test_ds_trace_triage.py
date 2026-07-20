@@ -238,6 +238,15 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "download-selected-raw" in html
     assert "download-filtered-evidence" in html
     assert "highlightLogLine" in html
+    assert "function axisBase" in html
+    assert "dataZoom" in html
+    assert "markLine" in html
+    assert "log-error" in html
+    assert "log-deadline" in html
+    assert "log-urma" in html
+    assert "log-rpc" in html
+    assert "log-latency" in html
+    assert "log-slow" in html
     assert "echarts.init" in html
     assert "id=\"classification-table\"" in html
     assert "id=\"error-table\"" in html
