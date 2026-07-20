@@ -202,7 +202,13 @@ Status ClientWorkerRemoteApi::Init(int32_t requestTimeoutMs, int32_t connectTime
             return Status(StatusCode::K_RPC_UNAVAILABLE,
                           FormatString("Failed to init brpc channel to %s", brpcAddr.ToString()));
         }
-        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        // Fail Init explicitly when the brpc socket is not reachable instead of
+        // proceeding to RegisterClient and leaving the client in INIT_FAILED.
+        // Concurrent init / slow worker startup can race the socket health check;
+        // returning here gives a clear K_RPC_UNAVAILABLE rather than a deferred
+        // "Not ready" surfaced by IsClientReady() seconds later (issue #785).
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WaitForBrpcSocketAvailable(brpcAddr), StatusCode::K_RPC_UNAVAILABLE,
+            FormatString("brpc socket not available to %s for WorkerOCService", brpcAddr.ToString()));
         auto stub = std::make_shared<WorkerOCService_BrpcGenericStub>(channel.get(), requestTimeoutMs);
         auto session = std::make_shared<BrpcSession>(std::move(stub), std::move(channel));
         std::atomic_store(&brpcSession_, session);
@@ -304,7 +310,13 @@ void ClientWorkerRemoteApi::RecreateOCStub()
             LOG(ERROR) << "Failed to init brpc channel for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
             return;
         }
-        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        // If the brpc socket is not reachable, keep the old session as fallback
+        // rather than swapping in a dead stub (mirrors the nullptr-channel path
+        // above). The caller's reconnect/retry loop will retry later.
+        if (!WaitForBrpcSocketAvailable(brpcAddr)) {
+            LOG(ERROR) << "brpc socket not available for WorkerOCService stub, endpoint=" << brpcAddr.ToString();
+            return;
+        }
         // Bundle new stub and channel; atomic_store swaps both together.
         auto newStub = std::make_shared<WorkerOCService_BrpcGenericStub>(newChannel.get(), stubTimeout);
         auto newSession = std::make_shared<BrpcSession>(std::move(newStub), std::move(newChannel));

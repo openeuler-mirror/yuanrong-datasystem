@@ -62,14 +62,20 @@ Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs,
         cfg.endpoint = brpcAddr.ToString();
         cfg.timeout_ms = requestTimeoutMs;
         cfg.connect_timeout_ms = connectTimeoutMs;
-        // Disable brpc blind retry: this channel carries non-idempotent
-        // stream RPCs (DeleteStream, CloseProducer, CloseConsumer).
-        cfg.max_retry = 0;
-        brpcChannel_ = BrpcChannelFactory::Create(cfg);
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(brpcChannel_ != nullptr, StatusCode::K_RPC_UNAVAILABLE,
+        // Defer brpcChannel_ assignment until after all checks pass
+        // (same pattern as Connect() in client_worker_common_api.cpp):
+        // overwriting brpcChannel_ before the socket check destroys the
+        // old channel while brpcRpcSession_ may still hold a raw pointer
+        // to it, risking use-after-free on early return (issue #785).
+        auto newChannel = BrpcChannelFactory::Create(cfg);
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(newChannel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
             FormatString("Failed to init brpc channel to %s for ClientWorkerSCService", brpcAddr.ToString()));
-        // Wait for brpc health check to establish TCP connection.
-        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        // Wait for brpc health check to establish TCP connection. Fail Init
+        // explicitly when the socket is not reachable, instead of proceeding
+        // and leaving the client in INIT_FAILED (issue #785).
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WaitForBrpcSocketAvailable(brpcAddr), StatusCode::K_RPC_UNAVAILABLE,
+            FormatString("brpc socket not available to %s for ClientWorkerSCService", brpcAddr.ToString()));
+        brpcChannel_ = std::move(newChannel);
         brpcRpcSession_ =
             std::make_unique<ClientWorkerSCService_BrpcGenericStub>(brpcChannel_.get(), requestTimeoutMs);
     } else {
