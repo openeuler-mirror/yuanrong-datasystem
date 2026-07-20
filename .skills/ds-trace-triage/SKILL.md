@@ -56,6 +56,8 @@ root-cause analysis rather than broad access/resource trending.
    - `report.site.html`: yche.me-shaped report draft; keep the same core
      components as local HTML and include `/assets/css/site.css` plus
      `/assets/js/site.js`
+   - `site_publish.md`: xqyun/yche.me publish checklist with target path,
+     URL, copy command, and validation command
 5. Inspect selected full logs for the top slow/error traces. Keep aggregate
    distributions first, then per-trace evidence.
 6. Cross-check any source-level conclusion with CodeGraph plus direct source

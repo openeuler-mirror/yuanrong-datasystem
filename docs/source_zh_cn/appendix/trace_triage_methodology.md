@@ -35,6 +35,7 @@ run 目录包含：
 - `triage.json` / `triage.md`：分类、issue candidates、代表 trace。
 - `report.local.html`：本地自包含 HTML，可直接打开。
 - `report.site.html`：yche.me 站点版 HTML 草稿，供后续发布流程使用。
+- `site_publish.md`：发布准备清单，记录 `xqyun-32c32g:/var/www/html/perf/*.html` 目标路径、yche.me URL、复制命令和 HTTP 验证命令；生成该文件不代表已经发布成功。
 
 也可以显式分阶段执行，便于人工检查中间产物：
 

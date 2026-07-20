@@ -1210,6 +1210,37 @@ def _write_inputs_doc(run_dir, manifest):
     (Path(run_dir) / "inputs.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_site_publish_doc(run_dir, manifest):
+    run_dir = Path(run_dir)
+    filename = f"{run_dir.name}.html"
+    remote_path = f"/var/www/html/perf/{filename}"
+    url = f"https://yche.me/perf/{filename}"
+    lines = [
+        "# yche.me Publish Checklist",
+        "",
+        f"- case_name: `{manifest.get('case_name', '')}`",
+        f"- scenario: `{manifest.get('scenario', '')}`",
+        f"- source_html: `report.site.html`",
+        f"- target_host: `xqyun-32c32g`",
+        f"- target_path: `{remote_path}`",
+        f"- url: `{url}`",
+        "",
+        "## Commands",
+        "",
+        "```bash",
+        f"scp report.site.html xqyun-32c32g:{remote_path}",
+        f"curl -fsSI {url}",
+        "```",
+        "",
+        "## Verification",
+        "",
+        "- HTTP status should be 200.",
+        "- Open the URL and verify navigation, ECharts, provenance, coverage, trace filters, downloads, and selected logs.",
+    ]
+    (run_dir / "site_publish.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"publish_doc": "site_publish.md", "target_path": remote_path, "url": url}
+
+
 def _write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -1852,8 +1883,9 @@ class TraceRunPipeline:
         (run_dir / "report.site.html").write_text(
             self.renderer.html(report, title, site=True, manifest=manifest), encoding="utf-8"
         )
+        publish_doc = _write_site_publish_doc(run_dir, manifest)
         _update_manifest(run_dir, lambda item: item["render_targets"].update({
-            "site": {"path": "report.site.html", "status": "generated"}
+            "site": {"path": "report.site.html", "status": "generated", **publish_doc}
         }))
         return run_dir / "report.site.html"
 

@@ -186,11 +186,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert (run_dir / "triage.md").exists()
     assert (run_dir / "report.local.html").exists()
     assert (run_dir / "report.site.html").exists()
+    assert (run_dir / "site_publish.md").exists()
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["case_name"] == "set-case"
     assert manifest["scenario"] == "memory-copy"
     assert manifest["render_targets"]["local"]["path"] == "report.local.html"
     assert manifest["render_targets"]["site"]["path"] == "report.site.html"
+    assert manifest["render_targets"]["site"]["publish_doc"] == "site_publish.md"
     html = (run_dir / "report.local.html").read_text(encoding="utf-8")
     site_html = (run_dir / "report.site.html").read_text(encoding="utf-8")
     assert "echarts" in html
@@ -252,6 +254,11 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
         "trace-report-summary.md",
     ]:
         assert marker in site_html
+    publish_doc = (run_dir / "site_publish.md").read_text(encoding="utf-8")
+    assert "xqyun-32c32g" in publish_doc
+    assert "/var/www/html/perf/" in publish_doc
+    assert "https://yche.me/perf/" in publish_doc
+    assert "report.site.html" in publish_doc
     triage = json.loads((run_dir / "triage.json").read_text())
     assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
 
@@ -396,12 +403,14 @@ def test_independent_stage_functions_consume_previous_artifacts(tmp_path):
 
     assert mod.render_local_stage(run_dir) == run_dir / "report.local.html"
     assert mod.render_site_stage(run_dir) == run_dir / "report.site.html"
+    assert (run_dir / "site_publish.md").exists()
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["stages"]["parse"]["status"] == "done"
     assert manifest["stages"]["aggregate"]["status"] == "done"
     assert manifest["stages"]["triage"]["status"] == "done"
     assert manifest["render_targets"]["local"]["status"] == "generated"
     assert manifest["render_targets"]["site"]["status"] == "generated"
+    assert manifest["render_targets"]["site"]["publish_doc"] == "site_publish.md"
 
 
 def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
