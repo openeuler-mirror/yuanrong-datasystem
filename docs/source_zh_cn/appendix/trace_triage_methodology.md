@@ -71,6 +71,19 @@ python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 
 当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us->ms 转换、`exceed 3ms` breakdown、`latencySummary` 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、UB request id/src/target/dataSize/cpuid/status/inflight 字段、时间桶、worker/edge 聚合、目录化 run 产物、本地/站点 HTML、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。
 
+日志字段小步演进时，优先通过 parser 扩展点接入：
+
+```python
+mod.register_error_pattern("DMA_WAIT_TIMEOUT")
+mod.register_metric_rule(
+  "urma_dma",
+  r"\[URMA_ELAPSED_DMA\].*?cost\s+([\d.]+)\s*(us|ms)",
+  unit_group=2,
+)
+```
+
+新增规则必须同时验证 trace 级产物和聚合级产物，例如 `traces[*].custom_metrics_ms`、`dimensions.custom_metrics_ms`、`traces[*].errors` 和 `dimensions.errors`。这样新字段可以随 DataSystem 演进追加，而不破坏已有 run/cache/render 阶段契约。
+
 ## 当前主线校准流程
 
 不要复用旧会话中的“latest”结论。每次分析先刷新并记录 ref：

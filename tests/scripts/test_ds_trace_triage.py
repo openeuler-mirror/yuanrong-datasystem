@@ -305,6 +305,35 @@ def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
     assert Path(capsys.readouterr().out.strip()).name == "report.site.html"
 
 
+def test_parser_extension_rules_add_new_errors_and_metrics(tmp_path):
+    trace_id = "019f7d0c-d7a5-7967-bbd3-cbb6d899a501"
+    log = tmp_path / "extension.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T13:30:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024",
+                f"2026-07-20T13:30:00.001000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_DMA] cost 2500us, lane:2",
+                f"2026-07-20T13:30:00.002000 | ERROR | worker | kvdataworker-0-worker2 | 1 | {trace_id} | DMA_WAIT_TIMEOUT lane 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    mod.register_error_pattern("DMA_WAIT_TIMEOUT")
+    mod.register_metric_rule(
+        "urma_dma",
+        r"\[URMA_ELAPSED_DMA\].*?cost\s+([\d.]+)\s*(us|ms)",
+        unit_group=2,
+    )
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+
+    assert report["dimensions"]["errors"]["DMA_WAIT_TIMEOUT"] == 1
+    assert report["traces"][trace_id]["errors"]["DMA_WAIT_TIMEOUT"] == 1
+    assert report["dimensions"]["custom_metrics_ms"]["urma_dma"]["p50"] == 2.5
+    assert report["traces"][trace_id]["custom_metrics_ms"]["urma_dma"] == 2.5
+
+
 def test_cli_self_test_writes_json_and_markdown(tmp_path, capsys):
     mod = _load_module()
     out_json = tmp_path / "summary.json"

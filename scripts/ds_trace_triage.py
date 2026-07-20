@@ -52,7 +52,7 @@ INFLIGHT_WR_RE = re.compile(r"urma_inflight_wr_count:\s*(\d+)", re.I)
 TRANSFER_PATH_RE = re.compile(r"(?:transferPath|path):\s*(UB|RDMA|TCP)\b", re.I)
 INFLIGHT_REMOTE_GET_RE = re.compile(r"inflightRemoteGet:\s*(\d+)", re.I)
 REMOTE_GET_REQUEST_RE = re.compile(r"Remote get request:\[([^\]]+)\]\s+object:\[([^\]]*)\].*?offset\[(\d+)\]\s+size\[(\d+)\]", re.I)
-ERROR_PATTERNS = (
+ERROR_PATTERNS = [
     "RPC deadline exceeded",
     "URMA_WAIT_TIMEOUT",
     "K_NOT_FOUND",
@@ -60,7 +60,24 @@ ERROR_PATTERNS = (
     "Key not found",
     "Etcd is abnormal",
     "fallback payload rejected",
-)
+]
+CUSTOM_METRIC_RULES = []
+
+
+def register_error_pattern(pattern):
+    """Register a literal error marker for evolved DataSystem log wording."""
+    if pattern not in ERROR_PATTERNS:
+        ERROR_PATTERNS.append(pattern)
+
+
+def register_metric_rule(name, pattern, value_group=1, unit_group=None):
+    """Register a custom latency metric extracted as ms from a regex match."""
+    CUSTOM_METRIC_RULES.append({
+        "name": name,
+        "regex": re.compile(pattern, re.I),
+        "value_group": value_group,
+        "unit_group": unit_group,
+    })
 
 
 def _iter_input_lines(paths):
@@ -374,6 +391,7 @@ def analyze_inputs(paths, code_ref="unknown"):
         "urma_notify_ms": [],
         "urma_thread_sched_ms": [],
         "urma_perf": Counter(),
+        "custom_metrics_ms": Counter(),
         "ub_events": [],
         "latency_summary_us": Counter(),
         "latency_summary_raw": [],
@@ -388,6 +406,7 @@ def analyze_inputs(paths, code_ref="unknown"):
     rpc_slow = defaultdict(lambda: {"count": 0, "fields_us": defaultdict(list)})
     urma = defaultdict(list)
     urma_perf = defaultdict(list)
+    custom_metrics = defaultdict(list)
     latency_summary = defaultdict(list)
     errors = Counter()
     ub_summary = {"transfer_path": Counter(), "edges": defaultdict(lambda: {"count": 0, "latencies": []})}
@@ -487,6 +506,14 @@ def analyze_inputs(paths, code_ref="unknown"):
             trace["urma_perf"][name] += val
             urma_perf[name].append(val)
 
+        for rule in CUSTOM_METRIC_RULES:
+            cm = rule["regex"].search(line)
+            if cm:
+                unit = cm.group(rule["unit_group"]) if rule["unit_group"] else "ms"
+                val = _ms(cm.group(rule["value_group"]), unit)
+                trace["custom_metrics_ms"][rule["name"]] += val
+                custom_metrics[rule["name"]].append(val)
+
         for pattern in ERROR_PATTERNS:
             if pattern in line:
                 surface_counts["error"] += 1
@@ -535,6 +562,7 @@ def analyze_inputs(paths, code_ref="unknown"):
                 "thread_sched": _percentiles(trace["urma_thread_sched_ms"]),
             },
             "urma_perf_ms": {k: round(v, 3) for k, v in trace["urma_perf"].items()},
+            "custom_metrics_ms": {k: round(v, 3) for k, v in trace["custom_metrics_ms"].items()},
             "ub_events": trace["ub_events"],
             "latency_summary_us": dict(trace["latency_summary_us"]),
             "latency_summary_raw": trace["latency_summary_raw"],
@@ -611,6 +639,7 @@ def analyze_inputs(paths, code_ref="unknown"):
                           for edge, item in sorted(ub_summary["edges"].items())},
             },
             "urma_perf_ms": {k: _percentiles(v) for k, v in sorted(urma_perf.items())},
+            "custom_metrics_ms": {k: _percentiles(v) for k, v in sorted(custom_metrics.items())},
             "latency_summary_us": {k: _percentiles(v) for k, v in sorted(latency_summary.items())},
             "errors": dict(errors),
             "classifications": dict(classifications),

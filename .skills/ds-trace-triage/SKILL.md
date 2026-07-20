@@ -93,6 +93,22 @@ subfields, `URMA_ELAPSED_TOTAL/POLL_JFC/NOTIFY/THREAD_SHED`, and classification
 counts. When DataSystem log wording changes, update the fixture and tests in the
 same patch as parser logic.
 
+For small log-format extensions, keep the analyzer stable by registering new
+markers instead of rewriting the parse loop:
+
+```python
+mod.register_error_pattern("DMA_WAIT_TIMEOUT")
+mod.register_metric_rule(
+    "urma_dma",
+    r"\[URMA_ELAPSED_DMA\].*?cost\s+([\d.]+)\s*(us|ms)",
+    unit_group=2,
+)
+```
+
+Every registered rule must have a focused pytest fixture that verifies the trace
+level output and the aggregate `dimensions.custom_metrics_ms` or
+`dimensions.errors` output.
+
 ## Report expectations
 
 Always cover:
