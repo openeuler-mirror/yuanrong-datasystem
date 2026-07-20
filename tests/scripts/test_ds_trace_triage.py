@@ -240,6 +240,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "Flow Breakdown" in html
     assert "flowLabelMap" in html
     assert "Worker GET" in html
+    assert "wideHorizontalGrid" in html
+    assert "grid:wideHorizontalGrid" in html
     assert "id=\"time-breakdown-chart\"" in html
     assert "Time Bucket Latency Stages" in html
     assert "client/access p99 upper bound" in html
@@ -264,9 +266,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "href=\"#write-flow-section\">写入流程" in html
     assert "href=\"#worker-chart\">Worker 分布" in html
     assert "href=\"#ub-edge-chart\">UB Edge" in html
-    assert "读取流程：Client→Entry→Meta/Data→UB" in html
-    assert "写入流程：Client→Entry CreateBuffer/Publish→Meta Publish" in html
-    assert "Client→Entry→Meta/Data 流程" in html
+    assert "图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
+    assert "图 4-0b 写入：区分 createbuffer、client publish、entry/meta publish。" in html
+    assert "读写链路分开看" in html
     assert "edge.summary" in html
     assert "edge.reason" in html
     assert "rollup" in html
@@ -302,7 +304,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"selected-stage-legend\"" in html
     assert "stage-pill" in html
     assert "legend:{show:false}" in html
-    assert "横向条形图按阶段耗时排序" in html
+    assert "点击 Trace 行联动，按阶段耗时排序，单位 ms。" in html
     assert "highlightLogLine" in html
     assert "renderTraceLogBlocks" in html
     assert "class=\"trace-log-block" in html

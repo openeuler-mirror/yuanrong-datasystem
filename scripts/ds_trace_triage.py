@@ -1548,12 +1548,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s3">
         <h2>3. 时延 Breakdown</h2>
-        <div class="panel insight">Breakdown 不做简单相加：Client/access 是等待窗口；Entry/DataWorker 指标可能发生在 client deadline 之后。图中 p99/max 用于找尾部，p50 用于看普遍水平。</div>
+        <div class="panel insight">看尾部先看 p99/max；Client/access 是等待窗口，不能和 Entry/DataWorker 子阶段直接相加。</div>
         <div class="chart-grid">
-          <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 Top 时延指标：图中使用短名称，完整字段见 tooltip 和表 3-1。</div></div>
-          <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布：图中使用短名称，完整 flow 见 tooltip 和表 3-2。</div></div>
+          <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 Top 时延：短名展示，完整字段见 tooltip。</div></div>
+          <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 Flow 分布：短名展示，完整 flow 见 tooltip。</div></div>
         </div>
-        <div class="panel"><div id="time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 时间桶时延分段：柱状图为同桶内 RPC/UB 子阶段 p99，折线为 client/access p99 上界；client access 不与子阶段相加。</div></div>
+        <div class="panel"><div id="time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 时间桶：柱为 RPC/UB 子阶段 p99，线为 client/access p99。</div></div>
         <div class="compare2">
           <div class="panel"><h3>表 3-1 时延指标</h3><table id="latency-table"></table></div>
           <div class="panel"><h3>表 3-2 Flow Breakdown</h3><table id="flow-table"></table></div>
@@ -1561,13 +1561,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s4">
         <h2>4. Worker / UB 分布</h2>
-        <div id="flow-stage-chart" class="panel insight">原 Client→Entry→Meta/Data 流程现在按读写链路分开展示：读取关注 Client→Entry→Meta/Data→UB，写入关注 Client→Entry CreateBuffer/Publish→Meta Publish；两者不能混合相加。</div>
+        <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data/UB，写关注 CreateBuffer/Publish/Meta。</div>
         <div id="read-flow-section" class="flow-section">
-          <div class="panel"><h3>读取流程证据块</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-0a 读取流程：Client→Entry→Meta/Data→UB；重点看 Entry→Data RPC 与 DataWorker UB/URMA 是否解释尾部。</div></div>
+          <div class="panel"><h3>读取流程证据块</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。</div></div>
           <div class="panel"><h3>表 4-0a 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
         </div>
         <div id="write-flow-section" class="flow-section">
-          <div class="panel"><h3>写入流程证据块</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">图 4-0b 写入流程：Client→Entry CreateBuffer/Publish→Meta Publish；重点区分 createbuffer、client publish、entry/meta publish。</div></div>
+          <div class="panel"><h3>写入流程证据块</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">图 4-0b 写入：区分 createbuffer、client publish、entry/meta publish。</div></div>
           <div class="panel"><h3>表 4-0b 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
         </div>
         <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>
@@ -1593,10 +1593,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <table id="top-trace-table"></table>
         </div>
         <div class="compare2">
-          <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击上方 Trace 行后联动更新，横向条形图按阶段耗时排序，单位 ms</div><table id="selected-stage-table"></table></div>
+          <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击 Trace 行联动，按阶段耗时排序，单位 ms。</div><table id="selected-stage-table"></table></div>
           <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
-        <div class="panel"><h3>Trace 全量日志</h3><div class="small">参考慢 Trace 报告方式：日志按组件连续分块展示；块内保持原始顺序完整展开，ERROR、timeout、RPC slow、latencySummary、RemotePull、URMA 以及大耗时字段会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><div id="selected-trace-log" class="trace-log-groups"></div></div>
+        <div class="panel"><h3>Trace 全量日志</h3><div class="small">按组件分块，保留原始顺序；异常、慢 RPC、latencySummary、RemotePull、URMA 和大耗时会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><div id="selected-trace-log" class="trace-log-groups"></div></div>
       </section>
       <section id="s6">
         <h2>6. 建议与后续口径</h2>
@@ -1755,6 +1755,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
       dataZoom:[{type:'inside'},{type:'slider', height:18, bottom:18}]
     }, extra || {});
+  }
+  function wideHorizontalGrid(left=120, top=56, bottom=34) {
+    return {left:left,right:24,top:top,bottom:bottom,containLabel:false};
   }
   function noDataOption(title) {
     return {title:{text:title, left:'center', top:'center', textStyle:{fontSize:14,color:'#94a3b8'}}};
@@ -2022,9 +2025,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       legend:{show:false},
       dataZoom:[],
       tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:ps => ps.filter(p => p.data && p.data.value != null).map(p => `研发流程: ${escapeHtml(p.data.display)}<br>耗时: ${p.data.value}ms<br>原始字段: ${escapeHtml(p.data.rawStage || '')}<br>观测来源: ${escapeHtml(p.data.source || '')}`).join('<br><br>')},
-      grid:{left:96,right:72,top:44,bottom:36,containLabel:true},
+      grid:wideHorizontalGrid(128,44,30),
       xAxis:{type:'value', name:'ms'},
-      yAxis:{type:'category', data:stageRows.map(s => stageDisplayName(s.stage)), axisLabel:{width:104, overflow:'truncate'}},
+      yAxis:{type:'category', data:stageRows.map(s => stageDisplayName(s.stage)), axisLabel:{width:118, overflow:'truncate'}},
       series:[{
         name:'duration_ms',
         type:'bar',
@@ -2127,7 +2130,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   ]}) : noDataOption('No cohort data'));
   chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
   chart('latency-chart', latencyChartRows.length ? axisBase('Top Latency Metrics', {
-    grid:{left:132,right:42,top:66,bottom:42,containLabel:true},
+    grid:wideHorizontalGrid(150,66,36),
     tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => {
       const idx = ps[0]?.dataIndex ?? 0;
       const rawName = latencyChartRows[idx]?.[0] || '';
@@ -2136,18 +2139,18 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       return lines.join('<br>');
     }},
     xAxis:{type:'value', name:'ms'},
-    yAxis:{type:'category', data:latencyChartRows.map(r => metricLabel(r[0])), axisLabel:{width:116, overflow:'truncate'}},
+    yAxis:{type:'category', data:latencyChartRows.map(r => metricLabel(r[0])), axisLabel:{width:138, overflow:'truncate'}},
     series:['p50','p90','p99','max'].map(key => ({name:key,type:'bar',barMaxWidth:18,data:latencyChartRows.map(([, item]) => item[key] || 0), markLine:key === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]} : undefined}))
   }) : noDataOption('No latency metric data'));
   chart('flow-chart', flowRows.length ? axisBase('Flow Breakdown', {
-    grid:{left:112,right:42,top:56,bottom:42,containLabel:true},
+    grid:wideHorizontalGrid(122,56,34),
     tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => {
       const idx = ps[0]?.dataIndex ?? 0;
       const rawName = flowRows[idx]?.[0] || '';
       return `${escapeHtml(flowLabel(rawName))}<br><span class="muted">${escapeHtml(rawName)}</span><br>count: ${ps[0]?.value ?? 0}`;
     }},
     xAxis:{type:'value', name:'count'},
-    yAxis:{type:'category', data:flowRows.map(r => flowLabel(r[0])), axisLabel:{width:96, overflow:'truncate'}},
+    yAxis:{type:'category', data:flowRows.map(r => flowLabel(r[0])), axisLabel:{width:112, overflow:'truncate'}},
     series:[{name:'count',type:'bar',barMaxWidth:28,data:flowRows.map(r => r[1]),itemStyle:{color:'#2563eb'},label:{show:true,position:'right'}}]
   }) : noDataOption('No flow data'));
   const timeStageNames = [...new Set(timeBucketRows.flatMap(row => Object.keys(row.stage_breakdown_ms || {})))]
