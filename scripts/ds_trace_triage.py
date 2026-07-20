@@ -1327,8 +1327,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s5">
         <h2>5. Trace 查看</h2>
         <div class="panel">
-        <div class="controls"><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><button id="reset-filter">清空</button></div>
+        <div class="controls"><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><button id="reset-filter">清空</button></div>
         <div class="controls pager">
+          <label>每页 <select id="trace-page-size"><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="9999">全部</option></select> 条</label>
           <button class="primary" id="prev-page">上一页</button>
           <span id="page-status" class="muted"></span>
           <button class="primary" id="next-page">下一页</button>
@@ -1363,7 +1364,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   let filteredTraceRows = traceRows;
   let currentPage = 0;
   let selectedTraceId = traceRows[0]?.[0] || null;
-  const pageSize = 8;
+  let pageSize = 8;
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   }
@@ -1479,6 +1480,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function applyTraceFilters() {
     const query = document.getElementById('trace-search').value.trim().toLowerCase();
     const cls = document.getElementById('class-filter').value;
+    const worker = document.getElementById('worker-filter').value;
     filteredTraceRows = traceRows.filter(([traceId, item]) => {
       const haystack = [
         traceId,
@@ -1487,7 +1489,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         Object.keys(item.workers || {}).join(' '),
         (item.evidence || []).map(e => e.text).join(' ')
       ].join(' ').toLowerCase();
-      return (!cls || item.classification === cls) && (!query || haystack.includes(query));
+      return (!cls || item.classification === cls)
+        && (!worker || Object.prototype.hasOwnProperty.call(item.workers || {}, worker))
+        && (!query || haystack.includes(query));
     });
     if (!filteredTraceRows.some(([traceId]) => traceId === selectedTraceId)) {
       selectedTraceId = filteredTraceRows[0]?.[0] || null;
@@ -1541,9 +1545,22 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   document.getElementById('class-filter').innerHTML = '<option value="">全部分类</option>' +
     classificationRows.map(([name]) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   document.getElementById('class-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  const traceWorkerNames = [...new Set(traceRows.flatMap(([, item]) => Object.keys(item.workers || {})))].sort();
+  document.getElementById('worker-filter').innerHTML = '<option value="">全部 Worker</option>' +
+    traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  document.getElementById('worker-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('trace-page-size').addEventListener('change', event => {
+    pageSize = Number(event.target.value) || 8;
+    currentPage = 0;
+    renderTracePage();
+    renderSelectedTrace();
+  });
   document.getElementById('reset-filter').addEventListener('click', () => {
     document.getElementById('trace-search').value = '';
     document.getElementById('class-filter').value = '';
+    document.getElementById('worker-filter').value = '';
+    document.getElementById('trace-page-size').value = '8';
+    pageSize = 8;
     currentPage = 0;
     renderTracePage();
     renderSelectedTrace();
