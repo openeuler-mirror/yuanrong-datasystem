@@ -50,7 +50,7 @@ python3 scripts/ds_trace_triage.py triage "$run_dir"
 python3 scripts/ds_trace_triage.py render-local "$run_dir"
 python3 scripts/ds_trace_triage.py render-site "$run_dir"
 python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
-# 确认 site_publish.md 后，不带 --dry-run 会执行 scp 并用 curl 验证。
+# 确认 site_publish.md 后，不带 --dry-run 会执行 scp、curl HEAD，并校验线上 HTML 关键组件。
 ```
 
 旧的直接摘要入口仍可用于快速检查：

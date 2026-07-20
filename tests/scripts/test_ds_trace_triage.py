@@ -458,22 +458,30 @@ def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypa
     run_dir = mod.run_pipeline([str(log)], tmp_path / "runs", case_name="publish-case", code_ref="unit-test")
     calls = []
 
-    def fake_run(cmd, check):
-        calls.append(cmd)
+    def fake_run(cmd, check, **kwargs):
+        calls.append((cmd, kwargs))
         class Result:
             returncode = 0
+            stdout = (
+                'Trace 分析报告 id="coverage-table" id="flow-stage-chart" '
+                'id="download-report-summary" /assets/css/site.css /assets/js/site.js'
+            )
         return Result()
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     url = mod.publish_site_stage(run_dir, dry_run=False)
 
     assert url.startswith("https://yche.me/perf/")
-    assert calls[0][0] == "scp"
-    assert calls[0][1] == str(run_dir / "report.site.html")
-    assert calls[0][2].startswith("xqyun-32c32g:/var/www/html/perf/")
-    assert calls[1][:2] == ["curl", "-fsSI"]
+    assert calls[0][0][0] == "scp"
+    assert calls[0][0][1] == str(run_dir / "report.site.html")
+    assert calls[0][0][2].startswith("xqyun-32c32g:/var/www/html/perf/")
+    assert calls[1][0][:2] == ["curl", "-fsSI"]
+    assert calls[2][0][:4] == ["curl", "-fsSL", "-A", "Mozilla/5.0"]
+    assert calls[2][1]["capture_output"] is True
+    assert calls[2][1]["text"] is True
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["render_targets"]["site"]["publish"]["status"] == "published"
+    assert manifest["render_targets"]["site"]["publish"]["live_markers"] == "verified"
 
 
 def test_trace_run_pipeline_object_exposes_stage_boundaries(tmp_path):
