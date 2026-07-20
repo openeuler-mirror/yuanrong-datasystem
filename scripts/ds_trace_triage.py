@@ -1478,7 +1478,7 @@ tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
-.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
 th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
@@ -1559,12 +1559,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <h2>4. Worker / UB 分布</h2>
         <div id="flow-stage-chart" class="panel insight">原 Client→Entry→Meta/Data 流程现在按读写链路分开展示：读取关注 Client→Entry→Meta/Data→UB，写入关注 Client→Entry CreateBuffer/Publish→Meta Publish；两者不能混合相加。</div>
         <div class="panel controls"><label>读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><span class="muted">联动 Trace、Breakdown、流程 Edge 与 UB Edge。</span></div>
-        <div class="chart-grid">
-          <div class="panel"><h3>图 4-0a 读取流程：Client→Entry→Meta/Data→UB</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">读取路径重点看 Entry→Data RPC 与 DataWorker UB/URMA 是否解释尾部。</div></div>
-          <div class="panel"><h3>图 4-0b 写入流程：Client→Entry CreateBuffer/Publish→Meta Publish</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">写入路径重点区分 createbuffer、client publish、entry/meta publish。</div></div>
-        </div>
-        <div class="compare2">
+        <div id="read-flow-section" class="flow-section">
+          <div class="panel"><h3>读取流程证据块</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-0a 读取流程：Client→Entry→Meta/Data→UB；重点看 Entry→Data RPC 与 DataWorker UB/URMA 是否解释尾部。</div></div>
           <div class="panel"><h3>表 4-0a 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
+        </div>
+        <div id="write-flow-section" class="flow-section">
+          <div class="panel"><h3>写入流程证据块</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">图 4-0b 写入流程：Client→Entry CreateBuffer/Publish→Meta Publish；重点区分 createbuffer、client publish、entry/meta publish。</div></div>
           <div class="panel"><h3>表 4-0b 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
         </div>
         <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>

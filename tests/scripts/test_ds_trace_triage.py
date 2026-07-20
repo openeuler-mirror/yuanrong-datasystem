@@ -254,6 +254,11 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"flow-stage-table\"" in html
     assert "id=\"read-flow-stage-table\"" in html
     assert "id=\"write-flow-stage-table\"" in html
+    assert "id=\"read-flow-section\"" in html
+    assert "id=\"write-flow-section\"" in html
+    assert "读取流程证据块" in html
+    assert "写入流程证据块" in html
+    assert "flow-section" in html
     assert "读取流程：Client→Entry→Meta/Data→UB" in html
     assert "写入流程：Client→Entry CreateBuffer/Publish→Meta Publish" in html
     assert "Client→Entry→Meta/Data 流程" in html
