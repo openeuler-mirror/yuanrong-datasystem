@@ -110,7 +110,7 @@ publish: local only / dry-run / published
    - `manifest.json`: case/scenario/ref/time range and render targets
    - `events.jsonl`: trace-scoped raw and UB events with source/member/line
    - `parsed_traces.json`: parser output consumed by aggregate
-   - `summary.json`: time/worker/flow/latency/RPC/UB/error dimensions
+- `summary.json`: time/worker/flow/latency/RPC/UB/error dimensions
    - `triage.json` and `triage.md`: classifications and issue candidates
    - `report.local.html`: self-contained local report
    - `report.site.html`: yche.me-shaped report draft; keep the same core
@@ -202,6 +202,11 @@ Always cover:
 
 - time: first/last timestamp, burst windows if visible
 - worker: entry/provider/target concentration where logs expose it
+- UB worker: distinguish entry UB and exit UB. Entry UB comes from
+  RemoteGet/transferPath-side evidence; exit UB comes from
+  `URMA_ELAPSED_*` evidence. Use `dimensions.ub_worker_summary` to identify
+  whether bursts concentrate on the request entry side, the data-send side, or
+  both.
 - flow: Get/Set/Create/Publish/RemotePull/GetObjMetaInfo/RPC methods
 - latency: access latency percentiles and top slow traces
 - breakdown: `ProcessGetObjectRequest`, QueryMeta/CreateMeta, SafeObject locks,

@@ -168,6 +168,13 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
     assert report["dimensions"]["worker_summary"]["kventryworker-0-worker1"]["roles"] == ["entry_worker"]
     assert report["dimensions"]["worker_summary"]["kvdataworker-0-worker2"]["roles"] == ["data_worker"]
     assert report["dimensions"]["worker_edges"]["10.0.0.2:31501 -> 10.0.0.1:31501"]["p99_ms"] == 231.001
+    ub_workers = report["dimensions"]["ub_worker_summary"]["workers"]
+    assert ub_workers["kventryworker-0-worker1"]["role"] == "ub_entry"
+    assert ub_workers["kventryworker-0-worker1"]["entry_events"] == 3
+    assert ub_workers["kvdataworker-0-worker2"]["role"] == "ub_exit"
+    assert ub_workers["kvdataworker-0-worker2"]["exit_events"] == 4
+    assert ub_workers["kvdataworker-0-worker2"]["latency_ms"]["p99"] == 231.001
+    assert report["dimensions"]["ub_worker_summary"]["time_buckets"][0]["exit_events"] == 4
     assert "late_worker_completion" in trace["triage_flags"]
 
 
@@ -282,6 +289,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"write-worker-chart\"" in html
     assert "id=\"read-ub-edge-chart\"" in html
     assert "id=\"write-ub-edge-chart\"" in html
+    assert "id=\"ub-worker-role-chart\"" in html
+    assert "id=\"ub-worker-time-chart\"" in html
+    assert "id=\"ub-worker-role-table\"" in html
+    assert "id=\"ub-worker-time-table\"" in html
+    assert "ub_worker_summary" in html
+    assert "UB 入口/出口 Worker" in html
+    assert "renderUbWorkerViews" in html
     assert "workerRowsForOperation" in html
     assert "renderWorkerSection" in html
     assert "renderUbSection" in html

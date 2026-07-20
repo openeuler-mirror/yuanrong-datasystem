@@ -728,6 +728,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         worker_edges[edge] = {"count": item["count"], "p99_ms": _percentiles(item["latencies"]).get("p99")}
 
     time_buckets = _build_time_buckets(trace_rows, 1000)
+    ub_worker_summary = _build_ub_worker_summary(trace_rows)
     cohorts = _build_cohorts(trace_rows)
     coverage = {
         "surfaces": {
@@ -771,6 +772,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
             "time_buckets": {"1000ms": time_buckets, "10000ms": _build_time_buckets(trace_rows, 10000)},
             "workers": {k: {"line_count": v} for k, v in worker_counts.most_common()},
             "worker_summary": worker_summary,
+            "ub_worker_summary": ub_worker_summary,
             "cohorts": cohorts,
             "worker_edges": worker_edges,
             "coverage": coverage,
@@ -1245,6 +1247,104 @@ def _build_time_buckets(trace_rows, bucket_ms):
     return rows
 
 
+def _ub_role(event_type):
+    if event_type in ("transfer_path", "remote_get_start"):
+        return "ub_entry"
+    if event_type in ("total", "poll_jfc", "notify", "thread_sched"):
+        return "ub_exit"
+    return "unknown"
+
+
+def _build_ub_worker_summary(trace_rows, bucket_ms=1000):
+    workers = defaultdict(lambda: {
+        "entry_events": 0,
+        "exit_events": 0,
+        "trace_ids": set(),
+        "entry_trace_ids": set(),
+        "exit_trace_ids": set(),
+        "latencies": [],
+        "edges": Counter(),
+        "first_ts": None,
+        "last_ts": None,
+    })
+    buckets = defaultdict(lambda: {
+        "bucket_start": None,
+        "entry_events": 0,
+        "exit_events": 0,
+        "latencies": [],
+        "entry_workers": Counter(),
+        "exit_workers": Counter(),
+    })
+    for trace_id, trace in trace_rows.items():
+        for event in trace.get("ub_events", []):
+            worker = event.get("worker") or "unknown"
+            role = _ub_role(event.get("event_type"))
+            if role == "unknown":
+                continue
+            item = workers[worker]
+            item["trace_ids"].add(trace_id)
+            if role == "ub_entry":
+                item["entry_events"] += 1
+                item["entry_trace_ids"].add(trace_id)
+            else:
+                item["exit_events"] += 1
+                item["exit_trace_ids"].add(trace_id)
+            if event.get("src_addr") and event.get("target_addr"):
+                item["edges"][f"{event['src_addr']} -> {event['target_addr']}"] += 1
+            if event.get("cost_ms") is not None:
+                item["latencies"].append(event["cost_ms"])
+            ts = event.get("timestamp")
+            if ts:
+                item["first_ts"] = min(filter(None, [item["first_ts"], ts])) if item["first_ts"] else ts
+                item["last_ts"] = max(filter(None, [item["last_ts"], ts])) if item["last_ts"] else ts
+                bucket_start = ts[:19]
+                bucket = buckets[bucket_start]
+                bucket["bucket_start"] = bucket_start
+                if role == "ub_entry":
+                    bucket["entry_events"] += 1
+                    bucket["entry_workers"][worker] += 1
+                else:
+                    bucket["exit_events"] += 1
+                    bucket["exit_workers"][worker] += 1
+                if event.get("cost_ms") is not None:
+                    bucket["latencies"].append(event["cost_ms"])
+    worker_rows = {}
+    for worker, item in workers.items():
+        role = "ub_entry_and_exit" if item["entry_events"] and item["exit_events"] else (
+            "ub_entry" if item["entry_events"] else "ub_exit")
+        worker_rows[worker] = {
+            "role": role,
+            "entry_events": item["entry_events"],
+            "exit_events": item["exit_events"],
+            "trace_count": len(item["trace_ids"]),
+            "entry_trace_count": len(item["entry_trace_ids"]),
+            "exit_trace_count": len(item["exit_trace_ids"]),
+            "latency_ms": _percentiles(item["latencies"]),
+            "top_edges": [edge for edge, _ in item["edges"].most_common(5)],
+            "first_ts": item["first_ts"],
+            "last_ts": item["last_ts"],
+        }
+    time_rows = []
+    for _, item in sorted(buckets.items()):
+        time_rows.append({
+            "bucket_start": item["bucket_start"],
+            "bucket_ms": bucket_ms,
+            "entry_events": item["entry_events"],
+            "exit_events": item["exit_events"],
+            "latency_ms": _percentiles(item["latencies"]),
+            "top_entry_workers": [worker for worker, _ in item["entry_workers"].most_common(5)],
+            "top_exit_workers": [worker for worker, _ in item["exit_workers"].most_common(5)],
+        })
+    return {
+        "workers": dict(sorted(worker_rows.items(), key=lambda kv: (
+            -(kv[1]["latency_ms"].get("max") or 0),
+            -(kv[1]["entry_events"] + kv[1]["exit_events"]),
+            kv[0],
+        ))),
+        "time_buckets": time_rows,
+    }
+
+
 def render_markdown(report):
     lines = [
         "# Trace Triage Summary",
@@ -1572,6 +1672,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div id="read-flow-section" class="flow-section">
           <div class="panel"><h3>读取流程证据块</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。</div></div>
           <div class="panel"><h3>表 4-0a 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
+          <div class="panel"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 4-0c UB worker：入口 UB 是 RemoteGet/transferPath 所在 worker，出口 UB 是 URMA_ELAPSED 所在 worker。</div></div>
+          <div class="panel"><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 4-0d UB 时间桶：按秒观察入口/出口事件是否集中爆发。</div></div>
+          <div class="compare2">
+            <div class="panel"><h3>表 4-0c UB Worker 角色</h3><table id="ub-worker-role-table"></table></div>
+            <div class="panel"><h3>表 4-0d UB 时间桶</h3><table id="ub-worker-time-table"></table></div>
+          </div>
           <div class="panel"><div id="read-worker-chart" class="chart"></div><div class="caption">图 4-1a 读取 Worker 分布。</div></div>
           <div class="panel"><h3>表 4-1a 读取 Worker Breakdown</h3><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
           <div class="panel"><div id="read-ub-edge-chart" class="chart"></div><div class="caption">图 4-2a 读取 UB edge。</div></div>
@@ -2040,6 +2146,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const ubRows = Object.entries(dim.ub_summary?.edges || {})
     .sort((a,b) => (b[1].count || 0) - (a[1].count || 0))
     .slice(0, 40);
+  const ubWorkerRows = Object.entries(dim.ub_worker_summary?.workers || {})
+    .sort((a,b) => (b[1].latency_ms?.max || 0) - (a[1].latency_ms?.max || 0) || ((b[1].entry_events || 0) + (b[1].exit_events || 0)) - ((a[1].entry_events || 0) + (a[1].exit_events || 0)))
+    .slice(0, 40);
+  const ubWorkerTimeRows = dim.ub_worker_summary?.time_buckets || [];
   const timeBucketRows = dim.time_buckets?.['1000ms'] || [];
   function latencyRowsForOperation(operation) {
     const rows = latencyChartRows.filter(([name]) => metricOperation(name) === operation || metricOperation(name) === 'both');
@@ -2142,6 +2252,47 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       {name:'UB edges',type:'bar',barMaxWidth:34,data:rows.slice(0,20).map(r => r[1].count || 0), itemStyle:{color:'#059669'}, label:{show:true, position:'top'}},
       {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:rows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0), itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
     ]}) : noDataOption(operation === 'write' ? 'Write flow has no UB read edge data' : 'No read UB edge data'));
+  }
+  function renderUbWorkerViews() {
+    renderTable('ub-worker-role-table', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], ubWorkerRows.map(([worker,item]) => [
+      worker,
+      item.role || '',
+      item.entry_events || 0,
+      item.exit_events || 0,
+      item.trace_count || 0,
+      item.latency_ms?.p99 || '',
+      item.latency_ms?.max || '',
+      (item.top_edges || []).join(', ')
+    ]), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`);
+    renderTable('ub-worker-time-table', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], ubWorkerTimeRows.map(item => [
+      item.bucket_start || '',
+      item.entry_events || 0,
+      item.exit_events || 0,
+      item.latency_ms?.p99 || '',
+      item.latency_ms?.max || '',
+      (item.top_entry_workers || []).join(', '),
+      (item.top_exit_workers || []).join(', ')
+    ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`);
+    chart('ub-worker-role-chart', ubWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
+      tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
+      xAxis:{type:'category', data:ubWorkerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
+      yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
+      series:[
+        {name:'入口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:ubWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'出口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:ubWorkerRows.slice(0,20).map(r => r[1].exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'p99 ms',type:'line',yAxisIndex:1,data:ubWorkerRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}}
+      ]
+    }) : noDataOption('No UB worker role data'));
+    chart('ub-worker-time-chart', ubWorkerTimeRows.length ? axisBase('UB Entry/Exit Time Buckets', {
+      tooltip:{trigger:'axis', axisPointer:{type:'cross'}, confine:true},
+      xAxis:{type:'category', data:ubWorkerTimeRows.map(r => String(r.bucket_start || '').replace('T','\\n')), axisLabel:{rotate:0}},
+      yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
+      series:[
+        {name:'入口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:ubWorkerTimeRows.map(r => r.entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'出口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:ubWorkerTimeRows.map(r => r.exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:ubWorkerTimeRows.map(r => r.latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
+      ]
+    }) : noDataOption('No UB time bucket data'));
   }
   function renderOperationViews() {
     renderTracePage();
@@ -2375,6 +2526,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   renderTimeBucketSection('write', 'Write');
   renderFlowGraph('read-flow-stage-chart', readFlowStages, 'Read Flow');
   renderFlowGraph('write-flow-stage-chart', writeFlowStages, 'Write Flow');
+  renderUbWorkerViews();
   renderWorkerSection('read', 'Read');
   renderWorkerSection('write', 'Write');
   renderUbSection('read');
