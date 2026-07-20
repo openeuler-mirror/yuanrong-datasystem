@@ -17,8 +17,8 @@
 
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 
+#include <csignal>
 #include <etcd/api/mvccpb/kv.pb.h>
-#include <signal.h>
 #include <sstream>
 #include <thread>
 
