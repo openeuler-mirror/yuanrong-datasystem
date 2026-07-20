@@ -84,6 +84,19 @@ mod.register_metric_rule(
 
 新增规则必须同时验证 trace 级产物和聚合级产物，例如 `traces[*].custom_metrics_ms`、`dimensions.custom_metrics_ms`、`traces[*].errors` 和 `dimensions.errors`。这样新字段可以随 DataSystem 演进追加，而不破坏已有 run/cache/render 阶段契约。
 
+脚本虽保持单文件交付，但职责按对象拆分：
+
+| 对象 | 职责边界 |
+|---|---|
+| `ParserRules` | 管理错误文本和自定义耗时指标扩展规则 |
+| `TraceInputReader` | 读取目录、普通日志、gzip 日志和 gzip-tar 包 |
+| `TraceParser` | 将单行日志解析为 trace-scoped facts，不做聚合 |
+| `TraceAnalyzer` | 串联 reader/parser，并形成 trace rows 与 dimensions |
+| `TraceReportRenderer` | 生成 events、triage、Markdown、本地 HTML 和 site HTML |
+| `TraceRunPipeline` | 管理 run 目录、raw 保留、cache、manifest 和阶段状态 |
+
+兼容入口 `analyze_inputs`、`parse_stage`、`aggregate_stage`、`triage_stage`、`render-local`、`render-site`、`run_pipeline` 保持可用，但新增能力优先落到对应对象，再通过 wrapper 暴露。
+
 ## 当前主线校准流程
 
 不要复用旧会话中的“latest”结论。每次分析先刷新并记录 ref：

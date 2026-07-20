@@ -61,56 +61,133 @@ ERROR_PATTERNS = [
     "Etcd is abnormal",
     "fallback payload rejected",
 ]
-CUSTOM_METRIC_RULES = []
+
+
+class ParserRules:
+    """Mutable parser extension rules for one analyzer instance."""
+
+    def __init__(self, error_patterns=None, custom_metric_rules=None):
+        self.error_patterns = list(error_patterns or ERROR_PATTERNS)
+        self.custom_metric_rules = list(custom_metric_rules or [])
+
+    def register_error_pattern(self, pattern):
+        if pattern not in self.error_patterns:
+            self.error_patterns.append(pattern)
+
+    def register_metric_rule(self, name, pattern, value_group=1, unit_group=None):
+        self.custom_metric_rules.append({
+            "name": name,
+            "regex": re.compile(pattern, re.I),
+            "value_group": value_group,
+            "unit_group": unit_group,
+        })
+
+
+DEFAULT_RULES = ParserRules()
+
+
+class TraceInputReader:
+    """Read log lines from files, directories, gzip files, and tar bundles."""
+
+    def iter_lines(self, paths):
+        for raw_path in paths:
+            path = Path(raw_path)
+            if path.is_dir():
+                for root, _, files in os.walk(path):
+                    for name in files:
+                        yield from self.iter_file(Path(root) / name)
+            else:
+                yield from self.iter_file(path)
+
+    def iter_file(self, path):
+        if tarfile.is_tarfile(path):
+            with tarfile.open(path, "r:*") as tar:
+                for member in tar.getmembers():
+                    if not member.isfile():
+                        continue
+                    stream = tar.extractfile(member)
+                    if stream is None:
+                        continue
+                    text = io.TextIOWrapper(stream, encoding="utf-8", errors="replace")
+                    for line_no, line in enumerate(text, 1):
+                        yield str(path), member.name, line_no, line.rstrip("\n")
+            return
+        opener = gzip.open if path.suffix == ".gz" else open
+        try:
+            with opener(path, "rt", encoding="utf-8", errors="replace") as f:
+                for line_no, line in enumerate(f, 1):
+                    yield str(path), path.name, line_no, line.rstrip("\n")
+        except (OSError, UnicodeError):
+            return
+
+
+class TraceParser:
+    """Parse one log line into trace-scoped facts without aggregating them."""
+
+    def __init__(self, rules=None):
+        self.rules = rules or DEFAULT_RULES
+
+    def worker_from(self, source, member, line):
+        for text in (member, source, line):
+            m = WORKER_RE.search(text)
+            if m:
+                return m.group(1)
+        parts = [p.strip() for p in line.split(" | ")]
+        if len(parts) > 3 and parts[3]:
+            return parts[3]
+        return "unknown"
+
+    def timestamp(self, line):
+        m = TS_RE.search(line)
+        if not m:
+            return None
+        try:
+            return datetime.fromisoformat(m.group(1))
+        except ValueError:
+            return None
+
+    def parse_line(self, source, member, line_no, line):
+        match = TRACE_ID_RE.search(line)
+        if not match:
+            return None
+        worker = self.worker_from(source, member, line)
+        ts = self.timestamp(line)
+        parsed = {
+            "trace_id": match.group(0),
+            "worker": worker,
+            "timestamp": ts,
+            "evidence": {"source": source, "member": member, "line": line_no, "text": line},
+            "ub_events": _extract_ub_events(source, member, line_no, line, ts, worker),
+            "errors": [],
+            "custom_metrics_ms": {},
+        }
+        for rule in self.rules.custom_metric_rules:
+            cm = rule["regex"].search(line)
+            if cm:
+                unit = cm.group(rule["unit_group"]) if rule["unit_group"] else "ms"
+                parsed["custom_metrics_ms"][rule["name"]] = _ms(cm.group(rule["value_group"]), unit)
+        for pattern in self.rules.error_patterns:
+            if pattern in line:
+                parsed["errors"].append(pattern)
+        return parsed
 
 
 def register_error_pattern(pattern):
     """Register a literal error marker for evolved DataSystem log wording."""
-    if pattern not in ERROR_PATTERNS:
-        ERROR_PATTERNS.append(pattern)
+    DEFAULT_RULES.register_error_pattern(pattern)
 
 
 def register_metric_rule(name, pattern, value_group=1, unit_group=None):
     """Register a custom latency metric extracted as ms from a regex match."""
-    CUSTOM_METRIC_RULES.append({
-        "name": name,
-        "regex": re.compile(pattern, re.I),
-        "value_group": value_group,
-        "unit_group": unit_group,
-    })
+    DEFAULT_RULES.register_metric_rule(name, pattern, value_group=value_group, unit_group=unit_group)
 
 
 def _iter_input_lines(paths):
-    for raw_path in paths:
-        path = Path(raw_path)
-        if path.is_dir():
-            for root, _, files in os.walk(path):
-                for name in files:
-                    yield from _iter_file(Path(root) / name)
-        else:
-            yield from _iter_file(path)
+    yield from TraceInputReader().iter_lines(paths)
 
 
 def _iter_file(path):
-    if tarfile.is_tarfile(path):
-        with tarfile.open(path, "r:*") as tar:
-            for member in tar.getmembers():
-                if not member.isfile():
-                    continue
-                stream = tar.extractfile(member)
-                if stream is None:
-                    continue
-                text = io.TextIOWrapper(stream, encoding="utf-8", errors="replace")
-                for line_no, line in enumerate(text, 1):
-                    yield str(path), member.name, line_no, line.rstrip("\n")
-        return
-    opener = gzip.open if path.suffix == ".gz" else open
-    try:
-        with opener(path, "rt", encoding="utf-8", errors="replace") as f:
-            for line_no, line in enumerate(f, 1):
-                yield str(path), path.name, line_no, line.rstrip("\n")
-    except (OSError, UnicodeError):
-        return
+    yield from TraceInputReader().iter_file(path)
 
 
 def _percentiles(values):
@@ -141,24 +218,11 @@ def _add_metric(bucket, key, value):
 
 
 def _worker_from(source, member, line):
-    for text in (member, source, line):
-        m = WORKER_RE.search(text)
-        if m:
-            return m.group(1)
-    parts = [p.strip() for p in line.split(" | ")]
-    if len(parts) > 3 and parts[3]:
-        return parts[3]
-    return "unknown"
+    return TraceParser().worker_from(source, member, line)
 
 
 def _timestamp(line):
-    m = TS_RE.search(line)
-    if not m:
-        return None
-    try:
-        return datetime.fromisoformat(m.group(1))
-    except ValueError:
-        return None
+    return TraceParser().timestamp(line)
 
 
 def _ms(raw_value, unit):
@@ -376,7 +440,21 @@ def _surface_status(count):
     return "present" if count else "missing"
 
 
-def analyze_inputs(paths, code_ref="unknown"):
+class TraceAnalyzer:
+    """Coordinate input reading, line parsing, trace accumulation, and dimensions."""
+
+    def __init__(self, reader=None, parser=None, rules=None):
+        self.rules = rules or DEFAULT_RULES
+        self.reader = reader or TraceInputReader()
+        self.parser = parser or TraceParser(self.rules)
+
+    def analyze(self, paths, code_ref="unknown"):
+        return _analyze_inputs(paths, code_ref=code_ref, reader=self.reader, parser=self.parser, rules=self.rules)
+
+
+def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=None):
+    reader = reader or TraceInputReader()
+    parser = parser or TraceParser(rules or DEFAULT_RULES)
     traces = defaultdict(lambda: {
         "lines": 0,
         "workers": Counter(),
@@ -412,25 +490,24 @@ def analyze_inputs(paths, code_ref="unknown"):
     ub_summary = {"transfer_path": Counter(), "edges": defaultdict(lambda: {"count": 0, "latencies": []})}
     surface_counts = Counter()
 
-    for source, member, line_no, line in _iter_input_lines(paths):
-        m = TRACE_ID_RE.search(line)
-        if not m:
+    for source, member, line_no, line in reader.iter_lines(paths):
+        parsed = parser.parse_line(source, member, line_no, line)
+        if not parsed:
             continue
-        trace_id = m.group(0)
+        trace_id = parsed["trace_id"]
         trace = traces[trace_id]
         trace["lines"] += 1
-        worker = _worker_from(source, member, line)
+        worker = parsed["worker"]
         trace["workers"][worker] += 1
         worker_counts[worker] += 1
-        ts = _timestamp(line)
+        ts = parsed["timestamp"]
         if ts:
             trace["timestamps"].append(ts.isoformat())
             all_ts.append(ts)
         if len(trace["evidence"]) < 12:
-            trace["evidence"].append({"source": source, "member": member, "line": line_no, "text": line})
+            trace["evidence"].append(parsed["evidence"])
 
-        ub_events = _extract_ub_events(source, member, line_no, line, ts, worker)
-        for event in ub_events:
+        for event in parsed["ub_events"]:
             trace["ub_events"].append(event)
             if event.get("transfer_path"):
                 ub_summary["transfer_path"][event["transfer_path"]] += 1
@@ -506,19 +583,14 @@ def analyze_inputs(paths, code_ref="unknown"):
             trace["urma_perf"][name] += val
             urma_perf[name].append(val)
 
-        for rule in CUSTOM_METRIC_RULES:
-            cm = rule["regex"].search(line)
-            if cm:
-                unit = cm.group(rule["unit_group"]) if rule["unit_group"] else "ms"
-                val = _ms(cm.group(rule["value_group"]), unit)
-                trace["custom_metrics_ms"][rule["name"]] += val
-                custom_metrics[rule["name"]].append(val)
+        for name, val in parsed["custom_metrics_ms"].items():
+            trace["custom_metrics_ms"][name] += val
+            custom_metrics[name].append(val)
 
-        for pattern in ERROR_PATTERNS:
-            if pattern in line:
-                surface_counts["error"] += 1
-                errors[pattern] += 1
-                trace["errors"][pattern] += 1
+        for pattern in parsed["errors"]:
+            surface_counts["error"] += 1
+            errors[pattern] += 1
+            trace["errors"][pattern] += 1
 
     trace_rows = {}
     classifications = Counter()
@@ -646,6 +718,10 @@ def analyze_inputs(paths, code_ref="unknown"):
         },
         "traces": trace_rows,
     }
+
+
+def analyze_inputs(paths, code_ref="unknown"):
+    return TraceAnalyzer().analyze(paths, code_ref=code_ref)
 
 
 def _build_time_buckets(trace_rows, bucket_ms):
@@ -910,6 +986,22 @@ def _build_triage(report):
     }
 
 
+class TraceReportRenderer:
+    """Render machine summaries into stage artifacts."""
+
+    def events(self, report):
+        return _build_events(report)
+
+    def triage(self, report):
+        return _build_triage(report)
+
+    def markdown(self, report):
+        return render_markdown(report)
+
+    def html(self, report, title, site=False):
+        return _render_html(report, title, site=site)
+
+
 def _new_run_dir(out_root, case_name, cache_key):
     now = datetime.now()
     run_dir = out_root / f"{now.strftime('%Y%m%d-%H%M%S')}-{_slug(case_name)}-{cache_key[:8]}"
@@ -921,106 +1013,135 @@ def _new_run_dir(out_root, case_name, cache_key):
     return run_dir, now
 
 
-def parse_stage(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
-    out_root = Path(out_dir)
-    out_root.mkdir(parents=True, exist_ok=True)
-    cache_key, identities = _cache_key(inputs, code_ref, case_name, scenario)
-    if not force:
-        cached = _find_cached_run(out_root, cache_key)
-        if cached:
-            return cached
-    run_dir, now = _new_run_dir(out_root, case_name, cache_key)
-    _preserve_raw_inputs(inputs, run_dir)
+class TraceRunPipeline:
+    """Manage staged run directories, cache, manifest state, and render targets."""
 
-    report = analyze_inputs(inputs, code_ref=code_ref)
-    events = _build_events(report)
-    manifest = {
-        "schema_version": 1,
-        "case_name": case_name,
-        "scenario": scenario,
-        "analysis_created_at": now.isoformat(),
-        "code_ref": code_ref,
-        "script_version": _script_version(),
-        "cache": {"key": cache_key, "status": "created"},
-        "trace_time_range": report["dimensions"]["time"],
-        "inputs": identities,
-        "stages": {
-            "parse": {"status": "done", "path": "parsed_traces.json"},
-            "aggregate": {"status": "pending"},
-            "triage": {"status": "pending"},
-        },
-        "render_targets": {
-            "local": {"path": "report.local.html", "status": "pending"},
-            "site": {"path": "report.site.html", "status": "pending"},
-        },
-    }
-    _write_json(run_dir / "manifest.json", manifest)
-    (run_dir / "events.jsonl").write_text(
-        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8"
-    )
-    _write_json(run_dir / "parsed_traces.json", report)
-    return run_dir
+    def __init__(self, analyzer=None, renderer=None):
+        self.analyzer = analyzer or TraceAnalyzer()
+        self.renderer = renderer or TraceReportRenderer()
+
+    def parse(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+        out_root = Path(out_dir)
+        out_root.mkdir(parents=True, exist_ok=True)
+        cache_key, identities = _cache_key(inputs, code_ref, case_name, scenario)
+        if not force:
+            cached = _find_cached_run(out_root, cache_key)
+            if cached:
+                return cached
+        run_dir, now = _new_run_dir(out_root, case_name, cache_key)
+        _preserve_raw_inputs(inputs, run_dir)
+
+        report = self.analyzer.analyze(inputs, code_ref=code_ref)
+        events = self.renderer.events(report)
+        manifest = {
+            "schema_version": 1,
+            "case_name": case_name,
+            "scenario": scenario,
+            "analysis_created_at": now.isoformat(),
+            "code_ref": code_ref,
+            "script_version": _script_version(),
+            "cache": {"key": cache_key, "status": "created"},
+            "trace_time_range": report["dimensions"]["time"],
+            "inputs": identities,
+            "stages": {
+                "parse": {"status": "done", "path": "parsed_traces.json"},
+                "aggregate": {"status": "pending"},
+                "triage": {"status": "pending"},
+            },
+            "render_targets": {
+                "local": {"path": "report.local.html", "status": "pending"},
+                "site": {"path": "report.site.html", "status": "pending"},
+            },
+        }
+        _write_json(run_dir / "manifest.json", manifest)
+        (run_dir / "events.jsonl").write_text(
+            "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8"
+        )
+        _write_json(run_dir / "parsed_traces.json", report)
+        return run_dir
+
+    def aggregate(self, run_dir):
+        run_dir = Path(run_dir)
+        report = _read_json(run_dir / "parsed_traces.json")
+        _write_json(run_dir / "summary.json", report)
+        _update_manifest(run_dir, lambda manifest: manifest["stages"].update({
+            "aggregate": {"status": "done", "path": "summary.json"}
+        }))
+        return run_dir / "summary.json"
+
+    def triage(self, run_dir):
+        run_dir = Path(run_dir)
+        report = _read_json(run_dir / "summary.json")
+        triage = self.renderer.triage(report)
+        _write_json(run_dir / "triage.json", triage)
+        (run_dir / "triage.md").write_text(self.renderer.markdown(report), encoding="utf-8")
+        _update_manifest(run_dir, lambda manifest: manifest["stages"].update({
+            "triage": {"status": "done", "path": "triage.json", "markdown": "triage.md"}
+        }))
+        return run_dir / "triage.json"
+
+    def render_local(self, run_dir):
+        run_dir = Path(run_dir)
+        report = _read_json(run_dir / "summary.json")
+        manifest = _read_json(run_dir / "manifest.json")
+        title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
+        (run_dir / "report.local.html").write_text(self.renderer.html(report, title), encoding="utf-8")
+        _update_manifest(run_dir, lambda item: item["render_targets"].update({
+            "local": {"path": "report.local.html", "status": "generated"}
+        }))
+        return run_dir / "report.local.html"
+
+    def render_site(self, run_dir):
+        run_dir = Path(run_dir)
+        report = _read_json(run_dir / "summary.json")
+        manifest = _read_json(run_dir / "manifest.json")
+        title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
+        (run_dir / "report.site.html").write_text(
+            self.renderer.html(report, title, site=True), encoding="utf-8"
+        )
+        _update_manifest(run_dir, lambda item: item["render_targets"].update({
+            "site": {"path": "report.site.html", "status": "generated"}
+        }))
+        return run_dir / "report.site.html"
+
+    def run(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+        run_dir = self.parse(inputs, out_dir, case_name=case_name, scenario=scenario,
+                             code_ref=code_ref, force=force)
+        if not (run_dir / "summary.json").exists():
+            self.aggregate(run_dir)
+        if not (run_dir / "triage.json").exists():
+            self.triage(run_dir)
+        if not (run_dir / "report.local.html").exists():
+            self.render_local(run_dir)
+        if not (run_dir / "report.site.html").exists():
+            self.render_site(run_dir)
+        return run_dir
+
+
+def parse_stage(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+    return TraceRunPipeline().parse(inputs, out_dir, case_name=case_name, scenario=scenario,
+                                    code_ref=code_ref, force=force)
 
 
 def aggregate_stage(run_dir):
-    run_dir = Path(run_dir)
-    report = _read_json(run_dir / "parsed_traces.json")
-    _write_json(run_dir / "summary.json", report)
-    _update_manifest(run_dir, lambda manifest: manifest["stages"].update({
-        "aggregate": {"status": "done", "path": "summary.json"}
-    }))
-    return run_dir / "summary.json"
+    return TraceRunPipeline().aggregate(run_dir)
 
 
 def triage_stage(run_dir):
-    run_dir = Path(run_dir)
-    report = _read_json(run_dir / "summary.json")
-    triage = _build_triage(report)
-    _write_json(run_dir / "triage.json", triage)
-    (run_dir / "triage.md").write_text(render_markdown(report), encoding="utf-8")
-    _update_manifest(run_dir, lambda manifest: manifest["stages"].update({
-        "triage": {"status": "done", "path": "triage.json", "markdown": "triage.md"}
-    }))
-    return run_dir / "triage.json"
+    return TraceRunPipeline().triage(run_dir)
 
 
 def render_local_stage(run_dir):
-    run_dir = Path(run_dir)
-    report = _read_json(run_dir / "summary.json")
-    manifest = _read_json(run_dir / "manifest.json")
-    title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
-    (run_dir / "report.local.html").write_text(_render_html(report, title), encoding="utf-8")
-    _update_manifest(run_dir, lambda item: item["render_targets"].update({
-        "local": {"path": "report.local.html", "status": "generated"}
-    }))
-    return run_dir / "report.local.html"
+    return TraceRunPipeline().render_local(run_dir)
 
 
 def render_site_stage(run_dir):
-    run_dir = Path(run_dir)
-    report = _read_json(run_dir / "summary.json")
-    manifest = _read_json(run_dir / "manifest.json")
-    title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
-    (run_dir / "report.site.html").write_text(
-        _render_html(report, title, site=True), encoding="utf-8"
-    )
-    _update_manifest(run_dir, lambda item: item["render_targets"].update({
-        "site": {"path": "report.site.html", "status": "generated"}
-    }))
-    return run_dir / "report.site.html"
+    return TraceRunPipeline().render_site(run_dir)
 
 
 def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
-    run_dir = parse_stage(inputs, out_dir, case_name=case_name, scenario=scenario, code_ref=code_ref, force=force)
-    if not (run_dir / "summary.json").exists():
-        aggregate_stage(run_dir)
-    if not (run_dir / "triage.json").exists():
-        triage_stage(run_dir)
-    if not (run_dir / "report.local.html").exists():
-        render_local_stage(run_dir)
-    if not (run_dir / "report.site.html").exists():
-        render_site_stage(run_dir)
-    return run_dir
+    return TraceRunPipeline().run(inputs, out_dir, case_name=case_name, scenario=scenario,
+                                  code_ref=code_ref, force=force)
 
 
 def _make_self_test_bundle(path):

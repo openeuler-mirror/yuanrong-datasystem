@@ -109,6 +109,19 @@ Every registered rule must have a focused pytest fixture that verifies the trace
 level output and the aggregate `dimensions.custom_metrics_ms` or
 `dimensions.errors` output.
 
+The script keeps these responsibilities separated inside one file:
+
+- `ParserRules`: owns log wording extension rules.
+- `TraceInputReader`: reads directories, files, gzip logs, and tar bundles.
+- `TraceParser`: parses one log line into trace-scoped facts.
+- `TraceAnalyzer`: coordinates reader/parser output into report dimensions.
+- `TraceReportRenderer`: renders events, triage, Markdown, and HTML.
+- `TraceRunPipeline`: owns staged run directories, cache, manifest, and render
+  target status.
+
+Keep compatibility wrappers such as `analyze_inputs`, `parse_stage`, and
+`run_pipeline`, but put new behavior behind the responsible class first.
+
 ## Report expectations
 
 Always cover:

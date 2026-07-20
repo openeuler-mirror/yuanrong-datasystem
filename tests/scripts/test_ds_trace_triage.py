@@ -305,6 +305,30 @@ def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
     assert Path(capsys.readouterr().out.strip()).name == "report.site.html"
 
 
+def test_trace_run_pipeline_object_exposes_stage_boundaries(tmp_path):
+    trace_id = "019f7d0e-c704-7767-917a-3907373e9d31"
+    log = tmp_path / "object-pipeline.log"
+    log.write_text(
+        f"2026-07-20T13:20:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    pipeline = mod.TraceRunPipeline()
+    run_dir = pipeline.parse([str(log)], tmp_path / "runs", case_name="object-pipeline", code_ref="unit-test")
+
+    assert (run_dir / "parsed_traces.json").exists()
+    assert pipeline.aggregate(run_dir).name == "summary.json"
+    assert pipeline.triage(run_dir).name == "triage.json"
+    assert pipeline.render_local(run_dir).name == "report.local.html"
+    assert pipeline.render_site(run_dir).name == "report.site.html"
+
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["stages"]["parse"]["status"] == "done"
+    assert manifest["stages"]["aggregate"]["status"] == "done"
+    assert manifest["render_targets"]["local"]["status"] == "generated"
+
+
 def test_parser_extension_rules_add_new_errors_and_metrics(tmp_path):
     trace_id = "019f7d0c-d7a5-7967-bbd3-cbb6d899a501"
     log = tmp_path / "extension.log"
@@ -332,6 +356,29 @@ def test_parser_extension_rules_add_new_errors_and_metrics(tmp_path):
     assert report["traces"][trace_id]["errors"]["DMA_WAIT_TIMEOUT"] == 1
     assert report["dimensions"]["custom_metrics_ms"]["urma_dma"]["p50"] == 2.5
     assert report["traces"][trace_id]["custom_metrics_ms"]["urma_dma"] == 2.5
+
+
+def test_trace_parser_uses_injected_rules_without_global_state():
+    trace_id = "019f7d0d-9185-74c3-85df-57cd02a3d901"
+    line = (
+        f"2026-07-20T13:31:00.000000 | ERROR | worker | kvdataworker-0-worker2 | 1 | {trace_id} | "
+        "[URMA_ELAPSED_DMA] cost 2500us DMA_WAIT_TIMEOUT lane 2"
+    )
+
+    mod = _load_module()
+    rules = mod.ParserRules()
+    rules.register_error_pattern("DMA_WAIT_TIMEOUT")
+    rules.register_metric_rule(
+        "urma_dma",
+        r"\[URMA_ELAPSED_DMA\].*?cost\s+([\d.]+)\s*(us|ms)",
+        unit_group=2,
+    )
+    parsed = mod.TraceParser(rules).parse_line("worker.log", "worker.log", 1, line)
+
+    assert parsed["trace_id"] == trace_id
+    assert parsed["worker"] == "kvdataworker-0-worker2"
+    assert parsed["errors"] == ["DMA_WAIT_TIMEOUT"]
+    assert parsed["custom_metrics_ms"] == {"urma_dma": 2.5}
 
 
 def test_cli_self_test_writes_json_and_markdown(tmp_path, capsys):
