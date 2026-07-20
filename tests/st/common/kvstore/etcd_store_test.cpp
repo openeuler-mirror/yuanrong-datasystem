@@ -56,9 +56,6 @@ DS_DECLARE_string(etcd_passphrase_path);
 
 namespace datasystem {
 namespace st {
-namespace {
-constexpr uint32_t TEST_LOCAL_FAILURE_TIMEOUT_S = 1;
-}
 
 class EtcdStoreTest : public ExternalClusterTest {
 protected:
@@ -478,8 +475,9 @@ TEST_F(EtcdStoreTest, TestWatchEvents3)
 TEST_F(EtcdStoreTest, TestKeepAliveFailedDueToNetworkerFailure)
 {
     FLAGS_node_timeout_s = 3;  // node timeout is 3 s
-    FLAGS_node_dead_timeout_s = TEST_LOCAL_FAILURE_TIMEOUT_S;
-    FLAGS_auto_del_dead_node = true;
+    // This case only asserts the fake DELETE on confirmed local isolation; disable auto suicide so the
+    // test process is not SIGKILL'd by the restored rc26 keepAlive dead-timeout path.
+    FLAGS_auto_del_dead_node = false;
     datasystem::inject::Set("EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)");
     InitTestEtcdInstance();
     ASSERT_TRUE(db_ != nullptr && tableCreated_);
