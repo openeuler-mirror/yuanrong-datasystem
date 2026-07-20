@@ -417,6 +417,12 @@ private:
     void DrainPrimaryEndLifeTasks();
 
     /**
+     * @brief Called when a drain worker finds the queue empty: decrements the active
+     *        worker count and restarts a worker if the queue became non-empty meanwhile.
+     */
+    void OnDrainWorkerIdle();
+
+    /**
      * @brief Pop all currently queued primary end-life tasks as a drain batch.
      * @return A batch of queued primary end-life tasks.
      */
@@ -426,7 +432,7 @@ private:
      * @brief Group primary end-life tasks by current master and process each master batch.
      * @param[in] tasks The tasks popped from the primary end-life queue.
      */
-    void ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks);
+    void ProcessPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks);
 
     /**
      * @brief Process one master batch by deleting remote metadata before local object erase.
@@ -641,7 +647,10 @@ private:
     // Tracks metadata-deleted objects whose local cleanup failed and must be retried locally.
     std::unordered_map<std::string, uint64_t> metaDeletedPrimaryEndLifeObjects_;
     std::deque<PrimaryEndLifeTask> primaryEndLifeQueue_;
-    bool primaryEndLifeDrainRunning_{ false };
+    // Count of drain workers currently running (guarded by primaryEndLifeMutex_).
+    // Replaces the single-task primaryEndLifeDrainRunning_ flag so up to
+    // PRIMARY_END_LIFE_THREAD_NUM workers can drain the end-life queue concurrently.
+    int activeDrainWorkers_{ 0 };
     friend class ::datasystem::ut::SpillEvictionTest;
 };
 

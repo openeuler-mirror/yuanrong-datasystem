@@ -30,18 +30,40 @@ void EvictionList::Add(const std::string &objectKey, uint8_t counter)
 {
     PerfPoint point(PerfKey::WORKER_EVICT_LIST_ADD);
     TBBIndexMap::accessor accessor;
-    if (indexTable_.insert(accessor, objectKey)) {
+    bool inserted = indexTable_.insert(accessor, objectKey);
+    {
         tbb::spin_rw_mutex::scoped_lock wlock(listMutex_, true);
-        auto newest = list_.emplace(oldest_, objectKey, counter);
-        if (list_.size() == 1) {
-            oldest_ = newest;
+        if (inserted) {
+            // Append to the tail (newest end). The clock hand starts at oldest_
+            // (oldest object) and advances per successful eviction, so a newly added
+            // object at the tail is reached only after a full LRU sweep
+            // (list_size / write_rate, ~seconds). The previous emplace(oldest_)
+            // inserted the new node right before the clock hand, so the hand wrapped
+            // back to it within a single EvictionTask (~ms) and evicted fresh data
+            // before cross-node GETs could arrive (issue #750).
+            try {
+                list_.emplace_back(objectKey, counter);
+                if (list_.size() == 1) {
+                    oldest_ = list_.begin();
+                }
+                accessor->second = std::prev(list_.end());
+            } catch (...) {
+                indexTable_.erase(accessor);
+                // Don't propagate the exception (e.g. bad_alloc from emplace_back):
+                // callers (eviction task, publish, GET re-access) are not prepared
+                // for Add to throw and would crash the worker. The object simply
+                // stays out of the eviction list and will be added on the next access.
+                return;
+            }
+        } else {
+            // curCounter++ under the write lock: concurrent Add (GET re-access or
+            // FinishPrimaryEndLifeTask readd from multiple drain workers) races on
+            // the non-atomic uint8_t curCounter otherwise.
+            auto &nodePtr = accessor->second;
+            if (nodePtr->curCounter < nodePtr->maxCounter) {
+                nodePtr->curCounter++;
+            }
         }
-        accessor->second = newest;
-    }
-
-    auto &nodePtr = accessor->second;
-    if (nodePtr->curCounter < nodePtr->maxCounter) {
-        nodePtr->curCounter++;
     }
     point.Record();
 }
