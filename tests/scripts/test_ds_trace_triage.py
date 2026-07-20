@@ -290,6 +290,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"read-ub-edge-table-pager\"" in html
     assert "id=\"write-ub-edge-table-pager\"" in html
     assert "renderPagedTable" in html
+    assert "formatCell" in html
+    assert "cell-hot" in html
+    assert "cell-warn" in html
+    assert "cell-ok" in html
     assert "hotrow" in html
     assert "warnrow" in html
     assert "class=\"controls pager\"" in html
@@ -303,10 +307,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "只看成功" in html
     assert "按 access max 降序" in html
     assert "traceStartTime" in html
+    assert "traceAccessLatencyMs" in html
+    assert "latency ms" in html
     assert "hasTraceFailure" in html
     assert "requestStatus" in html
     assert "statusMatchesTrace" in html
-    assert "['time','trace','classification','errors','access','workers']" in html
+    assert "['time','trace','classification','latency ms','errors','access','workers']" in html
     assert "联动 Trace 列表与选中 Trace Breakdown" in html
     assert "读写视角" in html
     assert "全部读写" in html

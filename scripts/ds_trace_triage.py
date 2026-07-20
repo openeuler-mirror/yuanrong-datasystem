@@ -1474,7 +1474,7 @@ h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-siz
 .subtitle,.note,.insight{color:var(--muted);line-height:1.65}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
-tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}
+tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}.cell-hot,.cell-warn,.cell-ok{display:inline-block;border-radius:4px;padding:1px 5px;font-weight:700}.cell-hot{background:#fee2e2;color:#991b1b}.cell-warn{background:#ffedd5;color:#9a3412}.cell-ok{background:#dcfce7;color:#166534}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
@@ -1624,7 +1624,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const manifest = __MANIFEST__;
   const dim = report.dimensions || {};
   const traces = report.traces || {};
-  const traceRows = Object.entries(traces).sort((a,b) => (b[1].access_latency_ms?.max || 0) - (a[1].access_latency_ms?.max || 0));
+  function traceAccessLatencyMs(item) {
+    const value = item?.access_latency_ms?.max ?? item?.access_latency_ms?.p99 ?? item?.access_latency_ms?.p50 ?? 0;
+    const n = Number(value || 0);
+    return Number.isFinite(n) ? Number(n.toFixed(3)) : 0;
+  }
+  const traceRows = Object.entries(traces).sort((a,b) => traceAccessLatencyMs(b[1]) - traceAccessLatencyMs(a[1]));
   let filteredTraceRows = traceRows;
   let currentPage = 0;
   let selectedTraceId = traceRows[0]?.[0] || null;
@@ -1689,7 +1694,36 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       return;
     }
     table.innerHTML = `<thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>` +
-      `<tbody>${rows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+      `<tbody>${rows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map((cell, cellIdx) => `<td>${formatCell(headers[cellIdx], cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  }
+  function formatCell(header, cell) {
+    const text = String(cell ?? '');
+    const lowerHeader = String(header || '').toLowerCase();
+    const lower = text.toLowerCase();
+    const escaped = escapeHtml(text);
+    if (!text) return '';
+    const numeric = Number(text);
+    if (/(error|errors|status|classification)/.test(lowerHeader) && /(deadline|timeout|error|fail|1001|runtime)/i.test(text)) {
+      return `<span class="cell-hot">${escaped}</span>`;
+    }
+    if (/status/.test(lowerHeader) && /(present|ok|success)/i.test(text)) return `<span class="cell-ok">${escaped}</span>`;
+    if (/(latency|duration|p99|max|access|slow)/.test(lowerHeader) && Number.isFinite(numeric)) {
+      return `<span class="${numeric >= 20 ? 'cell-hot' : numeric >= 5 ? 'cell-warn' : 'cell-ok'}">${escaped}</span>`;
+    }
+    if (/(slow|errors|count|traces)/.test(lowerHeader) && Number.isFinite(numeric) && numeric > 0) {
+      return `<span class="${numeric >= 20 ? 'cell-hot' : 'cell-warn'}">${escaped}</span>`;
+    }
+    if (/(access|latency|distribution)/.test(lowerHeader) && /(p99|max)=/i.test(text)) {
+      return escaped.replace(/\\b(p99|max)=([\\d.]+)/gi, (match, key, value) => {
+        const n = Number(value);
+        const cls = Number.isFinite(n) && n >= 20 ? 'cell-hot' : Number.isFinite(n) && n >= 5 ? 'cell-warn' : 'cell-ok';
+        return `<span class="${cls}">${key}=${value}</span>`;
+      });
+    }
+    if (/(deadline|timeout|error|fail|rpc deadline exceeded|status=1001)/i.test(text)) {
+      return escaped.replace(/(deadline|timeout|error|fail|RPC deadline exceeded|status=1001)/gi, '<span class="cell-hot">$1</span>');
+    }
+    return escaped;
   }
   const pagedTables = {};
   function renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize=5) {
@@ -2141,10 +2175,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const totalPages = Math.max(Math.ceil(filteredTraceRows.length / pageSize), 1);
     currentPage = Math.min(Math.max(currentPage, 0), totalPages - 1);
     const pageRows = filteredTraceRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-    renderTable('top-trace-table', ['time','trace','classification','errors','access','workers'], pageRows.map(([traceId,item]) => [
+    renderTable('top-trace-table', ['time','trace','classification','latency ms','errors','access','workers'], pageRows.map(([traceId,item]) => [
       traceStartTime(item),
       traceId,
       item.classification,
+      traceAccessLatencyMs(item),
       JSON.stringify(item.errors || {}),
       pctText(item.access_latency_ms),
       Object.keys(item.workers || {}).slice(0, 6).join(', ')
