@@ -945,110 +945,231 @@ def _update_manifest(run_dir, updater):
 
 
 def _render_html(report, title, site=False):
-    data = json.dumps(report, ensure_ascii=False)
-    stylesheet = '<link rel="stylesheet" href="/assets/css/site.css">' if site else """<style>
-body{font-family:Arial,sans-serif;margin:24px;max-width:1280px;color:#17202a;background:#fafafa}
-h1{font-size:28px;margin:0 0 16px}h2{font-size:18px;margin:28px 0 10px}
+    data = json.dumps(report, ensure_ascii=False).replace("</script>", "<\\/script>")
+    base_style = """<style>
+body{font-family:Arial,sans-serif;margin:0;color:#17202a;background:#f7f8fa}
+.layout{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh}
+.sidebar{position:sticky;top:0;height:100vh;overflow:auto;background:#111827;color:#e5e7eb;padding:18px 14px}
+.sidebar h2{font-size:15px;margin:0 0 14px}.sidebar a{display:block;color:#d1d5db;text-decoration:none;padding:8px;border-radius:5px;font-size:13px}
+.sidebar a:hover{background:#263244;color:white}.content-area{padding:24px;max-width:1440px}
+h1{font-size:28px;margin:0 0 16px}h2{font-size:20px;margin:0 0 12px}section{margin:0 0 28px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-.card{background:white;border:1px solid #ddd;padding:12px;border-radius:6px}
-.metric{font-size:24px;font-weight:700;margin-top:4px}.muted{color:#667085;font-size:12px}
+.chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}
+.card,.panel{background:white;border:1px solid #ddd;padding:12px;border-radius:6px}
+.metric{font-size:24px;font-weight:700;margin-top:4px}.muted{color:#667085;font-size:12px}.chart{height:320px}
 table{width:100%;border-collapse:collapse;background:white;border:1px solid #ddd}
 th,td{text-align:left;border-bottom:1px solid #eee;padding:8px;vertical-align:top;font-size:13px}
 th{background:#f3f6f8}.bad{color:#b00020;font-weight:700}.warn{color:#9a5b00;font-weight:700}
+button{border:1px solid #ccd0d5;background:white;border-radius:5px;padding:6px 10px;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}
+.toolbar{display:flex;gap:8px;align-items:center;margin:10px 0}.selected-row{background:#fff7e6}
 code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
 pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-radius:6px;max-height:520px;overflow:auto}
+@media(max-width:900px){.layout{display:block}.sidebar{position:relative;height:auto}.content-area{padding:16px}.chart-grid{grid-template-columns:1fr}}
 </style>"""
+    stylesheet = ('<link rel="stylesheet" href="/assets/css/site.css">' if site else "") + base_style
     script_ref = '<script src="/assets/js/site.js"></script>' if site else ""
-    return f"""<!doctype html>
+    template = """<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{title}</title>
-  {stylesheet}
+  <title>__TITLE__</title>
+  __STYLESHEET__
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 </head>
 <body>
-  <main class="content-area">
-    <h1>{title}</h1>
-    <div id="summary" class="grid"></div>
-    <h2>Classification Breakdown</h2>
-    <table id="classification-table"></table>
-    <h2>Error Breakdown</h2>
-    <table id="error-table"></table>
-    <h2>Latency Breakdown</h2>
-    <table id="latency-table"></table>
-    <h2>Flow Breakdown</h2>
-    <table id="flow-table"></table>
-    <h2>Worker Breakdown</h2>
-    <table id="worker-table"></table>
-    <h2>UB Edges</h2>
-    <table id="ub-edge-table"></table>
-    <h2>Top Traces</h2>
-    <table id="top-trace-table"></table>
-    <details>
-      <summary>Raw Trace JSON</summary>
-      <pre id="trace-data"></pre>
-    </details>
-  </main>
+  <div class="layout">
+    <aside class="sidebar">
+      <h2>Trace Triage</h2>
+      <a href="#overview">1. Overview</a>
+      <a href="#root-cause">2. Error / Classification</a>
+      <a href="#latency">3. Latency</a>
+      <a href="#workers">4. Worker / UB</a>
+      <a href="#traces">5. Trace Pages</a>
+      <a href="#raw">6. Raw JSON</a>
+    </aside>
+    <main class="content-area">
+      <section id="overview">
+        <h1>__TITLE__</h1>
+        <div id="summary" class="grid"></div>
+      </section>
+      <section id="root-cause">
+        <h2>2. Error / Classification</h2>
+        <div class="chart-grid">
+          <div class="panel"><div id="classification-chart" class="chart"></div></div>
+          <div class="panel"><div id="error-chart" class="chart"></div></div>
+        </div>
+        <h2>Classification Breakdown</h2>
+        <table id="classification-table"></table>
+        <h2>Error Breakdown</h2>
+        <table id="error-table"></table>
+      </section>
+      <section id="latency">
+        <h2>3. Latency</h2>
+        <div class="chart-grid">
+          <div class="panel"><div id="latency-chart" class="chart"></div></div>
+          <div class="panel"><div id="flow-chart" class="chart"></div></div>
+        </div>
+        <table id="latency-table"></table>
+        <h2>Flow Breakdown</h2>
+        <table id="flow-table"></table>
+      </section>
+      <section id="workers">
+        <h2>4. Worker / UB</h2>
+        <div class="chart-grid">
+          <div class="panel"><div id="worker-chart" class="chart"></div></div>
+          <div class="panel"><div id="ub-edge-chart" class="chart"></div></div>
+        </div>
+        <h2>Worker Breakdown</h2>
+        <table id="worker-table"></table>
+        <h2>UB Edges</h2>
+        <table id="ub-edge-table"></table>
+      </section>
+      <section id="traces">
+        <h2>5. Trace Pages</h2>
+        <div class="toolbar">
+          <button id="prev-page">Prev</button>
+          <span id="page-status" class="muted"></span>
+          <button id="next-page">Next</button>
+        </div>
+        <table id="top-trace-table"></table>
+        <h2>Selected Trace Breakdown</h2>
+        <div class="panel"><div id="selected-trace-chart" class="chart"></div></div>
+        <table id="selected-trace-table"></table>
+        <h2>Selected Trace Logs</h2>
+        <pre id="selected-trace-log"></pre>
+      </section>
+      <section id="raw">
+        <h2>6. Raw Trace JSON</h2>
+        <details>
+          <summary>Open raw trace JSON</summary>
+          <pre id="trace-data"></pre>
+        </details>
+      </section>
+    </main>
+  </div>
   <script>
-  const report = {data};
-  const dim = report.dimensions || {{}};
-  const traces = report.traces || {{}};
-  function escapeHtml(value) {{
-    return String(value ?? '').replace(/[&<>"']/g, ch => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[ch]));
-  }}
-  function pctText(item) {{
+  const report = __DATA__;
+  const dim = report.dimensions || {};
+  const traces = report.traces || {};
+  const traceRows = Object.entries(traces).sort((a,b) => (b[1].access_latency_ms?.max || 0) - (a[1].access_latency_ms?.max || 0));
+  let currentPage = 0;
+  let selectedTraceId = traceRows[0]?.[0] || null;
+  const pageSize = 8;
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+  function pctText(item) {
     if (!item || !item.count) return '';
-    return `count=${{item.count}} p50=${{item.p50}} p90=${{item.p90}} p99=${{item.p99}} max=${{item.max}}`;
-  }}
-  function renderTable(id, headers, rows) {{
+    return `count=${item.count} p50=${item.p50} p90=${item.p90} p99=${item.p99} max=${item.max}`;
+  }
+  function renderTable(id, headers, rows, rowAttrs) {
     const table = document.getElementById(id);
-    if (!rows.length) {{
+    if (!rows.length) {
       table.innerHTML = `<tbody><tr><td class="muted">No data</td></tr></tbody>`;
       return;
-    }}
-    table.innerHTML = `<thead><tr>${{headers.map(h => `<th>${{escapeHtml(h)}}</th>`).join('')}}</tr></thead>` +
-      `<tbody>${{rows.map(row => `<tr>${{row.map(cell => `<td>${{escapeHtml(cell)}}</td>`).join('')}}</tr>`).join('')}}</tbody>`;
-  }}
-  const access = dim.latency_ms?.access || {{}};
+    }
+    table.innerHTML = `<thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>` +
+      `<tbody>${rows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  }
+  function chart(id, option) {
+    const node = document.getElementById(id);
+    if (!node) return;
+    if (!window.echarts) {
+      node.innerHTML = '<div class="muted">ECharts failed to load; tables below remain available.</div>';
+      return;
+    }
+    echarts.init(node).setOption(option);
+  }
+  const access = dim.latency_ms?.access || {};
   document.getElementById('summary').innerHTML = [
     ['trace_count', report.trace_count, 'parsed traces'],
-    ['errors', Object.values(dim.errors || {{}}).reduce((a,b) => a + b, 0), 'total error markers'],
+    ['errors', Object.values(dim.errors || {}).reduce((a,b) => a + b, 0), 'total error markers'],
     ['access p99 ms', access.p99 ?? '', 'client/access latency'],
     ['code_ref', report.code_ref, 'source reference']
-  ].map(([k,v,hint]) => `<section class="card"><div class="muted">${{escapeHtml(k)}}</div><div class="metric">${{escapeHtml(v)}}</div><div class="muted">${{escapeHtml(hint)}}</div></section>`).join('');
-  renderTable('classification-table', ['classification','count'], Object.entries(dim.classifications || {{}}).sort((a,b) => b[1]-a[1]));
-  renderTable('error-table', ['error','count'], Object.entries(dim.errors || {{}}).sort((a,b) => b[1]-a[1]));
+  ].map(([k,v,hint]) => `<section class="card"><div class="muted">${escapeHtml(k)}</div><div class="metric">${escapeHtml(v)}</div><div class="muted">${escapeHtml(hint)}</div></section>`).join('');
+  const classificationRows = Object.entries(dim.classifications || {}).sort((a,b) => b[1]-a[1]);
+  const errorRows = Object.entries(dim.errors || {}).sort((a,b) => b[1]-a[1]);
+  renderTable('classification-table', ['classification','count'], classificationRows);
+  renderTable('error-table', ['error','count'], errorRows);
   renderTable('latency-table', ['metric','distribution'], [
     ['access', pctText(dim.latency_ms?.access)],
-    ...Object.entries(dim.urma_elapsed || {{}}).map(([k,v]) => [`urma.${{k}}`, pctText(v)]),
-    ...Object.entries(dim.latency_summary_us || {{}}).map(([k,v]) => [`latencySummary.${{k}}`, pctText(v)])
+    ...Object.entries(dim.urma_elapsed || {}).map(([k,v]) => [`urma.${k}`, pctText(v)]),
+    ...Object.entries(dim.latency_summary_us || {}).map(([k,v]) => [`latencySummary.${k}`, pctText(v)])
   ].filter(row => row[1]));
-  renderTable('flow-table', ['flow','count'], Object.entries(dim.flow || {{}}).sort((a,b) => b[1]-a[1]));
-  renderTable('worker-table', ['worker','roles','lines','traces','errors'], Object.entries(dim.worker_summary || {{}})
+  const flowRows = Object.entries(dim.flow || {}).sort((a,b) => b[1]-a[1]);
+  const workerRows = Object.entries(dim.worker_summary || {})
     .sort((a,b) => (b[1].error_count || 0) - (a[1].error_count || 0) || (b[1].line_count || 0) - (a[1].line_count || 0))
-    .slice(0, 40)
-    .map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.error_count]));
-  renderTable('ub-edge-table', ['edge','count','latency'], Object.entries(dim.ub_summary?.edges || {{}})
+    .slice(0, 40);
+  const ubRows = Object.entries(dim.ub_summary?.edges || {})
     .sort((a,b) => (b[1].count || 0) - (a[1].count || 0))
-    .slice(0, 40)
+    .slice(0, 40);
+  renderTable('flow-table', ['flow','count'], flowRows);
+  renderTable('worker-table', ['worker','roles','lines','traces','errors'], workerRows
+    .map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.error_count]));
+  renderTable('ub-edge-table', ['edge','count','latency'], ubRows
     .map(([edge,item]) => [edge, item.count, pctText(item.latency_ms)]));
-  renderTable('top-trace-table', ['trace','classification','errors','access','workers'], Object.entries(traces)
-    .sort((a,b) => (b[1].access_latency_ms?.max || 0) - (a[1].access_latency_ms?.max || 0))
-    .slice(0, 50)
-    .map(([traceId,item]) => [
+  function renderTracePage() {
+    const totalPages = Math.max(Math.ceil(traceRows.length / pageSize), 1);
+    currentPage = Math.min(Math.max(currentPage, 0), totalPages - 1);
+    const pageRows = traceRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+    renderTable('top-trace-table', ['trace','classification','errors','access','workers'], pageRows.map(([traceId,item]) => [
       traceId,
       item.classification,
-      JSON.stringify(item.errors || {{}}),
+      JSON.stringify(item.errors || {}),
       pctText(item.access_latency_ms),
-      Object.keys(item.workers || {{}}).slice(0, 6).join(', ')
-    ]));
+      Object.keys(item.workers || {}).slice(0, 6).join(', ')
+    ]), row => `data-trace="${escapeHtml(row[0])}" class="${row[0] === selectedTraceId ? 'selected-row' : ''}"`);
+    document.querySelectorAll('#top-trace-table tbody tr').forEach(row => row.addEventListener('click', () => {
+      selectedTraceId = row.getAttribute('data-trace');
+      renderTracePage();
+      renderSelectedTrace();
+    }));
+    document.getElementById('page-status').textContent = `page ${currentPage + 1} / ${totalPages}, ${traceRows.length} traces`;
+    document.getElementById('prev-page').disabled = currentPage === 0;
+    document.getElementById('next-page').disabled = currentPage >= totalPages - 1;
+  }
+  function renderSelectedTrace() {
+    const item = traces[selectedTraceId] || {};
+    renderTable('selected-trace-table', ['field','value'], [
+      ['trace', selectedTraceId || ''],
+      ['classification', item.classification || ''],
+      ['errors', JSON.stringify(item.errors || {})],
+      ['access', pctText(item.access_latency_ms)],
+      ['coverage', JSON.stringify(item.evidence_coverage || {})],
+      ['missing_evidence', JSON.stringify(item.missing_evidence || [])]
+    ]);
+    const stageRows = (item.stage_breakdown || []).filter(s => s.duration_ms !== undefined);
+    chart('selected-trace-chart', {
+      title:{text:'Selected Trace Stage Breakdown', left:'center'},
+      tooltip:{trigger:'axis'},
+      xAxis:{type:'category', data:stageRows.map(s => s.stage), axisLabel:{rotate:25}},
+      yAxis:{type:'value', name:'ms'},
+      series:[{type:'bar', data:stageRows.map(s => s.duration_ms), itemStyle:{color:'#5470c6'}}]
+    });
+    document.getElementById('selected-trace-log').textContent = (item.evidence || []).map(e => `${e.member}:${e.line} ${e.text}`).join('\\n');
+  }
+  document.getElementById('prev-page').addEventListener('click', () => { currentPage -= 1; renderTracePage(); });
+  document.getElementById('next-page').addEventListener('click', () => { currentPage += 1; renderTracePage(); });
+  chart('classification-chart', {title:{text:'Classification', left:'center'}, tooltip:{trigger:'item'}, series:[{type:'pie', radius:'60%', data:classificationRows.map(([name,value]) => ({name,value}))}]});
+  chart('error-chart', {title:{text:'Errors', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25}}, yAxis:{type:'value'}, series:[{type:'bar', data:errorRows.map(r => r[1]), itemStyle:{color:'#c23531'}}]});
+  chart('latency-chart', {title:{text:'Latency Percentiles', left:'center'}, tooltip:{trigger:'axis'}, legend:{top:25}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',data:[access[k] || 0]}))});
+  chart('flow-chart', {title:{text:'Flow', left:'center'}, tooltip:{trigger:'item'}, series:[{type:'pie', radius:['35%','65%'], data:flowRows.map(([name,value]) => ({name,value}))}]});
+  chart('worker-chart', {title:{text:'Top Workers by Errors', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:workerRows.slice(0,15).map(r => r[0]), axisLabel:{rotate:40}}, yAxis:{type:'value'}, series:[{type:'bar', data:workerRows.slice(0,15).map(r => r[1].error_count || 0), itemStyle:{color:'#fac858'}}]});
+  chart('ub-edge-chart', {title:{text:'UB Edge Count', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:ubRows.slice(0,15).map(r => r[0]), axisLabel:{rotate:45}}, yAxis:{type:'value'}, series:[{type:'bar', data:ubRows.slice(0,15).map(r => r[1].count || 0), itemStyle:{color:'#91cc75'}}]});
+  renderTracePage();
+  renderSelectedTrace();
   document.getElementById('trace-data').textContent = JSON.stringify(traces, null, 2);
   </script>
-  {script_ref}
+  __SCRIPT_REF__
 </body>
 </html>
 """
+    return (template
+            .replace("__TITLE__", title)
+            .replace("__STYLESHEET__", stylesheet)
+            .replace("__DATA__", data)
+            .replace("__SCRIPT_REF__", script_ref))
 
 
 def _build_events(report):
