@@ -12,6 +12,63 @@ description: >
 Use this skill when the input is a small or medium trace corpus and the goal is
 root-cause analysis rather than broad access/resource trending.
 
+## Agent compatibility
+
+This skill is tool-agnostic. Codex, Cursor, Claude Code, and Hermes should all
+use the same repository script and produce the same run-directory contract.
+
+Recommended trigger text:
+
+- Codex: `Use $ds-trace-triage to analyze these DataSystem trace bundles.`
+- Cursor rule: `When the user asks for DataSystem trace triage, follow
+  .skills/ds-trace-triage/SKILL.md and run scripts/ds_trace_triage.py.`
+- Claude Code memory / `CLAUDE.md`: `For DS slow/error trace packages, follow
+  .skills/ds-trace-triage/SKILL.md. Do not hand-write ad hoc parsers; run
+  scripts/ds_trace_triage.py run/verify and report the run directory.`
+- Hermes instruction: `For DataSystem trace analysis, execute the deterministic
+  ds_trace_triage pipeline, keep raw inputs/extracted logs, and return
+  report.local.html plus summary counts.`
+
+Cross-agent invariants:
+
+- Treat the skill file as the source of procedure; do not duplicate divergent
+  logic in IDE/chat-specific prompts.
+- Always run from the repository root that contains `scripts/ds_trace_triage.py`.
+- Accept multiple gzip/tar/log inputs in one command; preserve input order only
+  for provenance, not for cohort meaning.
+- Return a clickable/local path to `report.local.html`, plus `trace_count`,
+  time range, dominant classifications, error counts, and access latency
+  percentiles when present.
+- If the report is larger than the yche publish gate, keep it local and say so.
+- Never publish to yche.me unless explicitly asked; use `publish-site --dry-run`
+  first.
+
+Minimal command template for any agent:
+
+```bash
+cd <yuanrong-datasystem-worktree>
+python3 scripts/ds_trace_triage.py verify
+python3 scripts/ds_trace_triage.py run <input1.gz> <input2.gz> \
+  --code-ref "$(git rev-parse main/master 2>/dev/null || git rev-parse HEAD)" \
+  --case <case-name> \
+  --scenario <scenario-name> \
+  --out /tmp/ds-trace-user-runs \
+  --force
+```
+
+Minimal response template:
+
+```text
+report.local.html: <run-dir>/report.local.html
+run_dir: <run-dir>
+trace_count: <N>
+time_range: <first_ts> .. <last_ts>
+dominant_classifications: <top counts>
+errors: <error counts>
+access_latency: p50=<...> p90=<...> p99=<...> max=<...>
+publish: local only / dry-run / published
+```
+
 ## Required workflow
 
 1. Pin the source:
@@ -27,7 +84,7 @@ root-cause analysis rather than broad access/resource trending.
    ```
 3. Run the deterministic parser first:
    ```bash
-   python3 scripts/ds_trace_triage.py run <trace_dir_or_tar_gz> \
+   python3 scripts/ds_trace_triage.py run <trace_dir_or_tar_gz> [more.gz ...] \
        --code-ref "$(git rev-parse main/master)" \
        --case <case-name> \
        --scenario <scenario> \
@@ -36,7 +93,7 @@ root-cause analysis rather than broad access/resource trending.
    For manual debugging or CI artifact checks, the same pipeline can be run as
    explicit stages:
    ```bash
-   run_dir=$(python3 scripts/ds_trace_triage.py parse <trace_dir_or_tar_gz> \
+   run_dir=$(python3 scripts/ds_trace_triage.py parse <trace_dir_or_tar_gz> [more.gz ...] \
        --code-ref "$(git rev-parse main/master)" \
        --case <case-name> \
        --scenario <scenario> \
