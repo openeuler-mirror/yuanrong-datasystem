@@ -1952,6 +1952,27 @@ def publish_site_stage(run_dir, dry_run=True):
     return site_target.get("url", "")
 
 
+def _verify_html_inline_script(html_path):
+    html_path = Path(html_path)
+    html = html_path.read_text(encoding="utf-8")
+    match = re.search(r"<script>\n  const report = (.*)\n  </script>", html, re.S)
+    assert match, "inline report script not found"
+    node = shutil.which("node")
+    if not node:
+        return "inline-script-present"
+    with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as tmp:
+        tmp.write("const report = " + match.group(1))
+        tmp_path = Path(tmp.name)
+    try:
+        subprocess.run([node, "--check", str(tmp_path)], check=True)
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+    return "node-check-passed"
+
+
 def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
     return TraceRunPipeline().run(inputs, out_dir, case_name=case_name, scenario=scenario,
                                   code_ref=code_ref, force=force)
@@ -1990,6 +2011,9 @@ def run_self_test():
         assert (run_dir / "triage.json").exists()
         assert (run_dir / "report.local.html").exists()
         assert (run_dir / "report.site.html").exists()
+        assert _verify_html_inline_script(run_dir / "report.local.html") in {
+            "inline-script-present", "node-check-passed"
+        }
         assert (run_dir / "site_publish.md").exists()
         publish_url = publish_site_stage(run_dir, dry_run=True)
         assert publish_url.startswith("https://yche.me/perf/")

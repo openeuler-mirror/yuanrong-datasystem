@@ -403,6 +403,9 @@ def test_independent_stage_functions_consume_previous_artifacts(tmp_path):
 
     assert mod.render_local_stage(run_dir) == run_dir / "report.local.html"
     assert mod.render_site_stage(run_dir) == run_dir / "report.site.html"
+    assert mod._verify_html_inline_script(run_dir / "report.local.html") in {
+        "inline-script-present", "node-check-passed"
+    }
     assert (run_dir / "site_publish.md").exists()
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["stages"]["parse"]["status"] == "done"

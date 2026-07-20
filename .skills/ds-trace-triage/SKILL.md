@@ -80,7 +80,8 @@ python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 Add those commands to CI as a low-cost parser contract. They verify gzip-tar
 handling, trace grouping, access latency, breakdown, rpc slow, URMA elapsed,
 UB field extraction, time buckets, worker/edge aggregation, local/site HTML
-generation, and error classification.
+generation, inline report JavaScript syntax when Node.js is available, and
+error classification.
 It also verifies the yche publish checklist and `publish-site --dry-run`
 manifest status.
 
