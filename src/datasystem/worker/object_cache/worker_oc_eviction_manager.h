@@ -510,6 +510,21 @@ private:
     Status DeletePrimaryEndLifeLocal(const PrimaryEndLifeCandidate &candidate);
 
     /**
+     * @brief Re-acquire W-lock after the master RPC window, re-validate version, and refresh
+     *        candidate.entry for the local Erase in Phase 2.
+     * @param[in,out] candidate The candidate to re-lock; entry is refreshed from the table.
+     * @return K_OK on success; K_NOT_FOUND if version changed or object erased; K_TRY_AGAIN if
+     *         TryWLock retries exhausted.
+     */
+    Status ReacquireAndValidateForLocalDelete(PrimaryEndLifeCandidate &candidate);
+
+    /**
+     * @brief Phase 2 per-candidate: re-acquire WLock and perform local Erase.
+     */
+    void ProcessPrimaryEndLifeLocalErase(std::vector<PrimaryEndLifeCandidate> &candidates, Status &rc,
+                                         std::unordered_set<std::string> &failedKeys);
+
+    /**
      * @brief Get the memory release size for a locked primary end-life candidate.
      * @param[in] entry The object entry to inspect.
      * @return Data plus metadata size in bytes, saturated on overflow.
