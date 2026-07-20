@@ -82,6 +82,13 @@ def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
     assert any("entry worker -> data worker" in item["flow_stage"] for item in source_appendix)
     assert any("data worker UB write" in item["flow_stage"] for item in source_appendix)
     assert any("entry worker -> meta worker publish" in item["flow_stage"] for item in source_appendix)
+    flow_stages = report["dimensions"]["flow_stages"]
+    edge_names = {edge["name"] for edge in flow_stages["edges"]}
+    assert "client -> entry worker" in edge_names
+    assert "entry worker -> meta worker" in edge_names
+    assert "entry worker -> data worker" in edge_names
+    assert "data worker -> entry worker UB write" in edge_names
+    assert "entry worker -> meta worker publish" in edge_names
     assert report["traces"][trace_id]["classification"] == "client_deadline_with_urma_wait"
 
 
@@ -201,6 +208,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"cohort-chart\"" in html
     assert "id=\"cohort-table\"" in html
     assert "id=\"latency-chart\"" in html
+    assert "id=\"flow-stage-chart\"" in html
+    assert "id=\"flow-stage-table\"" in html
+    assert "Client→Entry→Meta/Data 流程" in html
     assert "id=\"worker-chart\"" in html
     assert "class=\"controls pager\"" in html
     assert "搜索 trace / worker / 关键词" in html

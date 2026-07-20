@@ -697,6 +697,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         ub_summary=ub_summary,
     )
     source_appendix = _build_source_appendix(coverage)
+    flow_stages = _build_flow_stages(coverage, flow_counts, ub_summary)
 
     return {
         "schema_version": 1,
@@ -717,6 +718,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
             "diagnosis": diagnosis,
             "recommendations": recommendations,
             "source_appendix": source_appendix,
+            "flow_stages": flow_stages,
             "flow": dict(flow_counts),
             "latency_ms": {"access": _percentiles(access_latencies)},
             "breakdown_ms": breakdown,
@@ -921,6 +923,87 @@ def _build_source_appendix(coverage):
             "report_reading": "Mark as observation gap in customer reports.",
         })
     return rows
+
+
+def _build_flow_stages(coverage, flow_counts, ub_summary):
+    surfaces = coverage.get("surfaces", {})
+
+    def surface_status(name):
+        item = surfaces.get(name, {})
+        return {
+            "status": item.get("status", "missing"),
+            "events": item.get("events", 0),
+        }
+
+    read_count = sum(count for name, count in flow_counts.items() if "GET" in name)
+    write_count = sum(count for name, count in flow_counts.items()
+                      if any(op in name for op in ("SET", "CREATE", "PUBLISH")))
+    ub_edges = ub_summary.get("edges", {})
+    ub_transfer_count = ub_summary.get("transfer_path", {}).get("UB", 0)
+    nodes = [
+        {"id": "client", "label": "Client", "role": "client"},
+        {"id": "entry", "label": "Entry Worker", "role": "entry_worker"},
+        {"id": "meta", "label": "Meta Worker", "role": "meta_worker"},
+        {"id": "data", "label": "Data Worker", "role": "data_worker"},
+        {"id": "ub", "label": "UB/URMA", "role": "transport"},
+    ]
+    edges = [
+        {
+            "name": "client -> entry worker",
+            "source": "client",
+            "target": "entry",
+            "operation": "read/write request",
+            "evidence": f"{surface_status('client_access')['events']} access events, {read_count} read flows, {write_count} write flows",
+            "status": surface_status("client_access")["status"],
+            "report_reading": "客户看到的耗时和错误起点，先用于表象定界。",
+        },
+        {
+            "name": "entry worker -> meta worker",
+            "source": "entry",
+            "target": "meta",
+            "operation": "GetObjMetaInfo / QueryMeta",
+            "evidence": f"{surface_status('latency_summary')['events']} latencySummary events",
+            "status": surface_status("latency_summary")["status"],
+            "report_reading": "只有出现 QueryMeta/GetObjMetaInfo 耗时或 RPC slow 时才归因到元数据路径。",
+        },
+        {
+            "name": "entry worker -> data worker",
+            "source": "entry",
+            "target": "data",
+            "operation": "RemotePull / BatchGetObjectRemote",
+            "evidence": f"{len(ub_edges)} UB edge buckets, {ub_transfer_count} UB transfer markers",
+            "status": "present" if ub_edges or ub_transfer_count else "missing",
+            "report_reading": "读取主路径的远端数据获取窗口，用来解释 client deadline 后 worker 继续完成。",
+        },
+        {
+            "name": "data worker -> entry worker UB write",
+            "source": "data",
+            "target": "ub",
+            "operation": "UB write completion",
+            "evidence": f"{surface_status('urma_elapsed')['events']} URMA elapsed events",
+            "status": surface_status("urma_elapsed")["status"],
+            "report_reading": "DataWorker 侧 payload write/wait/notify 时序，不要只凭 total 单字段下根因。",
+        },
+        {
+            "name": "UB write -> entry worker",
+            "source": "ub",
+            "target": "entry",
+            "operation": "completion visible to Entry Worker",
+            "evidence": "align RemotePull finish, BatchGetObjectRemote, URMA request id when sampled",
+            "status": "present" if ub_edges or surface_status("urma_elapsed")["status"] == "present" else "missing",
+            "report_reading": "用于关联 DataWorker completion 与 EntryWorker RemotePull finish 的时间差。",
+        },
+        {
+            "name": "entry worker -> meta worker publish",
+            "source": "entry",
+            "target": "meta",
+            "operation": "CreateBuffer / Publish",
+            "evidence": f"{write_count} write flows, {surface_status('latency_summary')['events']} latencySummary events",
+            "status": "present" if write_count or surface_status("latency_summary")["status"] == "present" else "missing",
+            "report_reading": "写流程需要拆开 createbuffer、client publish、entry publish、meta publish。",
+        },
+    ]
+    return {"nodes": nodes, "edges": edges}
 
 
 def _build_time_buckets(trace_rows, bucket_ms):
@@ -1187,6 +1270,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a href="#s3">3. 时延 Breakdown</a>
       <a class="sub" href="#latency-chart">图 3-1 时延</a>
       <a href="#s4">4. Worker / UB</a>
+      <a class="sub" href="#flow-stage-chart">图 4-0 流程图</a>
       <a href="#s5">5. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 5-1 Top Trace</a>
       <a href="#s6">6. 建议与口径</a>
@@ -1229,6 +1313,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s4">
         <h2>4. Worker / UB 分布</h2>
+        <div class="panel"><h3>图 4-0 Client→Entry→Meta/Data 流程</h3><div id="flow-stage-chart" class="chart"></div><div class="caption">把读取与写入关键链路拆成客户可理解的阶段，并标注当前日志是否有证据覆盖。</div></div>
+        <div class="panel"><h3>表 4-0 流程阶段证据</h3><table id="flow-stage-table"></table></div>
         <div class="chart-grid">
           <div class="panel"><div id="worker-chart" class="chart"></div><div class="caption">图 4-1 Worker 错误聚合</div></div>
           <div class="panel"><div id="ub-edge-chart" class="chart"></div><div class="caption">图 4-2 UB edge 次数</div></div>
@@ -1325,6 +1411,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const diagnosis = dim.diagnosis || {};
   const recommendations = dim.recommendations || [];
   const sourceAppendix = dim.source_appendix || [];
+  const flowStages = dim.flow_stages || {nodes: [], edges: []};
   document.getElementById('report-subtitle').innerHTML =
     `输入日志解析得到 <b>${report.trace_count}</b> 条 trace，错误标记 <b>${totalErrors}</b> 个。` +
     `当前主分类为 <b>${escapeHtml(topClass[0])}</b>，access p99 为 <b>${access.p99 ?? ''}ms</b>。`;
@@ -1363,6 +1450,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     item.source_hint,
     item.validation,
     item.report_reading
+  ]));
+  renderTable('flow-stage-table', ['stage','operation','evidence','status','report reading'], (flowStages.edges || []).map(edge => [
+    edge.name,
+    edge.operation,
+    edge.evidence,
+    edge.status,
+    edge.report_reading
   ]));
   renderTable('error-table', ['error','count'], errorRows);
   renderTable('latency-table', ['metric','distribution'], [
@@ -1483,6 +1577,38 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   chart('error-chart', {title:{text:'Errors', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25}}, yAxis:{type:'value'}, series:[{type:'bar', data:errorRows.map(r => r[1]), itemStyle:{color:'#c23531'}}]});
   chart('latency-chart', {title:{text:'Latency Percentiles', left:'center'}, tooltip:{trigger:'axis'}, legend:{top:25}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',data:[access[k] || 0]}))});
   chart('flow-chart', {title:{text:'Flow', left:'center'}, tooltip:{trigger:'item'}, series:[{type:'pie', radius:['35%','65%'], data:flowRows.map(([name,value]) => ({name,value}))}]});
+  chart('flow-stage-chart', {
+    tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
+      ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.evidence)}`
+      : escapeHtml(p.data.label || p.data.name)},
+    series:[{
+      type:'graph',
+      layout:'none',
+      roam:true,
+      edgeSymbol:['none','arrow'],
+      edgeSymbolSize:8,
+      label:{show:true},
+      edgeLabel:{show:true, formatter:p => p.data.status === 'present' ? 'present' : 'missing', fontSize:11},
+      lineStyle:{width:2, color:'#64748b', curveness:.08},
+      data:(flowStages.nodes || []).map((node, idx) => ({
+        name:node.id,
+        label:node.label,
+        x:[80,280,480,480,680][idx] || 80,
+        y:[170,170,80,260,260][idx] || 170,
+        symbolSize:72,
+        itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
+      })),
+      links:(flowStages.edges || []).map(edge => ({
+        source:edge.source,
+        target:edge.target,
+        name:edge.name,
+        operation:edge.operation,
+        evidence:edge.evidence,
+        status:edge.status,
+        lineStyle:{color:edge.status === 'present' ? '#2563eb' : '#cbd5e1', type:edge.status === 'present' ? 'solid' : 'dashed'}
+      }))
+    }]
+  });
   chart('worker-chart', {title:{text:'Top Workers by Errors', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:workerRows.slice(0,15).map(r => r[0]), axisLabel:{rotate:40}}, yAxis:{type:'value'}, series:[{type:'bar', data:workerRows.slice(0,15).map(r => r[1].error_count || 0), itemStyle:{color:'#fac858'}}]});
   chart('ub-edge-chart', {title:{text:'UB Edge Count', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:ubRows.slice(0,15).map(r => r[0]), axisLabel:{rotate:45}}, yAxis:{type:'value'}, series:[{type:'bar', data:ubRows.slice(0,15).map(r => r[1].count || 0), itemStyle:{color:'#91cc75'}}]});
   renderTracePage();

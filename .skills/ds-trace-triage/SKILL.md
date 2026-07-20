@@ -178,6 +178,8 @@ them:
   cohort-compare, UB/URMA, and deadline follow-up actions for the appendix.
 - `dimensions.source_appendix`: maps log surfaces to read/write flow stages,
   source hints, CodeGraph/source validation, and customer-facing report reading.
+- `dimensions.flow_stages`: graph-ready Client/Entry/Meta/Data/UB nodes and
+  read/write edges with evidence coverage for the flow-stage chart and table.
 - `dimensions.time_buckets`: 1s/10s burst and gap candidates
 - `dimensions.worker_summary`: role-aware client/entry/data/meta worker views
 - `dimensions.classifications`: parser-assigned root-cause families such as
