@@ -28,6 +28,9 @@ function run_compile() {
     git diff --name-only --diff-filter=AM HEAD~1 HEAD > ${attach_workspace}/diff_file_name
     git diff HEAD^ > ${attach_workspace}/diff.txt
 
+    python3 -m py_compile scripts/ds_trace_triage.py tests/scripts/test_ds_trace_triage.py
+    python3 scripts/ds_trace_triage.py verify
+
     label=""
     tile=`curl -k --location --request GET "https://api.gitcode.com/api/v5/repos/openeuler/yuanrong-datasystem/pulls/${prid}/labels?access_token=hcVDUMFJcHjDdjRTWkKjbAAo" --header 'Content-Type: text/plain'`
     while read -r line

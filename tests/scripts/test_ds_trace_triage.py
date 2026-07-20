@@ -169,6 +169,78 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
 
 
+def test_run_pipeline_preserves_raw_extracted_logs_and_reuses_cache(tmp_path):
+    trace_id = "019f7d06-cbda-7381-a95f-99fed6ee3732"
+    bundle = tmp_path / "multi-input.tar.gz"
+    _write_tar_gz(
+        bundle,
+        {
+            "case-a/kventryworker-0-worker1/worker.log": "\n".join(
+                [
+                    f"2026-07-20T12:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
+                    f"2026-07-20T12:00:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | [Get] Done, clientId: c1, objects: 1, transferPath: UB, totalCost: 20.298ms, inflightRemoteGet: 1",
+                ]
+            )
+        },
+    )
+
+    mod = _load_module()
+    first = mod.run_pipeline([str(bundle)], tmp_path / "runs", case_name="cache-case", scenario="round-a")
+    second = mod.run_pipeline([str(bundle)], tmp_path / "runs", case_name="cache-case", scenario="round-a")
+    forced = mod.run_pipeline([str(bundle)], tmp_path / "runs", case_name="cache-case", scenario="round-a", force=True)
+
+    assert first == second
+    assert forced != first
+    manifest = json.loads((first / "manifest.json").read_text())
+    assert manifest["cache"]["status"] == "created"
+    assert manifest["inputs"][0]["members"] == ["case-a/kventryworker-0-worker1/worker.log"]
+    assert (first / "raw" / "inputs" / "multi-input.tar.gz").exists()
+    extracted = first / "raw" / "extracted" / "multi-input.tar.gz" / "case-a" / "kventryworker-0-worker1" / "worker.log"
+    assert extracted.exists()
+    assert trace_id in extracted.read_text()
+    assert json.loads((second / "manifest.json").read_text())["cache"]["status"] == "created"
+
+
+def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
+    read_trace = "019f7d07-bc52-7e1a-93e2-0a0372070197"
+    write_trace = "019f7d08-52a0-780e-ac5d-131d879ba989"
+    log = tmp_path / "mixed.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T12:10:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {read_trace} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
+                f"2026-07-20T12:10:00.001000 | INFO | client | 10.0.0.9 | 1 | {read_trace} | Get done latencySummary:{{client.rpc.get:20298}}",
+                f"2026-07-20T12:10:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {read_trace} | Remote get success, objectKey: obj-a, path: UB, cost: 231.321ms src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
+                f"2026-07-20T12:10:00.020000 | WARN | worker | kvdataworker-0-worker2 | 1 | {read_trace} | [URMA_ELAPSED_TOTAL] cost 231.001ms, request id:77, src address:10.0.0.2:31501, target address:10.0.0.1:31501, dataSize:4096, cpuid:2, status: OK",
+                f"2026-07-20T12:10:01.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {write_trace} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
+                f"2026-07-20T12:10:01.001000 | INFO | client | 10.0.0.9 | 1 | {write_trace} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    read = report["traces"][read_trace]
+    write = report["traces"][write_trace]
+
+    read_stages = {stage["stage"]: stage for stage in read["stage_breakdown"]}
+    assert read_stages["read.client_to_entry_worker"]["duration_ms"] == 20.298
+    assert read_stages["read.entry_to_data_worker"]["duration_ms"] == 231.321
+    assert read_stages["read.data_worker_ub_write"]["duration_ms"] == 231.001
+    assert read_stages["read.entry_to_meta_worker"]["confidence"] == "missing"
+    assert read["evidence_coverage"]["urma"] == "present"
+    assert read["missing_evidence"][0]["stage"] == "read.entry_to_meta_worker"
+
+    write_stages = {stage["stage"]: stage for stage in write["stage_breakdown"]}
+    assert write_stages["write.client_to_entry_createbuffer"]["duration_ms"] == 0.49
+    assert write_stages["write.client_memory_copy"]["duration_ms"] == 2.988
+    assert write_stages["write.client_to_entry_publish"]["duration_ms"] == 0.69
+    assert write_stages["write.entry_to_meta_publish"]["confidence"] == "missing"
+    assert report["dimensions"]["coverage"]["surfaces"]["urma_elapsed"]["status"] == "present"
+    assert report["dimensions"]["coverage"]["surfaces"]["rpc_slow"]["status"] == "missing"
+
+
 def test_cli_self_test_writes_json_and_markdown(tmp_path, capsys):
     mod = _load_module()
     out_json = tmp_path / "summary.json"

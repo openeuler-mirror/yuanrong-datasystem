@@ -268,6 +268,97 @@ def _classify(trace):
     return "unknown"
 
 
+def _stage(stage, duration_ms=None, confidence="missing", source="missing", fields=None):
+    row = {"stage": stage, "confidence": confidence, "source": source}
+    if duration_ms is not None:
+        row["duration_ms"] = round(duration_ms, 3)
+    if fields:
+        row["fields"] = fields
+    return row
+
+
+def _build_stage_breakdown(trace):
+    flows = trace["flows"]
+    summary = trace["latency_summary_us"]
+    ub_events = trace["ub_events"]
+    breakdown = []
+    missing = []
+    is_write = any(flow in flows for flow in ("DS_KV_CLIENT_SET", "DS_KV_CLIENT_CREATE", "DS_KV_CLIENT_PUBLISH"))
+
+    if is_write:
+        create_us = summary.get("client.rpc.create")
+        publish_us = summary.get("client.rpc.publish")
+        memory_us = summary.get("client.process.memory_copy")
+        meta_us = summary.get("worker.rpc.create_meta")
+        breakdown.append(_stage("write.client_to_entry_createbuffer", create_us / 1000.0 if create_us else None,
+                                "high" if create_us else "missing", "latencySummary client.rpc.create"))
+        breakdown.append(_stage("write.client_memory_copy", memory_us / 1000.0 if memory_us else None,
+                                "high" if memory_us else "missing", "latencySummary client.process.memory_copy"))
+        breakdown.append(_stage("write.client_to_entry_publish", publish_us / 1000.0 if publish_us else None,
+                                "high" if publish_us else "missing", "latencySummary client.rpc.publish"))
+        breakdown.append(_stage("write.entry_to_meta_publish", meta_us / 1000.0 if meta_us else None,
+                                "high" if meta_us else "missing", "latencySummary worker.rpc.create_meta"))
+        if not meta_us:
+            missing.append({
+                "stage": "write.entry_to_meta_publish",
+                "expected": ["worker.rpc.create_meta", "MasterOCService.CreateMeta rpc slow"],
+                "impact": "cannot split Publish metadata update from entry worker processing",
+                "fallback": "mark missing",
+            })
+        return breakdown, missing
+
+    client_ms = None
+    if summary.get("client.rpc.get"):
+        client_ms = summary["client.rpc.get"] / 1000.0
+    elif trace["access_latency_ms"]:
+        client_ms = max(trace["access_latency_ms"])
+    remote_costs = [
+        event["cost_ms"] for event in ub_events
+        if event.get("event_type") == "transfer_path" and event.get("cost_ms") is not None
+    ]
+    total_costs = [
+        event["cost_ms"] for event in ub_events
+        if event.get("event_type") == "total" and event.get("cost_ms") is not None
+    ]
+    qmeta_us = summary.get("worker.rpc.query_meta")
+    breakdown.append(_stage("read.client_to_entry_worker", client_ms, "high" if client_ms is not None else "missing",
+                            "client access or latencySummary client.rpc.get"))
+    breakdown.append(_stage("read.entry_to_meta_worker", qmeta_us / 1000.0 if qmeta_us else None,
+                            "high" if qmeta_us else "missing", "latencySummary worker.rpc.query_meta"))
+    breakdown.append(_stage("read.entry_to_data_worker", max(remote_costs) if remote_costs else None,
+                            "high" if remote_costs else "missing", "Remote get success / worker.rpc.remote_get"))
+    breakdown.append(_stage("read.data_worker_ub_write", max(total_costs) if total_costs else None,
+                            "high" if total_costs else "missing", "URMA_ELAPSED_TOTAL"))
+    if not qmeta_us:
+        missing.append({
+            "stage": "read.entry_to_meta_worker",
+            "expected": ["worker.rpc.query_meta", "QueryMeta rpc slow"],
+            "impact": "cannot split meta lookup from entry worker processing",
+            "fallback": "mark missing; keep client_to_entry_worker as observed upper bound",
+        })
+    return breakdown, missing
+
+
+def _evidence_coverage(trace):
+    has_client = bool(trace["flows"]) or any(k.startswith("client.") for k in trace["latency_summary_us"])
+    has_entry = any(event["event_type"] in ("transfer_path", "remote_get_start") for event in trace["ub_events"])
+    has_data = any(event["event_type"] in ("total", "poll_jfc", "notify", "thread_sched") for event in trace["ub_events"])
+    has_meta = bool(trace["latency_summary_us"].get("worker.rpc.query_meta")
+                    or trace["latency_summary_us"].get("worker.rpc.create_meta"))
+    return {
+        "client": "present" if has_client else "missing",
+        "entry_worker": "present" if has_entry else "missing",
+        "meta_worker": "present" if has_meta else "missing",
+        "data_worker": "present" if has_data else "missing",
+        "urma": "present" if has_data else "missing",
+        "clock_alignment": "same_host_or_unknown",
+    }
+
+
+def _surface_status(count):
+    return "present" if count else "missing"
+
+
 def analyze_inputs(paths, code_ref="unknown"):
     traces = defaultdict(lambda: {
         "lines": 0,
@@ -300,6 +391,7 @@ def analyze_inputs(paths, code_ref="unknown"):
     latency_summary = defaultdict(list)
     errors = Counter()
     ub_summary = {"transfer_path": Counter(), "edges": defaultdict(lambda: {"count": 0, "latencies": []})}
+    surface_counts = Counter()
 
     for source, member, line_no, line in _iter_input_lines(paths):
         m = TRACE_ID_RE.search(line)
@@ -331,6 +423,7 @@ def analyze_inputs(paths, code_ref="unknown"):
 
         access = ACCESS_RE.search(line)
         if access:
+            surface_counts["client_access"] += 1
             status, operation, duration_us, _size = access.groups()
             latency_ms = int(duration_us) / 1000.0
             trace["flows"][operation] += 1
@@ -351,6 +444,7 @@ def analyze_inputs(paths, code_ref="unknown"):
 
         rpc = RPC_SLOW_RE.search(line)
         if rpc:
+            surface_counts["rpc_slow"] += 1
             method = rpc.group(1)
             trace["rpc_slow"][method] += 1
             rpc_slow[method]["count"] += 1
@@ -361,6 +455,7 @@ def analyze_inputs(paths, code_ref="unknown"):
 
         summary = LATENCY_SUMMARY_RE.search(line)
         if summary:
+            surface_counts["latency_summary"] += 1
             raw = "latencySummary:{" + summary.group(1) + "}"
             if len(trace["latency_summary_raw"]) < 8:
                 trace["latency_summary_raw"].append(raw)
@@ -377,6 +472,7 @@ def analyze_inputs(paths, code_ref="unknown"):
         ):
             um = regex.search(line)
             if um:
+                surface_counts["urma_elapsed"] += 1
                 val = _ms(um.group(1), um.group(2) if len(um.groups()) > 1 else "ms")
                 trace[f"urma_{name}_ms"].append(val)
                 urma[name].append(val)
@@ -393,6 +489,7 @@ def analyze_inputs(paths, code_ref="unknown"):
 
         for pattern in ERROR_PATTERNS:
             if pattern in line:
+                surface_counts["error"] += 1
                 errors[pattern] += 1
                 trace["errors"][pattern] += 1
 
@@ -419,6 +516,7 @@ def analyze_inputs(paths, code_ref="unknown"):
                 worker_roles[event["worker"]].add("entry_worker")
             if event["event_type"] in ("total", "poll_jfc", "notify", "thread_sched"):
                 worker_roles[event["worker"]].add("data_worker")
+        stage_breakdown, missing_evidence = _build_stage_breakdown(trace)
         trace_rows[trace_id] = {
             "classification": trace["classification"],
             "line_count": trace["lines"],
@@ -442,6 +540,9 @@ def analyze_inputs(paths, code_ref="unknown"):
             "latency_summary_raw": trace["latency_summary_raw"],
             "errors": dict(trace["errors"]),
             "triage_flags": triage_flags,
+            "stage_breakdown": stage_breakdown,
+            "evidence_coverage": _evidence_coverage(trace),
+            "missing_evidence": missing_evidence,
             "evidence": trace["evidence"],
         }
 
@@ -480,6 +581,19 @@ def analyze_inputs(paths, code_ref="unknown"):
             "workers": {k: {"line_count": v} for k, v in worker_counts.most_common()},
             "worker_summary": worker_summary,
             "worker_edges": worker_edges,
+            "coverage": {
+                "surfaces": {
+                    "client_access": {"events": surface_counts["client_access"],
+                                      "status": _surface_status(surface_counts["client_access"])},
+                    "rpc_slow": {"events": surface_counts["rpc_slow"],
+                                 "status": _surface_status(surface_counts["rpc_slow"])},
+                    "latency_summary": {"events": surface_counts["latency_summary"],
+                                        "status": _surface_status(surface_counts["latency_summary"])},
+                    "urma_elapsed": {"events": surface_counts["urma_elapsed"],
+                                     "status": _surface_status(surface_counts["urma_elapsed"])},
+                    "error": {"events": surface_counts["error"], "status": _surface_status(surface_counts["error"])},
+                }
+            },
             "flow": dict(flow_counts),
             "latency_ms": {"access": _percentiles(access_latencies)},
             "breakdown_ms": breakdown,
@@ -595,13 +709,80 @@ def _slug(text):
 def _input_identity(path):
     p = Path(path)
     h = hashlib.sha256()
+    members = []
     if p.is_file():
         with open(p, "rb") as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(chunk)
-        return {"path": str(p), "size": p.stat().st_size, "sha256": h.hexdigest()}
+        if tarfile.is_tarfile(p):
+            with tarfile.open(p, "r:*") as tar:
+                members = sorted(member.name for member in tar.getmembers() if member.isfile())
+        return {"path": str(p), "size": p.stat().st_size, "sha256": h.hexdigest(), "members": members}
     h.update(str(p).encode("utf-8"))
-    return {"path": str(p), "size": 0, "sha256": h.hexdigest()}
+    return {"path": str(p), "size": 0, "sha256": h.hexdigest(), "members": members}
+
+
+def _script_version():
+    h = hashlib.sha256()
+    with open(Path(__file__), "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def _cache_key(inputs, code_ref, case_name, scenario):
+    identities = sorted((_input_identity(path) for path in inputs), key=lambda item: item["path"])
+    payload = {
+        "script_version": _script_version(),
+        "code_ref": code_ref,
+        "case_name": case_name,
+        "scenario": scenario,
+        "inputs": identities,
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest(), identities
+
+
+def _find_cached_run(out_root, cache_key):
+    for manifest_path in sorted(out_root.glob("*/manifest.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if manifest.get("cache", {}).get("key") == cache_key:
+            return manifest_path.parent
+    return None
+
+
+def _safe_member_path(member_name):
+    pure = Path(member_name)
+    safe_parts = [part for part in pure.parts if part not in ("", ".", "..")]
+    return Path(*safe_parts) if safe_parts else Path("member.log")
+
+
+def _preserve_raw_inputs(inputs, run_dir):
+    raw_inputs = run_dir / "raw" / "inputs"
+    raw_extracted = run_dir / "raw" / "extracted"
+    raw_inputs.mkdir(parents=True, exist_ok=True)
+    raw_extracted.mkdir(parents=True, exist_ok=True)
+    for raw in inputs:
+        p = Path(raw)
+        if p.is_file():
+            copied = raw_inputs / p.name
+            shutil.copy2(p, copied)
+            if tarfile.is_tarfile(p):
+                extract_root = raw_extracted / p.name
+                with tarfile.open(p, "r:*") as tar:
+                    for member in tar.getmembers():
+                        if not member.isfile():
+                            continue
+                        stream = tar.extractfile(member)
+                        if stream is None:
+                            continue
+                        target = extract_root / _safe_member_path(member.name)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        with open(target, "wb") as out:
+                            shutil.copyfileobj(stream, out)
 
 
 def _write_json(path, value):
@@ -689,22 +870,21 @@ def _build_triage(report):
 
 
 def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
-    del force
     out_root = Path(out_dir)
     out_root.mkdir(parents=True, exist_ok=True)
+    cache_key, identities = _cache_key(inputs, code_ref, case_name, scenario)
+    if not force:
+        cached = _find_cached_run(out_root, cache_key)
+        if cached:
+            return cached
     now = datetime.now()
-    run_dir = out_root / f"{now.strftime('%Y%m%d-%H%M%S')}-{_slug(case_name)}"
+    run_dir = out_root / f"{now.strftime('%Y%m%d-%H%M%S')}-{_slug(case_name)}-{cache_key[:8]}"
     suffix = 1
     while run_dir.exists():
         suffix += 1
         run_dir = out_root / f"{now.strftime('%Y%m%d-%H%M%S')}-{_slug(case_name)}-{suffix}"
     run_dir.mkdir(parents=True)
-    raw_inputs = run_dir / "raw" / "inputs"
-    raw_inputs.mkdir(parents=True)
-    for raw in inputs:
-        p = Path(raw)
-        if p.is_file():
-            shutil.copy2(p, raw_inputs / p.name)
+    _preserve_raw_inputs(inputs, run_dir)
 
     report = analyze_inputs(inputs, code_ref=code_ref)
     events = _build_events(report)
@@ -715,8 +895,10 @@ def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref=
         "scenario": scenario,
         "analysis_created_at": now.isoformat(),
         "code_ref": code_ref,
+        "script_version": _script_version(),
+        "cache": {"key": cache_key, "status": "created"},
         "trace_time_range": report["dimensions"]["time"],
-        "inputs": [_input_identity(p) for p in inputs],
+        "inputs": identities,
         "render_targets": {
             "local": {"path": "report.local.html", "status": "generated"},
             "site": {"path": "report.site.html", "status": "generated"},
@@ -769,6 +951,13 @@ def run_self_test():
         assert (run_dir / "triage.json").exists()
         assert (run_dir / "report.local.html").exists()
         assert (run_dir / "report.site.html").exists()
+        assert (run_dir / "raw" / "inputs" / "fixture.tar.gz").exists()
+        assert (run_dir / "raw" / "extracted" / "fixture.tar.gz" / "kvchachjpworker-0-worker7" / "worker.log").exists()
+        run_report = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+        run_trace = next(iter(run_report["traces"].values()))
+        assert run_trace["stage_breakdown"]
+        assert run_trace["evidence_coverage"]["urma"] == "present"
+        assert run_report["dimensions"]["coverage"]["surfaces"]["urma_elapsed"]["status"] == "present"
     assert report["trace_count"] == 1
     assert report["dimensions"]["latency_ms"]["access"]["p50"] == 518.923
     assert report["dimensions"]["breakdown_ms"]["ProcessGetObjectRequest"]["sum"] == 517.0

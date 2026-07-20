@@ -60,6 +60,19 @@ handling, trace grouping, access latency, breakdown, rpc slow, URMA elapsed,
 UB field extraction, time buckets, worker/edge aggregation, local/site HTML
 generation, and error classification.
 
+The repository CI runs the dependency-light gate in `.gitee/ci_build.sh`:
+
+```bash
+python3 -m py_compile scripts/ds_trace_triage.py tests/scripts/test_ds_trace_triage.py
+python3 scripts/ds_trace_triage.py verify
+```
+
+Run pytest locally when changing parser behavior:
+
+```bash
+python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
+```
+
 The self-test must keep covering the historical contract learned from the trace
 threads: `latencySummary` raw text and key/value fields, RPC slow server/network
 subfields, `URMA_ELAPSED_TOTAL/POLL_JFC/NOTIFY/THREAD_SHED`, and classification

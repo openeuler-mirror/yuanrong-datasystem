@@ -155,7 +155,13 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 最小门禁：
 
 ```bash
+python3 -m py_compile scripts/ds_trace_triage.py tests/scripts/test_ds_trace_triage.py
 python3 scripts/ds_trace_triage.py verify
+```
+
+这组无第三方依赖的门禁已经接入 `.gitee/ci_build.sh`。本地修改 parser 行为时，再跑 pytest 覆盖更细的 fixture：
+
+```bash
 python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
 
