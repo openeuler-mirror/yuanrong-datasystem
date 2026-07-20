@@ -1226,8 +1226,9 @@ def _update_manifest(run_dir, updater):
     return manifest
 
 
-def _render_html(report, title, site=False):
+def _render_html(report, title, site=False, manifest=None):
     data = json.dumps(report, ensure_ascii=False).replace("</script>", "<\\/script>")
+    manifest_data = json.dumps(manifest or {}, ensure_ascii=False).replace("</script>", "<\\/script>")
     base_style = """<style>
 :root{--bg:#f6f8fb;--card:#fff;--text:#172033;--muted:#5f6b7a;--border:#dfe5ee;--blue:#2563eb;--orange:#ea580c;--red:#dc2626;--green:#059669;--purple:#7c3aed;--amber:#ca8a04}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:'Microsoft YaHei',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
@@ -1283,6 +1284,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <h1>__TITLE__</h1>
         <p class="subtitle" id="report-subtitle"></p>
         <div id="summary" class="cards"></div>
+        <div class="panel"><h3>运行与输入来源</h3><table id="run-metadata-table"></table></div>
         <div class="panel insight" id="report-insight"></div>
         <div class="panel"><h3>客户化诊断口径</h3><ul id="diagnosis-list"></ul></div>
       </section>
@@ -1358,6 +1360,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   </div>
   <script>
   const report = __DATA__;
+  const manifest = __MANIFEST__;
   const dim = report.dimensions || {};
   const traces = report.traces || {};
   const traceRows = Object.entries(traces).sort((a,b) => (b[1].access_latency_ms?.max || 0) - (a[1].access_latency_ms?.max || 0));
@@ -1429,6 +1432,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     ['access p99 ms', access.p99 ?? '', 'client/access latency'],
     ['code_ref', report.code_ref, 'source reference']
   ].map(([k,v,hint]) => `<div class="card"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div><div class="n">${escapeHtml(hint)}</div></div>`).join('');
+  renderTable('run-metadata-table', ['field','value'], [
+    ['case_name', manifest.case_name || ''],
+    ['scenario', manifest.scenario || ''],
+    ['analysis_created_at', manifest.analysis_created_at || ''],
+    ['input_document', manifest.input_document || 'inputs.md'],
+    ['raw_inputs', 'raw/inputs'],
+    ['raw_extracted', 'raw/extracted'],
+    ['inputs', (manifest.inputs || []).map(item => `${item.path} (${item.size || 0} bytes)`).join('\\n')]
+  ].filter(row => row[1]));
   const classificationRows = Object.entries(dim.classifications || {}).sort((a,b) => b[1]-a[1]);
   const errorRows = Object.entries(dim.errors || {}).sort((a,b) => b[1]-a[1]);
   const cohortRows = Object.entries(dim.cohorts || {}).sort((a,b) => b[1].trace_count - a[1].trace_count);
@@ -1640,6 +1652,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
             .replace("__TITLE__", title)
             .replace("__STYLESHEET__", stylesheet)
             .replace("__DATA__", data)
+            .replace("__MANIFEST__", manifest_data)
             .replace("__SCRIPT_REF__", script_ref))
 
 
@@ -1699,8 +1712,8 @@ class TraceReportRenderer:
     def markdown(self, report):
         return render_markdown(report)
 
-    def html(self, report, title, site=False):
-        return _render_html(report, title, site=site)
+    def html(self, report, title, site=False, manifest=None):
+        return _render_html(report, title, site=site, manifest=manifest)
 
 
 def _new_run_dir(out_root, case_name, cache_key):
@@ -1788,7 +1801,9 @@ class TraceRunPipeline:
         report = _read_json(run_dir / "summary.json")
         manifest = _read_json(run_dir / "manifest.json")
         title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
-        (run_dir / "report.local.html").write_text(self.renderer.html(report, title), encoding="utf-8")
+        (run_dir / "report.local.html").write_text(
+            self.renderer.html(report, title, manifest=manifest), encoding="utf-8"
+        )
         _update_manifest(run_dir, lambda item: item["render_targets"].update({
             "local": {"path": "report.local.html", "status": "generated"}
         }))
@@ -1800,7 +1815,7 @@ class TraceRunPipeline:
         manifest = _read_json(run_dir / "manifest.json")
         title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
         (run_dir / "report.site.html").write_text(
-            self.renderer.html(report, title, site=True), encoding="utf-8"
+            self.renderer.html(report, title, site=True, manifest=manifest), encoding="utf-8"
         )
         _update_manifest(run_dir, lambda item: item["render_targets"].update({
             "site": {"path": "report.site.html", "status": "generated"}

@@ -195,6 +195,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "echarts" in html
     assert "<aside><h2>Trace 分析报告</h2><nav id=\"nav\">" in html
     assert "class=\"subtitle\"" in html
+    assert "id=\"run-metadata-table\"" in html
+    assert "set-case" in html
+    assert "memory-copy" in html
+    assert "inputs.md" in html
+    assert "raw/inputs" in html
+    assert "raw/extracted" in html
+    assert "client.log" in html
     assert "class=\"panel insight\"" in html
     assert "id=\"diagnosis-list\"" in html
     assert "id=\"recommendation-table\"" in html
