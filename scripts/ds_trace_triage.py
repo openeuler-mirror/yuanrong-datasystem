@@ -1335,12 +1335,13 @@ h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-siz
 .subtitle,.note,.insight{color:var(--muted);line-height:1.65}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
+tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
 th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
-button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}
+button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
 code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 @media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards{grid-template-columns:1fr}}
@@ -1366,6 +1367,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a class="sub" href="#error-chart">图 2-2 错误</a>
       <a href="#s3">3. 时延 Breakdown</a>
       <a class="sub" href="#latency-chart">图 3-1 时延</a>
+      <a class="sub" href="#time-breakdown-chart">图 3-3 时间桶</a>
       <a href="#s4">4. Worker / UB</a>
       <a class="sub" href="#flow-stage-chart">图 4-0 流程图</a>
       <a href="#s5">5. Trace 查看</a>
@@ -1405,6 +1407,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 时延分布，单位 ms/us 按指标原始语义展示</div></div>
           <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布</div></div>
         </div>
+        <div class="panel"><div id="time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 时间桶 Breakdown：按采样时间聚合 trace/error/slow/p99，用于定位 burst 和时间相关性</div></div>
         <div class="compare2">
           <div class="panel"><h3>表 3-1 时延指标</h3><table id="latency-table"></table></div>
           <div class="panel"><h3>表 3-2 Flow Breakdown</h3><table id="flow-table"></table></div>
@@ -1419,8 +1422,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><div id="ub-edge-chart" class="chart"></div><div class="caption">图 4-2 UB edge 次数</div></div>
         </div>
         <div class="compare2">
-          <div class="panel"><h3>表 4-1 Worker Breakdown</h3><table id="worker-table"></table></div>
-          <div class="panel"><h3>表 4-2 UB Edges</h3><table id="ub-edge-table"></table></div>
+          <div class="panel"><h3>表 4-1 Worker Breakdown</h3><div class="small">默认每页 5 行；error/slow 较高的行会高亮。</div><table id="worker-table"></table><div id="worker-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 4-2 UB Edges</h3><div class="small">默认每页 5 行；p99/max 超过 5ms/20ms 的 edge 会高亮。</div><table id="ub-edge-table"></table><div id="ub-edge-table-pager" class="mini-pager"></div></div>
         </div>
       </section>
       <section id="s5">
@@ -1436,7 +1439,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <table id="top-trace-table"></table>
         </div>
         <div class="compare2">
-          <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div class="caption">点击上方 Trace 行后联动更新，单位 ms</div></div>
+          <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div class="caption">点击上方 Trace 行后联动更新，横向条形图按阶段耗时排序，单位 ms</div><table id="selected-stage-table"></table></div>
           <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
         <div class="panel"><h3>Trace 全量日志</h3><div class="small">ERROR、deadline、latencySummary、RemotePull、URMA 等关键字段在原始日志中完整保留。</div><pre id="selected-trace-log"></pre></div>
@@ -1480,6 +1483,25 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }
     table.innerHTML = `<thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>` +
       `<tbody>${rows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map(cell => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  }
+  const pagedTables = {};
+  function renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize=5) {
+    const state = pagedTables[id] || (pagedTables[id] = {page:0});
+    const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+    state.page = Math.min(Math.max(state.page, 0), pages - 1);
+    const start = state.page * pageSize;
+    renderTable(id, headers, rows.slice(start, start + pageSize), (row, idx) => rowAttrs ? rowAttrs(row, start + idx) : '');
+    const pager = document.getElementById(pagerId);
+    if (!pager) return;
+    pager.innerHTML = `<button ${state.page <= 0 ? 'disabled' : ''} data-act="prev">上一页</button><span>第 ${state.page + 1} / ${pages} 页，共 ${rows.length} 行</span><button ${state.page >= pages - 1 ? 'disabled' : ''} data-act="next">下一页</button>`;
+    pager.querySelectorAll('button').forEach(button => button.addEventListener('click', () => {
+      state.page += button.dataset.act === 'prev' ? -1 : 1;
+      renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize);
+    }));
+  }
+  function severityClass(value, warn=5, hot=20) {
+    const n = Number(value || 0);
+    return n >= hot ? 'hotrow' : n >= warn ? 'warnrow' : '';
   }
   const palette = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
   function axisBase(title, extra) {
@@ -1608,11 +1630,16 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const ubRows = Object.entries(dim.ub_summary?.edges || {})
     .sort((a,b) => (b[1].count || 0) - (a[1].count || 0))
     .slice(0, 40);
+  const timeBucketRows = dim.time_buckets?.['1000ms'] || [];
   renderTable('flow-table', ['flow','count'], flowRows);
-  renderTable('worker-table', ['worker','roles','lines','traces','errors'], workerRows
-    .map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.error_count]));
-  renderTable('ub-edge-table', ['edge','count','latency'], ubRows
-    .map(([edge,item]) => [edge, item.count, pctText(item.latency_ms)]));
+  const workerTableRows = workerRows
+    .map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0]);
+  renderPagedTable('worker-table', 'worker-table-pager', ['worker','roles','lines','traces','slow','errors'], workerTableRows,
+    row => (Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
+  const ubTableRows = ubRows
+    .map(([edge,item]) => [edge, item.count, item.latency_ms?.p99 || '', item.latency_ms?.max || '', pctText(item.latency_ms)]);
+  renderPagedTable('ub-edge-table', 'ub-edge-table-pager', ['edge','count','p99 ms','max ms','latency'], ubTableRows,
+    row => `class="${severityClass(Math.max(Number(row[2]) || 0, Number(row[3]) || 0))}"`, 5);
   function applyTraceFilters() {
     const query = document.getElementById('trace-search').value.trim().toLowerCase();
     const cls = document.getElementById('class-filter').value;
@@ -1664,11 +1691,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       ['coverage', JSON.stringify(item.evidence_coverage || {})],
       ['missing_evidence', JSON.stringify(item.missing_evidence || [])]
     ]);
-    const stageRows = (item.stage_breakdown || []).filter(s => s.duration_ms !== undefined);
+    const stageRows = (item.stage_breakdown || [])
+      .filter(s => s.duration_ms !== undefined)
+      .slice()
+      .sort((a,b) => (a.duration_ms || 0) - (b.duration_ms || 0));
+    renderTable('selected-stage-table', ['stage','duration ms','confidence','source'], stageRows.map(s => [
+      s.stage,
+      s.duration_ms,
+      s.confidence || '',
+      s.source || ''
+    ]), row => `class="${severityClass(row[1])}"`);
     chart('selected-trace-chart', stageRows.length ? axisBase('Selected Trace Stage Breakdown', {
-      xAxis:{type:'category', data:stageRows.map(s => s.stage), axisLabel:{rotate:25, width:120, overflow:'truncate'}},
-      yAxis:{type:'value', name:'ms'},
-      series:[{name:'duration_ms',type:'bar',barMaxWidth:42,data:stageRows.map(s => ({value:s.duration_ms, itemStyle:{color:s.duration_ms >= 20 ? '#dc2626' : s.duration_ms >= 5 ? '#ea580c' : '#2563eb'}})), label:{show:true, position:'top'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]}}]
+      grid:{left:180,right:42,top:44,bottom:52,containLabel:true},
+      xAxis:{type:'value', name:'ms'},
+      yAxis:{type:'category', data:stageRows.map(s => s.stage), axisLabel:{width:165, overflow:'truncate'}},
+      series:[{name:'duration_ms',type:'bar',barMaxWidth:28,data:stageRows.map(s => ({value:s.duration_ms, source:s.source || '', itemStyle:{color:s.duration_ms >= 20 ? '#dc2626' : s.duration_ms >= 5 ? '#ea580c' : '#2563eb'}})), label:{show:true, position:'right', formatter:p => `${p.value}ms`}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]}}]
     }) : noDataOption('No selected trace stage data'));
     document.getElementById('selected-trace-log').innerHTML = (item.evidence || [])
       .map(e => highlightLogLine(`${e.member}:${e.line} ${e.text}`)).join('\\n');
@@ -1755,6 +1792,17 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
   chart('latency-chart', axisBase('Latency Percentiles', {legend:{top:30}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',barMaxWidth:42,data:[access[k] || 0], markLine:k === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]} : undefined}))}));
   chart('flow-chart', flowRows.length ? {title:{text:'Flow', left:'center'}, color:palette, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['35%','65%'], center:['50%','47%'], data:flowRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No flow data'));
+  chart('time-breakdown-chart', timeBucketRows.length ? axisBase('Time Bucket Breakdown', {
+    tooltip:{trigger:'axis', axisPointer:{type:'cross'}, confine:true},
+    xAxis:{type:'category', data:timeBucketRows.map(r => String(r.bucket_start || '').replace('T','\\n')), axisLabel:{rotate:0}},
+    yAxis:[{type:'value', name:'count'}, {type:'value', name:'ms'}],
+    series:[
+      {name:'traces',type:'bar',stack:'count',barMaxWidth:28,data:timeBucketRows.map(r => r.trace_count || 0), itemStyle:{color:'#94a3b8'}},
+      {name:'errors',type:'bar',stack:'count',barMaxWidth:28,data:timeBucketRows.map(r => r.error_count || 0), itemStyle:{color:'#dc2626'}},
+      {name:'slow',type:'bar',stack:'count',barMaxWidth:28,data:timeBucketRows.map(r => r.slow_count || 0), itemStyle:{color:'#ea580c'}},
+      {name:'p99 access',type:'line',yAxisIndex:1,smooth:true,data:timeBucketRows.map(r => r.p99_access_ms || 0), itemStyle:{color:'#2563eb'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]}}
+    ]
+  }) : noDataOption('No time bucket data'));
   chart('flow-stage-chart', {
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.evidence)}`
@@ -1787,8 +1835,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       }))
     }]
   });
-  chart('worker-chart', workerRows.length ? axisBase('Top Workers by Errors', {xAxis:{type:'category', data:workerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{name:'errors',type:'bar',barMaxWidth:42,data:workerRows.slice(0,20).map(r => ({value:r[1].error_count || 0, itemStyle:{color:(r[1].error_count || 0) ? '#dc2626' : '#94a3b8'}})), label:{show:true, position:'top'}}]}) : noDataOption('No worker data'));
-  chart('ub-edge-chart', ubRows.length ? axisBase('UB Edge Count', {xAxis:{type:'category', data:ubRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:150, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{name:'UB edges',type:'bar',barMaxWidth:42,data:ubRows.slice(0,20).map(r => r[1].count || 0), itemStyle:{color:'#059669'}, label:{show:true, position:'top'}}]}) : noDataOption('No UB edge data'));
+  chart('worker-chart', workerRows.length ? axisBase('Top Workers by Trace/Error', {xAxis:{type:'category', data:workerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
+    {name:'traces',type:'bar',barMaxWidth:34,data:workerRows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
+    {name:'slow',type:'bar',barMaxWidth:34,data:workerRows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
+    {name:'errors',type:'bar',barMaxWidth:34,data:workerRows.slice(0,20).map(r => r[1].error_count || 0), itemStyle:{color:'#dc2626'}, label:{show:true, position:'top'}}
+  ]}) : noDataOption('No worker data'));
+  chart('ub-edge-chart', ubRows.length ? axisBase('UB Edge Count / Tail Latency', {xAxis:{type:'category', data:ubRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:150, overflow:'truncate'}}, yAxis:[{type:'value', name:'count'}, {type:'value', name:'ms'}], series:[
+    {name:'UB edges',type:'bar',barMaxWidth:34,data:ubRows.slice(0,20).map(r => r[1].count || 0), itemStyle:{color:'#059669'}, label:{show:true, position:'top'}},
+    {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:ubRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0), itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
+  ]}) : noDataOption('No UB edge data'));
   renderTracePage();
   renderSelectedTrace();
   document.getElementById('trace-data').textContent = JSON.stringify(traces, null, 2);

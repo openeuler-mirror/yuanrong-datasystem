@@ -227,10 +227,17 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"cohort-chart\"" in html
     assert "id=\"cohort-table\"" in html
     assert "id=\"latency-chart\"" in html
+    assert "id=\"time-breakdown-chart\"" in html
+    assert "Time Bucket Breakdown" in html
     assert "id=\"flow-stage-chart\"" in html
     assert "id=\"flow-stage-table\"" in html
     assert "Client→Entry→Meta/Data 流程" in html
     assert "id=\"worker-chart\"" in html
+    assert "id=\"worker-table-pager\"" in html
+    assert "id=\"ub-edge-table-pager\"" in html
+    assert "renderPagedTable" in html
+    assert "hotrow" in html
+    assert "warnrow" in html
     assert "class=\"controls pager\"" in html
     assert "搜索 trace / worker / 关键词" in html
     assert "id=\"worker-filter\"" in html
@@ -239,6 +246,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "每页" in html
     assert "download-selected-raw" in html
     assert "download-filtered-evidence" in html
+    assert "id=\"selected-stage-table\"" in html
+    assert "横向条形图按阶段耗时排序" in html
     assert "highlightLogLine" in html
     assert "function axisBase" in html
     assert "dataZoom" in html
