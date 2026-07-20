@@ -268,6 +268,7 @@ UB/URMA 相关报告要用时序口径：
 - 左侧固定目录：主章节 + 图/表子项，滚动时高亮当前章节。
 - 首屏：标题、输入范围、KPI cards、核心判断 panel。
 - 输入来源区：HTML 首屏必须渲染 `manifest.json` 中的 case、scenario、analysis_created_at、输入包、`inputs.md`、`raw/inputs` 和 `raw/extracted`，保证单独打开报告时也能知道这次 run 的来源。
+- 覆盖边界区：HTML 必须渲染 `dimensions.coverage.surfaces`，明确 client access、RPC slow、latencySummary、URMA elapsed、error 等观测面是 present 还是 missing。
 - 图表区：ECharts 图只回答规模/分布问题，caption 必须解释图意。
 - Trace 区：搜索、分类/worker 过滤、分页、选中 trace 联动 breakdown、摘要和全量日志。
 - 下载区：至少支持下载当前 trace 裸日志和当前过滤证据。

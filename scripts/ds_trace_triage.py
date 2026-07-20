@@ -1287,6 +1287,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel"><h3>运行与输入来源</h3><table id="run-metadata-table"></table></div>
         <div class="panel insight" id="report-insight"></div>
         <div class="panel"><h3>客户化诊断口径</h3><ul id="diagnosis-list"></ul></div>
+        <div class="panel"><h3>日志覆盖与缺失观测面</h3><table id="coverage-table"></table></div>
       </section>
       <section id="s2">
         <h2>2. 错误根因与分类分布</h2>
@@ -1444,6 +1445,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const classificationRows = Object.entries(dim.classifications || {}).sort((a,b) => b[1]-a[1]);
   const errorRows = Object.entries(dim.errors || {}).sort((a,b) => b[1]-a[1]);
   const cohortRows = Object.entries(dim.cohorts || {}).sort((a,b) => b[1].trace_count - a[1].trace_count);
+  const coverageRows = Object.entries(dim.coverage?.surfaces || {}).sort((a,b) => a[0].localeCompare(b[0]));
+  renderTable('coverage-table', ['log surface','events','status','reading'], coverageRows.map(([name,item]) => [
+    name,
+    item.events || 0,
+    item.status || 'missing',
+    item.status === 'present' ? '可作为 observed evidence 进入定界' : '观测盲区，不能把缺失当根因'
+  ]));
   renderTable('cohort-table', ['cohort','traces','classifications','errors','access'], cohortRows.map(([name,item]) => [
     name,
     item.trace_count,

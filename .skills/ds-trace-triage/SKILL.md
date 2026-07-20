@@ -158,7 +158,8 @@ For customer-facing reports, write like a diagnosis note:
   fixed left navigation, KPI cards, a core-judgment panel, ECharts with
   captions, cohort comparison, trace search/filter/pagination, selected-trace
   breakdown, highlighted full logs, run/input provenance from `manifest.json`,
-  and downloads for selected raw logs plus filtered evidence.
+  evidence coverage/missing-surface tables, and downloads for selected raw logs
+  plus filtered evidence.
 
 Machine-readable summaries should expose these buckets when the input contains
 them:
