@@ -48,7 +48,9 @@ namespace datasystem {
  *
  * Fields default to the centralized brpc policy:
  *   - POOLED connection (set unconditionally in the factory, not here)
- *   - circuit_breaker ON by default
+ *   - circuit_breaker gated by FLAGS_brpc_enable_circuit_breaker (default false).
+ *     When the flag is true, cfg.enable_circuit_breaker=true enables the breaker
+ *     per-channel; when false the breaker is globally off.
  *   - max_retry = 3 by default
  */
 struct BrpcChannelConfig {
