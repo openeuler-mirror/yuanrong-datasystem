@@ -1503,7 +1503,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <h2>3. 时延 Breakdown</h2>
         <div class="panel insight">Breakdown 不做简单相加：Client/access 是等待窗口；Entry/DataWorker 指标可能发生在 client deadline 之后。图中 p99/max 用于找尾部，p50 用于看普遍水平。</div>
         <div class="chart-grid">
-          <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 时延指标 Top 分布：latencySummary 原始 us 统一换算为 ms 后展示</div></div>
+          <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 Top 时延指标：图中使用短名称，完整字段见 tooltip 和表 3-1。</div></div>
           <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布：柱形图便于和表 3-2 一行对照</div></div>
         </div>
         <div class="panel"><div id="time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 时间桶时延分段：柱状图为同桶内 RPC/UB 子阶段 p99，折线为 client/access p99 上界；client access 不与子阶段相加。</div></div>
@@ -1581,6 +1581,29 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       out[key] = item[key] === undefined || item[key] === null ? null : Number((item[key] * scale).toFixed(3));
     });
     return out;
+  }
+  const metricLabelMap = {
+    'access':'Access',
+    'urma.total':'URMA total',
+    'urma.poll_jfc':'URMA poll',
+    'urma.notify':'URMA notify',
+    'urma.thread_sched':'URMA sched',
+    'latencySummary.client.process.get':'Client process GET',
+    'latencySummary.client.process.set':'Client process SET',
+    'latencySummary.client.rpc.get':'Client RPC GET',
+    'latencySummary.client.rpc.create':'Client RPC Create',
+    'latencySummary.client.rpc.publish':'Client RPC Publish',
+    'latencySummary.client.process.memory_copy':'Client memory copy',
+    'latencySummary.worker.process.get':'Worker process GET',
+    'latencySummary.worker.process.remote_get':'Worker RemoteGet process',
+    'latencySummary.worker.rpc.query_meta':'Worker QueryMeta RPC',
+    'latencySummary.worker.rpc.remote_get':'Worker RemoteGet RPC',
+    'latencySummary.worker.rpc.create_meta':'Worker CreateMeta RPC',
+    'latencySummary.worker.process.publish':'Worker Publish'
+  };
+  function metricLabel(name) {
+    if (metricLabelMap[name]) return metricLabelMap[name];
+    return String(name || '').replace(/^latencySummary\\./, '').replace(/^urma\\./, 'URMA ').replace(/[._]/g, ' ');
   }
   function renderTable(id, headers, rows, rowAttrs) {
     const table = document.getElementById(id);
@@ -1946,10 +1969,17 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     {name:'errors',type:'bar',barMaxWidth:42,data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0)), label:{show:true, position:'top'}, itemStyle:{color:'#dc2626'}}
   ]}) : noDataOption('No cohort data'));
   chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
-  chart('latency-chart', latencyChartRows.length ? axisBase('Latency Metrics Top12', {
-    grid:{left:230,right:50,top:72,bottom:46,containLabel:true},
+  chart('latency-chart', latencyChartRows.length ? axisBase('Top Latency Metrics', {
+    grid:{left:132,right:42,top:66,bottom:42,containLabel:true},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => {
+      const idx = ps[0]?.dataIndex ?? 0;
+      const rawName = latencyChartRows[idx]?.[0] || '';
+      const lines = [`${escapeHtml(metricLabel(rawName))}`, `<span class="muted">${escapeHtml(rawName)}</span>`];
+      ps.forEach(p => lines.push(`${escapeHtml(p.seriesName)}: ${p.value} ms`));
+      return lines.join('<br>');
+    }},
     xAxis:{type:'value', name:'ms'},
-    yAxis:{type:'category', data:latencyChartRows.map(r => r[0]), axisLabel:{width:210, overflow:'truncate'}},
+    yAxis:{type:'category', data:latencyChartRows.map(r => metricLabel(r[0])), axisLabel:{width:116, overflow:'truncate'}},
     series:['p50','p90','p99','max'].map(key => ({name:key,type:'bar',barMaxWidth:18,data:latencyChartRows.map(([, item]) => item[key] || 0), markLine:key === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]} : undefined}))
   }) : noDataOption('No latency metric data'));
   chart('flow-chart', flowRows.length ? axisBase('Flow Breakdown', {
