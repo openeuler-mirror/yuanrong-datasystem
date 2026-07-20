@@ -307,6 +307,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "点击 Trace 行联动，按阶段耗时排序，单位 ms。" in html
     assert "highlightLogLine" in html
     assert "renderTraceLogBlocks" in html
+    assert "traceLogBlockSummary" in html
+    assert "trace-log-summary" in html
+    assert "trace-log-focus" in html
+    assert "重点:" in html
     assert "class=\"trace-log-block" in html
     assert "Client 侧日志" in html
     assert "Entry Worker 日志" in html

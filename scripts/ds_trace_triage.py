@@ -1484,7 +1484,7 @@ th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:t
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
-.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500}
+.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
 code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 @media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards{grid-template-columns:1fr}}
 </style>"""
@@ -1808,6 +1808,36 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (/collected_worker_logs|DS_POSIX|worker_oc_service|BatchGetObjectRemote|Remote done|access\\.log/i.test(text)) return 'entry_worker';
     return 'context';
   }
+  function traceLogBlockSummary(group) {
+    const text = group.lines.join('\\n');
+    const focus = [];
+    const add = (label, tone='') => {
+      if (!focus.some(item => item.label === label)) focus.push({label, tone});
+    };
+    if (/ERROR|FATAL|Get error|Set error|status[:=]?\\s*1001/i.test(text)) add('error/status', 'hot');
+    if (/deadline exceeded|RPC timed out|\\btimeout\\b|20ms deadline/i.test(text)) add('deadline/timeout', 'hot');
+    if (/RPC_FRAMEWORK_SLOW|server_exec_us=|network_residual_us=|remote_processing_us=/i.test(text)) add('RPC slow', 'warn');
+    if (/latencySummary|client\\.rpc\\.|worker\\.rpc\\.|worker\\.process\\./i.test(text)) add('latencySummary');
+    if (/URMA_ELAPSED|URMA_WAIT_TIMEOUT|\\burma[_a-z]*\\b|\\bUB\\b/i.test(text)) add('URMA/UB', 'warn');
+    if (/RemotePull|Remote done|BatchGetObjectRemote/i.test(text)) add('RemoteGet');
+    if (/QueryMeta|GetObjMetaInfo|MasterOCService/i.test(text)) add('QueryMeta');
+    if (/CreateBuffer|Publish/i.test(text)) add('Write path');
+    const costs = [...text.matchAll(/(?:cost(?:Us)?|totalCost|framework_us|e2e_us|server_exec_us|network_residual_us|remote_processing_us)[:=]?\\s*([\\d.]+)\\s*(us|ms)?/gi)]
+      .map(match => {
+        const raw = Number(match[1]);
+        if (!Number.isFinite(raw)) return null;
+        const unit = (match[2] || '').toLowerCase();
+        return unit === 'us' || /(?:costUs|_us)/i.test(match[0]) ? raw / 1000 : raw;
+      })
+      .filter(value => value !== null);
+    if (costs.length) add(`max ${Math.max(...costs).toFixed(3)}ms`, Math.max(...costs) >= 20 ? 'hot' : 'warn');
+    const ips = [...new Set([...text.matchAll(/\\b\\d{1,3}(?:\\.\\d{1,3}){3}(?::\\d+)?\\b/g)].map(match => match[0]))].slice(0, 2);
+    ips.forEach(ip => add(ip));
+    if (!focus.length) add('按原始时间顺序看');
+    return '<span>重点:</span>' + focus.slice(0, 7).map(item =>
+      `<span class="trace-log-focus ${escapeHtml(item.tone)}">${escapeHtml(item.label)}</span>`
+    ).join('');
+  }
   function renderTraceLogBlocks(evidence) {
     const groups = [];
     (evidence || []).forEach(e => {
@@ -1822,7 +1852,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (!groups.length) return '<div class="muted">No selected trace log evidence.</div>';
     return groups.map(group =>
       `<div class="trace-log-block trace-log-${escapeHtml(group.component)}">` +
-      `<h4><span>${escapeHtml(componentLabels[group.component] || group.component)}</span><span class="trace-log-count">${group.lines.length} lines</span></h4>` +
+      `<h4><span class="trace-log-heading"><span>${escapeHtml(componentLabels[group.component] || group.component)}</span><span class="trace-log-summary">${traceLogBlockSummary(group)}</span></span><span class="trace-log-count">${group.lines.length} lines</span></h4>` +
       `<pre>${group.lines.map(highlightLogLine).join('\\n')}</pre></div>`
     ).join('');
   }
