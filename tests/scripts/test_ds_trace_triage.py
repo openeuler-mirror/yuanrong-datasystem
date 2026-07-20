@@ -269,6 +269,15 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "class=\"controls pager\"" in html
     assert "搜索 trace / worker / 关键词" in html
     assert "id=\"worker-filter\"" in html
+    assert "id=\"operation-filter\"" in html
+    assert "读写视角" in html
+    assert "全部读写" in html
+    assert "只看读取" in html
+    assert "只看写入" in html
+    assert "function traceOperation" in html
+    assert "function operationMatches" in html
+    assert "function stageMatchesOperation" in html
+    assert "function renderOperationViews" in html
     assert "id=\"trace-page-size\"" in html
     assert "全部 Worker" in html
     assert "每页" in html

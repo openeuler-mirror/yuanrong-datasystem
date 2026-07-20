@@ -1558,6 +1558,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s4">
         <h2>4. Worker / UB 分布</h2>
         <div id="flow-stage-chart" class="panel insight">原 Client→Entry→Meta/Data 流程现在按读写链路分开展示：读取关注 Client→Entry→Meta/Data→UB，写入关注 Client→Entry CreateBuffer/Publish→Meta Publish；两者不能混合相加。</div>
+        <div class="panel controls"><label>读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><span class="muted">联动 Trace、Breakdown、流程 Edge 与 UB Edge。</span></div>
         <div class="chart-grid">
           <div class="panel"><h3>图 4-0a 读取流程：Client→Entry→Meta/Data→UB</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">读取路径重点看 Entry→Data RPC 与 DataWorker UB/URMA 是否解释尾部。</div></div>
           <div class="panel"><h3>图 4-0b 写入流程：Client→Entry CreateBuffer/Publish→Meta Publish</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">写入路径重点区分 createbuffer、client publish、entry/meta publish。</div></div>
@@ -1579,7 +1580,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s5">
         <h2>5. Trace 查看</h2>
         <div class="panel">
-        <div class="controls"><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><button id="reset-filter">清空</button></div>
+        <div class="controls"><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">读写视角使用第 4 节过滤器</span><button id="reset-filter">清空</button></div>
         <div class="controls pager">
           <label>每页 <select id="trace-page-size"><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="9999">全部</option></select> 条</label>
           <button class="primary" id="prev-page">上一页</button>
@@ -1618,6 +1619,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   let currentPage = 0;
   let selectedTraceId = traceRows[0]?.[0] || null;
   let pageSize = 8;
+  let activeOperation = '';
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   }
@@ -1723,6 +1725,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function stageDetailText(stage) {
     const display = stageDisplayName(stage);
     return display === stage ? display : `${display} (${stage})`;
+  }
+  function traceOperation(item) {
+    const stageNames = (item.stage_breakdown || []).map(stage => stage.stage || '');
+    const flowNames = Object.keys(item.flows || {});
+    const hasRead = stageNames.some(name => name.startsWith('read.')) || flowNames.some(name => name.includes('GET'));
+    const hasWrite = stageNames.some(name => name.startsWith('write.')) || flowNames.some(name => /(SET|CREATE|PUBLISH)/.test(name));
+    return hasRead && hasWrite ? 'mixed' : hasRead ? 'read' : hasWrite ? 'write' : 'unknown';
+  }
+  function operationMatches(item) {
+    if (!activeOperation) return true;
+    const op = traceOperation(item);
+    return op === activeOperation || op === 'mixed';
+  }
+  function stageMatchesOperation(stageName) {
+    return !activeOperation || String(stageName || '').startsWith(`${activeOperation}.`);
   }
   const palette = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
   function axisBase(title, extra) {
@@ -1914,10 +1931,23 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     .map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0]);
   renderPagedTable('worker-table', 'worker-table-pager', ['worker','roles','lines','traces','slow','errors'], workerTableRows,
     row => (Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
-  const ubTableRows = ubRows
-    .map(([edge,item]) => [edge, item.count, item.latency_ms?.p99 || '', item.latency_ms?.max || '', pctText(item.latency_ms)]);
-  renderPagedTable('ub-edge-table', 'ub-edge-table-pager', ['edge','count','p99 ms','max ms','latency'], ubTableRows,
-    row => `class="${severityClass(Math.max(Number(row[2]) || 0, Number(row[3]) || 0))}"`, 5);
+  function renderOperationViews() {
+    const showRead = activeOperation !== 'write';
+    const showWrite = activeOperation !== 'read';
+    renderFlowStageTable('read-flow-stage-table', showRead ? readFlowStages : {edges: []});
+    renderFlowStageTable('write-flow-stage-table', showWrite ? writeFlowStages : {edges: []});
+    renderFlowGraph('read-flow-stage-chart', showRead ? readFlowStages : {nodes: [], edges: []}, 'Read Flow');
+    renderFlowGraph('write-flow-stage-chart', showWrite ? writeFlowStages : {nodes: [], edges: []}, 'Write Flow');
+    const visibleUbRows = activeOperation === 'write' ? [] : ubRows;
+    const ubTableRows = visibleUbRows
+      .map(([edge,item]) => [edge, item.count, item.latency_ms?.p99 || '', item.latency_ms?.max || '', pctText(item.latency_ms)]);
+    renderPagedTable('ub-edge-table', 'ub-edge-table-pager', ['edge','count','p99 ms','max ms','latency'], ubTableRows,
+      row => `class="${severityClass(Math.max(Number(row[2]) || 0, Number(row[3]) || 0))}"`, 5);
+    chart('ub-edge-chart', visibleUbRows.length ? axisBase('UB Edge Count / Tail Latency', {xAxis:{type:'category', data:visibleUbRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:150, overflow:'truncate'}}, yAxis:[{type:'value', name:'count'}, {type:'value', name:'ms'}], series:[
+      {name:'UB edges',type:'bar',barMaxWidth:34,data:visibleUbRows.slice(0,20).map(r => r[1].count || 0), itemStyle:{color:'#059669'}, label:{show:true, position:'top'}},
+      {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:visibleUbRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0), itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
+    ]}) : noDataOption(activeOperation === 'write' ? 'Write flow has no UB read edge data' : 'No UB edge data'));
+  }
   function applyTraceFilters() {
     const query = document.getElementById('trace-search').value.trim().toLowerCase();
     const cls = document.getElementById('class-filter').value;
@@ -1932,6 +1962,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       ].join(' ').toLowerCase();
       return (!cls || item.classification === cls)
         && (!worker || Object.prototype.hasOwnProperty.call(item.workers || {}, worker))
+        && operationMatches(item)
         && (!query || haystack.includes(query));
     });
     if (!filteredTraceRows.some(([traceId]) => traceId === selectedTraceId)) {
@@ -1971,6 +2002,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     ]);
     const stageRows = (item.stage_breakdown || [])
       .filter(s => s.duration_ms !== undefined)
+      .filter(s => stageMatchesOperation(s.stage))
       .slice()
       .sort((a,b) => (a.duration_ms || 0) - (b.duration_ms || 0));
     renderTable('selected-stage-table', ['研发流程','duration ms','confidence','source'], stageRows.map(s => [
@@ -2004,6 +2036,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   document.getElementById('prev-page').addEventListener('click', () => { currentPage -= 1; renderTracePage(); });
   document.getElementById('next-page').addEventListener('click', () => { currentPage += 1; renderTracePage(); });
   document.getElementById('trace-search').addEventListener('input', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('operation-filter').addEventListener('change', event => {
+    activeOperation = event.target.value;
+    currentPage = 0;
+    renderOperationViews();
+    renderTracePage();
+    renderSelectedTrace();
+  });
   document.getElementById('class-filter').innerHTML = '<option value="">全部分类</option>' +
     classificationRows.map(([name]) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   document.getElementById('class-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
@@ -2021,9 +2060,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     document.getElementById('trace-search').value = '';
     document.getElementById('class-filter').value = '';
     document.getElementById('worker-filter').value = '';
+    document.getElementById('operation-filter').value = '';
     document.getElementById('trace-page-size').value = '8';
+    activeOperation = '';
     pageSize = 8;
     currentPage = 0;
+    renderOperationViews();
     renderTracePage();
     renderSelectedTrace();
   });
@@ -2155,17 +2197,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }]
   });
   }
-  renderFlowGraph('read-flow-stage-chart', readFlowStages, 'Read Flow');
-  renderFlowGraph('write-flow-stage-chart', writeFlowStages, 'Write Flow');
   chart('worker-chart', workerRows.length ? axisBase('Top Workers by Trace/Error', {xAxis:{type:'category', data:workerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
     {name:'traces',type:'bar',barMaxWidth:34,data:workerRows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
     {name:'slow',type:'bar',barMaxWidth:34,data:workerRows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
     {name:'errors',type:'bar',barMaxWidth:34,data:workerRows.slice(0,20).map(r => r[1].error_count || 0), itemStyle:{color:'#dc2626'}, label:{show:true, position:'top'}}
   ]}) : noDataOption('No worker data'));
-  chart('ub-edge-chart', ubRows.length ? axisBase('UB Edge Count / Tail Latency', {xAxis:{type:'category', data:ubRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:150, overflow:'truncate'}}, yAxis:[{type:'value', name:'count'}, {type:'value', name:'ms'}], series:[
-    {name:'UB edges',type:'bar',barMaxWidth:34,data:ubRows.slice(0,20).map(r => r[1].count || 0), itemStyle:{color:'#059669'}, label:{show:true, position:'top'}},
-    {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:ubRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0), itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
-  ]}) : noDataOption('No UB edge data'));
+  renderOperationViews();
   renderTracePage();
   renderSelectedTrace();
   document.getElementById('trace-data').textContent = JSON.stringify(traces, null, 2);
