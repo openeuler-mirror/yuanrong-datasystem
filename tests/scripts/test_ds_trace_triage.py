@@ -85,6 +85,12 @@ def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
     assert any("data worker UB write" in item["flow_stage"] for item in source_appendix)
     assert any("entry worker -> meta worker publish" in item["flow_stage"] for item in source_appendix)
     flow_stages = report["dimensions"]["flow_stages"]
+    assert "read" in flow_stages
+    assert "write" in flow_stages
+    assert any(edge["name"] == "read: entry worker -> data worker"
+               for edge in flow_stages["read"]["edges"])
+    assert any(edge["name"] == "write: entry worker -> meta worker publish"
+               for edge in flow_stages["write"]["edges"])
     edge_names = {edge["name"] for edge in flow_stages["edges"]}
     assert "client -> entry worker" in edge_names
     assert "entry worker -> meta worker" in edge_names
@@ -243,7 +249,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "stageDetailText" in html
     assert "研发流程" in html
     assert "id=\"flow-stage-chart\"" in html
+    assert "id=\"read-flow-stage-chart\"" in html
+    assert "id=\"write-flow-stage-chart\"" in html
     assert "id=\"flow-stage-table\"" in html
+    assert "id=\"read-flow-stage-table\"" in html
+    assert "id=\"write-flow-stage-table\"" in html
+    assert "读取流程：Client→Entry→Meta/Data→UB" in html
+    assert "写入流程：Client→Entry CreateBuffer/Publish→Meta Publish" in html
     assert "Client→Entry→Meta/Data 流程" in html
     assert "edge.summary" in html
     assert "edge.reason" in html

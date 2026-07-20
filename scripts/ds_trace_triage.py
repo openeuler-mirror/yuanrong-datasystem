@@ -1056,6 +1056,13 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
     ub_edges = ub_summary.get("edges", {})
     ub_transfer_count = ub_summary.get("transfer_path", {}).get("UB", 0)
     rollups = {
+        "read_client_entry": _flow_stage_rollup(trace_rows, {"read.client_to_entry_worker"}),
+        "write_client_entry": _flow_stage_rollup(trace_rows, {
+            "write.client_to_entry_createbuffer",
+            "write.client_to_entry_publish",
+        }),
+        "read_entry_meta": _flow_stage_rollup(trace_rows, {"read.entry_to_meta_worker"}),
+        "write_entry_meta": _flow_stage_rollup(trace_rows, {"write.entry_to_meta_publish"}),
         "client_entry": _flow_stage_rollup(trace_rows, {
             "read.client_to_entry_worker",
             "write.client_to_entry_createbuffer",
@@ -1075,33 +1082,33 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
         {"id": "data", "label": "Data Worker", "role": "data_worker", "top_workers": rollups["data_ub"].get("top_workers", [])[:2], "top_ips": rollups["data_ub"].get("top_ips", [])[:2]},
         {"id": "ub", "label": "UB/URMA", "role": "transport"},
     ]
-    edges = [
+    read_edges = [
         {
-            "name": "client -> entry worker",
+            "name": "read: client -> entry worker",
             "source": "client",
             "target": "entry",
-            "operation": "read/write request",
-            "evidence": f"{surface_status('client_access')['events']} access events, {read_count} read flows, {write_count} write flows",
+            "operation": "Get client RPC",
+            "evidence": f"{surface_status('client_access')['events']} access events, {read_count} read flows",
             "status": surface_status("client_access")["status"],
-            "summary": _flow_edge_summary(rollups["client_entry"], "client access upper bound"),
-            "rollup": rollups["client_entry"],
+            "summary": _flow_edge_summary(rollups["read_client_entry"], "client read access upper bound"),
+            "rollup": rollups["read_client_entry"],
             "reason": "客户侧端到端窗口，作为上界，不和内部 RPC/UB 子阶段相加。",
             "report_reading": "客户看到的耗时和错误起点，先用于表象定界。",
         },
         {
-            "name": "entry worker -> meta worker",
+            "name": "read: entry worker -> meta worker",
             "source": "entry",
             "target": "meta",
             "operation": "GetObjMetaInfo / QueryMeta",
             "evidence": f"{surface_status('latency_summary')['events']} latencySummary events",
             "status": surface_status("latency_summary")["status"],
-            "summary": _flow_edge_summary(rollups["entry_meta"], "QueryMeta/CreateMeta evidence"),
-            "rollup": rollups["entry_meta"],
+            "summary": _flow_edge_summary(rollups["read_entry_meta"], "QueryMeta evidence"),
+            "rollup": rollups["read_entry_meta"],
             "reason": "元数据 RPC 阶段；若 p99/max 高，优先复核 QueryMeta/CreateMeta slow log 和 MetaWorker。",
             "report_reading": "只有出现 QueryMeta/GetObjMetaInfo 耗时或 RPC slow 时才归因到元数据路径。",
         },
         {
-            "name": "entry worker -> data worker",
+            "name": "read: entry worker -> data worker",
             "source": "entry",
             "target": "data",
             "operation": "RemotePull / BatchGetObjectRemote",
@@ -1113,7 +1120,7 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
             "report_reading": "读取主路径的远端数据获取窗口，用来解释 client deadline 后 worker 继续完成。",
         },
         {
-            "name": "data worker -> entry worker UB write",
+            "name": "read: data worker -> entry worker UB write",
             "source": "data",
             "target": "ub",
             "operation": "UB write completion",
@@ -1125,7 +1132,7 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
             "report_reading": "DataWorker 侧 payload write/wait/notify 时序，不要只凭 total 单字段下根因。",
         },
         {
-            "name": "UB write -> entry worker",
+            "name": "read: UB write -> entry worker",
             "source": "ub",
             "target": "entry",
             "operation": "completion visible to Entry Worker",
@@ -1136,20 +1143,56 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
             "reason": "用 UB completion 与 EntryWorker RemotePull finish 对齐，确认时间差是否在传输后可见阶段。",
             "report_reading": "用于关联 DataWorker completion 与 EntryWorker RemotePull finish 的时间差。",
         },
+    ]
+    write_edges = [
         {
-            "name": "entry worker -> meta worker publish",
+            "name": "write: client -> entry worker createbuffer",
+            "source": "client",
+            "target": "entry",
+            "operation": "CreateBuffer RPC",
+            "evidence": f"{write_count} write flows, {surface_status('latency_summary')['events']} latencySummary events",
+            "status": "present" if write_count or surface_status("latency_summary")["status"] == "present" else "missing",
+            "summary": _flow_edge_summary(rollups["write_client_entry"], "CreateBuffer/Publish client RPC evidence"),
+            "rollup": rollups["write_client_entry"],
+            "reason": "写路径客户侧 createbuffer/publish 请求窗口，需要和 Entry→Meta publish 区分。",
+            "report_reading": "写流程先拆 client createbuffer/publish，再看 entry/meta 发布。",
+        },
+        {
+            "name": "write: client -> entry worker publish",
+            "source": "client",
+            "target": "entry",
+            "operation": "Publish RPC",
+            "evidence": f"{write_count} write flows, {surface_status('latency_summary')['events']} latencySummary events",
+            "status": "present" if write_count or surface_status("latency_summary")["status"] == "present" else "missing",
+            "summary": _flow_edge_summary(rollups["write_client_entry"], "client publish evidence"),
+            "rollup": rollups["write_client_entry"],
+            "reason": "写路径 publish 从 Client 到 EntryWorker；慢时延需和本地 memory copy 及 meta publish 分开看。",
+            "report_reading": "client publish 是写路径入口，不代表 UB 读传输。",
+        },
+        {
+            "name": "write: entry worker -> meta worker publish",
             "source": "entry",
             "target": "meta",
             "operation": "CreateBuffer / Publish",
             "evidence": f"{write_count} write flows, {surface_status('latency_summary')['events']} latencySummary events",
             "status": "present" if write_count or surface_status("latency_summary")["status"] == "present" else "missing",
-            "summary": _flow_edge_summary(rollups["entry_meta"], "publish metadata evidence"),
-            "rollup": rollups["entry_meta"],
+            "summary": _flow_edge_summary(rollups["write_entry_meta"], "publish metadata evidence"),
+            "rollup": rollups["write_entry_meta"],
             "reason": "写路径元数据发布阶段；需要和 createbuffer/client publish 区分。",
             "report_reading": "写流程需要拆开 createbuffer、client publish、entry publish、meta publish。",
         },
     ]
-    return {"nodes": nodes, "edges": edges}
+    compat_edges = []
+    for edge in read_edges + write_edges:
+        old_edge = dict(edge)
+        old_edge["name"] = old_edge["name"].replace("read: ", "").replace("write: ", "")
+        compat_edges.append(old_edge)
+    return {
+        "nodes": nodes,
+        "edges": compat_edges,
+        "read": {"nodes": nodes, "edges": read_edges},
+        "write": {"nodes": nodes[:3], "edges": write_edges},
+    }
 
 
 def _build_time_buckets(trace_rows, bucket_ms):
@@ -1515,8 +1558,16 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s4">
         <h2>4. Worker / UB 分布</h2>
-        <div class="panel"><h3>图 4-0 Client→Entry→Meta/Data 流程</h3><div id="flow-stage-chart" class="chart"></div><div class="caption">把读取与写入关键链路拆成客户可理解的阶段，并标注当前日志是否有证据覆盖。</div></div>
-        <div class="panel"><h3>表 4-0 流程阶段证据</h3><table id="flow-stage-table"></table></div>
+        <div id="flow-stage-chart" class="panel insight">原 Client→Entry→Meta/Data 流程现在按读写链路分开展示：读取关注 Client→Entry→Meta/Data→UB，写入关注 Client→Entry CreateBuffer/Publish→Meta Publish；两者不能混合相加。</div>
+        <div class="chart-grid">
+          <div class="panel"><h3>图 4-0a 读取流程：Client→Entry→Meta/Data→UB</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">读取路径重点看 Entry→Data RPC 与 DataWorker UB/URMA 是否解释尾部。</div></div>
+          <div class="panel"><h3>图 4-0b 写入流程：Client→Entry CreateBuffer/Publish→Meta Publish</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">写入路径重点区分 createbuffer、client publish、entry/meta publish。</div></div>
+        </div>
+        <div class="compare2">
+          <div class="panel"><h3>表 4-0a 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
+          <div class="panel"><h3>表 4-0b 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
+        </div>
+        <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>
         <div class="chart-grid">
           <div class="panel"><div id="worker-chart" class="chart"></div><div class="caption">图 4-1 Worker 错误聚合</div></div>
           <div class="panel"><div id="ub-edge-chart" class="chart"></div><div class="caption">图 4-2 UB edge 次数</div></div>
@@ -1759,7 +1810,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const diagnosis = dim.diagnosis || {};
   const recommendations = dim.recommendations || [];
   const sourceAppendix = dim.source_appendix || [];
-  const flowStages = dim.flow_stages || {nodes: [], edges: []};
+  const flowStages = dim.flow_stages || {nodes: [], edges: [], read:{nodes: [], edges: []}, write:{nodes: [], edges: []}};
+  const readFlowStages = flowStages.read || {nodes: flowStages.nodes || [], edges: []};
+  const writeFlowStages = flowStages.write || {nodes: flowStages.nodes || [], edges: []};
   document.getElementById('log-highlight-legend').innerHTML = [
     ['log-error','ERROR/status'],
     ['log-deadline','deadline/timeout'],
@@ -1824,14 +1877,19 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     item.validation,
     item.report_reading
   ]));
-  renderTable('flow-stage-table', ['stage','summary','operation','IPs','reason','status'], (flowStages.edges || []).map(edge => [
-    edge.name,
-    edge.summary || '',
-    edge.operation,
-    (edge.rollup?.top_ips || []).join(', '),
-    edge.reason || edge.report_reading,
-    edge.status
-  ]));
+  function renderFlowStageTable(id, graph) {
+    renderTable(id, ['stage','summary','operation','IPs','reason','status'], (graph.edges || []).map(edge => [
+      edge.name,
+      edge.summary || '',
+      edge.operation,
+      (edge.rollup?.top_ips || []).join(', '),
+      edge.reason || edge.report_reading,
+      edge.status
+    ]));
+  }
+  renderFlowStageTable('flow-stage-table', flowStages);
+  renderFlowStageTable('read-flow-stage-table', readFlowStages);
+  renderFlowStageTable('write-flow-stage-table', writeFlowStages);
   renderTable('error-table', ['error','count'], errorRows);
   const latencyRowsForTable = [
     ['access', pctText(dim.latency_ms?.access)],
@@ -2059,7 +2117,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       {name:'client/access p99 upper bound',type:'line',smooth:true,data:timeBucketRows.map(r => r.p99_access_ms || 0), itemStyle:{color:'#2563eb'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]}}
     ]
   }) : noDataOption('No time bucket stage data'));
-  chart('flow-stage-chart', {
+  function renderFlowGraph(id, graph, title) {
+    chart(id, {
+    title:{text:title, left:'center', top:4, textStyle:{fontSize:14}},
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
       : `${escapeHtml(p.data.label || p.data.name)}<br>${escapeHtml((p.data.top_ips || []).join(', '))}`},
@@ -2072,7 +2132,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       label:{show:true},
       edgeLabel:{show:true, formatter:p => p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:11, width:120, overflow:'break'},
       lineStyle:{width:2, color:'#64748b', curveness:.08},
-      data:(flowStages.nodes || []).map((node, idx) => ({
+      data:(graph.nodes || []).map((node, idx) => ({
         name:node.id,
         label:[node.label, ...(node.top_workers || []), ...(node.top_ips || [])].slice(0, 3).join('\\n'),
         top_ips:node.top_ips || [],
@@ -2081,7 +2141,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         symbolSize:72,
         itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
       })),
-      links:(flowStages.edges || []).map(edge => ({
+      links:(graph.edges || []).map(edge => ({
         source:edge.source,
         target:edge.target,
         name:edge.name,
@@ -2095,6 +2155,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       }))
     }]
   });
+  }
+  renderFlowGraph('read-flow-stage-chart', readFlowStages, 'Read Flow');
+  renderFlowGraph('write-flow-stage-chart', writeFlowStages, 'Write Flow');
   chart('worker-chart', workerRows.length ? axisBase('Top Workers by Trace/Error', {xAxis:{type:'category', data:workerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
     {name:'traces',type:'bar',barMaxWidth:34,data:workerRows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
     {name:'slow',type:'bar',barMaxWidth:34,data:workerRows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
