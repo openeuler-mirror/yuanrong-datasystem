@@ -1286,7 +1286,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div id="summary" class="cards"></div>
         <div class="panel"><h3>运行与输入来源</h3><table id="run-metadata-table"></table></div>
         <div class="panel insight" id="report-insight"></div>
-        <div class="panel"><h3>客户化诊断口径</h3><ul id="diagnosis-list"></ul></div>
+        <div class="panel"><h3>客户化诊断口径</h3><ul id="diagnosis-list"></ul><div class="controls"><button class="primary" id="download-report-summary">下载分析摘要</button></div></div>
         <div class="panel"><h3>日志覆盖与缺失观测面</h3><table id="coverage-table"></table></div>
       </section>
       <section id="s2">
@@ -1596,6 +1596,33 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       ...(item.evidence || []).map(e => `${e.member}:${e.line} ${e.text}`)
     ].join('\\n')).join('\\n\\n');
     downloadText('filtered-trace-evidence.log', rows);
+  });
+  document.getElementById('download-report-summary').addEventListener('click', () => {
+    const lines = [
+      '# DataSystem Trace Report Summary',
+      '',
+      `- case_name: ${manifest.case_name || ''}`,
+      `- scenario: ${manifest.scenario || ''}`,
+      `- code_ref: ${report.code_ref || ''}`,
+      `- trace_count: ${report.trace_count || 0}`,
+      '',
+      '## Diagnosis',
+      ...diagnosisRows.map(item => `- ${item.label}: ${item.text}`),
+      '',
+      '## Evidence Coverage',
+      ...coverageRows.map(([name,item]) => `- ${name}: ${item.status || 'missing'} (${item.events || 0} events)`),
+      '',
+      '## Recommendations',
+      ...recommendations.map(item => `- [${item.category}] ${item.title}: ${item.detail}`),
+      '',
+      '## Source Mapping',
+      ...sourceAppendix.map(item => `- ${item.log_surface} | ${item.flow_stage} | ${item.source_hint}`),
+      '',
+      '## Inputs',
+      ...(manifest.inputs || []).map(item => `- ${item.path} (${item.size || 0} bytes)`),
+      '',
+    ];
+    downloadText('trace-report-summary.md', lines.join('\\n'));
   });
   const navLinks = [...document.querySelectorAll('#nav a')];
   window.addEventListener('scroll', () => {

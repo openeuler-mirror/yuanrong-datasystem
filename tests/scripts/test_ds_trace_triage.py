@@ -208,6 +208,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "日志覆盖与缺失观测面" in html
     assert "client_access" in html
     assert "latency_summary" in html
+    assert "id=\"download-report-summary\"" in html
+    assert "下载分析摘要" in html
+    assert "trace-report-summary.md" in html
     assert "id=\"recommendation-table\"" in html
     assert "id=\"source-appendix-table\"" in html
     assert "代码与字段映射" in html

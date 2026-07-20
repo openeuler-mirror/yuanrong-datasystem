@@ -272,6 +272,7 @@ UB/URMA 相关报告要用时序口径：
 - 图表区：ECharts 图只回答规模/分布问题，caption 必须解释图意。
 - Trace 区：搜索、分类/worker 过滤、分页、选中 trace 联动 breakdown、摘要和全量日志。
 - 下载区：至少支持下载当前 trace 裸日志和当前过滤证据。
+- 摘要导出区：支持下载本次分析 Markdown 摘要，包含输入来源、诊断口径、coverage、recommendations 和源码字段映射。
 - 日志区：ERROR、deadline、latencySummary、RemotePull、BatchGetObjectRemote、URMA、>=阈值耗时字段要高亮。
 - 对比区：多个输入包按 cohort 展示 trace_count、errors、classifications、access latency 和 top workers。
 - 流程图区：`summary.json` 必须输出 `dimensions.flow_stages`，用节点/边表达 Client、EntryWorker、MetaWorker、DataWorker、UB/URMA，并为每条边标注证据覆盖状态。

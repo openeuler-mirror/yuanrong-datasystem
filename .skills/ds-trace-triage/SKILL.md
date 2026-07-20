@@ -159,7 +159,7 @@ For customer-facing reports, write like a diagnosis note:
   captions, cohort comparison, trace search/filter/pagination, selected-trace
   breakdown, highlighted full logs, run/input provenance from `manifest.json`,
   evidence coverage/missing-surface tables, and downloads for selected raw logs
-  plus filtered evidence.
+  plus filtered evidence and report-summary Markdown.
 
 Machine-readable summaries should expose these buckets when the input contains
 them:
