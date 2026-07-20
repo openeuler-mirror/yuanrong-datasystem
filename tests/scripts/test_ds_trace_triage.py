@@ -1,4 +1,5 @@
 import importlib.util
+import gzip
 import io
 import json
 import tarfile
@@ -770,6 +771,132 @@ def test_trace_analyzer_composes_object_boundaries_for_accumulation_and_dimensio
     assert hasattr(analyzer.dimension_builder, "build")
     assert report["trace_count"] == 1
     assert report["dimensions"]["flow"]["DS_KV_CLIENT_GET"] == 1
+
+
+def test_trace_analyzer_uses_injected_accumulator_and_dimension_builder(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820001"
+    log = tmp_path / "inject.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T13:26:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024",
+                "no trace id here",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class RecordingAccumulator:
+        def __init__(self, paths):
+            self.paths = list(paths)
+            self.ingested = []
+
+        def ingest(self, parsed, line):
+            self.ingested.append((parsed["trace_id"], line))
+
+        def finish(self):
+            return {"paths": self.paths, "ingested": self.ingested}
+
+    class RecordingDimensionBuilder:
+        def __init__(self):
+            self.snapshot = None
+
+        def build(self, snapshot, paths, code_ref="unknown"):
+            self.snapshot = snapshot
+            return {
+                "code_ref": code_ref,
+                "inputs": list(paths),
+                "trace_count": len(snapshot["ingested"]),
+                "traces": [trace_id for trace_id, _ in snapshot["ingested"]],
+            }
+
+    mod = _load_module()
+    builder = RecordingDimensionBuilder()
+    analyzer = mod.TraceAnalyzer(accumulator_cls=RecordingAccumulator, dimension_builder=builder)
+
+    report = analyzer.analyze([str(log)], code_ref="unit-test")
+
+    assert isinstance(analyzer.accumulator, RecordingAccumulator)
+    assert report["trace_count"] == 1
+    assert report["traces"] == [trace_id]
+    assert builder.snapshot["paths"] == [str(log)]
+
+
+def test_trace_input_reader_reads_plain_gzip_and_skips_invalid_binary(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820002"
+    gz = tmp_path / "reader.log.gz"
+    with gzip.open(gz, "wt", encoding="utf-8") as f:
+        f.write(
+            f"2026-07-20T13:27:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_id} | gzip line\n"
+        )
+    invalid = tmp_path / "invalid.gz"
+    invalid.write_bytes(b"not-a-valid-gzip")
+
+    mod = _load_module()
+    rows = list(mod.TraceInputReader().iter_lines([str(gz), str(invalid)]))
+
+    assert rows == [(str(gz), gz.name, 1, rows[0][3])]
+    assert trace_id in rows[0][3]
+
+
+def test_trace_dimension_builder_emits_empty_report_contract():
+    mod = _load_module()
+    snapshot = mod.TraceAccumulator([]).finish()
+
+    report = mod.TraceDimensionBuilder().build(snapshot, [], code_ref="empty-ref")
+
+    assert report["code_ref"] == "empty-ref"
+    assert report["trace_count"] == 0
+    assert report["dimensions"]["time"] == {"first_ts": None, "last_ts": None}
+    assert report["dimensions"]["coverage"]["surfaces"]["client_access"]["status"] == "missing"
+    assert report["dimensions"]["ub_summary"] == {"transfer_path": {}, "edges": {}}
+
+
+def test_trace_run_store_prepares_parse_run_cache_and_raw_inputs(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820003"
+    bundle = tmp_path / "store-input.tar.gz"
+    _write_tar_gz(
+        bundle,
+        {"case/worker.log": f"2026-07-20T13:28:00.000000 | INFO | worker | 10.0.0.1 | 1 | {trace_id} | store\n"},
+    )
+
+    mod = _load_module()
+    store = mod.TraceRunStore()
+    prepared = store.prepare_parse_run([str(bundle)], tmp_path / "runs", "store-case", "scenario", "ref")
+
+    assert prepared["cached"] is False
+    assert (prepared["run_dir"] / "raw" / "inputs" / bundle.name).exists()
+    assert (prepared["run_dir"] / "raw" / "extracted" / bundle.name / "case" / "worker.log").exists()
+    store.write_parse_outputs(
+        prepared["run_dir"],
+        {"dimensions": {"time": {"first_ts": None, "last_ts": None}}, "traces": {}},
+        [],
+        "store-case",
+        "scenario",
+        "ref",
+        prepared["created_at"],
+        prepared["cache_key"],
+        prepared["identities"],
+    )
+
+    cached = store.prepare_parse_run([str(bundle)], tmp_path / "runs", "store-case", "scenario", "ref")
+
+    assert cached == {"run_dir": prepared["run_dir"], "cached": True}
+    manifest = json.loads((prepared["run_dir"] / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["inputs"][0]["members"] == ["case/worker.log"]
+
+
+def test_trace_site_publisher_size_guard_reports_ok_and_too_large(tmp_path):
+    report = tmp_path / "report.site.html"
+    report.write_text("abc", encoding="utf-8")
+
+    mod = _load_module()
+    publisher = mod.TraceSitePublisher()
+
+    assert publisher.size_guard(report, max_bytes=3)["size_status"] == "ok"
+    too_large = publisher.size_guard(report, max_bytes=2)
+    assert too_large["size_status"] == "too_large"
+    assert too_large["source_size_bytes"] == 3
 
 
 def test_parser_extension_rules_add_new_errors_and_metrics(tmp_path):

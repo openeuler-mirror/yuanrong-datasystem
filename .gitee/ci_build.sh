@@ -29,6 +29,7 @@ function run_compile() {
     git diff HEAD^ > ${attach_workspace}/diff.txt
 
     python3 -m py_compile scripts/ds_trace_triage.py tests/scripts/test_ds_trace_triage.py
+    python3 -m pytest -s -q tests/scripts/test_ds_trace_triage.py
     python3 scripts/ds_trace_triage.py verify
 
     label=""
