@@ -670,6 +670,26 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
 
     time_buckets = _build_time_buckets(trace_rows, 1000)
     cohorts = _build_cohorts(trace_rows)
+    coverage = {
+        "surfaces": {
+            "client_access": {"events": surface_counts["client_access"],
+                              "status": _surface_status(surface_counts["client_access"])},
+            "rpc_slow": {"events": surface_counts["rpc_slow"],
+                         "status": _surface_status(surface_counts["rpc_slow"])},
+            "latency_summary": {"events": surface_counts["latency_summary"],
+                                "status": _surface_status(surface_counts["latency_summary"])},
+            "urma_elapsed": {"events": surface_counts["urma_elapsed"],
+                             "status": _surface_status(surface_counts["urma_elapsed"])},
+            "error": {"events": surface_counts["error"], "status": _surface_status(surface_counts["error"])},
+        }
+    }
+    diagnosis = _build_diagnosis(
+        errors=errors,
+        classifications=classifications,
+        access_latencies=access_latencies,
+        coverage=coverage,
+        cohorts=cohorts,
+    )
 
     return {
         "schema_version": 1,
@@ -686,19 +706,8 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
             "worker_summary": worker_summary,
             "cohorts": cohorts,
             "worker_edges": worker_edges,
-            "coverage": {
-                "surfaces": {
-                    "client_access": {"events": surface_counts["client_access"],
-                                      "status": _surface_status(surface_counts["client_access"])},
-                    "rpc_slow": {"events": surface_counts["rpc_slow"],
-                                 "status": _surface_status(surface_counts["rpc_slow"])},
-                    "latency_summary": {"events": surface_counts["latency_summary"],
-                                        "status": _surface_status(surface_counts["latency_summary"])},
-                    "urma_elapsed": {"events": surface_counts["urma_elapsed"],
-                                     "status": _surface_status(surface_counts["urma_elapsed"])},
-                    "error": {"events": surface_counts["error"], "status": _surface_status(surface_counts["error"])},
-                }
-            },
+            "coverage": coverage,
+            "diagnosis": diagnosis,
             "flow": dict(flow_counts),
             "latency_ms": {"access": _percentiles(access_latencies)},
             "breakdown_ms": breakdown,
@@ -757,6 +766,47 @@ def _build_cohorts(trace_rows):
             "top_workers": {k: v for k, v in cohort["workers"].most_common(10)},
         }
     return rows
+
+
+def _build_diagnosis(errors, classifications, access_latencies, coverage, cohorts):
+    top_error, top_error_count = (errors.most_common(1)[0] if errors else ("none", 0))
+    top_class, top_class_count = (classifications.most_common(1)[0] if classifications else ("unknown", 0))
+    access = _percentiles(access_latencies)
+    surfaces = coverage.get("surfaces", {})
+    present = [name for name, item in surfaces.items() if item.get("status") == "present"]
+    missing = [name for name, item in surfaces.items() if item.get("status") != "present"]
+    cohort_count = len(cohorts)
+    cohort_text = (
+        f"输入被拆成 {cohort_count} 个 cohort，报告应先比较每个输入包的分布再合并判断。"
+        if cohort_count > 1 else "当前只有一个输入 cohort，重点看该输入内部的 trace/error/worker 分布。"
+    )
+    return {
+        "symptom_line": {
+            "label": "错误线",
+            "text": f"主要失败表象是 {top_error}（{top_error_count} 次），用于回答客户为什么看到失败。",
+        },
+        "latency_line": {
+            "label": "慢时延线",
+            "text": (
+                f"access p50={access.get('p50', '')}ms、p99={access.get('p99', '')}ms、max={access.get('max', '')}ms；"
+                "再结合 latencySummary、breakdown、RPC slow、URMA/UB edge 判断时间花在哪里。"
+            ),
+        },
+        "evidence_boundary": {
+            "label": "证据边界",
+            "text": (
+                f"已观测面：{', '.join(present) or 'none'}；缺失/未采样面：{', '.join(missing) or 'none'}。"
+                "缺失项只能标为观测盲区，不能直接当根因。"
+            ),
+        },
+        "customer_expression": {
+            "label": "客户表达",
+            "text": (
+                f"建议描述为“{top_class} 是当前最大根因族（{top_class_count} 条 trace）”。"
+                f"{cohort_text} 该判断来自日志聚合的 observed evidence，源码/CodeGraph 复核应另列。"
+            ),
+        },
+    }
 
 
 def _build_time_buckets(trace_rows, bucket_ms):
@@ -1151,23 +1201,17 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const access = dim.latency_ms?.access || {};
   const totalErrors = Object.values(dim.errors || {}).reduce((a,b) => a + b, 0);
   const topClass = Object.entries(dim.classifications || {}).sort((a,b) => b[1] - a[1])[0] || ['unknown', 0];
-  const surface = dim.coverage?.surfaces || {};
-  const hasUrma = (surface.urma_elapsed?.events || 0) > 0;
-  const hasRpcSlow = (surface.rpc_slow?.events || 0) > 0;
-  const hasLatencySummary = (surface.latency_summary?.events || 0) > 0;
-  const topError = Object.entries(dim.errors || {}).sort((a,b) => b[1] - a[1])[0] || ['none', 0];
+  const diagnosis = dim.diagnosis || {};
   document.getElementById('report-subtitle').innerHTML =
     `输入日志解析得到 <b>${report.trace_count}</b> 条 trace，错误标记 <b>${totalErrors}</b> 个。` +
     `当前主分类为 <b>${escapeHtml(topClass[0])}</b>，access p99 为 <b>${access.p99 ?? ''}ms</b>。`;
+  const diagnosisRows = ['symptom_line','latency_line','evidence_boundary','customer_expression']
+    .map(key => diagnosis[key])
+    .filter(Boolean);
   document.getElementById('report-insight').innerHTML =
-    `<b>核心判断：</b>本报告先按 error/status 定界失败表象，再用 access、latencySummary、RPC slow、URMA elapsed、Worker/UB edge 判断慢时延阶段。` +
-    `若 client deadline 与 worker 后续完成时间同时存在，应把 client 超时窗口和服务端实际完成阶段分开阅读。`;
-  document.getElementById('diagnosis-list').innerHTML = [
-    ['错误线', `主要失败表象是 ${topError[0]}（${topError[1]} 次），先用于回答“客户为什么看到失败”。`],
-    ['慢时延线', `access p50=${access.p50 ?? ''}ms、p99=${access.p99 ?? ''}ms；再看 latencySummary、breakdown、RPC slow、URMA/UB edge 判断时间花在哪里。`],
-    ['证据边界', `${hasLatencySummary ? 'latencySummary 已出现' : 'latencySummary 缺失'}；${hasRpcSlow ? 'RPC slow 已出现' : 'RPC slow 缺失'}；${hasUrma ? 'URMA elapsed 已出现' : 'URMA elapsed 缺失'}。缺失项只能标为观测盲区，不能直接当根因。`],
-    ['客户表达', `建议描述为“${topClass[0]} 是当前最大根因族”，并说明这是基于日志字段聚合的 observed evidence，不替代源码/CodeGraph 复核。`]
-  ].map(([k,v]) => `<li><b>${escapeHtml(k)}：</b>${escapeHtml(v)}</li>`).join('');
+    `<b>核心判断：</b>${escapeHtml(diagnosis.customer_expression?.text || '请结合错误线、慢时延线和证据边界阅读。')}`;
+  document.getElementById('diagnosis-list').innerHTML = diagnosisRows
+    .map(item => `<li><b>${escapeHtml(item.label)}：</b>${escapeHtml(item.text)}</li>`).join('');
   document.getElementById('summary').innerHTML = [
     ['trace_count', report.trace_count, 'parsed traces'],
     ['errors', totalErrors, 'total error markers'],

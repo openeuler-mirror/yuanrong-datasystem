@@ -171,6 +171,9 @@ them:
 - `dimensions.ub_summary`: transfer path and `src -> target` UB edges
 - `dimensions.cohorts`: per-input-package trace/error/classification/latency
   comparison for multi-package and noisy-vs-clean analysis
+- `dimensions.diagnosis`: customer-facing diagnosis lines for symptom,
+  latency, evidence boundary, and customer expression. HTML should render this
+  data instead of re-deriving report language in JavaScript.
 - `dimensions.time_buckets`: 1s/10s burst and gap candidates
 - `dimensions.worker_summary`: role-aware client/entry/data/meta worker views
 - `dimensions.classifications`: parser-assigned root-cause families such as

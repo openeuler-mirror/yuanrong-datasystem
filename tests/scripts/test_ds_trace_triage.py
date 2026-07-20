@@ -63,6 +63,13 @@ def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
     assert report["dimensions"]["urma_elapsed"]["notify"]["p50"] == 0.041
     assert report["dimensions"]["urma_elapsed"]["thread_sched"]["p50"] == 12.5
     assert report["dimensions"]["errors"]["RPC deadline exceeded"] == 1
+    diagnosis = report["dimensions"]["diagnosis"]
+    assert diagnosis["symptom_line"]["label"] == "错误线"
+    assert "RPC deadline exceeded" in diagnosis["symptom_line"]["text"]
+    assert diagnosis["latency_line"]["label"] == "慢时延线"
+    assert "518.923" in diagnosis["latency_line"]["text"]
+    assert diagnosis["evidence_boundary"]["label"] == "证据边界"
+    assert diagnosis["customer_expression"]["label"] == "客户表达"
     assert report["traces"][trace_id]["classification"] == "client_deadline_with_urma_wait"
 
 

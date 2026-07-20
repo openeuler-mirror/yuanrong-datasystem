@@ -272,3 +272,4 @@ UB/URMA 相关报告要用时序口径：
 - 下载区：至少支持下载当前 trace 裸日志和当前过滤证据。
 - 日志区：ERROR、deadline、latencySummary、RemotePull、BatchGetObjectRemote、URMA、>=阈值耗时字段要高亮。
 - 对比区：多个输入包按 cohort 展示 trace_count、errors、classifications、access latency 和 top workers。
+- 诊断区：`summary.json` 必须输出 `dimensions.diagnosis`，包含错误线、慢时延线、证据边界、客户表达。HTML 只负责渲染，不应在前端临时重新推导客户话术。
