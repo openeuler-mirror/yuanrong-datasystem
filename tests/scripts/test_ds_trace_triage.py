@@ -232,17 +232,23 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"classification-chart\"" in html
     assert "id=\"cohort-chart\"" in html
     assert "id=\"cohort-table\"" in html
-    assert "id=\"latency-chart\"" in html
-    assert "Top Latency Metrics" in html
+    assert "id=\"read-latency-chart\"" in html
+    assert "id=\"write-latency-chart\"" in html
+    assert "renderLatencySection('read', 'Read')" in html
+    assert "renderLatencySection('write', 'Write')" in html
     assert "metricLabelMap" in html
     assert "Worker RemoteGet RPC" in html
     assert "latencyChartRows" in html
+    assert "latencyRowsForOperation" in html
     assert "Flow Breakdown" in html
+    assert "flowRowsForOperation" in html
     assert "flowLabelMap" in html
     assert "Worker GET" in html
     assert "wideHorizontalGrid" in html
     assert "grid:wideHorizontalGrid" in html
-    assert "id=\"time-breakdown-chart\"" in html
+    assert "id=\"read-time-breakdown-chart\"" in html
+    assert "id=\"write-time-breakdown-chart\"" in html
+    assert "buildTraceTimeBuckets" in html
     assert "Time Bucket Latency Stages" in html
     assert "client/access p99 upper bound" in html
     assert "Entry→Data RPC" in html
@@ -264,17 +270,25 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "href=\"#flow-stage-chart\">读写视角" in html
     assert "href=\"#read-flow-section\">读取流程" in html
     assert "href=\"#write-flow-section\">写入流程" in html
-    assert "href=\"#worker-chart\">Worker 分布" in html
-    assert "href=\"#ub-edge-chart\">UB Edge" in html
+    assert "href=\"#read-worker-chart\">读取 Worker" in html
+    assert "href=\"#write-worker-chart\">写入 Worker" in html
     assert "图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
     assert "图 4-0b 写入：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html
     assert "edge.summary" in html
     assert "edge.reason" in html
     assert "rollup" in html
-    assert "id=\"worker-chart\"" in html
-    assert "id=\"worker-table-pager\"" in html
-    assert "id=\"ub-edge-table-pager\"" in html
+    assert "id=\"read-worker-chart\"" in html
+    assert "id=\"write-worker-chart\"" in html
+    assert "id=\"read-ub-edge-chart\"" in html
+    assert "id=\"write-ub-edge-chart\"" in html
+    assert "workerRowsForOperation" in html
+    assert "renderWorkerSection" in html
+    assert "renderUbSection" in html
+    assert "id=\"read-worker-table-pager\"" in html
+    assert "id=\"write-worker-table-pager\"" in html
+    assert "id=\"read-ub-edge-table-pager\"" in html
+    assert "id=\"write-ub-edge-table-pager\"" in html
     assert "renderPagedTable" in html
     assert "hotrow" in html
     assert "warnrow" in html
@@ -337,7 +351,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "echarts.init" in html
     assert "id=\"classification-table\"" in html
     assert "id=\"error-table\"" in html
-    assert "id=\"worker-table\"" in html
+    assert "id=\"read-worker-table\"" in html
+    assert "id=\"write-worker-table\"" in html
     assert "id=\"top-trace-table\"" in html
     assert "Error Breakdown" in html
     for marker in [
