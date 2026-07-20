@@ -27,15 +27,22 @@ root-cause analysis rather than broad access/resource trending.
    ```
 3. Run the deterministic parser first:
    ```bash
-   python3 scripts/ds_trace_triage.py <trace_dir_or_tar_gz> \
+   python3 scripts/ds_trace_triage.py run <trace_dir_or_tar_gz> \
        --code-ref "$(git rev-parse main/master)" \
-       --output-json /tmp/ds_trace_summary.json \
-       --output-md /tmp/ds_trace_summary.md
+       --case <case-name> \
+       --scenario <scenario> \
+       --out /tmp/ds-trace-runs
    ```
-4. Read the JSON/Markdown summary and then inspect selected full logs for the
-   top slow/error traces. Keep aggregate distributions first, then per-trace
-   evidence.
-5. Cross-check any source-level conclusion with CodeGraph plus direct source
+4. Read the timestamped run directory:
+   - `manifest.json`: case/scenario/ref/time range and render targets
+   - `events.jsonl`: trace-scoped raw and UB events with source/member/line
+   - `summary.json`: time/worker/flow/latency/RPC/UB/error dimensions
+   - `triage.json` and `triage.md`: classifications and issue candidates
+   - `report.local.html`: self-contained local report
+   - `report.site.html`: yche.me-shaped report draft
+5. Inspect selected full logs for the top slow/error traces. Keep aggregate
+   distributions first, then per-trace evidence.
+6. Cross-check any source-level conclusion with CodeGraph plus direct source
    reads. CodeGraph is discovery, not sole proof.
 
 ## Self verification and CI
@@ -43,13 +50,15 @@ root-cause analysis rather than broad access/resource trending.
 The script has a built-in fixture:
 
 ```bash
+python3 scripts/ds_trace_triage.py verify
 python3 scripts/ds_trace_triage.py --self-test
 python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
 
 Add those commands to CI as a low-cost parser contract. They verify gzip-tar
 handling, trace grouping, access latency, breakdown, rpc slow, URMA elapsed,
-worker aggregation, and error classification.
+UB field extraction, time buckets, worker/edge aggregation, local/site HTML
+generation, and error classification.
 
 The self-test must keep covering the historical contract learned from the trace
 threads: `latencySummary` raw text and key/value fields, RPC slow server/network
@@ -82,6 +91,9 @@ them:
 - `dimensions.rpc_slow`: method plus `e2e_us`, framework, server queue/exec, and
   `network_residual_us`
 - `dimensions.urma_elapsed`: total, poll JFC, notify, and thread scheduling
+- `dimensions.ub_summary`: transfer path and `src -> target` UB edges
+- `dimensions.time_buckets`: 1s/10s burst and gap candidates
+- `dimensions.worker_summary`: role-aware client/entry/data/meta worker views
 - `dimensions.classifications`: parser-assigned root-cause families such as
   `client_deadline_with_urma_wait`, `client_deadline_20ms`,
   `write_memory_copy_dominant`, `remote_fast_transport_wait`, and `rpc_slow`

@@ -8,10 +8,12 @@ worker, access flow, latency, breakdown, RPC slow, URMA elapsed, and errors.
 
 import argparse
 import gzip
+import hashlib
 import io
 import json
 import os
 import re
+import shutil
 import statistics
 import sys
 import tarfile
@@ -35,10 +37,21 @@ RPC_SLOW_FIELD_RE = re.compile(
 LATENCY_SUMMARY_RE = re.compile(r"latencySummary:\{([^}]*)\}")
 SUMMARY_ITEM_RE = re.compile(r"([A-Za-z][A-Za-z0-9_.-]*)\s*:\s*(\d+)")
 URMA_TOTAL_RE = re.compile(r"\[URMA_ELAPSED_TOTAL\].*?cost\s+([\d.]+)ms", re.I)
-URMA_POLL_RE = re.compile(r"\[URMA_ELAPSED_POLL_JFC\].*?cost\s+([\d.]+)ms", re.I)
-URMA_NOTIFY_RE = re.compile(r"\[URMA_ELAPSED_NOTIFY\].*?cost\s+([\d.]+)ms", re.I)
-URMA_THREAD_RE = re.compile(r"\[URMA_ELAPSED_THREAD_SHED\].*?cost\s+([\d.]+)ms", re.I)
+URMA_POLL_RE = re.compile(r"\[URMA_ELAPSED_POLL_JFC\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
+URMA_NOTIFY_RE = re.compile(r"\[URMA_ELAPSED_NOTIFY\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
+URMA_THREAD_RE = re.compile(r"\[URMA_ELAPSED_THREAD_SHED\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
 URMA_PERF_RE = re.compile(r"\[URMA_PERF\].*?([A-Za-z][A-Za-z0-9_./-]*)\s*[:=]\s*([\d.]+)\s*(us|ms)?", re.I)
+REQUEST_ID_RE = re.compile(r"(?:request id\s*:|requestId[:=])\s*([A-Za-z0-9_-]+)", re.I)
+SRC_ADDR_RE = re.compile(r"src address:([^\s,]+)", re.I)
+DST_ADDR_RE = re.compile(r"(?:target|dst) address:([^\s,]+)", re.I)
+DATA_SIZE_RE = re.compile(r"dataSize:(\d+)|size\[(\d+)\]", re.I)
+CPUID_RE = re.compile(r"cpuid:\s*(\d+)", re.I)
+STATUS_RE = re.compile(r"status:\s*([^,]+)", re.I)
+WAIT_OS_RE = re.compile(r"wait os sched.*?:\s*([\d.]+)ms", re.I)
+INFLIGHT_WR_RE = re.compile(r"urma_inflight_wr_count:\s*(\d+)", re.I)
+TRANSFER_PATH_RE = re.compile(r"(?:transferPath|path):\s*(UB|RDMA|TCP)\b", re.I)
+INFLIGHT_REMOTE_GET_RE = re.compile(r"inflightRemoteGet:\s*(\d+)", re.I)
+REMOTE_GET_REQUEST_RE = re.compile(r"Remote get request:\[([^\]]+)\]\s+object:\[([^\]]*)\].*?offset\[(\d+)\]\s+size\[(\d+)\]", re.I)
 ERROR_PATTERNS = (
     "RPC deadline exceeded",
     "URMA_WAIT_TIMEOUT",
@@ -131,6 +144,108 @@ def _timestamp(line):
         return None
 
 
+def _ms(raw_value, unit):
+    value = float(raw_value)
+    return value / 1000.0 if (unit or "ms").lower() == "us" else value
+
+
+def _first_match(regex, line):
+    match = regex.search(line)
+    return match.group(1).strip() if match else None
+
+
+def _int_match(regex, line):
+    match = regex.search(line)
+    if not match:
+        return None
+    for group in match.groups():
+        if group:
+            return int(group)
+    return None
+
+
+def _ub_base_event(event_type, source, member, line_no, line, ts, worker):
+    event = {
+        "event_type": event_type,
+        "timestamp": ts.isoformat() if ts else None,
+        "worker": worker,
+        "source": source,
+        "member": member,
+        "line": line_no,
+        "raw": line,
+    }
+    request_id = _first_match(REQUEST_ID_RE, line)
+    if request_id:
+        event["request_id"] = request_id
+    src_addr = _first_match(SRC_ADDR_RE, line)
+    if src_addr:
+        event["src_addr"] = src_addr
+    dst_addr = _first_match(DST_ADDR_RE, line)
+    if dst_addr:
+        event["target_addr"] = dst_addr
+    data_size = _int_match(DATA_SIZE_RE, line)
+    if data_size is not None:
+        event["data_size"] = data_size
+    cpuid = _int_match(CPUID_RE, line)
+    if cpuid is not None:
+        event["cpuid"] = cpuid
+    status = _first_match(STATUS_RE, line)
+    if status:
+        event["status"] = status
+    return event
+
+
+def _extract_ub_events(source, member, line_no, line, ts, worker):
+    events = []
+    transfer = TRANSFER_PATH_RE.search(line)
+    if transfer:
+        event = _ub_base_event("transfer_path", source, member, line_no, line, ts, worker)
+        event["transfer_path"] = transfer.group(1).upper()
+        inflight = _int_match(INFLIGHT_REMOTE_GET_RE, line)
+        if inflight is not None:
+            event["inflight_remote_get"] = inflight
+        cost = re.search(r"cost:\s*([\d.]+)ms|totalCost:\s*([\d.]+)ms", line, re.I)
+        if cost:
+            event["cost_ms"] = float(next(group for group in cost.groups() if group))
+        events.append(event)
+
+    request = REMOTE_GET_REQUEST_RE.search(line)
+    if request:
+        request_id, object_key, offset, read_size = request.groups()
+        event = _ub_base_event("remote_get_start", source, member, line_no, line, ts, worker)
+        event.update({
+            "request_id": request_id,
+            "object_key": object_key,
+            "offset": int(offset),
+            "read_size": int(read_size),
+        })
+        events.append(event)
+
+    total = URMA_TOTAL_RE.search(line)
+    if total:
+        event = _ub_base_event("total", source, member, line_no, line, ts, worker)
+        event["cost_ms"] = float(total.group(1))
+        wait_os = _first_match(WAIT_OS_RE, line)
+        if wait_os:
+            event["wait_os_sched_ms"] = float(wait_os)
+        inflight_wr = _int_match(INFLIGHT_WR_RE, line)
+        if inflight_wr is not None:
+            event["urma_inflight_wr_count"] = inflight_wr
+        events.append(event)
+
+    for event_type, regex in (("poll_jfc", URMA_POLL_RE), ("notify", URMA_NOTIFY_RE), ("thread_sched", URMA_THREAD_RE)):
+        match = regex.search(line)
+        if match:
+            event = _ub_base_event(event_type, source, member, line_no, line, ts, worker)
+            event["cost_ms"] = _ms(match.group(1), match.group(2))
+            count = _int_match(re.compile(r"count:\s*(\d+)", re.I), line)
+            if count is not None:
+                event["count"] = count
+            events.append(event)
+
+    return events
+
+
 def _classify(trace):
     max_access = max(trace["access_latency_ms"] or [0])
     max_urma = max(trace["urma_total_ms"] or [0])
@@ -168,6 +283,7 @@ def analyze_inputs(paths, code_ref="unknown"):
         "urma_notify_ms": [],
         "urma_thread_sched_ms": [],
         "urma_perf": Counter(),
+        "ub_events": [],
         "latency_summary_us": Counter(),
         "latency_summary_raw": [],
         "errors": Counter(),
@@ -183,6 +299,7 @@ def analyze_inputs(paths, code_ref="unknown"):
     urma_perf = defaultdict(list)
     latency_summary = defaultdict(list)
     errors = Counter()
+    ub_summary = {"transfer_path": Counter(), "edges": defaultdict(lambda: {"count": 0, "latencies": []})}
 
     for source, member, line_no, line in _iter_input_lines(paths):
         m = TRACE_ID_RE.search(line)
@@ -200,6 +317,17 @@ def analyze_inputs(paths, code_ref="unknown"):
             all_ts.append(ts)
         if len(trace["evidence"]) < 12:
             trace["evidence"].append({"source": source, "member": member, "line": line_no, "text": line})
+
+        ub_events = _extract_ub_events(source, member, line_no, line, ts, worker)
+        for event in ub_events:
+            trace["ub_events"].append(event)
+            if event.get("transfer_path"):
+                ub_summary["transfer_path"][event["transfer_path"]] += 1
+            if event.get("src_addr") and event.get("target_addr") and event.get("event_type") == "total":
+                edge = f"{event['src_addr']} -> {event['target_addr']}"
+                ub_summary["edges"][edge]["count"] += 1
+                if event.get("cost_ms") is not None:
+                    ub_summary["edges"][edge]["latencies"].append(event["cost_ms"])
 
         access = ACCESS_RE.search(line)
         if access:
@@ -249,7 +377,7 @@ def analyze_inputs(paths, code_ref="unknown"):
         ):
             um = regex.search(line)
             if um:
-                val = float(um.group(1))
+                val = _ms(um.group(1), um.group(2) if len(um.groups()) > 1 else "ms")
                 trace[f"urma_{name}_ms"].append(val)
                 urma[name].append(val)
 
@@ -270,9 +398,27 @@ def analyze_inputs(paths, code_ref="unknown"):
 
     trace_rows = {}
     classifications = Counter()
+    worker_roles = defaultdict(set)
+    worker_trace_ids = defaultdict(set)
+    worker_slow_counts = Counter()
+    worker_error_counts = Counter()
     for trace_id, trace in traces.items():
         trace["classification"] = _classify(trace)
         classifications[trace["classification"]] += 1
+        triage_flags = []
+        if trace["errors"] and max(trace["urma_total_ms"] or [0]) > max(trace["access_latency_ms"] or [0]):
+            triage_flags.append("late_worker_completion")
+        for worker in trace["workers"]:
+            worker_trace_ids[worker].add(trace_id)
+            if trace["classification"] not in ("unknown", "access_latency_only"):
+                worker_slow_counts[worker] += 1
+            if trace["errors"]:
+                worker_error_counts[worker] += sum(trace["errors"].values())
+        for event in trace["ub_events"]:
+            if event["event_type"] in ("transfer_path", "remote_get_start"):
+                worker_roles[event["worker"]].add("entry_worker")
+            if event["event_type"] in ("total", "poll_jfc", "notify", "thread_sched"):
+                worker_roles[event["worker"]].add("data_worker")
         trace_rows[trace_id] = {
             "classification": trace["classification"],
             "line_count": trace["lines"],
@@ -291,11 +437,34 @@ def analyze_inputs(paths, code_ref="unknown"):
                 "thread_sched": _percentiles(trace["urma_thread_sched_ms"]),
             },
             "urma_perf_ms": {k: round(v, 3) for k, v in trace["urma_perf"].items()},
+            "ub_events": trace["ub_events"],
             "latency_summary_us": dict(trace["latency_summary_us"]),
             "latency_summary_raw": trace["latency_summary_raw"],
             "errors": dict(trace["errors"]),
+            "triage_flags": triage_flags,
             "evidence": trace["evidence"],
         }
+
+    worker_summary = {}
+    for worker, item in worker_counts.most_common():
+        roles = sorted(worker_roles.get(worker) or {"unknown"})
+        worker_summary[worker] = {
+            "roles": roles,
+            "line_count": item,
+            "trace_count": len(worker_trace_ids[worker]),
+            "slow_trace_count": worker_slow_counts[worker],
+            "error_count": worker_error_counts[worker],
+            "coverage": {
+                "urma": "present" if "data_worker" in roles else "missing",
+                "remote_get": "present" if "entry_worker" in roles else "missing",
+            },
+        }
+
+    worker_edges = {}
+    for edge, item in ub_summary["edges"].items():
+        worker_edges[edge] = {"count": item["count"], "p99_ms": _percentiles(item["latencies"]).get("p99")}
+
+    time_buckets = _build_time_buckets(trace_rows, 1000)
 
     return {
         "schema_version": 1,
@@ -307,7 +476,10 @@ def analyze_inputs(paths, code_ref="unknown"):
                 "first_ts": min(all_ts).isoformat() if all_ts else None,
                 "last_ts": max(all_ts).isoformat() if all_ts else None,
             },
+            "time_buckets": {"1000ms": time_buckets, "10000ms": _build_time_buckets(trace_rows, 10000)},
             "workers": {k: {"line_count": v} for k, v in worker_counts.most_common()},
+            "worker_summary": worker_summary,
+            "worker_edges": worker_edges,
             "flow": dict(flow_counts),
             "latency_ms": {"access": _percentiles(access_latencies)},
             "breakdown_ms": breakdown,
@@ -319,6 +491,11 @@ def analyze_inputs(paths, code_ref="unknown"):
                 for k, v in sorted(rpc_slow.items())
             },
             "urma_elapsed": {k: _percentiles(v) for k, v in sorted(urma.items())},
+            "ub_summary": {
+                "transfer_path": dict(ub_summary["transfer_path"]),
+                "edges": {edge: {"count": item["count"], "latency_ms": _percentiles(item["latencies"])}
+                          for edge, item in sorted(ub_summary["edges"].items())},
+            },
             "urma_perf_ms": {k: _percentiles(v) for k, v in sorted(urma_perf.items())},
             "latency_summary_us": {k: _percentiles(v) for k, v in sorted(latency_summary.items())},
             "errors": dict(errors),
@@ -326,6 +503,47 @@ def analyze_inputs(paths, code_ref="unknown"):
         },
         "traces": trace_rows,
     }
+
+
+def _build_time_buckets(trace_rows, bucket_ms):
+    buckets = defaultdict(lambda: {
+        "trace_ids": set(),
+        "error_count": 0,
+        "slow_count": 0,
+        "access_latencies": [],
+        "top_workers": Counter(),
+    })
+    for trace_id, trace in trace_rows.items():
+        first_ts = trace.get("first_ts")
+        if not first_ts:
+            continue
+        dt = datetime.fromisoformat(first_ts)
+        epoch_ms = int(dt.timestamp() * 1000)
+        start_ms = epoch_ms - (epoch_ms % bucket_ms)
+        bucket = buckets[start_ms]
+        bucket["trace_ids"].add(trace_id)
+        bucket["error_count"] += sum(trace.get("errors", {}).values())
+        if trace.get("classification") not in ("unknown", "access_latency_only"):
+            bucket["slow_count"] += 1
+        if trace.get("access_latency_ms", {}).get("p50") is not None:
+            bucket["access_latencies"].append(trace["access_latency_ms"]["p50"])
+        for worker in trace.get("workers", {}):
+            bucket["top_workers"][worker] += 1
+    rows = []
+    for start_ms, bucket in sorted(buckets.items()):
+        rows.append({
+            "bucket_start": datetime.fromtimestamp(start_ms / 1000.0).isoformat(),
+            "bucket_ms": bucket_ms,
+            "trace_count": len(bucket["trace_ids"]),
+            "error_count": bucket["error_count"],
+            "slow_count": bucket["slow_count"],
+            "p50_access_ms": _percentiles(bucket["access_latencies"]).get("p50"),
+            "p99_access_ms": _percentiles(bucket["access_latencies"]).get("p99"),
+            "burst_score": max(bucket["slow_count"], bucket["error_count"], 1),
+            "gap_score": 0,
+            "top_workers": [w for w, _ in bucket["top_workers"].most_common(3)],
+        })
+    return rows
 
 
 def render_markdown(report):
@@ -369,6 +587,155 @@ def render_markdown(report):
     return "\n".join(lines) + "\n"
 
 
+def _slug(text):
+    clean = re.sub(r"[^A-Za-z0-9_.-]+", "-", text.strip()).strip("-").lower()
+    return clean or "trace-run"
+
+
+def _input_identity(path):
+    p = Path(path)
+    h = hashlib.sha256()
+    if p.is_file():
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return {"path": str(p), "size": p.stat().st_size, "sha256": h.hexdigest()}
+    h.update(str(p).encode("utf-8"))
+    return {"path": str(p), "size": 0, "sha256": h.hexdigest()}
+
+
+def _write_json(path, value):
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _render_html(report, title, site=False):
+    data = json.dumps(report, ensure_ascii=False)
+    stylesheet = '<link rel="stylesheet" href="/assets/css/site.css">' if site else "<style>body{font-family:sans-serif;margin:24px;max-width:1280px}pre{white-space:pre-wrap}.bad{color:#b00020}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.card{border:1px solid #ddd;padding:12px;border-radius:6px}</style>"
+    script_ref = '<script src="/assets/js/site.js"></script>' if site else ""
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  {stylesheet}
+</head>
+<body>
+  <main class="content-area">
+    <h1>{title}</h1>
+    <div id="summary" class="grid"></div>
+    <h2>Trace Evidence</h2>
+    <pre id="trace-data"></pre>
+  </main>
+  <script>
+  const report = {data};
+  const dim = report.dimensions || {{}};
+  document.getElementById('summary').innerHTML = [
+    ['code_ref', report.code_ref],
+    ['trace_count', report.trace_count],
+    ['time_range', `${{dim.time?.first_ts || ''}} -> ${{dim.time?.last_ts || ''}}`],
+    ['classifications', JSON.stringify(dim.classifications || {{}})]
+  ].map(([k,v]) => `<section class="card"><strong>${{k}}</strong><br>${{v}}</section>`).join('');
+  document.getElementById('trace-data').textContent = JSON.stringify(report.traces || {{}}, null, 2);
+  </script>
+  {script_ref}
+</body>
+</html>
+"""
+
+
+def _build_events(report):
+    events = []
+    for trace_id, trace in report["traces"].items():
+        for evidence in trace.get("evidence", []):
+            events.append({
+                "schema_version": 1,
+                "trace_id": trace_id,
+                "ts": evidence["text"].split(" | ", 1)[0],
+                "worker": next(iter(trace.get("workers", {"unknown": 1}))),
+                "event_type": "raw",
+                "source": evidence["source"],
+                "member": evidence["member"],
+                "line": evidence["line"],
+                "raw": evidence["text"],
+            })
+        for event in trace.get("ub_events", []):
+            row = dict(event)
+            row["schema_version"] = 1
+            row["trace_id"] = trace_id
+            row["event_type"] = "ub_" + row["event_type"]
+            events.append(row)
+    return events
+
+
+def _build_triage(report):
+    by_class = Counter(trace["classification"] for trace in report["traces"].values())
+    candidates = []
+    for classification, count in by_class.most_common():
+        representatives = [
+            trace_id for trace_id, trace in report["traces"].items() if trace["classification"] == classification
+        ][:5]
+        candidates.append({
+            "classification": classification,
+            "trace_count": count,
+            "representative_traces": representatives,
+            "evidence_boundary": "observed",
+        })
+    return {
+        "schema_version": 1,
+        "root_cause_families": dict(by_class),
+        "issue_candidates": candidates,
+    }
+
+
+def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+    del force
+    out_root = Path(out_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+    now = datetime.now()
+    run_dir = out_root / f"{now.strftime('%Y%m%d-%H%M%S')}-{_slug(case_name)}"
+    suffix = 1
+    while run_dir.exists():
+        suffix += 1
+        run_dir = out_root / f"{now.strftime('%Y%m%d-%H%M%S')}-{_slug(case_name)}-{suffix}"
+    run_dir.mkdir(parents=True)
+    raw_inputs = run_dir / "raw" / "inputs"
+    raw_inputs.mkdir(parents=True)
+    for raw in inputs:
+        p = Path(raw)
+        if p.is_file():
+            shutil.copy2(p, raw_inputs / p.name)
+
+    report = analyze_inputs(inputs, code_ref=code_ref)
+    events = _build_events(report)
+    triage = _build_triage(report)
+    manifest = {
+        "schema_version": 1,
+        "case_name": case_name,
+        "scenario": scenario,
+        "analysis_created_at": now.isoformat(),
+        "code_ref": code_ref,
+        "trace_time_range": report["dimensions"]["time"],
+        "inputs": [_input_identity(p) for p in inputs],
+        "render_targets": {
+            "local": {"path": "report.local.html", "status": "generated"},
+            "site": {"path": "report.site.html", "status": "generated"},
+        },
+    }
+    _write_json(run_dir / "manifest.json", manifest)
+    (run_dir / "events.jsonl").write_text(
+        "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8"
+    )
+    _write_json(run_dir / "summary.json", report)
+    _write_json(run_dir / "triage.json", triage)
+    (run_dir / "triage.md").write_text(render_markdown(report), encoding="utf-8")
+    (run_dir / "report.local.html").write_text(_render_html(report, f"Trace Triage: {case_name}"), encoding="utf-8")
+    (run_dir / "report.site.html").write_text(
+        _render_html(report, f"Trace Triage: {case_name}", site=True), encoding="utf-8"
+    )
+    return run_dir
+
+
 def _make_self_test_bundle(path):
     trace_id = "019f7b27-56f0-74f0-9a68-5b3742f11e23"
     content = "\n".join([
@@ -394,6 +761,14 @@ def run_self_test():
         bundle = Path(tmp) / "fixture.tar.gz"
         _make_self_test_bundle(bundle)
         report = analyze_inputs([str(bundle)], code_ref="self-test")
+        run_dir = run_pipeline([str(bundle)], Path(tmp) / "runs", case_name="self-test", scenario="fixture",
+                               code_ref="self-test")
+        assert (run_dir / "manifest.json").exists()
+        assert (run_dir / "events.jsonl").exists()
+        assert (run_dir / "summary.json").exists()
+        assert (run_dir / "triage.json").exists()
+        assert (run_dir / "report.local.html").exists()
+        assert (run_dir / "report.site.html").exists()
     assert report["trace_count"] == 1
     assert report["dimensions"]["latency_ms"]["access"]["p50"] == 518.923
     assert report["dimensions"]["breakdown_ms"]["ProcessGetObjectRequest"]["sum"] == 517.0
@@ -408,6 +783,31 @@ def run_self_test():
 
 
 def main(argv=None):
+    argv = list(argv or sys.argv[1:])
+    if argv and argv[0] in ("run", "verify"):
+        command = argv.pop(0)
+        if command == "verify":
+            parser = argparse.ArgumentParser(description="Run built-in trace triage verification.")
+            parser.add_argument("--output-json", help="Write machine-readable summary JSON.")
+            args = parser.parse_args(argv)
+            report = run_self_test()
+            print("verify passed")
+            if args.output_json:
+                Path(args.output_json).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+                                                  encoding="utf-8")
+            return 0
+        parser = argparse.ArgumentParser(description="Run staged DataSystem trace triage.")
+        parser.add_argument("inputs", nargs="+", help="Log files, directories, or gzip-wrapped tar bundles.")
+        parser.add_argument("--out", required=True, help="Output root for timestamped run directories.")
+        parser.add_argument("--case", default="trace-case", help="Case name stored in manifest.")
+        parser.add_argument("--scenario", default="", help="Scenario description stored in manifest.")
+        parser.add_argument("--code-ref", default="unknown", help="Source ref used for CodeGraph/source validation.")
+        args = parser.parse_args(argv)
+        run_dir = run_pipeline(args.inputs, args.out, case_name=args.case, scenario=args.scenario,
+                               code_ref=args.code_ref)
+        print(run_dir)
+        return 0
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="*", help="Log files, directories, or gzip-wrapped tar bundles.")
     parser.add_argument("--code-ref", default="unknown", help="Source ref used for CodeGraph/source validation.")

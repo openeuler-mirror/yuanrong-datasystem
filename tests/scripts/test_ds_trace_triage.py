@@ -92,6 +92,83 @@ def test_latency_summary_and_write_memory_copy_are_preserved(tmp_path):
     assert report["dimensions"]["flow"]["DS_KV_CLIENT_SET"] == 1
 
 
+def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_path):
+    trace_id = "019f7c61-31b8-7d20-bbd7-56869c2c4c2a"
+    log = tmp_path / "worker.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T10:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
+                f"2026-07-20T10:00:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | [Get] Done, clientId: c1, objects: 1, transferPath: UB, totalCost: 230.100ms, inflightRemoteGet: 9 exceed 3ms: {{ ProcessGetObjectRequest: 230 ms }}",
+                f"2026-07-20T10:00:00.020000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get request:[881] object:[obj-a], offset[0] size[4194304] src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
+                f"2026-07-20T10:00:00.040000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get success, objectKey: obj-a, path: UB, cost: 231.321ms src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
+                f"2026-07-20T10:00:00.050000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost 231.001ms, wait os sched thread finish time(std::condition_variable.wait_for): 230.500ms, request id:881, src address:10.0.0.2:31501, target address:10.0.0.1:31501, dataSize:4194304, cpuid:23, status: OK, urma_inflight_wr_count: 11",
+                f"2026-07-20T10:00:00.051000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_POLL_JFC]: urma_poll_jfc cost 309us, cpuid: 23, suggest: check URMA",
+                f"2026-07-20T10:00:00.052000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_NOTIFY]: urma_poll_jfc thread notify urma_post_jetty_send_wr thread wake up cost 0.041ms, cpuid: 23, count: 1",
+                f"2026-07-20T10:00:00.053000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_THREAD_SHED]: urma_poll_jfc thread wake up after nanosleep(1us) cost 12500us, cpuid: 23",
+                f"2026-07-20T10:00:00.070000 | ERROR | worker | kventryworker-0-worker1 | 1 | {trace_id} | RPC deadline exceeded while waiting WorkerOCService.Get",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    trace = report["traces"][trace_id]
+
+    total = next(event for event in trace["ub_events"] if event["event_type"] == "total")
+    assert total["request_id"] == "881"
+    assert total["src_addr"] == "10.0.0.2:31501"
+    assert total["target_addr"] == "10.0.0.1:31501"
+    assert total["data_size"] == 4194304
+    assert total["cpuid"] == 23
+    assert total["status"] == "OK"
+    assert total["urma_inflight_wr_count"] == 11
+    assert total["wait_os_sched_ms"] == 230.5
+    assert report["dimensions"]["urma_elapsed"]["poll_jfc"]["p50"] == 0.309
+    assert report["dimensions"]["urma_elapsed"]["thread_sched"]["p50"] == 12.5
+    assert report["dimensions"]["ub_summary"]["transfer_path"]["UB"] == 2
+    assert report["dimensions"]["ub_summary"]["edges"]["10.0.0.2:31501 -> 10.0.0.1:31501"]["count"] == 1
+    assert report["dimensions"]["time_buckets"]["1000ms"][0]["trace_count"] == 1
+    assert report["dimensions"]["time_buckets"]["1000ms"][0]["burst_score"] >= 1
+    assert report["dimensions"]["worker_summary"]["kventryworker-0-worker1"]["roles"] == ["entry_worker"]
+    assert report["dimensions"]["worker_summary"]["kvdataworker-0-worker2"]["roles"] == ["data_worker"]
+    assert report["dimensions"]["worker_edges"]["10.0.0.2:31501 -> 10.0.0.1:31501"]["p99_ms"] == 231.001
+    assert "late_worker_completion" in trace["triage_flags"]
+
+
+def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
+    trace_id = "019f7c62-9e9f-7792-a5d8-f4d30275bafe"
+    log = tmp_path / "client.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T11:00:00.000000 | INFO | client | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
+                f"2026-07-20T11:00:00.001000 | INFO | client | 10.0.0.9 | 1 | {trace_id} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    run_dir = mod.run_pipeline([str(log)], tmp_path / "runs", case_name="set-case", scenario="memory-copy")
+
+    assert (run_dir / "manifest.json").exists()
+    assert (run_dir / "events.jsonl").exists()
+    assert (run_dir / "summary.json").exists()
+    assert (run_dir / "triage.json").exists()
+    assert (run_dir / "triage.md").exists()
+    assert (run_dir / "report.local.html").exists()
+    assert (run_dir / "report.site.html").exists()
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["case_name"] == "set-case"
+    assert manifest["scenario"] == "memory-copy"
+    assert manifest["render_targets"]["local"]["path"] == "report.local.html"
+    assert manifest["render_targets"]["site"]["path"] == "report.site.html"
+    triage = json.loads((run_dir / "triage.json").read_text())
+    assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
+
+
 def test_cli_self_test_writes_json_and_markdown(tmp_path, capsys):
     mod = _load_module()
     out_json = tmp_path / "summary.json"

@@ -16,7 +16,26 @@
 
 ## 快速入口
 
-先跑脚本生成机器可读和人工可读摘要：
+先跑脚本生成一个带时间戳的 run 目录：
+
+```bash
+python3 scripts/ds_trace_triage.py run <trace_dir_or_tar_gz> \
+  --code-ref "$(git rev-parse main/master)" \
+  --case <case-name> \
+  --scenario <scenario> \
+  --out /tmp/ds-trace-runs
+```
+
+run 目录包含：
+
+- `manifest.json`：case、scenario、源码 ref、trace 时间范围、输入摘要和渲染目标。
+- `events.jsonl`：逐 trace 的原始证据事件和 UB 事件，带 source/member/line/raw。
+- `summary.json`：时间、worker、flow、latency、RPC、UB、error 等聚合维度。
+- `triage.json` / `triage.md`：分类、issue candidates、代表 trace。
+- `report.local.html`：本地自包含 HTML，可直接打开。
+- `report.site.html`：yche.me 站点版 HTML 草稿，供后续发布流程使用。
+
+旧的直接摘要入口仍可用于快速检查：
 
 ```bash
 python3 scripts/ds_trace_triage.py <trace_dir_or_tar_gz> \
@@ -28,13 +47,14 @@ python3 scripts/ds_trace_triage.py <trace_dir_or_tar_gz> \
 脚本支持自验证：
 
 ```bash
+python3 scripts/ds_trace_triage.py verify
 python3 scripts/ds_trace_triage.py --self-test
 python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
 
 这两个命令应接入 CI，作为日志格式和 parser contract 的低成本回归门禁。
 
-当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us->ms 转换、`exceed 3ms` breakdown、`latencySummary` 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。
+当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us->ms 转换、`exceed 3ms` breakdown、`latencySummary` 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、UB request id/src/target/dataSize/cpuid/status/inflight 字段、时间桶、worker/edge 聚合、目录化 run 产物、本地/站点 HTML、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。
 
 ## 当前主线校准流程
 
@@ -108,6 +128,10 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 | `URMA_ELAPSED_NOTIFY` | poll 线程唤醒等待线程的耗时 | 判断跨线程唤醒/调度 |
 | `URMA_ELAPSED_THREAD_SHED` | poll loop/sleep 调度间隔 | 判断 OS scheduling/sleep gap |
 | `URMA_PERF` | URMA perf counters | 用于区分 write、poll gap、sleep、notify |
+| `transferPath: UB/RDMA/TCP` | Worker Get/RemotePull 选择的传输路径 | 判断是否走 UB，不能和缺 URMA elapsed 混淆 |
+| `src address` / `target address` | UB/RemotePull 边 | 用于 data worker -> entry worker UB write 边统计 |
+| `request id` | URMA event 关联键 | 同一 trace 可有多个 request id，不能简单去重 |
+| `urma_inflight_wr_count` | URMA event map 大小 | 判断 inflight 堆积和慢尾相关性 |
 
 ## 八个历史 Thread 的能力沉淀
 
@@ -131,7 +155,7 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 最小门禁：
 
 ```bash
-python3 scripts/ds_trace_triage.py --self-test
+python3 scripts/ds_trace_triage.py verify
 python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
 
