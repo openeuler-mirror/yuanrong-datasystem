@@ -738,6 +738,8 @@ def test_trace_run_pipeline_object_exposes_stage_boundaries(tmp_path):
     pipeline = mod.TraceRunPipeline()
     run_dir = pipeline.parse([str(log)], tmp_path / "runs", case_name="object-pipeline", code_ref="unit-test")
 
+    assert isinstance(pipeline.store, mod.TraceRunStore)
+    assert isinstance(pipeline.site_publisher, mod.TraceSitePublisher)
     assert (run_dir / "parsed_traces.json").exists()
     assert pipeline.aggregate(run_dir).name == "summary.json"
     assert pipeline.triage(run_dir).name == "triage.json"
@@ -748,6 +750,26 @@ def test_trace_run_pipeline_object_exposes_stage_boundaries(tmp_path):
     assert manifest["stages"]["parse"]["status"] == "done"
     assert manifest["stages"]["aggregate"]["status"] == "done"
     assert manifest["render_targets"]["local"]["status"] == "generated"
+
+
+def test_trace_analyzer_composes_object_boundaries_for_accumulation_and_dimensions(tmp_path):
+    trace_id = "019f7d0e-c704-7767-917a-3907373e9d31"
+    log = tmp_path / "object-analyzer.log"
+    log.write_text(
+        f"2026-07-20T13:25:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    analyzer = mod.TraceAnalyzer()
+    report = analyzer.analyze([str(log)], code_ref="unit-test")
+
+    assert isinstance(analyzer.accumulator, mod.TraceAccumulator)
+    assert isinstance(analyzer.dimension_builder, mod.TraceDimensionBuilder)
+    assert hasattr(analyzer.accumulator, "ingest")
+    assert hasattr(analyzer.dimension_builder, "build")
+    assert report["trace_count"] == 1
+    assert report["dimensions"]["flow"]["DS_KV_CLIENT_GET"] == 1
 
 
 def test_parser_extension_rules_add_new_errors_and_metrics(tmp_path):

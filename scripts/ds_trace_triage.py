@@ -499,128 +499,140 @@ def _surface_status(count):
     return "present" if count else "missing"
 
 
-class TraceAnalyzer:
-    """Coordinate input reading, line parsing, trace accumulation, and dimensions."""
+class TraceAccumulator:
+    """Accumulate parsed log lines into trace-scoped facts and raw dimensions."""
 
-    def __init__(self, reader=None, parser=None, rules=None):
-        self.rules = rules or DEFAULT_RULES
-        self.reader = reader or TraceInputReader()
-        self.parser = parser or TraceParser(self.rules)
+    def __init__(self, paths):
+        self.noise_cohort_mode = _detect_noise_cohort_mode(paths)
+        self.traces = defaultdict(self._new_trace)
+        self.all_ts = []
+        self.worker_counts = Counter()
+        self.flow_counts = Counter()
+        self.access_latencies = []
+        self.breakdown = {}
+        self.rpc_slow = defaultdict(lambda: {"count": 0, "fields_us": defaultdict(list)})
+        self.urma = defaultdict(list)
+        self.urma_perf = defaultdict(list)
+        self.custom_metrics = defaultdict(list)
+        self.latency_summary = defaultdict(list)
+        self.errors = Counter()
+        self.ub_summary = {"transfer_path": Counter(), "edges": defaultdict(lambda: {"count": 0, "latencies": []})}
+        self.surface_counts = Counter()
 
-    def analyze(self, paths, code_ref="unknown"):
-        return _analyze_inputs(paths, code_ref=code_ref, reader=self.reader, parser=self.parser, rules=self.rules)
+    @staticmethod
+    def _new_trace():
+        return {
+            "lines": 0,
+            "workers": Counter(),
+            "timestamps": [],
+            "flows": Counter(),
+            "access_latency_ms": [],
+            "breakdown_ms": Counter(),
+            "rpc_slow": Counter(),
+            "rpc_slow_fields_us": defaultdict(list),
+            "urma_total_ms": [],
+            "urma_poll_jfc_ms": [],
+            "urma_notify_ms": [],
+            "urma_thread_sched_ms": [],
+            "urma_perf": Counter(),
+            "custom_metrics_ms": Counter(),
+            "ub_events": [],
+            "latency_summary_us": Counter(),
+            "latency_summary_raw": [],
+            "errors": Counter(),
+            "evidence": [],
+            "input_sources": Counter(),
+        }
 
-
-def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=None):
-    reader = reader or TraceInputReader()
-    parser = parser or TraceParser(rules or DEFAULT_RULES)
-    noise_cohort_mode = _detect_noise_cohort_mode(paths)
-    traces = defaultdict(lambda: {
-        "lines": 0,
-        "workers": Counter(),
-        "timestamps": [],
-        "flows": Counter(),
-        "access_latency_ms": [],
-        "breakdown_ms": Counter(),
-        "rpc_slow": Counter(),
-        "rpc_slow_fields_us": defaultdict(list),
-        "urma_total_ms": [],
-        "urma_poll_jfc_ms": [],
-        "urma_notify_ms": [],
-        "urma_thread_sched_ms": [],
-        "urma_perf": Counter(),
-        "custom_metrics_ms": Counter(),
-        "ub_events": [],
-        "latency_summary_us": Counter(),
-        "latency_summary_raw": [],
-        "errors": Counter(),
-        "evidence": [],
-        "input_sources": Counter(),
-    })
-    all_ts = []
-    worker_counts = Counter()
-    flow_counts = Counter()
-    access_latencies = []
-    breakdown = {}
-    rpc_slow = defaultdict(lambda: {"count": 0, "fields_us": defaultdict(list)})
-    urma = defaultdict(list)
-    urma_perf = defaultdict(list)
-    custom_metrics = defaultdict(list)
-    latency_summary = defaultdict(list)
-    errors = Counter()
-    ub_summary = {"transfer_path": Counter(), "edges": defaultdict(lambda: {"count": 0, "latencies": []})}
-    surface_counts = Counter()
-
-    for source, member, line_no, line in reader.iter_lines(paths):
-        parsed = parser.parse_line(source, member, line_no, line)
-        if not parsed:
-            continue
+    def ingest(self, parsed, line):
         trace_id = parsed["trace_id"]
-        trace = traces[trace_id]
+        trace = self.traces[trace_id]
         trace["lines"] += 1
-        trace["input_sources"][_source_cohort_label(source, member, noise_cohort_mode)] += 1
+        evidence = parsed["evidence"]
+        trace["input_sources"][
+            _source_cohort_label(evidence["source"], evidence["member"], self.noise_cohort_mode)
+        ] += 1
         worker = parsed["worker"]
         trace["workers"][worker] += 1
-        worker_counts[worker] += 1
+        self.worker_counts[worker] += 1
         ts = parsed["timestamp"]
         if ts:
             trace["timestamps"].append(ts.isoformat())
-            all_ts.append(ts)
-        trace["evidence"].append(parsed["evidence"])
+            self.all_ts.append(ts)
+        trace["evidence"].append(evidence)
+        self._ingest_ub_events(trace, parsed["ub_events"])
+        self._ingest_access(trace, line)
+        self._ingest_breakdown(trace, line)
+        self._ingest_rpc_slow(trace, line)
+        self._ingest_latency_summary(trace, line)
+        self._ingest_urma_elapsed(trace, line)
+        self._ingest_urma_perf(trace, line)
+        self._ingest_custom_metrics(trace, parsed["custom_metrics_ms"])
+        self._ingest_errors(trace, parsed["errors"])
 
-        for event in parsed["ub_events"]:
+    def _ingest_ub_events(self, trace, events):
+        for event in events:
             trace["ub_events"].append(event)
             if event.get("transfer_path"):
-                ub_summary["transfer_path"][event["transfer_path"]] += 1
+                self.ub_summary["transfer_path"][event["transfer_path"]] += 1
             if event.get("src_addr") and event.get("target_addr") and event.get("event_type") == "total":
                 edge = f"{event['src_addr']} -> {event['target_addr']}"
-                ub_summary["edges"][edge]["count"] += 1
+                self.ub_summary["edges"][edge]["count"] += 1
                 if event.get("cost_ms") is not None:
-                    ub_summary["edges"][edge]["latencies"].append(event["cost_ms"])
+                    self.ub_summary["edges"][edge]["latencies"].append(event["cost_ms"])
 
+    def _ingest_access(self, trace, line):
         access = ACCESS_RE.search(line)
-        if access:
-            surface_counts["client_access"] += 1
-            status, operation, duration_us, _size = access.groups()
-            latency_ms = int(duration_us) / 1000.0
-            trace["flows"][operation] += 1
-            flow_counts[operation] += 1
-            if status != "0":
-                errors[f"status={status}"] += 1
-                trace["errors"][f"status={status}"] += 1
-            trace["access_latency_ms"].append(latency_ms)
-            access_latencies.append(latency_ms)
+        if not access:
+            return
+        self.surface_counts["client_access"] += 1
+        status, operation, duration_us, _size = access.groups()
+        latency_ms = int(duration_us) / 1000.0
+        trace["flows"][operation] += 1
+        self.flow_counts[operation] += 1
+        if status != "0":
+            self.errors[f"status={status}"] += 1
+            trace["errors"][f"status={status}"] += 1
+        trace["access_latency_ms"].append(latency_ms)
+        self.access_latencies.append(latency_ms)
 
+    def _ingest_breakdown(self, trace, line):
         block = BREAKDOWN_BLOCK_RE.search(line)
-        if block:
-            for key, value in BREAKDOWN_ITEM_RE.findall(block.group(1)):
-                value_ms = float(value)
-                name = " ".join(key.split())
-                trace["breakdown_ms"][name] += value_ms
-                _add_metric(breakdown, name, value_ms)
+        if not block:
+            return
+        for key, value in BREAKDOWN_ITEM_RE.findall(block.group(1)):
+            value_ms = float(value)
+            name = " ".join(key.split())
+            trace["breakdown_ms"][name] += value_ms
+            _add_metric(self.breakdown, name, value_ms)
 
+    def _ingest_rpc_slow(self, trace, line):
         rpc = RPC_SLOW_RE.search(line)
-        if rpc:
-            surface_counts["rpc_slow"] += 1
-            method = rpc.group(1)
-            trace["rpc_slow"][method] += 1
-            rpc_slow[method]["count"] += 1
-            for field, raw_value in RPC_SLOW_FIELD_RE.findall(line):
-                val = int(raw_value)
-                trace["rpc_slow_fields_us"][field].append(val)
-                rpc_slow[method]["fields_us"][field].append(val)
+        if not rpc:
+            return
+        self.surface_counts["rpc_slow"] += 1
+        method = rpc.group(1)
+        trace["rpc_slow"][method] += 1
+        self.rpc_slow[method]["count"] += 1
+        for field, raw_value in RPC_SLOW_FIELD_RE.findall(line):
+            val = int(raw_value)
+            trace["rpc_slow_fields_us"][field].append(val)
+            self.rpc_slow[method]["fields_us"][field].append(val)
 
+    def _ingest_latency_summary(self, trace, line):
         summary = LATENCY_SUMMARY_RE.search(line)
-        if summary:
-            surface_counts["latency_summary"] += 1
-            raw = "latencySummary:{" + summary.group(1) + "}"
-            if len(trace["latency_summary_raw"]) < 8:
-                trace["latency_summary_raw"].append(raw)
-            for key, raw_value in SUMMARY_ITEM_RE.findall(summary.group(1)):
-                val = int(raw_value)
-                trace["latency_summary_us"][key] += val
-                latency_summary[key].append(val)
+        if not summary:
+            return
+        self.surface_counts["latency_summary"] += 1
+        raw = "latencySummary:{" + summary.group(1) + "}"
+        if len(trace["latency_summary_raw"]) < 8:
+            trace["latency_summary_raw"].append(raw)
+        for key, raw_value in SUMMARY_ITEM_RE.findall(summary.group(1)):
+            val = int(raw_value)
+            trace["latency_summary_us"][key] += val
+            self.latency_summary[key].append(val)
 
+    def _ingest_urma_elapsed(self, trace, line):
         for name, regex in (
             ("total", URMA_TOTAL_RE),
             ("poll_jfc", URMA_POLL_RE),
@@ -629,181 +641,259 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         ):
             um = regex.search(line)
             if um:
-                surface_counts["urma_elapsed"] += 1
+                self.surface_counts["urma_elapsed"] += 1
                 val = _ms(um.group(1), um.group(2) if len(um.groups()) > 1 else "ms")
                 trace[f"urma_{name}_ms"].append(val)
-                urma[name].append(val)
+                self.urma[name].append(val)
 
+    def _ingest_urma_perf(self, trace, line):
         perf = URMA_PERF_RE.search(line)
-        if perf:
-            key, raw_value, unit = perf.groups()
-            val = float(raw_value)
-            if (unit or "ms").lower() == "us":
-                val /= 1000.0
-            name = " ".join(key.split())
-            trace["urma_perf"][name] += val
-            urma_perf[name].append(val)
+        if not perf:
+            return
+        key, raw_value, unit = perf.groups()
+        val = float(raw_value)
+        if (unit or "ms").lower() == "us":
+            val /= 1000.0
+        name = " ".join(key.split())
+        trace["urma_perf"][name] += val
+        self.urma_perf[name].append(val)
 
-        for name, val in parsed["custom_metrics_ms"].items():
+    def _ingest_custom_metrics(self, trace, metrics):
+        for name, val in metrics.items():
             trace["custom_metrics_ms"][name] += val
-            custom_metrics[name].append(val)
+            self.custom_metrics[name].append(val)
 
-        for pattern in parsed["errors"]:
-            surface_counts["error"] += 1
-            errors[pattern] += 1
+    def _ingest_errors(self, trace, patterns):
+        for pattern in patterns:
+            self.surface_counts["error"] += 1
+            self.errors[pattern] += 1
             trace["errors"][pattern] += 1
 
-    trace_rows = {}
-    classifications = Counter()
-    worker_roles = defaultdict(set)
-    worker_trace_ids = defaultdict(set)
-    worker_slow_counts = Counter()
-    worker_error_counts = Counter()
-    for trace_id, trace in traces.items():
-        trace["classification"] = _classify(trace)
-        classifications[trace["classification"]] += 1
-        triage_flags = []
-        if trace["errors"] and max(trace["urma_total_ms"] or [0]) > max(trace["access_latency_ms"] or [0]):
-            triage_flags.append("late_worker_completion")
-        for worker in trace["workers"]:
-            worker_trace_ids[worker].add(trace_id)
-            if trace["classification"] not in ("unknown", "access_latency_only"):
-                worker_slow_counts[worker] += 1
-            if trace["errors"]:
-                worker_error_counts[worker] += sum(trace["errors"].values())
-        for event in trace["ub_events"]:
-            if event["event_type"] in ("transfer_path", "remote_get_start"):
-                worker_roles[event["worker"]].add("entry_worker")
-            if event["event_type"] in ("total", "poll_jfc", "notify", "thread_sched"):
-                worker_roles[event["worker"]].add("data_worker")
-        stage_breakdown, missing_evidence = _build_stage_breakdown(trace)
-        trace_rows[trace_id] = {
-            "classification": trace["classification"],
-            "line_count": trace["lines"],
-            "workers": dict(trace["workers"]),
-            "first_ts": min(trace["timestamps"]) if trace["timestamps"] else None,
-            "last_ts": max(trace["timestamps"]) if trace["timestamps"] else None,
-            "flows": dict(trace["flows"]),
-            "access_latency_ms": _percentiles(trace["access_latency_ms"]),
-            "breakdown_ms": {k: round(v, 3) for k, v in trace["breakdown_ms"].items()},
-            "rpc_slow": dict(trace["rpc_slow"]),
-            "rpc_slow_fields_us": {k: _percentiles(v) for k, v in sorted(trace["rpc_slow_fields_us"].items())},
-            "urma_elapsed_ms": {
-                "total": _percentiles(trace["urma_total_ms"]),
-                "poll_jfc": _percentiles(trace["urma_poll_jfc_ms"]),
-                "notify": _percentiles(trace["urma_notify_ms"]),
-                "thread_sched": _percentiles(trace["urma_thread_sched_ms"]),
-            },
-            "urma_perf_ms": {k: round(v, 3) for k, v in trace["urma_perf"].items()},
-            "custom_metrics_ms": {k: round(v, 3) for k, v in trace["custom_metrics_ms"].items()},
-            "ub_events": trace["ub_events"],
-            "latency_summary_us": dict(trace["latency_summary_us"]),
-            "latency_summary_raw": trace["latency_summary_raw"],
-            "errors": dict(trace["errors"]),
-            "input_sources": sorted(trace["input_sources"]),
-            "triage_flags": triage_flags,
-            "stage_breakdown": stage_breakdown,
-            "evidence_coverage": _evidence_coverage(trace),
-            "missing_evidence": missing_evidence,
-            "evidence": trace["evidence"],
+    def finish(self):
+        trace_rows, classifications, worker_summary = self._build_trace_rows()
+        worker_edges = {
+            edge: {"count": item["count"], "p99_ms": _percentiles(item["latencies"]).get("p99")}
+            for edge, item in self.ub_summary["edges"].items()
         }
-
-    worker_summary = {}
-    for worker, item in worker_counts.most_common():
-        roles = sorted(worker_roles.get(worker) or {"unknown"})
-        worker_summary[worker] = {
-            "roles": roles,
-            "line_count": item,
-            "trace_count": len(worker_trace_ids[worker]),
-            "slow_trace_count": worker_slow_counts[worker],
-            "error_count": worker_error_counts[worker],
-            "coverage": {
-                "urma": "present" if "data_worker" in roles else "missing",
-                "remote_get": "present" if "entry_worker" in roles else "missing",
-            },
-        }
-
-    worker_edges = {}
-    for edge, item in ub_summary["edges"].items():
-        worker_edges[edge] = {"count": item["count"], "p99_ms": _percentiles(item["latencies"]).get("p99")}
-
-    time_buckets = _build_time_buckets(trace_rows, 1000)
-    ub_worker_summary = _build_ub_worker_summary(trace_rows)
-    cohorts = _build_cohorts(trace_rows)
-    coverage = {
-        "surfaces": {
-            "client_access": {"events": surface_counts["client_access"],
-                              "status": _surface_status(surface_counts["client_access"])},
-            "rpc_slow": {"events": surface_counts["rpc_slow"],
-                         "status": _surface_status(surface_counts["rpc_slow"])},
-            "latency_summary": {"events": surface_counts["latency_summary"],
-                                "status": _surface_status(surface_counts["latency_summary"])},
-            "urma_elapsed": {"events": surface_counts["urma_elapsed"],
-                             "status": _surface_status(surface_counts["urma_elapsed"])},
-            "error": {"events": surface_counts["error"], "status": _surface_status(surface_counts["error"])},
-        }
-    }
-    diagnosis = _build_diagnosis(
-        errors=errors,
-        classifications=classifications,
-        access_latencies=access_latencies,
-        coverage=coverage,
-        cohorts=cohorts,
-    )
-    recommendations = _build_recommendations(
-        classifications=classifications,
-        coverage=coverage,
-        cohorts=cohorts,
-        ub_summary=ub_summary,
-    )
-    source_appendix = _build_source_appendix(coverage)
-    flow_stages = _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows)
-
-    return {
-        "schema_version": 1,
-        "code_ref": code_ref,
-        "inputs": [str(p) for p in paths],
-        "trace_count": len(trace_rows),
-        "dimensions": {
-            "time": {
-                "first_ts": min(all_ts).isoformat() if all_ts else None,
-                "last_ts": max(all_ts).isoformat() if all_ts else None,
-            },
-            "time_buckets": {"1000ms": time_buckets, "10000ms": _build_time_buckets(trace_rows, 10000)},
-            "workers": {k: {"line_count": v} for k, v in worker_counts.most_common()},
+        return {
+            "trace_rows": trace_rows,
+            "classifications": classifications,
             "worker_summary": worker_summary,
-            "ub_worker_summary": ub_worker_summary,
-            "cohorts": cohorts,
             "worker_edges": worker_edges,
-            "coverage": coverage,
-            "diagnosis": diagnosis,
-            "recommendations": recommendations,
-            "source_appendix": source_appendix,
-            "flow_stages": flow_stages,
-            "flow": dict(flow_counts),
-            "latency_ms": {"access": _percentiles(access_latencies)},
-            "breakdown_ms": breakdown,
-            "rpc_slow": {
-                k: {
-                    "count": v["count"],
-                    **{field: _percentiles(vals) for field, vals in sorted(v["fields_us"].items())},
-                }
-                for k, v in sorted(rpc_slow.items())
+            "all_ts": self.all_ts,
+            "worker_counts": self.worker_counts,
+            "flow_counts": self.flow_counts,
+            "access_latencies": self.access_latencies,
+            "breakdown": self.breakdown,
+            "rpc_slow": self.rpc_slow,
+            "urma": self.urma,
+            "urma_perf": self.urma_perf,
+            "custom_metrics": self.custom_metrics,
+            "latency_summary": self.latency_summary,
+            "errors": self.errors,
+            "ub_summary": self.ub_summary,
+            "surface_counts": self.surface_counts,
+        }
+
+    def _build_trace_rows(self):
+        trace_rows = {}
+        classifications = Counter()
+        worker_roles = defaultdict(set)
+        worker_trace_ids = defaultdict(set)
+        worker_slow_counts = Counter()
+        worker_error_counts = Counter()
+        for trace_id, trace in self.traces.items():
+            trace["classification"] = _classify(trace)
+            classifications[trace["classification"]] += 1
+            triage_flags = []
+            if trace["errors"] and max(trace["urma_total_ms"] or [0]) > max(trace["access_latency_ms"] or [0]):
+                triage_flags.append("late_worker_completion")
+            for worker in trace["workers"]:
+                worker_trace_ids[worker].add(trace_id)
+                if trace["classification"] not in ("unknown", "access_latency_only"):
+                    worker_slow_counts[worker] += 1
+                if trace["errors"]:
+                    worker_error_counts[worker] += sum(trace["errors"].values())
+            for event in trace["ub_events"]:
+                if event["event_type"] in ("transfer_path", "remote_get_start"):
+                    worker_roles[event["worker"]].add("entry_worker")
+                if event["event_type"] in ("total", "poll_jfc", "notify", "thread_sched"):
+                    worker_roles[event["worker"]].add("data_worker")
+            stage_breakdown, missing_evidence = _build_stage_breakdown(trace)
+            trace_rows[trace_id] = {
+                "classification": trace["classification"],
+                "line_count": trace["lines"],
+                "workers": dict(trace["workers"]),
+                "first_ts": min(trace["timestamps"]) if trace["timestamps"] else None,
+                "last_ts": max(trace["timestamps"]) if trace["timestamps"] else None,
+                "flows": dict(trace["flows"]),
+                "access_latency_ms": _percentiles(trace["access_latency_ms"]),
+                "breakdown_ms": {k: round(v, 3) for k, v in trace["breakdown_ms"].items()},
+                "rpc_slow": dict(trace["rpc_slow"]),
+                "rpc_slow_fields_us": {k: _percentiles(v) for k, v in sorted(trace["rpc_slow_fields_us"].items())},
+                "urma_elapsed_ms": {
+                    "total": _percentiles(trace["urma_total_ms"]),
+                    "poll_jfc": _percentiles(trace["urma_poll_jfc_ms"]),
+                    "notify": _percentiles(trace["urma_notify_ms"]),
+                    "thread_sched": _percentiles(trace["urma_thread_sched_ms"]),
+                },
+                "urma_perf_ms": {k: round(v, 3) for k, v in trace["urma_perf"].items()},
+                "custom_metrics_ms": {k: round(v, 3) for k, v in trace["custom_metrics_ms"].items()},
+                "ub_events": trace["ub_events"],
+                "latency_summary_us": dict(trace["latency_summary_us"]),
+                "latency_summary_raw": trace["latency_summary_raw"],
+                "errors": dict(trace["errors"]),
+                "input_sources": sorted(trace["input_sources"]),
+                "triage_flags": triage_flags,
+                "stage_breakdown": stage_breakdown,
+                "evidence_coverage": _evidence_coverage(trace),
+                "missing_evidence": missing_evidence,
+                "evidence": trace["evidence"],
+            }
+        return trace_rows, classifications, self._build_worker_summary(
+            worker_roles, worker_trace_ids, worker_slow_counts, worker_error_counts
+        )
+
+    def _build_worker_summary(self, worker_roles, worker_trace_ids, worker_slow_counts, worker_error_counts):
+        worker_summary = {}
+        for worker, item in self.worker_counts.most_common():
+            roles = sorted(worker_roles.get(worker) or {"unknown"})
+            worker_summary[worker] = {
+                "roles": roles,
+                "line_count": item,
+                "trace_count": len(worker_trace_ids[worker]),
+                "slow_trace_count": worker_slow_counts[worker],
+                "error_count": worker_error_counts[worker],
+                "coverage": {
+                    "urma": "present" if "data_worker" in roles else "missing",
+                    "remote_get": "present" if "entry_worker" in roles else "missing",
+                },
+            }
+        return worker_summary
+
+
+class TraceDimensionBuilder:
+    """Convert accumulated trace facts into the stable report schema."""
+
+    def build(self, snapshot, paths, code_ref="unknown"):
+        trace_rows = snapshot["trace_rows"]
+        surface_counts = snapshot["surface_counts"]
+        coverage = self._build_coverage(surface_counts)
+        cohorts = _build_cohorts(trace_rows)
+        diagnosis = _build_diagnosis(
+            errors=snapshot["errors"],
+            classifications=snapshot["classifications"],
+            access_latencies=snapshot["access_latencies"],
+            coverage=coverage,
+            cohorts=cohorts,
+        )
+        recommendations = _build_recommendations(
+            classifications=snapshot["classifications"],
+            coverage=coverage,
+            cohorts=cohorts,
+            ub_summary=snapshot["ub_summary"],
+        )
+        flow_stages = _build_flow_stages(coverage, snapshot["flow_counts"], snapshot["ub_summary"], trace_rows)
+        return {
+            "schema_version": 1,
+            "code_ref": code_ref,
+            "inputs": [str(p) for p in paths],
+            "trace_count": len(trace_rows),
+            "dimensions": {
+                "time": self._build_time_range(snapshot["all_ts"]),
+                "time_buckets": {"1000ms": _build_time_buckets(trace_rows, 1000),
+                                 "10000ms": _build_time_buckets(trace_rows, 10000)},
+                "workers": {k: {"line_count": v} for k, v in snapshot["worker_counts"].most_common()},
+                "worker_summary": snapshot["worker_summary"],
+                "ub_worker_summary": _build_ub_worker_summary(trace_rows),
+                "cohorts": cohorts,
+                "worker_edges": snapshot["worker_edges"],
+                "coverage": coverage,
+                "diagnosis": diagnosis,
+                "recommendations": recommendations,
+                "source_appendix": _build_source_appendix(coverage),
+                "flow_stages": flow_stages,
+                "flow": dict(snapshot["flow_counts"]),
+                "latency_ms": {"access": _percentiles(snapshot["access_latencies"])},
+                "breakdown_ms": snapshot["breakdown"],
+                "rpc_slow": self._build_rpc_slow(snapshot["rpc_slow"]),
+                "urma_elapsed": {k: _percentiles(v) for k, v in sorted(snapshot["urma"].items())},
+                "ub_summary": self._build_ub_summary(snapshot["ub_summary"]),
+                "urma_perf_ms": {k: _percentiles(v) for k, v in sorted(snapshot["urma_perf"].items())},
+                "custom_metrics_ms": {k: _percentiles(v) for k, v in sorted(snapshot["custom_metrics"].items())},
+                "latency_summary_us": {k: _percentiles(v) for k, v in sorted(snapshot["latency_summary"].items())},
+                "errors": dict(snapshot["errors"]),
+                "classifications": dict(snapshot["classifications"]),
             },
-            "urma_elapsed": {k: _percentiles(v) for k, v in sorted(urma.items())},
-            "ub_summary": {
-                "transfer_path": dict(ub_summary["transfer_path"]),
-                "edges": {edge: {"count": item["count"], "latency_ms": _percentiles(item["latencies"])}
-                          for edge, item in sorted(ub_summary["edges"].items())},
+            "traces": trace_rows,
+        }
+
+    @staticmethod
+    def _build_time_range(all_ts):
+        return {
+            "first_ts": min(all_ts).isoformat() if all_ts else None,
+            "last_ts": max(all_ts).isoformat() if all_ts else None,
+        }
+
+    @staticmethod
+    def _build_coverage(surface_counts):
+        return {
+            "surfaces": {
+                "client_access": {"events": surface_counts["client_access"],
+                                  "status": _surface_status(surface_counts["client_access"])},
+                "rpc_slow": {"events": surface_counts["rpc_slow"],
+                             "status": _surface_status(surface_counts["rpc_slow"])},
+                "latency_summary": {"events": surface_counts["latency_summary"],
+                                    "status": _surface_status(surface_counts["latency_summary"])},
+                "urma_elapsed": {"events": surface_counts["urma_elapsed"],
+                                 "status": _surface_status(surface_counts["urma_elapsed"])},
+                "error": {"events": surface_counts["error"], "status": _surface_status(surface_counts["error"])},
+            }
+        }
+
+    @staticmethod
+    def _build_rpc_slow(rpc_slow):
+        return {
+            k: {
+                "count": v["count"],
+                **{field: _percentiles(vals) for field, vals in sorted(v["fields_us"].items())},
+            }
+            for k, v in sorted(rpc_slow.items())
+        }
+
+    @staticmethod
+    def _build_ub_summary(ub_summary):
+        return {
+            "transfer_path": dict(ub_summary["transfer_path"]),
+            "edges": {
+                edge: {"count": item["count"], "latency_ms": _percentiles(item["latencies"])}
+                for edge, item in sorted(ub_summary["edges"].items())
             },
-            "urma_perf_ms": {k: _percentiles(v) for k, v in sorted(urma_perf.items())},
-            "custom_metrics_ms": {k: _percentiles(v) for k, v in sorted(custom_metrics.items())},
-            "latency_summary_us": {k: _percentiles(v) for k, v in sorted(latency_summary.items())},
-            "errors": dict(errors),
-            "classifications": dict(classifications),
-        },
-        "traces": trace_rows,
-    }
+        }
+
+
+class TraceAnalyzer:
+    """Coordinate input reading, line parsing, trace accumulation, and dimensions."""
+
+    def __init__(self, reader=None, parser=None, rules=None, accumulator_cls=None, dimension_builder=None):
+        self.rules = rules or DEFAULT_RULES
+        self.reader = reader or TraceInputReader()
+        self.parser = parser or TraceParser(self.rules)
+        self.accumulator_cls = accumulator_cls or TraceAccumulator
+        self.dimension_builder = dimension_builder or TraceDimensionBuilder()
+        self.accumulator = None
+
+    def analyze(self, paths, code_ref="unknown"):
+        self.accumulator = self.accumulator_cls(paths)
+        for source, member, line_no, line in self.reader.iter_lines(paths):
+            parsed = self.parser.parse_line(source, member, line_no, line)
+            if parsed:
+                self.accumulator.ingest(parsed, line)
+        return self.dimension_builder.build(self.accumulator.finish(), paths, code_ref=code_ref)
+
+
+def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=None):
+    return TraceAnalyzer(reader=reader, parser=parser, rules=rules).analyze(paths, code_ref=code_ref)
 
 
 def analyze_inputs(paths, code_ref="unknown"):
@@ -2618,31 +2708,33 @@ def _new_run_dir(out_root, case_name, cache_key):
     return run_dir, now
 
 
-class TraceRunPipeline:
-    """Manage staged run directories, cache, manifest state, and render targets."""
+class TraceRunStore:
+    """Own run-directory cache, manifest, and artifact file operations."""
 
-    def __init__(self, analyzer=None, renderer=None):
-        self.analyzer = analyzer or TraceAnalyzer()
-        self.renderer = renderer or TraceReportRenderer()
-
-    def parse(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+    def prepare_parse_run(self, inputs, out_dir, case_name, scenario, code_ref, force=False):
         out_root = Path(out_dir)
         out_root.mkdir(parents=True, exist_ok=True)
         cache_key, identities = _cache_key(inputs, code_ref, case_name, scenario)
         if not force:
             cached = _find_cached_run(out_root, cache_key)
             if cached:
-                return cached
-        run_dir, now = _new_run_dir(out_root, case_name, cache_key)
+                return {"run_dir": cached, "cached": True}
+        run_dir, created_at = _new_run_dir(out_root, case_name, cache_key)
         _preserve_raw_inputs(inputs, run_dir)
+        return {
+            "run_dir": run_dir,
+            "created_at": created_at,
+            "cache_key": cache_key,
+            "identities": identities,
+            "cached": False,
+        }
 
-        report = self.analyzer.analyze(inputs, code_ref=code_ref)
-        events = self.renderer.events(report)
+    def write_parse_outputs(self, run_dir, report, events, case_name, scenario, code_ref, created_at, cache_key, identities):
         manifest = {
             "schema_version": 1,
             "case_name": case_name,
             "scenario": scenario,
-            "analysis_created_at": now.isoformat(),
+            "analysis_created_at": created_at.isoformat(),
             "code_ref": code_ref,
             "script_version": _script_version(),
             "cache": {"key": cache_key, "status": "created"},
@@ -2659,57 +2751,168 @@ class TraceRunPipeline:
                 "site": {"path": "report.site.html", "status": "pending"},
             },
         }
-        _write_json(run_dir / "manifest.json", manifest)
+        self.write_json(run_dir / "manifest.json", manifest)
         _write_inputs_doc(run_dir, manifest)
         (run_dir / "events.jsonl").write_text(
             "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8"
         )
-        _write_json(run_dir / "parsed_traces.json", report)
+        self.write_json(run_dir / "parsed_traces.json", report)
+
+    def read_json(self, path):
+        return _read_json(path)
+
+    def write_json(self, path, value):
+        _write_json(path, value)
+
+    def update_manifest(self, run_dir, updater):
+        _update_manifest(run_dir, updater)
+
+    def write_text(self, path, text):
+        Path(path).write_text(text, encoding="utf-8")
+
+    def write_site_publish_doc(self, run_dir, manifest):
+        return _write_site_publish_doc(run_dir, manifest)
+
+
+class TraceSitePublisher:
+    """Publish site reports with size guard and live marker verification."""
+
+    def __init__(self, store=None, pipeline_factory=None):
+        self.store = store or TraceRunStore()
+        self.pipeline_factory = pipeline_factory or TraceRunPipeline
+
+    def size_guard(self, source_html, max_bytes=DEFAULT_SITE_HTML_MAX_BYTES):
+        source_html = Path(source_html)
+        size = source_html.stat().st_size
+        return {
+            "source_size_bytes": size,
+            "max_site_html_bytes": max_bytes,
+            "size_status": "ok" if size <= max_bytes else "too_large",
+        }
+
+    def publish(self, run_dir, dry_run=True, max_site_html_bytes=DEFAULT_SITE_HTML_MAX_BYTES):
+        run_dir = Path(run_dir)
+        manifest = self.store.read_json(run_dir / "manifest.json")
+        site_target = manifest.get("render_targets", {}).get("site", {})
+        if not (run_dir / site_target.get("path", "report.site.html")).exists():
+            self.pipeline_factory(store=self.store, site_publisher=self).render_site(run_dir)
+            manifest = self.store.read_json(run_dir / "manifest.json")
+            site_target = manifest.get("render_targets", {}).get("site", {})
+        if not (run_dir / site_target.get("publish_doc", "site_publish.md")).exists():
+            publish_doc = self.store.write_site_publish_doc(run_dir, manifest)
+            site_target = {**site_target, **publish_doc}
+        source_html = run_dir / site_target.get("path", "report.site.html")
+        size_guard = self.size_guard(source_html, max_site_html_bytes)
+        live_markers = "not-run"
+        if dry_run:
+            status = "dry-run"
+        elif size_guard["size_status"] != "ok":
+            status = "blocked-size-limit"
+            self._record_publish(run_dir, site_target, status, live_markers, size_guard)
+            raise SystemExit(
+                f"Refuse to publish oversized site HTML: {source_html} is "
+                f"{size_guard['source_size_bytes']} bytes > {max_site_html_bytes} bytes. "
+                "Review the report or raise --max-site-html-mb intentionally."
+            )
+        else:
+            self._copy_and_verify(source_html, site_target)
+            live_markers = "verified"
+            status = "published"
+        self._record_publish(run_dir, site_target, status, live_markers, size_guard)
+        return site_target.get("url", "")
+
+    def _copy_and_verify(self, source_html, site_target):
+        target_path = site_target.get("target_path", "")
+        url = site_target.get("url", "")
+        subprocess.run(["scp", str(source_html), f"xqyun-32c32g:{target_path}"], check=True)
+        subprocess.run(["curl", "-fsSI", url], check=True)
+        result = subprocess.run(["curl", "-fsSL", "-A", "Mozilla/5.0", url],
+                                check=True, capture_output=True, text=True)
+        for marker in [
+            "Trace 分析报告",
+            'id="coverage-table"',
+            'id="flow-stage-chart"',
+            'id="download-report-summary"',
+            "/assets/css/site.css",
+            "/assets/js/site.js",
+        ]:
+            assert marker in result.stdout, marker
+
+    def _record_publish(self, run_dir, site_target, status, live_markers, size_guard):
+        self.store.update_manifest(run_dir, lambda item: item["render_targets"]["site"].update({
+            **site_target,
+            "publish": {
+                "status": status,
+                "url": site_target.get("url", ""),
+                "target_path": site_target.get("target_path", ""),
+                "live_markers": live_markers,
+                **size_guard,
+            },
+        }))
+
+
+class TraceRunPipeline:
+    """Manage staged run directories, cache, manifest state, and render targets."""
+
+    def __init__(self, analyzer=None, renderer=None, store=None, site_publisher=None):
+        self.analyzer = analyzer or TraceAnalyzer()
+        self.renderer = renderer or TraceReportRenderer()
+        self.store = store or TraceRunStore()
+        self.site_publisher = site_publisher or TraceSitePublisher(self.store)
+
+    def parse(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+        prepared = self.store.prepare_parse_run(inputs, out_dir, case_name, scenario, code_ref, force=force)
+        if prepared["cached"]:
+            return prepared["run_dir"]
+        run_dir = prepared["run_dir"]
+        report = self.analyzer.analyze(inputs, code_ref=code_ref)
+        events = self.renderer.events(report)
+        self.store.write_parse_outputs(
+            run_dir, report, events, case_name, scenario, code_ref,
+            prepared["created_at"], prepared["cache_key"], prepared["identities"],
+        )
         return run_dir
 
     def aggregate(self, run_dir):
         run_dir = Path(run_dir)
-        report = _read_json(run_dir / "parsed_traces.json")
-        _write_json(run_dir / "summary.json", report)
-        _update_manifest(run_dir, lambda manifest: manifest["stages"].update({
+        report = self.store.read_json(run_dir / "parsed_traces.json")
+        self.store.write_json(run_dir / "summary.json", report)
+        self.store.update_manifest(run_dir, lambda manifest: manifest["stages"].update({
             "aggregate": {"status": "done", "path": "summary.json"}
         }))
         return run_dir / "summary.json"
 
     def triage(self, run_dir):
         run_dir = Path(run_dir)
-        report = _read_json(run_dir / "summary.json")
+        report = self.store.read_json(run_dir / "summary.json")
         triage = self.renderer.triage(report)
-        _write_json(run_dir / "triage.json", triage)
-        (run_dir / "triage.md").write_text(self.renderer.markdown(report), encoding="utf-8")
-        _update_manifest(run_dir, lambda manifest: manifest["stages"].update({
+        self.store.write_json(run_dir / "triage.json", triage)
+        self.store.write_text(run_dir / "triage.md", self.renderer.markdown(report))
+        self.store.update_manifest(run_dir, lambda manifest: manifest["stages"].update({
             "triage": {"status": "done", "path": "triage.json", "markdown": "triage.md"}
         }))
         return run_dir / "triage.json"
 
     def render_local(self, run_dir):
         run_dir = Path(run_dir)
-        report = _read_json(run_dir / "summary.json")
-        manifest = _read_json(run_dir / "manifest.json")
+        report = self.store.read_json(run_dir / "summary.json")
+        manifest = self.store.read_json(run_dir / "manifest.json")
         title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
-        (run_dir / "report.local.html").write_text(
-            self.renderer.html(report, title, manifest=manifest), encoding="utf-8"
-        )
-        _update_manifest(run_dir, lambda item: item["render_targets"].update({
+        self.store.write_text(run_dir / "report.local.html", self.renderer.html(report, title, manifest=manifest))
+        self.store.update_manifest(run_dir, lambda item: item["render_targets"].update({
             "local": {"path": "report.local.html", "status": "generated"}
         }))
         return run_dir / "report.local.html"
 
     def render_site(self, run_dir):
         run_dir = Path(run_dir)
-        report = _read_json(run_dir / "summary.json")
-        manifest = _read_json(run_dir / "manifest.json")
+        report = self.store.read_json(run_dir / "summary.json")
+        manifest = self.store.read_json(run_dir / "manifest.json")
         title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
-        (run_dir / "report.site.html").write_text(
-            self.renderer.html(report, title, site=True, manifest=manifest), encoding="utf-8"
-        )
-        publish_doc = _write_site_publish_doc(run_dir, manifest)
-        _update_manifest(run_dir, lambda item: item["render_targets"].update({
+        self.store.write_text(run_dir / "report.site.html",
+                              self.renderer.html(report, title, site=True, manifest=manifest))
+        publish_doc = self.store.write_site_publish_doc(run_dir, manifest)
+        self.store.update_manifest(run_dir, lambda item: item["render_targets"].update({
             "site": {"path": "report.site.html", "status": "generated", **publish_doc}
         }))
         return run_dir / "report.site.html"
@@ -2750,77 +2953,11 @@ def render_site_stage(run_dir):
 
 
 def _publish_size_guard(source_html, max_bytes=DEFAULT_SITE_HTML_MAX_BYTES):
-    source_html = Path(source_html)
-    size = source_html.stat().st_size
-    return {
-        "source_size_bytes": size,
-        "max_site_html_bytes": max_bytes,
-        "size_status": "ok" if size <= max_bytes else "too_large",
-    }
+    return TraceSitePublisher().size_guard(source_html, max_bytes)
 
 
 def publish_site_stage(run_dir, dry_run=True, max_site_html_bytes=DEFAULT_SITE_HTML_MAX_BYTES):
-    run_dir = Path(run_dir)
-    manifest = _read_json(run_dir / "manifest.json")
-    site_target = manifest.get("render_targets", {}).get("site", {})
-    if not (run_dir / site_target.get("path", "report.site.html")).exists():
-        TraceRunPipeline().render_site(run_dir)
-        manifest = _read_json(run_dir / "manifest.json")
-        site_target = manifest.get("render_targets", {}).get("site", {})
-    if not (run_dir / site_target.get("publish_doc", "site_publish.md")).exists():
-        publish_doc = _write_site_publish_doc(run_dir, manifest)
-        site_target = {**site_target, **publish_doc}
-    source_html = run_dir / site_target.get("path", "report.site.html")
-    size_guard = _publish_size_guard(source_html, max_site_html_bytes)
-    live_markers = "not-run"
-    if dry_run:
-        status = "dry-run"
-    elif size_guard["size_status"] != "ok":
-        status = "blocked-size-limit"
-        _update_manifest(run_dir, lambda item: item["render_targets"]["site"].update({
-            **site_target,
-            "publish": {
-                "status": status,
-                "url": site_target.get("url", ""),
-                "target_path": site_target.get("target_path", ""),
-                "live_markers": live_markers,
-                **size_guard,
-            },
-        }))
-        raise SystemExit(
-            f"Refuse to publish oversized site HTML: {source_html} is "
-            f"{size_guard['source_size_bytes']} bytes > {max_site_html_bytes} bytes. "
-            "Review the report or raise --max-site-html-mb intentionally."
-        )
-    else:
-        target_path = site_target.get("target_path", "")
-        url = site_target.get("url", "")
-        subprocess.run(["scp", str(source_html), f"xqyun-32c32g:{target_path}"], check=True)
-        subprocess.run(["curl", "-fsSI", url], check=True)
-        result = subprocess.run(["curl", "-fsSL", "-A", "Mozilla/5.0", url],
-                                check=True, capture_output=True, text=True)
-        for marker in [
-            "Trace 分析报告",
-            'id="coverage-table"',
-            'id="flow-stage-chart"',
-            'id="download-report-summary"',
-            "/assets/css/site.css",
-            "/assets/js/site.js",
-        ]:
-            assert marker in result.stdout, marker
-        live_markers = "verified"
-        status = "published"
-    _update_manifest(run_dir, lambda item: item["render_targets"]["site"].update({
-        **site_target,
-        "publish": {
-            "status": status,
-            "url": site_target.get("url", ""),
-            "target_path": site_target.get("target_path", ""),
-            "live_markers": live_markers,
-            **size_guard,
-        },
-    }))
-    return site_target.get("url", "")
+    return TraceSitePublisher().publish(run_dir, dry_run=dry_run, max_site_html_bytes=max_site_html_bytes)
 
 
 def _verify_html_inline_script(html_path):

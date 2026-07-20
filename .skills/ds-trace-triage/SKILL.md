@@ -188,10 +188,19 @@ The script keeps these responsibilities separated inside one file:
 - `ParserRules`: owns log wording extension rules.
 - `TraceInputReader`: reads directories, files, gzip logs, and tar bundles.
 - `TraceParser`: parses one log line into trace-scoped facts.
-- `TraceAnalyzer`: coordinates reader/parser output into report dimensions.
+- `TraceAccumulator`: ingests parsed lines into trace-scoped counters, evidence,
+  RPC, latencySummary, URMA, worker, and error state.
+- `TraceDimensionBuilder`: converts accumulated state into the stable
+  `summary.json` schema and cross-dimensional rollups.
+- `TraceAnalyzer`: only coordinates reader, parser, accumulator, and dimension
+  builder.
 - `TraceReportRenderer`: renders events, triage, Markdown, and HTML.
-- `TraceRunPipeline`: owns staged run directories, cache, manifest, and render
-  target status.
+- `TraceRunStore`: owns staged run directories, cache, manifest, raw inputs, and
+  artifact reads/writes.
+- `TraceSitePublisher`: owns yche.me size guard, copy, and live-marker
+  validation.
+- `TraceRunPipeline`: only orchestrates parse, aggregate, triage, render-local,
+  and render-site stage order.
 
 Keep compatibility wrappers such as `analyze_inputs`, `parse_stage`, and
 `run_pipeline`, but put new behavior behind the responsible class first.
