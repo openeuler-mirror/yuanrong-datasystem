@@ -167,9 +167,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert manifest["render_targets"]["site"]["path"] == "report.site.html"
     html = (run_dir / "report.local.html").read_text(encoding="utf-8")
     assert "echarts" in html
+    assert "<aside><h2>Trace 分析报告</h2><nav id=\"nav\">" in html
+    assert "class=\"subtitle\"" in html
+    assert "class=\"panel insight\"" in html
     assert "id=\"classification-chart\"" in html
     assert "id=\"latency-chart\"" in html
     assert "id=\"worker-chart\"" in html
+    assert "class=\"controls pager\"" in html
+    assert "搜索 trace / worker / 关键词" in html
     assert "echarts.init" in html
     assert "id=\"classification-table\"" in html
     assert "id=\"error-table\"" in html

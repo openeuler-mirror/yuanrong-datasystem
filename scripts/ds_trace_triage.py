@@ -947,24 +947,24 @@ def _update_manifest(run_dir, updater):
 def _render_html(report, title, site=False):
     data = json.dumps(report, ensure_ascii=False).replace("</script>", "<\\/script>")
     base_style = """<style>
-body{font-family:Arial,sans-serif;margin:0;color:#17202a;background:#f7f8fa}
-.layout{display:grid;grid-template-columns:240px minmax(0,1fr);min-height:100vh}
-.sidebar{position:sticky;top:0;height:100vh;overflow:auto;background:#111827;color:#e5e7eb;padding:18px 14px}
-.sidebar h2{font-size:15px;margin:0 0 14px}.sidebar a{display:block;color:#d1d5db;text-decoration:none;padding:8px;border-radius:5px;font-size:13px}
-.sidebar a:hover{background:#263244;color:white}.content-area{padding:24px;max-width:1440px}
-h1{font-size:28px;margin:0 0 16px}h2{font-size:20px;margin:0 0 12px}section{margin:0 0 28px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-.chart-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px}
-.card,.panel{background:white;border:1px solid #ddd;padding:12px;border-radius:6px}
-.metric{font-size:24px;font-weight:700;margin-top:4px}.muted{color:#667085;font-size:12px}.chart{height:320px}
-table{width:100%;border-collapse:collapse;background:white;border:1px solid #ddd}
-th,td{text-align:left;border-bottom:1px solid #eee;padding:8px;vertical-align:top;font-size:13px}
-th{background:#f3f6f8}.bad{color:#b00020;font-weight:700}.warn{color:#9a5b00;font-weight:700}
-button{border:1px solid #ccd0d5;background:white;border-radius:5px;padding:6px 10px;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}
-.toolbar{display:flex;gap:8px;align-items:center;margin:10px 0}.selected-row{background:#fff7e6}
-code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
-pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-radius:6px;max-height:520px;overflow:auto}
-@media(max-width:900px){.layout{display:block}.sidebar{position:relative;height:auto}.content-area{padding:16px}.chart-grid{grid-template-columns:1fr}}
+:root{--bg:#f6f8fb;--card:#fff;--text:#172033;--muted:#5f6b7a;--border:#dfe5ee;--blue:#2563eb;--orange:#ea580c;--red:#dc2626;--green:#059669;--purple:#7c3aed;--amber:#ca8a04}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:'Microsoft YaHei',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+.layout{display:flex}aside{position:fixed;left:0;top:0;width:245px;height:100vh;background:#fff;border-right:1px solid var(--border);padding:18px 14px;overflow:auto}
+aside h2{font-size:16px;margin:0 0 12px}nav a{display:block;color:#324055;text-decoration:none;padding:8px 10px;border-radius:6px;font-size:13px;margin:2px 0}
+nav a.active,nav a:hover{background:#eaf2ff;color:#1d4ed8}nav a.sub{padding-left:22px;color:#64748b;font-size:12px}
+main{margin-left:245px;width:calc(100% - 245px);padding:22px 28px 50px}section{margin-bottom:20px}
+h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-size:15px;text-align:center;margin:10px 0}
+.subtitle,.note,.insight{color:var(--muted);line-height:1.65}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
+.k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
+table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
+th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
+.controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
+button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}
+.selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
+code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
+@media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards{grid-template-columns:1fr}}
 </style>"""
     stylesheet = ('<link rel="stylesheet" href="/assets/css/site.css">' if site else "") + base_style
     script_ref = '<script src="/assets/js/site.js"></script>' if site else ""
@@ -979,72 +979,83 @@ pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-ra
 </head>
 <body>
   <div class="layout">
-    <aside class="sidebar">
-      <h2>Trace Triage</h2>
-      <a href="#overview">1. Overview</a>
-      <a href="#root-cause">2. Error / Classification</a>
-      <a href="#latency">3. Latency</a>
-      <a href="#workers">4. Worker / UB</a>
-      <a href="#traces">5. Trace Pages</a>
-      <a href="#raw">6. Raw JSON</a>
+    <aside><h2>Trace 分析报告</h2><nav id="nav">
+      <a href="#s1">1. 结论</a>
+      <a href="#s2">2. 根因分布</a>
+      <a class="sub" href="#classification-chart">图 2-1 分类</a>
+      <a class="sub" href="#error-chart">图 2-2 错误</a>
+      <a href="#s3">3. 时延 Breakdown</a>
+      <a class="sub" href="#latency-chart">图 3-1 时延</a>
+      <a href="#s4">4. Worker / UB</a>
+      <a href="#s5">5. Trace 查看</a>
+      <a class="sub" href="#top-trace-table">表 5-1 Top Trace</a>
+      <a href="#s6">6. 原始 JSON</a>
+    </nav>
     </aside>
-    <main class="content-area">
-      <section id="overview">
+    <main>
+      <section id="s1">
         <h1>__TITLE__</h1>
-        <div id="summary" class="grid"></div>
+        <p class="subtitle" id="report-subtitle"></p>
+        <div id="summary" class="cards"></div>
+        <div class="panel insight" id="report-insight"></div>
       </section>
-      <section id="root-cause">
-        <h2>2. Error / Classification</h2>
+      <section id="s2">
+        <h2>2. 错误根因与分类分布</h2>
         <div class="chart-grid">
-          <div class="panel"><div id="classification-chart" class="chart"></div></div>
-          <div class="panel"><div id="error-chart" class="chart"></div></div>
+          <div class="panel"><div id="classification-chart" class="chart"></div><div class="caption">图 2-1 分类分布</div></div>
+          <div class="panel"><div id="error-chart" class="chart"></div><div class="caption">图 2-2 错误文本/状态分布</div></div>
         </div>
-        <h2>Classification Breakdown</h2>
-        <table id="classification-table"></table>
-        <h2>Error Breakdown</h2>
-        <table id="error-table"></table>
+        <div class="compare2">
+          <div class="panel"><h3>表 2-1 分类聚合</h3><table id="classification-table"></table></div>
+          <div class="panel"><h3>Error Breakdown</h3><table id="error-table"></table></div>
+        </div>
       </section>
-      <section id="latency">
-        <h2>3. Latency</h2>
+      <section id="s3">
+        <h2>3. 时延 Breakdown</h2>
+        <div class="panel insight">Breakdown 不做简单相加：Client/access 是等待窗口；Entry/DataWorker 指标可能发生在 client deadline 之后。图中 p99/max 用于找尾部，p50 用于看普遍水平。</div>
         <div class="chart-grid">
-          <div class="panel"><div id="latency-chart" class="chart"></div></div>
-          <div class="panel"><div id="flow-chart" class="chart"></div></div>
+          <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 时延分布，单位 ms/us 按指标原始语义展示</div></div>
+          <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布</div></div>
         </div>
-        <table id="latency-table"></table>
-        <h2>Flow Breakdown</h2>
-        <table id="flow-table"></table>
+        <div class="compare2">
+          <div class="panel"><h3>表 3-1 时延指标</h3><table id="latency-table"></table></div>
+          <div class="panel"><h3>表 3-2 Flow Breakdown</h3><table id="flow-table"></table></div>
+        </div>
       </section>
-      <section id="workers">
-        <h2>4. Worker / UB</h2>
+      <section id="s4">
+        <h2>4. Worker / UB 分布</h2>
         <div class="chart-grid">
-          <div class="panel"><div id="worker-chart" class="chart"></div></div>
-          <div class="panel"><div id="ub-edge-chart" class="chart"></div></div>
+          <div class="panel"><div id="worker-chart" class="chart"></div><div class="caption">图 4-1 Worker 错误聚合</div></div>
+          <div class="panel"><div id="ub-edge-chart" class="chart"></div><div class="caption">图 4-2 UB edge 次数</div></div>
         </div>
-        <h2>Worker Breakdown</h2>
-        <table id="worker-table"></table>
-        <h2>UB Edges</h2>
-        <table id="ub-edge-table"></table>
+        <div class="compare2">
+          <div class="panel"><h3>表 4-1 Worker Breakdown</h3><table id="worker-table"></table></div>
+          <div class="panel"><h3>表 4-2 UB Edges</h3><table id="ub-edge-table"></table></div>
+        </div>
       </section>
-      <section id="traces">
-        <h2>5. Trace Pages</h2>
-        <div class="toolbar">
-          <button id="prev-page">Prev</button>
+      <section id="s5">
+        <h2>5. Trace 查看</h2>
+        <div class="panel">
+        <div class="controls"><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><button id="reset-filter">清空</button></div>
+        <div class="controls pager">
+          <button class="primary" id="prev-page">上一页</button>
           <span id="page-status" class="muted"></span>
-          <button id="next-page">Next</button>
+          <button class="primary" id="next-page">下一页</button>
         </div>
         <table id="top-trace-table"></table>
-        <h2>Selected Trace Breakdown</h2>
-        <div class="panel"><div id="selected-trace-chart" class="chart"></div></div>
-        <table id="selected-trace-table"></table>
-        <h2>Selected Trace Logs</h2>
-        <pre id="selected-trace-log"></pre>
+        </div>
+        <div class="compare2">
+          <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div class="caption">点击上方 Trace 行后联动更新，单位 ms</div></div>
+          <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table></div>
+        </div>
+        <div class="panel"><h3>Trace 全量日志</h3><div class="small">ERROR、deadline、latencySummary、RemotePull、URMA 等关键字段在原始日志中完整保留。</div><pre id="selected-trace-log"></pre></div>
       </section>
-      <section id="raw">
-        <h2>6. Raw Trace JSON</h2>
-        <details>
-          <summary>Open raw trace JSON</summary>
+      <section id="s6">
+        <h2>6. 原始 JSON 附录</h2>
+        <div class="panel"><details>
+          <summary>展开 parser 原始 trace JSON</summary>
           <pre id="trace-data"></pre>
-        </details>
+        </details></div>
       </section>
     </main>
   </div>
@@ -1053,6 +1064,7 @@ pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-ra
   const dim = report.dimensions || {};
   const traces = report.traces || {};
   const traceRows = Object.entries(traces).sort((a,b) => (b[1].access_latency_ms?.max || 0) - (a[1].access_latency_ms?.max || 0));
+  let filteredTraceRows = traceRows;
   let currentPage = 0;
   let selectedTraceId = traceRows[0]?.[0] || null;
   const pageSize = 8;
@@ -1082,12 +1094,20 @@ pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-ra
     echarts.init(node).setOption(option);
   }
   const access = dim.latency_ms?.access || {};
+  const totalErrors = Object.values(dim.errors || {}).reduce((a,b) => a + b, 0);
+  const topClass = Object.entries(dim.classifications || {}).sort((a,b) => b[1] - a[1])[0] || ['unknown', 0];
+  document.getElementById('report-subtitle').innerHTML =
+    `输入日志解析得到 <b>${report.trace_count}</b> 条 trace，错误标记 <b>${totalErrors}</b> 个。` +
+    `当前主分类为 <b>${escapeHtml(topClass[0])}</b>，access p99 为 <b>${access.p99 ?? ''}ms</b>。`;
+  document.getElementById('report-insight').innerHTML =
+    `<b>核心判断：</b>本报告先按 error/status 定界失败表象，再用 access、latencySummary、RPC slow、URMA elapsed、Worker/UB edge 判断慢时延阶段。` +
+    `若 client deadline 与 worker 后续完成时间同时存在，应把 client 超时窗口和服务端实际完成阶段分开阅读。`;
   document.getElementById('summary').innerHTML = [
     ['trace_count', report.trace_count, 'parsed traces'],
-    ['errors', Object.values(dim.errors || {}).reduce((a,b) => a + b, 0), 'total error markers'],
+    ['errors', totalErrors, 'total error markers'],
     ['access p99 ms', access.p99 ?? '', 'client/access latency'],
     ['code_ref', report.code_ref, 'source reference']
-  ].map(([k,v,hint]) => `<section class="card"><div class="muted">${escapeHtml(k)}</div><div class="metric">${escapeHtml(v)}</div><div class="muted">${escapeHtml(hint)}</div></section>`).join('');
+  ].map(([k,v,hint]) => `<div class="card"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div><div class="n">${escapeHtml(hint)}</div></div>`).join('');
   const classificationRows = Object.entries(dim.classifications || {}).sort((a,b) => b[1]-a[1]);
   const errorRows = Object.entries(dim.errors || {}).sort((a,b) => b[1]-a[1]);
   renderTable('classification-table', ['classification','count'], classificationRows);
@@ -1109,10 +1129,28 @@ pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-ra
     .map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.error_count]));
   renderTable('ub-edge-table', ['edge','count','latency'], ubRows
     .map(([edge,item]) => [edge, item.count, pctText(item.latency_ms)]));
+  function applyTraceFilters() {
+    const query = document.getElementById('trace-search').value.trim().toLowerCase();
+    const cls = document.getElementById('class-filter').value;
+    filteredTraceRows = traceRows.filter(([traceId, item]) => {
+      const haystack = [
+        traceId,
+        item.classification,
+        JSON.stringify(item.errors || {}),
+        Object.keys(item.workers || {}).join(' '),
+        (item.evidence || []).map(e => e.text).join(' ')
+      ].join(' ').toLowerCase();
+      return (!cls || item.classification === cls) && (!query || haystack.includes(query));
+    });
+    if (!filteredTraceRows.some(([traceId]) => traceId === selectedTraceId)) {
+      selectedTraceId = filteredTraceRows[0]?.[0] || null;
+    }
+  }
   function renderTracePage() {
-    const totalPages = Math.max(Math.ceil(traceRows.length / pageSize), 1);
+    applyTraceFilters();
+    const totalPages = Math.max(Math.ceil(filteredTraceRows.length / pageSize), 1);
     currentPage = Math.min(Math.max(currentPage, 0), totalPages - 1);
-    const pageRows = traceRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+    const pageRows = filteredTraceRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
     renderTable('top-trace-table', ['trace','classification','errors','access','workers'], pageRows.map(([traceId,item]) => [
       traceId,
       item.classification,
@@ -1125,7 +1163,7 @@ pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-ra
       renderTracePage();
       renderSelectedTrace();
     }));
-    document.getElementById('page-status').textContent = `page ${currentPage + 1} / ${totalPages}, ${traceRows.length} traces`;
+    document.getElementById('page-status').textContent = `第 ${currentPage + 1} / ${totalPages} 页，每页 ${pageSize} 条，共 ${filteredTraceRows.length} 条 trace`;
     document.getElementById('prev-page').disabled = currentPage === 0;
     document.getElementById('next-page').disabled = currentPage >= totalPages - 1;
   }
@@ -1151,6 +1189,26 @@ pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-ra
   }
   document.getElementById('prev-page').addEventListener('click', () => { currentPage -= 1; renderTracePage(); });
   document.getElementById('next-page').addEventListener('click', () => { currentPage += 1; renderTracePage(); });
+  document.getElementById('trace-search').addEventListener('input', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('class-filter').innerHTML = '<option value="">全部分类</option>' +
+    classificationRows.map(([name]) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  document.getElementById('class-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('reset-filter').addEventListener('click', () => {
+    document.getElementById('trace-search').value = '';
+    document.getElementById('class-filter').value = '';
+    currentPage = 0;
+    renderTracePage();
+    renderSelectedTrace();
+  });
+  const navLinks = [...document.querySelectorAll('#nav a')];
+  window.addEventListener('scroll', () => {
+    let active = navLinks[0];
+    for (const link of navLinks) {
+      const node = document.querySelector(link.getAttribute('href'));
+      if (node && node.getBoundingClientRect().top < 120) active = link;
+    }
+    navLinks.forEach(link => link.classList.toggle('active', link === active));
+  });
   chart('classification-chart', {title:{text:'Classification', left:'center'}, tooltip:{trigger:'item'}, series:[{type:'pie', radius:'60%', data:classificationRows.map(([name,value]) => ({name,value}))}]});
   chart('error-chart', {title:{text:'Errors', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25}}, yAxis:{type:'value'}, series:[{type:'bar', data:errorRows.map(r => r[1]), itemStyle:{color:'#c23531'}}]});
   chart('latency-chart', {title:{text:'Latency Percentiles', left:'center'}, tooltip:{trigger:'axis'}, legend:{top:25}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',data:[access[k] || 0]}))});
