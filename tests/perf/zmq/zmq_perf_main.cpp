@@ -35,7 +35,7 @@ int main(int argc, char **argv)
 {
     FLAGS_log_filename = "zmq_perf_client";
     FLAGS_v = datasystem::RPC_KEY_LOG_LEVEL;
-    datasystem::Logging::GetInstance()->Start(FLAGS_log_filename);
+    datasystem::Logging::GetInstance()->Start(FLAGS_log_filename, datasystem::LogProcessRole::CLIENT);
     datasystem::st::ZmqPerfRun zmqPerfRun;
     auto rc = zmqPerfRun.ProcessArgs(argc, argv);
     if (rc == 0) {

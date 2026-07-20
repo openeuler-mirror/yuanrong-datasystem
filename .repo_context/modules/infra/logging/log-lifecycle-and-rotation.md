@@ -14,7 +14,7 @@
   - `src/datasystem/common/log/failure_handler.h`
   - `src/datasystem/common/log/failure_handler.cpp`
 - Last verified against source:
-  - `2026-05-06`
+  - `2026-07-20`
 - Related design docs:
   - `.repo_context/modules/infra/logging/design.md`
   - `.repo_context/modules/infra/logging/access-recorder.md`
@@ -48,9 +48,16 @@
 
 ## Startup Flow
 
-- Verified from `logging.cpp`:
-  - `Logging::Start()` initializes client-specific config from environment when `isClient=true`.
-  - it sets `log_filename`, initializes the provider, starts `LogManager`, then initializes `AccessRecorderManager`.
+- Verified from `logging.cpp`, `operation_logger.cpp`, worker startup, and coordinator startup:
+  - `Logging::Start()` initializes client-specific config from environment when the explicit process role is
+    `LogProcessRole::CLIENT`; worker and coordinator callers pass `LogProcessRole::WORKER` and
+    `LogProcessRole::COORDINATOR` respectively.
+  - it sets `log_filename`, initializes the provider, starts `LogManager`, initializes `AccessRecorderManager`, and starts
+    the operation logger with an explicit `client`, `worker`, or `coordinator` role.
+  - operation records use the same source, pod, PID/TID, trace, and cluster context field layout as ordinary INFO logs;
+    multiline event payloads such as `CONFIG_INIT` keep one prefix on the first physical line.
+  - worker and coordinator startup paths write an effective-flag `CONFIG_INIT` snapshot after successful service startup;
+    sensitive flag values are masked by `OperationLogger` before emission.
   - if logging initialization fails, `FLAGS_log_monitor` is disabled.
 - Review implication:
   - startup failures can degrade observability partially instead of failing the whole process, so missing monitor logs do not necessarily mean the main service startup failed.

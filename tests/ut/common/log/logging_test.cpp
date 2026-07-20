@@ -246,7 +246,7 @@ public:
 
     void MultiTimeCostLogger()
     {
-        Logging::GetInstance()->Start("ds_llt", true, 1);
+        Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
         LOG(INFO) << "Start TestMultipleLogAndCompress. ";
 
         auto handle = Logging::AccessRecorderManagerInstance();
@@ -350,7 +350,7 @@ protected:
 TEST_F(LoggingTest, TestFlagsLogDirEmpty)
 {
     FLAGS_log_dir = "";
-    Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     std::string homeDir;
     DS_EXPECT_OK(Uri::GetHomeDir(homeDir));
     ASSERT_EQ(FLAGS_log_dir, homeDir + "/.datasystem/logs");
@@ -439,7 +439,7 @@ TEST_F(LoggingTest, TestEnvSucceed)
     (void)setenv(LOG_COMPRESS_ENV.c_str(), "true", replace);
     (void)setenv(LOG_RETENTION_DAY_ENV.c_str(), "0", replace);
 
-    Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     std::string pattern = EscapeRegex(logName) + "\\.INFO\\.\\d{14}\\.log\\.gz";
     auto interval = std::chrono::milliseconds(1000);
     constexpr int EXPECTED_LOG_FILE_COUNT = 5;
@@ -539,7 +539,7 @@ TEST_F(LoggingTest, TestCostAutoWriteToLog)
 {
     FLAGS_log_monitor = true;
 
-    Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     auto handle = Logging::AccessRecorderManagerInstance();
     const int poolSize = 4;
 
@@ -714,7 +714,7 @@ TEST_F(LoggingTest, TestWriteLogToFile)
 {
     std::string message = "This is mock message.";
     std::string filepath = FLAGS_log_dir + "/container.log";
-    Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     Logging::GetInstance()->WriteLogToFile(__LINE__, __FILE__, filepath, 'E', message);
     ASSERT_TRUE(FileExist(filepath));
     std::ifstream ifs(filepath);
@@ -729,7 +729,7 @@ TEST_F(LoggingTest, TestWriteLogToFile)
 
 TEST_F(LoggingTest, TestWriteLogWhenChangeEnv)
 {
-    Logging::GetInstance()->Start("ds_llt", true);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT);
     std::vector<std::thread> threads;
     const int testTimeSec = 2;
     threads.emplace_back([] {
@@ -768,7 +768,7 @@ TEST_F(LoggingTest, TestMinLogLevelNotWriteToFile)
     FLAGS_log_only_write_info_file = false;
     FLAGS_logbufsecs = 0;
     (void)setenv("DATASYSTEM_MIN_LOG_LEVEL", "1", replace);
-    Logging::GetInstance()->Start("ds_llt", true);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT);
     std::string infoLog = "This is info log.";
     std::string warningLog = "This is warning log.";
     std::string errorLog = "This is error log.";
@@ -818,7 +818,7 @@ TEST_F(LoggingTest, TestDisableClientLogMonitor)
 {
     int replace = 1;
     (void)setenv("DATASYSTEM_LOG_MONITOR_ENABLE", "false", replace);
-    Logging::GetInstance()->Start("ds_llt", true);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT);
 
     for (const auto &filename : GetFilesInDirectory(FLAGS_log_dir)) {
         ASSERT_FALSE(filename.find("ds_client_access") != std::string::npos);
@@ -828,7 +828,7 @@ TEST_F(LoggingTest, TestDisableClientLogMonitor)
 TEST_F(LoggingTest, TestLogFileDeleted)
 {
     FLAGS_max_log_size = 1;
-    Logging::GetInstance()->Start("ds_llt", false, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::WORKER, 1);
     auto interval = std::chrono::milliseconds(100);
     LOG(INFO) << "Create log file before deleting it.";
     std::this_thread::sleep_for(interval);
@@ -837,7 +837,7 @@ TEST_F(LoggingTest, TestLogFileDeleted)
     DS_EXPECT_OK(DeleteFile(filename));
 
     ResetLoggingForTest();
-    Logging::GetInstance()->Start("ds_llt", false, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::WORKER, 1);
     LOG(INFO) << "Recreate deleted log file.";
     std::this_thread::sleep_for(interval);
 
@@ -849,7 +849,7 @@ TEST_F(LoggingTest, TestAlsoLogToStderr)
     testing::internal::CaptureStderr();
 
     FLAGS_alsologtostderr = false;
-    Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     auto interval = std::chrono::milliseconds(100);
     std::this_thread::sleep_for(interval);
 
@@ -865,7 +865,7 @@ TEST_F(LoggingTest, TestStderrThreshold)
     ScopedEnv stderrThreshold(STDERR_THRESHOLD_ENV, "1");
     testing::internal::CaptureStderr();
 
-    Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     auto interval = std::chrono::milliseconds(100);
     std::this_thread::sleep_for(interval);
 
@@ -883,7 +883,7 @@ TEST_F(LoggingTest, TestMaxLogSize)
 {
     int replace = 1;
     (void)setenv(MAX_LOG_SIZE_ENV.c_str(), "5", replace);
-    Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     EXPECT_EQ(FLAGS_max_log_size, 5);  // 5 MB
 }
 
@@ -892,7 +892,7 @@ TEST_F(LoggingTest, TestLogOnlyWriteInfoFile)
     int replace = 1;
     (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
     FLAGS_log_only_write_info_file = true;
-    Logging::GetInstance()->Start("ds_llt", true);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT);
     std::string warningLog = "skip separate warning file";
     std::string errorLog = "skip separate error file";
 
@@ -925,7 +925,7 @@ TEST_F(LoggingTest, TestLogOnlyWriteInfoFileEnvOverride)
     (void)setenv("DATASYSTEM_LOG_ASYNC_ENABLE", "false", replace);
     (void)setenv(LOG_ONLY_WRITE_INFO_FILE_ENV.c_str(), "false", replace);
     FLAGS_log_only_write_info_file = true;
-    Logging::GetInstance()->Start("ds_llt", true);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT);
     std::string warningLog = "env separate warning log";
     std::string errorLog = "env separate error log";
 
@@ -972,7 +972,7 @@ TEST_F(LoggingTest, TestLogName)
     ScopedEnv accessLogName(ACCESS_LOG_NAME_ENV, "test_client_access");
     ScopedEnv clientLogWithoutPid(CLIENT_LOG_WITHOUT_PID_ENV, "false");
     ScopedEnv logMonitor(LOG_MONITOR_ENABLE, "true");
-    Logging::GetInstance()->Start("ds_llt", true, 1);
+    Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     Logging::AccessRecorderManagerInstance()->LogPerformance("LogNameTest", AccessKeyType::CLIENT, 1);
     DS_ASSERT_OK(LogManager::DoLogMonitorWrite());
     auto interval = std::chrono::milliseconds(100);

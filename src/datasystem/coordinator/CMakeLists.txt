@@ -35,6 +35,7 @@ target_link_libraries(coordinator_server PRIVATE
     common_log
     common_util
     common_signal
+    dynamic_flag_config
 )
 add_dependencies(coordinator_server coordinator_protos)
 
@@ -47,6 +48,7 @@ target_link_libraries(datasystem_coordinator_shared PRIVATE
     common_log
     common_util
     common_signal
+    dynamic_flag_config
 )
 set_target_properties(datasystem_coordinator_shared PROPERTIES OUTPUT_NAME datasystem_coordinator)
 
@@ -59,6 +61,7 @@ target_link_libraries(datasystem_coordinator_static PRIVATE
     common_log
     common_util
     common_signal
+    dynamic_flag_config
 )
 set_target_properties(datasystem_coordinator_static PROPERTIES OUTPUT_NAME datasystem_coordinator)
 

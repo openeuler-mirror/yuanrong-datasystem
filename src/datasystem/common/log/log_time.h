@@ -75,6 +75,14 @@ inline std::string FormatLogTimestamp(const std::tm *tmTime, int32_t usec)
     return s.str();
 }
 
+inline void AppendLogMessagePrefix(std::ostream &s, const std::string &podName, const std::string &azName)
+{
+    static const auto pid = getpid();
+    static thread_local const auto tid = syscall(__NR_gettid);
+    s << podName << " | " << pid << ":" << tid << " | " << Trace::Instance().GetTraceIDPtr() << " | " << azName
+      << " |  ";
+}
+
 inline void ConstructLogPrefix(std::ostream &s, const struct ::tm *tm_time, int32_t usc, const char *baseFilename,
                                int line, const char *podName, const char severity, const std::string azName)
 {

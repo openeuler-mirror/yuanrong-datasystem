@@ -64,6 +64,7 @@ ds_cc_library(
     deps = [
         ":coordinator_service_impl",
         "//include/datasystem:headers",
+        "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/signal:signal",
         "//src/datasystem/common/util:status_helper",
@@ -77,6 +78,7 @@ cc_binary(
         ":coordinator_server",
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:uuid_generator",
     ],
 )
 

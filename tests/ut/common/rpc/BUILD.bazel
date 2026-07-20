@@ -54,6 +54,16 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "trace_attachment_test",
+    srcs = ["trace_attachment_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//src/datasystem/common/rpc:rpc_stub",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "brpc_stream_close_helper_test",
     srcs = ["brpc_stream_close_helper_test.cpp"],
     deps = [

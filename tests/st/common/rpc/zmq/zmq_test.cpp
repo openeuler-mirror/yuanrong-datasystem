@@ -1265,7 +1265,7 @@ TEST_F(ZmqTest, TestZmqClientLogInitHelper1)
     LOG(INFO) << "Test init client log.";
     const std::string LOG_FILENAME = "client1";
     const std::string LOG_DIR = "./client_log1";
-    Logging::GetInstance()->Start(LOG_FILENAME, true);
+    Logging::GetInstance()->Start(LOG_FILENAME, LogProcessRole::CLIENT);
     EXPECT_FALSE(FileExist(LOG_DIR));
 }
 
@@ -1278,7 +1278,7 @@ TEST_F(ZmqTest, TestZmqClientLogInitHelper2)
     const std::string logEnv = "DATASYSTEM_CLIENT_LOG_DIR";
     int replace = 1;
     setenv(logEnv.c_str(), LOG_DIR.c_str(), replace);
-    Logging::GetInstance()->Start(LOG_FILENAME, true);
+    Logging::GetInstance()->Start(LOG_FILENAME, LogProcessRole::CLIENT);
     EXPECT_FALSE(FileExist(LOG_DIR));
     unsetenv(logEnv.c_str());
 }
@@ -1294,7 +1294,7 @@ TEST_F(ZmqTest, TestZmqClientLogInitHelper3)
     setenv(logEnv.c_str(), LOG_DIR.c_str(), replace);
 
     FLAGS_log_dir = "";
-    Logging::GetInstance()->Start(LOG_FILENAME, true);
+    Logging::GetInstance()->Start(LOG_FILENAME, LogProcessRole::CLIENT);
     EXPECT_TRUE(FileExist(LOG_DIR));
     unsetenv(logEnv.c_str());
 }

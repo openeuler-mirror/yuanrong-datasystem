@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_LOG_LOGGING_H
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 
 #include "datasystem/common/flags/flags.h"
@@ -31,6 +32,11 @@ DS_DECLARE_int32(v);
 DS_DECLARE_bool(enable_perf_trace_log);
 
 namespace datasystem {
+
+enum class LogProcessRole : uint8_t { CLIENT, WORKER, COORDINATOR };
+
+const char *GetLogProcessRoleName(LogProcessRole role);
+
 static constexpr uint32_t LOG_ROLLING_COMPRESS_SECS = 30;  // Log rolling or compress interval seconds.
 static const std::string LOG_NAME_ENV = "DATASYSTEM_CLIENT_LOG_NAME";
 static const std::string CLIENT_LOG_WITHOUT_PID_ENV = "DATASYSTEM_CLIENT_LOG_WITHOUT_PID";
@@ -74,13 +80,13 @@ public:
     static Logging *GetInstance();
 
     /**
-     * @brief  Start log for singleton mode.
+     * @brief Start logging with an explicit process role.
      * @param[in] logFilename The name of log file.
-     * @param[in] isClient The client sets log parameters through environment variables. So we need this flag to
-     * indicate the client.
+     * @param[in] processRole Process role recorded in the operation log.
      * @param[in] logProcessInterval Log rolling or compress interval seconds.
+     * @param[in] isEmbeddedClient Whether the worker is embedded in a client process.
      */
-    void Start(const std::string logFilename = "", bool isClient = false,
+    void Start(const std::string &logFilename, LogProcessRole processRole,
                uint32_t logProcessInterval = LOG_ROLLING_COMPRESS_SECS, bool isEmbeddedClient = false);
 
     /**
@@ -216,6 +222,7 @@ private:
     static std::string &podName_;
     bool isClient_;
     bool isEmbeddedClient_ = false;
+    LogProcessRole processRole_ = LogProcessRole::WORKER;
     bool isLoggingInitialized_ = false;
 };
 

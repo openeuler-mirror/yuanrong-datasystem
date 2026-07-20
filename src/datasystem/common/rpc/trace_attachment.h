@@ -25,7 +25,7 @@
 #define DATASYSTEM_COMMON_RPC_TRACE_ATTACHMENT_H
 
 #include <cstdint>
-#include <string>
+#include <cstring>
 
 #include <butil/iobuf.h>
 
@@ -35,15 +35,17 @@ namespace datasystem {
 
 inline void AttachTraceIDToAttachment(butil::IOBuf &buf)
 {
-    std::string traceID = Trace::Instance().GetTraceID();
-    if (traceID.empty()) {
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    const char *traceID = Trace::Instance().GetTraceIDPtr();
+    const size_t traceIDSize = std::strlen(traceID);
+    if (traceIDSize == 0) {
         return;
     }
     const char magic[8] = {'T', 'R', 'C', 'I', 'D', ':', 'V', '1'};
     buf.append(magic, sizeof(magic));
-    uint32_t len = static_cast<uint32_t>(traceID.size());
+    uint32_t len = static_cast<uint32_t>(traceIDSize);
     buf.append(&len, sizeof(len));
-    buf.append(traceID.data(), traceID.size());
+    buf.append(traceID, traceIDSize);
 }
 
 }  // namespace datasystem

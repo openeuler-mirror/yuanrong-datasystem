@@ -19,6 +19,7 @@
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/steady_clock.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -32,6 +33,15 @@ constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
 constexpr size_t TOPOLOGY_KEYSPACE_KIND_COUNT = 5;
 constexpr uint64_t MEMBER_LIMIT_LOG_INTERVAL = 1'024;
 constexpr char PHYSICAL_ROOT[] = "/datasystem/";
+
+TraceContext GetRecoveryTraceContext()
+{
+    auto traceContext = Trace::Instance().GetContext();
+    if (traceContext.traceID.empty()) {
+        traceContext.traceID = "CoordRec;" + GetStringUuid();
+    }
+    return traceContext;
+}
 
 struct TopologyCandidateEvidence {
     bool hasSnapshot{ false };
@@ -558,6 +568,7 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
                                               TopologyRecoveryCandidateReport report,
                                               TopologyRecoveryReportDecision &decision)
 {
+    const auto traceContext = GetRecoveryTraceContext();
     const size_t payloadBytes = report.canonicalTopology.size();
     std::future<Status> result;
     {
@@ -582,20 +593,22 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
         admittedReportBytes_ += payloadBytes;
         context.payloadValidationPending = true;
         try {
-            result = recoveryPool_->Submit([this, clusterName, payloadBytes, report = std::move(report)]() mutable {
-                Status status;
-                try {
-                    status = ValidatePayload(report);
-                } catch (const std::exception &error) {
-                    status = Status(K_RUNTIME_ERROR, std::string("candidate validation failed: ") + error.what());
-                } catch (...) {
-                    status = Status(K_RUNTIME_ERROR, "candidate validation failed with an unknown exception");
-                }
-                if (status.IsOk()) {
-                    return RecordPayload(clusterName, std::move(report));
-                }
-                return RejectPayload(clusterName, report, payloadBytes, status);
-            });
+            result = recoveryPool_->Submit(
+                [this, clusterName, payloadBytes, report = std::move(report), traceContext]() mutable {
+                    TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
+                    Status status;
+                    try {
+                        status = ValidatePayload(report);
+                    } catch (const std::exception &error) {
+                        status = Status(K_RUNTIME_ERROR, std::string("candidate validation failed: ") + error.what());
+                    } catch (...) {
+                        status = Status(K_RUNTIME_ERROR, "candidate validation failed with an unknown exception");
+                    }
+                    if (status.IsOk()) {
+                        return RecordPayload(clusterName, std::move(report));
+                    }
+                    return RejectPayload(clusterName, report, payloadBytes, status);
+                });
         } catch (const std::exception &error) {
             --pendingRecoveryWork_;
             admittedReportBytes_ -= payloadBytes;
@@ -711,6 +724,7 @@ void TopologyRecoveryManager::RefreshSelection(ClusterRecoveryContext &context)
 
 void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
 {
+    const auto traceContext = GetRecoveryTraceContext();
     std::lock_guard<std::mutex> lock(mutex_);
     auto found = contexts_.find(clusterName);
     if (stopping_ || found == contexts_.end() || found->second->state != TopologyRecoveryState::RECOVERING
@@ -722,7 +736,8 @@ void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
     ++pendingRecoveryWork_;
     bool accepted = false;
     try {
-        accepted = recoveryPool_->ExecuteNoWait([this, clusterName] {
+        accepted = recoveryPool_->ExecuteNoWait([this, clusterName, traceContext] {
+            TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
             try {
                 auto status = MaybeFinalize(clusterName);
                 if (status.IsError()) {

@@ -109,7 +109,7 @@ CoordinatorServiceImpl::~CoordinatorServiceImpl()
 
 Status CoordinatorServiceImpl::Init()
 {
-    Logging::GetInstance()->Start("datasystem_coordinator");
+    Logging::GetInstance()->Start("datasystem_coordinator", LogProcessRole::COORDINATOR);
     coordinatorId_ = GetBytesUuid();
     LOG(INFO) << "CLUSTER_COORDINATOR_ID role=coordinator id="
               << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE) << " state=created";

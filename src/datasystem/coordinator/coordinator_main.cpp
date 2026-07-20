@@ -19,10 +19,14 @@
  */
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/coordinator_server.h"
 
 int main(int argc, char **argv)
 {
+    datasystem::TraceGuard traceGuard =
+        datasystem::Trace::Instance().SetTraceNewID("CoordMain;" + datasystem::GetStringUuid());
     datasystem::ParseCommandLineFlags(argc, argv);
 
     auto rc = datasystem::CoordinatorServer::GetInstance()->InitAndRun();

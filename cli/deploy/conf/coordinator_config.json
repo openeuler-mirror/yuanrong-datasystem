@@ -56,7 +56,7 @@
     "description": "Compress old log files in .gz format when generated log size exceeds max_log_size."
   },
   "logbufsecs": {
-    "value": "0",
+    "value": "10",
     "description": "Buffer log messages for at most this many seconds."
   },
   "logfile_mode": {

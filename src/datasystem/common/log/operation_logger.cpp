@@ -26,8 +26,11 @@
 #include <spdlog/sinks/rotating_file_sink.h>
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/spdlog/log_param.h"
+#include "datasystem/common/log/spdlog/provider.h"
 
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_filename);
 DS_DECLARE_bool(log_async);
@@ -101,6 +104,15 @@ std::string MaskSensitiveFlagsSnapshot(const std::string &snapshot)
     }
     return out.str();
 }
+
+void WriteLogToLogger(const std::shared_ptr<ds_spdlog::logger> &logger, const std::string &message,
+                      const ds_spdlog::source_loc &sourceLoc)
+{
+    std::ostringstream out;
+    AppendLogMessagePrefix(out, Provider::GetPodName(), FLAGS_cluster_name);
+    out << message;
+    logger->log(sourceLoc, ds_spdlog::level::info, out.str());
+}
 }  // namespace
 
 OperationLogger &OperationLogger::Instance()
@@ -167,7 +179,8 @@ void OperationLogger::Shutdown()
         role_.clear();
     }
     if (logger != nullptr) {
-        logger->info("OPERATION_STOP: role=" + role);
+        WriteLogToLogger(logger, "OPERATION_STOP: role=" + role,
+                         ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
         logger->flush();
         ds_spdlog::drop(OPERATION_LOGGER_NAME);
     }
@@ -175,33 +188,36 @@ void OperationLogger::Shutdown()
 
 void OperationLogger::LogOperationStart()
 {
-    WriteLog("OPERATION_START: role=" + role_);
+    WriteLog("OPERATION_START: role=" + role_, ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
 }
 
 void OperationLogger::LogOperationStop()
 {
-    WriteLog("OPERATION_STOP: role=" + role_);
+    WriteLog("OPERATION_STOP: role=" + role_, ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
 }
 
 void OperationLogger::LogConfigInit(const std::string &flagsSnapshot)
 {
-    WriteLog("CONFIG_INIT: " + MaskSensitiveFlagsSnapshot(flagsSnapshot));
+    WriteLog("CONFIG_INIT: " + MaskSensitiveFlagsSnapshot(flagsSnapshot),
+             ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
 }
 
 void OperationLogger::LogConfigInitFailed(const std::string &detail)
 {
-    WriteLog("CONFIG_INIT_FAILED: " + detail);
+    WriteLog("CONFIG_INIT_FAILED: " + detail, ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
 }
 
 void OperationLogger::LogConfigChanged(const std::string &name, const std::string &oldVal, const std::string &newVal)
 {
     WriteLog("CONFIG_CHANGED: " + name + "=" + MaskSensitiveFlagValue(name, oldVal) + " --> "
-             + MaskSensitiveFlagValue(name, newVal));
+                 + MaskSensitiveFlagValue(name, newVal),
+             ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
 }
 
 void OperationLogger::LogConfigFailed(const std::string &name, const std::string &reason)
 {
-    WriteLog("CONFIG_FAILED: flag '" + name + "' " + reason);
+    WriteLog("CONFIG_FAILED: flag '" + name + "' " + reason,
+             ds_spdlog::source_loc{ __FILE__, __LINE__, __FUNCTION__ });
 }
 
 std::string OperationLogger::OperationLogPath() const
@@ -216,7 +232,7 @@ std::string OperationLogger::OperationLogPath() const
     return FLAGS_log_dir + "/" + FLAGS_log_filename + "_operation.log";
 }
 
-void OperationLogger::WriteLog(const std::string &message)
+void OperationLogger::WriteLog(const std::string &message, const ds_spdlog::source_loc &sourceLoc)
 {
     std::shared_ptr<ds_spdlog::logger> logger;
     {
@@ -226,7 +242,7 @@ void OperationLogger::WriteLog(const std::string &message)
     if (logger == nullptr) {
         return;
     }
-    logger->info(message);
+    WriteLogToLogger(logger, message, sourceLoc);
 }
 
 }  // namespace datasystem

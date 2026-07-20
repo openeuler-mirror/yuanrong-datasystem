@@ -45,7 +45,7 @@ class YuanRongIAMTest : public CommonTest {
 public:
     void SetUp() override
     {
-        Logging::GetInstance()->Start("ds_llt", true, 1);
+        Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
         akSkManager_ = std::make_shared<AkSkManager>();
         akSkManager_->SetClientAkSk(accessKey_, secretKey_);
         handler_ = std::make_shared<YuanRongIAMTestHelper>(akSkManager_);

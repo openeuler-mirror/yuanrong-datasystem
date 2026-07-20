@@ -378,7 +378,7 @@ TEST_F(FlagsTest, ExplicitLogMonitorConfigIsNotOverriddenByEnv)
     ASSERT_FALSE(FLAGS_log_monitor);
     ASSERT_TRUE(WasCommandLineFlagSpecified("log_monitor"));
 
-    Logging::GetInstance()->Start("kv_client_test", true);
+    Logging::GetInstance()->Start("kv_client_test", LogProcessRole::CLIENT);
     ASSERT_FALSE(FLAGS_log_monitor);
 
     if (oldValue != nullptr) {
@@ -428,7 +428,7 @@ TEST_F(FlagsTest, ExplicitDefaultClientLogConfigIsNotOverriddenByEnv)
     ASSERT_TRUE(ParseCommandLineFlags(config, errMsg));
     ASSERT_TRUE(errMsg.empty());
 
-    Logging::GetInstance()->Start("kv_client_default_config_test", true);
+    Logging::GetInstance()->Start("kv_client_default_config_test", LogProcessRole::CLIENT);
 
     EXPECT_EQ(FLAGS_max_log_size, 100u);
     EXPECT_EQ(FLAGS_max_log_file_num, 5u);

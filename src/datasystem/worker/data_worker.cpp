@@ -284,7 +284,8 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const bool isEmbeddedCli
     InitWorkerLogConfig();
     RETURN_IF_NOT_OK(Uri::NormalizePathWithUserHomeDir(FLAGS_log_dir, DEFAULT_LOG_DIR, "/worker"));
 
-    Logging::GetInstance()->Start(FLAGS_log_filename, false, LOG_ROLLING_COMPRESS_SECS, isEmbeddedClient);
+    Logging::GetInstance()->Start(FLAGS_log_filename, LogProcessRole::WORKER, LOG_ROLLING_COMPRESS_SECS,
+                                  isEmbeddedClient);
 
     LOG(INFO) << "Git Commit:" << GIT_HASH << "; Git Branch: " << GIT_BRANCH;
 

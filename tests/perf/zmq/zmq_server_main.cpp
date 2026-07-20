@@ -41,7 +41,7 @@ int main(int argc, char **argv)
 {
     FLAGS_log_filename = "zmq_perf_server";
     FLAGS_v = datasystem::RPC_KEY_LOG_LEVEL;
-    datasystem::Logging::GetInstance()->Start(FLAGS_log_filename);
+    datasystem::Logging::GetInstance()->Start(FLAGS_log_filename, datasystem::LogProcessRole::WORKER);
     signal(SIGINT, SignalHandler);
     signal(SIGTERM, SignalHandler);
     datasystem::st::ZmqPerfServer zmqPerfServer;

@@ -19,6 +19,9 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
+
 namespace datasystem {
 namespace {
 constexpr int64_t EXPIRY_POLL_INTERVAL_MS = 50;
@@ -96,6 +99,7 @@ void TtlManager::Stop()
 
 void TtlManager::CheckExpiration()
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("CoordTTL;" + GetStringUuid());
     while (running_) {
         std::vector<ExpiredTtlRecord> expiredKeys;
         {
