@@ -233,6 +233,15 @@ protected:
 
     void Join();
 
+    // no_sanitize("thread"): tsan on gcc 10.3/aarch64 reports false "Mutex is
+    // already destroyed" on ThreadPool mtx_ during worker startup (ArenaManager path).
+    // The mutex is alive (ThreadPool not destructed), but tsan's address-based tracking
+    // misidentifies it as a reused/destroyed mutex. DoThreadWork's mutex usage
+    // (unique_lock + cv::wait_for) is standard and race-free. Real races are in the
+    // task lambdas, which are still instrumented.
+#ifdef __SANITIZE_THREAD__
+__attribute__((no_sanitize("thread")))
+#endif
     void DoThreadWork();
 
     /**
