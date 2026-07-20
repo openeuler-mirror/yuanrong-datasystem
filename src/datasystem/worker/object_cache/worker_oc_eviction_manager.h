@@ -250,6 +250,8 @@ private:
         uint64_t lastLogTimeMs{ 0 };
         std::vector<std::string> successKeys;
         std::vector<std::string> failedKeys;
+        uint64_t tryAgainCount{ 0 };
+        uint64_t notReadyCount{ 0 };
     };
 
     struct EvictionTraceAggregator {
@@ -659,6 +661,7 @@ private:
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
     std::mutex primaryEndLifeMutex_;
     std::unordered_map<std::string, uint64_t> pendingPrimaryEndLifeObjects_;
+    std::atomic<uint64_t> primaryEndLifePendingFullCount_{ 0 };
     // Tracks metadata-deleted objects whose local cleanup failed and must be retried locally.
     std::unordered_map<std::string, uint64_t> metaDeletedPrimaryEndLifeObjects_;
     std::deque<PrimaryEndLifeTask> primaryEndLifeQueue_;
