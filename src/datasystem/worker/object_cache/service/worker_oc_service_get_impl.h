@@ -1036,7 +1036,9 @@ private:
     Status ProcessRemoteGetInNotificationImpl(
         std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
         std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
-        std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas, uint64_t &migratedBytes);
+        std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
+        std::map<std::string, uint64_t> &unconfirmedObjectVersions,
+        std::unordered_set<std::string> &failedConfirmationOwners);
 
     void PostProcessRemoteGetInNotificationImpl(
         std::map<ReadKey, LockedEntity> &lockedEntries,
@@ -1044,10 +1046,25 @@ private:
             &groupedQueryMetas,
         std::vector<std::vector<std::string>> &tempSuccessIds, std::vector<std::vector<ReadKey>> &tempNeedRetryIds,
         std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
-        Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas, uint64_t &migratedBytes);
+        Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
+        std::map<std::string, uint64_t> &unconfirmedObjectVersions,
+        std::unordered_set<std::string> &failedConfirmationOwners);
 
     void ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
                                            std::map<ReadKey, LockedEntity> &lockedEntries);
+
+    void ConfirmCopyMetaForNotifyRemoteGet(const std::vector<std::string> &dataSuccessIds,
+                                           const QueryMetaMap &queryMetas, std::vector<std::string> &confirmedIds,
+                                           std::unordered_set<std::string> &failedIds,
+                                           std::unordered_set<std::string> &failedConfirmationOwners);
+
+    bool ClassifyCopyMetaConfirmationResult(const master::CreateMultiCopyMetaRspPb &rsp, const Status &status,
+                                            const std::vector<std::string> &objectKeys,
+                                            std::vector<std::string> &confirmedIds,
+                                            std::unordered_set<std::string> &failedIds);
+
+    void FreeAndUnlockUnconfirmedNotifyRemoteGetObjects(const std::map<std::string, uint64_t> &objectVersions,
+                                                        std::map<ReadKey, LockedEntity> &lockedEntries);
 
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
