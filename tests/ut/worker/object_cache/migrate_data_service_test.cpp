@@ -94,8 +94,13 @@ public:
                                   master::ReportRebalanceResultRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(CreateMultiMeta, master::CreateMultiMetaReqPb &, master::CreateMultiMetaRspPb &, bool)
     RETURN_UNSUPPORTED_MASTER_API(CreateCopyMeta, master::CreateCopyMetaReqPb &, master::CreateCopyMetaRspPb &)
-    RETURN_UNSUPPORTED_MASTER_API(CreateMultiCopyMeta, master::CreateMultiCopyMetaReqPb &,
-                                  master::CreateMultiCopyMetaRspPb &)
+    Status CreateMultiCopyMeta(master::CreateMultiCopyMetaReqPb &req, master::CreateMultiCopyMetaRspPb &rsp) override
+    {
+        if (createMultiCopyMeta_) {
+            return createMultiCopyMeta_(req, rsp);
+        }
+        return Status(K_RUNTIME_ERROR, "unsupported test master API: CreateMultiCopyMeta");
+    }
     RETURN_UNSUPPORTED_MASTER_API(QueryMeta, master::QueryMetaReqPb &, uint64_t, master::QueryMetaRspPb &,
                                   std::vector<RpcMessage> &)
     RETURN_UNSUPPORTED_MASTER_API(RemoveMeta, master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)
@@ -122,6 +127,9 @@ public:
     {
         return masterAddr_.ToString();
     }
+
+    std::function<Status(master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &)>
+        createMultiCopyMeta_;
 
     RETURN_UNSUPPORTED_MASTER_API(PutP2PMeta, PutP2PMetaReqPb &, PutP2PMetaRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(SubscribeReceiveEvent, SubscribeReceiveEventReqPb &,
@@ -860,8 +868,9 @@ public:
     {
         CommonTest::SetUp();
         objectTable_ = std::make_shared<ObjectTable>();
+        workerMasterApiManager_ = std::make_shared<MigrateTestWorkerMasterApiManager>(localAddress_, metadataRoute_);
         WorkerOcServiceCrudParam param{
-            .workerMasterApiManager = nullptr,
+            .workerMasterApiManager = workerMasterApiManager_,
             .workerRequestManager = requestManager_,
             .memoryRefTable = nullptr,
             .objectTable = objectTable_,
@@ -871,7 +880,7 @@ public:
             .asyncSendManager = nullptr,
             .metadataSize = 0,
             .persistenceApi = nullptr,
-            .metadataRouteResolver = nullptr,
+            .metadataRouteResolver = &metadataRoute_,
             .endpointPolicy = nullptr,
             .exitRequested = nullptr,
             .allowDirectoryLag = false,
@@ -883,7 +892,25 @@ public:
     }
 
 protected:
+    void RouteObjectToMaster(const std::string &objectKey, const HostPort &masterAddress)
+    {
+        placement_.SetOwner(objectKey, masterAddress);
+    }
+
+    master::QueryMetaInfoPb MakeQueryMeta(uint64_t dataSize = 1)
+    {
+        master::QueryMetaInfoPb queryMeta;
+        queryMeta.mutable_meta()->set_version(1);
+        queryMeta.mutable_meta()->set_data_size(dataSize);
+        queryMeta.mutable_meta()->mutable_config()->set_data_format(static_cast<uint32_t>(DataFormat::BINARY));
+        return queryMeta;
+    }
+
+    MigrateTestPlacementFacade placement_;
+    worker::MetadataRouteResolver metadataRoute_{ &placement_, worker::MetadataRouteOptions{} };
+    HostPort localAddress_{ "127.0.0.1", 18888 };
     std::shared_ptr<ObjectTable> objectTable_;
+    std::shared_ptr<MigrateTestWorkerMasterApiManager> workerMasterApiManager_;
     WorkerRequestManager requestManager_;
     std::shared_ptr<WorkerOcServiceGetImpl> impl_;
     std::shared_ptr<MigrateDataRateController> rateController_;
@@ -930,16 +957,172 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     NotifyRemoteGetRspPb rsp;
     QueryMetaMap queryMetas;
     uint64_t migratedBytes = 0;
+    std::map<std::string, uint64_t> unconfirmedObjectVersions;
+    std::unordered_set<std::string> failedConfirmationOwners;
 
     impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
                                                   tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
-                                                  migratedBytes);
+                                                  migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners);
 
     EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete());
     EXPECT_TRUE(untouchedEntry->Get()->stateInfo.IsNeedToDelete());
 
     entry->WUnlock();
     untouchedEntry->WUnlock();
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, UnconfirmedNotifyRemoteGetObjectIsFreedAndErasedBeforeUnlock)
+{
+    const std::string objectKey = "unconfirmed_notify_remote_get";
+    auto object = std::make_unique<ObjCacheShmUnit>();
+    object->SetCreateTime(42);
+    object->stateInfo.SetDataFormat(DataFormat::BINARY);
+    objectTable_->Insert(objectKey, std::move(object));
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    DS_ASSERT_OK(entry->WLock());
+    std::map<ReadKey, WorkerOcServiceGetImpl::LockedEntity> lockedEntries;
+    lockedEntries.emplace(ReadKey(objectKey), WorkerOcServiceGetImpl::LockedEntity{ entry, true });
+
+    impl_->FreeAndUnlockUnconfirmedNotifyRemoteGetObjects({ { objectKey, 42 } }, lockedEntries);
+
+    EXPECT_FALSE(objectTable_->Contains(objectKey));
+    EXPECT_FALSE(entry->IsWLockedByCurrentThread());
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetReturnsFailedKeyWhenMasterDoesNotConfirmCopyMeta)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = true;
+    const std::string objectKey = "notify_remote_get_unconfirmed";
+    const HostPort masterAddress("127.0.0.1:18889");
+    RouteObjectToMaster(objectKey, masterAddress);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+    api->createMultiCopyMeta_ = [](master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &) {
+        return Status::OK();  // Version-expired copy-meta requests are OK but deliberately unconfirmed.
+    };
+    workerMasterApiManager_->SetDefaultApi(api);
+
+    auto entry = std::make_shared<SafeObjType>(std::make_unique<ObjCacheShmUnit>());
+    entry->Get()->SetCreateTime(42);
+    ASSERT_TRUE(entry->WLock().IsOk());
+    std::map<ReadKey, WorkerOcServiceGetImpl::LockedEntity> lockedEntries;
+    lockedEntries.emplace(ReadKey(objectKey, 0, 1), WorkerOcServiceGetImpl::LockedEntity{ entry, true });
+    using NotifyRemoteGetGroup =
+        std::unordered_map<std::string,
+                           std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>>;
+    NotifyRemoteGetGroup groupedQueryMetas;
+    groupedQueryMetas.emplace("leaving-worker", std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>{});
+    std::vector<std::vector<std::string>> tempSuccessIds{ { objectKey } };
+    std::vector<std::vector<ReadKey>> tempNeedRetryIds(1);
+    std::vector<std::unordered_set<std::string>> tempFailedIds(1);
+    std::set<ReadKey> objectsNeedGetRemote;
+    QueryMetaMap queryMetas{ { objectKey, MakeQueryMeta() } };
+    Status lastRc = Status::OK();
+    NotifyRemoteGetRspPb rsp;
+    uint64_t migratedBytes = 0;
+    std::map<std::string, uint64_t> unconfirmedObjectVersions;
+    std::unordered_set<std::string> failedConfirmationOwners;
+    ScopedRequestContext requestContext;
+
+    impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
+                                                  tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
+                                                  migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners);
+
+    EXPECT_THAT(rsp.failed_object_keys(), Contains(objectKey));
+    EXPECT_EQ(unconfirmedObjectVersions.at(objectKey), 42);
+    EXPECT_EQ(migratedBytes, 1);
+    entry->WUnlock();
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetAcceptsOnlyExplicitlyConfirmedCopyMeta)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = true;
+    const std::string objectKey = "notify_remote_get_confirmed";
+    const HostPort masterAddress("127.0.0.1:18889");
+    RouteObjectToMaster(objectKey, masterAddress);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+    api->createMultiCopyMeta_ = [objectKey](master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &rsp) {
+        rsp.add_confirmed_object_keys(objectKey);
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetDefaultApi(api);
+    QueryMetaMap queryMetas{ { objectKey, MakeQueryMeta() } };
+    std::vector<std::string> confirmedIds;
+    std::unordered_set<std::string> failedIds;
+    std::unordered_set<std::string> failedConfirmationOwners;
+    ScopedRequestContext requestContext;
+
+    impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
+                                              failedConfirmationOwners);
+
+    EXPECT_THAT(confirmedIds, ElementsAre(objectKey));
+    EXPECT_TRUE(failedIds.empty());
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsCopyMetaPersistenceFailure)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = true;
+    const std::string objectKey = "notify_remote_get_persistence_failure";
+    const HostPort masterAddress("127.0.0.1:18889");
+    RouteObjectToMaster(objectKey, masterAddress);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+    api->createMultiCopyMeta_ = [objectKey](master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &rsp) {
+        rsp.add_failed_object_keys(objectKey);  // Master could not persist the newly added location.
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetDefaultApi(api);
+    QueryMetaMap queryMetas{ { objectKey, MakeQueryMeta() } };
+    std::vector<std::string> confirmedIds;
+    std::unordered_set<std::string> failedIds;
+    std::unordered_set<std::string> failedConfirmationOwners;
+    ScopedRequestContext requestContext;
+
+    impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
+                                              failedConfirmationOwners);
+
+    EXPECT_TRUE(confirmedIds.empty());
+    EXPECT_THAT(failedIds, Contains(objectKey));
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetShortCircuitsFailedConfirmationOwner)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = true;
+    const std::string objectKey = "notify_remote_get_confirmation_owner_failure";
+    const HostPort masterAddress("127.0.0.1:18889");
+    RouteObjectToMaster(objectKey, masterAddress);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+    int requestCount = 0;
+    api->createMultiCopyMeta_ = [&requestCount](master::CreateMultiCopyMetaReqPb &,
+                                                master::CreateMultiCopyMetaRspPb &) {
+        ++requestCount;
+        return Status(K_RPC_UNAVAILABLE, "master unavailable");
+    };
+    workerMasterApiManager_->SetDefaultApi(api);
+    QueryMetaMap queryMetas{ { objectKey, MakeQueryMeta() } };
+    std::unordered_set<std::string> failedConfirmationOwners;
+    ScopedRequestContext requestContext;
+    std::vector<std::string> confirmedIds;
+    std::unordered_set<std::string> failedIds;
+
+    impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
+                                              failedConfirmationOwners);
+    confirmedIds.clear();
+    failedIds.clear();
+    impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
+                                              failedConfirmationOwners);
+
+    EXPECT_EQ(requestCount, 1);
+    EXPECT_TRUE(confirmedIds.empty());
+    EXPECT_THAT(failedIds, Contains(objectKey));
 }
 
 TEST_F(NotifyRemoteGetMigrationTest, UsesInjectedRateController)

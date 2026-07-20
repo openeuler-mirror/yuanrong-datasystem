@@ -149,6 +149,8 @@ message CreateMultiCopyMetaRspPb {
   repeated string failed_object_keys = 1; // failed keys, not retry
   repeated RedirectMetaInfo info = 2;
   bool meta_is_moving = 3;
+  // Keys whose copy location update has been accepted by the master.
+  repeated string confirmed_object_keys = 4;
 }
 
 message QueryMetaReqPb {
