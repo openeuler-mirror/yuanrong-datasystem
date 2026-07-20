@@ -232,6 +232,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "Worker RemoteGet RPC" in html
     assert "latencyChartRows" in html
     assert "Flow Breakdown" in html
+    assert "flowLabelMap" in html
+    assert "Worker GET" in html
     assert "id=\"time-breakdown-chart\"" in html
     assert "Time Bucket Latency Stages" in html
     assert "client/access p99 upper bound" in html

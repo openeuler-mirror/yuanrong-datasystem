@@ -1504,7 +1504,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel insight">Breakdown 不做简单相加：Client/access 是等待窗口；Entry/DataWorker 指标可能发生在 client deadline 之后。图中 p99/max 用于找尾部，p50 用于看普遍水平。</div>
         <div class="chart-grid">
           <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 Top 时延指标：图中使用短名称，完整字段见 tooltip 和表 3-1。</div></div>
-          <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布：柱形图便于和表 3-2 一行对照</div></div>
+          <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布：图中使用短名称，完整 flow 见 tooltip 和表 3-2。</div></div>
         </div>
         <div class="panel"><div id="time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 时间桶时延分段：柱状图为同桶内 RPC/UB 子阶段 p99，折线为 client/access p99 上界；client access 不与子阶段相加。</div></div>
         <div class="compare2">
@@ -1604,6 +1604,20 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function metricLabel(name) {
     if (metricLabelMap[name]) return metricLabelMap[name];
     return String(name || '').replace(/^latencySummary\\./, '').replace(/^urma\\./, 'URMA ').replace(/[._]/g, ' ');
+  }
+  const flowLabelMap = {
+    'DS_KV_CLIENT_GET':'Client GET',
+    'DS_POSIX_GET':'Worker GET',
+    'DS_KV_CLIENT_SET':'Client SET',
+    'DS_POSIX_SET':'Worker SET',
+    'DS_KV_CLIENT_CREATE':'Client Create',
+    'DS_POSIX_CREATE':'Worker Create',
+    'DS_KV_CLIENT_PUBLISH':'Client Publish',
+    'DS_POSIX_PUBLISH':'Worker Publish'
+  };
+  function flowLabel(name) {
+    if (flowLabelMap[name]) return flowLabelMap[name];
+    return String(name || '').replace(/^DS_/, '').replace(/_/g, ' ');
   }
   function renderTable(id, headers, rows, rowAttrs) {
     const table = document.getElementById(id);
@@ -1983,9 +1997,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     series:['p50','p90','p99','max'].map(key => ({name:key,type:'bar',barMaxWidth:18,data:latencyChartRows.map(([, item]) => item[key] || 0), markLine:key === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]} : undefined}))
   }) : noDataOption('No latency metric data'));
   chart('flow-chart', flowRows.length ? axisBase('Flow Breakdown', {
-    grid:{left:165,right:34,top:56,bottom:42,containLabel:true},
+    grid:{left:112,right:42,top:56,bottom:42,containLabel:true},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => {
+      const idx = ps[0]?.dataIndex ?? 0;
+      const rawName = flowRows[idx]?.[0] || '';
+      return `${escapeHtml(flowLabel(rawName))}<br><span class="muted">${escapeHtml(rawName)}</span><br>count: ${ps[0]?.value ?? 0}`;
+    }},
     xAxis:{type:'value', name:'count'},
-    yAxis:{type:'category', data:flowRows.map(r => r[0]), axisLabel:{width:150, overflow:'truncate'}},
+    yAxis:{type:'category', data:flowRows.map(r => flowLabel(r[0])), axisLabel:{width:96, overflow:'truncate'}},
     series:[{name:'count',type:'bar',barMaxWidth:28,data:flowRows.map(r => r[1]),itemStyle:{color:'#2563eb'},label:{show:true,position:'right'}}]
   }) : noDataOption('No flow data'));
   const timeStageNames = [...new Set(timeBucketRows.flatMap(row => Object.keys(row.stage_breakdown_ms || {})))]
