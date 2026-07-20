@@ -35,7 +35,7 @@ run 目录包含：
 - `triage.json` / `triage.md`：分类、issue candidates、代表 trace。
 - `report.local.html`：本地自包含 HTML，可直接打开。
 - `report.site.html`：yche.me 站点版 HTML 草稿，供后续发布流程使用。
-- `site_publish.md`：发布准备清单，记录 `xqyun-32c32g:/var/www/html/perf/*.html` 目标路径、yche.me URL、复制命令和 HTTP 验证命令；生成该文件不代表已经发布成功。
+- `site_publish.md`：发布准备清单，记录 `xqyun-32c32g:/var/www/html/perf/*.html` 目标路径、yche.me URL、HTML 大小、复制命令和 HTTP 验证命令；生成该文件不代表已经发布成功。
 
 也可以显式分阶段执行，便于人工检查中间产物：
 
@@ -50,7 +50,7 @@ python3 scripts/ds_trace_triage.py triage "$run_dir"
 python3 scripts/ds_trace_triage.py render-local "$run_dir"
 python3 scripts/ds_trace_triage.py render-site "$run_dir"
 python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
-# 确认 site_publish.md 后，不带 --dry-run 会执行 scp、curl HEAD，并校验线上 HTML 关键组件。
+# 确认 site_publish.md 后，不带 --dry-run 会先做 HTML 大小门禁，再执行 scp、curl HEAD，并校验线上 HTML 关键组件。
 ```
 
 旧的直接摘要入口仍可用于快速检查：
@@ -72,7 +72,9 @@ python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 
 这两个命令应接入 CI，作为日志格式和 parser contract 的低成本回归门禁。
 
-当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us->ms 转换、`exceed 3ms` breakdown、`latencySummary` 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、UB request id/src/target/dataSize/cpuid/status/inflight 字段、时间桶、worker/edge 聚合、目录化 run 产物、本地/站点 HTML、内联 JS 语法检查、yche 发布清单与 dry-run manifest 状态、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。
+当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us->ms 转换、`exceed 3ms` breakdown、`latencySummary` 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、UB request id/src/target/dataSize/cpuid/status/inflight 字段、时间桶、worker/edge 聚合、目录化 run 产物、本地/站点 HTML、内联 JS 语法检查、yche 发布清单、dry-run manifest 状态、真实发布大小门禁、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。
+
+yche.me 发布默认拒绝超过 2 MiB 的 `report.site.html`，避免把临时大页面或垃圾页面发布到站点。确有必要发布大报告时，必须先人工确认报告内容和体积来源，再显式传入 `--max-site-html-mb <N>`。
 
 日志字段小步演进时，优先通过 parser 扩展点接入：
 

@@ -29,6 +29,7 @@ TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 WORKER_RE = re.compile(r"(kv[^/\s|]*worker[^/\s|]*)", re.I)
 NOISE_ON_LABEL = "有底噪(dizao)"
 NOISE_OFF_LABEL = "无底噪(wudizao)"
+DEFAULT_SITE_HTML_MAX_BYTES = 2 * 1024 * 1024
 ACCESS_RE = re.compile(r"\|\s*(-?\d+)\s*\|\s*([A-Z0-9_]+)\s*\|\s*(\d+)\s*\|\s*(\d+)")
 BREAKDOWN_BLOCK_RE = re.compile(r"exceed\s+3ms:\s*\{([^}]*)\}", re.I)
 BREAKDOWN_ITEM_RE = re.compile(r"([A-Za-z][A-Za-z0-9_ /.-]*?)\s*:\s*([\d.]+)\s*ms")
@@ -1273,12 +1274,16 @@ def _write_site_publish_doc(run_dir, manifest):
     filename = f"{run_dir.name}.html"
     remote_path = f"/var/www/html/perf/{filename}"
     url = f"https://yche.me/perf/{filename}"
+    source_html = run_dir / "report.site.html"
+    source_size = source_html.stat().st_size if source_html.exists() else 0
     lines = [
         "# yche.me Publish Checklist",
         "",
         f"- case_name: `{manifest.get('case_name', '')}`",
         f"- scenario: `{manifest.get('scenario', '')}`",
         f"- source_html: `report.site.html`",
+        f"- source_size_bytes: `{source_size}`",
+        f"- default_publish_limit_bytes: `{DEFAULT_SITE_HTML_MAX_BYTES}`",
         f"- target_host: `xqyun-32c32g`",
         f"- target_path: `{remote_path}`",
         f"- url: `{url}`",
@@ -1294,6 +1299,7 @@ def _write_site_publish_doc(run_dir, manifest):
         "",
         "- HTTP status should be 200.",
         "- Open the URL and verify navigation, ECharts, provenance, coverage, trace filters, downloads, and selected logs.",
+        "- Do not publish oversized throw-away pages; pass `--max-site-html-mb` only after reviewing why the page is large.",
     ]
     (run_dir / "site_publish.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return {"publish_doc": "site_publish.md", "target_path": remote_path, "url": url}
@@ -2001,7 +2007,17 @@ def render_site_stage(run_dir):
     return TraceRunPipeline().render_site(run_dir)
 
 
-def publish_site_stage(run_dir, dry_run=True):
+def _publish_size_guard(source_html, max_bytes=DEFAULT_SITE_HTML_MAX_BYTES):
+    source_html = Path(source_html)
+    size = source_html.stat().st_size
+    return {
+        "source_size_bytes": size,
+        "max_site_html_bytes": max_bytes,
+        "size_status": "ok" if size <= max_bytes else "too_large",
+    }
+
+
+def publish_site_stage(run_dir, dry_run=True, max_site_html_bytes=DEFAULT_SITE_HTML_MAX_BYTES):
     run_dir = Path(run_dir)
     manifest = _read_json(run_dir / "manifest.json")
     site_target = manifest.get("render_targets", {}).get("site", {})
@@ -2012,11 +2028,29 @@ def publish_site_stage(run_dir, dry_run=True):
     if not (run_dir / site_target.get("publish_doc", "site_publish.md")).exists():
         publish_doc = _write_site_publish_doc(run_dir, manifest)
         site_target = {**site_target, **publish_doc}
+    source_html = run_dir / site_target.get("path", "report.site.html")
+    size_guard = _publish_size_guard(source_html, max_site_html_bytes)
     live_markers = "not-run"
     if dry_run:
         status = "dry-run"
+    elif size_guard["size_status"] != "ok":
+        status = "blocked-size-limit"
+        _update_manifest(run_dir, lambda item: item["render_targets"]["site"].update({
+            **site_target,
+            "publish": {
+                "status": status,
+                "url": site_target.get("url", ""),
+                "target_path": site_target.get("target_path", ""),
+                "live_markers": live_markers,
+                **size_guard,
+            },
+        }))
+        raise SystemExit(
+            f"Refuse to publish oversized site HTML: {source_html} is "
+            f"{size_guard['source_size_bytes']} bytes > {max_site_html_bytes} bytes. "
+            "Review the report or raise --max-site-html-mb intentionally."
+        )
     else:
-        source_html = run_dir / site_target.get("path", "report.site.html")
         target_path = site_target.get("target_path", "")
         url = site_target.get("url", "")
         subprocess.run(["scp", str(source_html), f"xqyun-32c32g:{target_path}"], check=True)
@@ -2041,6 +2075,7 @@ def publish_site_stage(run_dir, dry_run=True):
             "url": site_target.get("url", ""),
             "target_path": site_target.get("target_path", ""),
             "live_markers": live_markers,
+            **size_guard,
         },
     }))
     return site_target.get("url", "")
@@ -2166,6 +2201,8 @@ def main(argv=None):
             parser.add_argument("run_dir", help="Existing staged run directory.")
             if command == "publish-site":
                 parser.add_argument("--dry-run", action="store_true", help="Prepare publish metadata without copying.")
+                parser.add_argument("--max-site-html-mb", type=float, default=2.0,
+                                    help="Refuse real yche.me publish when report.site.html exceeds this size.")
             args = parser.parse_args(argv)
             if command == "aggregate":
                 print(aggregate_stage(args.run_dir))
@@ -2176,7 +2213,8 @@ def main(argv=None):
             elif command == "render-site":
                 print(render_site_stage(args.run_dir))
             else:
-                url = publish_site_stage(args.run_dir, dry_run=args.dry_run)
+                max_bytes = int(args.max_site_html_mb * 1024 * 1024)
+                url = publish_site_stage(args.run_dir, dry_run=args.dry_run, max_site_html_bytes=max_bytes)
                 print(f"{'DRY-RUN ' if args.dry_run else ''}{url}")
             return 0
         parser = argparse.ArgumentParser(description="Run staged DataSystem trace triage.")

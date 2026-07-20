@@ -46,8 +46,8 @@ root-cause analysis rather than broad access/resource trending.
    python3 scripts/ds_trace_triage.py render-local "$run_dir"
    python3 scripts/ds_trace_triage.py render-site "$run_dir"
    python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
-   # After reviewing site_publish.md, omit --dry-run to scp, curl HEAD,
-   # and verify live HTML markers.
+   # After reviewing site_publish.md, omit --dry-run to pass the HTML size gate,
+   # scp, curl HEAD, and verify live HTML markers.
    ```
 4. Read the timestamped run directory:
    - `manifest.json`: case/scenario/ref/time range and render targets
@@ -60,7 +60,8 @@ root-cause analysis rather than broad access/resource trending.
      components as local HTML and include `/assets/css/site.css` plus
      `/assets/js/site.js`
    - `site_publish.md`: xqyun/yche.me publish checklist with target path,
-     URL, copy command, and validation command
+     URL, HTML size, copy command, validation command, and the default publish
+     size limit
    - `manifest.json` `render_targets.site.publish`: dry-run/publish status
      recorded by the `publish-site` stage
 5. Inspect selected full logs for the top slow/error traces. Keep aggregate
@@ -85,6 +86,10 @@ generation, inline report JavaScript syntax when Node.js is available, and
 error classification.
 It also verifies the yche publish checklist and `publish-site --dry-run`
 manifest status.
+
+Real yche.me publish has a default 2 MiB `report.site.html` size gate to avoid
+publishing oversized throw-away pages. If a large page is intentional, review
+the report first and pass `--max-site-html-mb <N>` explicitly.
 
 The repository CI runs the dependency-light gate in `.gitee/ci_build.sh`:
 

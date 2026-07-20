@@ -4,6 +4,8 @@ import json
 import tarfile
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ds_trace_triage.py"
 
@@ -522,6 +524,36 @@ def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypa
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["render_targets"]["site"]["publish"]["status"] == "published"
     assert manifest["render_targets"]["site"]["publish"]["live_markers"] == "verified"
+    assert manifest["render_targets"]["site"]["publish"]["source_size_bytes"] > 0
+    assert manifest["render_targets"]["site"]["publish"]["max_site_html_bytes"] == mod.DEFAULT_SITE_HTML_MAX_BYTES
+
+
+def test_publish_site_stage_blocks_oversized_html_before_copy(tmp_path, monkeypatch):
+    trace_id = "019f7d0b-e9ec-79d1-9567-14e4179ace75"
+    log = tmp_path / "publish-large.log"
+    log.write_text(
+        f"2026-07-20T13:16:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    run_dir = mod.run_pipeline([str(log)], tmp_path / "runs", case_name="publish-large", code_ref="unit-test")
+    calls = []
+
+    def fake_run(cmd, check, **kwargs):
+        calls.append((cmd, kwargs))
+        raise AssertionError("scp/curl must not run for oversized HTML")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    with pytest.raises(SystemExit) as exc:
+        mod.publish_site_stage(run_dir, dry_run=False, max_site_html_bytes=1)
+
+    assert "Refuse to publish oversized site HTML" in str(exc.value)
+    assert calls == []
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    publish = manifest["render_targets"]["site"]["publish"]
+    assert publish["status"] == "blocked-size-limit"
+    assert publish["source_size_bytes"] > publish["max_site_html_bytes"]
 
 
 def test_trace_run_pipeline_object_exposes_stage_boundaries(tmp_path):
