@@ -61,14 +61,21 @@ cc_binary(
 以下代码片段 `main.cpp` 演示最小可用调用：
 
 ```cpp
+#include <cstdio>
 #include <datasystem/datasystem.h>
 
 using namespace datasystem;
 
 int main() {
     ConnectOptions opts{ .host = "127.0.0.1", .port = 31501 };
-    auto client = std::make_unique<KVClient>(opts);
+    auto client = std::make_shared<DsClient>(opts);
     Status status = client->Init();
+    if (status.IsError()) {
+        fprintf(stderr, "Init failed: %s\n", status.ToString().c_str());
+        return -1;
+    }
+    auto kv = client->KV();
+    (void)kv;
     return 0;
 }
 ```

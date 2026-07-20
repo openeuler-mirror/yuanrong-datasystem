@@ -807,7 +807,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 3. 使用 dscli runscript 命令执行脚本：
 
     ```bash
-    dscli runscript -f ./cluster.config install.sh
+    dscli runscript -f ./cluster_config.json install.sh
     ```
 
 更多关于 dscli runscript 命令的使用请参考：[dscli runscript](#dscli-runscript)。

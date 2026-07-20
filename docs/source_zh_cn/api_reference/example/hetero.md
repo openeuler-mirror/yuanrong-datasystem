@@ -94,27 +94,38 @@ def hetero_dev_subscribe():
 :::{tab-item} C++
 
 ```cpp
+#include <cstdio>
 #include "datasystem/datasystem.h"
-
 #include <acl/acl.h>
+
+using namespace datasystem;
 
 // HeteroDevPublish and HeteroDevSubscribe must be executed in different processes
 // because they need to be bound to different NPUs.
-void HeteroDevPublish()
+int HeteroDevPublish()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
     auto client = std::make_shared<DsClient>(connectOptions);
-    ASSERT_TRUE(client->Init().IsOk());
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
 
     // Initialize the ACL interface.
     int deviceId = 1;
-    aclInit(nullptr);
-    aclrtSetDevice(deviceId); // Bind the NPU card.
+    if (aclInit(nullptr) != ACL_SUCCESS) {
+        fprintf(stderr, "aclInit failed\n");
+        return -1;
+    }
+    if (aclrtSetDevice(deviceId) != ACL_SUCCESS) { // Bind the NPU card.
+        fprintf(stderr, "aclrtSetDevice failed\n");
+        return -1;
+    }
 
     // The sender constructs data and publishes it to the data system.
     std::vector<std::string> keys = { "test-key1" };
     std::vector<uint64_t> blobSize = { 10, 20 };
-    int blobNum = blobSize.size();
+    int blobNum = static_cast<int>(blobSize.size());
     std::vector<DeviceBlobList> inBlobList;
     inBlobList.resize(keys.size());
     // Enter the Device address information on the device to the devblob.
@@ -122,10 +133,13 @@ void HeteroDevPublish()
         inBlobList[i].deviceIdx = deviceId;
         for (int j = 0; j < blobNum; j++) {
             void *devPtr = nullptr;
-            int code = aclrtMalloc(&devPtr, blobSize[j], ACL_MEM_MALLOC_HUGE_FIRST);
+            int code = aclrtMalloc(&devPtr, blobSize[j], aclrtMemMallocPolicy::ACL_MEM_MALLOC_HUGE_FIRST);
             // Copying Data to the Device Memory.
             // aclrtMemcpy(devPtr, blobSize[j], value.data(), size, aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE)
-            ASSERT_EQ(code, 0);
+            if (code != ACL_SUCCESS) {
+                fprintf(stderr, "aclrtMalloc failed\n");
+                return -1;
+            }
             Blob blob = { .pointer = devPtr, .size = blobSize[j] };
             inBlobList[i].blobs.emplace_back(std::move(blob));
         }
@@ -133,30 +147,47 @@ void HeteroDevPublish()
 
     std::vector<Future> inFutureVecEnque;
     Status status = client->Hetero()->DevPublish(keys, inBlobList, inFutureVecEnque);
-    ASSERT_TRUE(status.IsOk());
+    if (!status.IsOk()) {
+        fprintf(stderr, "DevPublish failed\n");
+        return -1;
+    }
 
     // The sender checks the future.
     // If OK is returned, it indicates that the receiver has received the HBM successfully
     // and the HBM memory is disconnected from the data system.
     for (size_t i = 0; i < inFutureVecEnque.size(); i++) {
-        ASSERT_TRUE(inFutureVecEnque[i].Get().IsOk());
+        if (!inFutureVecEnque[i].Get().IsOk()) {
+            fprintf(stderr, "DevPublish future failed\n");
+            return -1;
+        }
     }
+    client->ShutDown();
+    return 0;
 }
 
-void HeteroDevSubscribe()
+int HeteroDevSubscribe()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
     auto client = std::make_shared<DsClient>(connectOptions);
-    ASSERT_TRUE(client->Init().IsOk());
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
 
     // Initialize the ACL interface.
     int deviceId = 2;
-    aclInit(nullptr);
-    aclrtSetDevice(deviceId); // Bind the NPU card.
+    if (aclInit(nullptr) != ACL_SUCCESS) {
+        fprintf(stderr, "aclInit failed\n");
+        return -1;
+    }
+    if (aclrtSetDevice(deviceId) != ACL_SUCCESS) { // Bind the NPU card.
+        fprintf(stderr, "aclrtSetDevice failed\n");
+        return -1;
+    }
 
     std::vector<std::string> keys = { "test-key1" };
     std::vector<uint64_t> blobSize = { 10, 20 };
-    int blobNum = blobSize.size();
+    int blobNum = static_cast<int>(blobSize.size());
     std::vector<DeviceBlobList> outBlobList;
     outBlobList.resize(keys.size());
     // The receiver allocates HBM memory and subscribes to receive data from the data system.
@@ -164,8 +195,11 @@ void HeteroDevSubscribe()
         outBlobList[i].deviceIdx = deviceId;
         for (int j = 0; j < blobNum; j++) {
             void *devPtr = nullptr;
-            int code = aclrtMalloc(&devPtr, blobSize[j], ACL_MEM_MALLOC_HUGE_FIRST);
-            ASSERT_EQ(code, 0);
+            int code = aclrtMalloc(&devPtr, blobSize[j], aclrtMemMallocPolicy::ACL_MEM_MALLOC_HUGE_FIRST);
+            if (code != ACL_SUCCESS) {
+                fprintf(stderr, "aclrtMalloc failed\n");
+                return -1;
+            }
             Blob blob = { .pointer = devPtr, .size = blobSize[j] };
             outBlobList[i].blobs.emplace_back(std::move(blob));
         }
@@ -173,15 +207,34 @@ void HeteroDevSubscribe()
 
     std::vector<Future> outFutureVecDeque;
     Status status = client->Hetero()->DevSubscribe(keys, outBlobList, outFutureVecDeque);
-    ASSERT_TRUE(status.IsOk());
+    if (!status.IsOk()) {
+        fprintf(stderr, "DevSubscribe failed\n");
+        return -1;
+    }
 
     // The receiver checks the future.
     // If ok is returned, the data is received successfully.
     for (size_t i = 0; i < outFutureVecDeque.size(); i++) {
-        ASSERT_TRUE(outFutureVecDeque[i].Get().IsOk());
+        if (!outFutureVecDeque[i].Get().IsOk()) {
+            fprintf(stderr, "DevSubscribe future failed\n");
+            return -1;
+        }
     }
+    client->ShutDown();
+    return 0;
 }
 
+int main(int argc, char *argv[])
+{
+    // 通过命令行参数选择角色，publish 与 subscribe 需分别在不同进程（绑定不同 NPU 卡）执行：
+    //   ./demo publish     # 发送端，绑定 deviceId=1
+    //   ./demo subscribe   # 接收端，绑定 deviceId=2
+    std::string role = (argc > 1) ? argv[1] : "publish";
+    if (role == "subscribe") {
+        return HeteroDevSubscribe();
+    }
+    return HeteroDevPublish();
+}
 ```
 
 :::
@@ -268,36 +321,51 @@ def hetero_dev_mget():
 :::{tab-item} C++
 
 ```cpp
+#include <cstdio>
 #include "datasystem/datasystem.h"
 #include <acl/acl.h>
 
+using namespace datasystem;
+
 // HeteroDevMSet and HeteroDevMGet must be executed in different processes
 // because they need to be bound to different NPUs.
-void HeteroDevMSet()
+int HeteroDevMSet()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
     auto client = std::make_shared<DsClient>(connectOptions);
-    ASSERT_TRUE(client->Init().IsOk());
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
 
     // Initialize the ACL interface.
     int deviceId = 1;
-    aclInit(nullptr);
-    aclrtSetDevice(deviceId);  // Bind the NPU card.
+    if (aclInit(nullptr) != ACL_SUCCESS) {
+        fprintf(stderr, "aclInit failed\n");
+        return -1;
+    }
+    if (aclrtSetDevice(deviceId) != ACL_SUCCESS) {  // Bind the NPU card.
+        fprintf(stderr, "aclrtSetDevice failed\n");
+        return -1;
+    }
 
     // The data generator constructs data and writes it to the data system.
     std::vector<std::string> keys = { "test-key1" };
     std::vector<uint64_t> blobSize = { 10, 20 };
-    int blobNum = blobSize.size();
+    int blobNum = static_cast<int>(blobSize.size());
     std::vector<DeviceBlobList> inBlobList;
     inBlobList.resize(keys.size());
     for (size_t i = 0; i < inBlobList.size(); i++) {
         inBlobList[i].deviceIdx = deviceId;
         for (int j = 0; j < blobNum; j++) {
             void *devPtr = nullptr;
-            int code = aclrtMalloc(&devPtr, blobSize[j], ACL_MEM_MALLOC_HUGE_FIRST);
+            int code = aclrtMalloc(&devPtr, blobSize[j], aclrtMemMallocPolicy::ACL_MEM_MALLOC_HUGE_FIRST);
             // Copying Data to the Device Memory.
             // aclrtMemcpy(devPtr, blobSize[j], value.data(), size, aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE)
-            ASSERT_EQ(code, 0);
+            if (code != ACL_SUCCESS) {
+                fprintf(stderr, "aclrtMalloc failed\n");
+                return -1;
+            }
             Blob blob = { .pointer = devPtr, .size = blobSize[j] };
             inBlobList[i].blobs.emplace_back(std::move(blob));
         }
@@ -305,25 +373,38 @@ void HeteroDevMSet()
 
     std::vector<std::string> setFailedKeys;
     Status status = client->Hetero()->DevMSet(keys, inBlobList, setFailedKeys);
-    ASSERT_TRUE(status.IsOk());
-    ASSERT_TRUE(setFailedKeys.size() == 0);
+    if (!status.IsOk() || !setFailedKeys.empty()) {
+        fprintf(stderr, "DevMSet failed\n");
+        return -1;
+    }
+    client->ShutDown();
+    return 0;
 }
 
-void HeteroDevMGet()
+int HeteroDevMGet()
 {
     ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
     auto client = std::make_shared<DsClient>(connectOptions);
-    ASSERT_TRUE(client->Init().IsOk());
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
 
     // Initialize the ACL interface.
     int deviceId = 2;
-    aclInit(nullptr);
-    aclrtSetDevice(deviceId); // Bind the NPU card.
+    if (aclInit(nullptr) != ACL_SUCCESS) {
+        fprintf(stderr, "aclInit failed\n");
+        return -1;
+    }
+    if (aclrtSetDevice(deviceId) != ACL_SUCCESS) { // Bind the NPU card.
+        fprintf(stderr, "aclrtSetDevice failed\n");
+        return -1;
+    }
 
     // The data obtainer allocates the HBM memory and invokes the DevMGet interface to receive data.
     std::vector<std::string> keys = { "test-key1" };
     std::vector<uint64_t> blobSize = { 10, 20 };
-    int blobNum = blobSize.size();
+    int blobNum = static_cast<int>(blobSize.size());
     std::vector<DeviceBlobList> outBlobList;
     outBlobList.resize(keys.size());
     // Allocate the HBM memory and fill it in the outBlobList.
@@ -331,8 +412,11 @@ void HeteroDevMGet()
         outBlobList[i].deviceIdx = deviceId;
         for (int j = 0; j < blobNum; j++) {
             void *devPtr = nullptr;
-            int code = aclrtMalloc(&devPtr, blobSize[j], ACL_MEM_MALLOC_HUGE_FIRST);
-            ASSERT_EQ(code, 0);
+            int code = aclrtMalloc(&devPtr, blobSize[j], aclrtMemMallocPolicy::ACL_MEM_MALLOC_HUGE_FIRST);
+            if (code != ACL_SUCCESS) {
+                fprintf(stderr, "aclrtMalloc failed\n");
+                return -1;
+            }
             Blob blob = { .pointer = devPtr, .size = blobSize[j] };
             outBlobList[i].blobs.emplace_back(std::move(blob));
         }
@@ -340,15 +424,32 @@ void HeteroDevMGet()
 
     std::vector<std::string> getFailedKeys;
     Status status = client->Hetero()->DevMGet(keys, outBlobList, getFailedKeys);
-    ASSERT_TRUE(status.IsOk());
-    ASSERT_TRUE(getFailedKeys.size() == 0);
+    if (!status.IsOk() || !getFailedKeys.empty()) {
+        fprintf(stderr, "DevMGet failed\n");
+        return -1;
+    }
 
     std::vector<std::string> delFailedKeys;
     status = client->Hetero()->DevDelete(keys, delFailedKeys);
-    ASSERT_TRUE(status.IsOk());
-    ASSERT_TRUE(delFailedKeys.size() == 0);
+    if (!status.IsOk() || !delFailedKeys.empty()) {
+        fprintf(stderr, "DevDelete failed\n");
+        return -1;
+    }
+    client->ShutDown();
+    return 0;
 }
 
+int main(int argc, char *argv[])
+{
+    // 通过命令行参数选择角色，mset 与 mget 需分别在不同进程（绑定不同 NPU 卡）执行：
+    //   ./demo mset   # 写入端，绑定 deviceId=1
+    //   ./demo mget   # 读取端，绑定 deviceId=2
+    std::string role = (argc > 1) ? argv[1] : "mset";
+    if (role == "mget") {
+        return HeteroDevMGet();
+    }
+    return HeteroDevMSet();
+}
 ```
 
 :::
@@ -426,56 +527,78 @@ def hetero_mset_d2h_mget_h2d():
 
 ```cpp
 
-#include "datasystem/hetero_client.h"
+#include <cstdio>
+#include "datasystem/datasystem.h"
 #include <acl/acl.h>
 
-ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-auto client = std::make_shared<DsClient>(connectOptions);
-ASSERT_TRUE(client->Init().IsOk());
+using namespace datasystem;
 
-// Initialize the ACL interface.
-int deviceId = 1;
-aclInit(nullptr);
-aclrtSetDevice(deviceId); // Bind the NPU card.
-
-std::vector<std::string> keys = { "test-key1" };
-std::vector<uint64_t> blobSize = { 10, 20 };
-int blobNum = blobSize.size();
-std::vector<DeviceBlobList> swapOutBlobList;
-swapOutBlobList.resize(keys.size());
-// Allocate the HBM memory and fill it in the swapOutBlobList.
-for (size_t i = 0; i < swapOutBlobList.size(); i++) {
-    swapOutBlobList[i].deviceIdx = deviceId;
-    for (int j = 0; j < blobNum; j++) {
-        void *devPtr = nullptr;
-        int code = aclrtMalloc(&devPtr, blobSize[j], ACL_MEM_MALLOC_HUGE_FIRST);
-        // Copying Data to the Device Memory.
-        // aclrtMemcpy(devPtr, blobSize[j], value.data(), size, aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE)
-        ASSERT_EQ(code, 0);
-        Blob blob = { .pointer = devPtr, .size = blobSize[j] };
-        swapOutBlobList[i].blobs.emplace_back(std::move(blob));
+int main()
+{
+    ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
+    auto client = std::make_shared<DsClient>(connectOptions);
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
     }
-}
 
-Status status = client->Hetero()->MSetD2H(keys, swapOutBlobList);
-ASSERT_TRUE(status.IsOk());
+    // Initialize the ACL interface.
+    int deviceId = 1;
+    aclInit(nullptr);
+    aclrtSetDevice(deviceId); // Bind the NPU card.
 
-std::vector<DeviceBlobList> swapInBlobList;
-swapInBlobList.resize(keys.size());
-// Allocate the HBM memory and fill it in the swapInBlobList.
-for (size_t i = 0; i < swapInBlobList.size(); i++) {
-    swapInBlobList[i].deviceIdx = deviceId;
-    for (int j = 0; j < blobNum; j++) {
-        void *devPtr = nullptr;
-        int code = aclrtMalloc(&devPtr, blobSize[j], ACL_MEM_MALLOC_HUGE_FIRST);
-        ASSERT_EQ(code, 0);
-        Blob blob = { .pointer = devPtr, .size = blobSize[j] };
-        swapInBlobList[i].blobs.emplace_back(std::move(blob));
+    std::vector<std::string> keys = { "test-key1" };
+    std::vector<uint64_t> blobSize = { 10, 20 };
+    int blobNum = blobSize.size();
+    std::vector<DeviceBlobList> swapOutBlobList;
+    swapOutBlobList.resize(keys.size());
+    // Allocate the HBM memory and fill it in the swapOutBlobList.
+    for (size_t i = 0; i < swapOutBlobList.size(); i++) {
+        swapOutBlobList[i].deviceIdx = deviceId;
+        for (int j = 0; j < blobNum; j++) {
+            void *devPtr = nullptr;
+            int code = aclrtMalloc(&devPtr, blobSize[j], aclrtMemMallocPolicy::ACL_MEM_MALLOC_HUGE_FIRST);
+            // Copying Data to the Device Memory.
+            // aclrtMemcpy(devPtr, blobSize[j], value.data(), size, aclrtMemcpyKind::ACL_MEMCPY_HOST_TO_DEVICE)
+            if (code != 0) {
+                fprintf(stderr, "aclrtMalloc failed\n");
+                return -1;
+            }
+            Blob blob = { .pointer = devPtr, .size = blobSize[j] };
+            swapOutBlobList[i].blobs.emplace_back(std::move(blob));
+        }
     }
+
+    Status status = client->Hetero()->MSetD2H(keys, swapOutBlobList);
+    if (!status.IsOk()) {
+        fprintf(stderr, "MSetD2H failed\n");
+        return -1;
+    }
+
+    std::vector<DeviceBlobList> swapInBlobList;
+    swapInBlobList.resize(keys.size());
+    // Allocate the HBM memory and fill it in the swapInBlobList.
+    for (size_t i = 0; i < swapInBlobList.size(); i++) {
+        swapInBlobList[i].deviceIdx = deviceId;
+        for (int j = 0; j < blobNum; j++) {
+            void *devPtr = nullptr;
+            int code = aclrtMalloc(&devPtr, blobSize[j], aclrtMemMallocPolicy::ACL_MEM_MALLOC_HUGE_FIRST);
+            if (code != 0) {
+                fprintf(stderr, "aclrtMalloc failed\n");
+                return -1;
+            }
+            Blob blob = { .pointer = devPtr, .size = blobSize[j] };
+            swapInBlobList[i].blobs.emplace_back(std::move(blob));
+        }
+    }
+    std::vector<std::string> failedList;
+    status = client->Hetero()->MGetH2D(keys, swapInBlobList, failedList, 30000);
+    if (!status.IsOk()) {
+        fprintf(stderr, "MGetH2D failed\n");
+        return -1;
+    }
+    return 0;
 }
-std::vector<std::string> failedList;
-status = client->Hetero()->MGetH2D(keys, swapInBlobList, failedList, 1);
-ASSERT_TRUE(status.IsOk());
 ```
 
 :::
