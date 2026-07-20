@@ -31,35 +31,61 @@ client.kv().delete([key])
 :::{tab-item} C++
 
 ```cpp
+#include <cstdio>
 #include "datasystem/datasystem.h"
 
-ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-auto client = std::make_shared<DsClient>(connectOptions);
-ASSERT_TRUE(client->Init().IsOk());
+using namespace datasystem;
 
-std::string key = "testKey";
-std::string value = "Hello kv client";
-std::string value2 = "Hello modify";
-Status status = client->KV()->Set(key, value);
-ASSERT_TRUE(status.IsOk());
+int main()
+{
+    ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
+    auto client = std::make_shared<DsClient>(connectOptions);
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
 
-std::string getValue;
-status = client->KV()->Get(key, getValue);
-ASSERT_TRUE(status.IsOk());
-ASSERT_TRUE(getValue == value);
+    std::string key = "testKey";
+    std::string value = "Hello kv client";
+    std::string value2 = "Hello modify";
+    Status status = client->KV()->Set(key, value);
+    if (!status.IsOk()) {
+        fprintf(stderr, "Set failed\n");
+        return -1;
+    }
 
-status = client->KV()->Set(key, value2);
-ASSERT_TRUE(status.IsOk());
+    std::string getValue;
+    status = client->KV()->Get(key, getValue);
+    if (!status.IsOk() || getValue != value) {
+        fprintf(stderr, "Get failed\n");
+        return -1;
+    }
 
-status = client->KV()->Get(key, getValue);
-ASSERT_TRUE(status.IsOk());
-ASSERT_TRUE(getValue == value2);
+    status = client->KV()->Set(key, value2);
+    if (!status.IsOk()) {
+        fprintf(stderr, "Set failed\n");
+        return -1;
+    }
 
-status = client->KV()->Del(key);
-ASSERT_TRUE(status.IsOk());
+    status = client->KV()->Get(key, getValue);
+    if (!status.IsOk() || getValue != value2) {
+        fprintf(stderr, "Get failed\n");
+        return -1;
+    }
 
-status = client->KV()->Get(key, getValue);
-ASSERT_TRUE(status.IsError());
+    status = client->KV()->Del(key);
+    if (!status.IsOk()) {
+        fprintf(stderr, "Del failed\n");
+        return -1;
+    }
+
+    status = client->KV()->Get(key, getValue);
+    if (!status.IsError()) {
+        fprintf(stderr, "Get after delete should fail\n");
+        return -1;
+    }
+    return 0;
+}
 ```
 
 :::
@@ -98,22 +124,35 @@ KV 接口支持 Causal 级别数据读写一致性。
 `username` 和 `password`。
 
 ```cpp
+#include <cstdio>
 #include "datasystem/datasystem.h"
 
-ServiceDiscoveryOptions sdOpts;
-sdOpts.etcdAddress = "127.0.0.1:2379";
-sdOpts.hostIdEnvName = "HOST_ID";
-sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
-sdOpts.username = "etcd_user";
-sdOpts.password = "etcd_password";
+using namespace datasystem;
 
-auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
-ASSERT_TRUE(serviceDiscovery->Init().IsOk());
+int main()
+{
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = "127.0.0.1:2379";
+    sdOpts.hostIdEnvName = "HOST_ID";
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    sdOpts.username = "etcd_user";
+    sdOpts.password = "etcd_password";
 
-ConnectOptions connectOptions;
-connectOptions.serviceDiscovery = serviceDiscovery;
-auto client = std::make_shared<DsClient>(connectOptions);
-ASSERT_TRUE(client->Init().IsOk());
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    if (!serviceDiscovery->Init().IsOk()) {
+        fprintf(stderr, "ServiceDiscovery Init failed\n");
+        return -1;
+    }
+
+    ConnectOptions connectOptions;
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    auto client = std::make_shared<DsClient>(connectOptions);
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
+    return 0;
+}
 ```
 
 #### 通过 Coordinator 发现 Worker

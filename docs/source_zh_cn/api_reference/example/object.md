@@ -56,34 +56,61 @@ if __name__ == "__main__":
 :::{tab-item} C++
 
 ```cpp
+#include <cstdio>
+#include <cstring>
 #include "datasystem/datasystem.h"
 
-ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-auto client = std::make_shared<DsClient>(connectOptions);
-ASSERT_TRUE(client->Init().IsOk());
+using namespace datasystem;
 
-std::string objectKey = "testKey";
-std::string data = "Hello object client";
-int size = data.size();
-std::shared_ptr<Buffer> buffer;
-Status status = client->Object()->Create(objectKey, size, CreateParam{}, buffer);
-ASSERT_TRUE(status.IsOk());
-ASSERT_EQ(size, buffer->GetSize());
-std::vector<std::string> failedobjectKeys;
-ASSERT_TRUE(client->Object()->GIncreaseRef({ objectKey }, failedobjectKeys).IsOk());
-buffer->WLatch();
-buffer->MemoryCopy((void *)data.data(), size);
-buffer->Seal();
-buffer->UnWLatch();
+int main()
+{
+    ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
+    auto client = std::make_shared<DsClient>(connectOptions);
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
 
-std::vector<Optional<Buffer>> buffers;
-ASSERT_TRUE(client->Object()->Get({ objectKey }, 0, buffers).IsOk());
-ASSERT_EQ(buffers[0]->GetSize(), size);
-buffers[0]->RLatch();
-ASSERT_EQ(memcmp(data.data(), buffers[0]->MutableData(), size), 0);
-buffers[0]->UnRLatch();
-ASSERT_TRUE(client->Object()->GDecreaseRef({ objectKey }, failedobjectKeys).IsOk());
-ASSERT_TRUE(client->Object()->Get({ objectKey }, 0, buffers).IsError());
+    std::string objectKey = "testKey";
+    std::string data = "Hello object client";
+    int size = data.size();
+    std::shared_ptr<Buffer> buffer;
+    Status status = client->Object()->Create(objectKey, size, CreateParam{}, buffer);
+    if (!status.IsOk() || size != buffer->GetSize()) {
+        fprintf(stderr, "Create failed\n");
+        return -1;
+    }
+    std::vector<std::string> failedobjectKeys;
+    if (!client->Object()->GIncreaseRef({ objectKey }, failedobjectKeys).IsOk()) {
+        fprintf(stderr, "GIncreaseRef failed\n");
+        return -1;
+    }
+    buffer->WLatch();
+    buffer->MemoryCopy((void *)data.data(), size);
+    buffer->Seal();
+    buffer->UnWLatch();
+
+    std::vector<Optional<Buffer>> buffers;
+    if (!client->Object()->Get({ objectKey }, 0, buffers).IsOk() || buffers[0]->GetSize() != size) {
+        fprintf(stderr, "Get failed\n");
+        return -1;
+    }
+    buffers[0]->RLatch();
+    if (memcmp(data.data(), buffers[0]->MutableData(), size) != 0) {
+        fprintf(stderr, "data mismatch\n");
+        return -1;
+    }
+    buffers[0]->UnRLatch();
+    if (!client->Object()->GDecreaseRef({ objectKey }, failedobjectKeys).IsOk()) {
+        fprintf(stderr, "GDecreaseRef failed\n");
+        return -1;
+    }
+    if (!client->Object()->Get({ objectKey }, 0, buffers).IsError()) {
+        fprintf(stderr, "Get after delete should fail\n");
+        return -1;
+    }
+    return 0;
+}
 ```
 
 :::
