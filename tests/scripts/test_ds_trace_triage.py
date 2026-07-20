@@ -410,6 +410,27 @@ def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
     assert first_bucket["stage_breakdown_ms"]["read.data_worker_ub_write"]["p99"] == 231.001
 
 
+def test_trace_evidence_preserves_late_urma_elapsed_lines(tmp_path):
+    trace_id = "019f7d09-efb4-7c57-8a89-2f6f6e06a321"
+    log = tmp_path / "late-urma.log"
+    lines = [
+        f"2026-07-20T12:20:00.{i:06d} | INFO | worker | kvworker-0-worker1 | 1 | {trace_id} | filler line {i}"
+        for i in range(13)
+    ]
+    lines.append(
+        f"2026-07-20T12:20:01.000000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_TOTAL] cost 9.123ms, request id:88, src address:10.0.0.2:31501, target address:10.0.0.1:31501, dataSize:4096, cpuid:2, status: OK"
+    )
+    log.write_text("\n".join(lines), encoding="utf-8")
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    evidence_text = "\n".join(item["text"] for item in report["traces"][trace_id]["evidence"])
+
+    assert len(report["traces"][trace_id]["evidence"]) == 14
+    assert "URMA_ELAPSED_TOTAL" in evidence_text
+    assert report["traces"][trace_id]["evidence_coverage"]["urma"] == "present"
+
+
 def test_grep_prefixed_log_lines_still_build_time_buckets(tmp_path):
     trace_id = "019f7d12-1f09-762a-9163-c547ef71a101"
     log = tmp_path / "grep-output.log"

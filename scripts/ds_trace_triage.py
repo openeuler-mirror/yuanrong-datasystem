@@ -566,8 +566,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         if ts:
             trace["timestamps"].append(ts.isoformat())
             all_ts.append(ts)
-        if len(trace["evidence"]) < 12:
-            trace["evidence"].append(parsed["evidence"])
+        trace["evidence"].append(parsed["evidence"])
 
         for event in parsed["ub_events"]:
             trace["ub_events"].append(event)
