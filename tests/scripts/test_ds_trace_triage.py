@@ -137,9 +137,10 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
                 f"2026-07-20T10:00:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | [Get] Done, clientId: c1, objects: 1, transferPath: UB, totalCost: 230.100ms, inflightRemoteGet: 9 exceed 3ms: {{ ProcessGetObjectRequest: 230 ms }}",
                 f"2026-07-20T10:00:00.020000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get request:[881] object:[obj-a], offset[0] size[4194304] src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
                 f"2026-07-20T10:00:00.040000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get success, objectKey: obj-a, path: UB, cost: 231.321ms src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
-                f"2026-07-20T10:00:00.050000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost 231.001ms, wait os sched thread finish time(std::condition_variable.wait_for): 230.500ms, request id:881, src address:10.0.0.2:31501, target address:10.0.0.1:31501, dataSize:4194304, cpuid:23, status: OK, urma_inflight_wr_count: 11",
+                f"2026-07-20T10:00:00.050000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost 231.001ms, wait os sched thread finish time(std::condition_variable.wait_for): 230.500ms, request id:881, src address:10.0.0.2:31501, target address:10.0.0.1:31501, dataSize:4194304, cpuid:23, status: OK, urma_inflight_wr_count: 11, wakeSchedLatencyUs:4500, srcChipInflight:{{2:5}}",
                 f"2026-07-20T10:00:00.051000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_POLL_JFC]: urma_poll_jfc cost 309us, cpuid: 23, suggest: check URMA",
                 f"2026-07-20T10:00:00.052000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_NOTIFY]: urma_poll_jfc thread notify urma_post_jetty_send_wr thread wake up cost 0.041ms, cpuid: 23, count: 1",
+                f"2026-07-20T10:00:00.052500 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_THREAD_SHED]: urma_poll_jfc loop gap, lastPollEndToThisPollStart 78000us, lastPollStartToThisPollStart 79000us, cpuid: 23",
                 f"2026-07-20T10:00:00.053000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_THREAD_SHED]: urma_poll_jfc thread wake up after nanosleep(1us) cost 12500us, cpuid: 23",
                 f"2026-07-20T10:00:00.070000 | ERROR | worker | kventryworker-0-worker1 | 1 | {trace_id} | RPC deadline exceeded while waiting WorkerOCService.Get",
             ]
@@ -160,8 +161,15 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
     assert total["status"] == "OK"
     assert total["urma_inflight_wr_count"] == 11
     assert total["wait_os_sched_ms"] == 230.5
+    assert total["wake_sched_latency_us"] == 4500
+    assert total["src_chip_inflight"] == "{2:5}"
+    loop_gap = next(event for event in trace["ub_events"] if event.get("thread_sched_kind") == "poll_loop_gap")
+    assert loop_gap["last_poll_end_to_start_us"] == 78000
+    assert loop_gap["last_poll_start_to_start_us"] == 79000
+    sleep_wake = next(event for event in trace["ub_events"] if event.get("thread_sched_kind") == "nanosleep_wake")
+    assert sleep_wake["sleep_target_us"] == 1
     assert report["dimensions"]["urma_elapsed"]["poll_jfc"]["p50"] == 0.309
-    assert report["dimensions"]["urma_elapsed"]["thread_sched"]["p50"] == 12.5
+    assert report["dimensions"]["urma_elapsed"]["thread_sched"]["p50"] == 45.25
     assert report["dimensions"]["ub_summary"]["transfer_path"]["UB"] == 2
     assert report["dimensions"]["ub_summary"]["edges"]["10.0.0.2:31501 -> 10.0.0.1:31501"]["count"] == 1
     assert report["dimensions"]["time_buckets"]["1000ms"][0]["trace_count"] == 1
@@ -173,9 +181,16 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
     assert ub_workers["kventryworker-0-worker1"]["role"] == "ub_entry"
     assert ub_workers["kventryworker-0-worker1"]["entry_events"] == 3
     assert ub_workers["kvdataworker-0-worker2"]["role"] == "ub_exit"
-    assert ub_workers["kvdataworker-0-worker2"]["exit_events"] == 4
+    assert ub_workers["kvdataworker-0-worker2"]["exit_events"] == 5
     assert ub_workers["kvdataworker-0-worker2"]["latency_ms"]["p99"] == 231.001
-    assert report["dimensions"]["ub_worker_summary"]["time_buckets"][0]["exit_events"] == 4
+    assert report["dimensions"]["ub_worker_summary"]["time_buckets"][0]["exit_events"] == 5
+    lifecycle = report["dimensions"]["ub_lifecycle_summary"]
+    assert lifecycle["metrics"]["wait_os_sched_ms"]["p99"] == 230.5
+    assert lifecycle["metrics"]["wake_sched_latency_ms"]["p99"] == 4.5
+    assert lifecycle["metrics"]["poll_loop_gap_ms"]["p99"] == 78.0
+    assert lifecycle["metrics"]["nanosleep_wake_ms"]["p99"] == 12.5
+    assert lifecycle["requests"][0]["request_id"] == "881"
+    assert lifecycle["requests"][0]["src_chip_inflight"] == "{2:5}"
     assert "late_worker_completion" in trace["triage_flags"]
 
 
@@ -292,11 +307,23 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"write-ub-edge-chart\"" in html
     assert "id=\"ub-worker-role-chart\"" in html
     assert "id=\"ub-worker-time-chart\"" in html
+    assert "id=\"ub-lifecycle-chart\"" in html
     assert "id=\"ub-worker-role-table\"" in html
     assert "id=\"ub-worker-time-table\"" in html
+    assert "id=\"ub-lifecycle-table\"" in html
+    assert "id=\"ub-request-table\"" in html
+    assert "id=\"ub-worker-role-table-pager\"" in html
+    assert "id=\"ub-worker-time-table-pager\"" in html
+    assert "id=\"ub-lifecycle-table-pager\"" in html
+    assert "id=\"ub-request-table-pager\"" in html
     assert "ub_worker_summary" in html
+    assert "ub_lifecycle_summary" in html
     assert "UB 入口/出口 Worker" in html
     assert "renderUbWorkerViews" in html
+    assert "renderUbLifecycleViews" in html
+    assert "href=\"#s5\">5. UB / URMA" in html
+    assert "图 5-1 UB 生命周期" in html
+    assert "表 5-1 UB 生命周期指标" in html
     assert "workerRowsForOperation" in html
     assert "renderWorkerSection" in html
     assert "renderUbSection" in html

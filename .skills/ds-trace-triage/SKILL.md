@@ -216,6 +216,13 @@ Always cover:
   `URMA_ELAPSED_*` evidence. Use `dimensions.ub_worker_summary` to identify
   whether bursts concentrate on the request entry side, the data-send side, or
   both.
+- UB lifecycle: keep UB/URMA in a standalone report chapter. Compare
+  `URMA_ELAPSED_TOTAL`, `wait os sched thread finish time`, `wakeSchedLatencyUs`,
+  `srcChipInflight`, `URMA_ELAPSED_POLL_JFC`, `URMA_ELAPSED_NOTIFY`,
+  poll-loop gap (`lastPollEndToThisPollStart` /
+  `lastPollStartToThisPollStart`), and nanosleep wake
+  (`nanosleep(1us) cost`). Render both metric percentiles and Top request rows
+  with worker/IP/request/cpuid/data-size/status fields.
 - flow: Get/Set/Create/Publish/RemotePull/GetObjMetaInfo/RPC methods
 - latency: access latency percentiles and top slow traces
 - breakdown: `ProcessGetObjectRequest`, QueryMeta/CreateMeta, SafeObject locks,
@@ -238,8 +245,12 @@ For customer-facing reports, write like a diagnosis note:
 - Every chart needs a caption explaining what question it answers.
 - Keep trace drilldown usable: search, filters, pagination, selected trace
   breakdown, and full logs.
-- For UB/URMA, describe the write/wait/notify timeline and compare total,
-  poll JFC, notify, thread scheduling, data size, CPU, inflight, and edge.
+- For UB/URMA, describe the post/write wait timeline and compare total,
+  `condition_variable.wait_for`, wake scheduling, poll JFC, notify, poll-loop
+  gap, nanosleep wake, data size, CPU, inflight, source chip, and edge.
+- Keep long report tables paginated around 4-6 rows per page. Do this for new
+  UB lifecycle, UB request, UB worker role, UB time-bucket, worker, and edge
+  tables so a single noisy run does not bury the charts.
 - For noisy-vs-clean comparisons, treat different runs as cohorts: paths or tar
   members containing `dizao`/`底噪` are `有底噪(dizao)`, paths containing
   `wudizao`/`无底噪` are `无底噪(wudizao)`, and once a noise marker exists in
@@ -262,6 +273,9 @@ them:
   `network_residual_us`
 - `dimensions.urma_elapsed`: total, poll JFC, notify, and thread scheduling
 - `dimensions.ub_summary`: transfer path and `src -> target` UB edges
+- `dimensions.ub_lifecycle_summary`: lifecycle metric percentiles plus Top
+  request rows for total/wait/wake/poll/notify/thread scheduling, worker, edge,
+  CPU, data size, status, and source-chip inflight.
 - `dimensions.cohorts`: per-input-package trace/error/classification/latency
   comparison for multi-package and noisy-vs-clean analysis
 - `dimensions.diagnosis`: customer-facing diagnosis lines for symptom,

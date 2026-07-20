@@ -45,6 +45,11 @@ URMA_TOTAL_RE = re.compile(r"\[URMA_ELAPSED_TOTAL\].*?cost\s+([\d.]+)ms", re.I)
 URMA_POLL_RE = re.compile(r"\[URMA_ELAPSED_POLL_JFC\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
 URMA_NOTIFY_RE = re.compile(r"\[URMA_ELAPSED_NOTIFY\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
 URMA_THREAD_RE = re.compile(r"\[URMA_ELAPSED_THREAD_SHED\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
+URMA_THREAD_LOOP_GAP_RE = re.compile(
+    r"\[URMA_ELAPSED_THREAD_SHED\].*?lastPollEndToThisPollStart\s+([\d.]+)us,\s*"
+    r"lastPollStartToThisPollStart\s+([\d.]+)us",
+    re.I,
+)
 URMA_PERF_RE = re.compile(r"\[URMA_PERF\].*?([A-Za-z][A-Za-z0-9_./-]*)\s*[:=]\s*([\d.]+)\s*(us|ms)?", re.I)
 REQUEST_ID_RE = re.compile(r"(?:request id\s*:|requestId[:=])\s*([A-Za-z0-9_-]+)", re.I)
 SRC_ADDR_RE = re.compile(r"src address:([^\s,]+)", re.I)
@@ -54,6 +59,9 @@ CPUID_RE = re.compile(r"cpuid:\s*(\d+)", re.I)
 STATUS_RE = re.compile(r"status:\s*([^,]+)", re.I)
 WAIT_OS_RE = re.compile(r"wait os sched.*?:\s*([\d.]+)ms", re.I)
 INFLIGHT_WR_RE = re.compile(r"urma_inflight_wr_count:\s*(\d+)", re.I)
+WAKE_SCHED_RE = re.compile(r"wakeSchedLatencyUs:\s*([\d.]+)", re.I)
+SRC_CHIP_INFLIGHT_RE = re.compile(r"srcChipInflight:\s*(\{[^}]*\})", re.I)
+SLEEP_TARGET_RE = re.compile(r"nanosleep\(([\d.]+)us\)", re.I)
 TRANSFER_PATH_RE = re.compile(r"(?:transferPath|path):\s*(UB|RDMA|TCP)\b", re.I)
 INFLIGHT_REMOTE_GET_RE = re.compile(r"inflightRemoteGet:\s*(\d+)", re.I)
 REMOTE_GET_REQUEST_RE = re.compile(r"Remote get request:\[([^\]]+)\]\s+object:\[([^\]]*)\].*?offset\[(\d+)\]\s+size\[(\d+)\]", re.I)
@@ -371,6 +379,21 @@ def _extract_ub_events(source, member, line_no, line, ts, worker):
         inflight_wr = _int_match(INFLIGHT_WR_RE, line)
         if inflight_wr is not None:
             event["urma_inflight_wr_count"] = inflight_wr
+        wake_sched = _first_match(WAKE_SCHED_RE, line)
+        if wake_sched:
+            event["wake_sched_latency_us"] = float(wake_sched)
+        src_chip_inflight = _first_match(SRC_CHIP_INFLIGHT_RE, line)
+        if src_chip_inflight:
+            event["src_chip_inflight"] = src_chip_inflight
+        events.append(event)
+
+    loop_gap = URMA_THREAD_LOOP_GAP_RE.search(line)
+    if loop_gap:
+        event = _ub_base_event("thread_sched", source, member, line_no, line, ts, worker)
+        event["thread_sched_kind"] = "poll_loop_gap"
+        event["last_poll_end_to_start_us"] = float(loop_gap.group(1))
+        event["last_poll_start_to_start_us"] = float(loop_gap.group(2))
+        event["cost_ms"] = event["last_poll_end_to_start_us"] / 1000.0
         events.append(event)
 
     for event_type, regex in (("poll_jfc", URMA_POLL_RE), ("notify", URMA_NOTIFY_RE), ("thread_sched", URMA_THREAD_RE)):
@@ -378,6 +401,13 @@ def _extract_ub_events(source, member, line_no, line, ts, worker):
         if match:
             event = _ub_base_event(event_type, source, member, line_no, line, ts, worker)
             event["cost_ms"] = _ms(match.group(1), match.group(2))
+            if event_type == "thread_sched":
+                sleep_target = _first_match(SLEEP_TARGET_RE, line)
+                if sleep_target:
+                    event["thread_sched_kind"] = "nanosleep_wake"
+                    event["sleep_target_us"] = float(sleep_target)
+                else:
+                    event["thread_sched_kind"] = "generic"
             count = _int_match(re.compile(r"count:\s*(\d+)", re.I), line)
             if count is not None:
                 event["count"] = count
@@ -633,6 +663,12 @@ class TraceAccumulator:
             self.latency_summary[key].append(val)
 
     def _ingest_urma_elapsed(self, trace, line):
+        loop_gap = URMA_THREAD_LOOP_GAP_RE.search(line)
+        if loop_gap:
+            self.surface_counts["urma_elapsed"] += 1
+            val = float(loop_gap.group(1)) / 1000.0
+            trace["urma_thread_sched_ms"].append(val)
+            self.urma["thread_sched"].append(val)
         for name, regex in (
             ("total", URMA_TOTAL_RE),
             ("poll_jfc", URMA_POLL_RE),
@@ -806,6 +842,7 @@ class TraceDimensionBuilder:
                 "workers": {k: {"line_count": v} for k, v in snapshot["worker_counts"].most_common()},
                 "worker_summary": snapshot["worker_summary"],
                 "ub_worker_summary": _build_ub_worker_summary(trace_rows),
+                "ub_lifecycle_summary": _build_ub_lifecycle_summary(trace_rows),
                 "cohorts": cohorts,
                 "worker_edges": snapshot["worker_edges"],
                 "coverage": coverage,
@@ -1052,9 +1089,16 @@ def _build_source_appendix(coverage):
         {
             "log_surface": "URMA_ELAPSED_TOTAL",
             "flow_stage": "data worker UB write completion",
-            "source_hint": "UrmaManager::WaitToFinish and URMA completion handling",
-            "validation": "Use CodeGraph plus source reads; compare total with poll_jfc/notify/thread_sched, request id, src/target, dataSize, cpuid, inflight.",
-            "report_reading": "Treat as write/wait completion window, not automatically as business logic or QueryMeta root cause.",
+            "source_hint": "UrmaManager::WaitToFinish / LogUrmaWaitToFinishElapsed",
+            "validation": "Use CodeGraph plus source reads; compare total with wait_for, wakeSchedLatencyUs, srcChipInflight, request id, src/target, dataSize, cpuid, and inflight.",
+            "report_reading": "Treat as post/write completion wait window; use wait/wake fields to split OS scheduling from completion cost.",
+        },
+        {
+            "log_surface": "URMA_ELAPSED_POLL_JFC / NOTIFY / THREAD_SHED",
+            "flow_stage": "data worker UB poll and wake scheduling",
+            "source_hint": "UrmaManager::PollJfcWait / ds_urma_poll_jfc / ds_urma_wait_jfc / nanosleep",
+            "validation": "Use CodeGraph plus source reads; split poll_jfc cost, notify wakeup, poll-loop gap, and nanosleep(1us) wake cost.",
+            "report_reading": "When total is high, these fields indicate whether the delay sits in polling, notification, or poll-thread scheduling.",
         },
         {
             "log_surface": "Publish / CreateBuffer",
@@ -1435,6 +1479,116 @@ def _build_ub_worker_summary(trace_rows, bucket_ms=1000):
     }
 
 
+def _add_lifecycle_metric(metrics, name, value):
+    if value is None:
+        return
+    try:
+        metrics[name].append(float(value))
+    except (TypeError, ValueError):
+        return
+
+
+def _build_ub_lifecycle_summary(trace_rows):
+    metrics = defaultdict(list)
+    requests = {}
+
+    def request_row(trace_id, event):
+        request_id = event.get("request_id")
+        key = request_id or "|".join(str(part or "") for part in (
+            trace_id, event.get("worker"), event.get("src_addr"), event.get("target_addr"), event.get("timestamp")
+        ))
+        row = requests.setdefault(key, {
+            "trace_id": trace_id,
+            "request_id": request_id or "",
+            "first_ts": event.get("timestamp") or "",
+            "last_ts": event.get("timestamp") or "",
+            "worker": event.get("worker") or "unknown",
+            "src_addr": event.get("src_addr") or "",
+            "target_addr": event.get("target_addr") or "",
+            "data_size": event.get("data_size"),
+            "cpuid": event.get("cpuid"),
+            "status": event.get("status") or "",
+            "src_chip_inflight": event.get("src_chip_inflight") or "",
+            "urma_inflight_wr_count": event.get("urma_inflight_wr_count"),
+            "total_ms": None,
+            "wait_os_sched_ms": None,
+            "wake_sched_latency_ms": None,
+            "poll_jfc_ms": None,
+            "notify_ms": None,
+            "thread_sched_ms": None,
+            "poll_loop_gap_ms": None,
+            "nanosleep_wake_ms": None,
+        })
+        if event.get("timestamp"):
+            row["first_ts"] = min(filter(None, [row["first_ts"], event["timestamp"]])) if row["first_ts"] else event["timestamp"]
+            row["last_ts"] = max(filter(None, [row["last_ts"], event["timestamp"]])) if row["last_ts"] else event["timestamp"]
+        for field in ("worker", "src_addr", "target_addr", "status", "src_chip_inflight"):
+            if event.get(field):
+                row[field] = event[field]
+        for field in ("data_size", "cpuid", "urma_inflight_wr_count"):
+            if event.get(field) is not None:
+                row[field] = event[field]
+        return row
+
+    def update_max(row, field, value):
+        if value is None:
+            return
+        value = float(value)
+        row[field] = value if row.get(field) is None else max(row[field], value)
+
+    for trace_id, trace in trace_rows.items():
+        for event in trace.get("ub_events", []):
+            event_type = event.get("event_type")
+            if event_type == "total":
+                _add_lifecycle_metric(metrics, "total_ms", event.get("cost_ms"))
+                _add_lifecycle_metric(metrics, "wait_os_sched_ms", event.get("wait_os_sched_ms"))
+                if event.get("wake_sched_latency_us") is not None:
+                    _add_lifecycle_metric(metrics, "wake_sched_latency_ms", event["wake_sched_latency_us"] / 1000.0)
+                row = request_row(trace_id, event)
+                update_max(row, "total_ms", event.get("cost_ms"))
+                update_max(row, "wait_os_sched_ms", event.get("wait_os_sched_ms"))
+                if event.get("wake_sched_latency_us") is not None:
+                    update_max(row, "wake_sched_latency_ms", event["wake_sched_latency_us"] / 1000.0)
+                continue
+            if event_type == "poll_jfc":
+                _add_lifecycle_metric(metrics, "poll_jfc_ms", event.get("cost_ms"))
+                update_max(request_row(trace_id, event), "poll_jfc_ms", event.get("cost_ms"))
+                continue
+            if event_type == "notify":
+                _add_lifecycle_metric(metrics, "notify_ms", event.get("cost_ms"))
+                update_max(request_row(trace_id, event), "notify_ms", event.get("cost_ms"))
+                continue
+            if event_type == "thread_sched":
+                kind = event.get("thread_sched_kind")
+                _add_lifecycle_metric(metrics, "thread_sched_ms", event.get("cost_ms"))
+                row = request_row(trace_id, event)
+                update_max(row, "thread_sched_ms", event.get("cost_ms"))
+                if kind == "poll_loop_gap":
+                    gap_ms = event.get("last_poll_end_to_start_us", 0) / 1000.0
+                    _add_lifecycle_metric(metrics, "poll_loop_gap_ms", gap_ms)
+                    update_max(row, "poll_loop_gap_ms", gap_ms)
+                elif kind == "nanosleep_wake":
+                    _add_lifecycle_metric(metrics, "nanosleep_wake_ms", event.get("cost_ms"))
+                    update_max(row, "nanosleep_wake_ms", event.get("cost_ms"))
+
+    request_rows = list(requests.values())
+    for row in request_rows:
+        row["score_ms"] = max(float(row.get(field) or 0) for field in (
+            "total_ms", "wait_os_sched_ms", "poll_loop_gap_ms", "nanosleep_wake_ms", "poll_jfc_ms", "notify_ms"
+        ))
+        for field in (
+            "total_ms", "wait_os_sched_ms", "wake_sched_latency_ms", "poll_jfc_ms", "notify_ms",
+            "thread_sched_ms", "poll_loop_gap_ms", "nanosleep_wake_ms", "score_ms",
+        ):
+            if row.get(field) is not None:
+                row[field] = round(float(row[field]), 3)
+    request_rows.sort(key=lambda item: (-item["score_ms"], item["trace_id"], item["request_id"]))
+    return {
+        "metrics": {name: _percentiles(values) for name, values in sorted(metrics.items())},
+        "requests": request_rows[:80],
+    }
+
+
 def render_markdown(report):
     lines = [
         "# Trace Triage Summary",
@@ -1700,17 +1854,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a href="#s3">3. 时延 Breakdown</a>
       <a class="sub" href="#read-latency-chart">读取时延</a>
       <a class="sub" href="#write-latency-chart">写入时延</a>
-      <a href="#s4">4. Worker / UB</a>
+      <a href="#s4">4. Worker / 流程</a>
       <a class="sub" href="#flow-stage-chart">读写视角</a>
       <a class="sub" href="#read-flow-section">读取流程</a>
       <a class="sub" href="#write-flow-section">写入流程</a>
       <a class="sub" href="#read-worker-chart">读取 Worker</a>
       <a class="sub" href="#write-worker-chart">写入 Worker</a>
-      <a href="#s5">5. Trace 查看</a>
-      <a class="sub" href="#top-trace-table">表 5-1 Top Trace</a>
-      <a href="#s6">6. 建议与口径</a>
-      <a class="sub" href="#source-appendix-table">表 6-2 代码映射</a>
-      <a href="#s7">7. 原始 JSON</a>
+      <a href="#s5">5. UB / URMA</a>
+      <a class="sub" href="#ub-lifecycle-chart">UB 生命周期</a>
+      <a class="sub" href="#ub-worker-role-chart">入口/出口 Worker</a>
+      <a class="sub" href="#read-ub-edge-chart">读取 UB Edge</a>
+      <a href="#s6">6. Trace 查看</a>
+      <a class="sub" href="#top-trace-table">表 6-1 Top Trace</a>
+      <a href="#s7">7. 建议与口径</a>
+      <a class="sub" href="#source-appendix-table">表 7-2 代码映射</a>
+      <a href="#s8">8. 原始 JSON</a>
     </nav>
     </aside>
     <main>
@@ -1757,34 +1915,45 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         </div>
       </section>
       <section id="s4">
-        <h2>4. Worker / UB 分布</h2>
-        <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data/UB，写关注 CreateBuffer/Publish/Meta。</div>
+        <h2>4. Worker / 流程分布</h2>
+        <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data，写关注 CreateBuffer/Publish/Meta。</div>
         <div id="read-flow-section" class="flow-section">
           <div class="panel"><h3>读取流程证据块</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。</div></div>
           <div class="panel"><h3>表 4-0a 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
-          <div class="panel"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 4-0c UB worker：入口 UB 是 RemoteGet/transferPath 所在 worker，出口 UB 是 URMA_ELAPSED 所在 worker。</div></div>
-          <div class="panel"><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 4-0d UB 时间桶：按秒观察入口/出口事件是否集中爆发。</div></div>
-          <div class="compare2">
-            <div class="panel"><h3>表 4-0c UB Worker 角色</h3><table id="ub-worker-role-table"></table></div>
-            <div class="panel"><h3>表 4-0d UB 时间桶</h3><table id="ub-worker-time-table"></table></div>
-          </div>
           <div class="panel"><div id="read-worker-chart" class="chart"></div><div class="caption">图 4-1a 读取 Worker 分布。</div></div>
           <div class="panel"><h3>表 4-1a 读取 Worker Breakdown</h3><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><div id="read-ub-edge-chart" class="chart"></div><div class="caption">图 4-2a 读取 UB edge。</div></div>
-          <div class="panel"><h3>表 4-2a 读取 UB Edges</h3><table id="read-ub-edge-table"></table><div id="read-ub-edge-table-pager" class="mini-pager"></div></div>
         </div>
         <div id="write-flow-section" class="flow-section">
           <div class="panel"><h3>写入流程证据块</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">图 4-0b 写入：区分 createbuffer、client publish、entry/meta publish。</div></div>
           <div class="panel"><h3>表 4-0b 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
           <div class="panel"><div id="write-worker-chart" class="chart"></div><div class="caption">图 4-1b 写入 Worker 分布。</div></div>
           <div class="panel"><h3>表 4-1b 写入 Worker Breakdown</h3><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><div id="write-ub-edge-chart" class="chart"></div><div class="caption">图 4-2b 写入 UB edge。</div></div>
-          <div class="panel"><h3>表 4-2b 写入 UB Edges</h3><table id="write-ub-edge-table"></table><div id="write-ub-edge-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>
       </section>
       <section id="s5">
-        <h2>5. Trace 查看</h2>
+        <h2>5. UB / URMA 分析</h2>
+        <div class="panel insight">UB 单独看：先看 wait/poll/notify/sched，再看入口/出口 worker，最后看 edge/IP。</div>
+        <div class="chart-grid">
+          <div class="panel"><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">图 5-1 UB 生命周期：TOTAL、wait_for、poll_jfc、notify、poll gap、nanosleep wake。</div></div>
+          <div class="panel"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-2 UB worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
+        </div>
+        <div class="panel"><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-3 UB 时间桶：按秒观察入口/出口事件与尾部时延。</div></div>
+        <div class="compare2">
+          <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><table id="ub-lifecycle-table"></table><div id="ub-lifecycle-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-3 UB Worker 角色</h3><table id="ub-worker-role-table"></table><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-4 UB 时间桶</h3><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
+        </div>
+        <div class="flow-section">
+          <div class="panel"><div id="read-ub-edge-chart" class="chart"></div><div class="caption">图 5-5a 读取 UB edge。</div></div>
+          <div class="panel"><h3>表 5-5a 读取 UB Edges</h3><table id="read-ub-edge-table"></table><div id="read-ub-edge-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><div id="write-ub-edge-chart" class="chart"></div><div class="caption">图 5-5b 写入 UB edge。</div></div>
+          <div class="panel"><h3>表 5-5b 写入 UB Edges</h3><table id="write-ub-edge-table"></table><div id="write-ub-edge-table-pager" class="mini-pager"></div></div>
+        </div>
+      </section>
+      <section id="s6">
+        <h2>6. Trace 查看</h2>
         <div class="panel">
         <div class="controls"><label>Trace 查看读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><label>请求状态 <select id="request-status-filter"><option value="">全部请求</option><option value="failed">只看失败</option><option value="success">只看成功</option></select></label><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">按 access max 降序；联动 Trace 列表与选中 Trace Breakdown。</span><button id="reset-filter">清空</button></div>
         <div class="controls pager">
@@ -1796,18 +1965,18 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <table id="top-trace-table"></table>
         </div>
         <div class="compare2">
-          <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击 Trace 行联动，按阶段耗时排序，单位 ms。</div><table id="selected-stage-table"></table></div>
-          <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
+          <div class="panel"><h3>图 6-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击 Trace 行联动，按阶段耗时排序，单位 ms。</div><table id="selected-stage-table"></table></div>
+          <div class="panel"><h3>表 6-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
         <div class="panel"><h3>Trace 全量日志</h3><div class="small">按组件分块，保留原始顺序；异常、慢 RPC、latencySummary、RemotePull、URMA 和大耗时会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><div id="selected-trace-log" class="trace-log-groups"></div></div>
       </section>
-      <section id="s6">
-        <h2>6. 建议与后续口径</h2>
-        <div class="panel"><h3>表 6-1 建议与证据边界</h3><table id="recommendation-table"></table></div>
-        <div class="panel"><h3>表 6-2 代码与字段映射</h3><table id="source-appendix-table"></table></div>
-      </section>
       <section id="s7">
-        <h2>7. 原始 JSON 附录</h2>
+        <h2>7. 建议与后续口径</h2>
+        <div class="panel"><h3>表 7-1 建议与证据边界</h3><table id="recommendation-table"></table></div>
+        <div class="panel"><h3>表 7-2 代码与字段映射</h3><table id="source-appendix-table"></table></div>
+      </section>
+      <section id="s8">
+        <h2>8. 原始 JSON 附录</h2>
         <div class="panel"><details>
           <summary>展开 parser 原始 trace JSON</summary>
           <pre id="trace-data"></pre>
@@ -2240,6 +2409,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     .sort((a,b) => (b[1].latency_ms?.max || 0) - (a[1].latency_ms?.max || 0) || ((b[1].entry_events || 0) + (b[1].exit_events || 0)) - ((a[1].entry_events || 0) + (a[1].exit_events || 0)))
     .slice(0, 40);
   const ubWorkerTimeRows = dim.ub_worker_summary?.time_buckets || [];
+  const ubLifecycleMetrics = Object.entries(dim.ub_lifecycle_summary?.metrics || {})
+    .sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
+  const ubRequestRows = dim.ub_lifecycle_summary?.requests || [];
   const timeBucketRows = dim.time_buckets?.['1000ms'] || [];
   function latencyRowsForOperation(operation) {
     const rows = latencyChartRows.filter(([name]) => metricOperation(name) === operation || metricOperation(name) === 'both');
@@ -2344,7 +2516,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     ]}) : noDataOption(operation === 'write' ? 'Write flow has no UB read edge data' : 'No read UB edge data'));
   }
   function renderUbWorkerViews() {
-    renderTable('ub-worker-role-table', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], ubWorkerRows.map(([worker,item]) => [
+    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], ubWorkerRows.map(([worker,item]) => [
       worker,
       item.role || '',
       item.entry_events || 0,
@@ -2353,8 +2525,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       item.latency_ms?.p99 || '',
       item.latency_ms?.max || '',
       (item.top_edges || []).join(', ')
-    ]), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`);
-    renderTable('ub-worker-time-table', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], ubWorkerTimeRows.map(item => [
+    ]), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`, 5);
+    renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], ubWorkerTimeRows.map(item => [
       item.bucket_start || '',
       item.entry_events || 0,
       item.exit_events || 0,
@@ -2362,7 +2534,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       item.latency_ms?.max || '',
       (item.top_entry_workers || []).join(', '),
       (item.top_exit_workers || []).join(', ')
-    ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`);
+    ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
     chart('ub-worker-role-chart', ubWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
       tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
       xAxis:{type:'category', data:ubWorkerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
@@ -2383,6 +2555,64 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:ubWorkerTimeRows.map(r => r.latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
       ]
     }) : noDataOption('No UB time bucket data'));
+  }
+  function lifecycleLabel(name) {
+    const labels = {
+      'total_ms':'URMA total',
+      'wait_os_sched_ms':'wait_for',
+      'wake_sched_latency_ms':'wake sched',
+      'poll_jfc_ms':'poll_jfc',
+      'notify_ms':'notify',
+      'thread_sched_ms':'thread sched',
+      'poll_loop_gap_ms':'poll loop gap',
+      'nanosleep_wake_ms':'nanosleep wake'
+    };
+    return labels[name] || metricLabel(name);
+  }
+  function renderUbLifecycleViews() {
+    const metricRows = ubLifecycleMetrics.map(([name,item]) => [
+      lifecycleLabel(name),
+      item.count || 0,
+      item.p50 ?? '',
+      item.p90 ?? '',
+      item.p99 ?? '',
+      item.max ?? ''
+    ]);
+    renderPagedTable('ub-lifecycle-table', 'ub-lifecycle-table-pager', ['metric','count','p50 ms','p90 ms','p99 ms','max ms'], metricRows,
+      row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0))}"`, 5);
+    renderPagedTable('ub-request-table', 'ub-request-table-pager',
+      ['time','trace','request','worker','total ms','wait ms','wake ms','poll ms','notify ms','sched ms','edge','cpuid','data size','status','chip inflight'],
+      ubRequestRows.map(item => [
+        item.first_ts || '',
+        item.trace_id || '',
+        item.request_id || '',
+        item.worker || '',
+        item.total_ms ?? '',
+        item.wait_os_sched_ms ?? '',
+        item.wake_sched_latency_ms ?? '',
+        item.poll_jfc_ms ?? '',
+        item.notify_ms ?? '',
+        Math.max(Number(item.poll_loop_gap_ms || 0), Number(item.nanosleep_wake_ms || 0), Number(item.thread_sched_ms || 0)) || '',
+        `${item.src_addr || ''} -> ${item.target_addr || ''}`,
+        item.cpuid ?? '',
+        item.data_size ?? '',
+        item.status || '',
+        item.src_chip_inflight || ''
+      ]),
+      row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0, Number(row[9]) || 0))}"`, 5);
+    chart('ub-lifecycle-chart', ubLifecycleMetrics.length ? axisBase('UB Lifecycle Breakdown', {
+      grid:wideHorizontalGrid(138,66,36),
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => ps.map(p => `${escapeHtml(p.seriesName)}: ${p.value} ms`).join('<br>')},
+      xAxis:{type:'value', name:'ms'},
+      yAxis:{type:'category', data:ubLifecycleMetrics.map(r => lifecycleLabel(r[0])), axisLabel:{width:128, overflow:'truncate'}},
+      series:['p50','p90','p99','max'].map(key => ({
+        name:key,
+        type:'bar',
+        barMaxWidth:18,
+        data:ubLifecycleMetrics.map(([, item]) => item[key] || 0),
+        markLine:key === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{xAxis:20}]} : undefined
+      }))
+    }) : noDataOption('No UB lifecycle data'));
   }
   function renderOperationViews() {
     renderTracePage();
@@ -2616,6 +2846,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   renderTimeBucketSection('write', 'Write');
   renderFlowGraph('read-flow-stage-chart', readFlowStages, 'Read Flow');
   renderFlowGraph('write-flow-stage-chart', writeFlowStages, 'Write Flow');
+  renderUbLifecycleViews();
   renderUbWorkerViews();
   renderWorkerSection('read', 'Read');
   renderWorkerSection('write', 'Write');
