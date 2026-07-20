@@ -1,0 +1,17 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1111111..2222222 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -338,5 +338,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+-    set(DYNAMIC_LIB ${DYNAMIC_LIB} rt)
++    if(WITH_BRPC_SHARED_LIB OR BUILD_SHARED_LIBS)
++        set(DYNAMIC_LIB
++            ${DYNAMIC_LIB}
++            "-Wl,--no-as-needed" "-l:libpthread.so.0" "-Wl,--as-needed")
++    endif()
++
++    set(DYNAMIC_LIB ${DYNAMIC_LIB} rt)
+     set(BRPC_PRIVATE_LIBS "${BRPC_PRIVATE_LIBS} -lrt")
+ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+     set(DYNAMIC_LIB ${DYNAMIC_LIB}
