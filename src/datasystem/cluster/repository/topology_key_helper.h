@@ -107,6 +107,12 @@ public:
                                              const std::string &localAddress) const noexcept;
 
     /**
+     * @brief Return the logical ScaleIn metadata-done marker collection.
+     * @return Stable table-name reference.
+     */
+    const std::string &ScaleInMetadataDoneTable() const noexcept;
+
+    /**
      * @brief Return the singleton topology relative key.
      * @return Stable empty-key reference.
      */
@@ -136,6 +142,26 @@ public:
      */
     static Status MembershipKey(const std::string &address, std::string &key);
 
+    /**
+     * @brief Validate a ScaleIn metadata-done marker identity and build its exact relative key.
+     * @param[in] batchEpoch Active ScaleIn batch epoch.
+     * @param[in] sourceId Stable source member ID.
+     * @param[in] taskId Deterministic migrate task ID.
+     * @param[out] key Exact relative key; unchanged on failure.
+     * @return K_OK on success; K_INVALID for invalid marker identity.
+     */
+    static Status ScaleInMetadataDoneKey(uint64_t batchEpoch, const std::string &sourceId,
+                                         const std::string &taskId, std::string &key);
+
+    /**
+     * @brief Validate a ScaleIn metadata-done source scope and build its relative key prefix.
+     * @param[in] batchEpoch Active ScaleIn batch epoch.
+     * @param[in] sourceId Stable source member ID.
+     * @param[out] prefix Relative key prefix; unchanged on failure.
+     * @return K_OK on success; K_INVALID for invalid marker scope.
+     */
+    static Status ScaleInMetadataDonePrefix(uint64_t batchEpoch, const std::string &sourceId, std::string &prefix);
+
 private:
     /**
      * @brief Construct prevalidated logical table names.
@@ -150,6 +176,7 @@ private:
     std::string notifyTable_;
     std::string membershipTable_;
     std::string etcdMembershipTablePrefix_;
+    std::string scaleInMetadataDoneTable_;
 };
 
 }  // namespace datasystem::cluster

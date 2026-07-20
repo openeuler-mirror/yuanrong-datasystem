@@ -103,6 +103,12 @@ static constexpr int MSET_PENDING_TTL_US = 60'000'000;  // 60s
 static constexpr int64_t CLIENT_ID_REF_RETRY_INTERVAL_MS = 200;
 static constexpr int64_t CLIENT_ID_REF_RETRY_JITTER_MAX_MS = 50;
 static constexpr int64_t CLIENT_ID_REF_RETRY_JITTER_BOUND_MS = CLIENT_ID_REF_RETRY_JITTER_MAX_MS + 1;
+static constexpr size_t TOPOLOGY_OPERATION_DIAGNOSTIC_PREFIX_SIZE = 12;
+
+static std::string TopologyOperationPrefix(const std::string &operationId)
+{
+    return operationId.substr(0, TOPOLOGY_OPERATION_DIAGNOSTIC_PREFIX_SIZE);
+}
 
 static std::chrono::milliseconds GetClientIdRefMigrationRetryDelay(std::chrono::milliseconds remainingTime)
 {
@@ -1443,14 +1449,21 @@ Status OCMetadataManager::GiveUpPrimaryLocation(const RemoveMetaReqPb &request, 
     }
     LOG(INFO) << FormatString("[Objects %s] Start to give up meta location %s", VectorToString(notRedirectObjectKeys),
                               address);
-    const bool topologyOperation = !request.topology_operation_id().empty();
+    const auto &topologyOperationId = request.topology_operation_id();
+    const bool topologyOperation = !topologyOperationId.empty();
+    if (topologyOperation) {
+        LOG(INFO) << "CLUSTER_SCALE_IN action=give_up_primary"
+                  << " source=" << address
+                  << " operation_prefix=" << TopologyOperationPrefix(topologyOperationId)
+                  << " object_count=" << notRedirectObjectKeys.size();
+    }
     for (const auto &objectKey : notRedirectObjectKeys) {
         RETURN_IF_NOT_OK(
             ProcessGiveUpPrimaryObject(objectKey, address, response, workerForChangePrimaryIds, topologyOperation));
     }
-    SendChangePrimaryCopy(workerForChangePrimaryIds, response);
+    SendChangePrimaryCopy(workerForChangePrimaryIds, response, topologyOperationId);
     if (!workerForChangePrimaryIds.empty()) {
-        RETURN_IF_NOT_OK(RetryForFailedIds(workerForChangePrimaryIds, response));
+        RETURN_IF_NOT_OK(RetryForFailedIds(workerForChangePrimaryIds, response, topologyOperationId));
     }
     return Status::OK();
 }
@@ -1510,8 +1523,10 @@ Status OCMetadataManager::ProcessGiveUpPrimaryObject(const std::string &objectKe
 }
 
 void OCMetadataManager::SendChangePrimaryCopy(
-    std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds, RemoveMetaRspPb &rsp)
+    std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds, RemoveMetaRspPb &rsp,
+    const std::string &topologyOperationId)
 {
+    const bool topologyOperation = !topologyOperationId.empty();
     for (auto info = workerForChangePrimaryIds.begin(); info != workerForChangePrimaryIds.end();) {
         std::string primaryAddr = info->first;
         std::unordered_set<std::string> successIds;
@@ -1521,13 +1536,22 @@ void OCMetadataManager::SendChangePrimaryCopy(
             return;
         });
         if (status.IsError()) {
-            LOG(ERROR) << "failed to send change primary copy: " << status.ToString();
+            if (topologyOperation) {
+                LOG(ERROR) << "CLUSTER_SCALE_IN action=change_primary"
+                           << " target=" << primaryAddr
+                           << " operation_prefix=" << TopologyOperationPrefix(topologyOperationId)
+                           << " object_count=" << info->second.size()
+                           << " outcome=send_failed"
+                           << " status=" << status.ToString();
+            } else {
+                LOG(ERROR) << "failed to send change primary copy: " << status.ToString();
+            }
             info++;
             continue;
         }
         for (const auto &id : successIds) {
             (void)workerForChangePrimaryIds[primaryAddr].erase(id);
-            if (ChangePrimaryCopy(primaryAddr, id).IsOk()) {
+            if (ChangePrimaryCopy(primaryAddr, id, topologyOperationId).IsOk()) {
                 rsp.add_success_ids(id);
             } else {
                 rsp.add_failed_ids(id);
@@ -1543,7 +1567,7 @@ void OCMetadataManager::SendChangePrimaryCopy(
 
 Status OCMetadataManager::RetryForFailedIds(
     const std::unordered_map<std::string, std::unordered_set<std::string>> &workerForChangePrimaryIds,
-    RemoveMetaRspPb &rsp)
+    RemoveMetaRspPb &rsp, const std::string &topologyOperationId)
 {
     for (const auto &info : workerForChangePrimaryIds) {
         for (const auto &id : info.second) {
@@ -1582,7 +1606,7 @@ Status OCMetadataManager::RetryForFailedIds(
                 if (successIds.find(id) == successIds.end()) {
                     continue;
                 }
-                success = ChangePrimaryCopy(addr.first, id).IsOk();
+                success = ChangePrimaryCopy(addr.first, id, topologyOperationId).IsOk();
                 break;
             }
             if (success) {
@@ -1595,9 +1619,11 @@ Status OCMetadataManager::RetryForFailedIds(
     return Status::OK();
 }
 
-Status OCMetadataManager::ChangePrimaryCopy(const std::string &primaryAddr, const std::string &objectKey)
+Status OCMetadataManager::ChangePrimaryCopy(const std::string &primaryAddr, const std::string &objectKey,
+                                            const std::string &topologyOperationId)
 {
-    if (IsLocalExitRequested()) {
+    const bool topologyOperation = !topologyOperationId.empty();
+    if (IsLocalExitRequested() && !topologyOperation) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Node exiting, change primary copy failed.", objectKey);
         return Status(StatusCode::K_TRY_AGAIN, "Try again");
     }

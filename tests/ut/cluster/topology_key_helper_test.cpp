@@ -32,7 +32,7 @@ std::string ExactPath(const std::string &table, const std::string &key)
     return key.empty() ? table : table + "/" + key;
 }
 
-TEST(TopologyKeyHelperTest, BuildsFiveClusterScopedKeyspaces)
+TEST(TopologyKeyHelperTest, BuildsClusterScopedKeyspaces)
 {
     std::unique_ptr<TopologyKeyHelper> keys;
     DS_ASSERT_OK(TopologyKeyHelper::Create("cluster_a-1.0", keys));
@@ -52,6 +52,9 @@ TEST(TopologyKeyHelperTest, BuildsFiveClusterScopedKeyspaces)
     EXPECT_EQ(ExactPath(keys->NotifyTable(), key), "/datasystem/cluster_a-1.0/notify/" + address);
     DS_ASSERT_OK(TopologyKeyHelper::MembershipKey(address, key));
     EXPECT_EQ(ExactPath(keys->MembershipTable(), key), "/datasystem/cluster_a-1.0/cluster/" + address);
+    DS_ASSERT_OK(TopologyKeyHelper::ScaleInMetadataDoneKey(42, std::string(16, 'a'), taskId, key));
+    EXPECT_EQ(ExactPath(keys->ScaleInMetadataDoneTable(), key),
+              "/datasystem/cluster_a-1.0/scale-in-metadata-done/e42/" + std::string(16, 'a') + "/" + taskId);
 }
 
 TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
@@ -74,6 +77,9 @@ TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
     EXPECT_EQ(ExactPath(keys->NotifyTable(), key), "/datasystem/notify/" + address);
     DS_ASSERT_OK(TopologyKeyHelper::MembershipKey(address, key));
     EXPECT_EQ(ExactPath(keys->MembershipTable(), key), "/datasystem/cluster/" + address);
+    DS_ASSERT_OK(TopologyKeyHelper::ScaleInMetadataDoneKey(42, std::string(16, 'a'), taskId, key));
+    EXPECT_EQ(ExactPath(keys->ScaleInMetadataDoneTable(), key),
+              "/datasystem/scale-in-metadata-done/e42/" + std::string(16, 'a') + "/" + taskId);
 }
 
 TEST(TopologyKeyHelperTest, ClassifiesEtcdWatchKeysWithoutLogicalPhysicalAmbiguity)
@@ -124,6 +130,7 @@ TEST(TopologyKeyHelperTest, RejectsPrefixUseOnExactCollections)
     EXPECT_EQ(TopologyKeyHelper::TaskKey("", key).GetCode(), K_INVALID);
     EXPECT_EQ(TopologyKeyHelper::NotifyKey("", key).GetCode(), K_INVALID);
     EXPECT_EQ(TopologyKeyHelper::MembershipKey("", key).GetCode(), K_INVALID);
+    EXPECT_EQ(TopologyKeyHelper::ScaleInMetadataDoneKey(0, "source", "task", key).GetCode(), K_INVALID);
     EXPECT_EQ(key, "unchanged");
     EXPECT_TRUE(TopologyKeyHelper::TopologyKey().empty());
 }

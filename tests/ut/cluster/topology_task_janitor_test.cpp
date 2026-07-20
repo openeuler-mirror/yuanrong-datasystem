@@ -81,12 +81,18 @@ TEST(TopologyTaskJanitorTest, DeletesOnlyStaleDerivedRecordsAfterReadingLatestTo
     JanitorScenario scenario;
     DS_ASSERT_OK(scenario.SetUp(true));
     ASSERT_TRUE(DerivedRecordsExist(*scenario.repository, scenario.expected));
+    const auto &migrate = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    const std::string sourceId(16, 'a');
+    DS_ASSERT_OK(scenario.repository->MarkScaleInMetadataDone({ migrate.epoch, sourceId, migrate.taskId, "op" }));
     TopologyTaskJanitorOptions options;
     options.scanLimit = 128;
     options.deleteBatch = 128;
     TopologyTaskJanitor janitor(*scenario.repository, scenario.algorithm, scenario.materializer, options);
     DS_ASSERT_OK(janitor.RunOnce());
     EXPECT_FALSE(DerivedRecordsExist(*scenario.repository, scenario.expected));
+    size_t markerCount = 1;
+    DS_ASSERT_OK(scenario.repository->CountScaleInMetadataDone(migrate.epoch, sourceId, markerCount));
+    EXPECT_EQ(markerCount, 0);
 }
 
 TEST(TopologyTaskJanitorTest, KeepsCurrentEpochRecordsAndDeletesNothingWhenTopologyReadFails)
@@ -95,8 +101,14 @@ TEST(TopologyTaskJanitorTest, KeepsCurrentEpochRecordsAndDeletesNothingWhenTopol
     DS_ASSERT_OK(current.SetUp(false));
     TopologyTaskJanitorOptions options;
     TopologyTaskJanitor keep(*current.repository, current.algorithm, current.materializer, options);
+    const auto &migrate = std::get<TopologyMigrateTask>(current.expected.tasks.front());
+    const std::string sourceId(16, 'a');
+    DS_ASSERT_OK(current.repository->MarkScaleInMetadataDone({ migrate.epoch, sourceId, migrate.taskId, "op" }));
     DS_ASSERT_OK(keep.RunOnce());
     EXPECT_TRUE(DerivedRecordsExist(*current.repository, current.expected));
+    size_t markerCount = 0;
+    DS_ASSERT_OK(current.repository->CountScaleInMetadataDone(migrate.epoch, sourceId, markerCount));
+    EXPECT_EQ(markerCount, 1);
 
     JanitorScenario failed;
     DS_ASSERT_OK(failed.SetUp(true));
@@ -104,6 +116,41 @@ TEST(TopologyTaskJanitorTest, KeepsCurrentEpochRecordsAndDeletesNothingWhenTopol
     failed.backend.FailNextGet();
     EXPECT_EQ(noDelete.RunOnce().GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_TRUE(DerivedRecordsExist(*failed.repository, failed.expected));
+}
+
+TEST(TopologyTaskJanitorTest, MetadataMarkerDeleteBatchCountsOnlySuccessfulDeletes)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("janitor-marker", keys));
+    TopologyRepository repository(backend, *keys);
+    TopologyState topology;
+    topology.version = 9;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), topology);
+    const std::string sourceId(16, 'a');
+    const std::string firstTaskId = "m-e7-" + std::string(32, 'a');
+    const std::string secondTaskId = "m-e7-" + std::string(32, 'b');
+    DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, firstTaskId, "operation-a" }));
+    DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, secondTaskId, "operation-b" }));
+    std::vector<ScaleInMetadataDoneJanitorCandidate> markers;
+    DS_ASSERT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(8, markers));
+    ASSERT_GE(markers.size(), 2);
+    const auto concurrentKey = markers.front().key;
+    backend.SetBeforeCasHandler([&] {
+        backend.PutBytes(keys->ScaleInMetadataDoneTable(), concurrentKey, "operation-concurrent");
+    });
+    TopologyTaskJanitorOptions options;
+    options.scanLimit = 8;
+    options.deleteBatch = 1;
+    HashAlgorithm algorithm;
+    TopologyTaskMaterializer materializer;
+    TopologyTaskJanitor janitor(repository, algorithm, materializer, options);
+
+    DS_ASSERT_OK(janitor.RunOnce());
+
+    size_t markerCount = 0;
+    DS_ASSERT_OK(repository.CountScaleInMetadataDone(7, sourceId, markerCount));
+    EXPECT_EQ(markerCount, 1);
 }
 
 TEST(TopologyTaskJanitorTest, ConditionalCleanupPreservesConcurrentTaskAndNotifyWrites)

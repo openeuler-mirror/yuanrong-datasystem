@@ -38,6 +38,11 @@ constexpr size_t TASK_DIAGNOSTIC_PREFIX_SIZE = 12;
 constexpr size_t OPERATION_ID_PREFIX_SIZE = sizeof("op-") - 1;
 std::atomic<uint64_t> g_retrySeed{ 0 };
 
+std::string DiagnosticPrefix(const std::string &value)
+{
+    return value.substr(0, TASK_DIAGNOSTIC_PREFIX_SIZE);
+}
+
 bool ValidOptions(const TopologyTaskExecutorOptions &options)
 {
     const auto maximumBackoff = std::chrono::duration_cast<std::chrono::milliseconds>(options.backoffMaximum);
@@ -109,6 +114,19 @@ std::chrono::milliseconds RetryDelay(uint32_t attempt, const TopologyTaskExecuto
         std::hash<std::thread::id>{}(std::this_thread::get_id())));
     std::uniform_int_distribution<int64_t> distribution(0, cap.count());
     return std::chrono::milliseconds(distribution(generator));
+}
+
+std::string ScaleInMetadataGateKey(uint64_t epoch, const std::string &sourceId)
+{
+    return std::to_string(epoch) + ":" + sourceId;
+}
+
+Status ScaleInMetadataGateKey(const TopologyExecutionFence &fence, std::string &gate)
+{
+    CHECK_FAIL_RETURN_STATUS(fence.phase == TopologyCallbackPhase::SCALE_IN && fence.source.has_value(), K_INVALID,
+                             "invalid ScaleIn metadata gate fence");
+    gate = ScaleInMetadataGateKey(fence.batchEpoch, fence.source->id);
+    return Status::OK();
 }
 }  // namespace
 
@@ -267,38 +285,76 @@ Status TopologyTaskExecutor::HandleNotify(const TopologyTaskNotify &notify)
 {
     std::shared_ptr<const TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
-    if (!snapshot->GetActiveBatch().has_value() || snapshot->GetActiveBatch()->type != notify.type) {
+    const auto activeBatch = snapshot->GetActiveBatch();
+    if (!activeBatch.has_value() || activeBatch->type != notify.type) {
         VLOG(1) << "CLUSTER_TASK action=ignore_stale_notify type=" << static_cast<uint32_t>(notify.type)
                 << " topology_version=" << snapshot->Version();
         return Status::OK();
     }
+    const auto epoch = activeBatch->epoch;
+    std::string scaleInMetadataGate;
+    RETURN_IF_NOT_OK(BuildScaleInMetadataGateForNotify(notify, *snapshot, epoch, scaleInMetadataGate));
     VLOG(1) << "CLUSTER_TASK action=notify type=" << static_cast<uint32_t>(notify.type)
-            << " epoch=" << snapshot->GetActiveBatch()->epoch << " task_count=" << notify.taskIds.size();
+            << " epoch=" << epoch << " task_count=" << notify.taskIds.size();
+    if (notify.type == TopologyChangeType::SCALE_IN) {
+        LOG(INFO) << "CLUSTER_SCALE_IN action=notify"
+                  << " epoch=" << epoch
+                  << " executor=" << localAddress_
+                  << " task_count=" << notify.taskIds.size()
+                  << " gate_prefix=" << DiagnosticPrefix(scaleInMetadataGate);
+    }
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        const auto epoch = snapshot->GetActiveBatch()->epoch;
-        if (currentEpoch_ != 0 && currentEpoch_ != epoch) {
-            for (auto &[operation, cancellation] : inFlightByOperation_) {
-                cancellation->Cancel();
-            }
-            CHECK_FAIL_RETURN_STATUS(inFlightByOperation_.empty(), K_TRY_AGAIN,
-                                     "old topology callback epoch is still draining");
-            attemptsByOperation_.clear();
-            nextAttemptByOperation_.clear();
-            ordinaryDeadlineByMember_.clear();
-            failureDeadlineByEpoch_.clear();
-            pendingByOperation_.clear();
-            progressReadyByOperation_.clear();
-            bestEffortFailureByOperation_.clear();
-        }
-        currentEpoch_ = epoch;
+        RETURN_IF_NOT_OK(RefreshNotifyEpochLocked(epoch));
     }
+    return SubmitNotifiedTasks(notify, epoch);
+}
+
+Status TopologyTaskExecutor::BuildScaleInMetadataGateForNotify(const TopologyTaskNotify &notify,
+                                                               const TopologySnapshot &snapshot, uint64_t epoch,
+                                                               std::string &gate) const
+{
+    gate.clear();
+    if (notify.type != TopologyChangeType::SCALE_IN) {
+        return Status::OK();
+    }
+    const Member *source = nullptr;
+    RETURN_IF_NOT_OK(snapshot.FindMemberByAddress(localAddress_, source));
+    gate = ScaleInMetadataGateKey(epoch, source->identity.id);
+    return Status::OK();
+}
+
+Status TopologyTaskExecutor::RefreshNotifyEpochLocked(uint64_t epoch)
+{
+    if (currentEpoch_ != 0 && currentEpoch_ != epoch) {
+        for (auto &[operation, cancellation] : inFlightByOperation_) {
+            cancellation->Cancel();
+        }
+        CHECK_FAIL_RETURN_STATUS(inFlightByOperation_.empty(), K_TRY_AGAIN,
+                                 "old topology callback epoch is still draining");
+        attemptsByOperation_.clear();
+        nextAttemptByOperation_.clear();
+        ordinaryDeadlineByMember_.clear();
+        failureDeadlineByEpoch_.clear();
+        pendingByOperation_.clear();
+        progressReadyByOperation_.clear();
+        scaleInMetadataPendingByGate_.clear();
+        scaleInMetadataGateByOperation_.clear();
+        scaleInMetadataDoneByOperation_.clear();
+        bestEffortFailureByOperation_.clear();
+    }
+    currentEpoch_ = epoch;
+    return Status::OK();
+}
+
+Status TopologyTaskExecutor::SubmitNotifiedTasks(const TopologyTaskNotify &notify, uint64_t epoch)
+{
     auto firstError = Status::OK();
     for (const auto &taskId : notify.taskIds) {
         const auto kind =
             notify.type == TopologyChangeType::FAILURE ? TopologyTaskKind::DELETE_MEMBER : TopologyTaskKind::MIGRATE;
         TopologyTask task;
-        auto rc = repository_.ReadTask(kind, taskId, notify.type, snapshot->GetActiveBatch()->epoch, task);
+        auto rc = repository_.ReadTask(kind, taskId, notify.type, epoch, task);
         if (rc.IsError()) {
             if (firstError.IsOk()) {
                 firstError = rc;
@@ -324,7 +380,8 @@ Status TopologyTaskExecutor::HandleNotify(const TopologyTaskNotify &notify)
     return firstError;
 }
 
-Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyExecutionFence fence)
+Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyExecutionFence fence,
+                                            bool allowScaleInDataDrain)
 {
     const auto operation = TopologyTaskMaterializer::BuildBusinessOperationId(fence.phase, fence);
     const auto phase = fence.phase;
@@ -332,7 +389,7 @@ Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyEx
                              "build topology callback operation digest failed");
     std::shared_ptr<CancellationToken> cancellation;
     std::lock_guard<std::mutex> lock(mutex_);
-    RETURN_IF_NOT_OK(AdmitCallbackLocked(task, fence, operation, cancellation));
+    RETURN_IF_NOT_OK(AdmitCallbackLocked(task, fence, operation, allowScaleInDataDrain, cancellation));
     if (cancellation == nullptr) {
         return Status::OK();
     }
@@ -349,6 +406,7 @@ Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyEx
         diagnostics_.lastError = error.what();
         if (!ScheduleRetryLocked(phase, operation)) {
             pendingByOperation_.erase(operation);
+            EraseScaleInOperationLocked(operation);
         }
         drained_.notify_all();
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("enqueue topology callback failed: ") + error.what());
@@ -360,6 +418,7 @@ Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyEx
         diagnostics_.lastError = "enqueue topology callback failed with an unknown exception";
         if (!ScheduleRetryLocked(phase, operation)) {
             pendingByOperation_.erase(operation);
+            EraseScaleInOperationLocked(operation);
         }
         drained_.notify_all();
         RETURN_STATUS(K_RUNTIME_ERROR, diagnostics_.lastError);
@@ -368,7 +427,7 @@ Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyEx
 }
 
 Status TopologyTaskExecutor::AdmitCallbackLocked(const TopologyTask &task, const TopologyExecutionFence &fence,
-                                                 const std::string &operation,
+                                                 const std::string &operation, bool allowScaleInDataDrain,
                                                  std::shared_ptr<CancellationToken> &cancellation)
 {
     CHECK_FAIL_RETURN_STATUS(started_ && !stopping_, K_NOT_READY, "topology task Executor is stopping");
@@ -376,8 +435,17 @@ Status TopologyTaskExecutor::AdmitCallbackLocked(const TopologyTask &task, const
         return Status::OK();
     }
     const auto now = std::chrono::steady_clock::now();
+    std::string gate;
+    if (fence.phase == TopologyCallbackPhase::SCALE_IN) {
+        RETURN_IF_NOT_OK(ScaleInMetadataGateKey(fence, gate));
+        scaleInMetadataGateByOperation_[operation] = gate;
+    }
     pendingByOperation_[operation] = task;
     if (progressReadyByOperation_.count(operation) > 0) {
+        nextAttemptByOperation_[operation] = now;
+        return Status::OK();
+    }
+    if (!allowScaleInDataDrain && scaleInMetadataDoneByOperation_.count(operation) > 0) {
         nextAttemptByOperation_[operation] = now;
         return Status::OK();
     }
@@ -391,6 +459,9 @@ Status TopologyTaskExecutor::AdmitCallbackLocked(const TopologyTask &task, const
     ++callbackBodies_;
     diagnostics_.queuedCallbacks = callbackBodies_;
     diagnostics_.inFlightCallbacks = inFlightByOperation_.size();
+    if (fence.phase == TopologyCallbackPhase::SCALE_IN && !allowScaleInDataDrain) {
+        scaleInMetadataPendingByGate_[gate].insert(operation);
+    }
     return Status::OK();
 }
 
@@ -515,6 +586,7 @@ void TopologyTaskExecutor::FinishCallbackBody(TopologyCallbackPhase phase, const
         if (!scheduled) {
             pendingByOperation_.erase(operation);
             nextAttemptByOperation_.erase(operation);
+            EraseScaleInOperationLocked(operation);
         }
     }
 }
@@ -529,11 +601,12 @@ Status TopologyTaskExecutor::InvokeCallback(const TopologyExecutionFence &fence,
         if (fence.phase == TopologyCallbackPhase::FAILURE) {
             return callbacks_.OnFailure(context);
         }
-        auto rc = callbacks_.OnScaleIn(context);
-        if (rc.IsOk()) {
+        const bool dataDrain = IsScaleInDataDrainReady(context.businessOperationId);
+        auto rc = dataDrain ? callbacks_.OnScaleInDataDrain(context) : callbacks_.OnScaleIn(context);
+        if (dataDrain && rc.IsOk()) {
             rc = callbacks_.PrepareScaleInCleanup(context, cleanup);
         }
-        if (rc.IsOk() && cleanup == nullptr) {
+        if (dataDrain && rc.IsOk() && cleanup == nullptr) {
             return Status(K_INVALID, "missing prepared topology cleanup");
         }
         return rc;
@@ -653,6 +726,10 @@ Status TopologyTaskExecutor::HandleCompletion(TopologyCallbackCompletion complet
         if (rc.IsError()) {
             return CompleteStale(operation, rc);
         }
+        if (completion.fence.phase == TopologyCallbackPhase::SCALE_IN && completion.status.IsOk()
+            && completion.preparedCleanup == nullptr && !IsScaleInDataDrainReady(operation)) {
+            return CompleteScaleInMetadata(completion, operation);
+        }
     }
     if (needsAuthorization) {
         if (std::chrono::steady_clock::now() >= completion.deadline) {
@@ -706,6 +783,7 @@ Status TopologyTaskExecutor::CompleteProgress(TopologyCallbackCompletion &comple
     pendingByOperation_.erase(operation);
     nextAttemptByOperation_.erase(operation);
     progressReadyByOperation_.erase(operation);
+    EraseScaleInOperationLocked(operation);
     const bool bestEffortFailure = bestEffortFailureByOperation_.erase(operation) > 0;
     if (bestEffortFailure) {
         ++diagnostics_.failed;
@@ -716,7 +794,116 @@ Status TopologyTaskExecutor::CompleteProgress(TopologyCallbackCompletion &comple
             << " epoch=" << completion.fence.batchEpoch
             << " task_prefix=" << completion.fence.taskId.substr(0, TASK_DIAGNOSTIC_PREFIX_SIZE)
             << " outcome=" << (bestEffortFailure ? "best_effort_failed" : "finished");
+    if (completion.fence.phase == TopologyCallbackPhase::SCALE_IN) {
+        LOG(INFO) << "CLUSTER_SCALE_IN action=progress"
+                  << " epoch=" << completion.fence.batchEpoch
+                  << " source=" << (completion.fence.source.has_value() ? completion.fence.source->address : "")
+                  << " source_id_prefix="
+                  << (completion.fence.source.has_value() ? DiagnosticPrefix(completion.fence.source->id) : "")
+                  << " target=" << (completion.fence.target.has_value() ? completion.fence.target->address : "")
+                  << " target_id_prefix="
+                  << (completion.fence.target.has_value() ? DiagnosticPrefix(completion.fence.target->id) : "")
+                  << " executor=" << completion.fence.executor.address
+                  << " operation_prefix=" << DiagnosticPrefix(operation)
+                  << " task_prefix=" << DiagnosticPrefix(completion.fence.taskId)
+                  << " outcome=" << (bestEffortFailure ? "best_effort_failed" : "finished");
+    }
     return Status::OK();
+}
+
+Status TopologyTaskExecutor::CompleteScaleInMetadata(TopologyCallbackCompletion &completion,
+                                                     const std::string &operation)
+{
+    CHECK_FAIL_RETURN_STATUS(completion.fence.source.has_value(), K_INVALID,
+                             "ScaleIn metadata completion lacks source");
+    auto rc = repository_.MarkScaleInMetadataDone({ completion.fence.batchEpoch, completion.fence.source->id,
+                                                    completion.fence.taskId, operation });
+    if (rc.IsError()) {
+        return CompleteFailure(completion.fence, operation, rc, false);
+    }
+    std::string gate;
+    RETURN_IF_NOT_OK(ScaleInMetadataGateKey(completion.fence, gate));
+    const auto now = std::chrono::steady_clock::now();
+    bool ready = false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    inFlightByOperation_.erase(operation);
+    scaleInMetadataGateByOperation_[operation] = gate;
+    scaleInMetadataDoneByOperation_.insert(operation);
+    auto pending = scaleInMetadataPendingByGate_.find(gate);
+    if (pending != scaleInMetadataPendingByGate_.end()) {
+        pending->second.erase(operation);
+        ready = pending->second.empty();
+        if (ready) {
+            scaleInMetadataPendingByGate_.erase(pending);
+        }
+    } else {
+        ready = true;
+    }
+    nextAttemptByOperation_[operation] = ready ? now : now + options_.backoffInitial;
+    if (ready) {
+        ScheduleScaleInDataDrainReadyLocked(gate);
+    }
+    diagnostics_.inFlightCallbacks = inFlightByOperation_.size();
+    LOG(INFO) << "CLUSTER_SCALE_IN action=metadata_done epoch=" << completion.fence.batchEpoch
+              << " source=" << completion.fence.source->address
+              << " source_id_prefix=" << DiagnosticPrefix(completion.fence.source->id)
+              << " target=" << (completion.fence.target.has_value() ? completion.fence.target->address : "")
+              << " executor=" << completion.fence.executor.address
+              << " operation_prefix=" << DiagnosticPrefix(operation)
+              << " task_prefix=" << DiagnosticPrefix(completion.fence.taskId)
+              << " range_count=" << completion.fence.ranges.size()
+              << " gate=" << (ready ? "ready" : "waiting");
+    return Status::OK();
+}
+
+Status TopologyTaskExecutor::IsScaleInMetadataGateReadyForOperationLocked(const std::string &operation,
+                                                                          bool &ready) const
+{
+    ready = false;
+    auto iter = scaleInMetadataGateByOperation_.find(operation);
+    CHECK_FAIL_RETURN_STATUS(iter != scaleInMetadataGateByOperation_.end(), K_INVALID,
+                             "ScaleIn metadata gate is missing");
+    ready = IsScaleInMetadataGateReadyLocked(iter->second);
+    return Status::OK();
+}
+
+bool TopologyTaskExecutor::IsScaleInMetadataGateReadyLocked(const std::string &gate) const
+{
+    auto iter = scaleInMetadataPendingByGate_.find(gate);
+    return iter == scaleInMetadataPendingByGate_.end() || iter->second.empty();
+}
+
+bool TopologyTaskExecutor::IsScaleInDataDrainReady(const std::string &operation) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return scaleInMetadataDoneByOperation_.count(operation) > 0;
+}
+
+void TopologyTaskExecutor::ScheduleScaleInDataDrainReadyLocked(const std::string &gate)
+{
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto &[operation, operationGate] : scaleInMetadataGateByOperation_) {
+        if (operationGate == gate && scaleInMetadataDoneByOperation_.count(operation) > 0
+            && pendingByOperation_.count(operation) > 0) {
+            nextAttemptByOperation_[operation] = now;
+        }
+    }
+}
+
+void TopologyTaskExecutor::EraseScaleInOperationLocked(const std::string &operation)
+{
+    auto gate = scaleInMetadataGateByOperation_.find(operation);
+    if (gate != scaleInMetadataGateByOperation_.end()) {
+        auto pending = scaleInMetadataPendingByGate_.find(gate->second);
+        if (pending != scaleInMetadataPendingByGate_.end()) {
+            pending->second.erase(operation);
+            if (pending->second.empty()) {
+                scaleInMetadataPendingByGate_.erase(pending);
+            }
+        }
+        scaleInMetadataGateByOperation_.erase(gate);
+    }
+    scaleInMetadataDoneByOperation_.erase(operation);
 }
 
 Status TopologyTaskExecutor::CompleteFailure(const TopologyExecutionFence &fence, const std::string &operation,
@@ -734,6 +921,7 @@ Status TopologyTaskExecutor::CompleteFailure(const TopologyExecutionFence &fence
     pendingByOperation_.erase(operation);
     nextAttemptByOperation_.erase(operation);
     progressReadyByOperation_.erase(operation);
+    EraseScaleInOperationLocked(operation);
     bestEffortFailureByOperation_.erase(operation);
     return status;
 }
@@ -745,6 +933,7 @@ Status TopologyTaskExecutor::CompleteStale(const std::string &operation, const S
     pendingByOperation_.erase(operation);
     nextAttemptByOperation_.erase(operation);
     progressReadyByOperation_.erase(operation);
+    EraseScaleInOperationLocked(operation);
     bestEffortFailureByOperation_.erase(operation);
     ++diagnostics_.stale;
     diagnostics_.lastError = status.ToString();
@@ -761,6 +950,7 @@ bool TopologyTaskExecutor::DiscardIfStopping(const std::string &operation)
     pendingByOperation_.erase(operation);
     nextAttemptByOperation_.erase(operation);
     progressReadyByOperation_.erase(operation);
+    EraseScaleInOperationLocked(operation);
     bestEffortFailureByOperation_.erase(operation);
     diagnostics_.cancelled += cancelled;
     return true;
@@ -800,15 +990,33 @@ Status TopologyTaskExecutor::HandleTick(std::chrono::steady_clock::time_point no
         TopologyExecutionFence fence;
         auto rc = BuildExecutionFence(task, TaskPhase(task), fence);
         bool progressOnly = false;
+        bool scaleInMetadataDone = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             progressOnly = progressReadyByOperation_.count(operation) > 0;
+            scaleInMetadataDone = scaleInMetadataDoneByOperation_.count(operation) > 0;
         }
         if (rc.IsError()) {
             PreserveDueOperation(operation, task, rc);
         } else if (progressOnly) {
             TopologyCallbackCompletion completion{ fence, operation, {}, Status::OK(), nullptr };
             rc = CompleteProgress(completion, operation);
+        } else if (scaleInMetadataDone) {
+            bool ready = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                rc = IsScaleInMetadataGateReadyForOperationLocked(operation, ready);
+            }
+            if (rc.IsError()) {
+                PreserveDueOperation(operation, task, rc);
+            } else if (ready) {
+                rc = SubmitCallback(task, std::move(fence), true);
+                if (rc.IsError()) {
+                    PreserveDueOperation(operation, task, rc);
+                }
+            } else {
+                PreserveDueOperation(operation, task, Status(K_NOT_READY, "ScaleIn metadata gate is waiting"));
+            }
         } else {
             rc = SubmitCallback(task, std::move(fence));
             if (rc.IsError()) {
@@ -834,6 +1042,7 @@ void TopologyTaskExecutor::PreserveDueOperation(const std::string &operation, co
         pendingByOperation_.erase(operation);
         nextAttemptByOperation_.erase(operation);
         progressReadyByOperation_.erase(operation);
+        EraseScaleInOperationLocked(operation);
         bestEffortFailureByOperation_.erase(operation);
         ++diagnostics_.stale;
         return;
@@ -875,6 +1084,9 @@ Status TopologyTaskExecutor::Stop(std::chrono::steady_clock::time_point deadline
     ordinaryDeadlineByMember_.clear();
     failureDeadlineByEpoch_.clear();
     progressReadyByOperation_.clear();
+    scaleInMetadataPendingByGate_.clear();
+    scaleInMetadataGateByOperation_.clear();
+    scaleInMetadataDoneByOperation_.clear();
     bestEffortFailureByOperation_.clear();
     started_ = false;
     diagnostics_.running = false;

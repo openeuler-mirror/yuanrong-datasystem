@@ -202,6 +202,13 @@ public:
     virtual Status OnScaleIn(const TopologyCallbackContext &context) = 0;
 
     /**
+     * @brief Execute one ScaleIn data-drain task phase after source metadata migration is complete.
+     * @param[in] context Opaque callback context.
+     * @return Status.
+     */
+    virtual Status OnScaleInDataDrain(const TopologyCallbackContext &context) = 0;
+
+    /**
      * @brief Prepare ScaleIn cleanup.
      * @param[in] context Opaque callback context.
      * @param[out] cleanup Prepared local effect.

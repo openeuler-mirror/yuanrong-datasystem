@@ -25,6 +25,9 @@ constexpr int32_t JANITOR_READ_TIMEOUT_MS = 3'000;
 constexpr size_t MAX_SCAN_LIMIT = 8'192;
 constexpr size_t MAX_DELETE_BATCH = 128;
 constexpr size_t TASK_EPOCH_OFFSET = 3;
+constexpr size_t SCALE_IN_MARKER_EPOCH_OFFSET = 1;
+constexpr size_t SCALE_IN_MARKER_MIN_KEY_SIZE = 3;
+constexpr char SCALE_IN_MARKER_EPOCH_PREFIX = 'e';
 
 std::string TaskId(const TopologyTask &task)
 {
@@ -45,6 +48,23 @@ std::optional<uint64_t> TaskEpoch(const std::string &taskId)
     uint64_t epoch = 0;
     const auto *begin = taskId.data() + TASK_EPOCH_OFFSET;
     const auto *end = taskId.data() + separator;
+    const auto result = std::from_chars(begin, end, epoch);
+    if (result.ec != std::errc{} || result.ptr != end || epoch == 0) {
+        return std::nullopt;
+    }
+    return epoch;
+}
+
+std::optional<uint64_t> ScaleInMarkerEpoch(const std::string &key)
+{
+    const auto separator = key.find('/');
+    if (key.size() < SCALE_IN_MARKER_MIN_KEY_SIZE || key.front() != SCALE_IN_MARKER_EPOCH_PREFIX
+        || separator == std::string::npos || separator <= SCALE_IN_MARKER_EPOCH_OFFSET) {
+        return std::nullopt;
+    }
+    uint64_t epoch = 0;
+    const auto *begin = key.data() + SCALE_IN_MARKER_EPOCH_OFFSET;
+    const auto *end = key.data() + separator;
     const auto result = std::from_chars(begin, end, epoch);
     if (result.ec != std::errc{} || result.ptr != end || epoch == 0) {
         return std::nullopt;
@@ -79,6 +99,28 @@ Status DeleteStaleTasks(TopologyRepository &repository, const StaleTaskCleanupPa
         bool deleted = false;
         ++pass.deletedCount;
         RETURN_IF_NOT_OK(repository.DeleteTaskIfMatches(candidate, deleted));
+    }
+    return Status::OK();
+}
+
+Status DeleteStaleScaleInMetadataMarkers(TopologyRepository &repository, size_t scanLimit, size_t deleteLimit,
+                                         uint64_t maximumStaleEpoch, size_t &deletedCount)
+{
+    std::vector<ScaleInMetadataDoneJanitorCandidate> candidates;
+    RETURN_IF_NOT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(scanLimit, candidates));
+    for (const auto &candidate : candidates) {
+        if (deletedCount >= deleteLimit) {
+            break;
+        }
+        const auto epoch = ScaleInMarkerEpoch(candidate.key);
+        if (!epoch.has_value() || *epoch > maximumStaleEpoch) {
+            continue;
+        }
+        bool deleted = false;
+        RETURN_IF_NOT_OK(repository.DeleteScaleInMetadataDoneIfMatches(candidate, deleted));
+        if (deleted) {
+            ++deletedCount;
+        }
     }
     return Status::OK();
 }
@@ -186,6 +228,8 @@ Status TopologyTaskJanitor::RunOnce()
                                                      options_.deleteBatch, maximumStaleEpoch, changed }));
     RETURN_IF_NOT_OK(DeleteStaleTasks(repository_, { TopologyTaskKind::DELETE_MEMBER, expectedIds, options_.scanLimit,
                                                      options_.deleteBatch, maximumStaleEpoch, changed }));
+    RETURN_IF_NOT_OK(DeleteStaleScaleInMetadataMarkers(repository_, options_.scanLimit, options_.deleteBatch,
+                                                       maximumStaleEpoch, changed));
     return ReconcileNotifies(repository_, expected.notifiesByAddress, options_.scanLimit, options_.deleteBatch,
                              changed);
 }

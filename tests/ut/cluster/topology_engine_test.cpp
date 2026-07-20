@@ -49,6 +49,11 @@ public:
         return Status::OK();
     }
 
+    Status OnScaleInDataDrain(const TopologyCallbackContext &) override
+    {
+        return Status::OK();
+    }
+
     Status PrepareScaleInCleanup(const TopologyCallbackContext &,
                                  std::unique_ptr<TopologyPreparedCleanup> &cleanup) override
     {

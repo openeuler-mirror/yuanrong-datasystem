@@ -23,10 +23,16 @@
 namespace datasystem::cluster {
 namespace {
 constexpr char TASK_DELETE_TOMBSTONE[] = "cluster-task-delete-tombstone-v1";
+constexpr char SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE[] = "cluster-scalein-metadata-delete-tombstone-v1";
 
 bool IsTaskDeleteTombstone(const std::string &bytes)
 {
     return bytes == TASK_DELETE_TOMBSTONE;
+}
+
+bool IsScaleInMetadataDoneDeleteTombstone(const std::string &bytes)
+{
+    return bytes == SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE;
 }
 
 Status EncodeTask(const TopologyTask &task, std::string &taskId, TopologyTaskKind &kind, std::string &bytes)
@@ -355,6 +361,48 @@ Status TopologyRepository::MarkTaskScopeFinished(const TopologyExecutionFence &f
     return rc;
 }
 
+Status TopologyRepository::MarkScaleInMetadataDone(const ScaleInMetadataDoneRecord &record)
+{
+    CHECK_FAIL_RETURN_STATUS(!record.businessOperationId.empty(), K_INVALID,
+                             "empty ScaleIn metadata operation id");
+    std::string key;
+    RETURN_IF_NOT_OK(
+        TopologyKeyHelper::ScaleInMetadataDoneKey(record.batchEpoch, record.sourceId, record.taskId, key));
+    ICoordinationBackend::ProcessFunction process = [&record](const std::string &current,
+                                                              std::unique_ptr<std::string> &next, bool &retry) {
+        retry = false;
+        if (current.empty()) {
+            next = std::make_unique<std::string>(record.businessOperationId);
+            return Status::OK();
+        }
+        if (IsScaleInMetadataDoneDeleteTombstone(current)) {
+            RETURN_STATUS(K_TRY_AGAIN, "ScaleIn metadata marker physical deletion is in progress");
+        }
+        CHECK_FAIL_RETURN_STATUS(current == record.businessOperationId, K_INVALID,
+                                 "ScaleIn metadata marker has different operation id");
+        return Status::OK();
+    };
+    auto rc = backend_.CAS(keys_.ScaleInMetadataDoneTable(), key, process);
+    if (rc.IsOk() || rc.GetCode() == K_TRY_AGAIN) {
+        return rc;
+    }
+    return ResolveExactWrite(backend_, keys_.ScaleInMetadataDoneTable(), key, record.businessOperationId, rc);
+}
+
+Status TopologyRepository::CountScaleInMetadataDone(uint64_t batchEpoch, const std::string &sourceId,
+                                                    size_t &count) const
+{
+    std::string prefix;
+    RETURN_IF_NOT_OK(TopologyKeyHelper::ScaleInMetadataDonePrefix(batchEpoch, sourceId, prefix));
+    std::vector<std::pair<std::string, std::string>> values;
+    RETURN_IF_NOT_OK(backend_.GetAll(keys_.ScaleInMetadataDoneTable(), values));
+    count = static_cast<size_t>(std::count_if(values.begin(), values.end(), [&prefix](const auto &value) {
+        return value.first.rfind(prefix, 0) == 0 && !value.second.empty()
+               && !IsScaleInMetadataDoneDeleteTombstone(value.second);
+    }));
+    return Status::OK();
+}
+
 Status TopologyRepository::ListTaskCandidatesForJanitor(TopologyTaskKind kind, size_t limit,
                                                         std::vector<TaskJanitorCandidate> &tasks) const
 {
@@ -395,6 +443,25 @@ Status TopologyRepository::ListNotifyCandidatesForJanitor(size_t limit,
         candidates.push_back({ address, std::move(notify), bytes });
     }
     notifies = std::move(candidates);
+    return Status::OK();
+}
+
+Status TopologyRepository::ListScaleInMetadataDoneCandidatesForJanitor(
+    size_t limit, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const
+{
+    CHECK_FAIL_RETURN_STATUS(limit > 0, K_INVALID, "ScaleIn metadata marker Janitor scan limit must be positive");
+    std::vector<std::pair<std::string, std::string>> values;
+    RETURN_IF_NOT_OK(backend_.GetAll(keys_.ScaleInMetadataDoneTable(), values));
+    std::sort(values.begin(), values.end());
+    std::vector<ScaleInMetadataDoneJanitorCandidate> candidates;
+    candidates.reserve(std::min(limit, values.size()));
+    for (const auto &[key, bytes] : values) {
+        if (candidates.size() >= limit) {
+            break;
+        }
+        candidates.push_back({ key, bytes });
+    }
+    markers = std::move(candidates);
     return Status::OK();
 }
 
@@ -446,6 +513,29 @@ Status TopologyRepository::DeleteNotifyIfMatches(const NotifyJanitorCandidate &c
         return Status::OK();
     }
     deleted = replacement.empty();
+    return Status::OK();
+}
+
+Status TopologyRepository::DeleteScaleInMetadataDoneIfMatches(
+    const ScaleInMetadataDoneJanitorCandidate &candidate, bool &deleted)
+{
+    deleted = false;
+    bool matched = false;
+    ICoordinationBackend::ProcessFunction process = [&](const std::string &current,
+                                                        std::unique_ptr<std::string> &next, bool &retry) {
+        retry = false;
+        matched = current == candidate.matchToken;
+        if (matched) {
+            next = std::make_unique<std::string>(SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE);
+        }
+        return Status::OK();
+    };
+    RETURN_IF_NOT_OK(backend_.CAS(keys_.ScaleInMetadataDoneTable(), candidate.key, process));
+    if (!matched) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK(backend_.Delete(keys_.ScaleInMetadataDoneTable(), candidate.key));
+    deleted = true;
     return Status::OK();
 }
 
