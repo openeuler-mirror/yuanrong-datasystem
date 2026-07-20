@@ -80,6 +80,8 @@ Add those commands to CI as a low-cost parser contract. They verify gzip-tar
 handling, trace grouping, access latency, breakdown, rpc slow, URMA elapsed,
 UB field extraction, time buckets, worker/edge aggregation, local/site HTML
 generation, and error classification.
+It also verifies the yche publish checklist and `publish-site --dry-run`
+manifest status.
 
 The repository CI runs the dependency-light gate in `.gitee/ci_build.sh`:
 

@@ -1981,8 +1981,14 @@ def run_self_test():
         assert (run_dir / "triage.json").exists()
         assert (run_dir / "report.local.html").exists()
         assert (run_dir / "report.site.html").exists()
+        assert (run_dir / "site_publish.md").exists()
+        publish_url = publish_site_stage(run_dir, dry_run=True)
+        assert publish_url.startswith("https://yche.me/perf/")
         assert (run_dir / "raw" / "inputs" / "fixture.tar.gz").exists()
         assert (run_dir / "raw" / "extracted" / "fixture.tar.gz" / "kvchachjpworker-0-worker7" / "worker.log").exists()
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["render_targets"]["site"]["publish_doc"] == "site_publish.md"
+        assert manifest["render_targets"]["site"]["publish"]["status"] == "dry-run"
         run_report = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
         run_trace = next(iter(run_report["traces"].values()))
         assert run_trace["stage_breakdown"]
