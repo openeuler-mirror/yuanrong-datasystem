@@ -70,6 +70,10 @@ def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
     assert "518.923" in diagnosis["latency_line"]["text"]
     assert diagnosis["evidence_boundary"]["label"] == "证据边界"
     assert diagnosis["customer_expression"]["label"] == "客户表达"
+    recommendations = report["dimensions"]["recommendations"]
+    assert any(item["category"] == "source_validation" for item in recommendations)
+    assert any(item["category"] == "observability" for item in recommendations)
+    assert any(item["category"] == "ub_urma" for item in recommendations)
     assert report["traces"][trace_id]["classification"] == "client_deadline_with_urma_wait"
 
 
@@ -178,6 +182,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "class=\"subtitle\"" in html
     assert "class=\"panel insight\"" in html
     assert "id=\"diagnosis-list\"" in html
+    assert "id=\"recommendation-table\"" in html
+    assert "建议与后续口径" in html
     assert "错误线" in html
     assert "慢时延线" in html
     assert "证据边界" in html

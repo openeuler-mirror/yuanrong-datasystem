@@ -174,6 +174,8 @@ them:
 - `dimensions.diagnosis`: customer-facing diagnosis lines for symptom,
   latency, evidence boundary, and customer expression. HTML should render this
   data instead of re-deriving report language in JavaScript.
+- `dimensions.recommendations`: source-validation, observability,
+  cohort-compare, UB/URMA, and deadline follow-up actions for the appendix.
 - `dimensions.time_buckets`: 1s/10s burst and gap candidates
 - `dimensions.worker_summary`: role-aware client/entry/data/meta worker views
 - `dimensions.classifications`: parser-assigned root-cause families such as

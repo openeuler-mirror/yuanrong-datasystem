@@ -690,6 +690,12 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         coverage=coverage,
         cohorts=cohorts,
     )
+    recommendations = _build_recommendations(
+        classifications=classifications,
+        coverage=coverage,
+        cohorts=cohorts,
+        ub_summary=ub_summary,
+    )
 
     return {
         "schema_version": 1,
@@ -708,6 +714,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
             "worker_edges": worker_edges,
             "coverage": coverage,
             "diagnosis": diagnosis,
+            "recommendations": recommendations,
             "flow": dict(flow_counts),
             "latency_ms": {"access": _percentiles(access_latencies)},
             "breakdown_ms": breakdown,
@@ -807,6 +814,47 @@ def _build_diagnosis(errors, classifications, access_latencies, coverage, cohort
             ),
         },
     }
+
+
+def _build_recommendations(classifications, coverage, cohorts, ub_summary):
+    surfaces = coverage.get("surfaces", {})
+    recommendations = [{
+        "category": "source_validation",
+        "title": "固定源码 ref 并用 CodeGraph/源码复核调用链",
+        "detail": "报告中的根因族来自日志聚合，应继续用 main/master 对应 ref 验证 timeout 传递、EntryWorker、MetaWorker、DataWorker 和 UB/URMA 分支。",
+    }]
+    missing = [name for name, item in surfaces.items() if item.get("status") != "present"]
+    if missing:
+        recommendations.append({
+            "category": "observability",
+            "title": "补齐缺失观测面",
+            "detail": f"当前缺失或未采样：{', '.join(missing)}。这些字段缺失时只能标为观测盲区，不能直接下根因结论。",
+        })
+    else:
+        recommendations.append({
+            "category": "observability",
+            "title": "保持现有日志字段稳定输出",
+            "detail": "client access、latencySummary、RPC slow、URMA elapsed、error 面均出现时，可继续扩大真实脱敏 fixture 做回归。",
+        })
+    if len(cohorts) > 1:
+        recommendations.append({
+            "category": "cohort_compare",
+            "title": "多输入包按 cohort 对比后再合并结论",
+            "detail": "先分别比较每个输入包的 trace_count、errors、classifications、access latency 和 top workers，再判断是否属于有无底噪差异或同源残留问题。",
+        })
+    if ub_summary.get("transfer_path") or ub_summary.get("edges"):
+        recommendations.append({
+            "category": "ub_urma",
+            "title": "UB/URMA 按 write/wait/notify 时序继续定界",
+            "detail": "结合 transfer path、src->target edge、URMA total、poll JFC、notify、thread scheduling、dataSize、cpuid、inflight 判断，不要只凭 URMA total 单字段归因。",
+        })
+    if classifications.get("client_deadline_20ms") or classifications.get("client_deadline_with_urma_wait"):
+        recommendations.append({
+            "category": "deadline",
+            "title": "拆开 client deadline 和 worker 后续完成阶段",
+            "detail": "20ms client timeout 是失败触发点；同 trace 的 worker access、RemotePull、BatchGetObjectRemote、URMA 日志用于判断服务端是否在 deadline 后继续完成。",
+        })
+    return recommendations
 
 
 def _build_time_buckets(trace_rows, bucket_ms):
@@ -1075,7 +1123,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a href="#s4">4. Worker / UB</a>
       <a href="#s5">5. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 5-1 Top Trace</a>
-      <a href="#s6">6. 原始 JSON</a>
+      <a href="#s6">6. 建议与口径</a>
+      <a href="#s7">7. 原始 JSON</a>
     </nav>
     </aside>
     <main>
@@ -1140,7 +1189,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel"><h3>Trace 全量日志</h3><div class="small">ERROR、deadline、latencySummary、RemotePull、URMA 等关键字段在原始日志中完整保留。</div><pre id="selected-trace-log"></pre></div>
       </section>
       <section id="s6">
-        <h2>6. 原始 JSON 附录</h2>
+        <h2>6. 建议与后续口径</h2>
+        <div class="panel"><h3>表 6-1 建议与证据边界</h3><table id="recommendation-table"></table></div>
+      </section>
+      <section id="s7">
+        <h2>7. 原始 JSON 附录</h2>
         <div class="panel"><details>
           <summary>展开 parser 原始 trace JSON</summary>
           <pre id="trace-data"></pre>
@@ -1202,6 +1255,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const totalErrors = Object.values(dim.errors || {}).reduce((a,b) => a + b, 0);
   const topClass = Object.entries(dim.classifications || {}).sort((a,b) => b[1] - a[1])[0] || ['unknown', 0];
   const diagnosis = dim.diagnosis || {};
+  const recommendations = dim.recommendations || [];
   document.getElementById('report-subtitle').innerHTML =
     `输入日志解析得到 <b>${report.trace_count}</b> 条 trace，错误标记 <b>${totalErrors}</b> 个。` +
     `当前主分类为 <b>${escapeHtml(topClass[0])}</b>，access p99 为 <b>${access.p99 ?? ''}ms</b>。`;
@@ -1229,6 +1283,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     pctText(item.access_latency_ms)
   ]));
   renderTable('classification-table', ['classification','count'], classificationRows);
+  renderTable('recommendation-table', ['category','title','detail'], recommendations.map(item => [
+    item.category,
+    item.title,
+    item.detail
+  ]));
   renderTable('error-table', ['error','count'], errorRows);
   renderTable('latency-table', ['metric','distribution'], [
     ['access', pctText(dim.latency_ms?.access)],
