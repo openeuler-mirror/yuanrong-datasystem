@@ -1442,6 +1442,7 @@ th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:t
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
+.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500}
 code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 @media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards{grid-template-columns:1fr}}
 </style>"""
@@ -1541,7 +1542,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击上方 Trace 行后联动更新，横向条形图按阶段耗时排序，单位 ms</div><table id="selected-stage-table"></table></div>
           <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
-        <div class="panel"><h3>Trace 全量日志</h3><div class="small">参考慢 Trace 报告方式：日志不分页，按原始顺序完整展开；ERROR、timeout、RPC slow、latencySummary、RemotePull、URMA 以及大耗时字段会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><pre id="selected-trace-log"></pre></div>
+        <div class="panel"><h3>Trace 全量日志</h3><div class="small">参考慢 Trace 报告方式：日志按组件连续分块展示；块内保持原始顺序完整展开，ERROR、timeout、RPC slow、latencySummary、RemotePull、URMA 以及大耗时字段会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><div id="selected-trace-log" class="trace-log-groups"></div></div>
       </section>
       <section id="s6">
         <h2>6. 建议与后续口径</h2>
@@ -1718,6 +1719,39 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       .replace(/(deadline exceeded|RPC timed out|\\btimeout\\b|20ms deadline)/gi, '<span class="log-tag log-deadline">$1</span>')
       .replace(/(cost(?:Us)?[:=]?\\s*[\\d.]+\\s*(?:us|ms)?|totalCost:\\s*[\\d.]+ms|[A-Za-z0-9_.-]+:\\s*\\d{4,})/gi, '<span class="log-tag log-slow">$1</span>')
       .replace(/(RemotePull|Remote done|BatchGetObjectRemote|ProcessGetObjectRequest|CreateBuffer|Publish|QueryMeta|GetObjMetaInfo)/gi, '<span class="log-tag log-field">$1</span>');
+  }
+  const componentLabels = {
+    client:'Client 侧日志',
+    entry_worker:'Entry Worker 日志',
+    meta_worker:'Meta Worker 观测',
+    data_worker:'Data Worker / UB 日志',
+    context:'Trace Context'
+  };
+  function classifyEvidenceComponent(e) {
+    const text = `${e.member || ''} ${e.text || ''}`;
+    if (/URMA_ELAPSED|urma_manager|urma_|target address|src address/i.test(text)) return 'data_worker';
+    if (/MasterOCService\\.QueryMeta|Query metadata from master|GetObjMetaInfo|meta[_ -]?worker/i.test(text)) return 'meta_worker';
+    if (/\\/collected\\/|ds_client_|object_client_impl|client_worker_remote_api|DS_KV_CLIENT|Client\\/WorkerRpc/i.test(text)) return 'client';
+    if (/collected_worker_logs|DS_POSIX|worker_oc_service|BatchGetObjectRemote|Remote done|access\\.log/i.test(text)) return 'entry_worker';
+    return 'context';
+  }
+  function renderTraceLogBlocks(evidence) {
+    const groups = [];
+    (evidence || []).forEach(e => {
+      const component = classifyEvidenceComponent(e);
+      const line = `${e.member}:${e.line} ${e.text}`;
+      const last = groups[groups.length - 1];
+      if (!last || last.component !== component) {
+        groups.push({component, lines: []});
+      }
+      groups[groups.length - 1].lines.push(line);
+    });
+    if (!groups.length) return '<div class="muted">No selected trace log evidence.</div>';
+    return groups.map(group =>
+      `<div class="trace-log-block trace-log-${escapeHtml(group.component)}">` +
+      `<h4><span>${escapeHtml(componentLabels[group.component] || group.component)}</span><span class="trace-log-count">${group.lines.length} lines</span></h4>` +
+      `<pre>${group.lines.map(highlightLogLine).join('\\n')}</pre></div>`
+    ).join('');
   }
   const access = dim.latency_ms?.access || {};
   const totalErrors = Object.values(dim.errors || {}).reduce((a,b) => a + b, 0);
@@ -1908,8 +1942,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]}
       }]
     }) : noDataOption('No selected trace stage data'));
-    document.getElementById('selected-trace-log').innerHTML = (item.evidence || [])
-      .map(e => highlightLogLine(`${e.member}:${e.line} ${e.text}`)).join('\\n');
+    document.getElementById('selected-trace-log').innerHTML = renderTraceLogBlocks(item.evidence || []);
   }
   document.getElementById('prev-page').addEventListener('click', () => { currentPage -= 1; renderTracePage(); });
   document.getElementById('next-page').addEventListener('click', () => { currentPage += 1; renderTracePage(); });

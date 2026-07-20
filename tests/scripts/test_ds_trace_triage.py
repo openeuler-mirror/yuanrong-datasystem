@@ -268,6 +268,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "legend:{show:false}" in html
     assert "横向条形图按阶段耗时排序" in html
     assert "highlightLogLine" in html
+    assert "renderTraceLogBlocks" in html
+    assert "class=\"trace-log-block" in html
+    assert "Client 侧日志" in html
+    assert "Entry Worker 日志" in html
+    assert "Meta Worker 观测" in html
+    assert "Data Worker / UB 日志" in html
     assert "function axisBase" in html
     assert "setOption(option, true)" in html
     assert "dataZoom" in html
