@@ -295,14 +295,17 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "class=\"controls pager\"" in html
     assert "搜索 trace / worker / 关键词" in html
     assert "id=\"worker-filter\"" in html
-    assert "id=\"failure-filter\"" in html
+    assert "id=\"request-status-filter\"" in html
     assert "id=\"operation-filter\"" in html
     assert "Trace 查看读写视角" in html
-    assert "只看失败请求" in html
+    assert "全部请求" in html
+    assert "只看失败" in html
+    assert "只看成功" in html
     assert "按 access max 降序" in html
     assert "traceStartTime" in html
     assert "hasTraceFailure" in html
-    assert "failureOnly" in html
+    assert "requestStatus" in html
+    assert "statusMatchesTrace" in html
     assert "['time','trace','classification','errors','access','workers']" in html
     assert "联动 Trace 列表与选中 Trace Breakdown" in html
     assert "读写视角" in html

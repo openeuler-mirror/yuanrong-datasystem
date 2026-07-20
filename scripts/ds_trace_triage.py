@@ -1590,7 +1590,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s5">
         <h2>5. Trace 查看</h2>
         <div class="panel">
-        <div class="controls"><label>Trace 查看读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><label><input id="failure-filter" type="checkbox"> 只看失败请求</label><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">按 access max 降序；联动 Trace 列表与选中 Trace Breakdown。</span><button id="reset-filter">清空</button></div>
+        <div class="controls"><label>Trace 查看读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><label>请求状态 <select id="request-status-filter"><option value="">全部请求</option><option value="failed">只看失败</option><option value="success">只看成功</option></select></label><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">按 access max 降序；联动 Trace 列表与选中 Trace Breakdown。</span><button id="reset-filter">清空</button></div>
         <div class="controls pager">
           <label>每页 <select id="trace-page-size"><option value="4" selected>4</option><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="9999">全部</option></select> 条</label>
           <button class="primary" id="prev-page">上一页</button>
@@ -1750,6 +1750,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }
   function hasTraceFailure(item) {
     return Object.keys(item.errors || {}).length > 0 || /deadline|error|fail|timeout/i.test(String(item.classification || ''));
+  }
+  function statusMatchesTrace(item, requestStatus) {
+    if (!requestStatus) return true;
+    const failed = hasTraceFailure(item);
+    return requestStatus === 'failed' ? failed : !failed;
   }
   function traceStartTime(item) {
     return item.first_ts || item.last_ts || '';
@@ -2112,7 +2117,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const query = document.getElementById('trace-search').value.trim().toLowerCase();
     const cls = document.getElementById('class-filter').value;
     const worker = document.getElementById('worker-filter').value;
-    const failureOnly = document.getElementById('failure-filter').checked;
+    const requestStatus = document.getElementById('request-status-filter').value;
     filteredTraceRows = traceRows.filter(([traceId, item]) => {
       const haystack = [
         traceId,
@@ -2123,7 +2128,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       ].join(' ').toLowerCase();
       return (!cls || item.classification === cls)
         && (!worker || Object.prototype.hasOwnProperty.call(item.workers || {}, worker))
-        && (!failureOnly || hasTraceFailure(item))
+        && statusMatchesTrace(item, requestStatus)
         && operationMatches(item)
         && (!query || haystack.includes(query));
     });
@@ -2199,7 +2204,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   document.getElementById('prev-page').addEventListener('click', () => { currentPage -= 1; renderTracePage(); });
   document.getElementById('next-page').addEventListener('click', () => { currentPage += 1; renderTracePage(); });
   document.getElementById('trace-search').addEventListener('input', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
-  document.getElementById('failure-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('request-status-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   document.getElementById('operation-filter').addEventListener('change', event => {
     activeOperation = event.target.value;
     currentPage = 0;
@@ -2225,7 +2230,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     document.getElementById('class-filter').value = '';
     document.getElementById('worker-filter').value = '';
     document.getElementById('operation-filter').value = '';
-    document.getElementById('failure-filter').checked = false;
+    document.getElementById('request-status-filter').value = '';
     document.getElementById('trace-page-size').value = '4';
     activeOperation = '';
     pageSize = 4;
