@@ -443,6 +443,36 @@ def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
     assert manifest["render_targets"]["site"]["publish"]["status"] == "dry-run"
 
 
+def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypatch):
+    trace_id = "019f7d0b-ded8-7927-9979-0ddc4141613e"
+    log = tmp_path / "publish.log"
+    log.write_text(
+        f"2026-07-20T13:15:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    run_dir = mod.run_pipeline([str(log)], tmp_path / "runs", case_name="publish-case", code_ref="unit-test")
+    calls = []
+
+    def fake_run(cmd, check):
+        calls.append(cmd)
+        class Result:
+            returncode = 0
+        return Result()
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    url = mod.publish_site_stage(run_dir, dry_run=False)
+
+    assert url.startswith("https://yche.me/perf/")
+    assert calls[0][0] == "scp"
+    assert calls[0][1] == str(run_dir / "report.site.html")
+    assert calls[0][2].startswith("xqyun-32c32g:/var/www/html/perf/")
+    assert calls[1][:2] == ["curl", "-fsSI"]
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["render_targets"]["site"]["publish"]["status"] == "published"
+
+
 def test_trace_run_pipeline_object_exposes_stage_boundaries(tmp_path):
     trace_id = "019f7d0e-c704-7767-917a-3907373e9d31"
     log = tmp_path / "object-pipeline.log"

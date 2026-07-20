@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import statistics
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -1935,7 +1936,15 @@ def publish_site_stage(run_dir, dry_run=True):
     if not (run_dir / site_target.get("publish_doc", "site_publish.md")).exists():
         publish_doc = _write_site_publish_doc(run_dir, manifest)
         site_target = {**site_target, **publish_doc}
-    status = "dry-run" if dry_run else "not-implemented"
+    if dry_run:
+        status = "dry-run"
+    else:
+        source_html = run_dir / site_target.get("path", "report.site.html")
+        target_path = site_target.get("target_path", "")
+        url = site_target.get("url", "")
+        subprocess.run(["scp", str(source_html), f"xqyun-32c32g:{target_path}"], check=True)
+        subprocess.run(["curl", "-fsSI", url], check=True)
+        status = "published"
     _update_manifest(run_dir, lambda item: item["render_targets"]["site"].update({
         **site_target,
         "publish": {"status": status, "url": site_target.get("url", ""), "target_path": site_target.get("target_path", "")},
