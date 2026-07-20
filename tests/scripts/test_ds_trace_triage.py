@@ -165,6 +165,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert manifest["scenario"] == "memory-copy"
     assert manifest["render_targets"]["local"]["path"] == "report.local.html"
     assert manifest["render_targets"]["site"]["path"] == "report.site.html"
+    html = (run_dir / "report.local.html").read_text(encoding="utf-8")
+    assert "id=\"classification-table\"" in html
+    assert "id=\"error-table\"" in html
+    assert "id=\"worker-table\"" in html
+    assert "id=\"top-trace-table\"" in html
+    assert "Error Breakdown" in html
     triage = json.loads((run_dir / "triage.json").read_text())
     assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
 

@@ -946,7 +946,18 @@ def _update_manifest(run_dir, updater):
 
 def _render_html(report, title, site=False):
     data = json.dumps(report, ensure_ascii=False)
-    stylesheet = '<link rel="stylesheet" href="/assets/css/site.css">' if site else "<style>body{font-family:sans-serif;margin:24px;max-width:1280px}pre{white-space:pre-wrap}.bad{color:#b00020}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.card{border:1px solid #ddd;padding:12px;border-radius:6px}</style>"
+    stylesheet = '<link rel="stylesheet" href="/assets/css/site.css">' if site else """<style>
+body{font-family:Arial,sans-serif;margin:24px;max-width:1280px;color:#17202a;background:#fafafa}
+h1{font-size:28px;margin:0 0 16px}h2{font-size:18px;margin:28px 0 10px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.card{background:white;border:1px solid #ddd;padding:12px;border-radius:6px}
+.metric{font-size:24px;font-weight:700;margin-top:4px}.muted{color:#667085;font-size:12px}
+table{width:100%;border-collapse:collapse;background:white;border:1px solid #ddd}
+th,td{text-align:left;border-bottom:1px solid #eee;padding:8px;vertical-align:top;font-size:13px}
+th{background:#f3f6f8}.bad{color:#b00020;font-weight:700}.warn{color:#9a5b00;font-weight:700}
+code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px}
+pre{white-space:pre-wrap;background:#111827;color:#e5e7eb;padding:12px;border-radius:6px;max-height:520px;overflow:auto}
+</style>"""
     script_ref = '<script src="/assets/js/site.js"></script>' if site else ""
     return f"""<!doctype html>
 <html lang="zh-CN">
@@ -960,19 +971,79 @@ def _render_html(report, title, site=False):
   <main class="content-area">
     <h1>{title}</h1>
     <div id="summary" class="grid"></div>
-    <h2>Trace Evidence</h2>
-    <pre id="trace-data"></pre>
+    <h2>Classification Breakdown</h2>
+    <table id="classification-table"></table>
+    <h2>Error Breakdown</h2>
+    <table id="error-table"></table>
+    <h2>Latency Breakdown</h2>
+    <table id="latency-table"></table>
+    <h2>Flow Breakdown</h2>
+    <table id="flow-table"></table>
+    <h2>Worker Breakdown</h2>
+    <table id="worker-table"></table>
+    <h2>UB Edges</h2>
+    <table id="ub-edge-table"></table>
+    <h2>Top Traces</h2>
+    <table id="top-trace-table"></table>
+    <details>
+      <summary>Raw Trace JSON</summary>
+      <pre id="trace-data"></pre>
+    </details>
   </main>
   <script>
   const report = {data};
   const dim = report.dimensions || {{}};
+  const traces = report.traces || {{}};
+  function escapeHtml(value) {{
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[ch]));
+  }}
+  function pctText(item) {{
+    if (!item || !item.count) return '';
+    return `count=${{item.count}} p50=${{item.p50}} p90=${{item.p90}} p99=${{item.p99}} max=${{item.max}}`;
+  }}
+  function renderTable(id, headers, rows) {{
+    const table = document.getElementById(id);
+    if (!rows.length) {{
+      table.innerHTML = `<tbody><tr><td class="muted">No data</td></tr></tbody>`;
+      return;
+    }}
+    table.innerHTML = `<thead><tr>${{headers.map(h => `<th>${{escapeHtml(h)}}</th>`).join('')}}</tr></thead>` +
+      `<tbody>${{rows.map(row => `<tr>${{row.map(cell => `<td>${{escapeHtml(cell)}}</td>`).join('')}}</tr>`).join('')}}</tbody>`;
+  }}
+  const access = dim.latency_ms?.access || {{}};
   document.getElementById('summary').innerHTML = [
-    ['code_ref', report.code_ref],
-    ['trace_count', report.trace_count],
-    ['time_range', `${{dim.time?.first_ts || ''}} -> ${{dim.time?.last_ts || ''}}`],
-    ['classifications', JSON.stringify(dim.classifications || {{}})]
-  ].map(([k,v]) => `<section class="card"><strong>${{k}}</strong><br>${{v}}</section>`).join('');
-  document.getElementById('trace-data').textContent = JSON.stringify(report.traces || {{}}, null, 2);
+    ['trace_count', report.trace_count, 'parsed traces'],
+    ['errors', Object.values(dim.errors || {{}}).reduce((a,b) => a + b, 0), 'total error markers'],
+    ['access p99 ms', access.p99 ?? '', 'client/access latency'],
+    ['code_ref', report.code_ref, 'source reference']
+  ].map(([k,v,hint]) => `<section class="card"><div class="muted">${{escapeHtml(k)}}</div><div class="metric">${{escapeHtml(v)}}</div><div class="muted">${{escapeHtml(hint)}}</div></section>`).join('');
+  renderTable('classification-table', ['classification','count'], Object.entries(dim.classifications || {{}}).sort((a,b) => b[1]-a[1]));
+  renderTable('error-table', ['error','count'], Object.entries(dim.errors || {{}}).sort((a,b) => b[1]-a[1]));
+  renderTable('latency-table', ['metric','distribution'], [
+    ['access', pctText(dim.latency_ms?.access)],
+    ...Object.entries(dim.urma_elapsed || {{}}).map(([k,v]) => [`urma.${{k}}`, pctText(v)]),
+    ...Object.entries(dim.latency_summary_us || {{}}).map(([k,v]) => [`latencySummary.${{k}}`, pctText(v)])
+  ].filter(row => row[1]));
+  renderTable('flow-table', ['flow','count'], Object.entries(dim.flow || {{}}).sort((a,b) => b[1]-a[1]));
+  renderTable('worker-table', ['worker','roles','lines','traces','errors'], Object.entries(dim.worker_summary || {{}})
+    .sort((a,b) => (b[1].error_count || 0) - (a[1].error_count || 0) || (b[1].line_count || 0) - (a[1].line_count || 0))
+    .slice(0, 40)
+    .map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.error_count]));
+  renderTable('ub-edge-table', ['edge','count','latency'], Object.entries(dim.ub_summary?.edges || {{}})
+    .sort((a,b) => (b[1].count || 0) - (a[1].count || 0))
+    .slice(0, 40)
+    .map(([edge,item]) => [edge, item.count, pctText(item.latency_ms)]));
+  renderTable('top-trace-table', ['trace','classification','errors','access','workers'], Object.entries(traces)
+    .sort((a,b) => (b[1].access_latency_ms?.max || 0) - (a[1].access_latency_ms?.max || 0))
+    .slice(0, 50)
+    .map(([traceId,item]) => [
+      traceId,
+      item.classification,
+      JSON.stringify(item.errors || {{}}),
+      pctText(item.access_latency_ms),
+      Object.keys(item.workers || {{}}).slice(0, 6).join(', ')
+    ]));
+  document.getElementById('trace-data').textContent = JSON.stringify(traces, null, 2);
   </script>
   {script_ref}
 </body>
