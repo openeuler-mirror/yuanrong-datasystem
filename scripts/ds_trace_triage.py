@@ -1665,6 +1665,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     'write.client_to_entry_publish':'#ca8a04',
     'write.entry_to_meta_publish':'#dc2626'
   };
+  function stageDisplayName(stage) {
+    if (stageLabelMap[stage]) return stageLabelMap[stage];
+    return String(stage || '').replace(/^(read|write)\\./, '').replace(/_/g, ' ');
+  }
+  function stageDetailText(stage) {
+    const display = stageDisplayName(stage);
+    return display === stage ? display : `${display} (${stage})`;
+  }
   const palette = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
   function axisBase(title, extra) {
     return Object.assign({
@@ -1874,28 +1882,28 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       .filter(s => s.duration_ms !== undefined)
       .slice()
       .sort((a,b) => (a.duration_ms || 0) - (b.duration_ms || 0));
-    renderTable('selected-stage-table', ['stage','duration ms','confidence','source'], stageRows.map(s => [
-      s.stage,
+    renderTable('selected-stage-table', ['研发流程','duration ms','confidence','source'], stageRows.map(s => [
+      stageDetailText(s.stage),
       s.duration_ms,
       s.confidence || '',
       s.source || ''
     ]), row => `class="${severityClass(row[1])}"`);
     const stageColors = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
     document.getElementById('selected-stage-legend').innerHTML = stageRows.map((stage, idx) =>
-      `<span class="stage-pill"><i class="stage-dot" style="background:${stageColors[idx % stageColors.length]}"></i>${escapeHtml(stage.stage)}</span>`
+      `<span class="stage-pill"><i class="stage-dot" style="background:${stageColors[idx % stageColors.length]}"></i>${escapeHtml(stageDisplayName(stage.stage))}</span>`
     ).join('');
     chart('selected-trace-chart', stageRows.length ? axisBase('Selected Trace Stage Breakdown', {
       legend:{show:false},
       dataZoom:[],
-      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:ps => ps.filter(p => p.data && p.data.value != null).map(p => `${escapeHtml(p.name)}<br>耗时: ${p.data.value}ms<br>信息源: ${escapeHtml(p.data.source || '')}`).join('<br><br>')},
-      grid:{left:155,right:72,top:44,bottom:36,containLabel:true},
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:ps => ps.filter(p => p.data && p.data.value != null).map(p => `研发流程: ${escapeHtml(p.data.display)}<br>耗时: ${p.data.value}ms<br>原始字段: ${escapeHtml(p.data.rawStage || '')}<br>观测来源: ${escapeHtml(p.data.source || '')}`).join('<br><br>')},
+      grid:{left:96,right:72,top:44,bottom:36,containLabel:true},
       xAxis:{type:'value', name:'ms'},
-      yAxis:{type:'category', data:stageRows.map(s => s.stage), axisLabel:{width:165, overflow:'truncate'}},
+      yAxis:{type:'category', data:stageRows.map(s => stageDisplayName(s.stage)), axisLabel:{width:104, overflow:'truncate'}},
       series:[{
         name:'duration_ms',
         type:'bar',
         barMaxWidth:28,
-        data:stageRows.map((row, rowIndex) => ({value:row.duration_ms, source:row.source || '', itemStyle:{color:stageColors[rowIndex % stageColors.length]}})),
+        data:stageRows.map((row, rowIndex) => ({value:row.duration_ms, display:stageDisplayName(row.stage), rawStage:row.stage, source:row.source || '', itemStyle:{color:stageColors[rowIndex % stageColors.length]}})),
         label:{show:true, position:'right', formatter:p => p.data && p.data.value != null ? `${p.data.value}ms` : ''},
         markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]}
       }]

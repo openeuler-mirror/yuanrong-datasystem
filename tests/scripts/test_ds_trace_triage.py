@@ -238,6 +238,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "Time Bucket Latency Stages" in html
     assert "client/access p99 upper bound" in html
     assert "Entry→Data RPC" in html
+    assert "stageDisplayName" in html
+    assert "DataWorker UB/URMA" in html
+    assert "stageDetailText" in html
+    assert "研发流程" in html
     assert "id=\"flow-stage-chart\"" in html
     assert "id=\"flow-stage-table\"" in html
     assert "Client→Entry→Meta/Data 流程" in html
