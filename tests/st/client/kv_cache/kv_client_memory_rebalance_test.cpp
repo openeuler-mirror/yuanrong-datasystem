@@ -640,6 +640,57 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceConvergesToMidpointWithRealS
     AssertReadable(client2_, pressureBatch);
 }
 
+// Regression for rate=20 migration failure (5afc55ff regression): data_migrate_rate_limit_mb=20
+// makes maxBandwidth=20MB/s and maxBatchSize=20MB. The first full 20MB batch saturates the
+// remote sliding window, so the remote reports limit_rate=0 and the source enters
+// SelfHealBusyRate. Before the prune-on-read fix, the sliding window only expired entries
+// inside SlidingWindowUpdateRate (write path), but 5afc55ff's `bytes_send > 0` guard made
+// probe requests (bytes_send==0) skip that call. The stale 20MB entry never drained, so all
+// 3 probes returned rate=0, self-heal failed with K_NOT_READY, and only the first batch was
+// ever sent (selfHealAttempted_ then cached the error for the handler's lifetime). After the
+// fix, GetAvailableBandwidth prunes on read, so probe 2-3 sees the window drained after ~1s,
+// self-heal recovers, and all batches complete. Asserting >=2 source-send inject hits
+// distinguishes the two: old code stays at +1 (times out), fixed code reaches +2..3.
+class LEVEL1_KVClientMemoryRebalanceLowRateTest : public LEVEL1_KVClientMemoryRebalanceTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 3;
+        opts.numEtcd = 1;
+        opts.numOBS = 0;
+        opts.workerGflagParams =
+            "-shared_memory_size_mb=64 -log_monitor=true -enable_memory_rebalance=true "
+            "-rebalance_usage_gap_percent=30 -rebalance_source_usage_percent=70 "
+            "-rebalance_cooldown_s=1 -rebalance_task_report_grace_ms=500 "
+            "-data_migrate_rate_limit_mb=20";
+        opts.injectActions = BuildRebalanceInjectActions();
+    }
+};
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceLowRateTest, LowRateMigrateSucceedsAfterBusySelfHealRecovers)
+{
+    WaitAllNodesActiveInHashRing(3);
+    auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    // Pre-load worker2 so worker1 is the unambiguous lowest-usage target.
+    auto pressureBatch = WriteObjects(client2_, "rebalance_low_rate_pressure", 1, 'p');
+    SleepMs(WORKER_RECEIVE_RING_DELAY_MS);
+    // 9 * 5MB = 45MB > 70% of 64MB (~44.8MB) -> triggers rebalance to worker1.
+    // With rate=20, maxBatchSize=20MB; the first full 20MB batch saturates the 20MB/s sliding
+    // window and forces the self-heal path on the next batch.
+    auto sourceBatch = WriteObjects(client0_, "rebalance_low_rate_source", 9, 'l');
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
+    // Before the fix, only the first 20MB batch was sent (self-heal then failed and cached the
+    // error for the handler's lifetime, blocking all subsequent batches). After the fix,
+    // self-heal recovers within ~1s once the sliding window is pruned on read, so all 3
+    // batches complete. Assert >=2 batches were sent within 30s.
+    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 2, 30'000);
+    AssertReadable(client1_, sourceBatch);
+    AssertReadable(client2_, pressureBatch);
+}
+
 class LEVEL1_KVClientMemoryRebalanceEvictSpillRegressionTest : public KVClientCommon {
 public:
    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
