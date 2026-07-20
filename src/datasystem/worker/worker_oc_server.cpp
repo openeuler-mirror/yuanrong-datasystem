@@ -31,6 +31,7 @@
 #include <unordered_set>
 #include <vector>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
@@ -2326,7 +2327,7 @@ Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int
                                  const std::string &tenantId, bool enableCrossNode, const std::string &podName,
                                  bool supportMultiShmRefCount, std::string deviceId,
                                  const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
-                                 uint32_t *pipelineQueueId)
+                                 uint32_t *pipelineQueueId, bool socketHeartbeat)
 {
     RETURN_IF_NOT_OK(ClientManager::Instance().AddClient(clientId, shmEnabled, socketFd, tenantId, enableCrossNode,
                                                          podName, std::move(deviceId), compatibilityVersion, lockId,
@@ -2334,14 +2335,35 @@ Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int
     if (objCacheClientWorkerSvc_ != nullptr) {
         objCacheClientWorkerSvc_->InitShmRefForClient(clientId, supportMultiShmRefCount);
     }
-    // Old flow (enableLocalCache=true): all registering clients keep RPC_HEARTBEAT so worker-side
-    // crash detection still relies on the 120s heartbeat timeout as before. The new (enableLocalCache=
-    // false) flow's clients opt out of heartbeat (RegisterClientReqPb.heartbeat_enabled=false) and are
-    // returned early in WorkerServiceImpl::AddRegisteringClient before reaching here, so they do not
-    // take this path yet. Activating SOCKET_HEARTBEAT for them is a follow-up of the shm-and-heartbeat
-    // design UC1 and must be wired on the new-flow registration path, not this shared AddClient.
-    return ClientManager::Instance().RegisterLostHandler(
-        clientId, std::bind(&WorkerOCServer::AfterClientLostHandler, this, clientId), HeartbeatType::RPC_HEARTBEAT);
+    // SOCKET_HEARTBEAT requires a valid fd-passing socketFd. Fall back to RPC_HEARTBEAT when it is
+    // invalid (embedded client, cross-host fallback, shm connection failure, or a non-INVALID fd
+    // that the kernel no longer considers open — review 180841385: a stale/invalid fd would slip
+    // past the == INVALID_SOCKET_FD guard, then AddFdEvent(EPOLL_CTL_ADD) returns EBADF, the client
+    // stays in SOCKET_HEARTBEAT with no epoll monitor and IsClientLost never trips).
+    auto isSocketFdValid = [](int fd) {
+        return fd != INVALID_SOCKET_FD && fcntl(fd, F_GETFD) != -1;
+    };
+    if (socketHeartbeat && !isSocketFdValid(socketFd)) {
+        LOG(WARNING) << "Client " << clientId << " requested SOCKET_HEARTBEAT but socketFd is invalid"
+                     << " (fd=" << socketFd << "); falling back to RPC_HEARTBEAT.";
+        socketHeartbeat = false;
+    }
+    auto hbType = socketHeartbeat ? HeartbeatType::SOCKET_HEARTBEAT : HeartbeatType::RPC_HEARTBEAT;
+    Status regRc = ClientManager::Instance().RegisterLostHandler(
+        clientId, std::bind(&WorkerOCServer::AfterClientLostHandler, this, clientId), hbType);
+    if (regRc.IsError()) {
+        // Roll back AddClient's state so a failed RegisterLostHandler does not leak ClientInfo,
+        // lockId, pipelineQueueId, the socketFd, and the shm-ref table entry.
+        LOG(WARNING) << "RegisterLostHandler failed for client " << clientId << ": " << regRc
+                     << "; rolling back AddClient.";
+        if (objCacheClientWorkerSvc_ != nullptr) {
+            LOG_IF_ERROR(objCacheClientWorkerSvc_->RefreshMeta(clientId),
+                         FormatString("RefreshMeta during AddClient rollback for %s", clientId));
+        }
+        ClientManager::Instance().RemoveClient(clientId);
+        return regRc;
+    }
+    return Status::OK();
 }
 
 void WorkerOCServer::CheckRule(bool isAsyncTasksRunning, int &checkNum)

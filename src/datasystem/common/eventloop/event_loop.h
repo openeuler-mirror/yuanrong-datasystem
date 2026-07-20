@@ -133,6 +133,10 @@ public:
     SockEventLoop() = default;
     ~SockEventLoop() override = default;
 
+    // Expose Finish() (protected in EventLoop) so external owners (ClientManager) can stop the
+    // epoll heartbeat loop during shutdown (review fix: heartbeatEventLoop_ lifecycle).
+    using EventLoop::Finish;
+
 protected:
     /**
      * @brief The processing after socket listen event triggering.
@@ -144,8 +148,9 @@ protected:
     /**
      * @brief Get the socket read result and call callback function.
      * @param[in] tev The eventdata which will be read.
+     * @param[in] fd Snapshotted fd of tev; used after the callback, which may free tev (UAF-safe).
      */
-    void ReadSockAndCallBack(const EventData *tev);
+    void ReadSockAndCallBack(const EventData *tev, int fd);
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_EVENTLOOP_EVLOOP_H

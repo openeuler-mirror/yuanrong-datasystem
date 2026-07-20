@@ -943,6 +943,35 @@ private:
     Status GetFromTransportLayer(const std::vector<std::string> &objectKeys,
                                  std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled);
 
+    // Routed same-host Get: split keys by routing into same-host (shm, GetBuffersFromWorker) and
+    // cross-host (GetFromTransportLayer) groups, with index-based mapping for duplicate keys and a
+    // transport fallback for shm failures. Extracted from Get() to keep it under the function-size
+    // and nesting limits (codeCheck G.FUN.01).
+    Status RouteGetByShm(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs, bool queryL2Cache,
+                         bool isRH2DSupported, bool traceEnabled,
+                         std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc);
+
+    // Split routed keys into same-host shm groups and cross-host remoteIdx, with index-based
+    // mapping for duplicate keys. Returns K_OK on success.
+    Status BuildShmGroups(const std::vector<std::string> &objectKeys,
+                          std::vector<std::pair<std::shared_ptr<IClientWorkerApi>,
+                                                std::vector<std::pair<std::string, size_t>>>> &shmGroups,
+                          std::vector<std::pair<std::string, size_t>> &remoteIdx);
+
+    // Execute one same-host shm group via GetBuffersFromWorker; on failure move the keys into
+    // remoteIdx for transport fallback. Returns the per-group shm status (caller aggregates rc).
+    Status ExecuteShmGroup(const std::shared_ptr<IClientWorkerApi> &workerApi,
+                           std::vector<std::pair<std::string, size_t>> &kidx, int64_t subTimeoutMs,
+                           bool queryL2Cache, bool isRH2DSupported,
+                           std::vector<std::shared_ptr<Buffer>> &objectBuffers,
+                           std::vector<std::pair<std::string, size_t>> &remoteIdx);
+
+    // Execute the cross-host transport fallback for remoteIdx, writing results into objectBuffers
+    // and aggregating the transport status into rc (preserving a prior shm error if transport is OK).
+    void ExecuteTransportFallback(const std::vector<std::pair<std::string, size_t>> &remoteIdx,
+                                  bool traceEnabled, std::vector<std::shared_ptr<Buffer>> &objectBuffers,
+                                  Status &rc);
+
     Status MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
                                     std::shared_ptr<Buffer> &buffer);
 
@@ -1536,7 +1565,9 @@ private:
 
     void ConstructTreadPool();
 
-    Status ApplyRoutingWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring);
+    Status ApplyRoutingWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
+                                      const std::unordered_map<std::string, std::string> &hostIdMap,
+                                      const std::string &sdkHostId);
 
     Status InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal);
 

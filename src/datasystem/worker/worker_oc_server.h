@@ -155,7 +155,7 @@ public:
     Status AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd, const std::string &tenantId,
                      bool enableCrossNode, const std::string &podName, bool supportMultiShmRefCount,
                      std::string deviceId, const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
-                     uint32_t *pipelineQueueId = nullptr) override;
+                     uint32_t *pipelineQueueId = nullptr, bool socketHeartbeat = false) override;
 
     /**
      * @brief Check unfinished asynchronous tasks and active scale-in process if exists.

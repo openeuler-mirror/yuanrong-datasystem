@@ -32,6 +32,8 @@
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/transport_advisor.h"
+#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/mmap_manager.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/util/net_util.h"
@@ -46,6 +48,19 @@ namespace client {
 
 class TransportLayer {
 public:
+    void SetShmDependencies(std::shared_ptr<IClientWorkerCommonApi> workerApi,
+                           std::shared_ptr<MmapManager> mmapManager)
+    {
+        workerApi_ = std::move(workerApi);
+        mmapManager_ = std::move(mmapManager);
+        // Forward to the DataPlaneManager so ShmTransporter instances built by BuildTransporter
+        // receive non-null workerApi_/mmapManager_. Without this, ShmTransporter::Create's mmap
+        // (zero-copy) branch is never taken and Set degrades to RPC payload inline.
+        if (manager_ != nullptr) {
+            manager_->SetShmDependencies(workerApi_, mmapManager_);
+        }
+    }
+
     explicit TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
                             uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig = {},
                             std::shared_ptr<ThreadPool> releasePool = nullptr);
@@ -128,8 +143,20 @@ private:
     void ScheduleReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
                           const TransportRequestContext &context);
 
+    // Retry InvokeDecreaseReference up to 3 times with exponential backoff; rebuilds the transporter
+    // if it dies mid-retry. Used by Release and ScheduleRelease to avoid permanent shm-ref leaks.
+    Status InvokeReleaseWithRetry(const HostPort &workerAddr, const ShmKey &shmId,
+                                  const TransportRequestContext &context,
+                                  std::shared_ptr<IDataTransporter> &transporter);
+    static Status InvokeReleaseWithRetryOnAliveTransporter(
+        const HostPort &workerAddr, const ShmKey &shmId, const TransportRequestContext &context,
+        std::shared_ptr<IDataTransporter> &transporter, const std::shared_ptr<DataPlaneManager> &manager,
+        const std::shared_ptr<TransportAdvisor> &advisor);
+
     std::shared_ptr<DataPlaneManager> manager_;
     std::shared_ptr<TransportAdvisor> advisor_;
+    std::shared_ptr<IClientWorkerCommonApi> workerApi_;
+    std::shared_ptr<MmapManager> mmapManager_;
     std::shared_ptr<ThreadPool> releasePool_;
     std::unique_ptr<ObjectReadFlow> objectRead_;
     // ApplyWorkerSnapshot serializes admission publication with shutdown through reconcileMutex_.

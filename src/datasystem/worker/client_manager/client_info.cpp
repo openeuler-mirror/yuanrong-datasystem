@@ -75,6 +75,7 @@ const std::string &ClientInfo::GetClientId() const
 
 void ClientInfo::UpdateLastHeartbeat()
 {
+    std::lock_guard<std::mutex> lck(mutex_);
     lastHeartbeat_.Reset();
 }
 
@@ -93,12 +94,29 @@ void ClientInfo::SetLostHandler(std::function<void()> lostHandler, HeartbeatType
 
 bool ClientInfo::IsClientLost()
 {
+    // SOCKET_HEARTBEAT relies on the epoll event loop; multiply the RPC heartbeat threshold by this
+    // factor for a time-based fallback so a silent crash the event loop misses (e.g. half-open fd)
+    // still triggers client-lost handling, while avoiding false positives on idle same-host clients.
+    constexpr uint32_t socketHeartbeatFallbackMultiplier = 4;
     uint32_t heartbeatThreshold = FLAGS_client_dead_timeout_s;
     INJECT_POINT("ClientManager.IsClientLost.heartbeatThreshold", [&heartbeatThreshold](int time) {
         heartbeatThreshold = time;
         return true;
     });
-    return (lastHeartbeat_.ElapsedSecond() > heartbeatThreshold) && heartbeatType_ == HeartbeatType::RPC_HEARTBEAT;
+    HeartbeatType type = heartbeatType_.load(std::memory_order_acquire);
+    // SOCKET_HEARTBEAT is primarily detected by the epoll event loop on the fd-passing socketFd.
+    // Add a longer time-based fallback so a silent crash that the event loop misses (e.g. kernel
+    // keeps the fd half-open) still triggers client-lost handling. The longer threshold avoids
+    // false positives on healthy but idle same-host clients (lastHeartbeat_ is only reset at
+    // RegisterLostHandler for SOCKET_HEARTBEAT, since no RPC heartbeat is sent).
+    // lastHeartbeat_ (Timer, 16-byte non-atomic) is guarded by mutex_ — both UpdateLastHeartbeat
+    // (RPC/register threads) and this read (health thread) take it, so the steady_clock time_point
+    // cannot tear.
+    std::lock_guard<std::mutex> lck(mutex_);
+    if (type == HeartbeatType::SOCKET_HEARTBEAT) {
+        return lastHeartbeat_.ElapsedSecond() > heartbeatThreshold * socketHeartbeatFallbackMultiplier;
+    }
+    return (lastHeartbeat_.ElapsedSecond() > heartbeatThreshold) && type == HeartbeatType::RPC_HEARTBEAT;
 }
 
 bool ClientInfo::ShmEnabled()

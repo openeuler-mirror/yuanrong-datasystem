@@ -274,6 +274,8 @@ ds_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//include/datasystem:headers",
+        "//src/datasystem/client:client_worker_common_api",
+        "//src/datasystem/client:mmap_manager",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/flags:dynamic_flag_config",
         "//src/datasystem/common/inject:common_inject",
@@ -290,6 +292,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/rpc:rpc_options",
         "//src/datasystem/common/rpc:timeout_duration",
+        "//src/datasystem/common/shared_memory:common_shm_unit_info",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:numa_util",
         "//src/datasystem/common/util:rpc_diagnostic",

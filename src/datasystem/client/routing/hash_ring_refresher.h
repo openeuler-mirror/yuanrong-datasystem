@@ -46,8 +46,9 @@ public:
                                           ::datasystem::ClusterTopologyPb &ring, std::string &masterAddress,
                                           uint64_t &newVersion, bool &changed,
                                           std::unordered_map<std::string, std::string> &hostIdMap)>;
-    using RingUpdateHook =
-        std::function<Status(uint64_t newVersion, const ::datasystem::ClusterTopologyPb &ring)>;
+    using RingUpdateHook = std::function<Status(uint64_t newVersion,
+                                                const ::datasystem::ClusterTopologyPb &ring,
+                                                const std::unordered_map<std::string, std::string> &hostIdMap)>;
 
     HashRingRefresher(std::shared_ptr<WorkerRouter> router, FetchRpc fetchRpc, RingUpdateHook ringUpdateHook = {});
     ~HashRingRefresher();

@@ -543,17 +543,23 @@ Status ObjectClientImpl::InitTransportLayer()
         std::make_unique<client::TransportLayer>(transportSignature_, asyncGetRPCPool_, fastTransportMemSize_,
                                                  BrpcChannelConfig{}, asyncReleasePool_);
     RETURN_IF_NOT_OK(transportLayer->Init());
+    // Inject shm dependencies (workerApi for GetClientFd fd-passing, mmapManager for mmap)
+    // so ShmTransporter can do real zero-copy shm instead of RPC payload inline.
+    transportLayer->SetShmDependencies(workerApi_[LOCAL_WORKER],
+                                       std::shared_ptr<client::MmapManager>(mmapManager_.get(), [](auto *) {}));
     transportLayer_ = std::move(transportLayer);
-    LOG(INFO) << "Client transport layer initialized";
+    LOG(INFO) << "Client transport layer initialized with shm dependencies";
     return Status::OK();
 }
 
 Status ObjectClientImpl::ApplyRoutingWorkerSnapshot(uint64_t ringVersion,
-                                                    const ::datasystem::ClusterTopologyPb &ring)
+                                                    const ::datasystem::ClusterTopologyPb &ring,
+                                                    const std::unordered_map<std::string, std::string> &hostIdMap,
+                                                    const std::string &sdkHostId)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
     client::WorkerSnapshot snapshot;
-    RETURN_IF_NOT_OK(client::BuildWorkerSnapshot(ringVersion, ring, snapshot));
+    RETURN_IF_NOT_OK(client::BuildWorkerSnapshot(ringVersion, ring, hostIdMap, sdkHostId, snapshot));
     return transportLayer_->ApplyWorkerSnapshot(std::move(snapshot));
 }
 
@@ -565,15 +571,25 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
     CHECK_FAIL_RETURN_STATUS(!initialWorker.Empty(), K_NOT_READY,
                              "Initial worker address is unavailable for routing initialization");
     RETURN_IF_NOT_OK(client::ParseDataPlacementPolicy(FLAGS_sdk_data_placement_policy, dataPlacementPolicy_));
-    auto ringUpdateHook = [this](uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring) {
-        return ApplyRoutingWorkerSnapshot(ringVersion, ring);
-    };
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
     BrpcChannelConfig channelConfig;
     channelConfig.timeout_ms = requestTimeoutMs_;
     channelConfig.connect_timeout_ms = connectTimeoutMs_;
     channelConfig.max_retry = 0;
     channelConfig.enable_circuit_breaker = false;
+    // SDK hostId is stable for the SDK's lifetime. Cache the first value resolved from the initial
+    // worker so a later reconnect/port change does not leave hostIdMap.find(initialWorker) empty
+    // and disable same-host SHM partitioning. When the lookup still succeeds, refresh the cache.
+    auto sdkHostIdCache = std::make_shared<std::string>();
+    auto ringUpdateHook = [this, initialWorker, sdkHostIdCache](
+                              uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
+                              const std::unordered_map<std::string, std::string> &hostIdMap) {
+        auto iter = hostIdMap.find(initialWorker.ToString());
+        if (iter != hostIdMap.end() && !iter->second.empty()) {
+            *sdkHostIdCache = iter->second;
+        }
+        return ApplyRoutingWorkerSnapshot(ringVersion, ring, hostIdMap, *sdkHostIdCache);
+    };
     auto routing = std::make_shared<client::Routing>(std::move(channelConfig), transportSignature_,
                                                      std::move(ringUpdateHook));
     RETURN_IF_NOT_OK(routing->Init("", initialWorker, initialWorkerIsLocal));
@@ -3442,6 +3458,129 @@ Status ObjectClientImpl::FinishTransportRead(const std::vector<Status> &itemStat
     return transportStatus.IsError() ? transportStatus : Status(K_RUNTIME_ERROR, "Failed to get objects");
 }
 
+Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKeys, int64_t subTimeoutMs,
+                                       bool queryL2Cache, bool isRH2DSupported, bool traceEnabled,
+                                       std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc)
+{
+    // Prefer same-host shm (GetBuffersFromWorker → mmap) over transport-layer RPC; fall back to
+    // transport for cross-host workers (codeCheck G.FUN.01: extracted from Get to bound its size).
+    auto routing = std::atomic_load(&routing_);
+    if (routing == nullptr) {
+        rc = GetFromTransportLayer(objectKeys, objectBuffers, traceEnabled);
+        return Status::OK();
+    }
+    std::vector<std::pair<std::shared_ptr<IClientWorkerApi>, std::vector<std::pair<std::string, size_t>>>>
+        shmGroups;
+    std::vector<std::pair<std::string, size_t>> remoteIdx;
+    RETURN_IF_NOT_OK(BuildShmGroups(objectKeys, shmGroups, remoteIdx));
+    for (auto &[workerApi, kidx] : shmGroups) {
+        auto shmErr = ExecuteShmGroup(workerApi, kidx, subTimeoutMs, queryL2Cache, isRH2DSupported,
+                                      objectBuffers, remoteIdx);
+        if (shmErr.IsError() && rc.IsOk()) {
+            rc = shmErr;
+        }
+    }
+    if (remoteIdx.empty()) {
+        if (rc.IsOk() && !shmGroups.empty()) {
+            rc = Status::OK();
+        }
+        return Status::OK();
+    }
+    ExecuteTransportFallback(remoteIdx, traceEnabled, objectBuffers, rc);
+    return Status::OK();
+}
+
+Status ObjectClientImpl::BuildShmGroups(const std::vector<std::string> &objectKeys,
+    std::vector<std::pair<std::shared_ptr<IClientWorkerApi>,
+                          std::vector<std::pair<std::string, size_t>>>> &shmGroups,
+    std::vector<std::pair<std::string, size_t>> &remoteIdx)
+{
+    auto routing = std::atomic_load(&routing_);
+    CHECK_FAIL_RETURN_STATUS(routing != nullptr, K_NOT_READY, "Routing is not initialized");
+    std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
+    RETURN_IF_NOT_OK(routing->SelectWorkers(objectKeys, dataPlacementPolicy_, groupedKeys));
+    // Index-based mapping: record every position a key occupies (duplicate keys are valid) and
+    // consume in SelectWorkers order. Avoids std::find (only the first duplicate) and fills every slot.
+    std::unordered_map<std::string, std::vector<size_t>> keyIndices;
+    for (size_t i = 0; i < objectKeys.size(); i++) {
+        keyIndices[objectKeys[i]].push_back(i);
+    }
+    std::unordered_map<std::string, size_t> cursor;
+    auto popIndex = [&](const std::string &key) -> size_t {
+        auto &c = cursor[key];
+        return keyIndices[key][c++];
+    };
+    for (auto &[worker, keys] : groupedKeys) {
+        SetRouteContext routeContext;
+        RETURN_IF_NOT_OK(BuildSetRouteContext(worker, routeContext));
+        bool shmEnabled = routeContext.directWorkerApi != nullptr && routeContext.directWorkerApi->IsShmEnable();
+        std::vector<std::pair<std::string, size_t>> kidx;
+        kidx.reserve(keys.size());
+        for (const auto &k : keys) {
+            kidx.emplace_back(k, popIndex(k));
+        }
+        if (shmEnabled) {
+            shmGroups.emplace_back(routeContext.clientApi, std::move(kidx));
+        } else {
+            for (auto &p : kidx) {
+                remoteIdx.push_back(std::move(p));
+            }
+        }
+    }
+    return Status::OK();
+}
+
+Status ObjectClientImpl::ExecuteShmGroup(const std::shared_ptr<IClientWorkerApi> &workerApi,
+    std::vector<std::pair<std::string, size_t>> &kidx, int64_t subTimeoutMs, bool queryL2Cache,
+    bool isRH2DSupported, std::vector<std::shared_ptr<Buffer>> &objectBuffers,
+    std::vector<std::pair<std::string, size_t>> &remoteIdx)
+{
+    std::vector<std::string> keys;
+    keys.reserve(kidx.size());
+    for (const auto &p : kidx) {
+        keys.push_back(p.first);
+    }
+    std::vector<std::shared_ptr<Buffer>> shmBuffers(keys.size());
+    GetParam getParam{ .objectKeys = keys,
+                       .subTimeoutMs = subTimeoutMs,
+                       .readParams = {},
+                       .queryL2Cache = queryL2Cache,
+                       .isRH2DSupported = isRH2DSupported };
+    auto shmRc = GetBuffersFromWorker(workerApi, getParam, shmBuffers);
+    if (shmRc.IsError()) {
+        // Do NOT move nullptr shmBuffers into objectBuffers — let the transport fallback fill these
+        // slots. Carrying the original indices keeps the mapping correct for duplicate keys.
+        for (const auto &p : kidx) {
+            remoteIdx.emplace_back(p.first, p.second);
+        }
+        return shmRc;
+    }
+    for (size_t i = 0; i < kidx.size(); i++) {
+        objectBuffers[kidx[i].second] = std::move(shmBuffers[i]);
+    }
+    return Status::OK();
+}
+
+void ObjectClientImpl::ExecuteTransportFallback(const std::vector<std::pair<std::string, size_t>> &remoteIdx,
+    bool traceEnabled, std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc)
+{
+    std::vector<std::string> remoteKeys;
+    remoteKeys.reserve(remoteIdx.size());
+    for (const auto &p : remoteIdx) {
+        remoteKeys.push_back(p.first);
+    }
+    std::vector<std::shared_ptr<Buffer>> remoteBuffers(remoteKeys.size());
+    auto transportRc = GetFromTransportLayer(remoteKeys, remoteBuffers, traceEnabled);
+    for (size_t i = 0; i < remoteIdx.size(); i++) {
+        objectBuffers[remoteIdx[i].second] = std::move(remoteBuffers[i]);
+    }
+    // Prefer the transport status (last attempt); keep the shm error if transport is OK so a
+    // partial shm failure still surfaces.
+    if (transportRc.IsError() || rc.IsOk()) {
+        rc = transportRc;
+    }
+}
+
 Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &objectKeys,
                                                std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled)
 {
@@ -3486,7 +3625,10 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     if (!enableLocalCache_) {
         CHECK_FAIL_RETURN_STATUS(!isRH2DSupported, K_NOT_SUPPORTED,
                                  "Remote H2D is not supported when local cache is disabled");
-        rc = GetFromTransportLayer(objectKeys, objectBuffers, traceEnabled);
+        // Routed same-host Get (shm zero-copy with transport fallback) is extracted into
+        // RouteGetByShm to keep Get() within the function-size and nesting limits (codeCheck G.FUN.01).
+        RETURN_IF_NOT_OK(RouteGetByShm(objectKeys, subTimeoutMs, queryL2Cache, isRH2DSupported, traceEnabled,
+                                       objectBuffers, rc));
     } else {
         std::shared_ptr<IClientWorkerApi> workerApi;
         std::unique_ptr<Raii> raii;

@@ -59,6 +59,9 @@ message RegisterClientReqPb {
     bool support_multi_shm_ref_count = 12;
     string device_id = 13;
     string compatibility_version = 14;
+    // New-flow (enableHeartbeat=false: embedded/readonly) same-host client requests worker-side
+    // SOCKET_HEARTBEAT (epoll on the fd-passing socketFd) instead of RPC heartbeat. Old flow always false.
+    bool socket_heartbeat = 15;
 
     // DFX required, need to send something to worker when reconnect.
     repeated google.protobuf.Any extend = 50;

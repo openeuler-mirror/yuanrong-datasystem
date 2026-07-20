@@ -36,6 +36,9 @@ namespace {
 
 AccessTransportKind KindForHint(TransportHint hint)
 {
+    if (hint == TransportHint::SHM_CANDIDATE) {
+        return AccessTransportKind::SHM;
+    }
     return hint == TransportHint::TCP_ONLY ? AccessTransportKind::TCP : AccessTransportKind::UB;
 }
 
@@ -411,6 +414,22 @@ Status DataPlaneManager::BuildTransporter(const HostPort &workerAddr, TransportH
                                           const std::shared_ptr<WorkerRpcClient> &rpcClient,
                                           std::shared_ptr<IDataTransporter> &out)
 {
+    if (hint == TransportHint::SHM_CANDIDATE) {
+        // Defensive: if the same-host worker's RPC client is not alive here (normally guaranteed
+        // alive by EnsureRpcClientLocked just before, but a race can tear it down), prefer building a
+        // TcpTransporter over a ShmTransporter. Both wrap the same dead rpcClient and will return
+        // K_RPC_UNAVAILABLE, but the TCP path returns the standard RPC error and lets the caller's
+        // rebuild/Teardown path re-establish the channel, instead of attempting shm fd-passing
+        // setup against a dead worker. This does not itself heal the connection.
+        if (rpcClient == nullptr || !rpcClient->IsAlive()) {
+            LOG(WARNING) << "SHM_CANDIDATE worker " << workerAddr.ToString()
+                         << " has no alive RPC client; building TCP transporter so the caller rebuilds.";
+            out = std::make_shared<TcpTransporter>(rpcClient);
+            return Status::OK();
+        }
+        out = std::make_shared<ShmTransporter>(rpcClient, workerApi_, mmapManager_);
+        return Status::OK();
+    }
     if (hint != TransportHint::TCP_ONLY) {
         return BuildUbTransporter(workerAddr, rpcClient, out);
     }

@@ -19,6 +19,8 @@
 #define DATASYSTEM_CLIENT_TRANSPORT_WORKER_SNAPSHOT_H
 
 #include <cstdint>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "datasystem/common/util/net_util.h"
@@ -43,11 +45,15 @@ struct WorkerSnapshot {
  * @brief Build an all-or-nothing transport snapshot from the complete topology membership.
  * @param[in] ringVersion Version returned with the topology update.
  * @param[in] ring Complete cluster topology; every member state remains transport-admissible.
+ * @param[in] hostIdMap workerAddr("host:port") -> hostId (from GetHashRingRspPb.host_id_map).
+ *            When non-empty, workers whose hostId matches sdkHostId go into sameHostAddrs.
+ * @param[in] sdkHostId The sdk's own host id; when empty, all workers go into otherAddrs (old behavior).
  * @param[out] snapshot Validated snapshot, left unchanged when any endpoint is malformed.
  * @return K_OK on success; K_INVALID when a member endpoint cannot be parsed.
  */
 Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
-                           WorkerSnapshot &snapshot);
+                           const std::unordered_map<std::string, std::string> &hostIdMap,
+                           const std::string &sdkHostId, WorkerSnapshot &snapshot);
 
 }  // namespace client
 }  // namespace datasystem

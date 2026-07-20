@@ -29,10 +29,13 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
+#include "datasystem/client/transport/data_plane/shm_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/transport_kind.h"
 #include "datasystem/client/transport/worker_snapshot.h"
+#include "datasystem/client/client_worker_common_api.h"
+#include "datasystem/client/mmap_manager.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/util/net_util.h"
 
@@ -48,6 +51,13 @@ public:
 
     /** @brief Initialize process-level resources required by UB data-plane transport. */
     Status Init();
+
+    void SetShmDependencies(std::shared_ptr<IClientWorkerCommonApi> workerApi,
+                            std::shared_ptr<MmapManager> mmapManager)
+    {
+        workerApi_ = std::move(workerApi);
+        mmapManager_ = std::move(mmapManager);
+    }
 
     /**
      * @brief Get or lazily create a transporter for the worker.
@@ -145,6 +155,8 @@ private:
     std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider_;
     uint64_t fastTransportMemSize_ = 0;
     std::atomic<bool> initialized_{ false };
+    std::shared_ptr<IClientWorkerCommonApi> workerApi_;
+    std::shared_ptr<MmapManager> mmapManager_;
 };
 }  // namespace client
 }  // namespace datasystem

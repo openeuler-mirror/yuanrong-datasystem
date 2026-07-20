@@ -331,7 +331,8 @@ Status WorkerServiceImpl::AddRegisteringClient(
     RETURN_OK_IF_TRUE(!req.heartbeat_enabled());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         worker_->AddClient(clientId, shmEnabled, socketFd, tenantId, req.enable_cross_node(), req.pod_name(),
-                           supportMultiShmRefCount, req.device_id(), compatibilityVersion, lockId, &pipelineQueueId),
+                           supportMultiShmRefCount, req.device_id(), compatibilityVersion, lockId, &pipelineQueueId,
+                           req.socket_heartbeat()),
         "worker add client failed");
     return Status::OK();
 }
@@ -409,16 +410,22 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     LogSampler::Instance().PopulateConfigProto(rsp.mutable_log_sample_config());
     rsp.set_is_voluntary_scale_down(localExiting_.load(std::memory_order_acquire));
 
-    auto expiredFds = memory::Allocator::Instance()->GetAllExpiredFds();
-    auto fdsMmapedByClient = ClientManager::Instance().GetWorkerFdByClientId(clientId);
-    std::set<int> intersection;
-    std::set_intersection(expiredFds.begin(), expiredFds.end(), fdsMmapedByClient.begin(), fdsMmapedByClient.end(),
-                          std::inserter(intersection, intersection.begin()));
+    auto intersection = GetExpiredFdsForClient(clientId);
     for (auto fd : intersection) {
         rsp.add_expired_worker_fds(fd);
     }
     VLOG(HEARTBEAT_LEVEL) << "Response heartbeat message to client " << clientId << ", response: " << rsp.DebugString();
     return Status::OK();
+}
+
+std::set<int> WorkerServiceImpl::GetExpiredFdsForClient(const ClientKey &clientId)
+{
+    auto expiredFds = memory::Allocator::Instance()->GetAllExpiredFds();
+    auto fdsMmapedByClient = ClientManager::Instance().GetWorkerFdByClientId(clientId);
+    std::set<int> intersection;
+    std::set_intersection(expiredFds.begin(), expiredFds.end(), fdsMmapedByClient.begin(), fdsMmapedByClient.end(),
+                          std::inserter(intersection, intersection.begin()));
+    return intersection;
 }
 
 Status WorkerServiceImpl::GetSocketPath(const GetSocketPathReqPb &req, GetSocketPathRspPb &rsp)

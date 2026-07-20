@@ -96,7 +96,8 @@ struct ClientWorkerCommonApiAttribute {
           hostPort_(std::move(hostPort)),
           enableCrossNodeConnection_(enableCrossNodeConnection),
           signature_(signature),
-          workerSupportMultiShmRefCount_(true)
+          workerSupportMultiShmRefCount_(true),
+          newFlowShm_(heartbeatType == HeartbeatType::NO_HEARTBEAT)
     {
     }
 
@@ -209,6 +210,11 @@ struct ClientWorkerCommonApiAttribute {
     std::shared_ptr<ShmUnitInfo> pipelineMsgShmUnit_;
     Signature *signature_;
     bool workerSupportMultiShmRefCount_;
+    // True for new-flow (enableHeartbeat=false: embedded/readonly) same-host clients: they were
+    // constructed with NO_HEARTBEAT and should request worker-side SOCKET_HEARTBEAT (epoll on
+    // socketFd) once shm is established. Captured at construction before Connect upgrades
+    // heartbeatType_ to RPC_HEARTBEAT.
+    bool newFlowShm_;
 
 protected:
     void UpdateMemoryAlignment(const RegisterClientRspPb &rsp);
