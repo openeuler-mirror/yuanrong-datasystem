@@ -696,6 +696,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         cohorts=cohorts,
         ub_summary=ub_summary,
     )
+    source_appendix = _build_source_appendix(coverage)
 
     return {
         "schema_version": 1,
@@ -715,6 +716,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
             "coverage": coverage,
             "diagnosis": diagnosis,
             "recommendations": recommendations,
+            "source_appendix": source_appendix,
             "flow": dict(flow_counts),
             "latency_ms": {"access": _percentiles(access_latencies)},
             "breakdown_ms": breakdown,
@@ -855,6 +857,70 @@ def _build_recommendations(classifications, coverage, cohorts, ub_summary):
             "detail": "20ms client timeout 是失败触发点；同 trace 的 worker access、RemotePull、BatchGetObjectRemote、URMA 日志用于判断服务端是否在 deadline 后继续完成。",
         })
     return recommendations
+
+
+def _build_source_appendix(coverage):
+    rows = [
+        {
+            "log_surface": "access log",
+            "flow_stage": "client -> entry worker",
+            "source_hint": "ObjectClientImpl / ClientWorkerRemoteApi / Worker OC access path",
+            "validation": "Use CodeGraph on pinned main/master ref, then direct source reads for client timeout, status, and WorkerRpc propagation.",
+            "report_reading": "Defines user-visible latency/status; use it as symptom line, not as standalone worker-side root cause.",
+        },
+        {
+            "log_surface": "latencySummary",
+            "flow_stage": "client -> entry worker createbuffer / publish",
+            "source_hint": "client summary emitters around Set/Create/Publish and buffer preparation",
+            "validation": "Use CodeGraph to map each summary key to current write path; preserve raw latencySummary text in evidence.",
+            "report_reading": "Explains write-side stage contribution even when no standalone slow log crosses threshold.",
+        },
+        {
+            "log_surface": "GetObjMetaInfo / QueryMeta",
+            "flow_stage": "entry worker -> meta worker",
+            "source_hint": "ClientWorkerRemoteApi::GetObjMetaInfo / meta service query path",
+            "validation": "Use CodeGraph and direct source reads to verify timeout budget and meta RPC branch before attributing QueryMeta.",
+            "report_reading": "Only call meta path slow when logs expose QueryMeta/GetObjMetaInfo cost; absence is an observation gap.",
+        },
+        {
+            "log_surface": "RPC slow",
+            "flow_stage": "RPC framework client/server/network split",
+            "source_hint": "brpc_perf_trace.h / rpc framework slow log emitters",
+            "validation": "Check method name and fields such as server_exec_us and network_residual_us against current transport code.",
+            "report_reading": "Separates server execution, queueing, framework, and residual/network windows.",
+        },
+        {
+            "log_surface": "RemotePull / BatchGetObjectRemote",
+            "flow_stage": "entry worker -> data worker",
+            "source_hint": "WorkerRemoteWorkerOCApi / WorkerWorkerOCServiceImpl::BatchGetObjectRemote",
+            "validation": "Use CodeGraph to verify current remote get branch, fallback, and aggregation behavior.",
+            "report_reading": "Explains worker-side completion after client deadline; compare with client access window.",
+        },
+        {
+            "log_surface": "URMA_ELAPSED_TOTAL",
+            "flow_stage": "data worker UB write completion",
+            "source_hint": "UrmaManager::WaitToFinish and URMA completion handling",
+            "validation": "Use CodeGraph plus source reads; compare total with poll_jfc/notify/thread_sched, request id, src/target, dataSize, cpuid, inflight.",
+            "report_reading": "Treat as write/wait completion window, not automatically as business logic or QueryMeta root cause.",
+        },
+        {
+            "log_surface": "Publish / CreateBuffer",
+            "flow_stage": "entry worker -> meta worker publish",
+            "source_hint": "CreateBuffer/Publish client APIs and meta worker publish path",
+            "validation": "Use CodeGraph to separate createbuffer, client publish, entry worker publish, and meta worker publish; verify each stage against latencySummary or slow logs.",
+            "report_reading": "For write traces, keep createbuffer and publish as separate phases instead of merging all write latency.",
+        },
+    ]
+    missing = [name for name, item in coverage.get("surfaces", {}).items() if item.get("status") != "present"]
+    if missing:
+        rows.append({
+            "log_surface": "missing evidence",
+            "flow_stage": "observability boundary",
+            "source_hint": ", ".join(missing),
+            "validation": "Add or recover the missing logs before turning absence into a root-cause claim.",
+            "report_reading": "Mark as observation gap in customer reports.",
+        })
+    return rows
 
 
 def _build_time_buckets(trace_rows, bucket_ms):
@@ -1124,6 +1190,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a href="#s5">5. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 5-1 Top Trace</a>
       <a href="#s6">6. 建议与口径</a>
+      <a class="sub" href="#source-appendix-table">表 6-2 代码映射</a>
       <a href="#s7">7. 原始 JSON</a>
     </nav>
     </aside>
@@ -1191,6 +1258,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s6">
         <h2>6. 建议与后续口径</h2>
         <div class="panel"><h3>表 6-1 建议与证据边界</h3><table id="recommendation-table"></table></div>
+        <div class="panel"><h3>表 6-2 代码与字段映射</h3><table id="source-appendix-table"></table></div>
       </section>
       <section id="s7">
         <h2>7. 原始 JSON 附录</h2>
@@ -1256,6 +1324,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const topClass = Object.entries(dim.classifications || {}).sort((a,b) => b[1] - a[1])[0] || ['unknown', 0];
   const diagnosis = dim.diagnosis || {};
   const recommendations = dim.recommendations || [];
+  const sourceAppendix = dim.source_appendix || [];
   document.getElementById('report-subtitle').innerHTML =
     `输入日志解析得到 <b>${report.trace_count}</b> 条 trace，错误标记 <b>${totalErrors}</b> 个。` +
     `当前主分类为 <b>${escapeHtml(topClass[0])}</b>，access p99 为 <b>${access.p99 ?? ''}ms</b>。`;
@@ -1287,6 +1356,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     item.category,
     item.title,
     item.detail
+  ]));
+  renderTable('source-appendix-table', ['log surface','flow stage','source hint','validation','report reading'], sourceAppendix.map(item => [
+    item.log_surface,
+    item.flow_stage,
+    item.source_hint,
+    item.validation,
+    item.report_reading
   ]));
   renderTable('error-table', ['error','count'], errorRows);
   renderTable('latency-table', ['metric','distribution'], [

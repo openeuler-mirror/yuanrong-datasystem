@@ -74,6 +74,14 @@ def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
     assert any(item["category"] == "source_validation" for item in recommendations)
     assert any(item["category"] == "observability" for item in recommendations)
     assert any(item["category"] == "ub_urma" for item in recommendations)
+    source_appendix = report["dimensions"]["source_appendix"]
+    assert any(item["log_surface"] == "access log" for item in source_appendix)
+    assert any(item["log_surface"] == "URMA_ELAPSED_TOTAL" for item in source_appendix)
+    assert any("CodeGraph" in item["validation"] for item in source_appendix)
+    assert any("client -> entry worker" in item["flow_stage"] for item in source_appendix)
+    assert any("entry worker -> data worker" in item["flow_stage"] for item in source_appendix)
+    assert any("data worker UB write" in item["flow_stage"] for item in source_appendix)
+    assert any("entry worker -> meta worker publish" in item["flow_stage"] for item in source_appendix)
     assert report["traces"][trace_id]["classification"] == "client_deadline_with_urma_wait"
 
 
@@ -183,6 +191,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "class=\"panel insight\"" in html
     assert "id=\"diagnosis-list\"" in html
     assert "id=\"recommendation-table\"" in html
+    assert "id=\"source-appendix-table\"" in html
+    assert "代码与字段映射" in html
     assert "建议与后续口径" in html
     assert "错误线" in html
     assert "慢时延线" in html
