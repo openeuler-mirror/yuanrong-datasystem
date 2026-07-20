@@ -409,13 +409,26 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
         // These channels carry non-idempotent RPCs (Delete, CloseProducer,
         // CloseConsumer, etc.) that must not be re-driven silently.
         cfg.max_retry = 0;
-        brpcChannel_ = BrpcChannelFactory::Create(cfg);
+        // Defer brpcChannel_ assignment until after all checks pass.
+        // In the reconnection path (reconnection=true), brpcChannel_ currently
+        // holds the old channel that brpcCommonStub_ references via a raw
+        // pointer.  If we overwrote brpcChannel_ first and then returned early
+        // from the socket-availability check, the old channel would be
+        // destroyed while brpcCommonStub_ still points to it — a use-after-
+        // free in subsequent Disconnect() / RegisterClient calls (issue #785).
+        auto newChannel = BrpcChannelFactory::Create(cfg);
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            brpcChannel_ != nullptr, StatusCode::K_RPC_UNAVAILABLE,
+            newChannel != nullptr, StatusCode::K_RPC_UNAVAILABLE,
             FormatString("Failed to init brpc channel to %s for WorkerService", brpcAddr.ToString()));
         // brpc Channel::Init() is non-blocking — health check runs periodically.
-        // Wait for the TCP connection to establish before returning.
-        (void)WaitForBrpcSocketAvailable(brpcAddr);
+        // Wait for the TCP connection to establish before returning. If the
+        // socket is still not available within the retry window, fail Connect()
+        // explicitly: otherwise the subsequent RegisterClient RPC fails and
+        // leaves the client in INIT_FAILED, surfaced as a deferred "Not ready"
+        // by IsClientReady() seconds later (issue #785).
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(WaitForBrpcSocketAvailable(brpcAddr), StatusCode::K_RPC_UNAVAILABLE,
+            FormatString("brpc socket not available to %s for WorkerService", brpcAddr.ToString()));
+        brpcChannel_ = std::move(newChannel);
         // The stub default timeout follows the request budget so RPCs that do
         // not override RpcOptions (e.g. DisconnectClient, which sets its own)
         // still respect the user-configured request timeout rather than the
