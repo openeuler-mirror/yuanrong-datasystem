@@ -23,6 +23,7 @@
 #include <gflags/gflags.h>
 #include <mutex>
 
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/log/log.h"
 
 namespace datasystem {
@@ -61,10 +62,11 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
     opts.connection_type = brpc::CONNECTION_TYPE_POOLED;
     // P2-3: circuit breaker auto-isolates peers with high error rates so a
     // half-dead worker (TCP alive but handler hung) cannot drag down QPS.
-    // Default on (cfg.enable_circuit_breaker defaults true). Caller can disable
-    // per-channel via cfg (e.g. worker<->worker mesh paths where isolating a
-    // peer under momentary back-pressure would amplify the failure).
-    opts.enable_circuit_breaker = cfg.enable_circuit_breaker;
+    // Gated by FLAGS_brpc_enable_circuit_breaker (default false). When true,
+    // the per-channel cfg.enable_circuit_breaker takes effect (mesh paths
+    // have it off by default). When false, cb is globally disabled regardless
+    // of per-channel config.
+    opts.enable_circuit_breaker = cfg.enable_circuit_breaker && FLAGS_brpc_enable_circuit_breaker;
     // P2-4: brpc-level retry. Default 3 covers transient EHOSTDOWN/ECONNREFUSED
     // without the old app-level RetryOnRPCError sleep-loop (retry storm fix).
     opts.max_retry = cfg.max_retry;

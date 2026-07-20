@@ -177,6 +177,13 @@ DS_DEFINE_bool(brpc_enable_builtin_services, false,
                "Default false to match the ZMQ security baseline (no HTTP endpoint); the /flags and "
                "/pprof endpoints allow gflag mutation and memory dumps. Set true only for debugging "
                "on a trusted network.");
+DS_DEFINE_bool(brpc_enable_circuit_breaker, false,
+               "Enable brpc circuit breaker on client->worker channels. Default false (off); set true to "
+               "let brpc auto-isolate peers with high error rates (EMA window: 1500 samples / 10% short, "
+               "3000 samples / 5% long; ELIMIT is ignored). When the breaker isolates a socket, new RPCs "
+               "fast-fail EHOSTDOWN; health-check (3s interval) revives the socket automatically. The "
+               "per-channel BrpcChannelConfig::enable_circuit_breaker still controls individual channels "
+               "when this global flag is true (mesh channels have it off by default).");
 DS_DEFINE_uint64_dynamic(client_slow_log_process_slower_than, 2000,
                  "Client-side in-process processing latency threshold (microseconds) for slow-log and latency "
                  "summary. Default 2000 (2ms). 0 means disabled. When enabled, requests whose in-process phases "
