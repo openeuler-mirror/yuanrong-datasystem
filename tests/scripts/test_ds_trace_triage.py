@@ -170,6 +170,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "<aside><h2>Trace 分析报告</h2><nav id=\"nav\">" in html
     assert "class=\"subtitle\"" in html
     assert "class=\"panel insight\"" in html
+    assert "id=\"diagnosis-list\"" in html
+    assert "错误线" in html
+    assert "慢时延线" in html
+    assert "证据边界" in html
     assert "id=\"classification-chart\"" in html
     assert "id=\"latency-chart\"" in html
     assert "id=\"worker-chart\"" in html

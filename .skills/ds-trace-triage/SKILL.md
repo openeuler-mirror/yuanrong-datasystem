@@ -139,6 +139,22 @@ Always cover:
   URMA timeout, fallback rejection, etcd abnormal
 - source: pinned ref, key files/functions, and evidence boundary
 
+For customer-facing reports, write like a diagnosis note:
+
+- Start with the user-visible symptom, then separate it from worker-side
+  evidence. For example, a client 20ms deadline and a 250ms worker completion
+  can both be true.
+- Include one concise "core judgment" paragraph with negative boundaries:
+  "not client local processing", "not QueryMeta with current evidence", "URMA
+  total is only 0.x ms".
+- Every chart needs a caption explaining what question it answers.
+- Keep trace drilldown usable: search, filters, pagination, selected trace
+  breakdown, and full logs.
+- For UB/URMA, describe the write/wait/notify timeline and compare total,
+  poll JFC, notify, thread scheduling, data size, CPU, inflight, and edge.
+- For multiple packages or noisy-vs-clean comparisons, treat each package as a
+  cohort and compare distributions before carrying over root-cause labels.
+
 Machine-readable summaries should expose these buckets when the input contains
 them:
 

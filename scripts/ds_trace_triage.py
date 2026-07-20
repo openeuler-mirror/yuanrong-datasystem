@@ -998,6 +998,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <p class="subtitle" id="report-subtitle"></p>
         <div id="summary" class="cards"></div>
         <div class="panel insight" id="report-insight"></div>
+        <div class="panel"><h3>客户化诊断口径</h3><ul id="diagnosis-list"></ul></div>
       </section>
       <section id="s2">
         <h2>2. 错误根因与分类分布</h2>
@@ -1096,12 +1097,23 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const access = dim.latency_ms?.access || {};
   const totalErrors = Object.values(dim.errors || {}).reduce((a,b) => a + b, 0);
   const topClass = Object.entries(dim.classifications || {}).sort((a,b) => b[1] - a[1])[0] || ['unknown', 0];
+  const surface = dim.coverage?.surfaces || {};
+  const hasUrma = (surface.urma_elapsed?.events || 0) > 0;
+  const hasRpcSlow = (surface.rpc_slow?.events || 0) > 0;
+  const hasLatencySummary = (surface.latency_summary?.events || 0) > 0;
+  const topError = Object.entries(dim.errors || {}).sort((a,b) => b[1] - a[1])[0] || ['none', 0];
   document.getElementById('report-subtitle').innerHTML =
     `输入日志解析得到 <b>${report.trace_count}</b> 条 trace，错误标记 <b>${totalErrors}</b> 个。` +
     `当前主分类为 <b>${escapeHtml(topClass[0])}</b>，access p99 为 <b>${access.p99 ?? ''}ms</b>。`;
   document.getElementById('report-insight').innerHTML =
     `<b>核心判断：</b>本报告先按 error/status 定界失败表象，再用 access、latencySummary、RPC slow、URMA elapsed、Worker/UB edge 判断慢时延阶段。` +
     `若 client deadline 与 worker 后续完成时间同时存在，应把 client 超时窗口和服务端实际完成阶段分开阅读。`;
+  document.getElementById('diagnosis-list').innerHTML = [
+    ['错误线', `主要失败表象是 ${topError[0]}（${topError[1]} 次），先用于回答“客户为什么看到失败”。`],
+    ['慢时延线', `access p50=${access.p50 ?? ''}ms、p99=${access.p99 ?? ''}ms；再看 latencySummary、breakdown、RPC slow、URMA/UB edge 判断时间花在哪里。`],
+    ['证据边界', `${hasLatencySummary ? 'latencySummary 已出现' : 'latencySummary 缺失'}；${hasRpcSlow ? 'RPC slow 已出现' : 'RPC slow 缺失'}；${hasUrma ? 'URMA elapsed 已出现' : 'URMA elapsed 缺失'}。缺失项只能标为观测盲区，不能直接当根因。`],
+    ['客户表达', `建议描述为“${topClass[0]} 是当前最大根因族”，并说明这是基于日志字段聚合的 observed evidence，不替代源码/CodeGraph 复核。`]
+  ].map(([k,v]) => `<li><b>${escapeHtml(k)}：</b>${escapeHtml(v)}</li>`).join('');
   document.getElementById('summary').innerHTML = [
     ['trace_count', report.trace_count, 'parsed traces'],
     ['errors', totalErrors, 'total error markers'],

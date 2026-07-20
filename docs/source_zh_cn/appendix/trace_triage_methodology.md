@@ -231,3 +231,34 @@ PY
 4. 当前源码链路：pinned ref、CodeGraph 查询、源码函数。
 5. 解释边界：哪些是日志直接证明，哪些是源码推断，哪些需要补采样。
 6. 后续建议：补字段、隔离 Worker、调整 timeout、拆分同步 wait、增加 inflight/queue 指标等。
+
+## 客户化报告口径
+
+面向客户或一线排障时，报告不能只堆字段，应按“表象、证据、定界、建议”组织：
+
+1. **先讲表象**：例如“客户端看到的是 20ms WorkerRpc deadline”或“4~8ms 采样慢请求”。这句话要让非实现同学马上知道用户感知是什么。
+2. **再讲服务端证据**：把 client access 窗口和 worker 后续完成阶段拆开。客户端 20ms 超时后，Entry/DataWorker 仍可能继续跑到 60ms、190ms、250ms；这不是矛盾，而是不同观察点。
+3. **给出否定性定界**：明确“不是 client.process.get 主慢”、“当前证据不能归因到 QueryMeta”、“URMA total 只有 0.x ms，不能说 URMA completion 慢”等，避免误导。
+4. **用图表解释，而不是替代证据**：每张 ECharts 图都要有 caption；图回答“分布和规模”，表格/日志回答“证据在哪一行”。
+5. **保留单 Trace 证据链**：Top Trace 必须能分页、搜索、点击后看到 stage breakdown 和全量日志。高亮或摘要应围绕 ERROR、deadline、latencySummary、RemotePull、RPC slow、URMA elapsed。
+6. **建议先补观测性**：当缺少 remote_get、QueryMeta、URMA 子阶段或目标 worker 字段时，不要直接给根因结论；先写“观测盲区”和建议补字段。
+
+错误分析和慢时延分析是两条正交线：
+
+- 错误线回答“为什么失败/谁返回失败”：status、deadline、not found、object in use、fallback、Etcd 等。
+- 慢时延线回答“时间花在哪里”：access、latencySummary、breakdown、RPC slow、URMA elapsed、UB edge。
+- 交汇点才是根因族：例如 `client_deadline_with_urma_wait`、`client_deadline_20ms`、`remote_fast_transport_wait`、`write_memory_copy_dominant`。
+
+UB/URMA 相关报告要用时序口径：
+
+- RPC/bthread 发起 write 后等待 completion。
+- polling pthread 轮询到 completion 后发布完成数据并 notify。
+- `URMA_ELAPSED_TOTAL` 是等待 completion 的总窗口；`POLL_JFC`、`NOTIFY`、`THREAD_SHED` 是子证据。
+- 如果 `write total - sleep wait` 只有几十 us，说明慢主要在等待 completion，不是 wait 返回后的业务处理。
+- DataWorker UB write 很关键，但不能只看 `URMA_ELAPSED_TOTAL`；还要看 request id、src/target、dataSize、cpuid、inflight、wake latency 和同 trace 的 EntryWorker RemotePull。
+
+有无底噪对比时，把两个日志包当成两个 cohort：
+
+- 每个 cohort 独立统计 trace 数、根因占比、Top slow、Worker/IP 分布。
+- 对比图优先展示“同一表象下服务端阶段是否变化”，例如 CPU/内存底噪消失后，URMA 秒级 tail 是否消失，是否残留 20ms deadline。
+- 不要用旧轮次根因覆盖新轮次；同一 trace 报告中必须标注输入包、case、scenario 和 run 时间。
