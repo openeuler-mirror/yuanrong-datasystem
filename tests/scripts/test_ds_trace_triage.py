@@ -363,6 +363,23 @@ def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
     assert report["dimensions"]["coverage"]["surfaces"]["rpc_slow"]["status"] == "missing"
 
 
+def test_grep_prefixed_log_lines_still_build_time_buckets(tmp_path):
+    trace_id = "019f7d12-1f09-762a-9163-c547ef71a101"
+    log = tmp_path / "grep-output.log"
+    log.write_text(
+        f"/data/worker.log:42:2026-07-20T14:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    buckets = report["dimensions"]["time_buckets"]["1000ms"]
+
+    assert len(buckets) == 1
+    assert buckets[0]["trace_count"] == 1
+    assert buckets[0]["bucket_start"].startswith("2026-07-20T14:00:00")
+
+
 def test_multiple_input_files_are_reported_as_cohorts(tmp_path):
     trace_a = "019f7d10-1f09-762a-9163-c547ef71a101"
     trace_b = "019f7d10-b880-7937-b945-382161303102"

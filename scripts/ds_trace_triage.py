@@ -25,7 +25,7 @@ from pathlib import Path
 
 
 TRACE_ID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
-TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
+TS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 WORKER_RE = re.compile(r"(kv[^/\s|]*worker[^/\s|]*)", re.I)
 NOISE_ON_LABEL = "有底噪(dizao)"
 NOISE_OFF_LABEL = "无底噪(wudizao)"
@@ -1337,6 +1337,7 @@ h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-siz
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
 tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
+.log-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span{font-size:12px}
 .compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
 th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
@@ -1442,7 +1443,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div class="caption">点击上方 Trace 行后联动更新，横向条形图按阶段耗时排序，单位 ms</div><table id="selected-stage-table"></table></div>
           <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
-        <div class="panel"><h3>Trace 全量日志</h3><div class="small">ERROR、deadline、latencySummary、RemotePull、URMA 等关键字段在原始日志中完整保留。</div><pre id="selected-trace-log"></pre></div>
+        <div class="panel"><h3>Trace 全量日志</h3><div class="small">参考慢 Trace 报告方式：日志不分页，按原始顺序完整展开；ERROR、timeout、RPC slow、latencySummary、RemotePull、URMA 以及大耗时字段会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><pre id="selected-trace-log"></pre></div>
       </section>
       <section id="s6">
         <h2>6. 建议与后续口径</h2>
@@ -1555,6 +1556,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const recommendations = dim.recommendations || [];
   const sourceAppendix = dim.source_appendix || [];
   const flowStages = dim.flow_stages || {nodes: [], edges: []};
+  document.getElementById('log-highlight-legend').innerHTML = [
+    ['log-error','ERROR/status'],
+    ['log-deadline','deadline/timeout'],
+    ['log-rpc','RPC slow'],
+    ['log-latency','latencySummary'],
+    ['log-urma','URMA/UB'],
+    ['log-slow','>=阈值耗时'],
+    ['log-field','关键流程']
+  ].map(([cls,label]) => `<span class="log-tag ${cls}">${label}</span>`).join('');
   document.getElementById('report-subtitle').innerHTML =
     `输入日志解析得到 <b>${report.trace_count}</b> 条 trace，错误标记 <b>${totalErrors}</b> 个。` +
     `当前主分类为 <b>${escapeHtml(topClass[0])}</b>，access p99 为 <b>${access.p99 ?? ''}ms</b>。`;
@@ -1701,11 +1711,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       s.confidence || '',
       s.source || ''
     ]), row => `class="${severityClass(row[1])}"`);
+    const stageColors = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
     chart('selected-trace-chart', stageRows.length ? axisBase('Selected Trace Stage Breakdown', {
-      grid:{left:180,right:42,top:44,bottom:52,containLabel:true},
+      legend:{top:26,type:'scroll'},
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:ps => ps.filter(p => p.data && p.data.value != null).map(p => `${escapeHtml(p.seriesName)}<br>耗时: ${p.data.value}ms<br>信息源: ${escapeHtml(p.data.source || '')}`).join('<br><br>')},
+      grid:{left:180,right:42,top:76,bottom:52,containLabel:true},
       xAxis:{type:'value', name:'ms'},
       yAxis:{type:'category', data:stageRows.map(s => s.stage), axisLabel:{width:165, overflow:'truncate'}},
-      series:[{name:'duration_ms',type:'bar',barMaxWidth:28,data:stageRows.map(s => ({value:s.duration_ms, source:s.source || '', itemStyle:{color:s.duration_ms >= 20 ? '#dc2626' : s.duration_ms >= 5 ? '#ea580c' : '#2563eb'}})), label:{show:true, position:'right', formatter:p => `${p.value}ms`}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]}}]
+      series:stageRows.map((stage, stageIndex) => ({
+        name:stage.stage,
+        type:'bar',
+        barMaxWidth:28,
+        data:stageRows.map((row, rowIndex) => rowIndex === stageIndex ? {value:row.duration_ms, source:row.source || '', itemStyle:{color:stageColors[stageIndex % stageColors.length]}} : null),
+        label:{show:true, position:'right', formatter:p => p.data && p.data.value != null ? `${p.data.value}ms` : ''},
+        markLine:stageIndex === 0 ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]} : undefined
+      }))
     }) : noDataOption('No selected trace stage data'));
     document.getElementById('selected-trace-log').innerHTML = (item.evidence || [])
       .map(e => highlightLogLine(`${e.member}:${e.line} ${e.text}`)).join('\\n');
