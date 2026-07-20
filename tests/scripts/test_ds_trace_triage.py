@@ -247,9 +247,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "download-selected-raw" in html
     assert "download-filtered-evidence" in html
     assert "id=\"selected-stage-table\"" in html
+    assert "id=\"selected-stage-legend\"" in html
+    assert "stage-pill" in html
+    assert "legend:{show:false}" in html
     assert "横向条形图按阶段耗时排序" in html
     assert "highlightLogLine" in html
     assert "function axisBase" in html
+    assert "setOption(option, true)" in html
     assert "dataZoom" in html
     assert "markLine" in html
     assert "log-error" in html

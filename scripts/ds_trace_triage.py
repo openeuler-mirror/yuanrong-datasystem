@@ -1337,7 +1337,8 @@ h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-siz
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
 tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
-.log-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span{font-size:12px}
+.log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
+.stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
 .compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
 th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
@@ -1440,7 +1441,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <table id="top-trace-table"></table>
         </div>
         <div class="compare2">
-          <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div class="caption">点击上方 Trace 行后联动更新，横向条形图按阶段耗时排序，单位 ms</div><table id="selected-stage-table"></table></div>
+          <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击上方 Trace 行后联动更新，横向条形图按阶段耗时排序，单位 ms</div><table id="selected-stage-table"></table></div>
           <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
         <div class="panel"><h3>Trace 全量日志</h3><div class="small">参考慢 Trace 报告方式：日志不分页，按原始顺序完整展开；ERROR、timeout、RPC slow、latencySummary、RemotePull、URMA 以及大耗时字段会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><pre id="selected-trace-log"></pre></div>
@@ -1526,7 +1527,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       node.innerHTML = '<div class="muted">ECharts failed to load; tables below remain available.</div>';
       return;
     }
-    echarts.init(node).setOption(option);
+    const instance = echarts.getInstanceByDom(node) || echarts.init(node);
+    instance.setOption(option, true);
   }
   function downloadText(filename, text) {
     const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
@@ -1712,20 +1714,24 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       s.source || ''
     ]), row => `class="${severityClass(row[1])}"`);
     const stageColors = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
+    document.getElementById('selected-stage-legend').innerHTML = stageRows.map((stage, idx) =>
+      `<span class="stage-pill"><i class="stage-dot" style="background:${stageColors[idx % stageColors.length]}"></i>${escapeHtml(stage.stage)}</span>`
+    ).join('');
     chart('selected-trace-chart', stageRows.length ? axisBase('Selected Trace Stage Breakdown', {
-      legend:{top:26,type:'scroll'},
-      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:ps => ps.filter(p => p.data && p.data.value != null).map(p => `${escapeHtml(p.seriesName)}<br>耗时: ${p.data.value}ms<br>信息源: ${escapeHtml(p.data.source || '')}`).join('<br><br>')},
-      grid:{left:180,right:42,top:76,bottom:52,containLabel:true},
+      legend:{show:false},
+      dataZoom:[],
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:ps => ps.filter(p => p.data && p.data.value != null).map(p => `${escapeHtml(p.name)}<br>耗时: ${p.data.value}ms<br>信息源: ${escapeHtml(p.data.source || '')}`).join('<br><br>')},
+      grid:{left:155,right:72,top:44,bottom:36,containLabel:true},
       xAxis:{type:'value', name:'ms'},
       yAxis:{type:'category', data:stageRows.map(s => s.stage), axisLabel:{width:165, overflow:'truncate'}},
-      series:stageRows.map((stage, stageIndex) => ({
-        name:stage.stage,
+      series:[{
+        name:'duration_ms',
         type:'bar',
         barMaxWidth:28,
-        data:stageRows.map((row, rowIndex) => rowIndex === stageIndex ? {value:row.duration_ms, source:row.source || '', itemStyle:{color:stageColors[stageIndex % stageColors.length]}} : null),
+        data:stageRows.map((row, rowIndex) => ({value:row.duration_ms, source:row.source || '', itemStyle:{color:stageColors[rowIndex % stageColors.length]}})),
         label:{show:true, position:'right', formatter:p => p.data && p.data.value != null ? `${p.data.value}ms` : ''},
-        markLine:stageIndex === 0 ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]} : undefined
-      }))
+        markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]}
+      }]
     }) : noDataOption('No selected trace stage data'));
     document.getElementById('selected-trace-log').innerHTML = (item.evidence || [])
       .map(e => highlightLogLine(`${e.member}:${e.line} ${e.text}`)).join('\\n');
