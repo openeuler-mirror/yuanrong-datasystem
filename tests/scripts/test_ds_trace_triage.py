@@ -312,6 +312,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"ub-worker-time-table\"" in html
     assert "id=\"ub-lifecycle-table\"" in html
     assert "id=\"ub-request-table\"" in html
+    assert "class=\"flow-section ub-table-stack\"" in html
     assert "id=\"ub-worker-role-table-pager\"" in html
     assert "id=\"ub-worker-time-table-pager\"" in html
     assert "id=\"ub-lifecycle-table-pager\"" in html

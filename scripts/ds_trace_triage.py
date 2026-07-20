@@ -1939,7 +1939,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-2 UB worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
         </div>
         <div class="panel"><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-3 UB 时间桶：按秒观察入口/出口事件与尾部时延。</div></div>
-        <div class="compare2">
+        <div class="flow-section ub-table-stack">
           <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><table id="ub-lifecycle-table"></table><div id="ub-lifecycle-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-3 UB Worker 角色</h3><table id="ub-worker-role-table"></table><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
