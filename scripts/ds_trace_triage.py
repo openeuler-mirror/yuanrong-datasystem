@@ -1583,9 +1583,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s5">
         <h2>5. Trace 查看</h2>
         <div class="panel">
-        <div class="controls"><label>Trace 查看读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">联动 Trace 列表与选中 Trace Breakdown。</span><button id="reset-filter">清空</button></div>
+        <div class="controls"><label>Trace 查看读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><label><input id="failure-filter" type="checkbox"> 只看失败请求</label><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">按 access max 降序；联动 Trace 列表与选中 Trace Breakdown。</span><button id="reset-filter">清空</button></div>
         <div class="controls pager">
-          <label>每页 <select id="trace-page-size"><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="9999">全部</option></select> 条</label>
+          <label>每页 <select id="trace-page-size"><option value="4" selected>4</option><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="9999">全部</option></select> 条</label>
           <button class="primary" id="prev-page">上一页</button>
           <span id="page-status" class="muted"></span>
           <button class="primary" id="next-page">下一页</button>
@@ -1621,7 +1621,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   let filteredTraceRows = traceRows;
   let currentPage = 0;
   let selectedTraceId = traceRows[0]?.[0] || null;
-  let pageSize = 8;
+  let pageSize = 4;
   let activeOperation = '';
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -1740,6 +1740,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (!activeOperation) return true;
     const op = traceOperation(item);
     return op === activeOperation || op === 'mixed';
+  }
+  function hasTraceFailure(item) {
+    return Object.keys(item.errors || {}).length > 0 || /deadline|error|fail|timeout/i.test(String(item.classification || ''));
+  }
+  function traceStartTime(item) {
+    return item.first_ts || item.last_ts || '';
   }
   function stageMatchesOperation(stageName) {
     return !activeOperation || String(stageName || '').startsWith(`${activeOperation}.`);
@@ -1988,6 +1994,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const query = document.getElementById('trace-search').value.trim().toLowerCase();
     const cls = document.getElementById('class-filter').value;
     const worker = document.getElementById('worker-filter').value;
+    const failureOnly = document.getElementById('failure-filter').checked;
     filteredTraceRows = traceRows.filter(([traceId, item]) => {
       const haystack = [
         traceId,
@@ -1998,6 +2005,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       ].join(' ').toLowerCase();
       return (!cls || item.classification === cls)
         && (!worker || Object.prototype.hasOwnProperty.call(item.workers || {}, worker))
+        && (!failureOnly || hasTraceFailure(item))
         && operationMatches(item)
         && (!query || haystack.includes(query));
     });
@@ -2010,13 +2018,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const totalPages = Math.max(Math.ceil(filteredTraceRows.length / pageSize), 1);
     currentPage = Math.min(Math.max(currentPage, 0), totalPages - 1);
     const pageRows = filteredTraceRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-    renderTable('top-trace-table', ['trace','classification','errors','access','workers'], pageRows.map(([traceId,item]) => [
+    renderTable('top-trace-table', ['time','trace','classification','errors','access','workers'], pageRows.map(([traceId,item]) => [
+      traceStartTime(item),
       traceId,
       item.classification,
       JSON.stringify(item.errors || {}),
       pctText(item.access_latency_ms),
       Object.keys(item.workers || {}).slice(0, 6).join(', ')
-    ]), row => `data-trace="${escapeHtml(row[0])}" class="${row[0] === selectedTraceId ? 'selected-row' : ''}"`);
+    ]), row => `data-trace="${escapeHtml(row[1])}" class="${row[1] === selectedTraceId ? 'selected-row' : ''}"`);
     document.querySelectorAll('#top-trace-table tbody tr').forEach(row => row.addEventListener('click', () => {
       selectedTraceId = row.getAttribute('data-trace');
       renderTracePage();
@@ -2072,6 +2081,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   document.getElementById('prev-page').addEventListener('click', () => { currentPage -= 1; renderTracePage(); });
   document.getElementById('next-page').addEventListener('click', () => { currentPage += 1; renderTracePage(); });
   document.getElementById('trace-search').addEventListener('input', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('failure-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   document.getElementById('operation-filter').addEventListener('change', event => {
     activeOperation = event.target.value;
     currentPage = 0;
@@ -2087,7 +2097,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   document.getElementById('worker-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   document.getElementById('trace-page-size').addEventListener('change', event => {
-    pageSize = Number(event.target.value) || 8;
+    pageSize = Number(event.target.value) || 4;
     currentPage = 0;
     renderTracePage();
     renderSelectedTrace();
@@ -2097,9 +2107,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     document.getElementById('class-filter').value = '';
     document.getElementById('worker-filter').value = '';
     document.getElementById('operation-filter').value = '';
-    document.getElementById('trace-page-size').value = '8';
+    document.getElementById('failure-filter').checked = false;
+    document.getElementById('trace-page-size').value = '4';
     activeOperation = '';
-    pageSize = 8;
+    pageSize = 4;
     currentPage = 0;
     renderOperationViews();
     renderTracePage();
