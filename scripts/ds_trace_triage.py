@@ -1052,6 +1052,7 @@ def _build_recommendations(classifications, coverage, cohorts, ub_summary):
 def _build_source_appendix(coverage):
     rows = [
         {
+            "scope": "通用",
             "log_surface": "access log",
             "flow_stage": "client -> entry worker",
             "source_hint": "ObjectClientImpl / ClientWorkerRemoteApi / Worker OC access path",
@@ -1059,6 +1060,7 @@ def _build_source_appendix(coverage):
             "report_reading": "Defines user-visible latency/status; use it as symptom line, not as standalone worker-side root cause.",
         },
         {
+            "scope": "写入",
             "log_surface": "latencySummary",
             "flow_stage": "client -> entry worker createbuffer / publish",
             "source_hint": "client summary emitters around Set/Create/Publish and buffer preparation",
@@ -1066,6 +1068,7 @@ def _build_source_appendix(coverage):
             "report_reading": "Explains write-side stage contribution even when no standalone slow log crosses threshold.",
         },
         {
+            "scope": "读取",
             "log_surface": "GetObjMetaInfo / QueryMeta",
             "flow_stage": "entry worker -> meta worker",
             "source_hint": "ClientWorkerRemoteApi::GetObjMetaInfo / meta service query path",
@@ -1073,6 +1076,7 @@ def _build_source_appendix(coverage):
             "report_reading": "Only call meta path slow when logs expose QueryMeta/GetObjMetaInfo cost; absence is an observation gap.",
         },
         {
+            "scope": "通用",
             "log_surface": "RPC slow",
             "flow_stage": "RPC framework client/server/network split",
             "source_hint": "brpc_perf_trace.h / rpc framework slow log emitters",
@@ -1080,6 +1084,7 @@ def _build_source_appendix(coverage):
             "report_reading": "Separates server execution, queueing, framework, and residual/network windows.",
         },
         {
+            "scope": "读取",
             "log_surface": "RemotePull / BatchGetObjectRemote",
             "flow_stage": "entry worker -> data worker",
             "source_hint": "WorkerRemoteWorkerOCApi / WorkerWorkerOCServiceImpl::BatchGetObjectRemote",
@@ -1087,6 +1092,7 @@ def _build_source_appendix(coverage):
             "report_reading": "Explains worker-side completion after client deadline; compare with client access window.",
         },
         {
+            "scope": "读取",
             "log_surface": "URMA_ELAPSED_TOTAL",
             "flow_stage": "data worker UB write completion",
             "source_hint": "UrmaManager::WaitToFinish / LogUrmaWaitToFinishElapsed",
@@ -1094,6 +1100,7 @@ def _build_source_appendix(coverage):
             "report_reading": "Treat as post/write completion wait window; use wait/wake fields to split OS scheduling from completion cost.",
         },
         {
+            "scope": "读取",
             "log_surface": "URMA_ELAPSED_POLL_JFC / NOTIFY / THREAD_SHED",
             "flow_stage": "data worker UB poll and wake scheduling",
             "source_hint": "UrmaManager::PollJfcWait / ds_urma_poll_jfc / ds_urma_wait_jfc / nanosleep",
@@ -1101,6 +1108,7 @@ def _build_source_appendix(coverage):
             "report_reading": "When total is high, these fields indicate whether the delay sits in polling, notification, or poll-thread scheduling.",
         },
         {
+            "scope": "写入",
             "log_surface": "Publish / CreateBuffer",
             "flow_stage": "entry worker -> meta worker publish",
             "source_hint": "CreateBuffer/Publish client APIs and meta worker publish path",
@@ -1111,6 +1119,7 @@ def _build_source_appendix(coverage):
     missing = [name for name, item in coverage.get("surfaces", {}).items() if item.get("status") != "present"]
     if missing:
         rows.append({
+            "scope": "通用",
             "log_surface": "missing evidence",
             "flow_stage": "observability boundary",
             "source_hint": ", ".join(missing),
@@ -2367,7 +2376,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     item.title,
     item.detail
   ]));
-  renderTable('source-appendix-table', ['log surface','flow stage','source hint','validation','report reading'], sourceAppendix.map(item => [
+  renderTable('source-appendix-table', ['scope','log surface','flow stage','source hint','validation','report reading'], sourceAppendix.map(item => [
+    item.scope || '通用',
     item.log_surface,
     item.flow_stage,
     item.source_hint,
