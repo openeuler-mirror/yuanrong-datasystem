@@ -192,6 +192,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert manifest["render_targets"]["local"]["path"] == "report.local.html"
     assert manifest["render_targets"]["site"]["path"] == "report.site.html"
     html = (run_dir / "report.local.html").read_text(encoding="utf-8")
+    site_html = (run_dir / "report.site.html").read_text(encoding="utf-8")
     assert "echarts" in html
     assert "<aside><h2>Trace 分析报告</h2><nav id=\"nav\">" in html
     assert "class=\"subtitle\"" in html
@@ -241,6 +242,16 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"worker-table\"" in html
     assert "id=\"top-trace-table\"" in html
     assert "Error Breakdown" in html
+    for marker in [
+        "/assets/css/site.css",
+        "/assets/js/site.js",
+        "id=\"run-metadata-table\"",
+        "id=\"coverage-table\"",
+        "id=\"flow-stage-chart\"",
+        "id=\"download-report-summary\"",
+        "trace-report-summary.md",
+    ]:
+        assert marker in site_html
     triage = json.loads((run_dir / "triage.json").read_text())
     assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
 

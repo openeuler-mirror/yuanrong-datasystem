@@ -53,7 +53,9 @@ root-cause analysis rather than broad access/resource trending.
    - `summary.json`: time/worker/flow/latency/RPC/UB/error dimensions
    - `triage.json` and `triage.md`: classifications and issue candidates
    - `report.local.html`: self-contained local report
-   - `report.site.html`: yche.me-shaped report draft
+   - `report.site.html`: yche.me-shaped report draft; keep the same core
+     components as local HTML and include `/assets/css/site.css` plus
+     `/assets/js/site.js`
 5. Inspect selected full logs for the top slow/error traces. Keep aggregate
    distributions first, then per-trace evidence.
 6. Cross-check any source-level conclusion with CodeGraph plus direct source
