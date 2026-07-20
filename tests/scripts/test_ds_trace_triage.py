@@ -228,7 +228,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"cohort-table\"" in html
     assert "id=\"latency-chart\"" in html
     assert "id=\"time-breakdown-chart\"" in html
-    assert "Time Bucket Breakdown" in html
+    assert "Time Bucket Latency Stages" in html
+    assert "client/access p99 upper bound" in html
+    assert "Entry→Data RPC" in html
     assert "id=\"flow-stage-chart\"" in html
     assert "id=\"flow-stage-table\"" in html
     assert "Client→Entry→Meta/Data 流程" in html
@@ -365,6 +367,9 @@ def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
     assert write_stages["write.entry_to_meta_publish"]["confidence"] == "missing"
     assert report["dimensions"]["coverage"]["surfaces"]["urma_elapsed"]["status"] == "present"
     assert report["dimensions"]["coverage"]["surfaces"]["rpc_slow"]["status"] == "missing"
+    first_bucket = report["dimensions"]["time_buckets"]["1000ms"][0]
+    assert first_bucket["stage_breakdown_ms"]["read.entry_to_data_worker"]["p99"] == 231.321
+    assert first_bucket["stage_breakdown_ms"]["read.data_worker_ub_write"]["p99"] == 231.001
 
 
 def test_grep_prefixed_log_lines_still_build_time_buckets(tmp_path):

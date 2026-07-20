@@ -1071,6 +1071,7 @@ def _build_time_buckets(trace_rows, bucket_ms):
         "error_count": 0,
         "slow_count": 0,
         "access_latencies": [],
+        "stage_latencies": defaultdict(list),
         "top_workers": Counter(),
     })
     for trace_id, trace in trace_rows.items():
@@ -1087,6 +1088,11 @@ def _build_time_buckets(trace_rows, bucket_ms):
             bucket["slow_count"] += 1
         if trace.get("access_latency_ms", {}).get("p50") is not None:
             bucket["access_latencies"].append(trace["access_latency_ms"]["p50"])
+        for stage in trace.get("stage_breakdown", []):
+            duration = stage.get("duration_ms")
+            if duration is None or stage.get("confidence") == "missing":
+                continue
+            bucket["stage_latencies"][stage["stage"]].append(duration)
         for worker in trace.get("workers", {}):
             bucket["top_workers"][worker] += 1
     rows = []
@@ -1099,6 +1105,10 @@ def _build_time_buckets(trace_rows, bucket_ms):
             "slow_count": bucket["slow_count"],
             "p50_access_ms": _percentiles(bucket["access_latencies"]).get("p50"),
             "p99_access_ms": _percentiles(bucket["access_latencies"]).get("p99"),
+            "stage_breakdown_ms": {
+                stage: _percentiles(values)
+                for stage, values in sorted(bucket["stage_latencies"].items())
+            },
             "burst_score": max(bucket["slow_count"], bucket["error_count"], 1),
             "gap_score": 0,
             "top_workers": [w for w, _ in bucket["top_workers"].most_common(3)],
@@ -1409,7 +1419,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 时延分布，单位 ms/us 按指标原始语义展示</div></div>
           <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布</div></div>
         </div>
-        <div class="panel"><div id="time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 时间桶 Breakdown：按采样时间聚合 trace/error/slow/p99，用于定位 burst 和时间相关性</div></div>
+        <div class="panel"><div id="time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 时间桶时延分段：柱状图为同桶内 RPC/UB 子阶段 p99，折线为 client/access p99 上界；client access 不与子阶段相加。</div></div>
         <div class="compare2">
           <div class="panel"><h3>表 3-1 时延指标</h3><table id="latency-table"></table></div>
           <div class="panel"><h3>表 3-2 Flow Breakdown</h3><table id="flow-table"></table></div>
@@ -1505,6 +1515,24 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const n = Number(value || 0);
     return n >= hot ? 'hotrow' : n >= warn ? 'warnrow' : '';
   }
+  const stageLabelMap = {
+    'read.entry_to_meta_worker':'Entry→Meta RPC',
+    'read.entry_to_data_worker':'Entry→Data RPC',
+    'read.data_worker_ub_write':'DataWorker UB/URMA',
+    'write.client_to_entry_createbuffer':'Client→Entry CreateBuffer',
+    'write.client_memory_copy':'Client Memory Copy',
+    'write.client_to_entry_publish':'Client→Entry Publish',
+    'write.entry_to_meta_publish':'Entry→Meta Publish'
+  };
+  const stageColorMap = {
+    'read.entry_to_meta_worker':'#0891b2',
+    'read.entry_to_data_worker':'#ea580c',
+    'read.data_worker_ub_write':'#059669',
+    'write.client_to_entry_createbuffer':'#2563eb',
+    'write.client_memory_copy':'#7c3aed',
+    'write.client_to_entry_publish':'#ca8a04',
+    'write.entry_to_meta_publish':'#dc2626'
+  };
   const palette = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
   function axisBase(title, extra) {
     return Object.assign({
@@ -1818,17 +1846,17 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
   chart('latency-chart', axisBase('Latency Percentiles', {legend:{top:30}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',barMaxWidth:42,data:[access[k] || 0], markLine:k === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]} : undefined}))}));
   chart('flow-chart', flowRows.length ? {title:{text:'Flow', left:'center'}, color:palette, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['35%','65%'], center:['50%','47%'], data:flowRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No flow data'));
-  chart('time-breakdown-chart', timeBucketRows.length ? axisBase('Time Bucket Breakdown', {
+  const timeStageNames = [...new Set(timeBucketRows.flatMap(row => Object.keys(row.stage_breakdown_ms || {})))]
+    .filter(name => !name.endsWith('client_to_entry_worker'));
+  chart('time-breakdown-chart', timeBucketRows.length ? axisBase('Time Bucket Latency Stages', {
     tooltip:{trigger:'axis', axisPointer:{type:'cross'}, confine:true},
     xAxis:{type:'category', data:timeBucketRows.map(r => String(r.bucket_start || '').replace('T','\\n')), axisLabel:{rotate:0}},
-    yAxis:[{type:'value', name:'count'}, {type:'value', name:'ms'}],
+    yAxis:{type:'value', name:'ms'},
     series:[
-      {name:'traces',type:'bar',stack:'count',barMaxWidth:28,data:timeBucketRows.map(r => r.trace_count || 0), itemStyle:{color:'#94a3b8'}},
-      {name:'errors',type:'bar',stack:'count',barMaxWidth:28,data:timeBucketRows.map(r => r.error_count || 0), itemStyle:{color:'#dc2626'}},
-      {name:'slow',type:'bar',stack:'count',barMaxWidth:28,data:timeBucketRows.map(r => r.slow_count || 0), itemStyle:{color:'#ea580c'}},
-      {name:'p99 access',type:'line',yAxisIndex:1,smooth:true,data:timeBucketRows.map(r => r.p99_access_ms || 0), itemStyle:{color:'#2563eb'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]}}
+      ...timeStageNames.map(name => ({name:stageLabelMap[name] || name,type:'bar',stack:'stage-p99',barMaxWidth:34,data:timeBucketRows.map(r => r.stage_breakdown_ms?.[name]?.p99 || 0),itemStyle:{color:stageColorMap[name] || '#64748b'}})),
+      {name:'client/access p99 upper bound',type:'line',smooth:true,data:timeBucketRows.map(r => r.p99_access_ms || 0), itemStyle:{color:'#2563eb'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]}}
     ]
-  }) : noDataOption('No time bucket data'));
+  }) : noDataOption('No time bucket stage data'));
   chart('flow-stage-chart', {
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.evidence)}`
