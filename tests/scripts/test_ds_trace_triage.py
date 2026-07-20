@@ -259,6 +259,11 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "读取流程证据块" in html
     assert "写入流程证据块" in html
     assert "flow-section" in html
+    assert "href=\"#flow-stage-chart\">读写视角" in html
+    assert "href=\"#read-flow-section\">读取流程" in html
+    assert "href=\"#write-flow-section\">写入流程" in html
+    assert "href=\"#worker-chart\">Worker 分布" in html
+    assert "href=\"#ub-edge-chart\">UB Edge" in html
     assert "读取流程：Client→Entry→Meta/Data→UB" in html
     assert "写入流程：Client→Entry CreateBuffer/Publish→Meta Publish" in html
     assert "Client→Entry→Meta/Data 流程" in html

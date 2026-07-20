@@ -1511,7 +1511,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a class="sub" href="#latency-chart">图 3-1 时延</a>
       <a class="sub" href="#time-breakdown-chart">图 3-3 时间桶</a>
       <a href="#s4">4. Worker / UB</a>
-      <a class="sub" href="#flow-stage-chart">图 4-0 流程图</a>
+      <a class="sub" href="#flow-stage-chart">读写视角</a>
+      <a class="sub" href="#read-flow-section">读取流程</a>
+      <a class="sub" href="#write-flow-section">写入流程</a>
+      <a class="sub" href="#worker-chart">Worker 分布</a>
+      <a class="sub" href="#ub-edge-chart">UB Edge</a>
       <a href="#s5">5. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 5-1 Top Trace</a>
       <a href="#s6">6. 建议与口径</a>
