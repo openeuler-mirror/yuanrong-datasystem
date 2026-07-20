@@ -115,6 +115,15 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
     `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; timeout/error retirement is
     bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap is `200 + 200`.
+    Every provider post first acquires a shared `UrmaJetty::PostPermit`. The Jetty uses one atomic gate word for
+    `closing`, retire-finalizer arming/scheduling, and the active provider-call count: concurrent posts remain allowed,
+    while retire closes admission and waits for already-admitted provider calls before `modify(ERROR)`.
+    Pool detach and the pending-retire record are established before the finalizer is armed. The record preserves an
+    early `FLUSH_ERR_DONE`; provider delete is admitted only after the per-Jetty flush notification moves the lifecycle
+    to delete-ready. Jetty-level flush notifications are dispatched before request-level pipeline hooks so the sole
+    notification cannot be consumed as an ordinary request completion. Modify/delete failure is quarantined and
+    remains inside the configured live-resource bound. A quarantined Jetty keeps its registry identity reserved:
+    flush carries only `local_id`, so registration rejects a different live wrapper with the same ID to prevent ABA.
     A send lane is leased once per logical transfer and shared by that transfer's chunk WR events; release or retirement
     happens only after the shared request lease is sealed and all associated events have completed, failed, or timed out.
     Worker-to-worker Batch Get is a narrower RPC-scoped exception: `BatchGetObjectRemoteImpl` attempts one shared-lane
@@ -123,11 +132,12 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     pinned to TCP before object processing; aggregate/GatherWrite and per-object URMA acquire/post are disabled, while
     the existing `TrackUrmaFallbackTcp` admission/accounting path remains in force. With fallback disabled, the original
     acquire error is returned (`K_TRY_AGAIN` for pool exhaustion). Object WR creation/provider-post failures use release
-    cleanup in the shared-lease path; provider-level concurrent post safety is delegated to the URMA implementation.
-    Capacity validation should count unique Jetty registry identities: retiring-to-pending transitions can transiently
-    represent one Jetty in both counters, so summing active+retiring+pending is not a stable instantaneous assertion.
+    cleanup in the shared-lease path. Same-Jetty concurrent post safety remains a provider contract; datasystem's gate
+    specifically excludes post/modify and post/delete overlap.
   - URMA receive-side Jetty reuse is process-level: `UrmaResource::GetOrCreateSharedRecvJetty()` lazily creates the
-    single RECV Jetty/JFR published by TCP handshake responses, and `UrmaResource::Clear()` owns shutdown cleanup.
+    single RECV Jetty/JFR published by TCP handshake responses. Jetty role is immutable, so RECV async-event retirement
+    does not enter the send pool or trigger send-pool refill. Shutdown closes Jetty admission before stopping the poll
+    thread; non-converged provider resources are retained fail-closed rather than implicitly deleted.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available

@@ -250,6 +250,8 @@ private:
         uint64_t lastLogTimeMs{ 0 };
         std::vector<std::string> successKeys;
         std::vector<std::string> failedKeys;
+        uint64_t tryAgainCount{ 0 };
+        uint64_t notReadyCount{ 0 };
     };
 
     struct EvictionTraceAggregator {
@@ -417,6 +419,12 @@ private:
     void DrainPrimaryEndLifeTasks();
 
     /**
+     * @brief Called when a drain worker finds the queue empty: decrements the active
+     *        worker count and restarts a worker if the queue became non-empty meanwhile.
+     */
+    void OnDrainWorkerIdle();
+
+    /**
      * @brief Pop all currently queued primary end-life tasks as a drain batch.
      * @return A batch of queued primary end-life tasks.
      */
@@ -426,7 +434,7 @@ private:
      * @brief Group primary end-life tasks by current master and process each master batch.
      * @param[in] tasks The tasks popped from the primary end-life queue.
      */
-    void ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks);
+    void ProcessPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks);
 
     /**
      * @brief Process one master batch by deleting remote metadata before local object erase.
@@ -502,6 +510,21 @@ private:
      * @return Status of local erase.
      */
     Status DeletePrimaryEndLifeLocal(const PrimaryEndLifeCandidate &candidate);
+
+    /**
+     * @brief Re-acquire W-lock after the master RPC window, re-validate version, and refresh
+     *        candidate.entry for the local Erase in Phase 2.
+     * @param[in,out] candidate The candidate to re-lock; entry is refreshed from the table.
+     * @return K_OK on success; K_NOT_FOUND if version changed or object erased; K_TRY_AGAIN if
+     *         TryWLock retries exhausted.
+     */
+    Status ReacquireAndValidateForLocalDelete(PrimaryEndLifeCandidate &candidate);
+
+    /**
+     * @brief Phase 2 per-candidate: re-acquire WLock and perform local Erase.
+     */
+    void ProcessPrimaryEndLifeLocalErase(std::vector<PrimaryEndLifeCandidate> &candidates, Status &rc,
+                                         std::unordered_set<std::string> &failedKeys);
 
     /**
      * @brief Get the memory release size for a locked primary end-life candidate.
@@ -638,10 +661,14 @@ private:
     std::weak_ptr<AsyncSendManager> asyncSendManager_{};
     std::mutex primaryEndLifeMutex_;
     std::unordered_map<std::string, uint64_t> pendingPrimaryEndLifeObjects_;
+    std::atomic<uint64_t> primaryEndLifePendingFullCount_{ 0 };
     // Tracks metadata-deleted objects whose local cleanup failed and must be retried locally.
     std::unordered_map<std::string, uint64_t> metaDeletedPrimaryEndLifeObjects_;
     std::deque<PrimaryEndLifeTask> primaryEndLifeQueue_;
-    bool primaryEndLifeDrainRunning_{ false };
+    // Count of drain workers currently running (guarded by primaryEndLifeMutex_).
+    // Replaces the single-task primaryEndLifeDrainRunning_ flag so up to
+    // PRIMARY_END_LIFE_THREAD_NUM workers can drain the end-life queue concurrently.
+    int activeDrainWorkers_{ 0 };
     friend class ::datasystem::ut::SpillEvictionTest;
 };
 

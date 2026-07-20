@@ -415,7 +415,6 @@ Status EtcdWatch::WatchEvents()
             ShutdownEtcd();
             return rc;
         }
-        std::this_thread::sleep_for(milliseconds(100));
     } while (!shuttingDown_);
 
     // Shutdown the stream and cq

@@ -65,17 +65,21 @@ constexpr uint32_t MASTER_TASK_THREAD_NUM = 8;
 
 constexpr uint32_t SPILL_EVICT_THREAD_NUM = 1;
 constexpr uint32_t MEM_EVICT_THREAD_NUM = 1;
-constexpr uint32_t PRIMARY_END_LIFE_THREAD_NUM = 1;
+// Number of concurrent drain workers for primary end-life tasks. End-life involves
+// master RPC (DeleteAllCopyMeta) which is the eviction throughput bottleneck under
+// high write load (issue #750). Multiple workers drain the queue in parallel so the
+// pending set (limit 64) turns over fast enough to keep up with EvictionTask.
+constexpr uint32_t PRIMARY_END_LIFE_THREAD_NUM = 4;
 
 namespace datasystem {
 namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 1;
 static constexpr int BATCH_DELETE_META_THRESHOLD = 300;
 static constexpr int BATCH_DELETE_META_MAX_DELAY_MS = 10;
-static constexpr size_t PRIMARY_END_LIFE_PENDING_LIMIT = 64;
-static constexpr size_t PRIMARY_END_LIFE_BATCH_LIMIT = PRIMARY_END_LIFE_PENDING_LIMIT;
+static constexpr size_t PRIMARY_END_LIFE_PENDING_LIMIT = 1024;
+static constexpr size_t PRIMARY_END_LIFE_BATCH_LIMIT = 64;
 static constexpr int PRIMARY_END_LIFE_BATCH_MAX_DELAY_MS = 10;
-static constexpr int64_t PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS = 5 * SECS_TO_MS;
+static constexpr int64_t PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS = 3000;
 static constexpr uint32_t PRIMARY_END_LIFE_LOCK_RETRY_TIMES = 3;
 static constexpr int PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS = 1;
 
@@ -117,11 +121,8 @@ WorkerOcEvictionManager::EvictionTraceAggregator::~EvictionTraceAggregator()
 
 void WorkerOcEvictionManager::EvictionTraceAggregator::Add(const EvictionTrace &trace)
 {
-    if (trace.rc.GetCode() == K_TRY_AGAIN || trace.rc.GetCode() == K_NOT_READY) {
-        return;
-    }
     auto elapsed = trace.timer.ElapsedMilliSecond();
-    if (elapsed > 1 || trace.rc.IsError()) {
+    auto buildTraceLog = [&trace, elapsed]() {
         auto actionName = GetActionName(trace.action);
         std::stringstream ss;
         ss << "[TaskId " << trace.taskId << "] ";
@@ -134,12 +135,28 @@ void WorkerOcEvictionManager::EvictionTraceAggregator::Add(const EvictionTrace &
             ss << "spill cost " << trace.spillCost << " ms, ";
         }
         ss << "status:" << (trace.rc.IsOk() ? "OK" : trace.rc.GetMsg());
-        LOG(INFO) << ss.str();
-    }
+        return ss.str();
+    };
+
     auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
     auto &summary = summaries_[trace.action];
     if (summary.lastLogTimeMs == 0) {
         summary.lastLogTimeMs = nowMs;
+    }
+    auto statusCode = trace.rc.GetCode();
+    if (statusCode == K_TRY_AGAIN || statusCode == K_NOT_READY) {
+        if (statusCode == K_TRY_AGAIN) {
+            summary.tryAgainCount += trace.objectKeySizeMap.size();
+        } else {
+            summary.notReadyCount += trace.objectKeySizeMap.size();
+        }
+        LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2) << buildTraceLog();
+        FlushIfNeeded(trace.action, summary, nowMs);
+        return;
+    }
+
+    if (elapsed > 1 || trace.rc.IsError()) {
+        LOG(INFO) << buildTraceLog();
     }
     if (!trace.objectKeySizeMap.empty()) {
         auto &keys = trace.rc.IsOk() ? summary.successKeys : summary.failedKeys;
@@ -160,6 +177,8 @@ void WorkerOcEvictionManager::EvictionTraceAggregator::Add(const EvictionTrace &
 void WorkerOcEvictionManager::EvictionTraceAggregator::FlushIfNeeded(Action action, ActionSummary &summary,
                                                                      uint64_t nowMs)
 {
+    // Exclude tryAgainCount and notReadyCount from keyCount to avoid
+    // frequent summary log flushing caused by transient failures.
     auto keyCount = summary.successKeys.size() + summary.failedKeys.size();
     if (keyCount >= EVICTION_TRACE_SUMMARY_THRESHOLD
         || nowMs - summary.lastLogTimeMs >= EVICTION_TRACE_SUMMARY_INTERVAL_MS) {
@@ -176,9 +195,12 @@ void WorkerOcEvictionManager::EvictionTraceAggregator::Flush(Action action, Acti
               << ", success key count: " << summary.successKeys.size()
               << ", success keys: " << JoinKeys(summary.successKeys)
               << ", failed key count: " << summary.failedKeys.size()
-              << ", failed keys: " << JoinKeys(summary.failedKeys);
+              << ", failed keys: " << JoinKeys(summary.failedKeys)
+              << ", try again count: " << summary.tryAgainCount << ", not ready count: " << summary.notReadyCount;
     summary.successKeys.clear();
     summary.failedKeys.clear();
+    summary.tryAgainCount = 0;
+    summary.notReadyCount = 0;
     summary.lastLogTimeMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
 }
 
@@ -566,7 +588,14 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
             flushDeletedObjects();
         }
         if (rc.IsError()) {
-            evictFailedIds.emplace_back(candidateId, READD_COUNTER);
+            // K_TRY_AGAIN (e.g. primary end-life queue full) is a transient capacity issue;
+            // Transient failures like end-life queue-full (K_TRY_AGAIN) use Q1 for fast
+            // retry since the condition clears quickly. Persistent errors (e.g. master
+            // RPC failure) use READD_COUNTER=5 as backoff to avoid a tight retry loop.
+            // With push_back the object lands at the tail, so the 5-round backoff
+            // (~list_size / write_rate per round) is a reasonable delay (issue #750).
+            uint8_t counter = (rc.GetCode() == StatusCode::K_TRY_AGAIN) ? Q1 : READD_COUNTER;
+            evictFailedIds.emplace_back(candidateId, counter);
         }
         auto spilledSize = ReleaseSpillFutures(spillTasks, evictFailedIds, false);
         pendingSpillSize -= std::min(pendingSpillSize, spilledSize);
@@ -719,6 +748,14 @@ Status WorkerOcEvictionManager::ReservePrimaryEndLifeTask(PrimaryEndLifeTask &ta
     }
     if (pendingPrimaryEndLifeObjects_.size() > PRIMARY_END_LIFE_PENDING_LIMIT) {
         pendingPrimaryEndLifeObjects_.erase(iter);
+        primaryEndLifePendingFullCount_.fetch_add(1, std::memory_order_relaxed);
+        LOG_EVERY_T(WARNING, LOG_TIME_LIMIT_LEVEL2)
+            << "Primary end-life pending queue is full, full count since last log: "
+            << primaryEndLifePendingFullCount_.exchange(0, std::memory_order_relaxed)
+            << ", pending size: " << pendingPrimaryEndLifeObjects_.size()
+            << ", queue size: " << primaryEndLifeQueue_.size() << ", active drain workers: " << activeDrainWorkers_
+            << ", limit: " << PRIMARY_END_LIFE_PENDING_LIMIT << ", rejected object: " << task.objectKey;
+
         RETURN_STATUS(K_TRY_AGAIN, "Primary end-life pending queue is full.");
     }
     accepted = true;
@@ -727,22 +764,37 @@ Status WorkerOcEvictionManager::ReservePrimaryEndLifeTask(PrimaryEndLifeTask &ta
 
 Status WorkerOcEvictionManager::EnqueuePrimaryEndLifeTask(const PrimaryEndLifeTask &task)
 {
-    std::unique_lock<std::mutex> lock(primaryEndLifeMutex_);
-    try {
-        primaryEndLifeQueue_.emplace_back(task);
-    } catch (const std::exception &e) {
-        RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Enqueue primary end-life task failed: %s", e.what()));
+    bool needStartWorker = false;
+    {
+        std::unique_lock<std::mutex> lock(primaryEndLifeMutex_);
+        try {
+            primaryEndLifeQueue_.emplace_back(task);
+        } catch (const std::exception &e) {
+            RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Enqueue primary end-life task failed: %s", e.what()));
+        }
+        // Spawn a new drain worker if the active count is below the thread limit. Existing
+        // workers loop on PopPrimaryEndLifeTasks and will consume the queue, but spawning up
+        // to PRIMARY_END_LIFE_THREAD_NUM workers lets end-life batches run in parallel.
+        if (activeDrainWorkers_ < static_cast<int>(PRIMARY_END_LIFE_THREAD_NUM)) {
+            activeDrainWorkers_++;
+            needStartWorker = true;
+        }
     }
-    if (!primaryEndLifeDrainRunning_) {
+    if (needStartWorker) {
         try {
             auto drainTraceID = Trace::Instance().GetTraceID();
             primaryEndLifeThreadPool_->Execute([this, drainTraceID]() {
                 TraceGuard traceGuard = Trace::Instance().SetTraceNewID(drainTraceID);
                 DrainPrimaryEndLifeTasks();
             });
-            primaryEndLifeDrainRunning_ = true;
         } catch (const std::exception &e) {
-            primaryEndLifeQueue_.pop_back();
+            std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+            activeDrainWorkers_--;
+            // The task stays in primaryEndLifeQueue_ and will be drained by the next
+            // worker (queue is non-empty, so the next Enqueue or the restart-guard in
+            // DrainPrimaryEndLifeTasks spawns one). Do NOT pop_back: between emplace_back
+            // (earlier lock) and here the lock was released, so another thread may have
+            // appended its own task at the back - pop_back would discard that task.
             RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Submit primary end-life task failed: %s", e.what()));
         }
     }
@@ -791,9 +843,49 @@ void WorkerOcEvictionManager::DrainPrimaryEndLifeTasks()
     while (true) {
         auto tasks = PopPrimaryEndLifeTasks();
         if (tasks.empty()) {
+            OnDrainWorkerIdle();
             return;
         }
-        ProcessPrimaryEndLifeTasks(std::move(tasks));
+        try {
+            ProcessPrimaryEndLifeTasks(tasks);
+        } catch (const std::exception &e) {
+            // ProcessPrimaryEndLifeTasks takes a const&, so tasks is still intact.
+            // Re-add the batch so pendingPrimaryEndLifeObjects_ entries that were not
+            // yet processed by FinishPrimaryEndLifeTask are cleared and the objects
+            // are returned to the eviction list for later retry.
+            LOG(ERROR) << FormatString("ProcessPrimaryEndLifeTasks exception: %s", e.what());
+            ReaddPrimaryEndLifeTasks(tasks);
+        }
+    }
+}
+
+void WorkerOcEvictionManager::OnDrainWorkerIdle()
+{
+    // Decrement the active count, then guard against the race where a new task was
+    // enqueued between Pop and the count decrement: if the queue is non-empty but no
+    // worker remains, restart one. Extracted from DrainPrimaryEndLifeTasks to keep
+    // nesting depth within G.FUN.01-CPP limits.
+    bool needRestart = false;
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        activeDrainWorkers_--;
+        if (!primaryEndLifeQueue_.empty() && activeDrainWorkers_ == 0) {
+            activeDrainWorkers_++;
+            needRestart = true;
+        }
+    }
+    if (needRestart) {
+        try {
+            auto drainTraceID = Trace::Instance().GetTraceID();
+            primaryEndLifeThreadPool_->Execute([this, drainTraceID]() {
+                TraceGuard traceGuard = Trace::Instance().SetTraceNewID(drainTraceID);
+                DrainPrimaryEndLifeTasks();
+            });
+        } catch (const std::exception &e) {
+            LOG(ERROR) << FormatString("Restart drain worker failed: %s", e.what());
+            std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+            activeDrainWorkers_--;
+        }
     }
 }
 
@@ -801,7 +893,6 @@ std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> WorkerOcEvictionManager
 {
     std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
     if (primaryEndLifeQueue_.empty()) {
-        primaryEndLifeDrainRunning_ = false;
         return {};
     }
     auto batchSize = std::min(primaryEndLifeQueue_.size(), PRIMARY_END_LIFE_BATCH_LIMIT);
@@ -814,8 +905,9 @@ std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> WorkerOcEvictionManager
     return tasks;
 }
 
-void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(std::vector<PrimaryEndLifeTask> tasks)
+void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(const std::vector<PrimaryEndLifeTask> &tasks)
 {
+    auto traceGuard = Trace::Instance().SetTraceUUID();
     std::vector<std::string> objectKeys;
     std::unordered_map<std::string, PrimaryEndLifeTask> taskByKey;
     objectKeys.reserve(tasks.size());
@@ -876,7 +968,8 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
     if (candidates.empty()) {
         return;
     }
-    Raii unlockRaii([&candidates] { UnlockPrimaryEndLifeCandidates(candidates); });
+    // Release W-lock before the master RPC so concurrent Get RLocks are not blocked for the
+    // RPC duration. Drain-vs-drain exclusion uses pendingPrimaryEndLifeObjects_ + single-thread pool.
     std::vector<PrimaryEndLifeCandidate> needDeleteMetaCandidates;
     needDeleteMetaCandidates.reserve(candidates.size());
     for (const auto &candidate : candidates) {
@@ -884,29 +977,80 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
             needDeleteMetaCandidates.emplace_back(candidate);
         }
     }
+    // Phase 1: Unlock → master RPC (unlocked).
+    UnlockPrimaryEndLifeCandidates(candidates);
     std::unordered_set<std::string> failedKeys;
     Status rc;
+    double elapsedMs = 0;
     if (!needDeleteMetaCandidates.empty()) {
+        Timer timer;
         rc = DeleteAllCopyMetaForPrimaryEndLife(masterAddr, needDeleteMetaCandidates, failedKeys);
+        elapsedMs = timer.ElapsedMilliSecond();
     }
-    if (rc.IsError()) {
-        LOG(WARNING) << FormatString("Primary end-life DeleteAllCopyMeta failed, count %zu, status: %s.",
+    const double elapsedLimit = 3;
+    if (rc.IsError() || elapsedMs > elapsedLimit) {
+        LOG(WARNING) << FormatString("Primary end-life DeleteAllCopyMeta cost %f ms, count %zu, status: %s.", elapsedMs,
                                      needDeleteMetaCandidates.size(), rc.ToString());
     }
-    for (const auto &candidate : candidates) {
+    // Phase 2: Re-acquire WLock per candidate for local Erase only.
+    ProcessPrimaryEndLifeLocalErase(candidates, rc, failedKeys);
+}
+
+void WorkerOcEvictionManager::ProcessPrimaryEndLifeLocalErase(std::vector<PrimaryEndLifeCandidate> &candidates,
+                                                              Status &rc, std::unordered_set<std::string> &failedKeys)
+{
+    for (auto &candidate : candidates) {
         PrimaryEndLifeTask finishTask = candidate.task;
         bool failed = !candidate.task.metaDeleted && (rc.IsError() || failedKeys.count(candidate.task.objectKey) > 0);
         if (!failed) {
-            bool removeAsyncSend = candidate.entry != nullptr && (*candidate.entry)->IsWriteBackL2CacheEvictMode();
-            Status deleteRc = DeletePrimaryEndLifeLocal(candidate);
-            failed = deleteRc.IsError();
-            finishTask.metaDeleted = failed;
-            if (!failed && removeAsyncSend) {
-                RemovePrimaryEndLifeAsyncSend(candidate.task.objectKey);
+            Status reacquireRc = ReacquireAndValidateForLocalDelete(candidate);
+            if (reacquireRc.IsError()) {
+                candidate.entry.reset();
+                failed = true;
+                finishTask.metaDeleted = true;
+            } else {
+                Raii wUnlockRaii([&candidate]() {
+                    if (candidate.entry != nullptr) {
+                        candidate.entry->WUnlock();
+                    }
+                });
+                bool removeAsyncSend = candidate.entry != nullptr && (*candidate.entry)->IsWriteBackL2CacheEvictMode();
+                Status deleteRc = DeletePrimaryEndLifeLocal(candidate);
+                failed = deleteRc.IsError();
+                finishTask.metaDeleted = failed;
+                if (!failed && removeAsyncSend) {
+                    RemovePrimaryEndLifeAsyncSend(candidate.task.objectKey);
+                }
             }
         }
         FinishPrimaryEndLifeTask(finishTask, failed);
     }
+}
+
+Status WorkerOcEvictionManager::ReacquireAndValidateForLocalDelete(PrimaryEndLifeCandidate &candidate)
+{
+    // Re-lookup entry from table (may have been erased during RPC window).
+    std::shared_ptr<SafeObjType> entry;
+    RETURN_IF_NOT_OK(objectTable_->Get(candidate.task.objectKey, entry));
+    // TryWLock with bounded retry, matching TryLockPrimaryEndLifeTask's policy.
+    Status rc;
+    for (uint32_t i = 0; i < PRIMARY_END_LIFE_LOCK_RETRY_TIMES; ++i) {
+        rc = entry->TryWLock();
+        if (rc.IsOk() || rc.GetCode() != K_TRY_AGAIN) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS));
+    }
+    RETURN_IF_NOT_OK(rc);
+    // If version changed during the RPC window, skip local Erase.
+    if ((*entry)->GetCreateTime() != candidate.task.version) {
+        entry->WUnlock();
+        RETURN_STATUS(StatusCode::K_NOT_FOUND,
+                      FormatString("[ObjectKey %s] Version changed during end-life RPC window, skip local erase.",
+                                   candidate.task.objectKey));
+    }
+    candidate.entry = entry;
+    return Status::OK();
 }
 
 Status WorkerOcEvictionManager::PreparePrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeTask> &tasks,
@@ -1106,7 +1250,9 @@ uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseSize(const SafeObjType
 void WorkerOcEvictionManager::UnlockPrimaryEndLifeCandidates(const std::vector<PrimaryEndLifeCandidate> &candidates)
 {
     for (const auto &candidate : candidates) {
-        candidate.entry->WUnlock();
+        if (candidate.entry != nullptr) {
+            candidate.entry->WUnlock();
+        }
     }
 }
 
@@ -1211,6 +1357,7 @@ size_t WorkerOcEvictionManager::ReleaseSpillFutures(std::unordered_map<std::stri
         Status spillRc = result.rc;
         spilledSize += trace->objectSize;
         if (spillRc.IsError()) {
+            // Transient spill lock contention uses Q1, persistent spill failure uses READD.
             auto counter = spillRc.GetCode() == StatusCode::K_TRY_AGAIN ? Q1 : READD_COUNTER;
             evictFailedIds.emplace_back(objectKey, counter);
         }
@@ -1293,7 +1440,7 @@ void WorkerOcEvictionManager::EvictSpilledObjects(uint64_t objectSize)
     }
 
     LOG(INFO) << "Spill eviction list size after evict:" << spillEvictionList.Size()
-              << ", failed size:" << evictFailedIds.size() << ", force compact: " << forceCompact;
+              << ", need retry size:" << evictFailedIds.size() << ", force compact: " << forceCompact;
 }
 
 bool WorkerOcEvictionManager::IsSpilledObjectEvictable(const std::shared_ptr<SafeObjType> &entry)
@@ -1360,8 +1507,9 @@ Status WorkerOcEvictionManager::GetAndLockEntry(const std::string &objectKey, st
         LOG(WARNING) << FormatString("[ObjectKey %s] Object TryWLock failed, %s.", objectKey, rc.ToString());
         Status eraseRc = memEvictionList_.Erase(objectKey);
         if (rc.GetCode() == K_TRY_AGAIN && eraseRc.IsOk()) {
-            // If other thread are using this object, skip it and re-add into EvictionList later.
-            uint8_t counter = READD_COUNTER;
+            // Transient lock contention: re-add with Q1 so the object does not gain 5x clock
+            // protection that would invert LRU order (issue #750).
+            uint8_t counter = Q1;
             evictFailedIds.emplace_back(objectKey, counter);
         }
     }
@@ -1482,17 +1630,15 @@ bool EvictWhenMemoryExceedThrehold(const std::string &keyInfo, uint64_t needSize
         maxAvailableMemorySize = std::min(
             datasystem::memory::Allocator::Instance()->GetMaxMemorySize(type, memCacheType),
             (datasystem::memory::Allocator::Instance()->GetTotalRealMemoryFree(memCacheType) + realMemoryUsed));
-        static uint64_t memThresInitVal =
+        memThreshold =
             getMemThresInitVal(maxAvailableMemorySize, FLAGS_eviction_reserve_mem_threshold_mb);
-        memThreshold = memThresInitVal;
     } else if (type == ServiceType::STREAM) {
         realMemoryUsed =
             datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage(ServiceType::STREAM) + realObjMemoryUsed;
         memOccupied = realMemoryUsed + needSize;
         maxAvailableMemorySize = datasystem::memory::Allocator::Instance()->GetMaxMemoryLimit();
-        static uint64_t memThresInitVal =
+        memThreshold =
             getMemThresInitVal(maxAvailableMemorySize, FLAGS_eviction_reserve_mem_threshold_mb);
-        memThreshold = memThresInitVal;
     }
     VLOG(1) << FormatString("Allocate memory for %s, size = %lu, memOccupied = %lu, memThreshold = %lu", keyInfo,
                             needSize, memOccupied, memThreshold);

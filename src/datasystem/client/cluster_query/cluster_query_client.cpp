@@ -207,7 +207,7 @@ Status ClusterQueryClient::Impl::InitEtcd()
     etcdStore_ = std::make_unique<EtcdStore>(options_.etcdAddress);
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(etcdStore_->CreateTableWithExactPrefix(keys_->MembershipTable(),
-                                                            EtcdMembershipTable(keys_->ClusterName())));
+                                                            keys_->EtcdMembershipTablePrefix()));
     return etcdStore_->CreateTableWithExactPrefix(keys_->TopologyTable(), keys_->TopologyTable());
 }
 

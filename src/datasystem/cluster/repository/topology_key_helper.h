@@ -12,11 +12,12 @@
  */
 
 /**
- * Description: Validated cluster topology keyspace builder.
+ * Description: Validated cluster topology keyspace and ETCD watch-key classifier.
  */
 #ifndef DATASYSTEM_CLUSTER_REPOSITORY_TOPOLOGY_KEY_HELPER_H
 #define DATASYSTEM_CLUSTER_REPOSITORY_TOPOLOGY_KEY_HELPER_H
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -25,7 +26,19 @@
 namespace datasystem::cluster {
 
 /**
- * @brief The only builder for `/datasystem[/cluster_name]/...` topology tables.
+ * @brief Schema kind for one raw ETCD topology watch key.
+ */
+enum class TopologyEtcdKeyKind : uint8_t {
+    UNKNOWN = 0,
+    TOPOLOGY,
+    LOCAL_NOTIFY,
+    MEMBERSHIP,
+    MIGRATE_TASK,
+    DELETE_TASK
+};
+
+/**
+ * @brief Validated topology logical keyspace and ETCD compatibility layout.
  */
 class TopologyKeyHelper final {
 public:
@@ -79,6 +92,21 @@ public:
     const std::string &MembershipTable() const noexcept;
 
     /**
+     * @brief Return the legacy-compatible physical ETCD membership table prefix.
+     * @return Stable physical prefix without a trailing slash or member address.
+     */
+    const std::string &EtcdMembershipTablePrefix() const noexcept;
+
+    /**
+     * @brief Classify one raw physical key from the unified ETCD watch.
+     * @param[in] physicalKey Physical ETCD key including its table prefix.
+     * @param[in] localAddress Canonical local Worker address used for the exact notify match.
+     * @return Backend-schema key kind, or UNKNOWN for a key outside the registered topology keyspace.
+     */
+    TopologyEtcdKeyKind ClassifyEtcdWatchKey(const std::string &physicalKey,
+                                             const std::string &localAddress) const noexcept;
+
+    /**
      * @brief Return the singleton topology relative key.
      * @return Stable empty-key reference.
      */
@@ -121,6 +149,7 @@ private:
     std::string deleteTaskTable_;
     std::string notifyTable_;
     std::string membershipTable_;
+    std::string etcdMembershipTablePrefix_;
 };
 
 }  // namespace datasystem::cluster

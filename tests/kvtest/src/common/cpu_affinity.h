@@ -1,10 +1,13 @@
 #pragma once
+#include <chrono>
 #include <iostream>
+#include <random>
 #include <sched.h>
 #include <thread>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 // HAS_LIBNUMA may be defined by CMake (preferred) or auto-detected below.
 // Always include <numa.h> when HAS_LIBNUMA is set, regardless of whether it
@@ -69,17 +72,40 @@ static bool ApplyNumaAffinity(int node) {
     if (numa_available() < 0) return false;
     return numa_run_on_node(node) == 0;
 }
+
+// Pick a NUMA node at random from the configured nodes and bind the calling
+// process to it. Returns true on success. Falls back to the cpu affinity
+// path (caller's responsibility) on any failure: libnuma missing, no nodes,
+// or numa_run_on_node failure. No warning emitted per design choice.
+static bool ApplyRandomNumaAffinity() {
+    if (numa_available() < 0) return false;
+    int nodeCount = numa_num_configured_nodes();
+    if (nodeCount <= 0) return false;
+    unsigned seed = static_cast<unsigned>(
+        std::chrono::steady_clock::now().time_since_epoch().count()) ^
+        static_cast<unsigned>(getpid());
+    std::mt19937 gen(seed);
+    int chosen = static_cast<int>(gen() % static_cast<unsigned>(nodeCount));
+    return numa_run_on_node(chosen) == 0;
+}
 #endif
 
 // Unified affinity application from config values. Shared by RunServerMode
 // and ChildProcessMain to avoid duplicating the NUMA-then-CPU fallback logic.
-static void ApplyAffinityFromConfig(const std::string &cpuAffinity, int numaNode) {
+// randomNumaNode: when true, pick a NUMA node at random (mutually exclusive
+// with numaNode >= 0; LoadConfig enforces this).
+static void ApplyAffinityFromConfig(const std::string &cpuAffinity, int numaNode,
+                                    bool randomNumaNode = false) {
 #ifdef HAS_LIBNUMA
-    if (numaNode >= 0 && ApplyNumaAffinity(numaNode)) {
+    if (randomNumaNode && ApplyRandomNumaAffinity()) {
+        return;
+    }
+    if (!randomNumaNode && numaNode >= 0 && ApplyNumaAffinity(numaNode)) {
         return;
     }
 #else
     (void)numaNode;
+    (void)randomNumaNode;
 #endif
 
     std::vector<int> cpus;

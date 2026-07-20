@@ -88,11 +88,29 @@ bool WaitForIdleSendLane(UrmaResource &resource)
     });
 }
 
+bool IsUrmaFaultTestEnvAvailable()
+{
+#ifdef USE_URMA_MOCK
+    return true;
+#else
+    return std::getenv("DS_URMA_DEV_NAME") != nullptr;
+#endif
+}
+
 std::shared_ptr<UrmaConnection> MakeTestConnection()
 {
     UrmaJfrInfo info;
     info.uniqueInstanceId = "urma-send-jetty-fault-test";
+    info.localAddress = HostPort("127.0.0.1", 29100);
     return std::make_shared<UrmaConnection>(std::unique_ptr<UrmaTargetJetty>(), info);
+}
+
+void ExpectStatusContains(const Status &status, const std::vector<std::string> &tokens)
+{
+    const auto statusText = status.ToString();
+    for (const auto &token : tokens) {
+        EXPECT_NE(statusText.find(token), std::string::npos) << statusText;
+    }
 }
 
 void ExpectReplacementAfterRetire(UrmaResource &resource, const std::shared_ptr<UrmaJetty> &retiredJetty)
@@ -113,7 +131,7 @@ size_t GetRegisteredJettyCount(UrmaResource &resource)
 
 TEST(UrmaSendJettyFaultTest, PoolExhaustionReturnsTryAgainFromManagerAcquirePath)
 {
-    if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+    if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 
@@ -128,6 +146,8 @@ TEST(UrmaSendJettyFaultTest, PoolExhaustionReturnsTryAgainFromManagerAcquirePath
     urma_target_jetty_t *targetJetty = nullptr;
     const auto status = manager.AcquireSendLaneFromConnection(MakeTestConnection(), unavailableJetty, targetJetty);
     EXPECT_EQ(status.GetCode(), K_TRY_AGAIN);
+    ExpectStatusContains(status, { "srcAddress=", "targetAddress=127.0.0.1:29100",
+                                   "remoteInstanceId=urma-send-jetty-fault-test" });
     EXPECT_EQ(unavailableJetty, nullptr);
     EXPECT_EQ(targetJetty, nullptr);
     resource.ReleaseJetty(heldJetty);
@@ -135,7 +155,7 @@ TEST(UrmaSendJettyFaultTest, PoolExhaustionReturnsTryAgainFromManagerAcquirePath
 
 TEST(UrmaSendJettyFaultTest, CqeErrorRetiresAndRefillsJetty)
 {
-    if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+    if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 
@@ -167,7 +187,7 @@ TEST(UrmaSendJettyFaultTest, CqeErrorRetiresAndRefillsJetty)
 
 TEST(UrmaSendJettyFaultTest, RepeatedCqeStatus9RefillsWithoutExceedingUniqueJettyHeadroom)
 {
-    if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+    if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 
@@ -192,8 +212,8 @@ TEST(UrmaSendJettyFaultTest, RepeatedCqeStatus9RefillsWithoutExceedingUniqueJett
         EXPECT_FALSE(failedJetty->IsValid());
         resource.ReleaseJetty(failedJetty);
         ExpectReplacementAfterRetire(resource, failedJetty);
-        // Count unique registry entries, not pool+retiring+pending counters: retiring-to-pending can transiently
-        // represent one Jetty in both counters.
+        // Count unique registry identities. The implementation now installs one pending-retire record
+        // synchronously, so a retired Jetty is not double-counted as both "retiring" and "pending".
         EXPECT_LE(GetRegisteredJettyCount(resource),
                   FLAGS_urma_send_jetty_lane_pool_size + FLAGS_urma_send_jetty_lane_refill_extra_size);
     }
@@ -201,7 +221,7 @@ TEST(UrmaSendJettyFaultTest, RepeatedCqeStatus9RefillsWithoutExceedingUniqueJett
 
 TEST(UrmaSendJettyFaultTest, NonRecoverableCqeDoesNotRecreateOrLeakLane)
 {
-    if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+    if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 
@@ -216,7 +236,7 @@ TEST(UrmaSendJettyFaultTest, NonRecoverableCqeDoesNotRecreateOrLeakLane)
     auto lease = std::make_shared<UrmaSendLaneLease>(jetty);
     constexpr uint64_t kRequestId = 3001;
     ASSERT_TRUE(manager.CreateEvent(kRequestId, MakeTestConnection(), lease, "non-recoverable-cqe", 0,
-                                    UrmaEvent::OperationType::WRITE)
+                                    UrmaEvent::OperationType::WRITE, nullptr)
                     .IsOk());
     ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
 
@@ -257,7 +277,7 @@ TEST(UrmaSendJettyFaultTest, NonRecoverableCqeDoesNotRecreateOrLeakLane)
 
 TEST(UrmaSendJettyFaultTest, AsyncJettyErrorRetiresAndRefillsJetty)
 {
-    if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+    if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 
@@ -281,7 +301,7 @@ TEST(UrmaSendJettyFaultTest, AsyncJettyErrorRetiresAndRefillsJetty)
 
 TEST(UrmaSendJettyFaultTest, WaitTimeoutRetiresAndRefillsJetty)
 {
-    if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+    if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 
@@ -295,7 +315,7 @@ TEST(UrmaSendJettyFaultTest, WaitTimeoutRetiresAndRefillsJetty)
     auto lease = std::make_shared<UrmaSendLaneLease>(timedOutJetty);
     constexpr uint64_t kRequestId = 1002;
     ASSERT_TRUE(manager.CreateEvent(kRequestId, MakeTestConnection(), lease, "fault-test", 0,
-                                    UrmaEvent::OperationType::WRITE)
+                                    UrmaEvent::OperationType::WRITE, nullptr)
                     .IsOk());
     // Seal before waiting, matching the submit path: the timeout then becomes the lease's final retirement action.
     ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
@@ -306,9 +326,38 @@ TEST(UrmaSendJettyFaultTest, WaitTimeoutRetiresAndRefillsJetty)
     ExpectReplacementAfterRetire(resource, timedOutJetty);
 }
 
+TEST(UrmaSendJettyFaultTest, InFlightWaitTimeoutStatusIncludesPeerContext)
+{
+    if (!IsUrmaFaultTestEnvAvailable()) {
+        GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
+    }
+
+    auto &manager = UrmaManager::Instance();
+    ASSERT_TRUE(InitManagerForFaultTest(manager).IsOk());
+    auto &resource = *manager.urmaResource_;
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+
+    std::shared_ptr<UrmaJetty> timedOutJetty;
+    ASSERT_TRUE(resource.AcquireJetty(timedOutJetty).IsOk());
+    auto lease = std::make_shared<UrmaSendLaneLease>(timedOutJetty);
+    constexpr uint64_t kRequestId = 1003;
+    constexpr uint64_t kDataSize = 4096;
+    ASSERT_TRUE(manager.CreateEvent(kRequestId, MakeTestConnection(), lease, "127.0.0.1:29100", kDataSize,
+                                    UrmaEvent::OperationType::WRITE, nullptr)
+                    .IsOk());
+    ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
+    const auto status = manager.WaitToFinish(kRequestId, 0);
+    EXPECT_EQ(status.GetCode(), K_URMA_WAIT_TIMEOUT);
+    ExpectStatusContains(status, { "requestId=1003", "srcAddress=", "targetAddress=127.0.0.1:29100",
+                                   "dataSize=4096", "op=WRITE" });
+    EXPECT_FALSE(timedOutJetty->IsValid());
+    resource.ReleaseJetty(timedOutJetty);
+    ExpectReplacementAfterRetire(resource, timedOutJetty);
+}
+
 TEST(UrmaSendJettyFaultTest, RepeatedWaitTimeoutsRefillWithoutExceedingUniqueJettyHeadroom)
 {
-    if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+    if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 
@@ -324,7 +373,7 @@ TEST(UrmaSendJettyFaultTest, RepeatedWaitTimeoutsRefillWithoutExceedingUniqueJet
         auto lease = std::make_shared<UrmaSendLaneLease>(timedOutJetty);
         const uint64_t requestId = 4000 + i;
         ASSERT_TRUE(manager.CreateEvent(requestId, MakeTestConnection(), lease, "fault-storm", 0,
-                                        UrmaEvent::OperationType::WRITE)
+                                        UrmaEvent::OperationType::WRITE, nullptr)
                         .IsOk());
         ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
         EXPECT_EQ(manager.WaitToFinish(requestId, -1).GetCode(), K_URMA_WAIT_TIMEOUT);
@@ -338,7 +387,7 @@ TEST(UrmaSendJettyFaultTest, RepeatedWaitTimeoutsRefillWithoutExceedingUniqueJet
 
 TEST(UrmaSendJettyFaultTest, RefillCreateFailuresKeepSurvivingLaneAndRecoverAutomatically)
 {
-    if (std::getenv("DS_URMA_DEV_NAME") == nullptr) {
+    if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
     }
 

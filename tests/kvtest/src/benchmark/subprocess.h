@@ -274,7 +274,7 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
     SLOG_INFO("Child process started, role=" << roleName << ", pid=" << getpid());
 
     // 1.5 Apply CPU/NUMA affinity (same logic as RunServerMode)
-    ApplyAffinityFromConfig(cfg.cpuAffinity, cfg.numaNode);
+    ApplyAffinityFromConfig(cfg.cpuAffinity, cfg.numaNode, cfg.randomNumaNode);
 
     // Disable SDK-internal thread pools. Benchmark children already use
     // RunPhaseMultiThread; nested SDK pools (ParallelFor, parallel memcpy)

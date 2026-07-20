@@ -139,10 +139,11 @@
     are rejected. Timeout keeps the gate closed and returns an explicit error so the external lifecycle manager can
     enforce final termination. Concurrent leavers cannot exchange objects after either member takes its drain snapshot.
   - tear down runtime services and service threads
-  - `WorkerOCServer` first drains business RPC ingress and then calls only `TopologyEngine::Shutdown(deadline)`. Engine
-    closes Coordinator ingress and the member-role event source, drains Reporter and Worker execution, then Runtime
-    stops Janitor/Controller and the Controller closes its role event source before Engine fully shuts down both
-    backends. Any timeout preserves the full dependency chain for a later retry; borrowed Store/Proxy
+  - `WorkerOCServer` first drains business RPC ingress and then calls only `TopologyEngine::Shutdown(deadline)`. In ETCD
+    mode Engine closes the Worker-owned Store's unified watch and keepalive once, drains Worker execution, and stops the
+    externally-fed Controller/Janitor before fully shutting down that Store once. Coordinator mode closes role-specific
+    event sources through its existing ingress/backend ownership. Any timeout preserves the full dependency chain for a
+    later retry; borrowed Store/Proxy
     and business callback owners outlive the Engine. The abnormal destructor path first stops Rebalance, NodeSelector,
     and Worker background threads. If bounded shutdown did not converge, it performs a final safe Engine join while
     metadata/service callback targets remain alive; it then shuts down the metadata/service borrowers, resets their

@@ -28,8 +28,9 @@ namespace datasystem::cluster {
 /**
  * @brief Own all in-process components of one cluster's Controller role.
  *
- * The Runtime borrows one role-exclusive backend and one planning algorithm. It does not own or fully shut down the
- * backend. Start is one-shot, while Stop may be retried after a deadline expires.
+ * The Runtime borrows one backend and one planning algorithm. A self-managed Controller owns its backend watch event
+ * source; an externally fed Controller owns only its dispatcher and state loop. It never fully shuts down the backend.
+ * Start is one-shot, while Stop may be retried after a deadline expires.
  */
 class TopologyControllerRuntime final {
 public:
@@ -72,8 +73,7 @@ public:
     /**
      * @brief Start the Controller and optional Janitor exactly once.
      * @return K_OK after both enabled components start; the original startup error otherwise.
-     * @note Controller Stop owns controller-role event-source shutdown; this Runtime never fully shuts down the
-     *       backend.
+     * @note Controller Stop closes a self-managed event source. External event-source ownership remains with Engine.
      */
     Status Start();
 
@@ -84,6 +84,13 @@ public:
      * @note A deadline error retains the Runtime and its borrowed dependencies for a later Stop retry.
      */
     Status Stop(std::chrono::steady_clock::time_point deadline);
+
+    /**
+     * @brief Submit one watch doorbell when the Controller uses an external event source.
+     * @param[in] event Backend event to consume.
+     * @return Controller ingress status.
+     */
+    Status SubmitCoordinationEvent(CoordinationEvent &&event);
 
     /**
      * @brief Return the Controller's existing no-IO diagnostic snapshot.

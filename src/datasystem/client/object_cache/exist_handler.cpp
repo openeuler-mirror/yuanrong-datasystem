@@ -59,6 +59,11 @@ bool IsExistConnectionError(const Status &rc)
            || rc.GetCode() == K_CLIENT_WORKER_DISCONNECT;
 }
 
+bool IsExistReroutableError(const Status &rc)
+{
+    return IsExistConnectionError(rc) || rc.GetCode() == K_NOT_READY;
+}
+
 int32_t GetExistConnectionProbeTimeoutMs(int32_t requestTimeoutMs)
 {
     return std::min(requestTimeoutMs, EXIST_CONNECTION_PROBE_TIMEOUT_MS);
@@ -366,7 +371,7 @@ Status ExistHandler::Run(const ExistHandlerRequest &request, std::vector<bool> &
     Status rc;
     for (int32_t rerouteRetries = 0; rerouteRetries <= EXIST_MAX_REROUTE_RETRY; ++rerouteRetries) {
         rc = RunSelectedWorkers(request, keyIndexes, exists);
-        if (rc.IsOk() || !IsExistConnectionError(rc) || rerouteRetries >= EXIST_MAX_REROUTE_RETRY) {
+        if (rc.IsOk() || !IsExistReroutableError(rc) || rerouteRetries >= EXIST_MAX_REROUTE_RETRY) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(EXIST_RETRY_BACKOFF_MS));
@@ -457,7 +462,7 @@ Status ExistHandler::ContinueOwnerGroupAfterResult(const Status &firstRc, const 
             batchExists = std::move(result.exists);
             continue;
         }
-        if (IsExistConnectionError(rc)) {
+        if (IsExistReroutableError(rc)) {
             UpdateRoutingState(work.worker, K_CLIENT_WORKER_DISCONNECT);
         }
         return rc;

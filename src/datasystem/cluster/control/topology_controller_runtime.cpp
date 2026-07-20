@@ -175,6 +175,11 @@ Status TopologyControllerRuntime::Stop(std::chrono::steady_clock::time_point dea
     return status;
 }
 
+Status TopologyControllerRuntime::SubmitCoordinationEvent(CoordinationEvent &&event)
+{
+    return controller_.SubmitCoordinationEvent(std::move(event));
+}
+
 TopologyControllerDiagnostics TopologyControllerRuntime::GetDiagnostics() const
 {
     return controller_.GetDiagnostics();

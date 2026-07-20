@@ -27,12 +27,6 @@ static constexpr char COORDINATION_CLUSTER_TABLE[] = "datasystem/cluster";  // K
 static constexpr char COORDINATION_MASTER_ADDRESS_TABLE[] = "/datasystem";
 static constexpr char COORDINATION_MASTER_ADDRESS_KEY[] = "master_address";
 
-inline std::string EtcdMembershipTable(const std::string &clusterName)
-{
-    const std::string table = "/" + std::string(COORDINATION_CLUSTER_TABLE);
-    return clusterName.empty() ? table : "/" + clusterName + table;
-}
-
 inline bool IsCoordinationKeyUnderPrefix(const std::string &key, const std::string &prefix)
 {
     return key == prefix || key.rfind(prefix + "/", 0) == 0;

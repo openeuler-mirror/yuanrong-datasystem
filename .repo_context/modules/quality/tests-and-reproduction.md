@@ -5,7 +5,7 @@
 - Status:
   - `active`
 - Last verified against source:
-  - `2026-07-16`
+  - `2026-07-18`
 - Canonical source roots:
   - `tests`
   - `tests/README.md`
@@ -262,11 +262,22 @@ DS_URMA_DEV_NAME=<device> \
   --test_env=DS_URMA_DEV_NAME --test_output=streamed
 ```
 
+- URMA Jetty admission-gate coverage:
+  - `//tests/ut/client:urma_jetty_gate_test` is a deterministic state-machine unit target. It uses no provider
+    handle and checks the shared close/admission linearization point, concurrent permits, exactly-once finalizer
+    scheduling, early/late `FLUSH_ERR_DONE`, and fail-closed quarantine.
+  - It uses the real URMA build configuration but does not access a provider handle or require a configured device:
+
+```bash
+bazel test //tests/ut/client:urma_jetty_gate_test --config=test --config=urma --test_output=streamed
+```
+
 - Manual URMA local send-Jetty fault coverage:
   - `//tests/ut/client:urma_send_jetty_fault_test` is a separate Bazel `manual` target. It covers manager-level
     pool exhaustion, repeated recoverable status-9 CQEs, non-recoverable CQE no-rebuild/no-leak behavior, async
-    `JETTY_ERR`, and repeated timeout retirement. Refill/capacity assertions use unique registry Jetty identities,
-    avoiding unstable retiring-plus-pending double counting. The non-recoverable case creates and seals a real event,
+    `JETTY_ERR`, and repeated timeout retirement. Refill/capacity assertions use unique registry Jetty identities;
+    retirement now installs one pending record synchronously rather than maintaining overlapping counters.
+    The non-recoverable case creates and seals a real event,
     then drives the production failed-event release/notify/wait-delete sequence before reacquiring the same Jetty.
   - It needs the same URMA SDK/runtime and configured device:
 
@@ -278,6 +289,9 @@ DS_URMA_DEV_NAME=<device> \
 
 - Manual URMA send-Jetty pool system coverage:
   - `//tests/st/client/object_cache:urma_send_jetty_pool_test` starts real workers and clients with URMA enabled.
+    Its admission-gate regression forces multi-chunk writes, pauses the second chunk after permit acquisition, injects
+    the real ABI status-9 ACK timeout for the first CQE, and verifies `modify` cannot start until the paused permit
+    is released.
     It verifies sequential small-pool reuse, one-lane ownership across overlapping ordinary-write and GatherWrite
     objects in a Batch Get with pool size 1, shared-lane cleanup after an injected GatherWrite failure, TCP-only
     fallback for ordinary and aggregate Batch Get when the sole lane is held, rejection when that TCP fallback payload

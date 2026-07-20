@@ -79,5 +79,30 @@ TEST(TopologyRoleWatchPlanTest, BuildsOnlyRoleRequiredExactAndPrefixWatches)
         std::all_of(watches.begin() + 1, watches.end(), [](const WatchKey &watch) { return watch.key.empty(); }));
 }
 
+TEST(TopologyRoleWatchPlanTest, BuildsOneUnifiedEtcdWatchPlan)
+{
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("watch", keys));
+    std::vector<WatchKey> watches;
+
+    DS_ASSERT_OK(
+        TopologyRoleWatchPlan::Build(TopologyRuntimeRole::UNIFIED_ETCD, "127.0.0.1:1", *keys, 9, watches));
+
+    ASSERT_EQ(watches.size(), 5);
+    EXPECT_EQ(watches[0].tableName, keys->TopologyTable());
+    EXPECT_EQ(watches[0].key, TopologyKeyHelper::TopologyKey());
+    EXPECT_EQ(watches[1].tableName, keys->NotifyTable());
+    EXPECT_EQ(watches[1].key, "127.0.0.1:1");
+    EXPECT_EQ(watches[2].tableName, keys->MigrateTaskTable());
+    EXPECT_TRUE(watches[2].key.empty());
+    EXPECT_EQ(watches[3].tableName, keys->DeleteTaskTable());
+    EXPECT_TRUE(watches[3].key.empty());
+    EXPECT_EQ(watches[4].tableName, keys->MembershipTable());
+    EXPECT_TRUE(watches[4].key.empty());
+    EXPECT_TRUE(std::all_of(watches.begin(), watches.end(), [](const WatchKey &watch) {
+        return watch.startRevision == 9;
+    }));
+}
+
 }  // namespace
 }  // namespace datasystem::cluster

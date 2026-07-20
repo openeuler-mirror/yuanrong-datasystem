@@ -183,23 +183,62 @@ public:
         ASSERT_EQ(summary.failedKeys.size(), size_t(0));
     }
 
-    void TestEvictionTraceAggregatorSkipsRetryableStatusAndUsesActionName()
+    void TestEvictionTraceAggregatorCountsRetryableStatusesByObject()
     {
         WorkerOcEvictionManager::EvictionTraceAggregator aggregator;
-        WorkerOcEvictionManager::EvictionTrace trace("retry_key");
-        trace.action = WorkerOcEvictionManager::Action::SPILL;
-        trace.rc = Status(K_TRY_AGAIN, "retry later");
-        trace.AddObjectKeySize("retry_key", 1);
+        WorkerOcEvictionManager::EvictionTrace tryAgainTrace("try_again_task");
+        tryAgainTrace.action = WorkerOcEvictionManager::Action::SPILL;
+        tryAgainTrace.rc = Status(K_TRY_AGAIN, "retry later");
+        tryAgainTrace.AddObjectKeySize("try_again_key_0", 1);
+        tryAgainTrace.AddObjectKeySize("try_again_key_1", 1);
+        aggregator.Add(tryAgainTrace);
 
-        aggregator.Add(trace);
+        WorkerOcEvictionManager::EvictionTrace notReadyTrace("not_ready_task");
+        notReadyTrace.action = WorkerOcEvictionManager::Action::SPILL;
+        notReadyTrace.rc = Status(K_NOT_READY, "not ready");
+        notReadyTrace.AddObjectKeySize("not_ready_key_0", 1);
+        notReadyTrace.AddObjectKeySize("not_ready_key_1", 1);
+        notReadyTrace.AddObjectKeySize("not_ready_key_2", 1);
+        aggregator.Add(notReadyTrace);
 
-        ASSERT_EQ(aggregator.GetSummaries().count(WorkerOcEvictionManager::Action::SPILL), size_t(0));
+        const auto &summary = aggregator.GetSummaries().at(WorkerOcEvictionManager::Action::SPILL);
+        ASSERT_EQ(summary.successKeys.size(), size_t(0));
+        ASSERT_EQ(summary.failedKeys.size(), size_t(0));
+        ASSERT_EQ(summary.tryAgainCount, uint64_t(2));
+        ASSERT_EQ(summary.notReadyCount, uint64_t(3));
         ASSERT_EQ(WorkerOcEvictionManager::GetActionName(WorkerOcEvictionManager::Action::SPILL), "spill");
+    }
+
+    void TestEvictionTraceAggregatorRetryableCountsNotFlushedByKeyThreshold()
+    {
+        WorkerOcEvictionManager::EvictionTraceAggregator aggregator;
+        constexpr size_t threshold = 32;
+        WorkerOcEvictionManager::EvictionTrace tryAgainTrace("try_again_task");
+        tryAgainTrace.action = WorkerOcEvictionManager::Action::END_LIFE;
+        tryAgainTrace.rc = Status(K_TRY_AGAIN, "retry later");
+        for (size_t i = 0; i < threshold / 2; ++i) {
+            tryAgainTrace.AddObjectKeySize("try_again_key_" + std::to_string(i), 1);
+        }
+        aggregator.Add(tryAgainTrace);
+
+        WorkerOcEvictionManager::EvictionTrace notReadyTrace("not_ready_task");
+        notReadyTrace.action = WorkerOcEvictionManager::Action::END_LIFE;
+        notReadyTrace.rc = Status(K_NOT_READY, "not ready");
+        for (size_t i = 0; i < threshold / 2; ++i) {
+            notReadyTrace.AddObjectKeySize("not_ready_key_" + std::to_string(i), 1);
+        }
+        aggregator.Add(notReadyTrace);
+
+        const auto &summary = aggregator.GetSummaries().at(WorkerOcEvictionManager::Action::END_LIFE);
+        ASSERT_EQ(summary.successKeys.size(), size_t(0));
+        ASSERT_EQ(summary.failedKeys.size(), size_t(0));
+        ASSERT_EQ(summary.tryAgainCount, uint64_t(threshold / 2));
+        ASSERT_EQ(summary.notReadyCount, uint64_t(threshold / 2));
     }
 
     void TestPrimaryEndLifeReserveDuplicateAndLimit()
     {
-        constexpr size_t pendingLimit = 64;
+        constexpr size_t pendingLimit = 1024;
         std::vector<WorkerOcEvictionManager::PrimaryEndLifeTask> tasks;
         tasks.reserve(pendingLimit);
         for (size_t i = 0; i < pendingLimit; ++i) {
@@ -512,9 +551,14 @@ TEST_F(SpillEvictionTest, TestEvictionTraceAggregatorFlushesWhenKeyCountExceedsT
     TestEvictionTraceAggregatorFlushesWhenKeyCountExceedsThreshold();
 }
 
-TEST_F(SpillEvictionTest, TestEvictionTraceAggregatorSkipsRetryableStatusAndUsesActionName)
+TEST_F(SpillEvictionTest, TestEvictionTraceAggregatorCountsRetryableStatusesByObject)
 {
-    TestEvictionTraceAggregatorSkipsRetryableStatusAndUsesActionName();
+    TestEvictionTraceAggregatorCountsRetryableStatusesByObject();
+}
+
+TEST_F(SpillEvictionTest, TestEvictionTraceAggregatorRetryableCountsNotFlushedByKeyThreshold)
+{
+    TestEvictionTraceAggregatorRetryableCountsNotFlushedByKeyThreshold();
 }
 
 TEST_F(SpillEvictionTest, TestPrimaryEndLifeReserveDuplicateAndLimit)

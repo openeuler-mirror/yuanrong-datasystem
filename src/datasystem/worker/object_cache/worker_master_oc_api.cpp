@@ -551,11 +551,12 @@ Status WorkerRemoteMasterOCApi::GIncreaseMasterRef(master::GIncreaseReqPb &incRe
     if (remainingTime > INT_MAX) {
         remainingTime = INT_MAX;
     }
-    RpcOptions opts;
-    opts.SetTimeout(remainingTime);
+    auto timeoutMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
     auto rc = RetryOnErrorRepent(
-        GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(),
-        [this, &opts, &incReq, &incRsp](int32_t) {
+        timeoutMs,
+        [this, &incReq, &incRsp](int32_t rpcTimeout) {
+            RpcOptions opts;
+            opts.SetTimeout(rpcTimeout);
             INJECT_POINT("WorkerMasterOCApi.GIncreaseMasterRef.beforeRpc");
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(incReq));
             return (brpcSession_ ? brpcSession_->GIncreaseRef(opts, incReq, incRsp)
@@ -1076,8 +1077,14 @@ Status WorkerRemoteMasterOCApi::ReleaseMetaData(ReleaseMetaDataReqPb &req, Relea
 
 Status WorkerRemoteMasterOCApi::ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    if (remainingTime <= 0) {
+        return WithRpcDiag(Status(K_RPC_DEADLINE_EXCEEDED, __LINE__, __FILE__,
+                                  FormatString("Request timeout (%ld ms).", -remainingTime)),
+                           "ReplacePrimary", localHostPort_, hostPort_);
+    }
     RpcOptions opts;
-    opts.SetTimeout(RPC_TIMEOUT);
+    opts.SetTimeout(remainingTime);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     auto rc = (brpcSession_ ? brpcSession_->ReplacePrimary(opts, req, rsp)
                               : rpcSession_->ReplacePrimary(opts, req, rsp));

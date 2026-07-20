@@ -54,10 +54,15 @@ Status MasterMasterOCApi::Init()
 
 Status MasterMasterOCApi::MigrateMetadata(MigrateMetadataReqPb &req, MigrateMetadataRspPb &rsp)
 {
+    int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
+    CHECK_FAIL_RETURN_STATUS(remainingTime > 0, K_RPC_DEADLINE_EXCEEDED,
+                             FormatString("Request timeout (%lld ms).", -remainingTime));
+    RpcOptions opts;
+    opts.SetTimeout(remainingTime);
     INJECT_POINT("BatchMigrateMetadata.streamSendData", []() {
         return Status(K_RPC_UNAVAILABLE, "mock networker error");
     });
-    auto rc = brpcSession_ ? brpcSession_->MigrateMetadata(req, rsp) : rpcSession_->MigrateMetadata(req, rsp);
+    auto rc = brpcSession_ ? brpcSession_->MigrateMetadata(opts, req, rsp) : rpcSession_->MigrateMetadata(opts, req, rsp);
     return WithRpcDiag(rc, "MigrateMetadata", localHostPort_, destHostPort_);
 }
 

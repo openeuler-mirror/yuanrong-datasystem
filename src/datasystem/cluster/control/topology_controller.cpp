@@ -118,7 +118,9 @@ bool TopologyControllerOptions::IsValid() const noexcept
 {
     return nodeDeadTimeout.count() > 0 && failureBatchWindow.count() > 0 && ordinaryBatchWindow.count() > 0
            && reconcileTick.count() > 0 && maxDerivedOperationsPerTick > 0 && maxMembersPerBatch > 0
-           && maxProgressReadsPerTick > 0 && now;
+           && maxProgressReadsPerTick > 0 && now
+           && (eventSourceMode == TopologyEventSourceMode::SELF_MANAGED
+               || eventSourceMode == TopologyEventSourceMode::EXTERNAL);
 }
 
 TopologyController::TopologyController(ICoordinationBackend &backend, TopologyRepository &repository,
@@ -147,20 +149,26 @@ Status TopologyController::Start()
     CHECK_FAIL_RETURN_STATUS(!started_ && options_.IsValid(),
                              K_INVALID, "invalid or already started topology Controller");
     std::vector<WatchKey> watches;
-    RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::CONTROLLER, "", keys_, 0, watches));
+    if (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED) {
+        RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::CONTROLLER, "", keys_, 0, watches));
+    }
     RETURN_IF_NOT_OK(PrepareMembershipRestartObservation());
     RETURN_IF_NOT_OK(dispatcher_.Start());
-    backend_.SetEventHandler([this](CoordinationEvent &&event) { (void)EnqueueCoordinationEvent(std::move(event)); });
-    auto rc = backend_.WatchEvents(watches);
-    if (rc.IsError()) {
-        dispatcher_.ShutdownIngress();
-        LOG_IF_ERROR(backend_.ShutdownEventSources(),
-                     "Shut down topology Controller event sources after Start failure");
-        backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
-        return rc;
+    if (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED) {
+        backend_.SetEventHandler(
+            [this](CoordinationEvent &&event) { (void)EnqueueCoordinationEvent(std::move(event)); });
+        auto rc = backend_.WatchEvents(watches);
+        if (rc.IsError()) {
+            dispatcher_.ShutdownIngress();
+            LOG_IF_ERROR(backend_.ShutdownEventSources(),
+                         "Shut down topology Controller event sources after Start failure");
+            backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
+            return rc;
+        }
     }
     LOG(INFO) << "CLUSTER_WATCH cluster=" << keys_.ClusterName() << " role=controller scope_count=" << watches.size()
-              << " revision=0 status=registered";
+              << " revision=0 status="
+              << (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED ? "registered" : "external");
     started_ = true;
     stopping_ = false;
     threadExited_ = false;
@@ -173,9 +181,11 @@ Status TopologyController::Start()
         threadExited_ = true;
         diagnostics_.running = false;
         dispatcher_.ShutdownIngress();
-        LOG_IF_ERROR(backend_.ShutdownEventSources(),
-                     "Shut down topology Controller event sources after thread Start failure");
-        backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
+        if (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED) {
+            LOG_IF_ERROR(backend_.ShutdownEventSources(),
+                         "Shut down topology Controller event sources after thread Start failure");
+            backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
+        }
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("start topology Controller failed: ") + error.what());
     }
     LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << keys_.ClusterName() << " role=controller state=ready";
@@ -191,8 +201,11 @@ Status TopologyController::Stop(std::chrono::steady_clock::time_point deadline)
     stopping_ = true;
     LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << keys_.ClusterName() << " role=controller state=stopping";
     dispatcher_.ShutdownIngress();
-    const auto eventSourceStatus = backend_.ShutdownEventSources();
-    backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
+    Status eventSourceStatus;
+    if (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED) {
+        eventSourceStatus = backend_.ShutdownEventSources();
+        backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
+    }
     if (!stoppedCv_.wait_until(lock, deadline, [this] { return threadExited_; })) {
         RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "topology Controller stop deadline exceeded");
     }
@@ -213,6 +226,13 @@ Status TopologyController::EnqueueCoordinationEvent(CoordinationEvent &&event)
 {
     LOG_IF_ERROR(ObserveMembershipRestart(event), "Failed to observe membership restart event");
     return dispatcher_.SubmitCoordination(std::move(event));
+}
+
+Status TopologyController::SubmitCoordinationEvent(CoordinationEvent &&event)
+{
+    CHECK_FAIL_RETURN_STATUS(options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL, K_INVALID,
+                             "topology Controller does not accept an external event source");
+    return EnqueueCoordinationEvent(std::move(event));
 }
 
 Status TopologyController::PrepareMembershipRestartObservation()

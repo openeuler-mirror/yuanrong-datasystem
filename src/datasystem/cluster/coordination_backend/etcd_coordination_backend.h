@@ -23,13 +23,13 @@
 namespace datasystem::cluster {
 
 /**
- * @brief Phase-1 adapter over one role-exclusive EtcdStore client/session.
+ * @brief Lightweight coordination adapter over a non-owned EtcdStore.
  */
 class EtcdCoordinationBackend final : public ICoordinationBackend {
 public:
     /**
      * @brief Construct the adapter using the current pointer-form interface.
-     * @param[in] etcdStore Non-owning store pointer; one store backs exactly one runtime role.
+     * @param[in] etcdStore Non-owning Store pointer; adapters may share one Store for synchronous operations.
      */
     explicit EtcdCoordinationBackend(EtcdStore *etcdStore);
 

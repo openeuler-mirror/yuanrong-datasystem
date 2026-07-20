@@ -406,10 +406,70 @@ private:
     urma_jfr_t *raw_ = nullptr;
 };
 
-class UrmaJetty {
+class UrmaJetty : public std::enable_shared_from_this<UrmaJetty> {
+    // postGate_ is updated as one atomic word so post admission and retirement have one
+    // linearization point. A C++ bit-field struct is deliberately not used: its layout is
+    // implementation-defined and updating one field would not provide a whole-word atomic CAS.
+    //
+    // Bit layout:
+    //   [63] closing             - reject all future provider-post permits.
+    //   [62] retire armed        - pool detach and pending-retire publication are complete.
+    //   [61] finalizer scheduled - the exactly-once modify/delete finalizer has been claimed.
+    //   [60:0] active posts      - synchronous provider-post calls currently holding a permit.
+    struct PostGate {
+        static constexpr uint64_t kClosing = 1ull << 63;
+        static constexpr uint64_t kRetireArmed = 1ull << 62;
+        static constexpr uint64_t kFinalizerScheduled = 1ull << 61;
+        static constexpr uint64_t kActiveMask = kFinalizerScheduled - 1;
+
+        static bool IsClosing(uint64_t value) { return (value & kClosing) != 0; }
+        static bool IsRetireArmed(uint64_t value) { return (value & kRetireArmed) != 0; }
+        static bool IsFinalizerScheduled(uint64_t value) { return (value & kFinalizerScheduled) != 0; }
+        static uint64_t ActivePosts(uint64_t value) { return value & kActiveMask; }
+    };
+
 public:
-    UrmaJetty(urma_jetty_t *raw, std::shared_ptr<UrmaJfr> sharedJfr, UrmaResource *resource)
-        : raw_(raw), sharedJfr_(std::move(sharedJfr)), resource_(resource), valid_(true)
+    enum class LifecycleState : uint8_t {
+        ACTIVE,        // Provider handle admits new post permits and may be leased from its pool.
+        QUIESCING,     // Admission is closed; already admitted synchronous posts are draining.
+        MODIFYING,     // The exactly-once finalizer is executing provider modify(ERROR).
+        WAIT_FLUSH,    // Modify succeeded; waiting for this Jetty's FLUSH_ERR_DONE.
+        DELETE_READY,  // Flush was observed and provider delete is now permitted.
+        DELETING,      // The exactly-once delete operation has been claimed.
+        DESTROYED,     // Provider delete succeeded; raw_ is null and the lifecycle is terminal.
+        QUARANTINED,   // A control operation failed; never reopen or implicitly delete this Jetty.
+    };
+
+    // A permit owns the Jetty while a synchronous provider post can touch raw_.  The gate state word
+    // is the sole linearization point for admission and close: no separate valid/inflight TOCTOU.
+    class PostPermit {
+    public:
+        PostPermit() = default;
+        ~PostPermit() { Reset(); }
+        PostPermit(const PostPermit &) = delete;
+        PostPermit &operator=(const PostPermit &) = delete;
+        PostPermit(PostPermit &&other) noexcept : jetty_(std::move(other.jetty_)) {}
+        PostPermit &operator=(PostPermit &&other) noexcept
+        {
+            if (this != &other) {
+                Reset();
+                jetty_ = std::move(other.jetty_);
+            }
+            return *this;
+        }
+        explicit operator bool() const { return jetty_ != nullptr; }
+        urma_jetty_t *Raw() const { return jetty_ == nullptr ? nullptr : jetty_->raw_; }
+
+    private:
+        friend class UrmaJetty;
+        explicit PostPermit(std::shared_ptr<UrmaJetty> jetty) : jetty_(std::move(jetty)) {}
+        void Reset();
+        std::shared_ptr<UrmaJetty> jetty_;
+    };
+
+    UrmaJetty(urma_jetty_t *raw, std::shared_ptr<UrmaJfr> sharedJfr, UrmaResource *resource,
+              JettyType type = JettyType::SEND)
+        : raw_(raw), sharedJfr_(std::move(sharedJfr)), resource_(resource), type_(type)
     {
         counter_.fetch_add(1);
     }
@@ -428,6 +488,7 @@ public:
 
     urma_jetty_t *Raw() const
     {
+        // Control-plane only. All paths that can call provider post must hold PostPermit.
         return raw_;
     }
 
@@ -438,13 +499,31 @@ public:
 
     bool IsValid() const
     {
-        return valid_;
+        return !PostGate::IsClosing(postGate_.load(std::memory_order_acquire)) &&
+               lifecycle_.load(std::memory_order_acquire) == LifecycleState::ACTIVE;
     }
 
-    bool MarkInvalid()
+    PostPermit TryAcquirePostPermit();
+
+    // Close admission. The caller must detach from a pool and install its retire record before
+    // ArmRetireFinalizer; a last permit release cannot schedule control-plane work before then.
+    bool BeginRetire();
+    bool ArmRetireFinalizer();
+    bool BeginModify();
+    bool CompleteModify();
+    bool ObserveFlushErrDone();
+    bool BeginDelete();
+    Status DeleteAfterFlush();
+    void Quarantine();
+    LifecycleState GetLifecycleState() const { return lifecycle_.load(std::memory_order_acquire); }
+    JettyType GetType() const { return type_; }
+    uint32_t ActivePostCalls() const
     {
-        bool expected = true;
-        return valid_.compare_exchange_strong(expected, false);
+        return static_cast<uint32_t>(PostGate::ActivePosts(postGate_.load(std::memory_order_acquire)));
+    }
+    bool IsFinalizerScheduled() const
+    {
+        return PostGate::IsFinalizerScheduled(postGate_.load(std::memory_order_acquire));
     }
 
     Status ModifyToError();
@@ -459,13 +538,21 @@ public:
     std::weak_ptr<UrmaConnection> GetConnection() const;
 
 private:
+    void ReleasePostPermit();
+    void ReleaseCounter();
+    bool TryScheduleFinalizer();
     static std::atomic<uint32_t> counter_;
     urma_jetty_t *raw_ = nullptr;
     std::shared_ptr<UrmaJfr> sharedJfr_;
     UrmaResource *resource_ = nullptr;
     mutable std::mutex connectionMutex_;
     std::weak_ptr<UrmaConnection> connection_;
-    std::atomic<bool> valid_ = false;
+    const JettyType type_;
+    // Encodes PostGate's flags and counter. Never update flags or the counter separately.
+    std::atomic<uint64_t> postGate_{ 0 };
+    std::atomic<LifecycleState> lifecycle_{ LifecycleState::ACTIVE };
+    std::atomic<bool> flushSeen_{ false };
+    bool counted_ = true;
 };
 
 class UrmaTargetJetty {
@@ -771,9 +858,10 @@ public:
     void ReleaseJetty(const std::shared_ptr<UrmaJetty> &jetty);
 
     /**
-     * @brief Handle a failed Jetty: mark it invalid, remove it from the pool, and trigger
-     *        background refill. The failed Jetty is asynchronously moved to error state.
-     *        Only the first caller for a given Jetty proceeds (via MarkInvalid).
+     * @brief Handle a failed Jetty: atomically close post admission, remove it from the pool,
+     *        install its retire record, and trigger background refill. The failed Jetty is
+     *        asynchronously moved to error state after admitted provider posts have drained.
+     *        Only the caller that wins BeginRetire proceeds.
      * @param[in] failedJetty The Jetty that observed a CQE/AE failure.
      * @return Status of the call.
      */
@@ -796,6 +884,16 @@ public:
      * @return Status of the call.
      */
     Status AsyncModifyJettyToError(std::shared_ptr<UrmaJetty> jetty);
+
+    // Called by the final PostPermit release. The finalizer bit was already atomically claimed by
+    // the Jetty, so this method only hands work to the control-plane thread.
+    void ScheduleRetireFinalizer(std::shared_ptr<UrmaJetty> jetty);
+
+    // Shutdown closes admission before poll is stopped. Provider delete is fail-closed when a
+    // flush cannot be observed; this is deliberate until the provider shutdown contract is known.
+    void BeginShutdown();
+    void WaitForPostPermitsDrained();
+    void NotifyPostPermitReleased();
 
     /**
      * @brief Asynchronously delete a Jetty that has been detached from service.
@@ -846,6 +944,9 @@ private:
      * @return Status of the call.
      */
     Status RetireJettyToError(const std::shared_ptr<UrmaJetty> &jetty);
+    Status RetireJettyInternal(const std::shared_ptr<UrmaJetty> &jetty);
+    void ScheduleDeleteJetty(const std::shared_ptr<UrmaJetty> &jetty);
+    void QuarantineJetty(const std::shared_ptr<UrmaJetty> &jetty);
 
     /**
      * @brief Pre-fill the send Jetty pool to FLAGS_urma_send_jetty_lane_pool_size at Init time.
@@ -881,8 +982,6 @@ private:
      */
     void RemoveFromPoolLocked(const std::shared_ptr<UrmaJetty> &jetty);
 
-    size_t GetPendingDeleteJettyCount();
-
     size_t GetRetiringOrPendingJettyCount();
 
     const urma_token_t urmaToken_ = { 0xACFE };  // default token
@@ -892,10 +991,12 @@ private:
     std::unique_ptr<UrmaJfce> jfce_;
     std::unique_ptr<UrmaJfc> jfc_;
     std::unique_ptr<ThreadPool> deleteJettyThread_;
-    std::atomic<size_t> retiringJettyCount_{ 0 };
     std::mutex pendingDeleteMutex_;
     // jetty id to pending delete jetty object with trace context
     std::unordered_map<uint32_t, PendingDeleteJetty> pendingDeleteJettys_;
+    // Modify failure is not known to permit delete in the provider ABI. Keep a strong reference
+    // and intentionally do not let the destructor issue an unsafe delete.
+    std::unordered_map<uint32_t, std::shared_ptr<UrmaJetty>> quarantinedJettys_;
     std::shared_timed_mutex deleteJettyThreadMutex_;
     std::mutex jettyRegistryMutex_;
     std::unordered_map<uint32_t, std::weak_ptr<UrmaJetty>> jettyRegistry_;
@@ -915,6 +1016,9 @@ private:
     std::condition_variable refillCV_;
     std::atomic<bool> refillStop_{ true };
     std::atomic<bool> refillNeeded_{ false };
+    std::atomic<bool> shuttingDown_{ false };
+    std::mutex postDrainMutex_;
+    std::condition_variable postDrainCV_;
 };
 
 }  // namespace datasystem

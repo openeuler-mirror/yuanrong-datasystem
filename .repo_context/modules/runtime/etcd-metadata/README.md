@@ -99,7 +99,8 @@
 ## Main Dependencies
 
 - Upstream callers:
-  - Worker topology composition creates exact cluster-scoped tables, starts role-minimal watches and initializes keepalive.
+  - Worker topology composition creates exact cluster-scoped tables, initializes one membership keepalive, and sends
+    the union of Worker/Controller watch targets over one Store-owned watch stream.
   - `TopologyRepository` reads/writes topology records through CAS and responds to backend watch events.
   - object-cache metadata modules store metadata/location/global-cache records under ETCD metadata prefixes.
   - CLI and tests use ETCD store helpers for inspection and fault scenarios.
@@ -183,7 +184,8 @@ Important nuance:
 
 ### Watch And Event Compensation
 
-1. `EtcdStore::WatchEvents` converts table/key pairs to physical targets and starts `EtcdWatch`.
+1. `EtcdStore::WatchEvents` converts table/key pairs to physical targets and starts one `EtcdWatch` stream. Worker
+   topology passes five logical targets in one call; ETCD creates one watch ID per target on that stream.
 2. Exact targets omit `range_end`; collection targets use `range_end = prefix + "\xFF"`; both start at
    `start_revision + 1`.
 3. The producer reads the ETCD watch stream and queues events.
@@ -192,6 +194,10 @@ Important nuance:
 6. When the watch stream fails, `ReInitWatch` first calls `RetrieveEventActively`, then reopens the stream.
 7. A passive compensation thread periodically searches ETCD and filters exact targets before generating fake PUT/DELETE
    events for missed state.
+8. `TopologyKeyHelper` classifies physical keys from the unified stream, and `TopologyEngine` applies role-delivery
+   policy: topology wakes Worker and Controller, local notify wakes Worker, and membership/task keys wake Controller.
+   Topology/task/notify payloads are discarded before bounded doorbell dispatch; membership values are retained for
+   restart-generation observation.
 
 Important nuance:
 

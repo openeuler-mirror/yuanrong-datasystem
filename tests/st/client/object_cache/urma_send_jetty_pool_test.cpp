@@ -46,6 +46,7 @@ constexpr size_t kValueSize = 512 * 1024;
 constexpr char kSendLaneReleaseInject[] = "UrmaManager.ApplySendLaneAction.Release";
 constexpr char kSendLaneRetireInject[] = "UrmaManager.ApplySendLaneAction.Retire";
 constexpr char kModifyJettyInject[] = "urma.ModifyJettyToError";
+constexpr char kPostJettyRwWithPermitInject[] = "UrmaManager.PostJettyRwWithPermit";
 constexpr char kPauseWriteAfterPostInject[] = "UrmaManager.UrmaWriteAfterPost";
 constexpr char kWriteErrorInject[] = "UrmaManager.UrmaWriteError";
 constexpr char kPauseGatherWriteAfterAcquireInject[] = "UrmaManager.GatherWriteAfterAcquire";
@@ -81,6 +82,9 @@ public:
             + std::to_string(SendLanePoolSize()) + " -urma_send_jetty_lane_refill_extra_size="
             + std::to_string(SendLaneRefillExtraSize()) + " -ipc_through_shared_memory=false";
         opts.workerGflagParams += " -enable_urma=true";
+        if (MaxWriteSizeMb() != 0) {
+            opts.workerGflagParams += " -urma_max_write_size_mb=" + std::to_string(MaxWriteSizeMb());
+        }
     }
 
     void SetUp() override
@@ -99,6 +103,11 @@ protected:
     virtual uint32_t SendLaneRefillExtraSize() const
     {
         return 1;
+    }
+
+    virtual uint32_t MaxWriteSizeMb() const
+    {
+        return 0;
     }
 
     void WaitForWorkerInjectExecuteCount(uint32_t workerIdx, const std::string &name, uint64_t expectedCount,
@@ -523,6 +532,14 @@ public:
     {
         UrmaSendJettyPoolStTest::SetClusterSetupOptions(opts);
         opts.workerGflagParams += " -enable_transport_fallback=false";
+    }
+};
+
+class UrmaSendJettyGateStTest : public UrmaSendJettyPoolStTest {
+protected:
+    uint32_t MaxWriteSizeMb() const override
+    {
+        return 1;
     }
 };
 
@@ -1196,6 +1213,72 @@ TEST_F(UrmaSendJettyPoolStTest, CqeRetirementRefillsSmallPoolAndSubsequentRemote
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kSendLaneReleaseInject, "16*call()"));
     GetEventually(*reader, keyAfter, valueAfter);
     WaitForWorkerInjectExecuteCount(kSourceWorker, kSendLaneReleaseInject, 1);
+}
+
+TEST_F(UrmaSendJettyGateStTest, MultiChunkStatus9WaitsForPausedSecondPostPermitBeforeModify)
+{
+    std::shared_ptr<KVClient> writer;
+    std::shared_ptr<KVClient> reader;
+    InitTestKVClient(kSourceWorker, writer);
+    InitTestKVClient(kDestinationWorker, reader, 30000, false, 30000);
+
+    // MaxWriteSizeMb() forces this payload through two WRs on the same send lane. The first
+    // reaches the provider, while the second stops after acquiring its post permit. Inject status
+    // 9 (UMDK ACK timeout) on the first CQE; modify must remain blocked until that second permit
+    // is released. This is a cross-process barrier built from the existing inject protocol.
+    const std::string key = "urma-gate-multichunk-status9";
+    const std::string value(1024 * 1024 + 64, 'g');
+    DS_ASSERT_OK(writer->Set(key, value));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kPostJettyRwWithPermitInject,
+                                           "1*call()->1*pause()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kModifyJettyInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kCqeStatusInject, "1*call(0, 9)"));
+
+    std::promise<Status> getPromise;
+    auto getFuture = getPromise.get_future();
+    std::thread getter([&] {
+        std::string got;
+        getPromise.set_value(reader->Get(key, got));
+    });
+
+    uint64_t postCount = 0;
+    uint64_t cqeCount = 0;
+    const bool secondPostPaused =
+        ObserveWorkerInjectExecuteCount(kSourceWorker, kPostJettyRwWithPermitInject, 2, postCount, 10000);
+    const bool firstCqeInjected =
+        ObserveWorkerInjectExecuteCount(kSourceWorker, kCqeStatusInject, 1, cqeCount, 10000);
+    uint64_t modifyWhilePostPaused = 0;
+    const auto modifyWhilePausedStatus = cluster_->GetInjectActionExecuteCount(
+        WORKER, kSourceWorker, kModifyJettyInject, modifyWhilePostPaused);
+
+    // Always release the cross-process barrier and join before asserting. Otherwise an observation
+    // failure would leave a joinable thread or a paused worker behind and mask the real regression.
+    const auto clearPost = cluster_->ClearInjectAction(WORKER, kSourceWorker, kPostJettyRwWithPermitInject);
+    const auto getStatus = getFuture.get();
+    getter.join();
+    uint64_t modifyCount = 0;
+    const bool modifyObserved =
+        ObserveWorkerInjectExecuteCount(kSourceWorker, kModifyJettyInject, 1, modifyCount, 10000);
+    const auto modifyCountStatus =
+        cluster_->GetInjectActionExecuteCount(WORKER, kSourceWorker, kModifyJettyInject, modifyCount);
+    const auto clearStatus = cluster_->ClearInjectAction(WORKER, kSourceWorker, kCqeStatusInject);
+    const auto clearModify = cluster_->ClearInjectAction(WORKER, kSourceWorker, kModifyJettyInject);
+
+    ASSERT_TRUE(secondPostPaused) << "only " << postCount << " post calls reached the permit-held inject point";
+    ASSERT_TRUE(firstCqeInjected) << "status-9 CQE injection did not execute, count=" << cqeCount;
+    ASSERT_TRUE(modifyWhilePausedStatus.IsOk()) << modifyWhilePausedStatus.ToString();
+    ASSERT_EQ(modifyWhilePostPaused, 0U)
+        << "modify overlapped the paused provider-post permit for the second chunk";
+    ASSERT_TRUE(clearPost.IsOk()) << clearPost.ToString();
+    ASSERT_TRUE(clearStatus.IsOk()) << clearStatus.ToString();
+    ASSERT_TRUE(clearModify.IsOk()) << clearModify.ToString();
+    // The injected status-9 CQE fails this request by design. The payload is deliberately
+    // larger than the TCP fallback limit so a fallback cannot hide the URMA failure. This ST
+    // verifies the ordering of post and modify, not successful delivery of the faulted request.
+    ASSERT_TRUE(getStatus.IsError()) << "status-9 CQE unexpectedly left the faulted Get successful";
+    ASSERT_TRUE(modifyObserved);
+    ASSERT_TRUE(modifyCountStatus.IsOk()) << modifyCountStatus.ToString();
+    ASSERT_EQ(modifyCount, 1U);
 }
 
 TEST_F(UrmaSendJettyPoolStTest, CqeRetirementFlushDeleteConvergesRegistryAndRemainsUsable)

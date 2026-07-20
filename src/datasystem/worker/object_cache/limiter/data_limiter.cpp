@@ -114,10 +114,7 @@ void MigrateDataRateLimiter::SlidingWindowUpdateRate(const uint64_t &bytesReceiv
     window.push_back({ now, bytesReceived });
     currentBandwidth += bytesReceived;
 
-    while (!window.empty() && window.front().timestamp + std::chrono::seconds(1) < now) {
-        currentBandwidth -= window.front().bytes;
-        window.pop_front();
-    }
+    PruneExpiredLocked(now);
 }
 
 MigrateDataRateController::MigrateDataRateController(uint64_t maxBandwidthBytes) : rateLimiter_(maxBandwidthBytes)
