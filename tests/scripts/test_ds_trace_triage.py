@@ -198,6 +198,14 @@ def test_run_pipeline_preserves_raw_extracted_logs_and_reuses_cache(tmp_path):
     extracted = first / "raw" / "extracted" / "multi-input.tar.gz" / "case-a" / "kventryworker-0-worker1" / "worker.log"
     assert extracted.exists()
     assert trace_id in extracted.read_text()
+    input_doc = first / "inputs.md"
+    assert input_doc.exists()
+    input_text = input_doc.read_text(encoding="utf-8")
+    assert "cache-case" in input_text
+    assert "round-a" in input_text
+    assert str(bundle) in input_text
+    assert "raw/inputs/multi-input.tar.gz" in input_text
+    assert "raw/extracted/multi-input.tar.gz" in input_text
     assert json.loads((second / "manifest.json").read_text())["cache"]["status"] == "created"
 
 

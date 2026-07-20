@@ -890,6 +890,44 @@ def _preserve_raw_inputs(inputs, run_dir):
                             shutil.copyfileobj(stream, out)
 
 
+def _write_inputs_doc(run_dir, manifest):
+    lines = [
+        "# Trace Triage Inputs",
+        "",
+        f"- case_name: `{manifest.get('case_name', '')}`",
+        f"- scenario: `{manifest.get('scenario', '')}`",
+        f"- code_ref: `{manifest.get('code_ref', '')}`",
+        f"- analysis_created_at: `{manifest.get('analysis_created_at', '')}`",
+        "",
+        "## Input Packages",
+        "",
+    ]
+    for index, item in enumerate(manifest.get("inputs", []), 1):
+        source = item.get("path", "")
+        name = Path(source).name or f"input-{index}"
+        lines.extend([
+            f"### {index}. `{name}`",
+            "",
+            f"- source_path: `{source}`",
+            f"- size_bytes: {item.get('size', 0)}",
+            f"- sha256: `{item.get('sha256', '')}`",
+        ])
+        raw_copy = Path("raw") / "inputs" / name
+        if (Path(run_dir) / raw_copy).exists():
+            lines.append(f"- preserved_raw: `{raw_copy.as_posix()}`")
+        members = item.get("members", [])
+        if members:
+            extract_root = Path("raw") / "extracted" / name
+            lines.append(f"- extracted_root: `{extract_root.as_posix()}`")
+            lines.append("- members:")
+            for member in members:
+                lines.append(f"  - `{member}`")
+        else:
+            lines.append("- members: none")
+        lines.append("")
+    (Path(run_dir) / "inputs.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def _write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -1042,6 +1080,7 @@ class TraceRunPipeline:
             "script_version": _script_version(),
             "cache": {"key": cache_key, "status": "created"},
             "trace_time_range": report["dimensions"]["time"],
+            "input_document": "inputs.md",
             "inputs": identities,
             "stages": {
                 "parse": {"status": "done", "path": "parsed_traces.json"},
@@ -1054,6 +1093,7 @@ class TraceRunPipeline:
             },
         }
         _write_json(run_dir / "manifest.json", manifest)
+        _write_inputs_doc(run_dir, manifest)
         (run_dir / "events.jsonl").write_text(
             "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8"
         )
