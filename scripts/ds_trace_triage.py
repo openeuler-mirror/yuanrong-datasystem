@@ -475,6 +475,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         "latency_summary_raw": [],
         "errors": Counter(),
         "evidence": [],
+        "input_sources": Counter(),
     })
     all_ts = []
     worker_counts = Counter()
@@ -497,6 +498,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         trace_id = parsed["trace_id"]
         trace = traces[trace_id]
         trace["lines"] += 1
+        trace["input_sources"][Path(source).name] += 1
         worker = parsed["worker"]
         trace["workers"][worker] += 1
         worker_counts[worker] += 1
@@ -639,6 +641,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
             "latency_summary_us": dict(trace["latency_summary_us"]),
             "latency_summary_raw": trace["latency_summary_raw"],
             "errors": dict(trace["errors"]),
+            "input_sources": sorted(trace["input_sources"]),
             "triage_flags": triage_flags,
             "stage_breakdown": stage_breakdown,
             "evidence_coverage": _evidence_coverage(trace),
@@ -666,6 +669,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         worker_edges[edge] = {"count": item["count"], "p99_ms": _percentiles(item["latencies"]).get("p99")}
 
     time_buckets = _build_time_buckets(trace_rows, 1000)
+    cohorts = _build_cohorts(trace_rows)
 
     return {
         "schema_version": 1,
@@ -680,6 +684,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
             "time_buckets": {"1000ms": time_buckets, "10000ms": _build_time_buckets(trace_rows, 10000)},
             "workers": {k: {"line_count": v} for k, v in worker_counts.most_common()},
             "worker_summary": worker_summary,
+            "cohorts": cohorts,
             "worker_edges": worker_edges,
             "coverage": {
                 "surfaces": {
@@ -722,6 +727,36 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
 
 def analyze_inputs(paths, code_ref="unknown"):
     return TraceAnalyzer().analyze(paths, code_ref=code_ref)
+
+
+def _build_cohorts(trace_rows):
+    cohorts = defaultdict(lambda: {
+        "trace_ids": set(),
+        "errors": Counter(),
+        "classifications": Counter(),
+        "access_latencies": [],
+        "workers": Counter(),
+    })
+    for trace_id, trace in trace_rows.items():
+        sources = trace.get("input_sources") or ["unknown"]
+        for source in sources:
+            cohort = cohorts[source]
+            cohort["trace_ids"].add(trace_id)
+            cohort["errors"].update(trace.get("errors", {}))
+            cohort["classifications"][trace.get("classification", "unknown")] += 1
+            if trace.get("access_latency_ms", {}).get("p50") is not None:
+                cohort["access_latencies"].append(trace["access_latency_ms"]["p50"])
+            cohort["workers"].update(trace.get("workers", {}))
+    rows = {}
+    for source, cohort in sorted(cohorts.items()):
+        rows[source] = {
+            "trace_count": len(cohort["trace_ids"]),
+            "errors": dict(cohort["errors"]),
+            "classifications": dict(cohort["classifications"]),
+            "access_latency_ms": _percentiles(cohort["access_latencies"]),
+            "top_workers": {k: v for k, v in cohort["workers"].most_common(10)},
+        }
+    return rows
 
 
 def _build_time_buckets(trace_rows, bucket_ms):
@@ -982,6 +1017,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     <aside><h2>Trace 分析报告</h2><nav id="nav">
       <a href="#s1">1. 结论</a>
       <a href="#s2">2. 根因分布</a>
+      <a class="sub" href="#cohort-chart">图 2-0 输入对比</a>
       <a class="sub" href="#classification-chart">图 2-1 分类</a>
       <a class="sub" href="#error-chart">图 2-2 错误</a>
       <a href="#s3">3. 时延 Breakdown</a>
@@ -1002,6 +1038,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s2">
         <h2>2. 错误根因与分类分布</h2>
+        <div class="panel"><div id="cohort-chart" class="chart"></div><div class="caption">图 2-0 输入包/cohort 对比：多个日志包独立统计，再对比分类和错误分布</div></div>
+        <div class="panel"><h3>表 2-0 输入包/cohort 对比</h3><table id="cohort-table"></table></div>
         <div class="chart-grid">
           <div class="panel"><div id="classification-chart" class="chart"></div><div class="caption">图 2-1 分类分布</div></div>
           <div class="panel"><div id="error-chart" class="chart"></div><div class="caption">图 2-2 错误文本/状态分布</div></div>
@@ -1047,7 +1085,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         </div>
         <div class="compare2">
           <div class="panel"><h3>图 5-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div class="caption">点击上方 Trace 行后联动更新，单位 ms</div></div>
-          <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table></div>
+          <div class="panel"><h3>表 5-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
         <div class="panel"><h3>Trace 全量日志</h3><div class="small">ERROR、deadline、latencySummary、RemotePull、URMA 等关键字段在原始日志中完整保留。</div><pre id="selected-trace-log"></pre></div>
       </section>
@@ -1094,6 +1132,22 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }
     echarts.init(node).setOption(option);
   }
+  function downloadText(filename, text) {
+    const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    URL.revokeObjectURL(link.href);
+    link.remove();
+  }
+  function highlightLogLine(line) {
+    const text = escapeHtml(line);
+    return text
+      .replace(/(ERROR|deadline exceeded|RPC timed out|status=1001|URMA_ELAPSED_TOTAL|latencySummary|Remote done|BatchGetObjectRemote|ProcessGetObjectRequest)/gi, '<span class="bad">$1</span>')
+      .replace(/(cost(?:Us)?[:=]?\\s*\\d+|totalCost:\\s*[\\d.]+ms|server_exec_us=\\d+|network_residual_us=\\d+)/gi, '<span class="warn">$1</span>');
+  }
   const access = dim.latency_ms?.access || {};
   const totalErrors = Object.values(dim.errors || {}).reduce((a,b) => a + b, 0);
   const topClass = Object.entries(dim.classifications || {}).sort((a,b) => b[1] - a[1])[0] || ['unknown', 0];
@@ -1122,6 +1176,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   ].map(([k,v,hint]) => `<div class="card"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div><div class="n">${escapeHtml(hint)}</div></div>`).join('');
   const classificationRows = Object.entries(dim.classifications || {}).sort((a,b) => b[1]-a[1]);
   const errorRows = Object.entries(dim.errors || {}).sort((a,b) => b[1]-a[1]);
+  const cohortRows = Object.entries(dim.cohorts || {}).sort((a,b) => b[1].trace_count - a[1].trace_count);
+  renderTable('cohort-table', ['cohort','traces','classifications','errors','access'], cohortRows.map(([name,item]) => [
+    name,
+    item.trace_count,
+    JSON.stringify(item.classifications || {}),
+    JSON.stringify(item.errors || {}),
+    pctText(item.access_latency_ms)
+  ]));
   renderTable('classification-table', ['classification','count'], classificationRows);
   renderTable('error-table', ['error','count'], errorRows);
   renderTable('latency-table', ['metric','distribution'], [
@@ -1197,7 +1259,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       yAxis:{type:'value', name:'ms'},
       series:[{type:'bar', data:stageRows.map(s => s.duration_ms), itemStyle:{color:'#5470c6'}}]
     });
-    document.getElementById('selected-trace-log').textContent = (item.evidence || []).map(e => `${e.member}:${e.line} ${e.text}`).join('\\n');
+    document.getElementById('selected-trace-log').innerHTML = (item.evidence || [])
+      .map(e => highlightLogLine(`${e.member}:${e.line} ${e.text}`)).join('\\n');
   }
   document.getElementById('prev-page').addEventListener('click', () => { currentPage -= 1; renderTracePage(); });
   document.getElementById('next-page').addEventListener('click', () => { currentPage += 1; renderTracePage(); });
@@ -1212,6 +1275,18 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     renderTracePage();
     renderSelectedTrace();
   });
+  document.getElementById('download-selected-raw').addEventListener('click', () => {
+    const item = traces[selectedTraceId] || {};
+    const text = (item.evidence || []).map(e => `${e.member}:${e.line} ${e.text}`).join('\\n');
+    downloadText(`${selectedTraceId || 'trace'}-raw.log`, text);
+  });
+  document.getElementById('download-filtered-evidence').addEventListener('click', () => {
+    const rows = filteredTraceRows.map(([traceId, item]) => [
+      `# ${traceId} ${item.classification || ''}`,
+      ...(item.evidence || []).map(e => `${e.member}:${e.line} ${e.text}`)
+    ].join('\\n')).join('\\n\\n');
+    downloadText('filtered-trace-evidence.log', rows);
+  });
   const navLinks = [...document.querySelectorAll('#nav a')];
   window.addEventListener('scroll', () => {
     let active = navLinks[0];
@@ -1222,6 +1297,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     navLinks.forEach(link => link.classList.toggle('active', link === active));
   });
   chart('classification-chart', {title:{text:'Classification', left:'center'}, tooltip:{trigger:'item'}, series:[{type:'pie', radius:'60%', data:classificationRows.map(([name,value]) => ({name,value}))}]});
+  chart('cohort-chart', {title:{text:'Input Cohort Comparison', left:'center'}, tooltip:{trigger:'axis'}, legend:{top:25}, xAxis:{type:'category', data:cohortRows.map(r => r[0]), axisLabel:{rotate:20}}, yAxis:{type:'value'}, series:[
+    {name:'traces',type:'bar',data:cohortRows.map(r => r[1].trace_count || 0)},
+    {name:'errors',type:'bar',data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0))}
+  ]});
   chart('error-chart', {title:{text:'Errors', left:'center'}, tooltip:{trigger:'axis'}, xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25}}, yAxis:{type:'value'}, series:[{type:'bar', data:errorRows.map(r => r[1]), itemStyle:{color:'#c23531'}}]});
   chart('latency-chart', {title:{text:'Latency Percentiles', left:'center'}, tooltip:{trigger:'axis'}, legend:{top:25}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',data:[access[k] || 0]}))});
   chart('flow-chart', {title:{text:'Flow', left:'center'}, tooltip:{trigger:'item'}, series:[{type:'pie', radius:['35%','65%'], data:flowRows.map(([name,value]) => ({name,value}))}]});

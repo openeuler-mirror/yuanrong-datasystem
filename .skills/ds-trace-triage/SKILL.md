@@ -154,6 +154,11 @@ For customer-facing reports, write like a diagnosis note:
   poll JFC, notify, thread scheduling, data size, CPU, inflight, and edge.
 - For multiple packages or noisy-vs-clean comparisons, treat each package as a
   cohort and compare distributions before carrying over root-cause labels.
+- The HTML report should follow the `/var/www/html/perf` trace-report pattern:
+  fixed left navigation, KPI cards, a core-judgment panel, ECharts with
+  captions, cohort comparison, trace search/filter/pagination, selected-trace
+  breakdown, highlighted full logs, and downloads for selected raw logs plus
+  filtered evidence.
 
 Machine-readable summaries should expose these buckets when the input contains
 them:
@@ -164,6 +169,8 @@ them:
   `network_residual_us`
 - `dimensions.urma_elapsed`: total, poll JFC, notify, and thread scheduling
 - `dimensions.ub_summary`: transfer path and `src -> target` UB edges
+- `dimensions.cohorts`: per-input-package trace/error/classification/latency
+  comparison for multi-package and noisy-vs-clean analysis
 - `dimensions.time_buckets`: 1s/10s burst and gap candidates
 - `dimensions.worker_summary`: role-aware client/entry/data/meta worker views
 - `dimensions.classifications`: parser-assigned root-cause families such as

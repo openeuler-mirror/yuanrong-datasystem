@@ -175,10 +175,15 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "慢时延线" in html
     assert "证据边界" in html
     assert "id=\"classification-chart\"" in html
+    assert "id=\"cohort-chart\"" in html
+    assert "id=\"cohort-table\"" in html
     assert "id=\"latency-chart\"" in html
     assert "id=\"worker-chart\"" in html
     assert "class=\"controls pager\"" in html
     assert "搜索 trace / worker / 关键词" in html
+    assert "download-selected-raw" in html
+    assert "download-filtered-evidence" in html
+    assert "highlightLogLine" in html
     assert "echarts.init" in html
     assert "id=\"classification-table\"" in html
     assert "id=\"error-table\"" in html
@@ -267,6 +272,34 @@ def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
     assert write_stages["write.entry_to_meta_publish"]["confidence"] == "missing"
     assert report["dimensions"]["coverage"]["surfaces"]["urma_elapsed"]["status"] == "present"
     assert report["dimensions"]["coverage"]["surfaces"]["rpc_slow"]["status"] == "missing"
+
+
+def test_multiple_input_files_are_reported_as_cohorts(tmp_path):
+    trace_a = "019f7d10-1f09-762a-9163-c547ef71a101"
+    trace_b = "019f7d10-b880-7937-b945-382161303102"
+    noisy = tmp_path / "noisy.log"
+    clean = tmp_path / "clean.log"
+    noisy.write_text(
+        f"2026-07-20T14:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_a} | - | 1001 | DS_KV_CLIENT_GET | 20298 | 0\n"
+        f"2026-07-20T14:00:00.001000 | ERROR | client | 10.0.0.1 | 1 | {trace_a} | RPC deadline exceeded\n",
+        encoding="utf-8",
+    )
+    clean.write_text(
+        f"2026-07-20T14:00:01.000000 | INFO | access_recorder | 10.0.0.2 | 1 | {trace_b} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(noisy), str(clean)], code_ref="unit-test")
+    cohorts = report["dimensions"]["cohorts"]
+
+    assert cohorts["noisy.log"]["trace_count"] == 1
+    assert cohorts["noisy.log"]["errors"]["RPC deadline exceeded"] == 1
+    assert cohorts["noisy.log"]["classifications"]["client_deadline_20ms"] == 1
+    assert cohorts["clean.log"]["trace_count"] == 1
+    assert cohorts["clean.log"]["errors"] == {}
+    assert cohorts["clean.log"]["classifications"]["access_latency_only"] == 1
+    assert report["traces"][trace_a]["input_sources"] == ["noisy.log"]
 
 
 def test_independent_stage_functions_consume_previous_artifacts(tmp_path):

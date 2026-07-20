@@ -262,3 +262,13 @@ UB/URMA 相关报告要用时序口径：
 - 每个 cohort 独立统计 trace 数、根因占比、Top slow、Worker/IP 分布。
 - 对比图优先展示“同一表象下服务端阶段是否变化”，例如 CPU/内存底噪消失后，URMA 秒级 tail 是否消失，是否残留 20ms deadline。
 - 不要用旧轮次根因覆盖新轮次；同一 trace 报告中必须标注输入包、case、scenario 和 run 时间。
+
+从 `/var/www/html/perf` 参考报告抽取出的 HTML 组件要求：
+
+- 左侧固定目录：主章节 + 图/表子项，滚动时高亮当前章节。
+- 首屏：标题、输入范围、KPI cards、核心判断 panel。
+- 图表区：ECharts 图只回答规模/分布问题，caption 必须解释图意。
+- Trace 区：搜索、分类/worker 过滤、分页、选中 trace 联动 breakdown、摘要和全量日志。
+- 下载区：至少支持下载当前 trace 裸日志和当前过滤证据。
+- 日志区：ERROR、deadline、latencySummary、RemotePull、BatchGetObjectRemote、URMA、>=阈值耗时字段要高亮。
+- 对比区：多个输入包按 cohort 展示 trace_count、errors、classifications、access latency 和 top workers。
