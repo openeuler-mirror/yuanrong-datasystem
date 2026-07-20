@@ -199,6 +199,12 @@ Rules for updating baselines:
   - changing a target used by `datasystem`, `datasystem_worker_shared`, or `ds_client_py` can alter multiple language
     packages because install rules reuse those targets;
   - changing third-party flags can invalidate `DS_OPENSOURCE_DIR` cache keys and may change package ABI;
+  - brpc shared builds must keep an explicit pthread runtime dependency and disable brpc's pthread mutex hook. Upstream
+    brpc uses pthread symbols directly, while its mutex hook resolves the real implementation with `RTLD_NEXT`; when
+    `datasystem_worker` loads `libpthread.so.0` before `libbrpc.so`, that lookup can skip the real pthread/libc symbols
+    and fail during process startup. The repository patches brpc's Linux shared build to preserve
+    `DT_NEEDED libpthread.so.0` because `Threads::Threads` may expand to no linker input on platforms where libc already
+    provides pthread functions, and passes `NO_PTHREAD_MUTEX_HOOK` to avoid the load-order-sensitive hook path.
   - changing install paths can break wheel pruning, C++ examples, `find_package(Datasystem)`, Java JNI packaging, or Go
     package validation.
   - `ASCEND_HIXL_FOUND` means basic HIXL headers and libraries were found. HCCS RH2D is gated separately by

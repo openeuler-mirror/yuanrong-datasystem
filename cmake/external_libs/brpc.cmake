@@ -104,7 +104,10 @@ set(brpc_CMAKE_OPTIONS
     -DProtobuf_LIBRARY:FILEPATH=${_BRPC_PROTOBUF_LIB}
     -DProtobuf_LIBRARY_RELEASE:FILEPATH=${_BRPC_PROTOBUF_LIB}
     -DProtobuf_PROTOC_LIBRARY:FILEPATH=${_BRPC_PROTOC_LIB}
-    -DCMAKE_CPP_FLAGS:STRING=-I${absl_INCLUDE_DIR})
+    # brpc's pthread mutex hook resolves the real pthread symbols with RTLD_NEXT.
+    # datasystem_worker can load libpthread before libbrpc, which makes that
+    # lookup skip the real implementation and fail during process startup.
+    "-DCMAKE_CPP_FLAGS:STRING=-I${absl_INCLUDE_DIR} -DNO_PTHREAD_MUTEX_HOOK")
 
 # brpc's CMakeLists.txt unconditionally overwrites CMAKE_CXX_FLAGS (line 149), so passing -I for
 # absl via CMAKE_CXX_FLAGS would be discarded. Instead, pass it via CMAKE_CPP_FLAGS which brpc
@@ -115,7 +118,8 @@ set(brpc_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
 set(brpc_PATCHES
     ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/fix-boringssl-compat.patch
-    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/avoid-glog-flag-conflicts.patch)
+    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/avoid-glog-flag-conflicts.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/link-pthread-runtime.patch)
 
 # brpc's build runs the project's protoc which dlopen-s libprotoc.so.<ver> at runtime.
 # Without LD_LIBRARY_PATH the protoc invocation fails with "cannot open shared object file".
@@ -167,7 +171,8 @@ set(BRPC_LIBRARIES
     ${BRPC_LIBRARY}
     ${gflags_LIBRARY}
     ${leveldb_LIBRARY}
-    protobuf::libprotobuf)
+    protobuf::libprotobuf
+    Threads::Threads)
 
 if (DEFINED EXPORT_TO_USER_ENV_FILE)
     file(APPEND "${EXPORT_TO_USER_ENV_FILE}"
