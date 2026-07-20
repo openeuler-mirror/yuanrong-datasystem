@@ -1924,6 +1924,25 @@ def render_site_stage(run_dir):
     return TraceRunPipeline().render_site(run_dir)
 
 
+def publish_site_stage(run_dir, dry_run=True):
+    run_dir = Path(run_dir)
+    manifest = _read_json(run_dir / "manifest.json")
+    site_target = manifest.get("render_targets", {}).get("site", {})
+    if not (run_dir / site_target.get("path", "report.site.html")).exists():
+        TraceRunPipeline().render_site(run_dir)
+        manifest = _read_json(run_dir / "manifest.json")
+        site_target = manifest.get("render_targets", {}).get("site", {})
+    if not (run_dir / site_target.get("publish_doc", "site_publish.md")).exists():
+        publish_doc = _write_site_publish_doc(run_dir, manifest)
+        site_target = {**site_target, **publish_doc}
+    status = "dry-run" if dry_run else "not-implemented"
+    _update_manifest(run_dir, lambda item: item["render_targets"]["site"].update({
+        **site_target,
+        "publish": {"status": status, "url": site_target.get("url", ""), "target_path": site_target.get("target_path", "")},
+    }))
+    return site_target.get("url", "")
+
+
 def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
     return TraceRunPipeline().run(inputs, out_dir, case_name=case_name, scenario=scenario,
                                   code_ref=code_ref, force=force)
@@ -1984,7 +2003,7 @@ def run_self_test():
 
 def main(argv=None):
     argv = list(argv or sys.argv[1:])
-    stage_commands = {"parse", "aggregate", "triage", "render-local", "render-site"}
+    stage_commands = {"parse", "aggregate", "triage", "render-local", "render-site", "publish-site"}
     if argv and argv[0] in ({"run", "verify"} | stage_commands):
         command = argv.pop(0)
         if command == "verify":
@@ -2009,9 +2028,11 @@ def main(argv=None):
             print(parse_stage(args.inputs, args.out, case_name=args.case, scenario=args.scenario,
                               code_ref=args.code_ref, force=args.force))
             return 0
-        if command in ("aggregate", "triage", "render-local", "render-site"):
+        if command in ("aggregate", "triage", "render-local", "render-site", "publish-site"):
             parser = argparse.ArgumentParser(description=f"Run trace triage {command} stage.")
             parser.add_argument("run_dir", help="Existing staged run directory.")
+            if command == "publish-site":
+                parser.add_argument("--dry-run", action="store_true", help="Prepare publish metadata without copying.")
             args = parser.parse_args(argv)
             if command == "aggregate":
                 print(aggregate_stage(args.run_dir))
@@ -2019,8 +2040,11 @@ def main(argv=None):
                 print(triage_stage(args.run_dir))
             elif command == "render-local":
                 print(render_local_stage(args.run_dir))
-            else:
+            elif command == "render-site":
                 print(render_site_stage(args.run_dir))
+            else:
+                url = publish_site_stage(args.run_dir, dry_run=args.dry_run)
+                print(f"{'DRY-RUN ' if args.dry_run else ''}{url}")
             return 0
         parser = argparse.ArgumentParser(description="Run staged DataSystem trace triage.")
         parser.add_argument("inputs", nargs="+", help="Log files, directories, or gzip-wrapped tar bundles.")

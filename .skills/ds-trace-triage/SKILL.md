@@ -45,6 +45,7 @@ root-cause analysis rather than broad access/resource trending.
    python3 scripts/ds_trace_triage.py triage "$run_dir"
    python3 scripts/ds_trace_triage.py render-local "$run_dir"
    python3 scripts/ds_trace_triage.py render-site "$run_dir"
+   python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
    ```
 4. Read the timestamped run directory:
    - `manifest.json`: case/scenario/ref/time range and render targets
@@ -58,6 +59,8 @@ root-cause analysis rather than broad access/resource trending.
      `/assets/js/site.js`
    - `site_publish.md`: xqyun/yche.me publish checklist with target path,
      URL, copy command, and validation command
+   - `manifest.json` `render_targets.site.publish`: dry-run/publish status
+     recorded by the `publish-site` stage
 5. Inspect selected full logs for the top slow/error traces. Keep aggregate
    distributions first, then per-trace evidence.
 6. Cross-check any source-level conclusion with CodeGraph plus direct source

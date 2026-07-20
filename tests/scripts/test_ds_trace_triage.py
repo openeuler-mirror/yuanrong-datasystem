@@ -435,6 +435,12 @@ def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
     assert Path(capsys.readouterr().out.strip()).name == "report.local.html"
     assert mod.main(["render-site", str(run_dir)]) == 0
     assert Path(capsys.readouterr().out.strip()).name == "report.site.html"
+    assert mod.main(["publish-site", str(run_dir), "--dry-run"]) == 0
+    publish_output = capsys.readouterr().out.strip()
+    assert "https://yche.me/perf/" in publish_output
+    assert "DRY-RUN" in publish_output
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["render_targets"]["site"]["publish"]["status"] == "dry-run"
 
 
 def test_trace_run_pipeline_object_exposes_stage_boundaries(tmp_path):

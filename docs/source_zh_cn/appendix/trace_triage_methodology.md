@@ -49,6 +49,7 @@ python3 scripts/ds_trace_triage.py aggregate "$run_dir"
 python3 scripts/ds_trace_triage.py triage "$run_dir"
 python3 scripts/ds_trace_triage.py render-local "$run_dir"
 python3 scripts/ds_trace_triage.py render-site "$run_dir"
+python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
 ```
 
 旧的直接摘要入口仍可用于快速检查：
