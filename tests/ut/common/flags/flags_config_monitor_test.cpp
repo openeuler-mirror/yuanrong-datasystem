@@ -97,7 +97,7 @@ protected:
         FLAGS_node_timeout_s = 60;
         configPath_ = FLAGS_log_dir + "/datasystem.config";
         ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
-        Logging::GetInstance()->Start("flags_cfg_mon", false);
+        Logging::GetInstance()->Start("flags_cfg_mon", LogProcessRole::WORKER);
     }
 
     void TearDown() override

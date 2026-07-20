@@ -25,6 +25,8 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 DS_DEFINE_int32(watch_event_dispatch_thread, 4, "Number of coordinator watch event dispatch threads");
 
@@ -243,6 +245,7 @@ void WatchDispatcher::Stop()
 
 void WatchDispatcher::FanOutLoop()
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("CoordWF;" + GetStringUuid());
     while (running_.load()) {
         std::deque<std::shared_ptr<WatchEvent>> batch;
         {
@@ -316,6 +319,7 @@ void WatchDispatcher::ScheduleChannelLocked(const std::shared_ptr<WatcherChannel
 
 void WatchDispatcher::DispatchLoop(size_t threadIndex)
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("CoordWD;" + GetStringUuid());
     auto &dt = dispatchThreadPool_[threadIndex];
     while (running_.load()) {
         auto channel = WaitForReadyChannel(*dt);

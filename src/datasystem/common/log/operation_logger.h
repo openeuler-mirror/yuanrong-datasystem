@@ -56,7 +56,7 @@ public:
 
     /**
      * @brief Record initial configuration snapshot in audit log.
-     * @param[in] flagsSnapshot Serialized non-default flags at startup.
+     * @param[in] flagsSnapshot Serialized effective flags at startup.
      */
     void LogConfigInit(const std::string &flagsSnapshot);
 
@@ -95,7 +95,7 @@ private:
     OperationLogger(OperationLogger &&) = delete;
     OperationLogger &operator=(OperationLogger &&) = delete;
 
-    void WriteLog(const std::string &message);
+    void WriteLog(const std::string &message, const ds_spdlog::source_loc &sourceLoc);
 
     std::shared_ptr<ds_spdlog::logger> logger_;
     std::string role_;

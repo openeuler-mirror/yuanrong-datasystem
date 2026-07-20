@@ -29,7 +29,7 @@ const static std::string WORKER = "worker";
 
 PerfClient::PerfClient(const ConnectOptions &connectOptions)
 {
-    Logging::GetInstance()->Start("perf_client", true);
+    Logging::GetInstance()->Start("perf_client", LogProcessRole::CLIENT);
     clientWorkerApi_ = std::make_shared<PerfClientWorkerApi>(std::move(connectOptions));
 }
 

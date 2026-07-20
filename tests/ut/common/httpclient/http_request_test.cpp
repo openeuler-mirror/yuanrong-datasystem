@@ -30,7 +30,7 @@ class HttpRequestTest : public CommonTest {
 public:
     void SetUp() override
     {
-        Logging::GetInstance()->Start("ds_llt", true, 1);
+        Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     };
 };
 

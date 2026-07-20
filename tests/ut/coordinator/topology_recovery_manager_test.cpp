@@ -41,6 +41,7 @@
 #include "datasystem/common/coordinator/ttl_manager.h"
 #include "datasystem/common/coordinator/watch_dispatcher.h"
 #include "datasystem/common/coordinator/watch_registry.h"
+#include "datasystem/common/log/trace.h"
 #include "ut/common.h"
 
 namespace datasystem::coordinator {
@@ -54,6 +55,7 @@ constexpr auto VALIDATION_TIMEOUT = std::chrono::seconds(1);
 constexpr auto TEST_DEADLINE = std::chrono::seconds(2);
 constexpr auto POLL_INTERVAL = std::chrono::milliseconds(1);
 constexpr auto SHUTDOWN_OBSERVATION = std::chrono::milliseconds(100);
+constexpr uint64_t TEST_DOWNSTREAM_PHASE_US = 123;
 
 class NoopWatchDispatcher final : public WatchDispatcher {
 public:
@@ -226,6 +228,52 @@ TEST_F(TopologyRecoveryManagerTest, InstallsUniqueHighestCanonicalPayload)
     DS_ASSERT_OK(store_->Range(TopologyKey(clusterName), "", entries, revision));
     ASSERT_EQ(entries.size(), 1);
     EXPECT_EQ(entries.front().value, payload.canonicalTopology);
+}
+
+TEST_F(TopologyRecoveryManagerTest, RecoveryTasksPreserveSubmittingTraceContext)
+{
+    const std::string clusterName = "trace-context";
+    const std::string requestTraceId = "coordinator-request-trace";
+    ObserveMember(clusterName, MEMBER_A);
+    auto payload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
+    TopologyRecoveryReportDecision decision;
+    {
+        TraceGuard evidenceTraceGuard = Trace::Instance().SetTraceNewID("evidence-only-trace");
+        ReportEvidence(clusterName, payload, decision);
+    }
+    ASSERT_TRUE(decision.payloadRequired);
+
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(requestTraceId);
+    Trace::Instance().SetRequestLogTrace(true);
+    Trace::Instance().SetRequestSampleDecision(true, true);
+    Trace::Instance().AddLatencyTick(LatencyTickKey::CLIENT_GET_START);
+    Trace::Instance().AddDownstreamPhase(LatencySummaryPhase::CLIENT_PROCESS_GET, TEST_DOWNSTREAM_PHASE_US);
+    const TraceContext expectedTrace = Trace::Instance().GetContext();
+    const std::string topologyKey = TopologyKey(clusterName);
+    auto observedTrace = std::make_shared<std::promise<TraceContext>>();
+    auto observedTraceFuture = observedTrace->get_future();
+    store_->SetCommittedMutationObserver([observedTrace, topologyKey](WatchEvent::Type type, const std::string &key) {
+        if (type == WatchEvent::Type::PUT && key == topologyKey) {
+            observedTrace->set_value(Trace::Instance().GetContext());
+        }
+    });
+
+    clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    ASSERT_EQ(observedTraceFuture.wait_for(TEST_DEADLINE), std::future_status::ready);
+    const TraceContext actualTrace = observedTraceFuture.get();
+    EXPECT_EQ(actualTrace.traceID, expectedTrace.traceID);
+    EXPECT_EQ(actualTrace.requestLogTrace, expectedTrace.requestLogTrace);
+    EXPECT_EQ(actualTrace.requestSampleDecisionValid, expectedTrace.requestSampleDecisionValid);
+    EXPECT_EQ(actualTrace.requestSampleDecisionAdmitted, expectedTrace.requestSampleDecisionAdmitted);
+    ASSERT_EQ(actualTrace.latencyTickCount, expectedTrace.latencyTickCount);
+    EXPECT_EQ(actualTrace.latencyTicks[0].key, expectedTrace.latencyTicks[0].key);
+    ASSERT_EQ(actualTrace.downstreamPhases.count, expectedTrace.downstreamPhases.count);
+    EXPECT_EQ(actualTrace.downstreamPhases.entries[0].phase, expectedTrace.downstreamPhases.entries[0].phase);
+    EXPECT_EQ(actualTrace.downstreamPhases.entries[0].durationUs,
+              expectedTrace.downstreamPhases.entries[0].durationUs);
+    ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
+    store_->SetCommittedMutationObserver({});
 }
 
 TEST_F(TopologyRecoveryManagerTest, MembershipDeleteDoesNotBreakAnInstallingCandidate)

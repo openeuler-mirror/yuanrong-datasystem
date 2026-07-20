@@ -29,8 +29,11 @@
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/log/logging.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/file_util.h"
 
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_string(log_filename);
 DS_DECLARE_bool(log_async);
@@ -62,6 +65,8 @@ protected:
     {
         logDir_ = MakeTempDir();
         ASSERT_FALSE(logDir_.empty());
+        oldClusterName_ = FLAGS_cluster_name;
+        FLAGS_cluster_name = "operation-logger-test-cluster";
         FLAGS_log_dir = logDir_;
         FLAGS_log_filename = "test_worker";
         FLAGS_log_async = false;
@@ -73,11 +78,13 @@ protected:
         if (!logDir_.empty()) {
             (void)RemoveAll(logDir_);
         }
+        FLAGS_cluster_name = oldClusterName_;
         FLAGS_log_dir.clear();
         FLAGS_log_filename.clear();
     }
 
     std::string logDir_;
+    std::string oldClusterName_;
 };
 
 TEST_F(OperationLoggerTest, WritesConfigChangedLine)
@@ -114,6 +121,31 @@ TEST_F(OperationLoggerTest, WritesOperationStartStop)
     const std::string content = ReadFile(path);
     EXPECT_THAT(content, testing::HasSubstr("OPERATION_START: role=client"));
     EXPECT_THAT(content, testing::HasSubstr("OPERATION_STOP: role=client"));
+}
+
+TEST_F(OperationLoggerTest, UsesStandardLogContextFields)
+{
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("operation-logger-test-trace");
+    ASSERT_TRUE(OperationLogger::Instance().Init("worker"));
+    OperationLogger::Instance().Shutdown();
+
+    const std::string path = logDir_ + "/test_worker_operation.log";
+    const std::string content = ReadFile(path);
+    EXPECT_THAT(content, testing::HasSubstr(" | I | operation_logger.cpp:"));
+    EXPECT_THAT(content, testing::HasSubstr(" | " + std::to_string(getpid()) + ":"));
+    EXPECT_THAT(content, testing::HasSubstr(" | operation-logger-test-trace | operation-logger-test-cluster |  "
+                                            "OPERATION_START: role=worker"));
+}
+
+TEST_F(OperationLoggerTest, WritesCoordinatorRole)
+{
+    ASSERT_TRUE(OperationLogger::Instance().Init(GetLogProcessRoleName(LogProcessRole::COORDINATOR)));
+    OperationLogger::Instance().Shutdown();
+
+    const std::string path = logDir_ + "/test_worker_operation.log";
+    const std::string content = ReadFile(path);
+    EXPECT_THAT(content, testing::HasSubstr("OPERATION_START: role=coordinator"));
+    EXPECT_THAT(content, testing::HasSubstr("OPERATION_STOP: role=coordinator"));
 }
 
 TEST_F(OperationLoggerTest, MasksSensitiveFlagsInConfigInit)

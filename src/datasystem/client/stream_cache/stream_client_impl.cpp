@@ -109,7 +109,7 @@ Status StreamClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
 
 Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &needRollbackState, bool reportWorkerLost)
 {
-    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT);
     FlagsMonitor::GetInstance()->Start();
     auto rc = clientStateManager_->ProcessInit(needRollbackState);
     if (!needRollbackState) {

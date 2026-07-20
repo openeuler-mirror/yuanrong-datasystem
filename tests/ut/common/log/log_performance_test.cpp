@@ -93,7 +93,7 @@ public:
         FLAGS_max_log_size = 2048;
         FLAGS_log_async = true;
 
-        Logging::GetInstance()->Start("ds_llt", true, 1);
+        Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     }
 
     void StartLoggingWithSamplerRate(double requestRate)

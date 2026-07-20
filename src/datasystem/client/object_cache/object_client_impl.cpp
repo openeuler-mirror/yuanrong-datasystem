@@ -785,7 +785,7 @@ Status ObjectClientImpl::Init(bool &needRollbackState, bool enableHeartbeat, con
     if (clientConfig != nullptr) {
         RETURN_IF_NOT_OK(ApplyKvClientProcessConfig(*clientConfig));
     }
-    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT);
     FlagsMonitor::GetInstance()->Start();
 
     auto rc = clientStateManager_->ProcessInit(needRollbackState);

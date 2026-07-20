@@ -77,6 +77,7 @@ ds_cc_library(
     srcs = ["operation_logger.cpp"],
     hdrs = ["operation_logger.h"],
     deps = [
+        ":log_base",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/log/spdlog:ds_spdlog",
     ],

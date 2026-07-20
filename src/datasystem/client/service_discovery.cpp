@@ -239,7 +239,7 @@ ServiceDiscovery::ServiceDiscovery(const ServiceDiscoveryOptions &opts)
 
 Status ServiceDiscovery::Init()
 {
-    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT);
     randomData_ = std::make_shared<RandomData>();
     CHECK_FAIL_RETURN_STATUS(!etcdAddress_.empty(), K_INVALID,
                              FormatString("The value of EtcdAddress should not be empty."));
@@ -334,7 +334,7 @@ CoordinatorServiceDiscovery::CoordinatorServiceDiscovery(const CoordinatorServic
 
 Status CoordinatorServiceDiscovery::Init()
 {
-    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, true);
+    Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT);
     CHECK_FAIL_RETURN_STATUS(coordinatorDiscovery_ != nullptr, K_INVALID,
                              "coordinatorDiscovery should not be null when serviceAddress is empty.");
     std::unique_ptr<cluster::TopologyKeyHelper> keys;

@@ -27,9 +27,10 @@ ds_cc_library(
     deps=[
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:uuid_generator",
         "//src/datasystem/protos:coordinator_brpc",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",
     ],

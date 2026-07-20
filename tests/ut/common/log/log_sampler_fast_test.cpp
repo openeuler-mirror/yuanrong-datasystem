@@ -65,7 +65,7 @@ public:
     {
         FLAGS_stderrthreshold = LogSeverity::FATAL;
         FLAGS_log_async = true;
-        Logging::GetInstance()->Start("ds_llt", true, 1);
+        Logging::GetInstance()->Start("ds_llt", LogProcessRole::CLIENT, 1);
     }
 
     void StartLoggingWithSamplerConfig(double requestRate, double accessRate, double diagnosticRate)

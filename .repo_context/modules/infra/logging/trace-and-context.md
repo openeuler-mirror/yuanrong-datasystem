@@ -19,7 +19,7 @@
 ## Responsibilities
 
 - Verified:
-  - `Trace::Instance()` is `thread_local`.
+  - `Trace::Instance()` uses the active BRPC `RequestContext` trace when one is bound to the current bthread and otherwise falls back to `thread_local` state.
   - `SetTraceUUID()` generates a new UUID-based trace ID unless the current thread already has one.
   - `SetRequestTraceUUID()` creates a root trace, marks it as a request-log-sampling trace for public SDK request APIs,
     and creates a local sampling decision immediately when LogSampler is enabled.
@@ -56,6 +56,8 @@
   - non-request/background work uses `Trace::Instance().SetTraceUUID()` or imported trace IDs without request markers;
   - asynchronous or cross-thread request flows capture and reapply full `TraceContext` explicitly;
   - ZMQ `MetaPb` carries one request-log sampling state (`NONE`, `UNDECIDED`, `ADMIT`, `REJECT`) and callsites restore both `trace_id` and request-sampling context when importing request context;
+  - BRPC request attachments preserve an existing caller trace ID and create a request-scoped UUID when the caller has no active trace, matching ZMQ's non-empty outbound trace behavior;
+  - coordinator startup establishes a `CoordMain` lifecycle trace before logging initialization, coordinator TTL/watch threads establish bounded component-scoped traces at thread entry, and topology recovery tasks capture and restore the submitting `TraceContext`;
   - request sampling decisions live in `Trace` rather than a process-wide trace-decision table; `LogSampler`
     owns the sampling decision and precomputed threshold; no per-second counter is used;
   - sub-operations can append sub-trace state without replacing the root trace.
@@ -77,5 +79,6 @@
   - `src/datasystem/context/context.cpp`
 - Common risks:
   - replacing `SetTraceUUID()` with unconditional regeneration can break correlation across a request chain;
-  - forgetting `TraceGuard` or equivalent cleanup can leak trace/sub-trace state into unrelated work on reused threads.
+  - forgetting `TraceGuard` or equivalent cleanup can leak trace/sub-trace state into unrelated work on reused threads;
+  - assigning one permanent background trace guarantees component logs are non-empty but does not make batched work causally equivalent to the original request;
   - adding heap-owning members to `Trace` can reintroduce process-teardown use-after-free for process-static SDK clients.

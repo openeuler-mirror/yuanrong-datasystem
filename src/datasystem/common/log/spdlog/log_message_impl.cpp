@@ -25,7 +25,6 @@
 #include <iostream>
 
 #include <unistd.h>
-#include <sys/syscall.h>
 
 #include "datasystem/common/log/log_time.h"
 #include "datasystem/common/log/log_sampler.h"
@@ -33,7 +32,6 @@
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/log/spdlog/provider.h"
-#include "datasystem/common/log/trace.h"
 
 DS_DEFINE_int32_dynamic(v, 0, "Show all VLOG(m) messages for m <= this.");
 DS_DECLARE_string(cluster_name);
@@ -110,16 +108,6 @@ char *LogStreamBuf::pbase() const
     return std::streambuf::pbase();
 }
 
-static void AppendLogMessageImplPrefix(const std::string &podName, std::ostream &logStream)
-{
-    PerfPoint point(PerfKey::APPEND_LOG_MESSAGE_PREFIX);
-    static const pid_t pid = getpid();
-    static thread_local pid_t tid = syscall(__NR_gettid);
-
-    logStream << podName << " | " << pid << ":" << tid << " | " << Trace::Instance().GetTraceID() << " | "
-              << FLAGS_cluster_name << " |  ";
-}
-
 static DsLogger GetMessageLogger()
 {
     PerfPoint point(PerfKey::GET_MESSAGE_LOGGER);
@@ -191,7 +179,8 @@ void LogMessageImpl::Init()
             skip_ = true;
             return;
         }
-        AppendLogMessageImplPrefix(podName_, logStream_);
+        PerfPoint point(PerfKey::APPEND_LOG_MESSAGE_PREFIX);
+        AppendLogMessagePrefix(logStream_, podName_, FLAGS_cluster_name);
     }
 }
 

@@ -21,9 +21,12 @@
 #include <csignal>
 #include <mutex>
 
+#include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/operation_logger.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/coordinator/coordinator_service_impl.h"
@@ -63,6 +66,7 @@ CoordinatorServer *CoordinatorServer::GetInstance()
 
 Status CoordinatorServer::InitAndRun()
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     {
         std::lock_guard<std::mutex> lock(initMutex_);
         if (isStarted_.load()) {
@@ -80,6 +84,8 @@ Status CoordinatorServer::InitAndRun()
     }
 
     LOG(INFO) << "Coordinator started successfully";
+    DynamicFlagConfig flags;
+    OperationLogger::Instance().LogConfigInit(flags.GetAllFlagsStr());
 
     RunEventLoop();  // blocks until termination signal or Stop()
 
@@ -88,6 +94,7 @@ Status CoordinatorServer::InitAndRun()
 
 Status CoordinatorServer::InitAndRun(const CoordinatorOptions &options)
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     std::string errMsg;
     CHECK_FAIL_RETURN_STATUS(
         FlagManager::GetInstance()->ParseConfigFile(options.configFilePath, errMsg),

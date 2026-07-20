@@ -145,6 +145,19 @@ bool g_hasClientAccessLogNameConfig = false;
 std::string g_clientAccessLogNameConfig;
 }  // namespace
 
+const char *GetLogProcessRoleName(LogProcessRole role)
+{
+    switch (role) {
+        case LogProcessRole::CLIENT:
+            return "client";
+        case LogProcessRole::WORKER:
+            return "worker";
+        case LogProcessRole::COORDINATOR:
+            return "coordinator";
+    }
+    return "unknown";
+}
+
 std::string &Logging::podName_ = Provider::GetPodName();
 
 Logging *Logging::GetInstance()
@@ -298,7 +311,7 @@ bool Logging::InitLoggingWrapper(uint32_t logProcessInterval)
     if (rc.IsError()) {
         return false;
     }
-    (void)OperationLogger::Instance().Init(isClient_ ? "client" : "worker");
+    (void)OperationLogger::Instance().Init(GetLogProcessRoleName(processRole_));
     return true;
 }
 
@@ -486,14 +499,16 @@ Logging::~Logging()
     }
 }
 
-void Logging::Start(const std::string logFilename, bool isClient, uint32_t logProcessInterval, bool isEmbeddedClient)
+void Logging::Start(const std::string &logFilename, LogProcessRole processRole, uint32_t logProcessInterval,
+                    bool isEmbeddedClient)
 {
     WriteLock lock(&mux_);
     if (IsLoggingInitialized()) {
         return;
     }
 
-    isClient_ = isClient;
+    processRole_ = processRole;
+    isClient_ = processRole == LogProcessRole::CLIENT;
     isEmbeddedClient_ = isEmbeddedClient;
     std::string clientLogName;
     if (isClient_) {
