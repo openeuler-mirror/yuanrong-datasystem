@@ -371,6 +371,37 @@ def test_multiple_input_files_are_reported_as_cohorts(tmp_path):
     assert report["traces"][trace_a]["input_sources"] == ["noisy.log"]
 
 
+def test_dizao_directory_marks_noise_cohorts(tmp_path):
+    trace_a = "019f7d11-1f09-762a-9163-c547ef71a101"
+    trace_b = "019f7d11-b880-7937-b945-382161303102"
+    noisy_dir = tmp_path / "round1-dizao"
+    clean_dir = tmp_path / "round2"
+    noisy_dir.mkdir()
+    clean_dir.mkdir()
+    noisy = noisy_dir / "worker.log"
+    clean = clean_dir / "worker.log"
+    noisy.write_text(
+        f"2026-07-20T14:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_a} | - | 1001 | DS_KV_CLIENT_GET | 20298 | 0\n"
+        f"2026-07-20T14:00:00.001000 | ERROR | client | 10.0.0.1 | 1 | {trace_a} | RPC deadline exceeded\n",
+        encoding="utf-8",
+    )
+    clean.write_text(
+        f"2026-07-20T14:00:01.000000 | INFO | access_recorder | 10.0.0.2 | 1 | {trace_b} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(noisy_dir), str(clean_dir)], code_ref="unit-test")
+    cohorts = report["dimensions"]["cohorts"]
+
+    assert cohorts["有底噪(dizao)"]["trace_count"] == 1
+    assert cohorts["有底噪(dizao)"]["errors"]["RPC deadline exceeded"] == 1
+    assert cohorts["无底噪(wudizao)"]["trace_count"] == 1
+    assert cohorts["无底噪(wudizao)"]["errors"] == {}
+    assert report["traces"][trace_a]["input_sources"] == ["有底噪(dizao)"]
+    assert report["traces"][trace_b]["input_sources"] == ["无底噪(wudizao)"]
+
+
 def test_independent_stage_functions_consume_previous_artifacts(tmp_path):
     trace_id = "019f7d09-3aa3-77bd-a738-9965d66c9f23"
     log = tmp_path / "stage.log"

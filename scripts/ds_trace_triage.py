@@ -27,6 +27,8 @@ from pathlib import Path
 TRACE_ID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
 TS_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?)")
 WORKER_RE = re.compile(r"(kv[^/\s|]*worker[^/\s|]*)", re.I)
+NOISE_ON_LABEL = "有底噪(dizao)"
+NOISE_OFF_LABEL = "无底噪(wudizao)"
 ACCESS_RE = re.compile(r"\|\s*(-?\d+)\s*\|\s*([A-Z0-9_]+)\s*\|\s*(\d+)\s*\|\s*(\d+)")
 BREAKDOWN_BLOCK_RE = re.compile(r"exceed\s+3ms:\s*\{([^}]*)\}", re.I)
 BREAKDOWN_ITEM_RE = re.compile(r"([A-Za-z][A-Za-z0-9_ /.-]*?)\s*:\s*([\d.]+)\s*ms")
@@ -189,6 +191,60 @@ def _iter_input_lines(paths):
 
 def _iter_file(path):
     yield from TraceInputReader().iter_file(path)
+
+
+def _has_noise_token(text):
+    lowered = text.lower()
+    return any(token in lowered for token in ("dizao", "wudizao", "底噪"))
+
+
+def _is_noise_off(text):
+    lowered = text.lower()
+    return any(token in lowered for token in ("wudizao", "wu-dizao", "wu_dizao", "无底噪"))
+
+
+def _is_noise_on(text):
+    lowered = text.lower()
+    if _is_noise_off(lowered):
+        return False
+    return "dizao" in lowered or "底噪" in lowered
+
+
+def _noise_context_for_path(path):
+    path = Path(path)
+    return "/".join(part for part in (path.parent.name, path.name) if part)
+
+
+def _detect_noise_cohort_mode(paths):
+    for raw_path in paths:
+        path = Path(raw_path)
+        if _has_noise_token(_noise_context_for_path(path)):
+            return True
+        if path.is_dir():
+            for root, _, files in os.walk(path):
+                root_path = Path(root)
+                root_context = "/".join(part for part in (root_path.parent.name, root_path.name) if part)
+                if _has_noise_token(root_context) or any(_has_noise_token(name) for name in files):
+                    return True
+        elif path.exists() and tarfile.is_tarfile(path):
+            try:
+                with tarfile.open(path, "r:*") as tar:
+                    if any(_has_noise_token(member.name) for member in tar.getmembers()):
+                        return True
+            except tarfile.TarError:
+                continue
+    return False
+
+
+def _source_cohort_label(source, member, noise_cohort_mode=False):
+    text = f"{_noise_context_for_path(source)}/{member}"
+    if _is_noise_off(text):
+        return NOISE_OFF_LABEL
+    if _is_noise_on(text):
+        return NOISE_ON_LABEL
+    if noise_cohort_mode:
+        return NOISE_OFF_LABEL
+    return Path(source).name
 
 
 def _percentiles(values):
@@ -456,6 +512,7 @@ class TraceAnalyzer:
 def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=None):
     reader = reader or TraceInputReader()
     parser = parser or TraceParser(rules or DEFAULT_RULES)
+    noise_cohort_mode = _detect_noise_cohort_mode(paths)
     traces = defaultdict(lambda: {
         "lines": 0,
         "workers": Counter(),
@@ -499,7 +556,7 @@ def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=N
         trace_id = parsed["trace_id"]
         trace = traces[trace_id]
         trace["lines"] += 1
-        trace["input_sources"][Path(source).name] += 1
+        trace["input_sources"][_source_cohort_label(source, member, noise_cohort_mode)] += 1
         worker = parsed["worker"]
         trace["workers"][worker] += 1
         worker_counts[worker] += 1

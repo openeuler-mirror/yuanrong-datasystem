@@ -260,8 +260,10 @@ UB/URMA 相关报告要用时序口径：
 - 如果 `write total - sleep wait` 只有几十 us，说明慢主要在等待 completion，不是 wait 返回后的业务处理。
 - DataWorker UB write 很关键，但不能只看 `URMA_ELAPSED_TOTAL`；还要看 request id、src/target、dataSize、cpuid、inflight、wake latency 和同 trace 的 EntryWorker RemotePull。
 
-有无底噪对比时，把两个日志包当成两个 cohort：
+有无底噪对比时，把不同运行当成两个 cohort：
 
+- 目录名或 tar member 路径包含 `dizao` / `底噪` 时标记为 `有底噪(dizao)`；包含 `wudizao` / `无底噪` 时标记为 `无底噪(wudizao)`。
+- 若同一次分析中已经出现底噪语义，则未包含 `dizao` 的其他运行默认作为 `无底噪(wudizao)` 对照。
 - 每个 cohort 独立统计 trace 数、根因占比、Top slow、Worker/IP 分布。
 - 对比图优先展示“同一表象下服务端阶段是否变化”，例如 CPU/内存底噪消失后，URMA 秒级 tail 是否消失，是否残留 20ms deadline。
 - 不要用旧轮次根因覆盖新轮次；同一 trace 报告中必须标注输入包、case、scenario 和 run 时间。

@@ -164,8 +164,12 @@ For customer-facing reports, write like a diagnosis note:
   breakdown, and full logs.
 - For UB/URMA, describe the write/wait/notify timeline and compare total,
   poll JFC, notify, thread scheduling, data size, CPU, inflight, and edge.
-- For multiple packages or noisy-vs-clean comparisons, treat each package as a
-  cohort and compare distributions before carrying over root-cause labels.
+- For noisy-vs-clean comparisons, treat different runs as cohorts: paths or tar
+  members containing `dizao`/`底噪` are `有底噪(dizao)`, paths containing
+  `wudizao`/`无底噪` are `无底噪(wudizao)`, and once a noise marker exists in
+  the run, unmarked peers are the `无底噪(wudizao)` baseline.
+- For generic multiple packages without noise markers, keep each package as a
+  separate cohort and compare distributions before carrying over root-cause labels.
 - The HTML report should follow the `/var/www/html/perf` trace-report pattern:
   fixed left navigation, KPI cards, a core-judgment panel, ECharts with
   captions, cohort comparison, trace search/filter/pagination, selected-trace
