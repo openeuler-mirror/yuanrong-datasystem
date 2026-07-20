@@ -227,6 +227,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"cohort-chart\"" in html
     assert "id=\"cohort-table\"" in html
     assert "id=\"latency-chart\"" in html
+    assert "Latency Metrics Top12" in html
+    assert "latencyChartRows" in html
+    assert "Flow Breakdown" in html
     assert "id=\"time-breakdown-chart\"" in html
     assert "Time Bucket Latency Stages" in html
     assert "client/access p99 upper bound" in html

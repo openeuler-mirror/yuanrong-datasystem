@@ -1503,8 +1503,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <h2>3. 时延 Breakdown</h2>
         <div class="panel insight">Breakdown 不做简单相加：Client/access 是等待窗口；Entry/DataWorker 指标可能发生在 client deadline 之后。图中 p99/max 用于找尾部，p50 用于看普遍水平。</div>
         <div class="chart-grid">
-          <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 时延分布，单位 ms/us 按指标原始语义展示</div></div>
-          <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布</div></div>
+          <div class="panel"><div id="latency-chart" class="chart"></div><div class="caption">图 3-1 时延指标 Top 分布：latencySummary 原始 us 统一换算为 ms 后展示</div></div>
+          <div class="panel"><div id="flow-chart" class="chart"></div><div class="caption">图 3-2 访问流程分布：柱形图便于和表 3-2 一行对照</div></div>
         </div>
         <div class="panel"><div id="time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 时间桶时延分段：柱状图为同桶内 RPC/UB 子阶段 p99，折线为 client/access p99 上界；client access 不与子阶段相加。</div></div>
         <div class="compare2">
@@ -1573,6 +1573,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function pctText(item) {
     if (!item || !item.count) return '';
     return `count=${item.count} p50=${item.p50} p90=${item.p90} p99=${item.p99} max=${item.max}`;
+  }
+  function scalePercentiles(item, scale) {
+    if (!item || !item.count) return null;
+    const out = {count:item.count};
+    ['min','p50','p90','p99','max'].forEach(key => {
+      out[key] = item[key] === undefined || item[key] === null ? null : Number((item[key] * scale).toFixed(3));
+    });
+    return out;
   }
   function renderTable(id, headers, rows, rowAttrs) {
     const table = document.getElementById(id);
@@ -1746,11 +1754,17 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     edge.status
   ]));
   renderTable('error-table', ['error','count'], errorRows);
-  renderTable('latency-table', ['metric','distribution'], [
+  const latencyRowsForTable = [
     ['access', pctText(dim.latency_ms?.access)],
     ...Object.entries(dim.urma_elapsed || {}).map(([k,v]) => [`urma.${k}`, pctText(v)]),
     ...Object.entries(dim.latency_summary_us || {}).map(([k,v]) => [`latencySummary.${k}`, pctText(v)])
-  ].filter(row => row[1]));
+  ].filter(row => row[1]);
+  const latencyChartRows = [
+    ['access', scalePercentiles(dim.latency_ms?.access, 1)],
+    ...Object.entries(dim.urma_elapsed || {}).map(([k,v]) => [`urma.${k}`, scalePercentiles(v, 1)]),
+    ...Object.entries(dim.latency_summary_us || {}).map(([k,v]) => [`latencySummary.${k}`, scalePercentiles(v, 0.001)])
+  ].filter(([, item]) => item && item.count).sort((a,b) => (b[1].max || 0) - (a[1].max || 0)).slice(0, 12);
+  renderTable('latency-table', ['metric','distribution'], latencyRowsForTable);
   const flowRows = Object.entries(dim.flow || {}).sort((a,b) => b[1]-a[1]);
   const workerRows = Object.entries(dim.worker_summary || {})
     .sort((a,b) => (b[1].error_count || 0) - (a[1].error_count || 0) || (b[1].line_count || 0) - (a[1].line_count || 0))
@@ -1932,8 +1946,18 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     {name:'errors',type:'bar',barMaxWidth:42,data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0)), label:{show:true, position:'top'}, itemStyle:{color:'#dc2626'}}
   ]}) : noDataOption('No cohort data'));
   chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
-  chart('latency-chart', axisBase('Latency Percentiles', {legend:{top:30}, xAxis:{type:'category', data:['access']}, yAxis:{type:'value', name:'ms'}, series:['p50','p90','p99','max'].map(k => ({name:k,type:'bar',barMaxWidth:42,data:[access[k] || 0], markLine:k === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]} : undefined}))}));
-  chart('flow-chart', flowRows.length ? {title:{text:'Flow', left:'center'}, color:palette, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['35%','65%'], center:['50%','47%'], data:flowRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No flow data'));
+  chart('latency-chart', latencyChartRows.length ? axisBase('Latency Metrics Top12', {
+    grid:{left:230,right:50,top:72,bottom:46,containLabel:true},
+    xAxis:{type:'value', name:'ms'},
+    yAxis:{type:'category', data:latencyChartRows.map(r => r[0]), axisLabel:{width:210, overflow:'truncate'}},
+    series:['p50','p90','p99','max'].map(key => ({name:key,type:'bar',barMaxWidth:18,data:latencyChartRows.map(([, item]) => item[key] || 0), markLine:key === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{xAxis:20}]} : undefined}))
+  }) : noDataOption('No latency metric data'));
+  chart('flow-chart', flowRows.length ? axisBase('Flow Breakdown', {
+    grid:{left:165,right:34,top:56,bottom:42,containLabel:true},
+    xAxis:{type:'value', name:'count'},
+    yAxis:{type:'category', data:flowRows.map(r => r[0]), axisLabel:{width:150, overflow:'truncate'}},
+    series:[{name:'count',type:'bar',barMaxWidth:28,data:flowRows.map(r => r[1]),itemStyle:{color:'#2563eb'},label:{show:true,position:'right'}}]
+  }) : noDataOption('No flow data'));
   const timeStageNames = [...new Set(timeBucketRows.flatMap(row => Object.keys(row.stage_breakdown_ms || {})))]
     .filter(name => !name.endsWith('client_to_entry_worker'));
   chart('time-breakdown-chart', timeBucketRows.length ? axisBase('Time Bucket Latency Stages', {
