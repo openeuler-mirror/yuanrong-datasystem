@@ -18,6 +18,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 
 #include <etcd/api/mvccpb/kv.pb.h>
+#include <signal.h>
 #include <sstream>
 #include <thread>
 
@@ -26,8 +27,9 @@
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_keep_alive.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
-#include "datasystem/common/log/trace.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/spdlog/provider.h"
+#include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/compatibility_manager.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
@@ -413,7 +415,7 @@ Status EtcdStore::GetLeaseIDWithReconnectIfError(const int64_t ttlInSec, std::at
     return rc;
 }
 
-Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer)
+Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTimer)
 {
     std::future<Status> fStatus;
     // This block is protected by write lock for the leaseKeepAlive_ pointer to make it threadsafe
@@ -447,6 +449,7 @@ Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer)
                                   keepAliveTimeoutTimer.ElapsedMilliSecond()));
             return Status::OK();
         });
+        deathTimer.Clear();
     }
 
     // Wait for this child thread and then return its rc to caller
@@ -559,8 +562,9 @@ Status EtcdStore::LaunchKeepAliveThreads()
         int64_t observedLeaseId = 0;
         bool needHandleKeepAliveFailure = true;  // Avoid generating multiple duplicate fake events.
         keepAliveTimeoutTimer_.Reset();
+        Timer deathTimer;
         while (!keepAliveExit_) {
-            Status rc = RunKeepAliveTask(keepAliveTimeoutTimer_);
+            Status rc = RunKeepAliveTask(keepAliveTimeoutTimer_, deathTimer);
             INJECT_POINT("EtcdStore.LaunchKeepAliveThreads.shutdown", [&rc]() {
                 rc = Status::OK();
                 return;
@@ -572,8 +576,8 @@ Status EtcdStore::LaunchKeepAliveThreads()
                 keepAliveExit_ = true;
                 continue;
             }
-            if (!ProcessKeepAliveFailure(rc, observedLeaseId, networkFailedConfirmTimes,
-                                         needHandleKeepAliveFailure)) {
+            if (!ProcessKeepAliveFailure(rc, observedLeaseId, networkFailedConfirmTimes, needHandleKeepAliveFailure,
+                                         deathTimer)) {
                 continue;
             }
             // Allow some time for network to recover and then retry to create the keep alive again.
@@ -588,7 +592,7 @@ Status EtcdStore::LaunchKeepAliveThreads()
 }
 
 bool EtcdStore::ProcessKeepAliveFailure(const Status &status, int64_t &observedLeaseId, int &confirmTimes,
-                                        bool &needHandleFailure)
+                                        bool &needHandleFailure, Timer &deathTimer)
 {
     keepAliveTimeout_ = true;
     if (keepAliveTimeoutTimer_.ElapsedMilliSecond() < EtcdKeepAlive::GetLeaseExpiredMs()) {
@@ -605,20 +609,41 @@ bool EtcdStore::ProcessKeepAliveFailure(const Status &status, int64_t &observedL
     if (needHandleFailure && checkEtcdStateWhenNetworkFailedHandler_ != nullptr) {
         storeAvailable = checkEtcdStateWhenNetworkFailedHandler_();
         if (!storeAvailable) {
+            // No peer can reach etcd either, so this is a cluster-wide outage, not a local fault.
+            // Reset the failure timer and confirmation counter so they only measure local failures.
             keepAliveTimeoutTimer_.Reset();
             confirmTimes = 0;
         }
     }
+    // retry-based failure check
     if (storeAvailable && ++confirmTimes >= NETWORK_FAILURE_CONFIRM_MIN_TIMES) {
         auto rc = HandleKeepAliveFailed();
         LOG_IF_ERROR(rc, "add remove event failed when keep alive failed");
         if (rc.IsOk()) {
-            LOG(WARNING) << "Confirmed local ETCD network isolation; keep the process alive and report the "
-                            "membership deletion event.";
+            LOG(INFO) << "Confirmed to be a network failure";
             needHandleFailure = false;
+            // Theoretically, the kill signal should not be sent through this timer, but in order to prevent the
+            // suicide mechanism from failing due to unknown reasons, this timer is used as a guarantee, and the
+            // deviation is set to 10s.
+            deathTimer.AdjustTimeoutAndReset((FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s + 10) * SECS_TO_MS);
         }
+    } else if (deathTimer.IsTimeout()) {
+        LOG(INFO) << "The node scaling time has been reached and the lease has not been renewed. Scaling down "
+                     "should be performed.";
+        Provider::Instance().FlushLogs();
+        (void)raise(SIGKILL);
     } else {
-        LOG(INFO) << "ETCD is unavailable for keepalive; retry without terminating the process.";
+        LOG(INFO) << "Etcd is currently not available for keepAlive, we only need to retry, no other "
+                     "additional operations are required.";
+    }
+    // independent timeout-based failure check
+    if (storeAvailable && keepAliveTimeoutTimer_.ElapsedMilliSecond() > FLAGS_node_dead_timeout_s * MS_PER_SECOND
+        && FLAGS_auto_del_dead_node) {
+        LOG(WARNING) << FormatString(
+            "local node failed time %ld has been reached %ld, need kill local worker, Scaling down.",
+            keepAliveTimeoutTimer_.ElapsedMilliSecond(), FLAGS_node_dead_timeout_s * MS_PER_SECOND);
+        Provider::Instance().FlushLogs();
+        (void)raise(SIGKILL);
     }
     return true;
 }

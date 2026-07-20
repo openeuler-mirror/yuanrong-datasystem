@@ -515,20 +515,24 @@ private:
     /**
      * @brief Launches the internal thread that loops the actual keep-alive logic
      * timestamp and tag, and each time reconnecting the etcd use the same value.
+     * @param[in,out] keepAliveTimeoutTimer Timer measuring continuous local keepalive failure.
+     * @param[in,out] deathTimer Backup suicide timer armed after confirmed local isolation.
      * @return Status of the call.
      */
-    Status RunKeepAliveTask(Timer &keepAliveTimeoutTimer);
+    Status RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTimer);
 
     /**
      * @brief Classify one failed keepalive attempt and publish local-isolation evidence when confirmed.
+     *        On confirmed local isolation past node_dead_timeout_s (and auto_del_dead_node), raises SIGKILL.
      * @param[in] status Failed keepalive status.
      * @param[in,out] observedLeaseId Lease generation used by the current confirmation counter.
      * @param[in,out] confirmTimes Consecutive local-isolation confirmations.
      * @param[in,out] needHandleFailure Whether a fake DELETE still needs to be published for this lease.
+     * @param[in,out] deathTimer Backup suicide timer armed after confirmed local isolation.
      * @return True when the lease-expiry threshold was reached and the caller should delay before retrying.
      */
     bool ProcessKeepAliveFailure(const Status &status, int64_t &observedLeaseId, int &confirmTimes,
-                                 bool &needHandleFailure);
+                                 bool &needHandleFailure, Timer &deathTimer);
 
     /**
      * @brief Helper function to kick off the threading and loops for the keep alive
