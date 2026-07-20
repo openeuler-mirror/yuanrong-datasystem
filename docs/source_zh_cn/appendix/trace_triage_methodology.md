@@ -30,10 +30,25 @@ run 目录包含：
 
 - `manifest.json`：case、scenario、源码 ref、trace 时间范围、输入摘要和渲染目标。
 - `events.jsonl`：逐 trace 的原始证据事件和 UB 事件，带 source/member/line/raw。
+- `parsed_traces.json`：parse 阶段产物，供 aggregate 阶段消费。
 - `summary.json`：时间、worker、flow、latency、RPC、UB、error 等聚合维度。
 - `triage.json` / `triage.md`：分类、issue candidates、代表 trace。
 - `report.local.html`：本地自包含 HTML，可直接打开。
 - `report.site.html`：yche.me 站点版 HTML 草稿，供后续发布流程使用。
+
+也可以显式分阶段执行，便于人工检查中间产物：
+
+```bash
+run_dir=$(python3 scripts/ds_trace_triage.py parse <trace_dir_or_tar_gz> \
+  --code-ref "$(git rev-parse main/master)" \
+  --case <case-name> \
+  --scenario <scenario> \
+  --out /tmp/ds-trace-runs)
+python3 scripts/ds_trace_triage.py aggregate "$run_dir"
+python3 scripts/ds_trace_triage.py triage "$run_dir"
+python3 scripts/ds_trace_triage.py render-local "$run_dir"
+python3 scripts/ds_trace_triage.py render-site "$run_dir"
+```
 
 旧的直接摘要入口仍可用于快速检查：
 

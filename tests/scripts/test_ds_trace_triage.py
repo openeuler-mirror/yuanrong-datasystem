@@ -241,6 +241,70 @@ def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
     assert report["dimensions"]["coverage"]["surfaces"]["rpc_slow"]["status"] == "missing"
 
 
+def test_independent_stage_functions_consume_previous_artifacts(tmp_path):
+    trace_id = "019f7d09-3aa3-77bd-a738-9965d66c9f23"
+    log = tmp_path / "stage.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T13:00:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
+                f"2026-07-20T13:00:00.001000 | INFO | client | 10.0.0.9 | 1 | {trace_id} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    run_dir = mod.parse_stage([str(log)], tmp_path / "runs", case_name="stage-case", scenario="stage-smoke")
+
+    assert (run_dir / "manifest.json").exists()
+    assert (run_dir / "events.jsonl").exists()
+    assert (run_dir / "parsed_traces.json").exists()
+    assert not (run_dir / "summary.json").exists()
+
+    summary_path = mod.aggregate_stage(run_dir)
+    assert summary_path == run_dir / "summary.json"
+    summary = json.loads(summary_path.read_text())
+    assert summary["dimensions"]["flow"]["DS_KV_CLIENT_SET"] == 1
+
+    triage_path = mod.triage_stage(run_dir)
+    triage = json.loads(triage_path.read_text())
+    assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
+
+    assert mod.render_local_stage(run_dir) == run_dir / "report.local.html"
+    assert mod.render_site_stage(run_dir) == run_dir / "report.site.html"
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["stages"]["parse"]["status"] == "done"
+    assert manifest["stages"]["aggregate"]["status"] == "done"
+    assert manifest["stages"]["triage"]["status"] == "done"
+    assert manifest["render_targets"]["local"]["status"] == "generated"
+    assert manifest["render_targets"]["site"]["status"] == "generated"
+
+
+def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
+    trace_id = "019f7d0a-6891-7f63-81dc-1452e30fa4f1"
+    log = tmp_path / "cli-stage.log"
+    log.write_text(
+        f"2026-07-20T13:10:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    assert mod.main(["parse", str(log), "--out", str(tmp_path / "runs"), "--case", "cli-stage"]) == 0
+    run_dir = Path(capsys.readouterr().out.strip())
+    assert (run_dir / "parsed_traces.json").exists()
+    assert not (run_dir / "summary.json").exists()
+
+    assert mod.main(["aggregate", str(run_dir)]) == 0
+    assert Path(capsys.readouterr().out.strip()).name == "summary.json"
+    assert mod.main(["triage", str(run_dir)]) == 0
+    assert Path(capsys.readouterr().out.strip()).name == "triage.json"
+    assert mod.main(["render-local", str(run_dir)]) == 0
+    assert Path(capsys.readouterr().out.strip()).name == "report.local.html"
+    assert mod.main(["render-site", str(run_dir)]) == 0
+    assert Path(capsys.readouterr().out.strip()).name == "report.site.html"
+
+
 def test_cli_self_test_writes_json_and_markdown(tmp_path, capsys):
     mod = _load_module()
     out_json = tmp_path / "summary.json"

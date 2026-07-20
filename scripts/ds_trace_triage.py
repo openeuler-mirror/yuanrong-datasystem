@@ -789,6 +789,18 @@ def _write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _read_json(path):
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _update_manifest(run_dir, updater):
+    manifest_path = Path(run_dir) / "manifest.json"
+    manifest = _read_json(manifest_path)
+    updater(manifest)
+    _write_json(manifest_path, manifest)
+    return manifest
+
+
 def _render_html(report, title, site=False):
     data = json.dumps(report, ensure_ascii=False)
     stylesheet = '<link rel="stylesheet" href="/assets/css/site.css">' if site else "<style>body{font-family:sans-serif;margin:24px;max-width:1280px}pre{white-space:pre-wrap}.bad{color:#b00020}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}.card{border:1px solid #ddd;padding:12px;border-radius:6px}</style>"
@@ -869,14 +881,7 @@ def _build_triage(report):
     }
 
 
-def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
-    out_root = Path(out_dir)
-    out_root.mkdir(parents=True, exist_ok=True)
-    cache_key, identities = _cache_key(inputs, code_ref, case_name, scenario)
-    if not force:
-        cached = _find_cached_run(out_root, cache_key)
-        if cached:
-            return cached
+def _new_run_dir(out_root, case_name, cache_key):
     now = datetime.now()
     run_dir = out_root / f"{now.strftime('%Y%m%d-%H%M%S')}-{_slug(case_name)}-{cache_key[:8]}"
     suffix = 1
@@ -884,11 +889,22 @@ def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref=
         suffix += 1
         run_dir = out_root / f"{now.strftime('%Y%m%d-%H%M%S')}-{_slug(case_name)}-{suffix}"
     run_dir.mkdir(parents=True)
+    return run_dir, now
+
+
+def parse_stage(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+    out_root = Path(out_dir)
+    out_root.mkdir(parents=True, exist_ok=True)
+    cache_key, identities = _cache_key(inputs, code_ref, case_name, scenario)
+    if not force:
+        cached = _find_cached_run(out_root, cache_key)
+        if cached:
+            return cached
+    run_dir, now = _new_run_dir(out_root, case_name, cache_key)
     _preserve_raw_inputs(inputs, run_dir)
 
     report = analyze_inputs(inputs, code_ref=code_ref)
     events = _build_events(report)
-    triage = _build_triage(report)
     manifest = {
         "schema_version": 1,
         "case_name": case_name,
@@ -899,22 +915,82 @@ def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref=
         "cache": {"key": cache_key, "status": "created"},
         "trace_time_range": report["dimensions"]["time"],
         "inputs": identities,
+        "stages": {
+            "parse": {"status": "done", "path": "parsed_traces.json"},
+            "aggregate": {"status": "pending"},
+            "triage": {"status": "pending"},
+        },
         "render_targets": {
-            "local": {"path": "report.local.html", "status": "generated"},
-            "site": {"path": "report.site.html", "status": "generated"},
+            "local": {"path": "report.local.html", "status": "pending"},
+            "site": {"path": "report.site.html", "status": "pending"},
         },
     }
     _write_json(run_dir / "manifest.json", manifest)
     (run_dir / "events.jsonl").write_text(
         "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8"
     )
+    _write_json(run_dir / "parsed_traces.json", report)
+    return run_dir
+
+
+def aggregate_stage(run_dir):
+    run_dir = Path(run_dir)
+    report = _read_json(run_dir / "parsed_traces.json")
     _write_json(run_dir / "summary.json", report)
+    _update_manifest(run_dir, lambda manifest: manifest["stages"].update({
+        "aggregate": {"status": "done", "path": "summary.json"}
+    }))
+    return run_dir / "summary.json"
+
+
+def triage_stage(run_dir):
+    run_dir = Path(run_dir)
+    report = _read_json(run_dir / "summary.json")
+    triage = _build_triage(report)
     _write_json(run_dir / "triage.json", triage)
     (run_dir / "triage.md").write_text(render_markdown(report), encoding="utf-8")
-    (run_dir / "report.local.html").write_text(_render_html(report, f"Trace Triage: {case_name}"), encoding="utf-8")
+    _update_manifest(run_dir, lambda manifest: manifest["stages"].update({
+        "triage": {"status": "done", "path": "triage.json", "markdown": "triage.md"}
+    }))
+    return run_dir / "triage.json"
+
+
+def render_local_stage(run_dir):
+    run_dir = Path(run_dir)
+    report = _read_json(run_dir / "summary.json")
+    manifest = _read_json(run_dir / "manifest.json")
+    title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
+    (run_dir / "report.local.html").write_text(_render_html(report, title), encoding="utf-8")
+    _update_manifest(run_dir, lambda item: item["render_targets"].update({
+        "local": {"path": "report.local.html", "status": "generated"}
+    }))
+    return run_dir / "report.local.html"
+
+
+def render_site_stage(run_dir):
+    run_dir = Path(run_dir)
+    report = _read_json(run_dir / "summary.json")
+    manifest = _read_json(run_dir / "manifest.json")
+    title = f"Trace Triage: {manifest.get('case_name', 'trace-case')}"
     (run_dir / "report.site.html").write_text(
-        _render_html(report, f"Trace Triage: {case_name}", site=True), encoding="utf-8"
+        _render_html(report, title, site=True), encoding="utf-8"
     )
+    _update_manifest(run_dir, lambda item: item["render_targets"].update({
+        "site": {"path": "report.site.html", "status": "generated"}
+    }))
+    return run_dir / "report.site.html"
+
+
+def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+    run_dir = parse_stage(inputs, out_dir, case_name=case_name, scenario=scenario, code_ref=code_ref, force=force)
+    if not (run_dir / "summary.json").exists():
+        aggregate_stage(run_dir)
+    if not (run_dir / "triage.json").exists():
+        triage_stage(run_dir)
+    if not (run_dir / "report.local.html").exists():
+        render_local_stage(run_dir)
+    if not (run_dir / "report.site.html").exists():
+        render_site_stage(run_dir)
     return run_dir
 
 
@@ -973,7 +1049,8 @@ def run_self_test():
 
 def main(argv=None):
     argv = list(argv or sys.argv[1:])
-    if argv and argv[0] in ("run", "verify"):
+    stage_commands = {"parse", "aggregate", "triage", "render-local", "render-site"}
+    if argv and argv[0] in ({"run", "verify"} | stage_commands):
         command = argv.pop(0)
         if command == "verify":
             parser = argparse.ArgumentParser(description="Run built-in trace triage verification.")
@@ -985,15 +1062,41 @@ def main(argv=None):
                 Path(args.output_json).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n",
                                                   encoding="utf-8")
             return 0
+        if command == "parse":
+            parser = argparse.ArgumentParser(description="Parse trace inputs into a staged run directory.")
+            parser.add_argument("inputs", nargs="+", help="Log files, directories, or gzip-wrapped tar bundles.")
+            parser.add_argument("--out", required=True, help="Output root for timestamped run directories.")
+            parser.add_argument("--case", default="trace-case", help="Case name stored in manifest.")
+            parser.add_argument("--scenario", default="", help="Scenario description stored in manifest.")
+            parser.add_argument("--code-ref", default="unknown", help="Source ref used for CodeGraph/source validation.")
+            parser.add_argument("--force", action="store_true", help="Create a fresh run even when cache matches.")
+            args = parser.parse_args(argv)
+            print(parse_stage(args.inputs, args.out, case_name=args.case, scenario=args.scenario,
+                              code_ref=args.code_ref, force=args.force))
+            return 0
+        if command in ("aggregate", "triage", "render-local", "render-site"):
+            parser = argparse.ArgumentParser(description=f"Run trace triage {command} stage.")
+            parser.add_argument("run_dir", help="Existing staged run directory.")
+            args = parser.parse_args(argv)
+            if command == "aggregate":
+                print(aggregate_stage(args.run_dir))
+            elif command == "triage":
+                print(triage_stage(args.run_dir))
+            elif command == "render-local":
+                print(render_local_stage(args.run_dir))
+            else:
+                print(render_site_stage(args.run_dir))
+            return 0
         parser = argparse.ArgumentParser(description="Run staged DataSystem trace triage.")
         parser.add_argument("inputs", nargs="+", help="Log files, directories, or gzip-wrapped tar bundles.")
         parser.add_argument("--out", required=True, help="Output root for timestamped run directories.")
         parser.add_argument("--case", default="trace-case", help="Case name stored in manifest.")
         parser.add_argument("--scenario", default="", help="Scenario description stored in manifest.")
         parser.add_argument("--code-ref", default="unknown", help="Source ref used for CodeGraph/source validation.")
+        parser.add_argument("--force", action="store_true", help="Create a fresh run even when cache matches.")
         args = parser.parse_args(argv)
         run_dir = run_pipeline(args.inputs, args.out, case_name=args.case, scenario=args.scenario,
-                               code_ref=args.code_ref)
+                               code_ref=args.code_ref, force=args.force)
         print(run_dir)
         return 0
 

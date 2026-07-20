@@ -33,9 +33,23 @@ root-cause analysis rather than broad access/resource trending.
        --scenario <scenario> \
        --out /tmp/ds-trace-runs
    ```
+   For manual debugging or CI artifact checks, the same pipeline can be run as
+   explicit stages:
+   ```bash
+   run_dir=$(python3 scripts/ds_trace_triage.py parse <trace_dir_or_tar_gz> \
+       --code-ref "$(git rev-parse main/master)" \
+       --case <case-name> \
+       --scenario <scenario> \
+       --out /tmp/ds-trace-runs)
+   python3 scripts/ds_trace_triage.py aggregate "$run_dir"
+   python3 scripts/ds_trace_triage.py triage "$run_dir"
+   python3 scripts/ds_trace_triage.py render-local "$run_dir"
+   python3 scripts/ds_trace_triage.py render-site "$run_dir"
+   ```
 4. Read the timestamped run directory:
    - `manifest.json`: case/scenario/ref/time range and render targets
    - `events.jsonl`: trace-scoped raw and UB events with source/member/line
+   - `parsed_traces.json`: parser output consumed by aggregate
    - `summary.json`: time/worker/flow/latency/RPC/UB/error dimensions
    - `triage.json` and `triage.md`: classifications and issue candidates
    - `report.local.html`: self-contained local report
