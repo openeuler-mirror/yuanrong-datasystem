@@ -3881,13 +3881,55 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return (edge.rollup?.top_ips || []).slice(0, 4).join(', ');
   }
   function flowEdgeCurveness(edge) {
-    if (edge.operation === 'CreateBuffer') return .24;
-    if (edge.operation === 'Client Publish') return -.16;
-    if (edge.operation === 'Client→Entry RPC/UB') return .04;
-    if (edge.operation === 'Entry→Meta RPC') return .08;
-    if (edge.operation === 'Entry→Data RPC') return .08;
-    if (edge.operation === 'URMA Write') return -0.28;
-    return .08;
+    if (edge.operation === 'CreateBuffer') return .08;
+    if (edge.operation === 'Client Publish') return -.08;
+    if (edge.operation === 'Client→Entry RPC/UB') return 0;
+    if (edge.operation === 'Entry→Meta RPC') return 0;
+    if (edge.operation === 'Entry→Data RPC') return .1;
+    if (edge.operation === 'URMA Write') return -.1;
+    return 0;
+  }
+  function flowEdgeLabelOffset(edge) {
+    if (edge.operation === 'CreateBuffer') return [0, -22];
+    if (edge.operation === 'Client Publish') return [0, 22];
+    if (edge.operation === 'Entry→Data RPC') return [0, 22];
+    if (edge.operation === 'URMA Write') return [0, -22];
+    return [0, 0];
+  }
+  function flowEdgeLabelNodeData(edges, positions) {
+    return edges.map((edge, index) => {
+      const source = positions[edge.source];
+      const target = positions[edge.target];
+      if (!source || !target) return null;
+      const [offsetX, offsetY] = flowEdgeLabelOffset(edge);
+      const maxMs = Number(edge.rollup?.max_ms || 0);
+      return {
+        name:`__flow_edge_label_${index}`,
+        edge_text:flowEdgeBriefText(edge),
+        x:Math.round((source.x + target.x) / 2 + offsetX),
+        y:Math.round((source.y + target.y) / 2 + offsetY),
+        symbolSize:1,
+        fixed:true,
+        silent:true,
+        itemStyle:{color:'transparent', borderColor:'transparent'},
+        tooltip:{show:false},
+        label:{
+          show:true,
+          formatter:p => p.data.edge_text,
+          position:'inside',
+          fontSize:FLOW_GRAPH_LABEL_FONT_SIZE,
+          fontWeight:maxMs >= 20 ? 700 : 500,
+          color:maxMs >= 20 ? '#b91c1c' : '#334155',
+          width:160,
+          overflow:'break',
+          align:'center',
+          verticalAlign:'middle',
+          backgroundColor:'rgba(255,255,255,.9)',
+          borderRadius:3,
+          padding:[2,4]
+        }
+      };
+    }).filter(Boolean);
   }
   function flowGraphNodeSize() {
     return 72;
@@ -3899,17 +3941,22 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const graphWidth = Math.max(720, node?.clientWidth || 0);
     const flowNodeX = [0.12,0.34,0.58,0.58,0.82].map(r => Math.round(graphWidth * r));
     const flowNodeY = [170,170,82,258,258];
+    const graphNodePositions = Object.fromEntries((graph.nodes || []).map((item, idx) => [item.id, {
+      x:flowNodeX[idx] || flowNodeX[0],
+      y:flowNodeY[idx] || 130
+    }]));
     const graphNodeData = (graph.nodes || []).map((node, idx) => ({
       name:node.id,
       label:flowNodeLabel(node),
       top_ips:node.top_ips || [],
       top_workers:node.top_workers || [],
-      x:flowNodeX[idx] || flowNodeX[0],
-      y:flowNodeY[idx] || 130,
+      x:graphNodePositions[node.id].x,
+      y:graphNodePositions[node.id].y,
       symbolSize:flowGraphNodeSize(),
       fixed:true,
       itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
     }));
+    const graphEdgeLabelData = flowEdgeLabelNodeData(graph.edges || [], graphNodePositions);
     chart(id, {
     title:{text:title, left:'center', top:4, textStyle:{fontSize:14}},
     textStyle:chartTextStyle,
@@ -3925,9 +3972,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       edgeSymbolSize:8,
       label:{show:true, fontSize:FLOW_GRAPH_LABEL_FONT_SIZE},
       labelLayout:{hideOverlap:false},
-      edgeLabel:{show:true, position:'middle', formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:FLOW_GRAPH_LABEL_FONT_SIZE, width:150, overflow:'break'},
+      edgeLabel:{show:false},
       lineStyle:{width:2, color:'#64748b', curveness:.08},
-      data:graphNodeData,
+      data:[...graphNodeData, ...graphEdgeLabelData],
       links:(graph.edges || []).map(edge => ({
         source:edge.source,
         target:edge.target,

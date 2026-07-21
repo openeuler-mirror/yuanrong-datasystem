@@ -502,8 +502,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "return 72" in html
     assert "const FLOW_GRAPH_LABEL_FONT_SIZE = 14" in html
     assert "label:{show:true, fontSize:FLOW_GRAPH_LABEL_FONT_SIZE}" in html
-    assert "edgeLabel:{show:true, position:'middle', formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:FLOW_GRAPH_LABEL_FONT_SIZE, width:150, overflow:'break'}" in html
-    assert "data:graphNodeData" in html
+    assert "function flowEdgeLabelOffset(edge)" in html
+    assert "function flowEdgeLabelNodeData(edges, positions)" in html
+    assert "const graphEdgeLabelData = flowEdgeLabelNodeData(graph.edges || [], graphNodePositions)" in html
+    assert "edgeLabel:{show:false}" in html
+    assert "data:[...graphNodeData, ...graphEdgeLabelData]" in html
+    assert "position:'middle'" not in html
+    assert "itemStyle:{color:'transparent', borderColor:'transparent'}" in html
+    assert "itemStyle:{opacity:0}" not in html
     assert "label:flowEdgeAutoLabel(edge)" not in html
     assert "offset:flowEdgeLabelOffset(edge)" not in html
     assert "edge_annotation" not in html
@@ -584,7 +590,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "edge.summary" in html
     assert "edge_label:flowEdgeBriefText(edge)" in html
     assert "worker " in html
-    assert "p.data.edge_label || p.data.summary" in html
+    assert "edge_text:flowEdgeBriefText(edge)" in html
+    assert "formatter:p => p.data.edge_text" in html
     assert "edge.reason" in html
     assert "abnormal_ips:flowEdgeAbnormalIps(edge)" in html
     assert "p.data.abnormal_ips || ''" in html
