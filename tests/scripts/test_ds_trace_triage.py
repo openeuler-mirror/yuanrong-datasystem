@@ -457,6 +457,15 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"write-flow-stage-table\"" in html
     assert "id=\"read-flow-section\"" in html
     assert "id=\"write-flow-section\"" in html
+    assert "id=\"worker-ip-alias-table\"" in html
+    assert "表 4-5 Worker IP / 别名映射" in html
+    assert "function buildWorkerIpAliasRows()" in html
+    assert "renderTable('worker-ip-alias-table'" in html
+    assert "alias" in html
+    assert "POD IP" in html
+    assert "ip list" in html
+    assert "roles" in html
+    assert "trace count" in html
     assert "读取流程证据块" in html
     assert "写入流程证据块" in html
     assert "flow-section" in html

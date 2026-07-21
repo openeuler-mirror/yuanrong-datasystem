@@ -325,7 +325,14 @@ class TraceParser:
             "trace_id": match.group(0),
             "worker": worker,
             "timestamp": ts,
-            "evidence": {"source": source, "member": member, "line": line_no, "text": line},
+            "evidence": {
+                "source": source,
+                "member": member,
+                "line": line_no,
+                "worker": worker,
+                "host_ip": _line_host_ip(line),
+                "text": line,
+            },
             "ub_events": _extract_ub_events(source, member, line_no, line, ts, worker),
             "errors": [],
             "custom_metrics_ms": {},
@@ -468,6 +475,13 @@ def _worker_from(source, member, line):
 
 def _timestamp(line):
     return TraceParser().timestamp(line)
+
+
+def _line_host_ip(line):
+    parts = [p.strip() for p in line.split(" | ")]
+    if len(parts) > 3 and re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?", parts[3]):
+        return parts[3]
+    return None
 
 
 def _ms(raw_value, unit):
@@ -2258,6 +2272,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a class="sub" href="#read-worker-chart">图 4-2 读取 Worker</a>
       <a class="sub" href="#write-flow-stage-chart">图 4-3 写入流程</a>
       <a class="sub" href="#write-worker-chart">图 4-4 写入 Worker</a>
+      <a class="sub" href="#worker-ip-alias-table">表 4-5 Worker IP 映射</a>
       <a href="#s5">5. UB / URMA</a>
       <a class="sub" href="#ub-lifecycle-chart">图 5-1 UB 生命周期</a>
       <a class="sub" href="#ub-wr-count-chart">图 5-2 WR / Inflight</a>
@@ -2343,6 +2358,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><div class="controls"><label>Worker 筛选 <select id="write-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="write-worker-chart" class="chart"></div><div class="caption">图 4-4 写入 Worker 分布：写入链路按 worker 聚合。</div></div>
           <div class="panel"><h3>表 4-4 写入 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="write-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
         </div>
+        <div class="panel"><h3>表 4-5 Worker IP / 别名映射</h3><table id="worker-ip-alias-table" class="adaptive-table"></table></div>
         <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>
       </section>
       <section id="s5">
@@ -3007,6 +3023,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   renderFlowStageTable('flow-stage-table', flowStages);
   renderFlowStageTable('read-flow-stage-table', readFlowStages);
   renderFlowStageTable('write-flow-stage-table', writeFlowStages);
+  renderTable('worker-ip-alias-table', ['worker','alias','POD IP','ip list','roles','trace count','lines','UB src','UB target'], buildWorkerIpAliasRows());
   renderTable('error-table', ['error','count'], errorRows);
   const latencyRowsForTable = [
     ['access', pctText(dim.latency_ms?.access)],
@@ -3097,6 +3114,77 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (item.data_provider_count) parts.push(`数据提供端(data provider)=${item.data_provider_count}`);
     if (!parts.length && item.other_role_count) parts.push(`其他/未归因=${item.other_role_count}`);
     return parts.join(', ') || (item.roles || []).join(',');
+  }
+  function buildWorkerIpAliasRows() {
+    const rows = {};
+    const ensure = worker => {
+      const key = workerAggregateKey(worker);
+      return rows[key] || (rows[key] = {
+        worker:workerAggregateLabel(key),
+        aliases:new Set(),
+        pod_ips:new Set(),
+        ips:new Set(),
+        roles:new Set(),
+        trace_ids:new Set(),
+        line_count:0,
+        ub_src:new Set(),
+        ub_dst:new Set()
+      });
+    };
+    Object.entries(dim.worker_summary || {}).forEach(([worker, item]) => {
+      const target = ensure(worker);
+      target.aliases.add(workerRelationName(worker));
+      (item.roles || []).forEach(role => target.roles.add(role));
+      target.line_count += Number(item.line_count || 0);
+    });
+    traceRows.forEach(([traceId, item]) => {
+      Object.keys(item.workers || {}).forEach(worker => {
+        const target = ensure(worker);
+        target.aliases.add(workerRelationName(worker));
+        target.trace_ids.add(traceId);
+      });
+      (item.evidence || []).forEach(evidence => {
+        const worker = evidence.worker || '';
+        if (!worker) return;
+        const target = ensure(worker);
+        target.aliases.add(workerRelationName(worker));
+        target.trace_ids.add(traceId);
+        if (evidence.host_ip) {
+          target.pod_ips.add(evidence.host_ip);
+          target.ips.add(evidence.host_ip);
+        }
+      });
+      (item.ub_events || []).forEach(event => {
+        const worker = event.worker || '';
+        if (!worker) return;
+        const target = ensure(worker);
+        target.aliases.add(workerRelationName(worker));
+        target.trace_ids.add(traceId);
+        if (event.src_addr) {
+          target.ips.add(event.src_addr);
+          target.ub_src.add(event.src_addr);
+        }
+        if (event.target_addr) {
+          target.ips.add(event.target_addr);
+          target.ub_dst.add(event.target_addr);
+        }
+        if (['transfer_path','remote_get_start'].includes(event.event_type)) target.roles.add('entry_worker');
+        if (['total','poll_jfc','notify','thread_sched'].includes(event.event_type)) target.roles.add('data_worker');
+      });
+    });
+    return Object.values(rows)
+      .sort((a,b) => b.trace_ids.size - a.trace_ids.size || b.line_count - a.line_count || a.worker.localeCompare(b.worker))
+      .map(item => [
+        item.worker,
+        [...item.aliases].sort().join(', '),
+        [...item.pod_ips].sort().join(', '),
+        [...item.ips].sort().join(', '),
+        [...item.roles].sort().join(', '),
+        item.trace_ids.size,
+        item.line_count,
+        [...item.ub_src].sort().join(', '),
+        [...item.ub_dst].sort().join(', ')
+      ]);
   }
   function workerRowsForOperation(operation, selectedWorker='') {
     const workers = {};
