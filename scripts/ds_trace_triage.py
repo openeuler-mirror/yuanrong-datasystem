@@ -1867,7 +1867,7 @@ tr.summaryrow td{background:#f8fafc}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
 .compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
-th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
+th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none}.sortable-th:hover{background:#eaf2ff}.sort-mark{color:#2563eb;font-size:11px;margin-left:4px}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 .table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table{font-size:12px}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
@@ -2102,14 +2102,55 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (flowLabelMap[name]) return flowLabelMap[name];
     return String(name || '').replace(/^DS_/, '').replace(/_/g, ' ');
   }
-  function renderTable(id, headers, rows, rowAttrs) {
+  const tableSortStates = {};
+  function sortCellValue(value) {
+    const text = String(value ?? '').replace(/<[^>]*>/g, '').trim();
+    const numberMatch = text.match(/-?\\d+(?:\\.\\d+)?/);
+    if (numberMatch) return {type:'number', value:Number(numberMatch[0]), text};
+    return {type:'text', value:text.toLowerCase(), text};
+  }
+  function sortRowsForTable(rows, sort) {
+    if (!sort || sort.index === undefined || sort.index === null) return rows.slice();
+    return rows.map((row, originalIndex) => ({row, originalIndex})).sort((a, b) => {
+      const av = sortCellValue(a.row[sort.index]);
+      const bv = sortCellValue(b.row[sort.index]);
+      let cmp = 0;
+      if (av.type === 'number' && bv.type === 'number') cmp = av.value - bv.value;
+      else cmp = av.text.localeCompare(bv.text, 'zh-CN', {numeric:true});
+      if (cmp === 0) cmp = a.originalIndex - b.originalIndex;
+      return sort.dir === 'desc' ? -cmp : cmp;
+    }).map(item => item.row);
+  }
+  function nextSortState(current, index) {
+    if (!current || current.index !== index) return {index, dir:'asc'};
+    return {index, dir:current.dir === 'asc' ? 'desc' : 'asc'};
+  }
+  function renderTable(id, headers, rows, rowAttrs, options={}) {
     const table = document.getElementById(id);
+    const sortable = options.sortable !== false;
+    const sortState = options.sortState || tableSortStates[id];
+    const visibleRows = options.skipSort ? rows.slice() : sortRowsForTable(rows, sortState);
+    const headerHtml = headers.map((h, index) => {
+      const active = sortState && sortState.index === index;
+      const mark = active ? `<span class="sort-mark">${sortState.dir === 'asc' ? '▲' : '▼'}</span>` : '<span class="sort-mark">↕</span>';
+      return `<th class="${sortable ? 'sortable-th' : ''}" data-sort-index="${index}" aria-sort="${active ? (sortState.dir === 'asc' ? 'ascending' : 'descending') : 'none'}">${escapeHtml(h)}${sortable ? mark : ''}</th>`;
+    }).join('');
     if (!rows.length) {
-      table.innerHTML = `<tbody><tr><td class="muted">No data</td></tr></tbody>`;
+      table.innerHTML = `<thead><tr>${headerHtml}</tr></thead><tbody><tr><td class="muted" colspan="${headers.length}">No data</td></tr></tbody>`;
       return;
     }
-    table.innerHTML = `<thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>` +
-      `<tbody>${rows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map((cell, cellIdx) => `<td>${formatCell(headers[cellIdx], cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    table.innerHTML = `<thead><tr>${headerHtml}</tr></thead>` +
+      `<tbody>${visibleRows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map((cell, cellIdx) => `<td>${formatCell(headers[cellIdx], cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    if (sortable) {
+      table.querySelectorAll('th[data-sort-index]').forEach(th => th.addEventListener('click', () => {
+        const index = Number(th.dataset.sortIndex);
+        if (options.onSort) options.onSort(index);
+        else {
+          tableSortStates[id] = nextSortState(tableSortStates[id], index);
+          renderTable(id, headers, rows, rowAttrs, options);
+        }
+      }));
+    }
   }
   function formatCell(header, cell) {
     const text = String(cell ?? '');
@@ -2142,11 +2183,20 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }
   const pagedTables = {};
   function renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize=5) {
-    const state = pagedTables[id] || (pagedTables[id] = {page:0});
-    const pages = Math.max(1, Math.ceil(rows.length / pageSize));
+    const state = pagedTables[id] || (pagedTables[id] = {page:0, sort:null});
+    const sortedRows = sortRowsForTable(rows, state.sort);
+    const pages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
     state.page = Math.min(Math.max(state.page, 0), pages - 1);
     const start = state.page * pageSize;
-    renderTable(id, headers, rows.slice(start, start + pageSize), (row, idx) => rowAttrs ? rowAttrs(row, start + idx) : '');
+    renderTable(id, headers, sortedRows.slice(start, start + pageSize), (row, idx) => rowAttrs ? rowAttrs(row, start + idx) : '', {
+      skipSort:true,
+      sortState:state.sort,
+      onSort:index => {
+        state.sort = nextSortState(state.sort, index);
+        state.page = 0;
+        renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize);
+      }
+    });
     const pager = document.getElementById(pagerId);
     if (!pager) return;
     pager.innerHTML = `<button ${state.page <= 0 ? 'disabled' : ''} data-act="prev">上一页</button><span>第 ${state.page + 1} / ${pages} 页，共 ${rows.length} 行</span><button ${state.page >= pages - 1 ? 'disabled' : ''} data-act="next">下一页</button>`;

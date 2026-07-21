@@ -284,6 +284,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "latencyRowsForOperation" in html
     assert "Flow Breakdown" in html
     assert "flowRowsForOperation" in html
+    assert "sortable-th" in html
+    assert "sortRowsForTable" in html
+    assert "sortCellValue" in html
+    assert "data-sort-index" in html
+    assert "aria-sort" in html
+    assert "renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize=5)" in html
+    assert "state.sort" in html
     assert "flowLabelMap" in html
     assert "Worker GET" in html
     assert "wideHorizontalGrid" in html
