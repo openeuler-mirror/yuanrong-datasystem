@@ -2265,6 +2265,31 @@ TEST_F(ObjectClientTest, InvalidObjKeyTest)
     DS_ASSERT_NOT_OK(client->Get({ invalidId }, 0, buffers));
 }
 
+TEST_F(ObjectClientTest, GetPrefixRejectsInvalidKeys)
+{
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client);
+
+    std::string prefix;
+    const std::string key = "TEST_;;UUID";
+    EXPECT_EQ(client->GetPrefix(key, prefix).GetCode(), StatusCode::K_OK);
+    EXPECT_EQ(prefix, key);
+    const std::string punctuationKey = ";;;;;;";
+    EXPECT_EQ(client->GetPrefix(punctuationKey, prefix).GetCode(), StatusCode::K_OK);
+    EXPECT_EQ(prefix, punctuationKey);
+    EXPECT_EQ(client->GetPrefix("", prefix).GetCode(), StatusCode::K_INVALID);
+    EXPECT_EQ(client->GetPrefix("   ", prefix).GetCode(), StatusCode::K_INVALID);
+}
+
+TEST_F(ObjectClientTest, GetRejectsInvalidKeyAfterValidKey)
+{
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client);
+
+    std::vector<Optional<Buffer>> buffers;
+    EXPECT_EQ(client->Get({ "valid_key", "   " }, 0, buffers).GetCode(), StatusCode::K_INVALID);
+}
+
 TEST_F(ObjectClientTest, GetNotExitObj)
 {
     std::string notExistId = "12332";

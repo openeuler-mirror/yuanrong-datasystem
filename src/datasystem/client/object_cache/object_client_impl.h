@@ -1200,12 +1200,18 @@ private:
      * @return K_OK on success; the error code otherwise.
      */
     template <typename Vec>
-    static Status CheckValidObjectKeyVector(const Vec &vec, bool nullable = false)
+    static Status CheckValidObjectKeyVector(const Vec &vec, bool nullable = false,
+                                            size_t maxSize = OBJECT_KEYS_MAX_SIZE_LIMIT)
     {
         CHECK_FAIL_RETURN_STATUS(nullable || !vec.empty(), K_INVALID, "The keys are empty");
-        if (!vec.empty()) {
-            CHECK_FAIL_RETURN_STATUS(!vec.begin()->empty(), K_INVALID, FormatString("keys[%d] can not be empty", 0));
-            RETURN_IF_NOT_OK(CheckValidObjectKey(*vec.begin()));
+        CHECK_FAIL_RETURN_STATUS(vec.size() <= maxSize, K_INVALID,
+                                 FormatString("The keys size exceed %zu.", maxSize));
+        size_t index = 0;
+        for (const auto &key : vec) {
+            CHECK_FAIL_RETURN_STATUS(!key.empty(), K_INVALID,
+                                     FormatString("keys[%zu] can not be empty", index));
+            RETURN_IF_NOT_OK(CheckValidObjectKey(key));
+            ++index;
         }
         return Status::OK();
     }
