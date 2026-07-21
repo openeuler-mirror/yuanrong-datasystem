@@ -473,6 +473,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function workerFilterOptions()" in html
     assert "function workerRoleBreakdownForTrace(item, worker)" in html
     assert "function workerRoleSummaryText(item)" in html
+    assert "function isSameNodeEntryData(item)" in html
+    assert "同节点 entry+data" in html
+    assert "same_node_entry_data" in html
+    assert "item.same_node_entry_data" in html
     assert "数据读取发起端(entry get)=" in html
     assert "数据提供端(data provider)=" in html
     assert "function aggregateUbWorkerRowsByIdentity(rows, selectedWorker='')" in html

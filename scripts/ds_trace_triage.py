@@ -2769,8 +2769,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (!out.entry_get && !out.data_provider) out.other += 1;
     return out;
   }
+  function isSameNodeEntryData(item) {
+    return Boolean(item && item.entry_get_count && item.data_provider_count);
+  }
   function workerRoleSummaryText(item) {
     const parts = [];
+    if (item.same_node_entry_data || isSameNodeEntryData(item)) parts.push('同节点 entry+data');
     if (item.entry_get_count) parts.push(`数据读取发起端(entry get)=${item.entry_get_count}`);
     if (item.data_provider_count) parts.push(`数据提供端(data provider)=${item.data_provider_count}`);
     if (!parts.length && item.other_role_count) parts.push(`其他/未归因=${item.other_role_count}`);
@@ -2795,6 +2799,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         target.entry_get_count += roleBreakdown.entry_get;
         target.data_provider_count += roleBreakdown.data_provider;
         target.other_role_count += roleBreakdown.other;
+        target.same_node_entry_data = isSameNodeEntryData(target);
         target.trace_count += 1;
         target.slow_trace_count += isSlow ? 1 : 0;
         target.error_count += errorCount;
@@ -2845,7 +2850,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       return [display_worker, workerRoleSummaryText(item), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0];
     });
     renderPagedTable(`${operation}-worker-table`, `${operation}-worker-table-pager`, ['worker','roles','lines','traces','slow','errors'], tableRows,
-      row => (Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
+      row => (String(row[1]).includes('同节点 entry+data') || Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
     chart(`${operation}-worker-chart`, chartRows.length ? axisBase(`${title} Workers by Trace/Error`, {xAxis:{type:'category', data:chartRows.slice(0,20).map(r => r[1].display_worker || workerAggregateLabel(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
       {name:'traces',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
       {name:'slow',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
@@ -2868,7 +2873,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const roleTableWorker = workerFilterValue('ub-worker-role-table-filter');
     const timeTableWorker = workerFilterValue('ub-worker-time-table-filter');
     function ubWorkerRoleLabel(role) {
-      if (role === 'entry_and_exit') return '发起端+提供端';
+      if (role === 'entry_and_exit') return '同节点 entry+data / 发起端+提供端';
       if (role === 'entry') return '数据读取发起端(entry get)';
       if (role === 'exit') return '数据提供端(data provider)';
       return role || '';
