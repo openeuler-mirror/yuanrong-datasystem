@@ -499,14 +499,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function flowGraphNodeSize()" in html
     assert "symbolSize:flowGraphNodeSize()" in html
     assert "return 72" in html
-    assert "label:{show:true}" in html
-    assert "edgeLabel:{show:true, formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:12, width:130, overflow:'break'}" in html
+    assert "const FLOW_GRAPH_LABEL_FONT_SIZE = 14" in html
+    assert "label:{show:true, fontSize:FLOW_GRAPH_LABEL_FONT_SIZE}" in html
+    assert "edgeLabel:{show:true, position:'middle', formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:FLOW_GRAPH_LABEL_FONT_SIZE, width:150, overflow:'break'}" in html
     assert "data:graphNodeData" in html
     assert "label:flowEdgeAutoLabel(edge)" not in html
     assert "offset:flowEdgeLabelOffset(edge)" not in html
     assert "edge_annotation" not in html
-    assert "fontSize:12" in html
-    assert "width:130" in html
+    assert "edgeLabel:{show:true, formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:12, width:130" not in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html
     assert "return node.label" in html

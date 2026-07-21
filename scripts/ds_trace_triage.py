@@ -3892,6 +3892,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function flowGraphNodeSize() {
     return 72;
   }
+  const FLOW_GRAPH_LABEL_FONT_SIZE = 14;
   function renderFlowGraph(id, graph, title) {
     chartRenderers.set(id, () => renderFlowGraph(id, graph, title));
     const node = document.getElementById(id);
@@ -3920,9 +3921,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       roam:true,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true},
+      label:{show:true, fontSize:FLOW_GRAPH_LABEL_FONT_SIZE},
       labelLayout:{hideOverlap:false},
-      edgeLabel:{show:true, formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:12, width:130, overflow:'break'},
+      edgeLabel:{show:true, position:'middle', formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:FLOW_GRAPH_LABEL_FONT_SIZE, width:150, overflow:'break'},
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:graphNodeData,
       links:(graph.edges || []).map(edge => ({
