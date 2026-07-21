@@ -291,8 +291,9 @@
     `MetadataRecoveryTest.OtherWorkersRecoverMetadataBeforeClearingDataWithoutMetadata`.
   - `IsolatedWorkerMetaCleanupAllowsNewOwnerRebuild`: covered by
     `WorkerStalePrimaryTest.LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerRebuild`.
-  - `RecoverableLocalDataRebuildsOrUpdatesMetadata`: partial. Worker clear-data and metadata recovery manager UTs cover
-    the mechanism, but a direct ST/UT with this acceptance name is still pending.
+  - `RecoverableLocalDataRebuildsOrUpdatesMetadata`: covered by
+    `MetaDataRecoveryManagerTest.RecoverableLocalDataRebuildsOrUpdatesMetadata`, which verifies a recoverable newer
+    metadata record updates an older local object-table entry and makes the restarted local copy primary again.
   - `RecoveredCoordinationEntersRecoveringBeforeRunning`: covered by
     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate`,
     `WorkerIsolationCoordinatorTest.LocalRecoveryStartsRecoveringBeforeTopologyReconciliation`, and runtime recovery UTs.
@@ -308,9 +309,10 @@
     `WorkerRecoveryControllerTest.SecondDisconnectDuringRecoveryKeepsAdmissionClosed`.
   - `MetadataRecoveryBestEffortRetryDoesNotBlockAvailability`: covered by
     `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability` and clear-data best-effort UTs.
-  - `MetadataRecoveryDoesNotHoldObjectTableLockDuringFullScan`: partial. `MetadataRecoverySelectorTest` covers bounded
-    generation snapshots and lock release before match/batching; an exact acceptance-named performance/lock test remains
-    useful before final closure.
+  - `MetadataRecoveryDoesNotHoldObjectTableLockDuringFullScan`: covered by
+    `MetadataRecoverySelectorTest.SelectionReleasesObjectTableLockBeforeMatchAndBatching` and
+    `MetadataRecoverySelectorTest.MetadataRecoveryUsesBoundedGenerationSnapshot`, which verify per-object matching and
+    concurrent table mutations are not blocked by full-scan selection.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV STs have been
     run during development, but full CI, Bazel, Stream ST, and complete Object/KV ST are not yet green in this session.
   - Follow-up scale/fault cases to add before claiming full story closure:

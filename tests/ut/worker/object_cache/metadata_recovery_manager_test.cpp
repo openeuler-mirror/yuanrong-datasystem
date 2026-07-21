@@ -432,6 +432,32 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesLoadsPayloadIntoMemory)
     entry->RUnlock();
 }
 
+TEST_F(MetaDataRecoveryManagerTest, RecoverableLocalDataRebuildsOrUpdatesMetadata)
+{
+    const std::string objectKey = "tenant/recoverable_update_obj";
+    constexpr uint64_t oldVersion = 3;
+    AddObject(objectKey, oldVersion, 512);
+
+    auto recoverMeta = BuildRecoverMeta(objectKey, WriteMode::WRITE_THROUGH_L2_CACHE, "127.0.0.1:18501");
+    recoverMeta.set_version(oldVersion + 1);
+    recoverMeta.set_data_size(4096);
+
+    std::vector<std::string> recoveredObjectKeys;
+    DS_ASSERT_OK(manager_->RecoverLocalEntries({ recoverMeta }, recoveredObjectKeys));
+    ASSERT_THAT(recoveredObjectKeys, ElementsAre(objectKey));
+
+    std::shared_ptr<SafeObjType> entry;
+    DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+    ASSERT_TRUE(entry->RLock().IsOk());
+    EXPECT_EQ((*entry)->GetCreateTime(), oldVersion + 1);
+    EXPECT_EQ((*entry)->GetDataSize(), 4096);
+    EXPECT_EQ((*entry)->GetMetadataSize(), 128);
+    EXPECT_EQ((*entry)->GetAddress(), localAddress_.ToString());
+    EXPECT_TRUE((*entry)->stateInfo.IsPrimaryCopy());
+    EXPECT_TRUE((*entry)->HasL2Cache());
+    entry->RUnlock();
+}
+
 TEST_F(MetaDataRecoveryManagerTest, RecoverLocalEntriesSkipsOlderMetaWhenLocalEntryIsNewer)
 {
     const std::string objectKey = "tenant/newer_local_obj";
