@@ -472,6 +472,20 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
 
 
+def test_trace_triage_gate_stays_out_of_ci_build():
+    repo = Path(__file__).resolve().parents[2]
+    ci_build = (repo / ".gitee" / "ci_build.sh").read_text(encoding="utf-8")
+    skill = (repo / ".skills" / "ds-trace-triage" / "SKILL.md").read_text(encoding="utf-8")
+    methodology = (repo / "docs" / "source_zh_cn" / "appendix" / "trace_triage_methodology.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "ds_trace_triage.py" not in ci_build
+    assert "先不要接入 .gitee/ci_build.sh" in skill
+    assert "候选 CI 门禁" in skill
+    assert "当前不默认接入 .gitee/ci_build.sh" in methodology
+
+
 def test_run_pipeline_preserves_raw_extracted_logs_and_reuses_cache(tmp_path):
     trace_id = "019f7d06-cbda-7381-a95f-99fed6ee3732"
     bundle = tmp_path / "multi-input.tar.gz"

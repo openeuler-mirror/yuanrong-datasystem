@@ -136,24 +136,27 @@ python3 scripts/ds_trace_triage.py --self-test
 python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
 
-Add those commands to CI as a low-cost parser contract. They verify gzip-tar
-handling, trace grouping, access latency, breakdown, rpc slow, URMA elapsed,
-UB field extraction, time buckets, worker/edge aggregation, local/site HTML
-generation, inline report JavaScript syntax when Node.js is available, and
-error classification.
-It also verifies the yche publish checklist and `publish-site --dry-run`
-manifest status.
+先不要接入 .gitee/ci_build.sh。这些命令是人工验证和 agent
+变更自检入口，避免 trace 分析工具影响主工程构建、标签分流和已有 CI 时长。
 
-Real yche.me publish has a default 2 MiB `report.site.html` size gate to avoid
-publishing oversized throw-away pages. If a large page is intentional, review
-the report first and pass `--max-site-html-mb <N>` explicitly.
+它们验证 gzip-tar handling、trace grouping、access latency、breakdown、
+rpc slow、URMA elapsed、UB field extraction、time buckets、worker/edge
+aggregation、local/site HTML generation、inline report JavaScript syntax when
+Node.js is available、error classification、yche publish checklist，以及
+`publish-site --dry-run` manifest status。
 
-The repository CI runs the dependency-light gate in `.gitee/ci_build.sh`:
+候选 CI 门禁只在后续明确评审后再接入，建议先放到独立 job 或手动触发 job，
+不要直接塞入 `.gitee/ci_build.sh` 主构建路径。候选命令如下：
 
 ```bash
 python3 -m py_compile scripts/ds_trace_triage.py tests/scripts/test_ds_trace_triage.py
 python3 scripts/ds_trace_triage.py verify
+python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
+
+Real yche.me publish has a default 2 MiB `report.site.html` size gate to avoid
+publishing oversized throw-away pages. If a large page is intentional, review
+the report first and pass `--max-site-html-mb <N>` explicitly.
 
 Run pytest locally when changing parser behavior:
 

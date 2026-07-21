@@ -196,20 +196,19 @@ CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktree
 
 这些能力在脚本里对应为 `dimensions.latency_summary_us`、`dimensions.rpc_slow` 子字段、`dimensions.urma_elapsed`、`dimensions.classifications`、以及每条 trace 的精选原始证据。HTML 交互和 yche 发布验证保留在 skill 人工流程里，不强行塞进 parser。
 
-## CI 集成建议
+## 验证与 CI 集成建议
 
-最小门禁：
+当前不默认接入 .gitee/ci_build.sh，避免 trace triage 工具影响主工程
+ci-build、标签分流和构建时长。先把下面命令作为人工验证或 agent 自检入口：
 
 ```bash
 python3 -m py_compile scripts/ds_trace_triage.py tests/scripts/test_ds_trace_triage.py
 python3 scripts/ds_trace_triage.py verify
-```
-
-这组无第三方依赖的门禁已经接入 `.gitee/ci_build.sh`。本地修改 parser 行为时，再跑 pytest 覆盖更细的 fixture：
-
-```bash
 python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
+
+后续如果要接 CI，建议作为候选 CI 门禁先放到独立 job 或手动触发 job，
+确认稳定后再评审是否进入主 ci-build。
 
 扩展门禁可以在后续加入真实脱敏 fixture：
 
