@@ -2608,7 +2608,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       return;
     }
     table.innerHTML = `<thead><tr>${headerHtml}</tr></thead>` +
-      `<tbody>${visibleRows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map((cell, cellIdx) => `<td>${formatCell(headers[cellIdx], cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+      `<tbody>${visibleRows.map((row, idx) => `<tr ${rowAttrs ? rowAttrs(row, idx) : ''}>${row.map((cell, cellIdx) => {
+        const cellHtml = options.formatCell ? options.formatCell(headers[cellIdx], cell, row, cellIdx) : formatCell(headers[cellIdx], cell);
+        return `<td>${cellHtml}</td>`;
+      }).join('')}</tr>`).join('')}</tbody>`;
     if (sortable) {
       table.querySelectorAll('th[data-sort-index]').forEach(th => th.addEventListener('click', () => {
         const index = Number(th.dataset.sortIndex);
@@ -2676,6 +2679,37 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function severityClass(value, warn=5, hot=20) {
     const n = Number(value || 0);
     return n >= hot ? 'hotrow' : n >= warn ? 'warnrow' : '';
+  }
+  function maxLatencyFromText(value) {
+    const text = String(value || '');
+    const keyed = [...text.matchAll(/\\b(?:p50|p90|p99|max)=(-?\\d+(?:\\.\\d+)?)/gi)].map(match => Number(match[1]));
+    const ms = [...text.matchAll(/=(-?\\d+(?:\\.\\d+)?)ms\\b/gi)].map(match => Number(match[1]));
+    const values = keyed.concat(ms).filter(Number.isFinite);
+    return values.length ? Math.max(...values) : 0;
+  }
+  function severityCellClass(value) {
+    const cls = severityClass(value);
+    return cls === 'hotrow' ? 'cell-hot' : cls === 'warnrow' ? 'cell-warn' : '';
+  }
+  function highlightLatencyTokens(value) {
+    return escapeHtml(value)
+      .replace(/\\b((?:p50|p90|p99|max)=)(-?\\d+(?:\\.\\d+)?)/gi, (match, prefix, raw) => {
+        const cls = severityCellClass(Number(raw));
+        return cls ? `<span class="${cls}">${prefix}${raw}</span>` : match;
+      })
+      .replace(/(=)(-?\\d+(?:\\.\\d+)?)(ms\\b)/gi, (match, prefix, raw, suffix) => {
+        const cls = severityCellClass(Number(raw));
+        return cls ? `${prefix}<span class="${cls}">${raw}${suffix}</span>` : match;
+      });
+  }
+  function selectedTraceSummaryValueHtml(field, value) {
+    const text = String(value ?? '');
+    if (!text) return '';
+    if (field === 'errors' && value !== '{}') return `<span class="cell-hot">${escapeHtml(text)}</span>`;
+    if (field === 'classification' && /deadline|error|slow|tail|timeout/i.test(value)) return `<span class="cell-hot">${escapeHtml(text)}</span>`;
+    const summarySeverity = severityClass(maxLatencyFromText(value));
+    if (/(access|latencySummary)/i.test(field) && summarySeverity) return highlightLatencyTokens(value);
+    return formatCell('value', value);
   }
   const stageLabelMap = {
     'read.client_to_entry_worker':'Client→Entry RPC',
@@ -3584,7 +3618,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       ['missing_evidence', JSON.stringify(item.missing_evidence || [])]
     ].filter(row => row[1]);
     renderTable('selected-trace-table', ['field','value'], selectedTraceSummaryRows,
-      row => row[0] === 'key latencySummary' || /access/.test(row[0]) ? 'class="summaryrow"' : '');
+      row => row[0] === 'key latencySummary' || /access/.test(row[0]) ? 'class="summaryrow"' : '',
+      {formatCell:(header, cell, row) => header === 'value' ? selectedTraceSummaryValueHtml(row[0], cell) : formatCell(header, cell)});
     const visibleStageRows = (item.stage_breakdown || [])
       .filter(s => stageMatchesOperation(s.stage))
       .slice()

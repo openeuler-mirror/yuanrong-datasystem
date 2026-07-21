@@ -669,6 +669,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "download-selected-raw" in html
     assert "download-filtered-evidence" in html
     assert "selectedTraceSummaryRows" in html
+    assert "function selectedTraceSummaryValueHtml(field, value)" in html
+    assert "selected-trace-table" in html
+    assert "renderTable('selected-trace-table', ['field','value'], selectedTraceSummaryRows" in html
+    assert "cell-hot" in html
+    assert "cell-warn" in html
+    assert "severityClass(maxLatencyFromText(value))" in html
+    assert "field === 'errors' && value !== '{}'" in html
+    assert "field === 'classification' && /deadline|error|slow|tail|timeout/i.test(value)" in html
     assert "client access" in html
     assert "worker access" in html
     assert "key latencySummary" in html
