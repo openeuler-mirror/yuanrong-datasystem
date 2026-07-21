@@ -491,10 +491,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "return [0, -44]" in html
     assert "edge.operation === 'Client Publish'" in html
     assert "return [0, 44]" in html
+    assert "edge.operation === 'Client→Entry RPC/UB'" in html
+    assert "return [-42, -48]" in html
     assert "edge.operation === 'Entry→Data RPC'" in html
-    assert "return [0, -36]" in html
+    assert "return [38, 48]" in html
     assert "edge.operation === 'Entry→Meta RPC'" in html
-    assert "return [0, -30]" in html
+    assert "return [34, -46]" in html
+    assert "edge.operation === 'URMA Write'" in html
+    assert "return [46, 54]" in html
     assert "function flowGraphNodeSize()" in html
     assert "symbol:'roundRect'" in html
     assert "symbolSize:flowGraphNodeSize()" in html
@@ -511,6 +515,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "fontSize:14" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html
+    assert "return node.label" in html
     assert "function flowEdgeLabel(edge)" in html
     assert "workerRelationName" in html
     assert "label:flowNodeLabel(node)" in html

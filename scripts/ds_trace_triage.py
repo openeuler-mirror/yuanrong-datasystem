@@ -3860,11 +3860,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }};
   }
   function flowNodeLabel(node) {
-    const detail = [
-      ...(node.top_workers || []).map(workerRelationName),
-      ...(node.top_ips || [])
-    ].filter(Boolean)[0];
-    return [node.label, detail].filter(Boolean).join('\\n');
+    return node.label;
   }
   function flowEdgeLabel(edge) {
     return [edge.operation, edge.summary].filter(Boolean).join('\\n');
@@ -3888,9 +3884,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function flowEdgeLabelOffset(edge) {
     if (edge.operation === 'CreateBuffer') return [0, -44];
     if (edge.operation === 'Client Publish') return [0, 44];
-    if (edge.operation === 'URMA Write') return [0, 42];
-    if (edge.operation === 'Entry→Data RPC') return [0, -36];
-    if (edge.operation === 'Entry→Meta RPC') return [0, -30];
+    if (edge.operation === 'Client→Entry RPC/UB') return [-42, -48];
+    if (edge.operation === 'URMA Write') return [46, 54];
+    if (edge.operation === 'Entry→Data RPC') return [38, 48];
+    if (edge.operation === 'Entry→Meta RPC') return [34, -46];
     return [0, -32];
   }
   function flowEdgeAutoLabel(edge) {
