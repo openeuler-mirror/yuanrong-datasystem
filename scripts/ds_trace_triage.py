@@ -2014,48 +2014,30 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a class="sub" href="#overall-guide">表 1-1 整体导读</a>
       <a href="#s2">2. 根因分布</a>
       <a class="sub" href="#cohort-chart">图 2-1 输入包 / Cohort</a>
-      <a class="sub" href="#cohort-table">表 2-1 Cohort</a>
       <a class="sub" href="#classification-chart">图 2-2 分类分布</a>
-      <a class="sub" href="#classification-table">表 2-2 分类</a>
       <a class="sub" href="#error-chart">图 2-3 错误分布</a>
-      <a class="sub" href="#error-table">表 2-3 Error</a>
       <a href="#s3">3. 时延 Breakdown</a>
       <a class="sub" href="#read-latency-chart">图 3-1 读取时延</a>
-      <a class="sub" href="#read-latency-table">表 3-1 读取时延</a>
       <a class="sub" href="#read-flow-chart">图 3-2 读取 Flow</a>
-      <a class="sub" href="#read-flow-table">表 3-3 读取 Flow</a>
       <a class="sub" href="#read-time-breakdown-chart">图 3-3 读取时间桶</a>
       <a class="sub" href="#write-latency-chart">图 3-4 写入时延</a>
-      <a class="sub" href="#write-latency-table">表 3-2 写入时延</a>
       <a class="sub" href="#write-flow-chart">图 3-5 写入 Flow</a>
-      <a class="sub" href="#write-flow-table">表 3-4 写入 Flow</a>
       <a class="sub" href="#write-time-breakdown-chart">图 3-6 写入时间桶</a>
       <a href="#s4">4. Worker / 流程</a>
       <a class="sub" href="#read-flow-stage-chart">图 4-1 读取流程</a>
-      <a class="sub" href="#read-flow-stage-table">表 4-1 读取流程</a>
       <a class="sub" href="#read-worker-chart">图 4-2 读取 Worker</a>
-      <a class="sub" href="#read-worker-table">表 4-2 读取 Worker</a>
       <a class="sub" href="#write-flow-stage-chart">图 4-3 写入流程</a>
-      <a class="sub" href="#write-flow-stage-table">表 4-3 写入流程</a>
       <a class="sub" href="#write-worker-chart">图 4-4 写入 Worker</a>
-      <a class="sub" href="#write-worker-table">表 4-4 写入 Worker</a>
       <a href="#s5">5. UB / URMA</a>
       <a class="sub" href="#ub-lifecycle-chart">图 5-1 UB 生命周期</a>
-      <a class="sub" href="#ub-lifecycle-table">表 5-1 生命周期</a>
       <a class="sub" href="#ub-wr-count-chart">图 5-2 WR / Inflight</a>
-      <a class="sub" href="#ub-request-table">表 5-2 UB Request</a>
       <a class="sub" href="#ub-worker-role-chart">图 5-3 入口/出口 Worker</a>
-      <a class="sub" href="#ub-worker-role-table">表 5-3 Worker 角色</a>
       <a class="sub" href="#ub-worker-time-chart">图 5-4 UB 时间桶</a>
-      <a class="sub" href="#ub-worker-time-table">表 5-4 UB 时间桶</a>
       <a class="sub" href="#read-ub-edge-chart">图 5-5 读取 UB Edge</a>
-      <a class="sub" href="#read-ub-edge-table">表 5-5 读取 Edge</a>
       <a class="sub" href="#write-ub-edge-chart">图 5-6 写入 UB Edge</a>
-      <a class="sub" href="#write-ub-edge-table">表 5-6 写入 Edge</a>
       <a href="#s6">6. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 6-1 Top Trace</a>
       <a class="sub" href="#selected-trace-chart">图 6-1 选中 Trace</a>
-      <a class="sub" href="#selected-trace-table">表 6-2 Trace 摘要</a>
       <a class="sub" href="#selected-trace-log">日志框 6-3 全量日志</a>
       <a href="#s7">7. 建议与口径</a>
       <a class="sub" href="#recommendation-table">表 7-1 建议</a>
@@ -2225,6 +2207,19 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function workerDisplayName(raw) {
     const parts = workerNameParts(raw);
     return parts.worker ? `worker ${parts.worker}` : (parts.raw || 'unknown worker');
+  }
+  function workerAggregateKey(raw) {
+    const parts = workerNameParts(raw);
+    return parts.worker ? `worker:${parts.worker}` : `raw:${String(raw || 'unknown')}`;
+  }
+  function workerAggregateLabel(key) {
+    const text = String(key || '');
+    if (text.startsWith('worker:')) return `worker ${text.slice('worker:'.length)}`;
+    if (text.startsWith('raw:')) return text.slice('raw:'.length) || 'unknown worker';
+    return workerDisplayName(text);
+  }
+  function workerMatchesFilter(raw, selectedWorker) {
+    return !selectedWorker || workerAggregateKey(raw) === selectedWorker;
   }
   function workerRelationName(raw) {
     const parts = workerNameParts(raw);
@@ -2769,10 +2764,16 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     traceRowsForOperation(operation).forEach(([, item]) => {
       const errorCount = Object.values(item.errors || {}).reduce((a,b) => a + b, 0);
       const isSlow = Number(item.access_latency_ms?.max || 0) >= 20;
+      const seenWorkerKeys = new Set();
       Object.keys(item.workers || {}).forEach(worker => {
-        if (selectedWorker && worker !== selectedWorker) return;
+        const key = workerAggregateKey(worker);
+        if (!workerMatchesFilter(worker, selectedWorker) || seenWorkerKeys.has(key)) return;
+        seenWorkerKeys.add(key);
         const source = dim.worker_summary?.[worker] || {};
-        const target = workers[worker] || (workers[worker] = {roles:source.roles || [],line_count:source.line_count || 0,trace_count:0,slow_trace_count:0,error_count:0});
+        const target = workers[key] || (workers[key] = {display_worker:workerAggregateLabel(key),roles:[],line_count:0,trace_count:0,slow_trace_count:0,error_count:0,relations:new Set()});
+        target.roles = [...new Set([...(target.roles || []), ...(source.roles || [])])];
+        target.line_count += source.line_count || 0;
+        target.relations.add(workerRelationName(worker));
         target.trace_count += 1;
         target.slow_trace_count += isSlow ? 1 : 0;
         target.error_count += errorCount;
@@ -2818,13 +2819,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function renderWorkerSection(operation, title) {
     const chartRows = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-filter`));
     const tableRowsForOperation = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-table-filter`));
-    const tableRows = tableRowsForOperation.map(([worker,item]) => {
-      const display_worker = workerRelationName(worker);
+    const tableRows = tableRowsForOperation.map(([,item]) => {
+      const display_worker = item.display_worker || '';
       return [display_worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0];
     });
     renderPagedTable(`${operation}-worker-table`, `${operation}-worker-table-pager`, ['worker','roles','lines','traces','slow','errors'], tableRows,
       row => (Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
-    chart(`${operation}-worker-chart`, chartRows.length ? axisBase(`${title} Workers by Trace/Error`, {xAxis:{type:'category', data:chartRows.slice(0,20).map(r => workerRelationName(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
+    chart(`${operation}-worker-chart`, chartRows.length ? axisBase(`${title} Workers by Trace/Error`, {xAxis:{type:'category', data:chartRows.slice(0,20).map(r => r[1].display_worker || workerAggregateLabel(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
       {name:'traces',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
       {name:'slow',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
       {name:'errors',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].error_count || 0), itemStyle:{color:'#dc2626'}, label:{show:true, position:'top'}}
@@ -2845,9 +2846,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const timeChartWorker = workerFilterValue('ub-worker-time-filter');
     const roleTableWorker = workerFilterValue('ub-worker-role-table-filter');
     const timeTableWorker = workerFilterValue('ub-worker-time-table-filter');
-    const filterUbWorkerRows = selectedWorker => selectedWorker ? ubWorkerRows.filter(([worker]) => worker === selectedWorker) : ubWorkerRows;
+    const filterUbWorkerRows = selectedWorker => selectedWorker ? ubWorkerRows.filter(([worker]) => workerMatchesFilter(worker, selectedWorker)) : ubWorkerRows;
     const filterUbWorkerTimeRows = selectedWorker => selectedWorker ? ubWorkerTimeRows.filter(item =>
-      (item.top_entry_workers || []).includes(selectedWorker) || (item.top_exit_workers || []).includes(selectedWorker)
+      (item.top_entry_workers || []).some(worker => workerMatchesFilter(worker, selectedWorker)) ||
+      (item.top_exit_workers || []).some(worker => workerMatchesFilter(worker, selectedWorker))
     ) : ubWorkerTimeRows;
     const chartUbWorkerRows = filterUbWorkerRows(roleChartWorker);
     const tableUbWorkerRows = filterUbWorkerRows(roleTableWorker);
@@ -2994,7 +2996,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         (item.evidence || []).map(e => e.text).join(' ')
       ].join(' ').toLowerCase();
       return (!cls || item.classification === cls)
-        && (!worker || Object.prototype.hasOwnProperty.call(item.workers || {}, worker))
+        && (!worker || Object.keys(item.workers || {}).some(name => workerMatchesFilter(name, worker)))
         && statusMatchesTrace(item, requestStatus)
         && operationMatches(item)
         && (!query || haystack.includes(query));
@@ -3115,8 +3117,16 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     classificationRows.map(([name]) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   document.getElementById('class-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   const traceWorkerNames = [...new Set(traceRows.flatMap(([, item]) => Object.keys(item.workers || {})))].sort();
+  function workerFilterOptions() {
+    const options = new Map();
+    traceWorkerNames.forEach(name => {
+      const key = workerAggregateKey(name);
+      if (!options.has(key)) options.set(key, workerAggregateLabel(key));
+    });
+    return [...options.entries()].sort((a,b) => a[1].localeCompare(b[1], 'zh-CN', {numeric:true}));
+  }
   document.getElementById('worker-filter').innerHTML = '<option value="">全部 Worker</option>' +
-    traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(workerRelationName(name))}</option>`).join('');
+    workerFilterOptions().map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
   document.getElementById('worker-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   const workerScopedFilterIds = [
     'read-worker-filter',
@@ -3132,7 +3142,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const node = document.getElementById(id);
     if (!node) return;
     node.innerHTML = '<option value="">全部 Worker</option>' +
-      traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(workerRelationName(name))}</option>`).join('');
+      workerFilterOptions().map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
     node.addEventListener('change', renderWorkerDependentViews);
   });
   document.getElementById('trace-page-size').addEventListener('change', event => {
@@ -3288,7 +3298,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function topWorkerText(rows) {
     const [worker, item] = firstEntry(rows);
     if (!item) return '无 worker 聚合样本';
-    return `${workerRelationName(worker)}: traces=${fmtCount(item.trace_count)}, slow=${fmtCount(item.slow_trace_count)}, errors=${fmtCount(item.error_count)}`;
+    return `${item.display_worker || workerAggregateLabel(worker)}: traces=${fmtCount(item.trace_count)}, slow=${fmtCount(item.slow_trace_count)}, errors=${fmtCount(item.error_count)}`;
   }
   function topFlowStageText(graph) {
     const edge = (graph.edges || []).slice().sort((a,b) =>

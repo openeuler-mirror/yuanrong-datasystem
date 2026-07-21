@@ -394,25 +394,24 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "读取流程证据块" in html
     assert "写入流程证据块" in html
     assert "flow-section" in html
-    assert "href=\"#cohort-table\">表 2-1 Cohort" in html
-    assert "href=\"#classification-table\">表 2-2 分类" in html
     assert "href=\"#read-flow-stage-chart\">图 4-1 读取流程" in html
-    assert "href=\"#read-flow-stage-table\">表 4-1 读取流程" in html
     assert "href=\"#read-worker-chart\">图 4-2 读取 Worker" in html
-    assert "href=\"#read-worker-table\">表 4-2 读取 Worker" in html
     assert "href=\"#write-flow-stage-chart\">图 4-3 写入流程" in html
-    assert "href=\"#write-flow-stage-table\">表 4-3 写入流程" in html
     assert "href=\"#write-worker-chart\">图 4-4 写入 Worker" in html
-    assert "href=\"#write-worker-table\">表 4-4 写入 Worker" in html
-    assert "href=\"#ub-lifecycle-table\">表 5-1 生命周期" in html
     assert "href=\"#ub-wr-count-chart\">图 5-2 WR / Inflight" in html
-    assert "href=\"#ub-request-table\">表 5-2 UB Request" in html
     assert "href=\"#ub-worker-time-chart\">图 5-4 UB 时间桶" in html
-    assert "href=\"#ub-worker-time-table\">表 5-4 UB 时间桶" in html
     assert "href=\"#read-ub-edge-chart\">图 5-5 读取 UB Edge" in html
     assert "href=\"#write-ub-edge-chart\">图 5-6 写入 UB Edge" in html
     assert "href=\"#selected-trace-chart\">图 6-1 选中 Trace" in html
     assert "href=\"#selected-trace-log\">日志框 6-3 全量日志" in html
+    for duplicate_table_link in [
+        "href=\"#cohort-table\">表 2-1 Cohort",
+        "href=\"#classification-table\">表 2-2 分类",
+        "href=\"#read-flow-stage-table\">表 4-1 读取流程",
+        "href=\"#read-worker-table\">表 4-2 读取 Worker",
+        "href=\"#ub-request-table\">表 5-2 UB Request",
+    ]:
+        assert duplicate_table_link not in html
     assert "--report-font-size" in html
     assert ".caption{text-align:center" in html
     assert "font-size:var(--report-font-size)" in html
@@ -469,11 +468,20 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "renderUbSection" in html
     assert "function workerDisplayName(raw)" in html
     assert "function workerRelationName(raw)" in html
+    assert "function workerAggregateKey(raw)" in html
+    assert "function workerMatchesFilter(raw, selectedWorker)" in html
+    assert "function workerFilterOptions()" in html
+    assert "const key = workerAggregateKey(worker)" in html
+    assert "seenWorkerKeys.has(key)" in html
+    assert "workerFilterOptions().map(([value, label])" in html
     assert "client ${parts.left} → worker ${parts.worker}" in html
     assert "worker ${parts.left} → worker ${parts.worker}" in html
-    assert "value=\"${escapeHtml(name)}\">${escapeHtml(workerRelationName(name))}</option>" in html
+    assert "value=\"${escapeHtml(value)}\">${escapeHtml(label)}</option>" in html
     assert "display_worker" in html
     assert "display_top_edges" in html
+    assert "href=\"#read-latency-table\">表 3-1 读取时延" not in html
+    assert "href=\"#read-worker-table\">表 4-2 读取 Worker" not in html
+    assert "href=\"#ub-request-table\">表 5-2 UB Request" not in html
     assert "id=\"read-worker-table-pager\"" in html
     assert "id=\"write-worker-table-pager\"" in html
     for worker_filter_id in [
