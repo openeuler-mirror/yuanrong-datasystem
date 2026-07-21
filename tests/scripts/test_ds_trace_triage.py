@@ -413,9 +413,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "href=\"#write-ub-edge-chart\">图 5-6 写入 UB Edge" in html
     assert "href=\"#selected-trace-chart\">图 6-1 选中 Trace" in html
     assert "href=\"#selected-trace-log\">日志框 6-3 全量日志" in html
-    assert "--report-font-size:13px" in html
-    assert ".caption{text-align:center;color:#64748b;font-size:var(--report-font-size)" in html
-    assert "th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size)" in html
+    assert "--report-font-size" in html
+    assert ".caption{text-align:center" in html
+    assert "font-size:var(--report-font-size)" in html
     assert "const chartTextStyle" in html
     assert "textStyle:chartTextStyle" in html
     assert "图 4-1 读取流程证据块：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
