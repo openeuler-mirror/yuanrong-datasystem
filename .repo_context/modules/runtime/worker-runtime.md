@@ -319,13 +319,17 @@
     `SlotRecoveryTest.RecoveryMetadataBatchRetriesOnlyFailedIdsAfterMembershipChange`, which verifies a mixed metadata
     recovery batch keeps already-pushed entries out of the deferred retry payload while retrying only failed ids after
     the coordination path becomes available again.
+  - `ScaleInSourceStaysLeavingWhenPeerFails`: covered by
+    `TopologyPlanBuilderTest.ScaleInSourceStaysLeavingWhenPeerFails`, which verifies a voluntary ScaleIn source remains
+    `LEAVING` while a concurrent peer failure is replanned as `FAILED`.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV STs have been
     run during development, but full CI, Bazel, Stream ST, and complete Object/KV ST are not yet green in this session.
   - Follow-up scale/fault cases to add before claiming full story closure:
     1. ScaleOut while one existing worker is `LOCAL_ISOLATED`; new-owner metadata rebuild must not read from the isolated
        worker before evidence passes.
-    2. ScaleIn voluntary source plus concurrent peer local-isolation; voluntary source must keep controlled exit, isolated
-       peer must not be self-killed or selected as migration target.
+    2. ScaleIn voluntary source plus concurrent peer local-isolation is now covered at topology replan level by
+       `ScaleInSourceStaysLeavingWhenPeerFails`; migration-target filtering for the same combined path remains covered
+       indirectly by active-target admission and needs a dedicated ST if we want end-to-end evidence.
     3. ScaleIn/ScaleOut task overlap plus transient global backend outage; workers must not self-isolate from global
        outage evidence and topology callbacks must remain idempotent.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
