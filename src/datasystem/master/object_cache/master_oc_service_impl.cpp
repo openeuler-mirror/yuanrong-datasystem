@@ -262,6 +262,7 @@ Status MasterOCServiceImpl::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &
     VLOG(1) << FormatString("Processing CreateMultiCopyMeta, req: ") << LogHelper::IgnoreSensitive(req)
             << AppendSrcDstForLog(req.address(), localAddr);
 
+    INJECT_POINT("master.CreateMultiCopyMeta.beforePersist");
     Status status = CreateMultiCopyMetaImpl(req, rsp);
     point.Record();
     auto elapsedMs = timer.ElapsedMilliSecond();
