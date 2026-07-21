@@ -47,8 +47,9 @@ Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
     }
     pointer_ = reinterpret_cast<uint8_t *>(mmap(nullptr, size_, PROT_READ | PROT_WRITE, mFlag, fd_, 0));
     if (pointer_ == MAP_FAILED) {
-        RETURN_STATUS_LOG_ERROR(StatusCode::K_RUNTIME_ERROR,
-                                FormatString("Mmap [fd = %d] failed. Error no: [%s]", fd_, StrErr(errno)));
+        RETURN_STATUS_LOG_ERROR(
+            StatusCode::K_RUNTIME_ERROR,
+            FormatString("Mmap [client id = %s, fd = %d] failed. Error no: [%s]", clientId_, fd_, StrErr(errno)));
     }
     // Exclude the shared memory from core dump.
     int ret = madvise(pointer_, size_, MADV_DONTDUMP);
@@ -59,7 +60,7 @@ Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
 
     // Closing this fd has an effect on performance.
     RETRY_ON_EINTR(close(fd_));
-    LOG(INFO) << "mmap success, fd " << fd_;
+    LOG(INFO) << FormatString("mmap success, client id: %s, fd: %d, size: %zu", clientId_, fd_, size_);
     return Status::OK();
 }
 
@@ -69,12 +70,14 @@ ShmMmapTableEntry::~ShmMmapTableEntry()
     if (pointer_ != nullptr && pointer_ != MAP_FAILED) {
         int ret = munmap(pointer_, size_);
         if (ret != 0) {
-            LOG(ERROR) << FormatString("munmap failed, returned: [%d], errno = [%s]", ret, StrErr(errno));
+            LOG(ERROR) << FormatString("munmap failed, client id: %s, fd: %d, size: %zu, returned: [%d], errno = [%s]",
+                                       clientId_, fd_, size_, ret, StrErr(errno));
         } else {
-            LOG(INFO) << "munmap success, fd " << fd_;
+            LOG(INFO) << FormatString("munmap success, client id: %s, fd: %d, size: %zu", clientId_, fd_, size_);
         }
     } else {
-        LOG(ERROR) << "Mmap pointer is invalid, it may be nullptr";
+        LOG(ERROR) << FormatString("Mmap pointer is invalid, client id: %s, fd: %d, it may be nullptr", clientId_,
+                                   fd_);
     }
 }
 }  // namespace client

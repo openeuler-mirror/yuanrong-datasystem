@@ -174,7 +174,7 @@ Status WorkerServiceImpl::GetClientFd(const GetClientFdReqPb &req, GetClientFdRs
                                      "Authenticate workerFd failed.");
 
     LOG(INFO) << "Start to send client fd. worker fds: " << VectorToString(workerFds) << ", socket fd: " << socketFd
-              << ", request id: " << req.request_id();
+              << ", request id: " << req.request_id() << ", client id: " << clientId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SockSendFd(socketFd, shmWorkerPort_ > 0, workerFds, req.request_id()),
                                      "worker socketfd send failed");
     ClientManager::Instance().SetClientId2WorkerFdMap(clientId, std::move(workerFds));
