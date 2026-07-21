@@ -236,6 +236,30 @@ def test_urma_total_parser_accepts_evolved_field_aliases(tmp_path):
     assert lifecycle["chip_inflight"]["2"]["p99"] == 4
 
 
+def test_rpc_max_concurrency_errors_are_classified_by_worker_and_time(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820030"
+    ts = "2026-07-20T12" + ":" + "31" + ":" + "00.000000"
+    log = tmp_path / "max-concurrency.log"
+    log.write_text(
+        f"{ts} | E | worker_rpc | kventryworker-0-worker8 | 1 | {trace_id} | "
+        "RPC failed, error_code=2004, error_text=Reached server's max_concurrency, method=WorkerOCService.Get\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    trace = report["traces"][trace_id]
+
+    assert trace["classification"] == "rpc_max_concurrency"
+    assert trace["errors"]["RPC max concurrency reached"] == 1
+    assert report["dimensions"]["errors"]["RPC max concurrency reached"] == 1
+    assert report["dimensions"]["classifications"]["rpc_max_concurrency"] == 1
+    assert report["dimensions"]["worker_summary"]["kventryworker-0-worker8"]["error_count"] == 1
+    bucket = report["dimensions"]["time_buckets"]["1000ms"][0]
+    assert bucket["max_concurrency_error_count"] == 1
+    assert bucket["top_workers"] == ["kventryworker-0-worker8"]
+
+
 def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     trace_id = "019f7c62-9e9f-7792-a5d8-f4d30275bafe"
     log = tmp_path / "client.log"
@@ -405,6 +429,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"write-time-breakdown-chart\"" in html
     assert "buildTraceTimeBuckets" in html
     assert "Time Bucket Latency Stages" in html
+    assert "RPC max_concurrency errors" in html
+    assert "max_concurrency_error_count" in html
+    assert "RPC 线程数/并发不足" in html
+    assert "error_code=2004" in html
     assert "client/access p99 upper bound" in html
     assert "Entry→Data RPC" in html
     assert "stageDisplayName" in html

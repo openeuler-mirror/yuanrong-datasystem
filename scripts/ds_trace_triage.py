@@ -73,8 +73,14 @@ SLEEP_TARGET_RE = re.compile(r"nanosleep\(([\d.]+)us\)", re.I)
 TRANSFER_PATH_RE = re.compile(r"(?:transferPath|path):\s*(UB|RDMA|TCP)\b", re.I)
 INFLIGHT_REMOTE_GET_RE = re.compile(r"inflightRemoteGet:\s*(\d+)", re.I)
 REMOTE_GET_REQUEST_RE = re.compile(r"Remote get request:\[([^\]]+)\]\s+object:\[([^\]]*)\].*?offset\[(\d+)\]\s+size\[(\d+)\]", re.I)
+RPC_MAX_CONCURRENCY_ERROR = "RPC max concurrency reached"
+RPC_MAX_CONCURRENCY_RE = re.compile(
+    r"RPC failed,\s*error_code=2004,\s*error_text=Reached server's max_concurrency",
+    re.I,
+)
 ERROR_PATTERNS = [
     "RPC deadline exceeded",
+    RPC_MAX_CONCURRENCY_ERROR,
     "URMA_WAIT_TIMEOUT",
     "K_NOT_FOUND",
     "Object in use",
@@ -290,9 +296,12 @@ class TraceParser:
             if cm:
                 unit = cm.group(rule["unit_group"]) if rule["unit_group"] else "ms"
                 parsed["custom_metrics_ms"][rule["name"]] = _ms(cm.group(rule["value_group"]), unit)
+        if RPC_MAX_CONCURRENCY_RE.search(line):
+            parsed["errors"].append(RPC_MAX_CONCURRENCY_ERROR)
         for pattern in self.rules.error_patterns:
             if pattern in line:
                 parsed["errors"].append(pattern)
+        parsed["errors"] = list(dict.fromkeys(parsed["errors"]))
         return parsed
 
 
@@ -504,6 +513,8 @@ def _classify(trace):
     max_urma = max(trace["urma_total_ms"] or [0])
     memory_copy_us = trace["latency_summary_us"].get("client.process.memory_copy", 0)
     set_total_us = trace["latency_summary_us"].get("client.process.set", 0)
+    if trace["errors"].get(RPC_MAX_CONCURRENCY_ERROR):
+        return "rpc_max_concurrency"
     if trace["errors"] and max_urma >= 50:
         return "client_deadline_with_urma_wait"
     if trace["errors"] and max_access and 18 <= max_access <= 25:
@@ -1216,6 +1227,12 @@ def _build_recommendations(classifications, coverage, cohorts, ub_summary):
             "title": "拆开 client deadline 和 worker 后续完成阶段",
             "detail": "20ms client timeout 是失败触发点；同 trace 的 worker access、RemotePull、BatchGetObjectRemote、URMA 日志用于判断服务端是否在 deadline 后继续完成。",
         })
+    if classifications.get("rpc_max_concurrency"):
+        recommendations.append({
+            "category": "rpc_capacity",
+            "title": "重点确认 RPC 线程数/并发不足",
+            "detail": "出现 error_code=2004 / max_concurrency 时，按时间桶和 worker 聚合观察是否集中在少数 worker；这通常意味着服务端 RPC 并发或线程池容量不足。",
+        })
     return recommendations
 
 
@@ -1513,6 +1530,7 @@ def _build_time_buckets(trace_rows, bucket_ms):
     buckets = defaultdict(lambda: {
         "trace_ids": set(),
         "error_count": 0,
+        "max_concurrency_error_count": 0,
         "slow_count": 0,
         "access_latencies": [],
         "stage_latencies": defaultdict(list),
@@ -1527,7 +1545,9 @@ def _build_time_buckets(trace_rows, bucket_ms):
         start_ms = epoch_ms - (epoch_ms % bucket_ms)
         bucket = buckets[start_ms]
         bucket["trace_ids"].add(trace_id)
-        bucket["error_count"] += sum(trace.get("errors", {}).values())
+        errors = trace.get("errors", {})
+        bucket["error_count"] += sum(errors.values())
+        bucket["max_concurrency_error_count"] += errors.get(RPC_MAX_CONCURRENCY_ERROR, 0)
         if trace.get("classification") not in ("unknown", "access_latency_only"):
             bucket["slow_count"] += 1
         if trace.get("access_latency_ms", {}).get("p50") is not None:
@@ -1546,6 +1566,7 @@ def _build_time_buckets(trace_rows, bucket_ms):
             "bucket_ms": bucket_ms,
             "trace_count": len(bucket["trace_ids"]),
             "error_count": bucket["error_count"],
+            "max_concurrency_error_count": bucket["max_concurrency_error_count"],
             "slow_count": bucket["slow_count"],
             "p50_access_ms": _percentiles(bucket["access_latencies"]).get("p50"),
             "p99_access_ms": _percentiles(bucket["access_latencies"]).get("p99"),
@@ -2626,7 +2647,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       .replace(/(\\|\\s*E\\s*\\|)/g, '<span class="log-tag log-error">$1</span>')
       .replace(/(\\|\\s*F\\s*\\|)/g, '<span class="log-tag log-error">$1</span>')
       .replace(/(\\|\\s*W\\s*\\|)/g, '<span class="log-tag log-deadline">$1</span>')
-      .replace(/\\b(ERROR|FATAL|K_RUNTIME_ERROR|K_TRY_AGAIN|status[:=]?\\s*1001)\\b/gi, '<span class="log-tag log-error">$1</span>')
+      .replace(/\\b(ERROR|FATAL|K_RUNTIME_ERROR|K_TRY_AGAIN|status[:=]?\\s*1001|RPC failed|error_code=2004|max_concurrency)\\b/gi, '<span class="log-tag log-error">$1</span>')
       .replace(/(\\[?URMA_ELAPSED_(?:TOTAL|POLL_JFC|NOTIFY|THREAD_SHED)\\]?|URMA_WAIT_TIMEOUT|urma_[a-z_]+|wait os sched[^:,]*?(?:\\([^)]*\\))?:\\s*[\\d.]+ms|wakeSchedLatencyUs:\\s*[\\d.]+|srcChipInflight:\\s*\\{[^}]*\\}|request id[:=]?\\s*\\d+|src address:\\s*[^,\\s]+|target address:\\s*[^,\\s]+|dataSize[:=]?\\s*\\d+|cpuid[:=]?\\s*\\d+|inflight[_a-z]*[:=]?\\s*\\d+)/gi, '<span class="log-tag log-urma">$1</span>')
       .replace(/(\\[?(?:ZMQ_)?RPC_FRAMEWORK_SLOW\\]?|server_exec_us=\\d+|network_residual_us=\\d+|client_req_framework_us=\\d+|client_rsp_framework_us=\\d+|remote_processing_us=\\d+)/gi, '<span class="log-tag log-rpc">$1</span>')
       .replace(/(latencySummary|client\\.rpc\\.[a-z_]+|worker\\.rpc\\.[a-z_]+|worker\\.process\\.[a-z_]+|client\\.process\\.[a-z_]+)/gi, '<span class="log-tag log-latency">$1</span>')
@@ -2655,7 +2676,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const add = (label, tone='') => {
       if (!focus.some(item => item.label === label)) focus.push({label, tone});
     };
-    if (/ERROR|FATAL|Get error|Set error|status[:=]?\\s*1001/i.test(text)) add('error/status', 'hot');
+    if (/ERROR|FATAL|Get error|Set error|status[:=]?\\s*1001|error_code=2004|max_concurrency/i.test(text)) add('error/status', 'hot');
+    if (/error_code=2004|max_concurrency/i.test(text)) add('RPC 线程数/并发不足', 'hot');
     if (/deadline exceeded|RPC timed out|\\btimeout\\b|20ms deadline/i.test(text)) add('deadline/timeout', 'hot');
     if (/RPC_FRAMEWORK_SLOW|server_exec_us=|network_residual_us=|remote_processing_us=/i.test(text)) add('RPC slow', 'warn');
     if (/latencySummary|client\\.rpc\\.|worker\\.rpc\\.|worker\\.process\\./i.test(text)) add('latencySummary');
@@ -2904,9 +2926,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       const ts = traceStartTime(item);
       if (!ts) return;
       const bucket = String(ts).slice(0, 19);
-      const target = buckets[bucket] || (buckets[bucket] = {bucket_start:bucket,bucket_ms:1000,access:[],stage_values:{}});
+      const target = buckets[bucket] || (buckets[bucket] = {bucket_start:bucket,bucket_ms:1000,access:[],stage_values:{},max_concurrency_error_count:0});
       const accessValue = item.access_latency_ms?.max ?? item.access_latency_ms?.p99 ?? item.access_latency_ms?.p50;
       if (Number.isFinite(Number(accessValue))) target.access.push(Number(accessValue));
+      target.max_concurrency_error_count += Number((item.errors || {})['RPC max concurrency reached'] || 0);
       (item.stage_breakdown || []).forEach(stage => {
         if (!String(stage.stage || '').startsWith(`${operation}.`) || stage.duration_ms === undefined) return;
         (target.stage_values[stage.stage] || (target.stage_values[stage.stage] = [])).push(Number(stage.duration_ms));
@@ -2915,7 +2938,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return Object.values(buckets).sort((a,b) => String(a.bucket_start).localeCompare(String(b.bucket_start))).map(bucket => {
       const stageBreakdown = {};
       Object.entries(bucket.stage_values).forEach(([name, values]) => { stageBreakdown[name] = percentileFromValues(values) || {}; });
-      return {bucket_start:bucket.bucket_start,bucket_ms:bucket.bucket_ms,p99_access_ms:(percentileFromValues(bucket.access) || {}).p99 || 0,stage_breakdown_ms:stageBreakdown};
+      return {bucket_start:bucket.bucket_start,bucket_ms:bucket.bucket_ms,p99_access_ms:(percentileFromValues(bucket.access) || {}).p99 || 0,max_concurrency_error_count:bucket.max_concurrency_error_count,stage_breakdown_ms:stageBreakdown};
     });
   }
   function workerFilterValue(id) {
@@ -3001,6 +3024,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       yAxis:{type:'value', name:'ms'},
       series:[
         ...stageNames.map(name => ({name:stageLabelMap[name] || name,type:'bar',stack:'stage-p99',barMaxWidth:34,data:rows.map(r => r.stage_breakdown_ms?.[name]?.p99 || 0),itemStyle:{color:stageColorMap[name] || '#64748b'}})),
+        {name:'RPC max_concurrency errors',type:'bar',barMaxWidth:24,data:rows.map(r => r.max_concurrency_error_count || 0),itemStyle:{color:'#991b1b'}},
         {name:'client/access p99 upper bound',type:'line',smooth:true,data:rows.map(r => r.p99_access_ms || 0), itemStyle:{color:'#2563eb'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms deadline'}, data:[{yAxis:20}]}}
       ]
     }) : noDataOption(`No ${operation} time bucket stage data`));
