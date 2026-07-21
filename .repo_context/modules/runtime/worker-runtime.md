@@ -296,6 +296,10 @@
       `CentralMetadataAddressResolver` and `CoordinationObjectMetadataReader` expose only `ICoordinationBackend`
       forward declarations in their public headers; the concrete coordination backend header is included only by the
       corresponding `.cpp` files.
+  14. `worker_oc_service_impl` Bazel dependencies no longer retain the obsolete `etcd_store` edge after the service
+      stopped storing `EtcdStore`. The target keeps the narrower `etcd_constants` edge for existing metadata constants.
+      `worker_isolation_coordinator` also declares its `worker_runtime_facade` Bazel dependency explicitly, matching the
+      public header include used by the runtime coordinator boundary.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -445,6 +449,19 @@
 ## Fast Verification
 
 - Recent focused verification for scale/fault overlap coverage:
+  - Extended boundary coverage:
+    `WorkerRuntimeModuleBoundaryTest.test_object_cache_service_does_not_keep_etcd_store` now also checks the
+    `worker_oc_service_impl` Bazel target, and
+    `WorkerRuntimeModuleBoundaryTest.test_worker_isolation_coordinator_bazel_declares_runtime_facade_dependency`
+    checks the runtime coordinator BUILD dependency.
+  - Initial RED: the object-cache boundary failed on the lingering
+    `//src/datasystem/common/kvstore/etcd:etcd_store` Bazel dependency; the runtime coordinator boundary failed because
+    `worker_isolation_coordinator.h` includes `worker_runtime_facade.h` but the Bazel target did not depend on
+    `:worker_runtime_facade`.
+  - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 16/16 tests in 0.005s.
+  - GREEN: `/usr/local/bin/bazel-7.4.1 --output_user_root=$PWD/.bazel-cache build --distdir=$PWD/.bazel-cache/distdir --config=release --config=test --config=urma_mock //src/datasystem/worker/object_cache:worker_oc_service_impl`
+    passed in 166.319s after the dependency fix. The first attempt reproduced the missing `worker_runtime_facade.h`
+    Bazel dependency and also showed the Bazel action cache for this focused path was not fully warm.
   - Added 1 boundary-contract test:
     `WorkerRuntimeModuleBoundaryTest.test_object_cache_coordination_headers_hide_backend_detail`.
   - Initial RED: the new boundary test failed because `central_metadata_address_resolver.h` and

@@ -109,6 +109,7 @@ ds_cc_library(
         "worker_isolation_coordinator.h",
     ],
     deps = [
+        ":worker_runtime_facade",
         ":worker_runtime_state",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",

@@ -342,7 +342,6 @@ ds_cc_library(
         "//src/datasystem/common/immutable_string",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/kvstore/etcd:etcd_constants",
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/l2cache:l2_storage",
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/l2cache:slot_client",

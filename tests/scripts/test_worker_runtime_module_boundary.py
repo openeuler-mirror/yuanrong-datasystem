@@ -165,6 +165,12 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use injected coordination/metadata capabilities")
 
+        build_file = REPO_ROOT / "src/datasystem/worker/object_cache/BUILD.bazel"
+        text = build_file.read_text(encoding="utf-8")
+        target_slice = text.split('name = "worker_oc_service_impl"', 1)[1]
+        target_slice = target_slice.split("ds_cc_library(", 1)[0]
+        self.assertNotIn("common/kvstore/etcd:etcd_store", target_slice)
+
     def test_get_service_uses_metadata_reader_not_coordination_backend(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/service/BUILD.bazel",
@@ -216,6 +222,16 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             text = file_path.read_text(encoding="utf-8")
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use WorkerRuntimeFacade semantic methods")
+
+    def test_worker_isolation_coordinator_bazel_declares_runtime_facade_dependency(self):
+        header = REPO_ROOT / "src/datasystem/worker/runtime/worker_isolation_coordinator.h"
+        build_file = REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel"
+
+        self.assertIn("worker_runtime_facade.h", header.read_text(encoding="utf-8"))
+        text = build_file.read_text(encoding="utf-8")
+        target_slice = text.split('name = "worker_isolation_coordinator"', 1)[1]
+        target_slice = target_slice.split("ds_cc_library(", 1)[0]
+        self.assertIn(":worker_runtime_facade", target_slice)
 
     def test_object_cache_public_headers_do_not_expose_runtime_internals(self):
         files = [
