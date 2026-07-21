@@ -45,6 +45,9 @@
   - KV and Object client code share the same deep backend implementation through `object_cache::ObjectClientImpl`.
   - General batch APIs accept up to 10,000 keys. `Exist` accepts up to 100,000 keys, so one query can cover the
     32,768 cache blocks required by a 1 Mi-token context with 32 tokens per key.
+  - `KVClient::MGetH2D` requires every input key to be unique and returns `K_INVALID` before pipeline dispatch when
+    duplicates are present. This constraint is specific to the KV pipeline H2D path, whose transfer state is tracked
+    per input request; it does not change `HeteroClient::MGetH2D`.
   - `client::TransportLayer` provides worker-address-based `Get` plus transport-native `Create`/`Set` primitives. Its
     TCP Set path publishes an RPC payload, while its UB Set path writes the payload through URMA and publishes an empty
     payload, with bounded TCP fallback on UB write failure. `ObjectClientImpl::Put` uses these primitives for the

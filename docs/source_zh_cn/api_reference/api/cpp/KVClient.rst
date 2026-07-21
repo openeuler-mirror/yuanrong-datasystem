@@ -182,7 +182,7 @@ KVClient
         通过 RH2D（Remote Host to Device）将多个 key 对应的 value 拷贝到调用方提供的设备内存中。
 
         参数：
-            - **keys** - 需要获取的一组 key。key 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个 key 最大长度为 255 字节。
+            - **keys** - 需要获取的一组 key，不允许包含重复 key。key 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个 key 最大长度为 255 字节。
             - **devBlob** - 目标设备内存描述数组。每个 key 对应一个连续 ``Blob``，用于指定 H2D 的目标设备地址及容量。
             - **outFailedKeys** - 传出参数，返回获取或 H2D 失败的 key 列表。
             - **h2dStream** - 可选的外部 CUDA stream 句柄。默认值为 ``nullptr``，表示使用内部 stream 并等待 H2D 完成。
@@ -190,7 +190,7 @@ KVClient
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示操作成功。
-            - 返回 ``StatusCode::K_INVALID`` 表示 ``keys`` 与 ``devBlob`` 长度不一致、key 非法、设备内存地址为空、设备内存容量为 0 或容量不足等参数错误。
+            - 返回 ``StatusCode::K_INVALID`` 表示 ``keys`` 与 ``devBlob`` 长度不一致、包含重复或非法 key、设备内存地址为空、设备内存容量为 0 或容量不足等参数错误。
             - 返回 ``StatusCode::K_NOT_FOUND`` 表示 key 不存在。
             - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示无法从 worker 获取值、H2D 提交/等待失败或服务端内部错误。
             - 返回 ``StatusCode::K_NOT_SUPPORTED`` 表示当前 client/worker、共享内存、编译选项或 worker 启动参数不支持 RH2D。
