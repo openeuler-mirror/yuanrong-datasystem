@@ -1969,7 +1969,7 @@ aside h2{font-size:16px;margin:0 0 12px}nav a{display:block;color:#324055;text-d
 nav a.active,nav a:hover{background:#eaf2ff;color:#1d4ed8}nav a.sub{padding-left:22px;color:#64748b;font-size:12px}
 main{margin-left:245px;width:calc(100% - 245px);padding:22px 28px 50px}section{margin-bottom:20px}
 h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-size:15px;text-align:center;margin:10px 0}
-.subtitle,.note,.insight{color:var(--muted);line-height:1.65}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.subtitle,.note,.insight{color:var(--muted);line-height:1.65}.section-summary{background:#f8fafc;border-left:4px solid var(--blue);color:#334155;font-size:13px;line-height:1.65}.section-summary b{color:#172033}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{min-width:0;background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
 tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}.cell-hot,.cell-warn,.cell-ok{display:inline-block;border-radius:4px;padding:1px 5px;font-weight:700}.cell-hot{background:#fee2e2;color:#991b1b}.cell-warn{background:#ffedd5;color:#9a3412}.cell-ok{background:#dcfce7;color:#166534}
@@ -2039,6 +2039,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s2">
         <h2>2. 错误根因与分类分布</h2>
+        <div class="panel section-summary" id="section-summary-s2"></div>
         <div class="panel"><h3>图 2-0 输入包 / Cohort 对比</h3><div id="cohort-chart" class="chart"></div><div class="caption">多个日志包独立统计，再对比分类和错误分布。</div></div>
         <div class="panel"><h3>表 2-0 输入包/cohort 对比</h3><table id="cohort-table"></table></div>
         <div class="chart-grid">
@@ -2052,6 +2053,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s3">
         <h2>3. 时延 Breakdown</h2>
+        <div class="panel section-summary" id="section-summary-s3"></div>
         <div class="panel insight">读写分开看尾部：读关注 GET/QueryMeta/RemoteGet/UB，写关注 SET/Create/Publish/memory copy。</div>
         <div class="flow-section">
           <div class="panel"><h3>读取时延</h3><div id="read-latency-chart" class="chart"></div><div class="caption">图 3-1a 读取 Top 时延。</div></div>
@@ -2072,6 +2074,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s4">
         <h2>4. Worker / 流程分布</h2>
+        <div class="panel section-summary" id="section-summary-s4"></div>
         <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data，写关注 CreateBuffer/Publish/Meta。</div>
         <div class="panel controls"><label>Worker 表格筛选 <select id="worker-table-filter"><option value="">全部 Worker</option></select></label><span class="muted">影响第 4/5 章 Worker 表格和对应图，不影响 Trace 查看筛选。</span></div>
         <div id="read-flow-section" class="flow-section">
@@ -2090,6 +2093,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s5">
         <h2>5. UB / URMA 分析</h2>
+        <div class="panel section-summary" id="section-summary-s5"></div>
         <div class="panel insight">UB 单独看：先看 wait/poll/notify/sched，再看入口/出口 worker，最后看 edge/IP。</div>
         <div class="chart-grid">
           <div class="panel"><h3>图 5-1 UB 生命周期</h3><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">TOTAL、wait_for、poll/notify/sched 等耗时字段，按实际采样字段展示。</div></div>
@@ -2112,6 +2116,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s6">
         <h2>6. Trace 查看</h2>
+        <div class="panel section-summary" id="section-summary-s6"></div>
         <div class="panel">
         <div class="controls"><label>Trace 查看读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><label>请求状态 <select id="request-status-filter"><option value="">全部请求</option><option value="failed">只看失败</option><option value="success">只看成功</option></select></label><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">按 access max 降序；联动 Trace 列表与选中 Trace Breakdown。</span><button id="reset-filter">清空</button></div>
         <h3>表 6-1 Top Trace</h3>
@@ -2131,6 +2136,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s7">
         <h2>7. 建议与后续口径</h2>
+        <div class="panel section-summary" id="section-summary-s7"></div>
         <div class="panel"><h3>表 7-1 建议与证据边界</h3><table id="recommendation-table"></table></div>
         <div class="panel">
           <h3>表 7-2 代码与字段映射</h3>
@@ -2141,6 +2147,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s8">
         <h2>8. 原始 JSON 附录</h2>
+        <div class="panel section-summary" id="section-summary-s8"></div>
         <div class="panel"><details>
           <summary>展开 parser 原始 trace JSON</summary>
           <pre id="trace-data"></pre>
@@ -2893,6 +2900,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     renderWorkerSection('read', 'Read');
     renderWorkerSection('write', 'Write');
     renderUbWorkerViews();
+    renderSectionSummaries();
   }
   function applyTraceFilters() {
     const query = document.getElementById('trace-search').value.trim().toLowerCase();
@@ -3148,6 +3156,85 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }]
   });
   }
+  function fmtMs(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? `${Number(n.toFixed(3))}ms` : '未采样';
+  }
+  function fmtCount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(n) : '0';
+  }
+  function firstEntry(rows, fallback=['无数据', null]) {
+    return rows && rows.length ? rows[0] : fallback;
+  }
+  function topLatencyText(rows) {
+    const [name, item] = firstEntry(rows);
+    if (!item || !item.count) return '无有效时延样本';
+    return `${metricLabel(name)} max=${fmtMs(item.max)}, p99=${fmtMs(item.p99)}`;
+  }
+  function topTimeBucketText(operation) {
+    const rows = buildTraceTimeBuckets(operation);
+    if (!rows.length) return '无时间桶样本';
+    const top = rows.slice().sort((a,b) => Number(b.p99_access_ms || 0) - Number(a.p99_access_ms || 0))[0];
+    const stage = Object.entries(top.stage_breakdown_ms || {})
+      .sort((a,b) => Number(b[1]?.p99 || 0) - Number(a[1]?.p99 || 0))[0];
+    const stageText = stage ? `${stageDisplayName(stage[0])} p99=${fmtMs(stage[1]?.p99)}` : '子阶段未采样';
+    return `${String(top.bucket_start || '').replace('T',' ')} access p99=${fmtMs(top.p99_access_ms)}，${stageText}`;
+  }
+  function topWorkerText(rows) {
+    const [worker, item] = firstEntry(rows);
+    if (!item) return '无 worker 聚合样本';
+    return `${worker}: traces=${fmtCount(item.trace_count)}, slow=${fmtCount(item.slow_trace_count)}, errors=${fmtCount(item.error_count)}`;
+  }
+  function topFlowStageText(graph) {
+    const edge = (graph.edges || []).slice().sort((a,b) =>
+      Number(b.rollup?.max_ms || 0) - Number(a.rollup?.max_ms || 0) ||
+      Number(b.rollup?.count || 0) - Number(a.rollup?.count || 0)
+    )[0];
+    if (!edge) return '流程阶段证据不足';
+    return `${edge.name}: ${edge.summary || edge.status || 'observed'}`;
+  }
+  function topUbMetricText() {
+    const [name, item] = firstEntry(ubLifecycleLatencyMetrics);
+    if (!item || !item.count) return 'UB 耗时字段未采样';
+    return `${lifecycleLabel(name)} max=${fmtMs(item.max)}, p99=${fmtMs(item.p99)}`;
+  }
+  function topUbWorkerText() {
+    const [worker, item] = firstEntry(ubWorkerRows);
+    if (!item) return '无 UB worker 聚合样本';
+    return `${worker}: role=${item.role || ''}, entry=${fmtCount(item.entry_events)}, exit=${fmtCount(item.exit_events)}, max=${fmtMs(item.latency_ms?.max)}`;
+  }
+  function topUbEdgeText() {
+    const [edge, item] = firstEntry(ubRows);
+    if (!item) return '无 UB edge 样本';
+    return `${edge}: count=${fmtCount(item.count)}, p99=${fmtMs(item.latency_ms?.p99)}`;
+  }
+  function topTraceText() {
+    const [traceId, item] = firstEntry(traceRows);
+    if (!item) return '无 trace 样本';
+    const workers = Object.keys(item.workers || {}).slice(0, 3).join(', ') || 'unknown worker';
+    return `${String(item.first_ts || item.last_ts || '').replace('T',' ')} ${traceId}: ${item.classification || 'unknown'}, access=${fmtMs(traceAccessLatencyMs(item))}, workers=${workers}`;
+  }
+  function missingCoverageText() {
+    const missing = coverageRows.filter(([, item]) => item.status !== 'present').map(([name]) => name).slice(0, 3);
+    return missing.length ? `缺失观测面：${missing.join(', ')}` : '关键观测面已采样';
+  }
+  function setSectionSummary(id, text) {
+    const node = document.getElementById(id);
+    if (node) node.innerHTML = `<b>本章结论：</b>${escapeHtml(text)}`;
+  }
+  function renderSectionSummaries() {
+    const topCohort = cohortRows.slice().sort((a,b) => Object.values(b[1].errors || {}).reduce((x,y)=>x+y,0) - Object.values(a[1].errors || {}).reduce((x,y)=>x+y,0))[0];
+    const topCohortText = topCohort ? `${topCohort[0]} errors=${fmtCount(Object.values(topCohort[1].errors || {}).reduce((a,b)=>a+b,0))}` : '无 cohort 对比';
+    setSectionSummary('section-summary-s2', `主分类 ${topClass[0]}=${fmtCount(topClass[1])}；Top error ${errorRows[0]?.[0] || '无'}=${fmtCount(errorRows[0]?.[1])}；${topCohortText}。`);
+    setSectionSummary('section-summary-s3', `读取瓶颈 ${topLatencyText(latencyRowsForOperation('read'))}；写入瓶颈 ${topLatencyText(latencyRowsForOperation('write'))}；时间热点：读 ${topTimeBucketText('read')}，写 ${topTimeBucketText('write')}。`);
+    setSectionSummary('section-summary-s4', `流程热点：读 ${topFlowStageText(readFlowStages)}；写 ${topFlowStageText(writeFlowStages)}。Worker 集中：读 ${topWorkerText(workerRowsForOperation('read'))}；写 ${topWorkerText(workerRowsForOperation('write'))}。`);
+    setSectionSummary('section-summary-s5', `UB 耗时 ${topUbMetricText()}；入口/出口集中 ${topUbWorkerText()}；Top edge ${topUbEdgeText()}。`);
+    setSectionSummary('section-summary-s6', `默认按接口 access 时延降序；Top trace ${topTraceText()}。建议先切换“失败/成功”和“读/写”筛选，再看原始日志块摘要。`);
+    setSectionSummary('section-summary-s7', `${recommendations[0]?.title || '暂无自动建议'}；${missingCoverageText()}。`);
+    setSectionSummary('section-summary-s8', `原始 JSON 保留 ${fmtCount(Object.keys(traces).length)} 条 trace，可用于复现 parser 聚合和人工二次确认。`);
+  }
+  renderSectionSummaries();
   renderLatencySection('read', 'Read');
   renderLatencySection('write', 'Write');
   renderFlowSection('read', 'Read');

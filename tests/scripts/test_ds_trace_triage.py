@@ -292,6 +292,27 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
         "日志框 6-3 Trace 全量日志",
     ]:
         assert title in html
+    for summary_id in [
+        "section-summary-s2",
+        "section-summary-s3",
+        "section-summary-s4",
+        "section-summary-s5",
+        "section-summary-s6",
+        "section-summary-s7",
+        "section-summary-s8",
+    ]:
+        assert f"id=\"{summary_id}\"" in html
+    for summary_marker in [
+        "function renderSectionSummaries()",
+        "本章结论",
+        "读取瓶颈",
+        "Worker 集中",
+        "UB 耗时",
+        "Top trace",
+        "缺失观测面",
+        "原始 JSON 保留",
+    ]:
+        assert summary_marker in html
     assert "id=\"cohort-table\"" in html
     assert "id=\"read-latency-chart\"" in html
     assert "id=\"write-latency-chart\"" in html
