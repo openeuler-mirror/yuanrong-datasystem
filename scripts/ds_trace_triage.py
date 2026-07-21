@@ -1865,10 +1865,10 @@ tr.summaryrow td{background:#f8fafc}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
-.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
 th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
-.table-scroll{width:100%;max-width:100%;overflow-x:auto}.wide-edge-table{min-width:1180px;table-layout:auto}.wide-request-table{min-width:1420px;table-layout:auto}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:34%;min-width:360px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){min-width:82px;text-align:right}
+.table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table{font-size:12px}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
@@ -1979,15 +1979,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <h2>5. UB / URMA 分析</h2>
         <div class="panel insight">UB 单独看：先看 wait/poll/notify/sched，再看入口/出口 worker，最后看 edge/IP。</div>
         <div class="chart-grid">
-          <div class="panel"><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">图 5-1 UB 生命周期：TOTAL、wait_for、poll_jfc、notify、poll gap、nanosleep wake。</div></div>
+          <div class="panel"><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">图 5-1 UB 生命周期：TOTAL、wait_for、poll/notify/sched 等耗时字段，按实际采样字段展示。</div></div>
           <div class="panel"><div id="ub-wr-count-chart" class="chart"></div><div class="caption">图 5-1b WR / Inflight Count：remote get WR、URMA inflight WR、chip inflight，单位 count。</div></div>
-          <div class="panel"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-2 UB worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
+          <div class="panel full-row"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-2 UB worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
         </div>
         <div class="panel"><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-3 UB 时间桶：按秒观察入口/出口事件与尾部时延。</div></div>
         <div class="flow-section ub-table-stack">
           <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><div class="table-scroll"><table id="ub-lifecycle-table" class="nowrap-table"></table></div><div id="ub-lifecycle-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><h3>表 5-2 UB Request Top</h3><div class="table-scroll"><table id="ub-request-table" class="wide-request-table"></table></div><div id="ub-request-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><h3>表 5-3 UB Worker 角色</h3><div class="table-scroll"><table id="ub-worker-role-table" class="wide-edge-table"></table></div><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table" class="adaptive-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-3 UB Worker 角色</h3><table id="ub-worker-role-table" class="adaptive-table"></table><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-4 UB 时间桶</h3><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="flow-section">
@@ -2626,6 +2626,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return labels[name] || metricLabel(name);
   }
   function renderUbLifecycleViews() {
+    function missingMetricCell(value) {
+      return value === undefined || value === null || value === '' ? '未采样' : value;
+    }
     const metricRows = [
       ...ubLifecycleMetrics.map(([name,item]) => [lifecycleLabel(name), item.count || 0, item.p50 ?? '', item.p90 ?? '', item.p99 ?? '', item.max ?? '']),
       ...ubChipInflightRows.map(([chip,item]) => [`Chip ${chip} inflight`, item.count || 0, item.p50 ?? '', item.p90 ?? '', item.p99 ?? '', item.max ?? ''])
@@ -2644,9 +2647,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         item.wake_sched_latency_ms ?? '',
         item.remote_get_wr_count ?? '',
         item.urma_inflight_wr_count ?? '',
-        item.poll_jfc_ms ?? '',
-        item.notify_ms ?? '',
-        Math.max(Number(item.poll_loop_gap_ms || 0), Number(item.nanosleep_wake_ms || 0), Number(item.thread_sched_ms || 0)) || '',
+        missingMetricCell(item.poll_jfc_ms),
+        missingMetricCell(item.notify_ms),
+        missingMetricCell(Math.max(Number(item.poll_loop_gap_ms || 0), Number(item.nanosleep_wake_ms || 0), Number(item.thread_sched_ms || 0)) || ''),
         `${item.src_addr || ''} -> ${item.target_addr || ''}`,
         item.cpuid ?? '',
         item.data_size ?? '',

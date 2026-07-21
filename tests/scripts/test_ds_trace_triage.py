@@ -325,13 +325,15 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "ubLifecycleLatencyMetrics" in html
     assert "ubWrCountRows" in html
     assert "WR / Inflight Count" in html
+    assert "按实际采样字段展示" in html
+    assert "class=\"panel full-row\"" in html
     assert "id=\"ub-worker-role-table\"" in html
-    assert "class=\"wide-edge-table\"" in html
-    assert "class=\"wide-request-table\"" in html
-    assert "table-scroll" in html
+    assert "class=\"adaptive-table\"" in html
     assert "#ub-worker-role-table" in html
     assert "#ub-request-table" in html
     assert "overflow-x:hidden" in html
+    assert "missingMetricCell" in html
+    assert "未采样" in html
     assert "id=\"ub-worker-time-table\"" in html
     assert "id=\"ub-lifecycle-table\"" in html
     assert "class=\"nowrap-table\"" in html
