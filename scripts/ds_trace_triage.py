@@ -1868,6 +1868,7 @@ tr.summaryrow td{background:#f8fafc}
 .compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
 th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
+.table-scroll{width:100%;overflow-x:auto}.wide-edge-table{min-width:1180px;table-layout:auto}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:34%;min-width:360px}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
@@ -1985,7 +1986,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="flow-section ub-table-stack">
           <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><table id="ub-lifecycle-table"></table><div id="ub-lifecycle-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><h3>表 5-3 UB Worker 角色</h3><table id="ub-worker-role-table"></table><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-3 UB Worker 角色</h3><div class="table-scroll"><table id="ub-worker-role-table" class="wide-edge-table"></table></div><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-4 UB 时间桶</h3><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="flow-section">
