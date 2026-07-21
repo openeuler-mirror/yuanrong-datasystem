@@ -1932,6 +1932,14 @@ def _write_site_publish_doc(run_dir, manifest):
         f"curl -fsSI {url}",
         "```",
         "",
+        "## Index Registration",
+        "",
+        "- Real publish is not complete until the site catalog is updated.",
+        "- Add or update one `var P` entry in `<publish-root>/index.html` for "
+        f"`perf/{filename}`; keep the edit minimal and preserve existing entries.",
+        "- Run an `index.html` JavaScript syntax check after editing, then verify the "
+        "new report URL and catalog entry over HTTPS.",
+        "",
         "## Verification",
         "",
         "- HTTP status should be 200.",
@@ -1964,10 +1972,10 @@ def _render_html(report, title, site=False, manifest=None):
     base_style = """<style>
 :root{--bg:#f6f8fb;--card:#fff;--text:#172033;--muted:#5f6b7a;--border:#dfe5ee;--blue:#2563eb;--orange:#ea580c;--red:#dc2626;--green:#059669;--purple:#7c3aed;--amber:#ca8a04}
 *{box-sizing:border-box}body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--text);font-family:'Microsoft YaHei',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-.layout{display:flex}aside{position:fixed;left:0;top:0;width:245px;height:100vh;background:#fff;border-right:1px solid var(--border);padding:18px 14px;overflow:auto}
+.layout{display:flex;align-items:flex-start;min-height:100vh}aside{position:sticky;left:0;top:0;flex:0 0 245px;width:245px;height:100vh;background:#fff;border-right:1px solid var(--border);padding:18px 14px;overflow:auto}
 aside h2{font-size:16px;margin:0 0 12px}nav a{display:block;color:#324055;text-decoration:none;padding:8px 10px;border-radius:6px;font-size:13px;margin:2px 0}
 nav a.active,nav a:hover{background:#eaf2ff;color:#1d4ed8}nav a.sub{padding-left:22px;color:#64748b;font-size:12px}
-main{margin-left:245px;width:calc(100% - 245px);padding:22px 28px 50px}section{margin-bottom:20px}
+main{flex:1;min-width:0;width:auto;padding:22px 28px 50px}section{margin-bottom:20px}
 h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-size:15px;text-align:center;margin:10px 0}
 .subtitle,.note,.insight{color:var(--muted);line-height:1.65}.section-summary{background:#f8fafc;border-left:4px solid var(--blue);color:#334155;font-size:13px;line-height:1.65}.section-summary b{color:#172033}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{min-width:0;background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}

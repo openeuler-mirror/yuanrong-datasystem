@@ -123,8 +123,8 @@ publish: local only / dry-run / published
      components as local HTML and include `/assets/css/site.css` plus
      `/assets/js/site.js`
    - `site_publish.md`: <publish-host>/<publish-site> publish checklist with target path,
-     URL, HTML size, copy command, validation command, and the default publish
-     size limit
+     URL, HTML size, copy command, catalog-index registration, validation
+     command, and the default publish size limit
    - `manifest.json` `render_targets.site.publish`: dry-run/publish status
      recorded by the `publish-site` stage
 5. Inspect selected full logs for the top slow/error traces. Keep aggregate
@@ -166,6 +166,25 @@ the report first and pass `--max-site-html-mb <N>` explicitly.
 Real publish also requires `DS_TRACE_TRIAGE_PUBLISH_HOST` and
 `DS_TRACE_TRIAGE_PUBLISH_ROOT`; `DS_TRACE_TRIAGE_PUBLISH_BASE_URL` defaults to
 the public report base URL when it is not set.
+
+Real publish is only complete after the report is discoverable from the site
+catalog. After copying `report.site.html` to `<publish-root>/perf/<filename>`,
+add or update exactly one `var P` metadata entry in `<publish-root>/index.html`
+for `perf/<filename>`. Keep the edit minimal, preserve existing entries, and do
+not rewrite the whole index when the remote tree has unrelated changes. Validate
+the updated catalog before reporting success:
+
+```bash
+# On the publish host, from the site root that owns index.html:
+# 1. Back up index.html.
+# 2. Add/update the single `var P` entry for perf/<filename>.
+# 3. Extract/check the inline JavaScript or otherwise run the site-local
+#    validation command used by that host.
+# 4. Verify both the report URL and the catalog entry over HTTPS.
+```
+
+If the page URL works but the catalog entry is missing, report the publish as
+copied but not fully registered.
 
 Run pytest locally when changing parser behavior:
 

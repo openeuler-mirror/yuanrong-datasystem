@@ -238,6 +238,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     site_html = (run_dir / "report.site.html").read_text(encoding="utf-8")
     assert "echarts" in html
     assert "<aside><h2>Trace 分析报告</h2><nav id=\"nav\">" in html
+    assert "aside{position:sticky" in html
+    assert "main{flex:1;min-width:0;width:auto" in html
+    assert "main{margin-left:245px" not in html
     assert "class=\"subtitle\"" in html
     assert "id=\"run-metadata-table\"" in html
     assert "class=\"metadata-table\"" in html
@@ -521,6 +524,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "target_path: `<publish-root>/perf/" in publish_doc
     assert ("https://yche" + ".me/perf/") in publish_doc
     assert "report.site.html" in publish_doc
+    assert "## Index Registration" in publish_doc
+    assert "var P" in publish_doc
+    assert "perf/" in publish_doc
+    assert "<publish-root>/index.html" in publish_doc
     triage = json.loads((run_dir / "triage.json").read_text())
     assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
 
@@ -536,6 +543,9 @@ def test_trace_triage_gate_stays_out_of_ci_build():
     assert "ds_trace_triage.py" not in ci_build
     assert "先不要接入 .gitee/ci_build.sh" in skill
     assert "候选 CI 门禁" in skill
+    assert "catalog-index registration" in skill
+    assert "var P" in skill
+    assert "copied but not fully registered" in skill
     assert "当前不默认接入 .gitee/ci_build.sh" in methodology
 
 
