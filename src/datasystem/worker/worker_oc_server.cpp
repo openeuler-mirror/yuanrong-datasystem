@@ -1099,7 +1099,9 @@ Status WorkerOCServer::ConstructTopologyRuntime()
     if (coordinatorServiceProxy_ != nullptr) {
         builder.UseCoordinator(*coordinatorServiceProxy_, BuildCoordinatorWatchIngress());
     } else {
-        builder.UseEtcd(*etcdStore_);
+        CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_NOT_READY, "ETCD Store is not initialized");
+        builder.UseUnifiedCoordinationBackends(std::make_unique<cluster::EtcdCoordinationBackend>(etcdStore_.get()),
+                                               std::make_unique<cluster::EtcdCoordinationBackend>(etcdStore_.get()));
     }
     RETURN_IF_NOT_OK(builder.Build(topologyEngine_));
     const bool isRestart = topologyEngine_->IsRestart();

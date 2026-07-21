@@ -177,6 +177,25 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
 
         self.assertEqual(allowed_files, matched_files)
 
+    def test_topology_engine_uses_coordination_backend_not_concrete_etcd(self):
+        files = [
+            REPO_ROOT / "src/datasystem/cluster/runtime/topology_engine.h",
+            REPO_ROOT / "src/datasystem/cluster/runtime/topology_engine.cpp",
+        ]
+
+        forbidden_tokens = [
+            "EtcdStore",
+            "EtcdCoordinationBackend",
+            "datasystem/common/kvstore/etcd/etcd_store.h",
+            "datasystem/cluster/coordination_backend/etcd_coordination_backend.h",
+            "UseEtcd(",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use ICoordinationBackend abstractions")
+
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/slot_recovery/BUILD.bazel",

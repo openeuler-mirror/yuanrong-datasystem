@@ -17,13 +17,11 @@
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/control/topology_controller_runtime.h"
-#include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/cluster/coordination_backend/topology_recovery_reporter.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -35,15 +33,15 @@ constexpr auto BACKEND_SCOPE_POLL_INTERVAL = std::chrono::milliseconds(100);
 constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 const std::string LOCAL_RECOVERY_RECONCILIATION_KEY = "__local_recovery_reconciliation__";
 
-Status RegisterEtcdTopologyTables(EtcdStore &store, const TopologyKeyHelper &keys)
+Status RegisterUnifiedTopologyTables(ICoordinationBackend &backend, const TopologyKeyHelper &keys)
 {
-    RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.TopologyTable(), keys.TopologyTable()));
-    RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.MigrateTaskTable(), keys.MigrateTaskTable()));
-    RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.DeleteTaskTable(), keys.DeleteTaskTable()));
-    RETURN_IF_NOT_OK(store.CreateTableWithExactPrefix(keys.NotifyTable(), keys.NotifyTable()));
+    RETURN_IF_NOT_OK(backend.CreateTableWithExactPrefix(keys.TopologyTable(), keys.TopologyTable()));
+    RETURN_IF_NOT_OK(backend.CreateTableWithExactPrefix(keys.MigrateTaskTable(), keys.MigrateTaskTable()));
+    RETURN_IF_NOT_OK(backend.CreateTableWithExactPrefix(keys.DeleteTaskTable(), keys.DeleteTaskTable()));
+    RETURN_IF_NOT_OK(backend.CreateTableWithExactPrefix(keys.NotifyTable(), keys.NotifyTable()));
     RETURN_IF_NOT_OK(
-        store.CreateTableWithExactPrefix(keys.ScaleInMetadataDoneTable(), keys.ScaleInMetadataDoneTable()));
-    return store.CreateTableWithExactPrefix(keys.MembershipTable(), keys.EtcdMembershipTablePrefix());
+        backend.CreateTableWithExactPrefix(keys.ScaleInMetadataDoneTable(), keys.ScaleInMetadataDoneTable()));
+    return backend.CreateTableWithExactPrefix(keys.MembershipTable(), keys.EtcdMembershipTablePrefix());
 }
 
 bool IsCanonicalAddress(const std::string &address)
@@ -169,12 +167,11 @@ bool ConfirmsPeerBackendReachability(const ControlBackendObservation &local, con
 }  // namespace
 
 struct TopologyEngine::Builder::Config {
-    enum class BackendKind : uint8_t { NONE, ETCD, COORDINATOR };
+    enum class BackendKind : uint8_t { NONE, UNIFIED, COORDINATOR };
 
     std::string clusterName;
     std::string localAddress;
     BackendKind backendKind{ BackendKind::NONE };
-    EtcdStore *memberStore{ nullptr };
     ICoordinatorServiceProxy *coordinatorProxy{ nullptr };
     CoordinatorWatchIngress ingress;
     ITopologyPhaseCallbacks *callbacks{ nullptr };
@@ -217,14 +214,16 @@ TopologyEngine::Builder &TopologyEngine::Builder::SetLocalAddress(std::string lo
     return *this;
 }
 
-TopologyEngine::Builder &TopologyEngine::Builder::UseEtcd(EtcdStore &store)
+TopologyEngine::Builder &TopologyEngine::Builder::UseUnifiedCoordinationBackends(
+    std::unique_ptr<ICoordinationBackend> memberBackend, std::unique_ptr<ICoordinationBackend> controllerBackend)
 {
     if (config_ == nullptr) {
         return *this;
     }
     config_->backendSelectionInvalid = config_->backendKind != Config::BackendKind::NONE;
-    config_->backendKind = Config::BackendKind::ETCD;
-    config_->memberStore = &store;
+    config_->backendKind = Config::BackendKind::UNIFIED;
+    config_->memberBackend = std::move(memberBackend);
+    config_->controllerBackend = std::move(controllerBackend);
     config_->coordinatorProxy = nullptr;
     config_->ingress = {};
     return *this;
@@ -240,7 +239,8 @@ TopologyEngine::Builder &TopologyEngine::Builder::UseCoordinator(ICoordinatorSer
     config_->backendKind = Config::BackendKind::COORDINATOR;
     config_->coordinatorProxy = &proxy;
     config_->ingress = std::move(ingress);
-    config_->memberStore = nullptr;
+    config_->memberBackend.reset();
+    config_->controllerBackend.reset();
     return *this;
 }
 
@@ -328,9 +328,9 @@ Status TopologyEngine::Builder::Validate() const
                                  && config_->callbacks != nullptr && config_->nodeDeadTimeout.count() > 0
                                  && !config_->backendSelectionInvalid,
                              K_INVALID, "invalid cluster topology Engine Builder settings");
-    if (config_->backendKind == Config::BackendKind::ETCD) {
-        CHECK_FAIL_RETURN_STATUS(config_->memberStore != nullptr, K_INVALID,
-                                 "ETCD topology Engine requires one shared Store resource");
+    if (config_->backendKind == Config::BackendKind::UNIFIED) {
+        CHECK_FAIL_RETURN_STATUS(config_->memberBackend != nullptr && config_->controllerBackend != nullptr, K_INVALID,
+                                 "unified topology Engine requires complete coordination backends");
     } else if (config_->backendKind == Config::BackendKind::COORDINATOR) {
         CHECK_FAIL_RETURN_STATUS(config_->coordinatorProxy != nullptr && config_->ingress.bind != nullptr
                                      && config_->ingress.unbindAndDrain != nullptr,
@@ -344,14 +344,11 @@ Status TopologyEngine::Builder::Validate() const
 Status TopologyEngine::Builder::CreateOwnedDependencies()
 {
     RETURN_IF_NOT_OK(TopologyKeyHelper::Create(config_->clusterName, config_->keys));
-    if (config_->backendKind == Config::BackendKind::ETCD) {
-        RETURN_IF_NOT_OK(RegisterEtcdTopologyTables(*config_->memberStore, *config_->keys));
+    if (config_->backendKind == Config::BackendKind::UNIFIED) {
+        RETURN_IF_NOT_OK(RegisterUnifiedTopologyTables(*config_->memberBackend, *config_->keys));
     }
     config_->algorithm = std::make_unique<HashAlgorithm>();
-    if (config_->backendKind == Config::BackendKind::ETCD) {
-        config_->memberBackend = std::make_unique<EtcdCoordinationBackend>(config_->memberStore);
-        config_->controllerBackend = std::make_unique<EtcdCoordinationBackend>(config_->memberStore);
-    } else {
+    if (config_->backendKind == Config::BackendKind::COORDINATOR) {
         config_->memberBackend = CreateDsCoordinationBackend(config_->coordinatorProxy, config_->localAddress);
         config_->controllerBackend = CreateDsCoordinationBackend(config_->coordinatorProxy, config_->localAddress);
     }
@@ -411,7 +408,7 @@ TopologyEngine::RuntimeOptions TopologyEngine::ConsumeRuntimeOptions(Builder::Co
     options.clusterName = config.clusterName;
     options.localAddress = config.localAddress;
     options.isRestart = config.isRestart;
-    options.unifiedEtcdWatch = config.backendKind == Builder::Config::BackendKind::ETCD;
+    options.unifiedEtcdWatch = config.backendKind == Builder::Config::BackendKind::UNIFIED;
     options.controlBackendProbe = std::move(config.controlBackendProbe);
     options.availabilityHandler = std::move(config.availabilityHandler);
     options.snapshotPublishedHandler = std::move(config.snapshotPublishedHandler);

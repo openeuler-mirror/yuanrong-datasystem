@@ -88,6 +88,11 @@ Status FakeCoordinationBackend::CreateTable(const std::string &table, const std:
     return Status::OK();
 }
 
+Status FakeCoordinationBackend::CreateTableWithExactPrefix(const std::string &table, const std::string &tablePrefix)
+{
+    return CreateTable(table, tablePrefix);
+}
+
 Status FakeCoordinationBackend::Put(const std::string &table, const std::string &key, const std::string &value)
 {
     PutBytes(table, key, value);

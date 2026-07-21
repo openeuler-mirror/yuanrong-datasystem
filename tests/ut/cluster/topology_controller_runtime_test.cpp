@@ -62,6 +62,11 @@ public:
         return backend_.CreateTable(table, tablePrefix);
     }
 
+    Status CreateTableWithExactPrefix(const std::string &table, const std::string &tablePrefix) override
+    {
+        return backend_.CreateTableWithExactPrefix(table, tablePrefix);
+    }
+
     Status Put(const std::string &table, const std::string &key, const std::string &value) override
     {
         return backend_.Put(table, key, value);

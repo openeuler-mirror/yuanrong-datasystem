@@ -83,6 +83,14 @@ public:
     Status CreateTable(const std::string &tableName, const std::string &tablePrefix) override;
 
     /**
+     * @brief Idempotently create one ETCD logical table using an exact physical prefix.
+     * @param[in] tableName Logical table name.
+     * @param[in] tablePrefix Exact physical ETCD table prefix.
+     * @return Backend operation status.
+     */
+    Status CreateTableWithExactPrefix(const std::string &tableName, const std::string &tablePrefix) override;
+
+    /**
      * @brief Put one exact ETCD key/value pair.
      * @param[in] tableName Logical table name.
      * @param[in] key Exact relative key.

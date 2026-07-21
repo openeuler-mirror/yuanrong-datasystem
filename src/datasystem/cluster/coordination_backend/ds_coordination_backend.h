@@ -85,6 +85,14 @@ public:
     Status CreateTable(const std::string &tableName, const std::string &tablePrefix) override;
 
     /**
+     * @brief Register one already-canonical logical table prefix.
+     * @param[in] tableName Logical table name.
+     * @param[in] tablePrefix Canonical physical table prefix.
+     * @return Status of the call.
+     */
+    Status CreateTableWithExactPrefix(const std::string &tableName, const std::string &tablePrefix) override;
+
+    /**
      * @brief Put one value into a logical table.
      * @param[in] tableName Logical table name.
      * @param[in] key Relative key within the table.

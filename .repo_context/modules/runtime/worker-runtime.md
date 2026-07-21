@@ -687,6 +687,25 @@
     libraries success, total wall time: 0s`), source build time 51s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
     database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_topology_engine_uses_coordination_backend_not_concrete_etcd`.
+  - Changed the C++ composition contract in
+    `TopologyRuntimeCompositionTest.KeepsBackendEventsAndMembershipMutationsInsideOwners` to reject public
+    `UseEtcd(EtcdStore&)` selection and require `UseUnifiedCoordinationBackends(...)` instead.
+  - Initial RED: `scripts/clion_remote_build.sh tests-index` failed after 6.8s at
+    `topology_runtime_composition_test.cpp` static assertions because `TopologyEngine::Builder` still exposed
+    concrete `EtcdStore` selection and lacked the `ICoordinationBackend`-level unified backend injection method.
+  - GREEN: `TopologyEngine` no longer includes or constructs `EtcdStore` / `EtcdCoordinationBackend`; table
+    registration goes through `ICoordinationBackend::CreateTableWithExactPrefix`, and `WorkerOCServer` performs the
+    ETCD adapter composition before passing member/controller backends into the Engine. The Bazel dependency from
+    `cluster_topology` to `//src/datasystem/common/kvstore/etcd:etcd_store` was removed.
+  - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 24/24 tests in 0.066s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 116s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 1s`), source build time 41s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
+    database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
+  - GREEN: remote
+    `cluster_topology_contract_ut --gtest_filter="TopologyRuntimeCompositionTest.*"` passed 1/1 test in 0ms.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

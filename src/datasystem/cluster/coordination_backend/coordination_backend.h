@@ -129,6 +129,14 @@ public:
     virtual Status CreateTable(const std::string &tableName, const std::string &tablePrefix) = 0;
 
     /**
+     * @brief Idempotently create one logical table using an already-canonical physical prefix.
+     * @param[in] tableName Logical table name.
+     * @param[in] tablePrefix Canonical physical table prefix.
+     * @return Backend operation status.
+     */
+    virtual Status CreateTableWithExactPrefix(const std::string &tableName, const std::string &tablePrefix) = 0;
+
+    /**
      * @brief Put one exact key/value pair.
      * @param[in] tableName Logical table name.
      * @param[in] key Exact relative key.

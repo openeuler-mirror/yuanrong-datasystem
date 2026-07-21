@@ -122,7 +122,6 @@ ds_cc_library(
         "//src/datasystem/cluster/coordination_backend:topology_recovery_reporter",
         "//src/datasystem/common/ak_sk:hasher",
         "//src/datasystem/common/kvstore:kv_store",
-        "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/common/util:common_util",

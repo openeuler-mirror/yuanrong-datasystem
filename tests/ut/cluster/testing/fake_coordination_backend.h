@@ -34,6 +34,7 @@ public:
     Status Get(const std::string &table, const std::string &key, RangeSearchResult &result,
                int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT) override;
     Status CreateTable(const std::string &table, const std::string &tablePrefix) override;
+    Status CreateTableWithExactPrefix(const std::string &table, const std::string &tablePrefix) override;
     Status Put(const std::string &table, const std::string &key, const std::string &value) override;
     Status CAS(const std::string &table, const std::string &key, const ProcessFunction &process,
                RangeSearchResult &result) override;

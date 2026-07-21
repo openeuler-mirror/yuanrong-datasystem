@@ -26,7 +26,6 @@
 #include "datasystem/common/util/thread.h"
 
 namespace datasystem {
-class EtcdStore;
 class ICoordinatorServiceProxy;
 }
 
@@ -93,11 +92,13 @@ public:
         Builder &SetLocalAddress(std::string localAddress);
 
         /**
-         * @brief Select ETCD using the Worker-owned Store and one unified watch stream.
-         * @param[in] store Shared non-owned Store.
+         * @brief Select unified member/controller backends using one externally composed coordination backend binding.
+         * @param[in] memberBackend Member-role backend.
+         * @param[in] controllerBackend Controller-role backend.
          * @return This Builder.
          */
-        Builder &UseEtcd(EtcdStore &store);
+        Builder &UseUnifiedCoordinationBackends(std::unique_ptr<ICoordinationBackend> memberBackend,
+                                                std::unique_ptr<ICoordinationBackend> controllerBackend);
 
         /**
          * @brief Select Coordinator and bind its Worker watch RPC ingress.

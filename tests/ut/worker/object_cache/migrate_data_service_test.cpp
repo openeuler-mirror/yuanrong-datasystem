@@ -135,6 +135,11 @@ public:
         return UnsupportedCoordinationCall();
     }
 
+    Status CreateTableWithExactPrefix(const std::string &, const std::string &) override
+    {
+        return UnsupportedCoordinationCall();
+    }
+
     Status Put(const std::string &, const std::string &, const std::string &) override
     {
         return UnsupportedCoordinationCall();

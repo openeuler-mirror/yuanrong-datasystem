@@ -6,12 +6,17 @@
 /**
  * Description: Cluster topology Runtime composition contract tests.
  */
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/cluster/runtime/topology_engine.h"
 
 #include <type_traits>
 #include <utility>
 
 #include "gtest/gtest.h"
+
+namespace datasystem {
+class EtcdStore;
+}
 
 namespace datasystem::cluster {
 namespace {
@@ -33,14 +38,26 @@ struct HasPublicReadyMutation<
     : std::true_type {};
 
 template <typename T, typename = void>
-struct HasSingleEtcdStoreSelection : std::false_type {};
+struct HasEtcdStoreSelection : std::false_type {};
 
 template <typename T>
-struct HasSingleEtcdStoreSelection<
-    T, std::void_t<decltype(std::declval<T &>().UseEtcd(std::declval<EtcdStore &>()))>> : std::true_type {};
+struct HasEtcdStoreSelection<T, std::void_t<decltype(std::declval<T &>().UseEtcd(std::declval<EtcdStore &>()))>>
+    : std::true_type {};
 
-static_assert(HasSingleEtcdStoreSelection<TopologyEngine::Builder>::value,
-              "ETCD topology composition must borrow exactly one Store");
+template <typename T, typename = void>
+struct HasUnifiedCoordinationBackendSelection : std::false_type {};
+
+template <typename T>
+struct HasUnifiedCoordinationBackendSelection<
+    T,
+    std::void_t<decltype(std::declval<T &>().UseUnifiedCoordinationBackends(
+        std::declval<std::unique_ptr<ICoordinationBackend>>(), std::declval<std::unique_ptr<ICoordinationBackend>>()))>>
+    : std::true_type {};
+
+static_assert(!HasEtcdStoreSelection<TopologyEngine::Builder>::value,
+              "Cluster topology composition must not expose concrete ETCD Store selection");
+static_assert(HasUnifiedCoordinationBackendSelection<TopologyEngine::Builder>::value,
+              "Unified topology composition must accept ICoordinationBackend instances");
 
 TEST(TopologyRuntimeCompositionTest, KeepsBackendEventsAndMembershipMutationsInsideOwners)
 {

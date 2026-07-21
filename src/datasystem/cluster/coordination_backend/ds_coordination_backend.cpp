@@ -120,6 +120,13 @@ Status DsCoordinationBackend::CreateTable(const std::string &tableName, const st
     return Status::OK();
 }
 
+Status DsCoordinationBackend::CreateTableWithExactPrefix(const std::string &tableName, const std::string &tablePrefix)
+{
+    (void)tableName;
+    (void)tablePrefix;
+    return Status::OK();
+}
+
 Status DsCoordinationBackend::Put(const std::string &tableName, const std::string &key, const std::string &value)
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
