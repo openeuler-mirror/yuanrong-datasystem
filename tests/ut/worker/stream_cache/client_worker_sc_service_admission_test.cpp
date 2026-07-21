@@ -42,5 +42,22 @@ TEST_F(ClientWorkerSCServiceAdmissionTest, WorkerServiceAdmissionRejectsStreamRe
     ASSERT_NE(rc.GetMsg().find("LOCAL_ISOLATED"), std::string::npos);
     ASSERT_NE(rc.GetMsg().find("CONTROL_BACKEND_LOCAL_ISOLATION"), std::string::npos);
 }
+
+TEST_F(ClientWorkerSCServiceAdmissionTest, WorkerServiceAdmissionRejectsStreamReadWriteDuringRecovering)
+{
+    worker::stream_cache::ClientWorkerSCServiceImpl service(HostPort(), HostPort(), nullptr, nullptr, nullptr,
+                                                            metadataRoute_, membership_);
+    worker::WorkerRuntimeFacade runtime;
+    runtime.MarkRecovering(worker::WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE, "recovering");
+    service.SetRuntimeFacade(&runtime);
+    DS_ASSERT_OK(SetHealthProbe());
+    SetTopologyServingAdmission(true);
+
+    auto rc = service.CreateProducer(nullptr);
+
+    ASSERT_EQ(rc.GetCode(), StatusCode::K_NOT_READY);
+    ASSERT_NE(rc.GetMsg().find("RECOVERING"), std::string::npos);
+    ASSERT_NE(rc.GetMsg().find("RECOVERY_EVIDENCE_INCOMPLETE"), std::string::npos);
+}
 }  // namespace ut
 }  // namespace datasystem

@@ -300,7 +300,8 @@
   - `WorkerServiceAdmissionRejectsReadWriteDuringIsolation`: covered for the shared service-mode matrix by
     `WorkerServiceAdmissionTest.AppliesServiceModeMatrix`; Object/KV paths have focused admission checks. Stream
     client-facing read/write entrypoints are covered by
-    `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringIsolation`; full Stream ST
+    `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringIsolation` and
+    `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringRecovering`; full Stream ST
     remains follow-up.
   - `MigrationTargetFiltersIsolatedWorker`: covered by
     `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker` and DRAINING target tests.
@@ -324,9 +325,9 @@
        outage evidence and topology callbacks must remain idempotent.
     4. Recovery metadata batch with mixed success/failure while membership changes; successful entries remain recovered,
        failed entries stay invisible or enter cleanup without blocking other workers.
-    5. KV/Object/Stream ordinary requests during `RECOVERING`; all must fail fast through the same facade semantics,
-       while recovery/cleanup RPCs stay allowed. `LOCAL_ISOLATED` Stream client-facing admission is now covered by UT;
-       ST-level Stream protocol coverage remains pending.
+    5. ST-level KV/Object/Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; unit coverage now
+       verifies Stream client-facing admission for both modes through the same facade semantics, while full protocol ST
+       remains pending.
 
 ## Fast Verification
 
