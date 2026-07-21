@@ -93,10 +93,12 @@ Status MmapManager::LookupUnitsAndMmapFds(const std::string &tenantId, std::vect
         // Notify worker to send fds and receive the client fd.
         if (!toRecvFds.empty()) {
             if (!enableEmbeddedClient_) {
+                const std::string clientId = clientWorker_->clientId_;
                 RETURN_IF_NOT_OK(clientWorker_->GetClientFd(toRecvFds, clientFds, tenantId));
                 // Mmap the new client fd.
                 for (size_t i = 0; i < clientFds.size(); i++) {
-                    RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(clientFds[i], toRecvFds[i], mmapSizes[i], tenantId));
+                    RETURN_IF_NOT_OK(
+                        mmapTable_->MmapAndStoreFd(clientFds[i], toRecvFds[i], mmapSizes[i], tenantId, clientId));
                 }
             } else {
                 for (size_t i = 0; i < toRecvFds.size(); i++) {
@@ -178,6 +180,12 @@ void MmapManager::ClearByShmId(const std::string &shmId)
     if (mmapTable_) {
         mmapTable_->ClearByShmId(shmId);
     }
+}
+
+std::vector<int64_t> MmapManager::GetFds()
+{
+    std::shared_lock<std::shared_timed_mutex> lck(mutex_);
+    return mmapTable_ == nullptr ? std::vector<int64_t>{} : mmapTable_->GetFds();
 }
 
 void MmapManager::Clear()

@@ -30,9 +30,10 @@
 namespace datasystem {
 namespace client {
 Status EmbeddedMmapTable::MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize,
-                                         const std::string &tenantId)
+                                         const std::string &tenantId, const std::string &clientId)
 {
     (void)clientFd;
+    (void)clientId;
     std::lock_guard<std::shared_timed_mutex> l(mutex_);
     auto entry = mmapTable_.find(workerFd);
     if (entry == mmapTable_.end()) {

@@ -132,6 +132,12 @@ TEST_F(MmapManagerTest, TestLookupUnitsAndMmapFdsShmPathWithStubGetClientFd)
     ASSERT_TRUE(st.IsOk()) << st.ToString();
     EXPECT_EQ(unit->pointer, firstPtr);
 
+    auto mappedFds = mmapManager.GetFds();
+    ASSERT_EQ(mappedFds.size(), 1);
+    EXPECT_EQ(mappedFds.front(), unit->fd);
+    mmapManager.ClearExpiredFds(mappedFds);
+    EXPECT_EQ(mmapManager.GetMmapEntryByFd(unit->fd), nullptr);
+
     ASSERT_EQ(0, close(memfd));
 #else
     GTEST_SKIP() << "Linux memfd + ShmMmapTable path only";

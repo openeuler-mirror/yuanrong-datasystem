@@ -26,6 +26,7 @@
 #include <ostream>
 #include <cstdint>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <set>
 #include <string>
@@ -376,6 +377,54 @@ TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_UnmapOldWorkerSharedMemoryAfterSwitch
     ASSERT_TRUE(WaitUntil([&]() { return !HasAnyMapping(worker0Mappings); }))
         << "old worker0 shared memory is still mapped after switching to worker1, old mappings: "
         << worker0Mappings.size() << ", current mappings: " << CountDatasystemMemfdMappings();
+}
+
+TEST_F(KVCacheClientMmapSwitchTest, LEVEL1_DeferUnmapUntilInFlightGetCompletes)
+{
+    InitSwitchableClient();
+    HostPort worker1Address;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Address));
+    DS_ASSERT_OK(datasystem::inject::Set("client.standby_worker", "call(" + worker1Address.ToString() + ")"));
+
+    const auto baselineMappings = GetDatasystemMemfdMappingRanges();
+    std::string value(MMAP_SWITCH_VALUE_SIZE, 'x');
+    std::string keyOnWorker0 = client_->Set(value);
+    ASSERT_FALSE(keyOnWorker0.empty());
+    ASSERT_TRUE(WaitUntil([&]() { return CountDatasystemMemfdMappings() > baselineMappings.size(); }))
+        << "client did not mmap worker0 shared memory";
+    const auto worker0Mappings = DifferenceMappings(GetDatasystemMemfdMappingRanges(), baselineMappings);
+    ASSERT_FALSE(worker0Mappings.empty());
+
+    DS_ASSERT_OK(datasystem::inject::Set("Get.RetryOnError.retry_on_error_after_func", "1*pause()"));
+    std::string getValue;
+    auto getFuture = std::async(std::launch::async, [&]() { return client_->Get(keyOnWorker0, getValue); });
+
+    const bool getPaused = WaitUntil(
+        []() { return datasystem::inject::GetExecuteCount("Get.RetryOnError.retry_on_error_after_func") > 0; });
+    EXPECT_TRUE(getPaused) << "Get request did not pause after receiving the worker0 response";
+
+    bool switchCompleted = false;
+    if (getPaused) {
+        DS_EXPECT_OK(datasystem::inject::Set("client.switch_worker_end", "call()"));
+        VoluntaryScaleDownInject(0);
+        switchCompleted =
+            WaitUntil([]() { return datasystem::inject::GetExecuteCount("client.switch_worker_end") > 0; });
+    }
+    EXPECT_TRUE(switchCompleted) << "client did not finish switching to worker1";
+    if (switchCompleted) {
+        EXPECT_TRUE(HasAnyMapping(worker0Mappings))
+            << "old worker0 shared memory was unmapped while an old-worker Get was still pending";
+    }
+
+    DS_EXPECT_OK(datasystem::inject::Clear("Get.RetryOnError.retry_on_error_after_func"));
+    const auto getStatus = getFuture.get();
+    if (!getPaused || !switchCompleted) {
+        return;
+    }
+
+    EXPECT_TRUE(WaitUntil([&]() { return !HasAnyMapping(worker0Mappings); }))
+        << "old worker0 shared memory was not unmapped after the pending Get completed, Get status: "
+        << getStatus.ToString();
 }
 
 TEST_F(KVCacheClientTest, TestKVCacheClientInitByEnvSuccess)

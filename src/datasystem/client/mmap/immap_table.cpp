@@ -81,6 +81,17 @@ void IMmapTable::ClearExpiredFds(const std::vector<int64_t> &fds)
     }
 }
 
+std::vector<int64_t> IMmapTable::GetFds()
+{
+    std::shared_lock<std::shared_timed_mutex> l(mutex_);
+    std::vector<int64_t> fds;
+    fds.reserve(mmapTable_.size());
+    for (const auto &entry : mmapTable_) {
+        fds.emplace_back(entry.first);
+    }
+    return fds;
+}
+
 std::shared_ptr<IMmapTableEntry> IMmapTable::GetMmapEntryByFd(int fd)
 {
     std::shared_lock<std::shared_timed_mutex> l(mutex_);
