@@ -60,6 +60,10 @@ HeteroClient
             - **failKeys** - 传出参数，返回获取失败的key。
             - **subTimeoutMs** - 传入参数， 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
 
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示获取成功，否则返回其他错误码。
 
@@ -96,6 +100,10 @@ HeteroClient
             - **keys** - 需要获取的一组key，最多不超过10000个。key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
             - **devBlobList** - 传出参数。描述用于接收的异构设备内存结构的列表， 数据从主机获取并写入 `devBlobList` 中的指针。详见 :cpp:class:`DeviceBlobList` 章节。
             - **subTimeoutMs** - 传入参数， 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
         返回：
             异步操作结果通过 std::shared_future< :cpp:class:`AsyncResult` > 返回。
@@ -148,6 +156,10 @@ HeteroClient
             - **devBlobList** - 传出参数。用于获取异构设备内存上的数据。详见 :cpp:class:`DeviceBlobList` 章节。
             - **failedKeys** - 传出参数，返回获取数据失败的key。
             - **subTimeoutMs** - 传入参数， 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  DevMGet 走 device 间传输路径，subTimeoutMs 的实际生效值为 ``max(60000ms, subTimeoutMs)``，此路径不受 :cpp:member:`ConnectOptions::requestTimeoutMs` 上限约束，与 MGetH2D 等 host 路径接口的约束不同。
 
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示获取成功，否则返回其他错误码。
