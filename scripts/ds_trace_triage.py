@@ -1503,7 +1503,6 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
         {"id": "entry", "label": "Entry Worker", "role": "entry_worker", "top_workers": rollups["client_entry"].get("top_workers", [])[:2], "top_ips": rollups["entry_data"].get("top_ips", [])[:2]},
         {"id": "meta", "label": "Meta Worker", "role": "meta_worker", "top_ips": rollups["entry_meta"].get("top_ips", [])[:2]},
         {"id": "data", "label": "Data Worker", "role": "data_worker", "top_workers": rollups["data_ub"].get("top_workers", [])[:2], "top_ips": rollups["data_ub"].get("top_ips", [])[:2]},
-        {"id": "ub", "label": "UB/URMA", "role": "transport"},
     ]
     read_edges = [
         {
@@ -1545,26 +1544,14 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
         {
             "name": "read: data worker -> entry worker UB write",
             "source": "data",
-            "target": "ub",
+            "target": "entry",
             "operation": "URMA Write",
             "evidence": f"{surface_status('urma_elapsed')['events']} URMA elapsed events",
             "status": surface_status("urma_elapsed")["status"],
             "summary": _flow_edge_summary(rollups["data_ub"], "URMA elapsed evidence"),
             "rollup": rollups["data_ub"],
-            "reason": "URMA Write completion；看 total、request id、src/target、dataSize、cpuid 和 inflight。",
-            "report_reading": "DataWorker 侧 payload write/wait/notify 时序，不要只凭 total 单字段下根因。",
-        },
-        {
-            "name": "read: UB write -> entry worker",
-            "source": "ub",
-            "target": "entry",
-            "operation": "URMA Completion",
-            "evidence": "align RemotePull finish, BatchGetObjectRemote, URMA request id when sampled",
-            "status": "present" if ub_edges or surface_status("urma_elapsed")["status"] == "present" else "missing",
-            "summary": _flow_edge_summary(rollups["data_ub"], "completion alignment"),
-            "rollup": rollups["data_ub"],
-            "reason": "用 UB completion 与 EntryWorker RemotePull finish 对齐，确认时间差是否在传输后可见阶段。",
-            "report_reading": "用于关联 DataWorker completion 与 EntryWorker RemotePull finish 的时间差。",
+            "reason": "DataWorker 通过 URMA Write 反向写回 EntryWorker；看 total、request id、src/target、dataSize、cpuid 和 inflight。",
+            "report_reading": "读取路径的数据回传阶段，方向是 DataWorker -> EntryWorker，不是 EntryWorker -> DataWorker。",
         },
     ]
     write_edges = [
@@ -2230,7 +2217,7 @@ tr.summaryrow td{background:#f8fafc}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
-.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.flow-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-pair .chart{height:320px}.chart{height:360px;width:100%}.flow-graph-chart{height:460px}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.flow-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-pair .chart{height:320px}.chart{height:360px;width:100%}.flow-graph-chart{height:520px}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size);word-break:break-word}
 th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none}.sortable-th:hover{background:#eaf2ff}.sort-mark{color:#2563eb;font-size:11px;margin-left:4px}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 .table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
@@ -3785,8 +3772,18 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       }
     }};
   }
+  function flowNodeLabel(node) {
+    const detail = [
+      ...(node.top_workers || []).map(workerRelationName),
+      ...(node.top_ips || [])
+    ].filter(Boolean)[0];
+    return [node.label, detail].filter(Boolean).join('\\n');
+  }
+  function flowEdgeLabel(edge) {
+    return [edge.operation, edge.summary].filter(Boolean).join('\\n');
+  }
   function renderFlowGraph(id, graph, title) {
-    const flowNodeY = [180,180,82,278,278];
+    const flowNodeY = [240,240,108,372,372];
     chart(id, {
     title:{show:false,text:title},
     textStyle:chartTextStyle,
@@ -3800,14 +3797,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       roam:false,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true, fontSize:14, width:128, overflow:'break', lineHeight:18},
+      label:{show:true, fontSize:15, width:150, overflow:'break', lineHeight:19},
       labelLayout:{hideOverlap:true},
       edgeLabel:{
         show:true,
         formatter:p => p.data.edge_label || p.data.status || '',
-        fontSize:14,
-        lineHeight:18,
-        width:150,
+        fontSize:15,
+        lineHeight:19,
+        width:190,
         overflow:'break',
         backgroundColor:'rgba(255,255,255,.92)',
         borderColor:'#dbeafe',
@@ -3818,12 +3815,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(graph.nodes || []).map((node, idx) => ({
         name:node.id,
-        label:node.label,
+        label:flowNodeLabel(node),
         top_ips:node.top_ips || [],
         top_workers:node.top_workers || [],
-        x:[96,320,560,560,808][idx] || 96,
+        x:[70,220,370,370,560][idx] || 70,
         y:flowNodeY[idx] || 130,
-        symbolSize:84,
+        symbolSize:90,
         itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
       })),
       links:(graph.edges || []).map(edge => ({
@@ -3833,11 +3830,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         operation:edge.operation,
         evidence:edge.evidence,
         summary:edge.summary,
-        edge_label:edge.operation,
+        edge_label:flowEdgeLabel(edge),
         reason:edge.reason,
         rollup:edge.rollup,
         status:edge.status,
-        lineStyle:{color:edge.rollup?.max_ms >= 20 ? '#dc2626' : edge.rollup?.max_ms >= 5 ? '#ea580c' : edge.status === 'present' ? '#2563eb' : '#cbd5e1', width:edge.rollup?.max_ms >= 20 ? 4 : 2, type:edge.status === 'present' ? 'solid' : 'dashed'}
+        lineStyle:{color:edge.rollup?.max_ms >= 20 ? '#dc2626' : edge.rollup?.max_ms >= 5 ? '#ea580c' : edge.status === 'present' ? '#2563eb' : '#cbd5e1', width:edge.rollup?.max_ms >= 20 ? 4 : 2, type:edge.status === 'present' ? 'solid' : 'dashed', curveness:edge.operation === 'URMA Write' ? -0.28 : .08}
       }))
     }]
   });

@@ -92,6 +92,15 @@ def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
     assert "write" in flow_stages
     assert any(edge["name"] == "read: entry worker -> data worker"
                for edge in flow_stages["read"]["edges"])
+    read_urma_edges = [edge for edge in flow_stages["read"]["edges"]
+                       if edge["operation"] == "URMA Write"]
+    assert len(read_urma_edges) == 1
+    assert read_urma_edges[0]["source"] == "data"
+    assert read_urma_edges[0]["target"] == "entry"
+    assert "反向写回 EntryWorker" in read_urma_edges[0]["reason"]
+    assert "ub" not in {node["id"] for node in flow_stages["read"]["nodes"]}
+    assert all(edge["operation"] != "URMA Completion"
+               for edge in flow_stages["read"]["edges"])
     assert any(edge["name"] == "write: entry worker -> meta worker publish"
                for edge in flow_stages["write"]["edges"])
     edge_names = {edge["name"] for edge in flow_stages["edges"]}
@@ -447,7 +456,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"read-flow-stage-chart\"" in html
     assert "id=\"write-flow-stage-chart\"" in html
     assert "class=\"chart flow-graph-chart\"" in html
-    assert ".flow-graph-chart{height:460px}" in html
+    assert ".flow-graph-chart{height:520px}" in html
     assert "function autoCenterFlowGraph(chartInstance)" in html
     assert "myAutoCenter" in html
     assert "title:'自适应居中'" in html
@@ -457,11 +466,15 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "restore:{}" not in html
     assert "labelLayout:{hideOverlap:true}" in html
     assert "roam:false" in html
-    assert "const flowNodeY = [180,180,82,278,278]" in html
-    assert "x:[96,320,560,560,808][idx]" in html
-    assert "fontSize:14" in html
+    assert "const flowNodeY = [240,240,108,372,372]" in html
+    assert "x:[70,220,370,370,560][idx]" in html
+    assert "fontSize:15" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
-    assert "label:node.label" in html
+    assert "function flowNodeLabel(node)" in html
+    assert "function flowEdgeLabel(edge)" in html
+    assert "workerRelationName" in html
+    assert "label:flowNodeLabel(node)" in html
+    assert "curveness:edge.operation === 'URMA Write' ? -0.28 : .08" in html
     assert "id=\"flow-stage-table\"" in html
     assert "id=\"read-flow-stage-table\"" in html
     assert "id=\"write-flow-stage-table\"" in html
@@ -511,7 +524,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html
     assert "edge.summary" in html
-    assert "edge_label:edge.operation" in html
+    assert "edge_label:flowEdgeLabel(edge)" in html
     assert "p.data.edge_label || p.data.status" in html
     assert "edge.reason" in html
     assert "rollup" in html
