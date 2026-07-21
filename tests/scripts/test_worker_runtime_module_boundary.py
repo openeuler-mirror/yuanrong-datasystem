@@ -97,6 +97,17 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         self.assertIn("class ICoordinationBackend;", text)
         self.assertNotIn("coordination_backend/coordination_backend.h", text)
 
+    def test_object_cache_coordination_headers_hide_backend_detail(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/central_metadata_address_resolver.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/object_metadata_coordination_reader.h",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            self.assertIn("class ICoordinationBackend;", text)
+            self.assertNotIn("coordination_backend/coordination_backend.h", text)
+
     def test_node_selector_uses_runtime_facade_not_runtime_state_manager(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/data_migrator/strategy/node_selector.h",

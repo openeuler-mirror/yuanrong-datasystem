@@ -16,6 +16,7 @@
  */
 #include "datasystem/worker/object_cache/central_metadata_address_resolver.h"
 
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/util/status_helper.h"
 

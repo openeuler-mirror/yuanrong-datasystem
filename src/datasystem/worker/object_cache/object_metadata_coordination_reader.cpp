@@ -18,6 +18,7 @@
 
 #include <memory>
 
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"

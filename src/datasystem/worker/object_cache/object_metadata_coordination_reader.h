@@ -17,10 +17,12 @@
 #ifndef DATASYSTEM_WORKER_OBJECT_CACHE_OBJECT_METADATA_COORDINATION_READER_H
 #define DATASYSTEM_WORKER_OBJECT_CACHE_OBJECT_METADATA_COORDINATION_READER_H
 
-#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/worker/object_cache/service/object_metadata_reader.h"
 
 namespace datasystem {
+namespace cluster {
+class ICoordinationBackend;
+}
 namespace object_cache {
 
 class CoordinationObjectMetadataReader final : public IObjectMetadataReader {

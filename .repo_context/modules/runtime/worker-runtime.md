@@ -292,6 +292,10 @@
   12. slot recovery keeps the `ICoordinationBackend` dependency in `CoordinationSlotRecoveryStore` implementation only;
       `slot_recovery_store.h` exposes the store contract and a forward declaration, so slot recovery manager users do
       not inherit coordination backend implementation headers.
+  13. object-cache metadata coordination helper headers hide coordination-backend implementation details. Both
+      `CentralMetadataAddressResolver` and `CoordinationObjectMetadataReader` expose only `ICoordinationBackend`
+      forward declarations in their public headers; the concrete coordination backend header is included only by the
+      corresponding `.cpp` files.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -441,6 +445,19 @@
 ## Fast Verification
 
 - Recent focused verification for scale/fault overlap coverage:
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_object_cache_coordination_headers_hide_backend_detail`.
+  - Initial RED: the new boundary test failed because `central_metadata_address_resolver.h` and
+    `object_metadata_coordination_reader.h` directly included `coordination_backend/coordination_backend.h` and did not
+    forward declare `ICoordinationBackend`.
+  - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 15/15 tests in 0.008s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 204s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 1s`), URMA Mock enabled, and 1154 compile database entries.
+  - GREEN: `ds_ut_object --gtest_filter="CentralMetadataAddressResolverTest.*"` passed 2/2 tests in 0ms gtest time,
+    2.23s wall time.
+  - GREEN: `ds_ut_object --gtest_filter="NotifyRemoteGetMigrationTest.QueryMetadataUsesCoordinationStoreLogicalKey:NotifyRemoteGetMigrationTest.QueryMetadataRejectsUnavailableCoordinationBackend"`
+    passed 2/2 tests in 1ms gtest time, 1.75s wall time.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
   - Added 1 boundary-contract test:
     `WorkerRuntimeModuleBoundaryTest.test_slot_recovery_store_header_hides_coordination_backend_detail`.
   - Initial RED: the new boundary test failed because `slot_recovery_store.h` directly included

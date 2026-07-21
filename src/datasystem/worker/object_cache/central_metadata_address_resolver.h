@@ -19,10 +19,12 @@
 
 #include <string>
 
-#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
+namespace cluster {
+class ICoordinationBackend;
+}
 namespace object_cache {
 
 class CentralMetadataAddressResolver {
