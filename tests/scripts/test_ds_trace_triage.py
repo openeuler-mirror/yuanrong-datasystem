@@ -475,7 +475,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "roam:false" in html
     assert "const graphWidth = Math.max(620, node?.clientWidth || 0)" in html
     assert "const flowNodeX = [0.10,0.33,0.56,0.56,0.86].map(r => Math.round(graphWidth * r))" in html
-    assert "fontSize:15" in html
+    assert "function flowEdgeBriefText(edge)" in html
+    assert "function flowGraphNodeSize()" in html
+    assert "symbol:'roundRect'" in html
+    assert "symbolSize:flowGraphNodeSize()" in html
+    assert "label:{show:true, position:'inside', fontSize:13" in html
+    assert "edgeLabel:{show:true, position:'middle'" in html
+    assert "fontSize:12" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html
     assert "function flowEdgeLabel(edge)" in html
@@ -549,7 +555,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html
     assert "edge.summary" in html
-    assert "edge_label:flowEdgeLabel(edge)" in html
+    assert "edge_label:flowEdgeBriefText(edge)" in html
     assert "worker " in html
     assert "p.data.edge_label || p.data.status" in html
     assert "edge.reason" in html

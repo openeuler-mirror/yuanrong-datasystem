@@ -3854,6 +3854,16 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function flowEdgeLabel(edge) {
     return [edge.operation, edge.summary].filter(Boolean).join('\\n');
   }
+  function flowEdgeBriefText(edge) {
+    const rollup = edge.rollup || {};
+    const latency = Number.isFinite(Number(rollup.max_ms)) ? `max=${Number(rollup.max_ms).toFixed(3)}ms` :
+      Number.isFinite(Number(rollup.p99_ms)) ? `p99=${Number(rollup.p99_ms).toFixed(3)}ms` : '';
+    const worker = (rollup.top_workers || []).map(workerRelationName).filter(Boolean)[0];
+    return [edge.operation, latency, worker].filter(Boolean).join('\\n');
+  }
+  function flowGraphNodeSize() {
+    return [150, 58];
+  }
   function edgeLabelSeverity(value) {
     const n = Number(value || 0);
     return n >= 20 ? 'hot' : n >= 5 ? 'warn' : 'normal';
@@ -3877,14 +3887,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       roam:false,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true, fontSize:15, width:150, overflow:'break', lineHeight:19},
+      label:{show:true, position:'inside', fontSize:13, width:136, overflow:'break', lineHeight:17},
       labelLayout:{hideOverlap:true},
-      edgeLabel:{
-        show:true,
+      edgeLabel:{show:true, position:'middle',
         formatter:p => `{${edgeLabelSeverity(p.data.rollup?.max_ms)}|${p.data.edge_label || p.data.status || ''}}`,
-        fontSize:15,
-        lineHeight:19,
-        width:190,
+        fontSize:12,
+        lineHeight:16,
+        width:168,
         overflow:'break',
         backgroundColor:'rgba(255,255,255,.92)',
         borderColor:'#dbeafe',
@@ -3896,12 +3905,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(graph.nodes || []).map((node, idx) => ({
         name:node.id,
+        symbol:'roundRect',
         label:flowNodeLabel(node),
         top_ips:node.top_ips || [],
         top_workers:node.top_workers || [],
         x:flowNodeX[idx] || flowNodeX[0],
         y:flowNodeY[idx] || 130,
-        symbolSize:90,
+        symbolSize:flowGraphNodeSize(),
         itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
       })),
       links:(graph.edges || []).map(edge => ({
@@ -3911,7 +3921,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         operation:edge.operation,
         evidence:edge.evidence,
         summary:edge.summary,
-        edge_label:flowEdgeLabel(edge),
+        edge_label:flowEdgeBriefText(edge),
         reason:edge.reason,
         rollup:edge.rollup,
         status:edge.status,
