@@ -88,6 +88,14 @@ ERROR_PATTERNS = [
     "Etcd is abnormal",
     "fallback payload rejected",
 ]
+BUILTIN_CUSTOM_METRIC_RULES = [
+    {
+        "name": "wlock_wait",
+        "pattern": r"\bWLock\b.{0,80}?(?:cost|elapsed|time|耗时)[:=\s]*([\d.]+)\s*(us|ms)",
+        "value_group": 1,
+        "unit_group": 2,
+    },
+]
 
 
 class ParserRules:
@@ -95,7 +103,16 @@ class ParserRules:
 
     def __init__(self, error_patterns=None, custom_metric_rules=None):
         self.error_patterns = list(error_patterns or ERROR_PATTERNS)
-        self.custom_metric_rules = list(custom_metric_rules or [])
+        metric_rules = BUILTIN_CUSTOM_METRIC_RULES if custom_metric_rules is None else custom_metric_rules
+        self.custom_metric_rules = [
+            {
+                "name": rule["name"],
+                "regex": rule["regex"] if "regex" in rule else re.compile(rule["pattern"], re.I),
+                "value_group": rule.get("value_group", 1),
+                "unit_group": rule.get("unit_group"),
+            }
+            for rule in metric_rules
+        ]
 
     def register_error_pattern(self, pattern):
         if pattern not in self.error_patterns:
@@ -2113,7 +2130,7 @@ th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
-.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-details{padding:8px 12px;background:#fff7ed;border-top:1px solid #fed7aa;color:#7c2d12;font-size:12px;line-height:1.55}.trace-log-details div+div{margin-top:3px}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
+.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-details{padding:8px 12px;background:#fff7ed;border-top:1px solid #fed7aa;color:#7c2d12;font-size:12px;line-height:1.55}.trace-log-details div+div{margin-top:3px}.trace-latency-hot{font-weight:700;color:#991b1b;background:#fee2e2;border-radius:4px;padding:1px 4px}.trace-latency-warn{font-weight:700;color:#9a3412;background:#ffedd5;border-radius:4px;padding:1px 4px}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
 code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 @media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards,.chapter-guide,.flow-pair{grid-template-columns:1fr}}
 </style>"""
@@ -2381,7 +2398,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     'latencySummary.worker.rpc.query_meta':'Worker QueryMeta RPC',
     'latencySummary.worker.rpc.remote_get':'Worker RemoteGet RPC',
     'latencySummary.worker.rpc.create_meta':'Worker CreateMeta RPC',
-    'latencySummary.worker.process.publish':'Worker Publish'
+    'latencySummary.worker.process.publish':'Worker Publish',
+    'custom.wlock_wait':'WLock wait',
+    'wlock_wait':'WLock wait'
   };
   function metricLabel(name) {
     if (metricLabelMap[name]) return metricLabelMap[name];
@@ -2657,6 +2676,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       .replace(/(\\[?(?:ZMQ_)?RPC_FRAMEWORK_SLOW\\]?|server_exec_us=\\d+|network_residual_us=\\d+|client_req_framework_us=\\d+|client_rsp_framework_us=\\d+|remote_processing_us=\\d+)/gi, '<span class="log-tag log-rpc">$1</span>')
       .replace(/(latencySummary|client\\.rpc\\.[a-z_]+|worker\\.rpc\\.[a-z_]+|worker\\.process\\.[a-z_]+|client\\.process\\.[a-z_]+)/gi, '<span class="log-tag log-latency">$1</span>')
       .replace(/(deadline exceeded|RPC timed out|\\btimeout\\b|20ms deadline)/gi, '<span class="log-tag log-deadline">$1</span>')
+      .replace(/(WLock[^,;\\n]*(?:cost|elapsed|time|耗时)[:=\\s]*[\\d.]+\\s*(?:us|ms))/gi, '<span class="log-tag log-slow">$1</span>')
       .replace(/(cost(?:Us)?[:=]?\\s*[\\d.]+\\s*(?:us|ms)?|totalCost:\\s*[\\d.]+ms|[A-Za-z0-9_.-]+:\\s*\\d{4,})/gi, '<span class="log-tag log-slow">$1</span>')
       .replace(/(RemotePull|Remote done|BatchGetObjectRemote|ProcessGetObjectRequest|CreateBuffer|Publish|QueryMeta|GetObjMetaInfo)/gi, '<span class="log-tag log-field">$1</span>');
   }
@@ -2685,6 +2705,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (/error_code=2004|max_concurrency/i.test(text)) add('RPC 线程数/并发不足', 'hot');
     if (/deadline exceeded|RPC timed out|\\btimeout\\b|20ms deadline/i.test(text)) add('deadline/timeout', 'hot');
     if (/RPC_FRAMEWORK_SLOW|server_exec_us=|network_residual_us=|remote_processing_us=/i.test(text)) add('RPC slow', 'warn');
+    if (/\\bWLock\\b/i.test(text)) add('WLock 耗时', 'warn');
     if (/latencySummary|client\\.rpc\\.|worker\\.rpc\\.|worker\\.process\\./i.test(text)) add('latencySummary');
     if (/URMA_ELAPSED|URMA_WAIT_TIMEOUT|\\burma[_a-z]*\\b|\\bUB\\b/i.test(text)) add('URMA/UB', 'warn');
     if (/RemotePull|Remote done|BatchGetObjectRemote/i.test(text)) add('RemoteGet');
@@ -2723,10 +2744,18 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     for (const match of text.matchAll(/\\b(costUs|cost|totalCost|framework_us|e2e_us|server_exec_us|network_residual_us|remote_processing_us|wakeSchedLatencyUs)[:=]?\\s*([\\d.]+)\\s*(us|ms)?/gi)) {
       add(match[1], match[2], match[3] || '');
     }
+    for (const match of text.matchAll(/\\b(WLock[^,;\\n]{0,80}?(?:cost|elapsed|time|耗时))[:=\\s]*([\\d.]+)\\s*(us|ms)/gi)) {
+      add(match[1].trim(), match[2], match[3] || '');
+    }
     for (const match of text.matchAll(/\\b([A-Za-z][A-Za-z0-9_. -]{1,80})\\s*:\\s*([\\d.]+)\\s*ms\\b/g)) {
       add(match[1].trim(), match[2], 'ms');
     }
     return details.sort((a,b) => b.ms - a.ms).slice(0, 8);
+  }
+  function traceLatencyClass(item) {
+    const value = Number(item?.ms);
+    if (!Number.isFinite(value)) return '';
+    return value >= 20 ? 'trace-latency-hot' : value >= 5 ? 'trace-latency-warn' : '';
   }
   function extractDirectionDetails(text) {
     const out = [];
@@ -2762,7 +2791,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const directions = extractDirectionDetails(text);
     if (directions.length) rows.push(`<div><b>方向:</b> ${directions.map(escapeHtml).join('；')}</div>`);
     const latencies = extractLatencyDetails(text);
-    if (latencies.length) rows.push(`<div><b>耗时明细:</b> ${latencies.map(item => `${escapeHtml(item.label)}=${item.ms.toFixed(3)}ms`).join('；')}</div>`);
+    if (latencies.length) rows.push(`<div><b>耗时明细:</b> ${latencies.map(item => `<span class="${traceLatencyClass(item)}">${escapeHtml(item.label)}=${item.ms.toFixed(3)}ms</span>`).join('；')}</div>`);
     return rows.length ? `<div class="trace-log-details">${rows.join('')}</div>` : '';
   }
   function renderTraceLogBlocks(evidence) {

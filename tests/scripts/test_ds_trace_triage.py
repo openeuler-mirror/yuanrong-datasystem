@@ -644,6 +644,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "remainingTime 远大于 20ms" in html
     assert "方向:" in html
     assert "耗时明细:" in html
+    assert "traceLatencyClass" in html
+    assert "trace-latency-hot" in html
+    assert "trace-latency-warn" in html
     assert "class=\"trace-log-details\"" in html
     assert "trace-log-summary" in html
     assert "trace-log-focus" in html
@@ -1436,6 +1439,26 @@ def test_parser_extension_rules_add_new_errors_and_metrics(tmp_path):
     assert report["traces"][trace_id]["errors"]["DMA_WAIT_TIMEOUT"] == 1
     assert report["dimensions"]["custom_metrics_ms"]["urma_dma"]["p50"] == 2.5
     assert report["traces"][trace_id]["custom_metrics_ms"]["urma_dma"] == 2.5
+
+
+def test_builtin_wlock_latency_is_recorded_in_json(tmp_path):
+    trace_id = "019f7d0c-d7a5-7967-bbd3-cbb6d899a502"
+    log = tmp_path / "wlock.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T13:32:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024",
+                f"2026-07-20T13:32:00.001000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | WLock wait cost 37.5ms while processing object metadata safe IP 192.0.2.254",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+
+    assert report["dimensions"]["custom_metrics_ms"]["wlock_wait"]["p50"] == 37.5
+    assert report["traces"][trace_id]["custom_metrics_ms"]["wlock_wait"] == 37.5
 
 
 def test_trace_parser_uses_injected_rules_without_global_state():
