@@ -434,9 +434,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "error_code=2004" in html
     assert "client/access p99 upper bound" in html
     assert "Client→Entry RPC" in html
+    assert "Entry→Meta RPC" in html
     assert "Entry→Data RPC" in html
     assert "stageDisplayName" in html
     assert "URMA Write" in html
+    assert "CreateBuffer" in html
+    assert "Client Publish" in html
+    assert "Entry→Meta Publish" in html
     assert "stageDetailText" in html
     assert "研发流程" in html
     assert "id=\"flow-stage-chart\"" in html
@@ -483,6 +487,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html
     assert "edge.summary" in html
+    assert "edge_label:[edge.operation, edge.summary].filter(Boolean).join" in html
+    assert "p.data.edge_label || p.data.operation" in html
     assert "edge.reason" in html
     assert "rollup" in html
     assert "id=\"read-worker-chart\"" in html
