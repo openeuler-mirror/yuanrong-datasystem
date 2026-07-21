@@ -384,8 +384,10 @@
   - `WorkerServiceAdmissionRejectsReadWriteDuringIsolation`: covered for the shared service-mode matrix by
     `WorkerServiceAdmissionTest.AppliesServiceModeMatrix`; Object protocol read/write rejection during
     `LOCAL_ISOLATED` and `RECOVERING` is covered by
-    `MigrationTargetIsolationTest.LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering`. KV paths have
-    focused admission checks. Stream client-facing read/write entrypoints are covered by
+    `MigrationTargetIsolationTest.LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering`; KV protocol
+    `Get/Set` rejection during `LOCAL_ISOLATED` and `RECOVERING` is covered by
+    `KVClientEtcdDfxTest.LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering`. Stream client-facing read/write
+    entrypoints are covered by
     `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringIsolation` and
     `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringRecovering`; full Stream ST
     remains follow-up.
@@ -444,9 +446,9 @@
        broader follow-up.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
        deferred retry payload; broader ST-level membership churn around the same path remains pending.
-    5. ST-level KV/Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; Object protocol ST now
-       covers ordinary read/write admission for both modes, and unit coverage verifies Stream client-facing admission for
-       both modes through the same facade semantics. Full KV/Stream protocol ST remains pending.
+    5. ST-level Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; Object and KV protocol STs
+       now cover ordinary read/write admission for both modes, and unit coverage verifies Stream client-facing admission
+       for both modes through the same facade semantics. Full Stream protocol ST remains pending.
 
 ## Fast Verification
 
@@ -534,6 +536,18 @@
     passed 4/4 tests in 35.874s gtest time, 35.95s wall time.
   - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 16/16 tests in 0.010s.
   - GREEN: `git diff --check` clean.
+  - Added 1 ST case:
+    `KVClientEtcdDfxTest.LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering`.
+  - Initial RED: the first version started only the target worker and failed in 18.84s because no peer could prove the
+    coordination backend was still reachable, so the keepalive failure stayed classified as a global backend outage
+    rather than `LOCAL_ISOLATED`. Adding only Object-style worker flags still reproduced the same RED in 18.29s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed after the test edits, with third-party cache hit
+    (`Compile thirdparty libraries success, total wall time: 1s`), URMA Mock enabled, 1154 compile database entries, and
+    total script time 97s. The script still emitted repeated-strip `debuglink section already exists` diagnostics during
+    install but exited 0.
+  - GREEN: `ds_st_kv_cache --gtest_filter="KVClientEtcdDfxTest.LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering"`
+    passed 1/1 test in 11.371s gtest time, 11.45s wall time, covering KV `Get` and `Set` rejection during both
+    `LOCAL_ISOLATED` and `RECOVERING` and verifying the original key is readable after recovery evidence completes.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

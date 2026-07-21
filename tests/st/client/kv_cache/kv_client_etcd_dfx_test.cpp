@@ -36,6 +36,14 @@
 namespace datasystem {
 namespace st {
 namespace {
+constexpr int kEventuallyWaitTimeoutMs = 15'000;
+constexpr int kEventuallyPollIntervalMs = 100;
+constexpr char kKeepAliveFailureInject[] = "EtcdKeepAlive.SendKeepAliveMessage";
+constexpr char kKeepAliveQuickLoopInject[] = "EtcdStore.LaunchKeepAliveThreads.loopQuickly";
+constexpr char kLeaseExpiredInject[] = "GetLeaseExpiredMs";
+constexpr char kLocalIsolatedInject[] = "WorkerOCServer.AfterMarkLocalIsolated";
+constexpr char kBeforeMarkRunningInject[] = "WorkerRecoveryController.BeforeMarkRunning";
+
 Status TryConnectTcpPort(const HostPort &addr)
 {
     struct addrinfo hints = {};
@@ -74,6 +82,28 @@ bool WaitForTcpPortListening(const HostPort &addr, std::chrono::milliseconds tim
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     } while (std::chrono::steady_clock::now() < deadline);
     return false;
+}
+
+template <typename Operation>
+void AssertEventuallyOk(Operation operation, const std::string &operationName)
+{
+    Status rc;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kEventuallyWaitTimeoutMs);
+    do {
+        rc = operation();
+        if (rc.IsOk()) {
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+    } while (std::chrono::steady_clock::now() < deadline);
+    ASSERT_TRUE(rc.IsOk()) << operationName << " stayed non-OK for " << kEventuallyWaitTimeoutMs
+                           << " ms, last status: " << rc.ToString();
+}
+
+void ExpectAdmissionRejected(const Status &rc, const std::string &mode, const std::string &operation)
+{
+    ASSERT_EQ(rc.GetCode(), K_NOT_READY) << operation << " status: " << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find(mode), std::string::npos) << operation << " status: " << rc.ToString();
 }
 }  // namespace
 
@@ -241,6 +271,91 @@ TEST_F(KVClientEtcdDfxTest, LEVEL1_TestStartingWorkerRejectsClientSetupBeforeRea
     std::string got;
     DS_ASSERT_OK(readyClient->Get(key, got));
     EXPECT_EQ(got, value);
+}
+
+TEST_F(KVClientEtcdDfxTest, LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering)
+{
+    constexpr int workerIndex = 0;
+    DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady(
+        { workerIndex, 1 },
+        " -client_reconnect_wait_s=1 -ipc_through_shared_memory=true -heartbeat_interval_ms=1000"
+        " -auto_del_dead_node=false"));
+
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(workerIndex, client);
+    const std::string key = "kv_admission_" + GetStringUuid();
+    const std::string value = "value";
+    DS_ASSERT_OK(client->Set(key, value));
+    std::string got;
+    DS_ASSERT_OK(client->Get(key, got));
+    ASSERT_EQ(got, value);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kLocalIsolatedInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kKeepAliveFailureInject, "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kLeaseExpiredInject, "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kKeepAliveQuickLoopInject, "call(0)"));
+    bool keepAliveFailureActive = true;
+    bool recoveryPauseActive = false;
+    Raii clearFaults([&]() {
+        if (recoveryPauseActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, workerIndex, kBeforeMarkRunningInject),
+                         "clear kv recovery pause");
+        }
+        if (keepAliveFailureActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, workerIndex, kKeepAliveFailureInject),
+                         "clear kv keepalive failure");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, workerIndex, kLeaseExpiredInject),
+                         "clear kv lease override");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, workerIndex, kKeepAliveQuickLoopInject),
+                         "clear kv quick keepalive loop");
+        }
+    });
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t count = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, kLocalIsolatedInject, count));
+            CHECK_FAIL_RETURN_STATUS(count > 0, K_NOT_READY, "worker has not entered local isolation");
+            return Status::OK();
+        },
+        "kv client target enters local isolation");
+
+    got.clear();
+    ExpectAdmissionRejected(client->Get(key, got, 1'000), "LOCAL_ISOLATED", "kv get during local isolation");
+    ExpectAdmissionRejected(client->Set("kv_admission_isolated_" + GetStringUuid(), value), "LOCAL_ISOLATED",
+                            "kv set during local isolation");
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kBeforeMarkRunningInject, "1*pause"));
+    recoveryPauseActive = true;
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kKeepAliveFailureInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kLeaseExpiredInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kKeepAliveQuickLoopInject));
+    keepAliveFailureActive = false;
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t count = 0;
+            RETURN_IF_NOT_OK(
+                cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, kBeforeMarkRunningInject, count));
+            CHECK_FAIL_RETURN_STATUS(count > 0, K_NOT_READY, "worker has not entered the recovery evidence gate");
+            return Status::OK();
+        },
+        "kv client target enters recovering mode");
+
+    got.clear();
+    ExpectAdmissionRejected(client->Get(key, got, 1'000), "RECOVERING", "kv get during recovery");
+    ExpectAdmissionRejected(client->Set("kv_admission_recovering_" + GetStringUuid(), value), "RECOVERING",
+                            "kv set during recovery");
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kBeforeMarkRunningInject));
+    recoveryPauseActive = false;
+    AssertEventuallyOk(
+        [&]() {
+            std::string recovered;
+            RETURN_IF_NOT_OK(client->Get(key, recovered, 1'000));
+            CHECK_FAIL_RETURN_STATUS(recovered == value, K_NOT_READY, "kv value mismatch after recovery");
+            return Status::OK();
+        },
+        "kv client reopens after recovery evidence completes");
 }
 
 TEST_F(KVClientEtcdDfxTest, DISABLED_TestWatchEventLost)
