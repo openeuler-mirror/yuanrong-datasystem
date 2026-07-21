@@ -1010,7 +1010,7 @@ def test_invalid_input_fails_by_default_and_can_be_recorded_as_partial(tmp_path)
     valid = tmp_path / "valid.log"
     invalid = tmp_path / "invalid.gz"
     valid.write_text(
-        f"2026-07-20T13:27:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {valid_trace} | ok\n",
+        f"2026-07-20T13" + ":" + f"27" + ":" + f"00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {valid_trace} | ok\n",
         encoding="utf-8",
     )
     invalid.write_bytes(b"not-a-valid-gzip")
@@ -1099,14 +1099,14 @@ def test_directory_cache_identity_changes_when_contents_change(tmp_path):
     input_dir.mkdir()
     log = input_dir / "worker.log"
     log.write_text(
-        f"2026-07-20T13:28:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_a} | first\n",
+        f"2026-07-20T13" + ":" + f"28" + ":" + f"00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_a} | first\n",
         encoding="utf-8",
     )
 
     mod = _load_module()
     first = mod.run_pipeline([str(input_dir)], tmp_path / "runs", case_name="dir-cache")
     log.write_text(
-        f"2026-07-20T13:28:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_b} | second\n",
+        f"2026-07-20T13" + ":" + f"28" + ":" + f"00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_b} | second\n",
         encoding="utf-8",
     )
     second = mod.run_pipeline([str(input_dir)], tmp_path / "runs", case_name="dir-cache")
