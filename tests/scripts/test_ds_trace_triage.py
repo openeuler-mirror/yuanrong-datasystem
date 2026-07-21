@@ -457,7 +457,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"ub-request-table-pager\"" in html
     assert "ub_worker_summary" in html
     assert "ub_lifecycle_summary" in html
-    assert "UB 入口/出口 Worker" in html
+    assert "UB Worker 角色" in html
     assert "renderUbWorkerViews" in html
     assert "renderUbLifecycleViews" in html
     assert "href=\"#s5\">5. UB / URMA" in html
@@ -472,6 +472,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function workerMatchesFilter(raw, selectedWorker)" in html
     assert "function workerFilterOptions()" in html
     assert "function aggregateUbWorkerRowsByIdentity(rows, selectedWorker='')" in html
+    assert "function ubWorkerRoleLabel(role)" in html
+    assert "数据读取发起端(entry get)" in html
+    assert "数据提供端(data provider)" in html
+    assert "发起端+提供端" in html
+    assert "数据读取发起端 events" in html
+    assert "数据提供端 events" in html
     assert "display_ub_role" in html
     assert "entry_and_exit" in html
     assert "const aggregate = target || (out[key] =" in html

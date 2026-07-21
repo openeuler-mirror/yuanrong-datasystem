@@ -2031,7 +2031,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a href="#s5">5. UB / URMA</a>
       <a class="sub" href="#ub-lifecycle-chart">图 5-1 UB 生命周期</a>
       <a class="sub" href="#ub-wr-count-chart">图 5-2 WR / Inflight</a>
-      <a class="sub" href="#ub-worker-role-chart">图 5-3 入口/出口 Worker</a>
+      <a class="sub" href="#ub-worker-role-chart">图 5-3 发起/提供 Worker</a>
       <a class="sub" href="#ub-worker-time-chart">图 5-4 UB 时间桶</a>
       <a class="sub" href="#read-ub-edge-chart">图 5-5 读取 UB Edge</a>
       <a class="sub" href="#write-ub-edge-chart">图 5-6 写入 UB Edge</a>
@@ -2117,7 +2117,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="chart-grid">
           <div class="panel"><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">图 5-1 UB 生命周期：TOTAL、wait_for、poll/notify/sched 等耗时字段，按实际采样字段展示。</div></div>
           <div class="panel"><div id="ub-wr-count-chart" class="chart"></div><div class="caption">图 5-2 WR / Inflight Count：remote get WR、URMA inflight WR、chip inflight，单位 count。</div></div>
-          <div class="panel full-row"><div class="controls"><label>Worker 筛选 <select id="ub-worker-role-filter"><option value="">全部 Worker</option></select></label></div><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-3 UB 入口/出口 Worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
+          <div class="panel full-row"><div class="controls"><label>Worker 筛选 <select id="ub-worker-role-filter"><option value="">全部 Worker</option></select></label></div><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-3 UB Worker 角色：数据读取发起端(entry get) 来自 RemoteGet/transferPath，数据提供端(data provider) 来自 URMA_ELAPSED。</div></div>
         </div>
         <div class="panel"><div class="controls"><label>Worker 筛选 <select id="ub-worker-time-filter"><option value="">全部 Worker</option></select></label></div><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-4 UB 时间桶：按秒观察入口/出口事件与尾部时延。</div></div>
         <div class="flow-section ub-table-stack">
@@ -2846,6 +2846,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const timeChartWorker = workerFilterValue('ub-worker-time-filter');
     const roleTableWorker = workerFilterValue('ub-worker-role-table-filter');
     const timeTableWorker = workerFilterValue('ub-worker-time-table-filter');
+    function ubWorkerRoleLabel(role) {
+      if (role === 'entry_and_exit') return '发起端+提供端';
+      if (role === 'entry') return '数据读取发起端(entry get)';
+      if (role === 'exit') return '数据提供端(data provider)';
+      return role || '';
+    }
     function aggregateUbWorkerRowsByIdentity(rows, selectedWorker='') {
       const out = {};
       rows.forEach(([worker, item]) => {
@@ -2888,12 +2894,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const tableUbWorkerRows = aggregateUbWorkerRowsByIdentity(ubWorkerRows, roleTableWorker);
     const chartUbWorkerTimeRows = filterUbWorkerTimeRows(timeChartWorker);
     const tableUbWorkerTimeRows = filterUbWorkerTimeRows(timeTableWorker);
-    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], tableUbWorkerRows.map(([worker,item]) => {
+    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','发起端 events','提供端 events','trace count','p99 ms','max ms','top edges'], tableUbWorkerRows.map(([worker,item]) => {
       const display_worker = item.display_worker || workerAggregateLabel(worker);
       const display_top_edges = (item.top_edges || []).map(edge => edge.replace(/\\s*->\\s*/g, ' → ')).join(', ');
       return [
         display_worker,
-        item.role || '',
+        ubWorkerRoleLabel(item.role),
         item.entry_events || 0,
         item.exit_events || 0,
         item.trace_count || 0,
@@ -2902,7 +2908,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         display_top_edges
       ];
     }), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`, 5);
-    renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], tableUbWorkerTimeRows.map(item => [
+    renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','发起端 events','提供端 events','p99 ms','max ms','发起端 workers','提供端 workers'], tableUbWorkerTimeRows.map(item => [
       item.bucket_start || '',
       item.entry_events || 0,
       item.exit_events || 0,
@@ -2911,23 +2917,23 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       [...new Set((item.top_entry_workers || []).map(workerAggregateKey))].map(workerAggregateLabel).join(', '),
       [...new Set((item.top_exit_workers || []).map(workerAggregateKey))].map(workerAggregateLabel).join(', ')
     ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
-    chart('ub-worker-role-chart', chartUbWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
+    chart('ub-worker-role-chart', chartUbWorkerRows.length ? axisBase('UB Worker Roles', {
       tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
       xAxis:{type:'category', data:chartUbWorkerRows.slice(0,20).map(r => r[1].display_worker || workerAggregateLabel(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
       yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
       series:[
-        {name:'入口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
-        {name:'出口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'数据读取发起端 events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'数据提供端 events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].exit_events || 0),itemStyle:{color:'#ea580c'}},
         {name:'p99 ms',type:'line',yAxisIndex:1,data:chartUbWorkerRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}}
       ]
     }) : noDataOption('No UB worker role data'));
-    chart('ub-worker-time-chart', chartUbWorkerTimeRows.length ? axisBase('UB Entry/Exit Time Buckets', {
+    chart('ub-worker-time-chart', chartUbWorkerTimeRows.length ? axisBase('UB Worker Role Time Buckets', {
       tooltip:{trigger:'axis', axisPointer:{type:'cross'}, confine:true},
       xAxis:{type:'category', data:chartUbWorkerTimeRows.map(r => String(r.bucket_start || '').replace('T','\\n')), axisLabel:{rotate:0}},
       yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
       series:[
-        {name:'入口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:chartUbWorkerTimeRows.map(r => r.entry_events || 0),itemStyle:{color:'#2563eb'}},
-        {name:'出口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:chartUbWorkerTimeRows.map(r => r.exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'数据读取发起端 events',type:'bar',stack:'ub-time',barMaxWidth:34,data:chartUbWorkerTimeRows.map(r => r.entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'数据提供端 events',type:'bar',stack:'ub-time',barMaxWidth:34,data:chartUbWorkerTimeRows.map(r => r.exit_events || 0),itemStyle:{color:'#ea580c'}},
         {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:chartUbWorkerTimeRows.map(r => r.latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
       ]
     }) : noDataOption('No UB time bucket data'));
