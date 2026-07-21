@@ -3871,10 +3871,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }
   function flowEdgeBriefText(edge) {
     const rollup = edge.rollup || {};
-    const latency = Number.isFinite(Number(rollup.max_ms)) ? `max=${Number(rollup.max_ms).toFixed(3)}ms` :
-      Number.isFinite(Number(rollup.p99_ms)) ? `p99=${Number(rollup.p99_ms).toFixed(3)}ms` : '';
+    const hasSamples = Number(rollup.trace_count || 0) > 0;
+    const maxMs = Number(rollup.max_ms);
+    const p99Ms = Number(rollup.p99_ms);
+    const latency = hasSamples && Number.isFinite(maxMs) && maxMs > 0 ? `max=${maxMs.toFixed(3)}ms` :
+      hasSamples && Number.isFinite(p99Ms) && p99Ms > 0 ? `p99=${p99Ms.toFixed(3)}ms` : '';
     const worker = (rollup.top_workers || []).map(workerRelationName).filter(Boolean)[0];
-    return [edge.operation, [latency, worker].filter(Boolean).join(' ')].filter(Boolean).join('\\n');
+    return [edge.operation, latency || '未采样', worker].filter(Boolean).join('\\n');
   }
   function flowEdgeCurveness(edge) {
     if (edge.operation === 'CreateBuffer') return .24;
@@ -3896,6 +3899,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       position:'middle',
       offset:flowEdgeLabelOffset(edge),
       formatter:`{${edgeLabelSeverity(edge.rollup?.max_ms)}|${flowEdgeBriefText(edge)}}`,
+      rotate:0,
+      align:'center',
+      verticalAlign:'middle',
       fontSize:14,
       lineHeight:18,
       width:210,
@@ -3949,6 +3955,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       labelLayout:{hideOverlap:false},
       edgeLabel:{show:true, position:'middle',
         formatter:p => `{${edgeLabelSeverity(p.data.rollup?.max_ms)}|${p.data.edge_label || p.data.status || ''}}`,
+        rotate:0,
+        align:'center',
+        verticalAlign:'middle',
         fontSize:14,
         lineHeight:18,
         width:210,
