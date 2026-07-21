@@ -481,6 +481,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function flowEdgeLabel(edge)" in html
     assert "workerRelationName" in html
     assert "label:flowNodeLabel(node)" in html
+    assert "chartRenderers.set(id, () => renderFlowGraph(id, graph, title))" in html
     assert "edgeLabelSeverity(p.data.rollup?.max_ms)" in html
     assert "rich:{hot:" in html
     assert "curveness:edge.operation === 'URMA Write' ? -0.28 : .08" in html
@@ -536,6 +537,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "font-size:var(--report-font-size)" in html
     assert "const chartTextStyle" in html
     assert "textStyle:chartTextStyle" in html
+    assert "const chartRegistry = new Map()" in html
+    assert "const chartRenderers = new Map()" in html
+    assert "function installResponsiveCharts()" in html
+    assert "window.addEventListener('resize', scheduleChartResize)" in html
+    assert "new ResizeObserver(scheduleChartResize)" in html
+    assert "chartRenderers.forEach(renderer => renderer())" in html
+    assert "chartRegistry.forEach(instance => instance.resize())" in html
+    assert "installResponsiveCharts()" in html
     assert "图 4-1 读取流程证据块：看 Client→Entry RPC/UB、Entry→Data RPC 与 URMA Write。" in html
     assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html

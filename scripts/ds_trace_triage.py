@@ -2839,6 +2839,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function noDataOption(title) {
     return {title:{text:title, left:'center', top:'center', textStyle:Object.assign({}, chartTextStyle, {color:'#94a3b8'})}};
   }
+  const chartRegistry = new Map();
+  const chartRenderers = new Map();
   function chart(id, option) {
     const node = document.getElementById(id);
     if (!node) return;
@@ -2848,6 +2850,23 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }
     const instance = echarts.getInstanceByDom(node) || echarts.init(node);
     instance.setOption(option, true);
+    instance.resize();
+    chartRegistry.set(id, instance);
+  }
+  function installResponsiveCharts() {
+    let timer = null;
+    const scheduleChartResize = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        chartRenderers.forEach(renderer => renderer());
+        chartRegistry.forEach(instance => instance.resize());
+      }, 80);
+    };
+    window.addEventListener('resize', scheduleChartResize);
+    if (window.ResizeObserver) {
+      const observer = new ResizeObserver(scheduleChartResize);
+      document.querySelectorAll('.chart').forEach(node => observer.observe(node));
+    }
   }
   function autoCenterFlowGraph(chartInstance) {
     if (!chartInstance) return;
@@ -3840,6 +3859,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return n >= 20 ? 'hot' : n >= 5 ? 'warn' : 'normal';
   }
   function renderFlowGraph(id, graph, title) {
+    chartRenderers.set(id, () => renderFlowGraph(id, graph, title));
     const node = document.getElementById(id);
     const graphWidth = Math.max(620, node?.clientWidth || 0);
     const flowNodeX = [0.10,0.33,0.56,0.56,0.86].map(r => Math.round(graphWidth * r));
@@ -4039,6 +4059,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   renderUbSection('write');
   renderTracePage();
   renderSelectedTrace();
+  installResponsiveCharts();
   document.getElementById('trace-data').textContent = JSON.stringify(traces, null, 2);
   </script>
   __SCRIPT_REF__
