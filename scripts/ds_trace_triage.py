@@ -3886,12 +3886,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return .08;
   }
   function flowEdgeLabelOffset(edge) {
-    if (edge.operation === 'CreateBuffer') return [0, -26];
-    if (edge.operation === 'Client Publish') return [0, 26];
-    if (edge.operation === 'URMA Write') return [0, 24];
-    if (edge.operation === 'Entry→Data RPC') return [0, -20];
-    if (edge.operation === 'Entry→Meta RPC') return [0, -16];
-    return [0, -18];
+    if (edge.operation === 'CreateBuffer') return [0, -44];
+    if (edge.operation === 'Client Publish') return [0, 44];
+    if (edge.operation === 'URMA Write') return [0, 42];
+    if (edge.operation === 'Entry→Data RPC') return [0, -36];
+    if (edge.operation === 'Entry→Meta RPC') return [0, -30];
+    return [0, -32];
   }
   function flowEdgeAutoLabel(edge) {
     return {
@@ -3906,12 +3906,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       lineHeight:18,
       width:210,
       overflow:'break',
-      backgroundColor:'rgba(255,255,255,.82)',
+      backgroundColor:'rgba(255,255,255,.68)',
       borderColor:'#dbeafe',
       borderWidth:1,
       borderRadius:4,
       padding:[2,5],
-      rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.82)',borderRadius:4,padding:[2,5]}}
+      rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.68)',borderRadius:4,padding:[2,5]}}
     };
   }
   function flowGraphNodeSize() {
@@ -3962,12 +3962,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         lineHeight:18,
         width:210,
         overflow:'break',
-        backgroundColor:'rgba(255,255,255,.82)',
+        backgroundColor:'rgba(255,255,255,.68)',
         borderColor:'#dbeafe',
         borderWidth:1,
         borderRadius:4,
         padding:[2,5],
-        rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.82)',borderRadius:4,padding:[2,5]}}
+        rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.68)',borderRadius:4,padding:[2,5]}}
       },
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:graphNodeData,

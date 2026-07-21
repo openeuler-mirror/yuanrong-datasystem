@@ -488,9 +488,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function flowEdgeAutoLabel(edge)" in html
     assert "function flowEdgeCurveness(edge)" in html
     assert "edge.operation === 'CreateBuffer'" in html
+    assert "return [0, -44]" in html
     assert "edge.operation === 'Client Publish'" in html
+    assert "return [0, 44]" in html
     assert "edge.operation === 'Entry→Data RPC'" in html
+    assert "return [0, -36]" in html
     assert "edge.operation === 'Entry→Meta RPC'" in html
+    assert "return [0, -30]" in html
     assert "function flowGraphNodeSize()" in html
     assert "symbol:'roundRect'" in html
     assert "symbolSize:flowGraphNodeSize()" in html
@@ -499,6 +503,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "rotate:0" in html
     assert "align:'center'" in html
     assert "verticalAlign:'middle'" in html
+    assert "backgroundColor:'rgba(255,255,255,.68)'" in html
     assert "data:graphNodeData" in html
     assert "label:flowEdgeAutoLabel(edge)" in html
     assert "offset:flowEdgeLabelOffset(edge)" in html
