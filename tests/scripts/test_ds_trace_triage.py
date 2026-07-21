@@ -257,9 +257,15 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "下载分析摘要" in html
     assert "trace-report-summary.md" in html
     assert "id=\"recommendation-table\"" in html
-    assert "id=\"source-appendix-table\"" in html
-    assert "['scope','log surface','flow stage','source hint','validation','report reading']" in html
-    assert "scope || '通用'" in html
+    assert "id=\"source-appendix-common-table\"" in html
+    assert "id=\"source-appendix-read-table\"" in html
+    assert "id=\"source-appendix-write-table\"" in html
+    assert "通用字段映射" in html
+    assert "读取字段映射" in html
+    assert "写入字段映射" in html
+    assert "renderSourceAppendixTables()" in html
+    assert "sourceAppendixByScope" in html
+    assert "['log surface','flow stage','source hint','validation','report reading']" in html
     assert "代码与字段映射" in html
     assert "建议与后续口径" in html
     assert "错误线" in html

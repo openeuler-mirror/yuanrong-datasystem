@@ -1911,7 +1911,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a href="#s6">6. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 6-1 Top Trace</a>
       <a href="#s7">7. 建议与口径</a>
-      <a class="sub" href="#source-appendix-table">表 7-2 代码映射</a>
+      <a class="sub" href="#source-appendix-common-table">表 7-2 代码映射</a>
       <a href="#s8">8. 原始 JSON</a>
     </nav>
     </aside>
@@ -2018,7 +2018,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s7">
         <h2>7. 建议与后续口径</h2>
         <div class="panel"><h3>表 7-1 建议与证据边界</h3><table id="recommendation-table"></table></div>
-        <div class="panel"><h3>表 7-2 代码与字段映射</h3><table id="source-appendix-table"></table></div>
+        <div class="panel">
+          <h3>表 7-2 代码与字段映射</h3>
+          <h4>通用字段映射</h4><table id="source-appendix-common-table"></table>
+          <h4>读取字段映射</h4><table id="source-appendix-read-table"></table>
+          <h4>写入字段映射</h4><table id="source-appendix-write-table"></table>
+        </div>
       </section>
       <section id="s8">
         <h2>8. 原始 JSON 附录</h2>
@@ -2412,14 +2417,23 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     item.title,
     item.detail
   ]));
-  renderTable('source-appendix-table', ['scope','log surface','flow stage','source hint','validation','report reading'], sourceAppendix.map(item => [
-    item.scope || '通用',
-    item.log_surface,
-    item.flow_stage,
-    item.source_hint,
-    item.validation,
-    item.report_reading
-  ]));
+  function sourceAppendixByScope(scope) {
+    return sourceAppendix.filter(item => (item.scope || '通用') === scope);
+  }
+  function renderSourceAppendixTables() {
+    const headers = ['log surface','flow stage','source hint','validation','report reading'];
+    const renderScope = (id, scope) => renderTable(id, headers, sourceAppendixByScope(scope).map(item => [
+      item.log_surface,
+      item.flow_stage,
+      item.source_hint,
+      item.validation,
+      item.report_reading
+    ]));
+    renderScope('source-appendix-common-table', '通用');
+    renderScope('source-appendix-read-table', '读取');
+    renderScope('source-appendix-write-table', '写入');
+  }
+  renderSourceAppendixTables();
   function renderFlowStageTable(id, graph) {
     renderTable(id, ['stage','summary','operation','IPs','reason','status'], (graph.edges || []).map(edge => [
       edge.name,
