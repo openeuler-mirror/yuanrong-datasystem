@@ -177,10 +177,5 @@ ds_cc_library(
         "//src/datasystem/common/rpc:api_deadline",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
         "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/master:metadata_manager_holder",
-        "//src/datasystem/master/object_cache:oc_metadata_manager",
-        "//src/datasystem/master/object_cache:oc_migrate_metadata_manager",
-        "//src/datasystem/master/stream_cache:sc_metadata_manager",
-        "//src/datasystem/master/stream_cache:sc_migrate_metadata_manager",
     ],
 )

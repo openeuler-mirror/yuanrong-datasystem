@@ -323,6 +323,11 @@
   20. master object/stream metadata recovery managers now include only the topology metadata input contracts they use:
       action, key filter, storage scan plan, and cancellation token. They no longer inherit the full topology callback
       executor interface through `topology_phase_callbacks.h`.
+  21. topology callback metadata recovery/cleanup actions are injected through `IWorkerTopologyMetadataActions`. Runtime
+      callback code owns task sequencing and best-effort result aggregation, while object-cache owns the concrete
+      `WorkerTopologyMetadataActions` adapter that calls OC/SC metadata migration, recovery, cleanup, and device-meta
+      cleanup managers. Boundary tests assert `worker_topology_phase_callbacks` stays free of `MetadataManagerHolder`
+      and concrete OC/SC metadata manager dependencies.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -705,6 +710,22 @@
     database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
   - GREEN: remote
     `cluster_topology_contract_ut --gtest_filter="TopologyRuntimeCompositionTest.*"` passed 1/1 test in 0ms.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_topology_phase_callbacks_use_injected_metadata_actions`.
+  - Updated 1 existing C++ contract case:
+    `TopologyBusinessContractTest.FailureLocalActionsAreInjectedBehindHook` now verifies both object-cache and metadata
+    actions are injected behind narrow runtime hook interfaces.
+  - Initial RED: the boundary suite failed 1/25 in 0.078s because `worker_topology_phase_callbacks.{h,cpp}` still
+    directly referenced `MetadataManagerHolder` and concrete OC/SC metadata manager classes.
+  - GREEN: introduced `IWorkerTopologyMetadataActions` in runtime and moved concrete metadata manager calls into
+    `WorkerTopologyMetadataActions` under `worker/object_cache`, preserving failure-task order:
+    metadata recovery, metadata cleanup, local data cleanup, device metadata cleanup, then RPC-stub cleanup.
+  - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 25/25 tests in 0.066s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 188s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 1s`), `BUILD_WITH_URMA_MOCK` enabled, and 1156 compile database entries.
+  - GREEN: remote `ds_ut_object --gtest_filter="TopologyBusinessContractTest.*"` passed 3/3 tests in 1ms gtest time,
+    about 1.18s wall time.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
 - Build worker and tests:
   - `bash build.sh -t build`

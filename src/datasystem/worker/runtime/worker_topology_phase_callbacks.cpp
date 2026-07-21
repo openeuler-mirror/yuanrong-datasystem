@@ -24,11 +24,6 @@
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/master/metadata_manager_holder.h"
-#include "datasystem/master/object_cache/oc_metadata_manager.h"
-#include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_metadata_manager.h"
-#include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 
 namespace datasystem::worker {
 namespace {
@@ -97,11 +92,8 @@ void LogCallbackResult(const std::string &phase, const cluster::TopologyCallback
 }  // namespace
 
 WorkerTopologyPhaseCallbacks::WorkerTopologyPhaseCallbacks(WorkerTopologyPhaseCallbackDependencies dependencies)
-    : centralizedMetadata_(dependencies.centralizedMetadata),
-      localMetadataMaster_(dependencies.localMetadataMaster),
-      streamMetadataEnabled_(dependencies.streamMetadataEnabled),
-      metadataManagers_(dependencies.metadataManagers),
-      readinessCheck_(std::move(dependencies.readinessCheck)),
+    : readinessCheck_(std::move(dependencies.readinessCheck)),
+      metadataActions_(std::move(dependencies.metadataActions)),
       objectCacheActions_(std::move(dependencies.objectCacheActions))
 {
 }
@@ -112,7 +104,8 @@ Status WorkerTopologyPhaseCallbacks::OnScaleOut(const cluster::TopologyCallbackC
     auto rc = CheckContext(context);
     if (rc.IsOk()) {
         ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
-        rc = MigrateMetadata(context);
+        rc = metadataActions_ == nullptr ? Status(K_NOT_READY, "Worker metadata topology actions are not initialized")
+                                         : metadataActions_->MigrateMetadata(context);
     }
     LogCallbackResult("scale_out", context, start, rc);
     return rc;
@@ -124,7 +117,8 @@ Status WorkerTopologyPhaseCallbacks::OnScaleIn(const cluster::TopologyCallbackCo
     auto rc = CheckContext(context);
     if (rc.IsOk()) {
         ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
-        rc = MigrateMetadata(context);
+        rc = metadataActions_ == nullptr ? Status(K_NOT_READY, "Worker metadata topology actions are not initialized")
+                                         : metadataActions_->MigrateMetadata(context);
     }
     LogCallbackResult("scale_in_metadata", context, start, rc);
     return rc;
@@ -183,20 +177,6 @@ Status WorkerTopologyPhaseCallbacks::CheckContext(const cluster::TopologyCallbac
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < context.deadline, K_RPC_DEADLINE_EXCEEDED,
                              "topology callback deadline exceeded");
     return Status::OK();
-}
-
-Status WorkerTopologyPhaseCallbacks::MigrateMetadata(const cluster::TopologyCallbackContext &context)
-{
-    if (centralizedMetadata_) {
-        return Status::OK();
-    }
-    RETURN_IF_NOT_OK(master::OCMigrateMetadataManager::Instance().MigrateTopologyMetadata(
-        context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation));
-    if (!streamMetadataEnabled_) {
-        return Status::OK();
-    }
-    return master::SCMigrateMetadataManager::Instance().MigrateTopologyMetadata(
-        context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation);
 }
 
 Status WorkerTopologyPhaseCallbacks::AcquireScaleInDrain(const cluster::TopologyCallbackContext &context, bool &leader)
@@ -273,51 +253,15 @@ void WorkerTopologyPhaseCallbacks::RecordFailureStep(const std::string &step, co
 
 Status WorkerTopologyPhaseCallbacks::RunFailureBestEffort(const cluster::TopologyCallbackContext &context)
 {
-    std::shared_ptr<master::OCMetadataManager> ocMetadata;
-    std::shared_ptr<master::SCMetadataManager> scMetadata;
     Status firstError;
-    const bool localMetadata = !centralizedMetadata_ || localMetadataMaster_;
-    if (localMetadata) {
-        RecordFailureStep("get-object-metadata", metadataManagers_.GetOcMetadataManager(ocMetadata), firstError);
-    }
-    if (localMetadata && streamMetadataEnabled_) {
-        RecordFailureStep("get-stream-metadata", metadataManagers_.GetScMetadataManager(scMetadata), firstError);
-    }
-    if (!centralizedMetadata_ && ocMetadata != nullptr) {
-        RecordFailureStep(
-            "recover-object",
-            ocMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.storageScanPlan,
-                                               context.businessOperationId, context.deadline, context.cancellation),
-            firstError);
-    }
-    if (!centralizedMetadata_ && streamMetadataEnabled_ && scMetadata != nullptr) {
-        RecordFailureStep(
-            "recover-stream",
-            scMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.businessOperationId,
-                                               context.deadline, context.cancellation),
-            firstError);
-    }
-    RunFailureCleanup(context, ocMetadata, scMetadata, firstError);
-    return firstError;
-}
-
-void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCallbackContext &context,
-                                                     const std::shared_ptr<master::OCMetadataManager> &ocMetadata,
-                                                     const std::shared_ptr<master::SCMetadataManager> &scMetadata,
-                                                     Status &firstError)
-{
-    const bool localMetadata = !centralizedMetadata_ || localMetadataMaster_;
-    if (streamMetadataEnabled_ && localMetadata && scMetadata != nullptr) {
-        RecordFailureStep("cleanup-stream",
-                          scMetadata->CleanupTopologyFailedMember(context.action, context.businessOperationId,
-                                                                  context.deadline, context.cancellation),
+    if (metadataActions_ == nullptr) {
+        RecordFailureStep("recover-metadata", Status(K_NOT_READY, "Worker metadata actions are not initialized"),
                           firstError);
-    }
-    if (localMetadata && ocMetadata != nullptr) {
-        RecordFailureStep("cleanup-object",
-                          ocMetadata->CleanupTopologyFailedMember(context.action, context.businessOperationId,
-                                                                  context.deadline, context.cancellation),
+        RecordFailureStep("cleanup-metadata", Status(K_NOT_READY, "Worker metadata actions are not initialized"),
                           firstError);
+    } else {
+        RecordFailureStep("recover-metadata", metadataActions_->RecoverFailureMetadata(context), firstError);
+        RecordFailureStep("cleanup-metadata", metadataActions_->CleanupFailureMetadata(context), firstError);
     }
     if (objectCacheActions_ == nullptr) {
         RecordFailureStep("cleanup-local-data", Status(K_NOT_READY, "Worker object-cache actions are not initialized"),
@@ -325,11 +269,11 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
     } else {
         RecordFailureStep("cleanup-local-data", objectCacheActions_->CleanupLocalData(context), firstError);
     }
-    if (!centralizedMetadata_ && ocMetadata != nullptr) {
-        RecordFailureStep("cleanup-device",
-                          ocMetadata->CleanupTopologyDeviceClientMeta(context.action, context.businessOperationId,
-                                                                      context.deadline, context.cancellation),
+    if (metadataActions_ == nullptr) {
+        RecordFailureStep("cleanup-device", Status(K_NOT_READY, "Worker metadata actions are not initialized"),
                           firstError);
+    } else {
+        RecordFailureStep("cleanup-device", metadataActions_->CleanupDeviceMetadata(context), firstError);
     }
     // Drop cached worker<->worker RPC stubs to the failed member so that no
     // healthy worker keeps reconnecting (and retransmitting TCP SYNs) to a
@@ -338,6 +282,7 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
     // Unconditional: every worker owns its own RpcStubCacheMgr regardless of
     // metadata mode. Remove is idempotent (K_NOT_FOUND is benign).
     RecordFailureStep("cleanup-rpc-stub", EraseFailedWorkerWorkerStub(context.action), firstError);
+    return firstError;
 }
 
 }  // namespace datasystem::worker

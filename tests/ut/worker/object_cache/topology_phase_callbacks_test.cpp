@@ -100,6 +100,9 @@ TEST(TopologyBusinessContractTest, FailureLocalActionsAreInjectedBehindHook)
     EXPECT_TRUE((std::is_class_v<worker::IWorkerTopologyObjectCacheActions>));
     EXPECT_TRUE((std::is_same_v<decltype(worker::WorkerTopologyPhaseCallbackDependencies::objectCacheActions),
                                 std::shared_ptr<worker::IWorkerTopologyObjectCacheActions>>));
+    EXPECT_TRUE((std::is_class_v<worker::IWorkerTopologyMetadataActions>));
+    EXPECT_TRUE((std::is_same_v<decltype(worker::WorkerTopologyPhaseCallbackDependencies::metadataActions),
+                                std::shared_ptr<worker::IWorkerTopologyMetadataActions>>));
 }
 
 TEST(TopologyBusinessContractTest, RemoveMetaCarriesTopologyOperationIdentity)

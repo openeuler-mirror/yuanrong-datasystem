@@ -13,6 +13,7 @@ set(WORKER_OC_SRCS
         central_metadata_address_resolver.cpp
         object_metadata_coordination_reader.cpp
         worker_topology_object_cache_actions.cpp
+        worker_topology_metadata_actions.cpp
         worker_oc_eviction_manager.cpp
         worker_oc_spill.cpp
         obj_cache_hashmap.cpp

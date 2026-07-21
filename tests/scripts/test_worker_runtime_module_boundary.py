@@ -100,6 +100,30 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use injected topology object-cache actions")
 
+    def test_topology_phase_callbacks_use_injected_metadata_actions(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/runtime/worker_topology_phase_callbacks.h",
+            REPO_ROOT / "src/datasystem/worker/runtime/worker_topology_phase_callbacks.cpp",
+        ]
+
+        forbidden_tokens = [
+            "MetadataManagerHolder",
+            "OCMetadataManager",
+            "SCMetadataManager",
+            "OCMigrateMetadataManager",
+            "SCMigrateMetadataManager",
+            "datasystem/master/metadata_manager_holder.h",
+            "datasystem/master/object_cache/oc_metadata_manager.h",
+            "datasystem/master/object_cache/oc_migrate_metadata_manager.h",
+            "datasystem/master/stream_cache/sc_metadata_manager.h",
+            "datasystem/master/stream_cache/sc_migrate_metadata_manager.h",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use injected topology metadata actions")
+
     def test_data_migrator_does_not_depend_on_topology_callback_executor(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/data_migrator/data_migrator.cpp",
