@@ -590,6 +590,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "log-error" in html
     assert "log-deadline" in html
     assert "log-urma" in html
+    assert "wait os sched" in html
+    assert "wakeSchedLatencyUs" in html
+    assert "srcChipInflight" in html
     assert "log-rpc" in html
     assert "log-latency" in html
     assert "log-slow" in html
