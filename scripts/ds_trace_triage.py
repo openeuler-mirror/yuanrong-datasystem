@@ -1459,7 +1459,7 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
             "status": surface_status("urma_elapsed")["status"],
             "summary": _flow_edge_summary(rollups["data_ub"], "URMA elapsed evidence"),
             "rollup": rollups["data_ub"],
-            "reason": "DataWorker UB/URMA write completion；看 total、request id、src/target、dataSize、cpuid 和 inflight。",
+            "reason": "URMA Write completion；看 total、request id、src/target、dataSize、cpuid 和 inflight。",
             "report_reading": "DataWorker 侧 payload write/wait/notify 时序，不要只凭 total 单字段下根因。",
         },
         {
@@ -2222,7 +2222,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel section-summary" id="section-summary-s4"></div>
         <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data，写关注 CreateBuffer/Publish/Meta。</div>
         <div id="read-flow-section" class="flow-section">
-          <div class="panel"><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-1 读取流程证据块：看 Entry→Data RPC 与 DataWorker UB/URMA。</div></div>
+          <div class="panel"><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-1 读取流程证据块：看 Client→Entry RPC、Entry→Data RPC 与 URMA Write。</div></div>
           <div class="panel"><h3>表 4-1 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
           <div class="panel"><div class="controls"><label>Worker 筛选 <select id="read-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="read-worker-chart" class="chart"></div><div class="caption">图 4-2 读取 Worker 分布：读取链路按 worker 聚合。</div></div>
           <div class="panel"><h3>表 4-2 读取 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="read-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
@@ -2521,9 +2521,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return n >= hot ? 'hotrow' : n >= warn ? 'warnrow' : '';
   }
   const stageLabelMap = {
+    'read.client_to_entry_worker':'Client→Entry RPC',
     'read.entry_to_meta_worker':'Entry→Meta RPC',
     'read.entry_to_data_worker':'Entry→Data RPC',
-    'read.data_worker_ub_write':'DataWorker UB/URMA',
+    'read.data_worker_ub_write':'URMA Write',
     'write.client_to_entry_createbuffer':'Client→Entry CreateBuffer',
     'write.client_memory_copy':'Client Memory Copy',
     'write.client_to_entry_publish':'Client→Entry Publish',

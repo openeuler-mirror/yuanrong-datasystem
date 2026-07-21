@@ -433,9 +433,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "RPC 线程数/并发不足" in html
     assert "error_code=2004" in html
     assert "client/access p99 upper bound" in html
+    assert "Client→Entry RPC" in html
     assert "Entry→Data RPC" in html
     assert "stageDisplayName" in html
-    assert "DataWorker UB/URMA" in html
+    assert "URMA Write" in html
     assert "stageDetailText" in html
     assert "研发流程" in html
     assert "id=\"flow-stage-chart\"" in html
@@ -478,7 +479,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "font-size:var(--report-font-size)" in html
     assert "const chartTextStyle" in html
     assert "textStyle:chartTextStyle" in html
-    assert "图 4-1 读取流程证据块：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
+    assert "图 4-1 读取流程证据块：看 Client→Entry RPC、Entry→Data RPC 与 URMA Write。" in html
     assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html
     assert "edge.summary" in html
