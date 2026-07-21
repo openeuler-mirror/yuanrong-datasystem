@@ -347,6 +347,18 @@ protected:
        }
    }
 
+   void ClearInjectAction(uint32_t workerIndex, const std::string &name)
+   {
+       DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, name));
+   }
+
+   void ClearInjectActionForAll(const std::string &name)
+   {
+       for (auto workerIndex : AllWorkers()) {
+           ClearInjectAction(workerIndex, name);
+       }
+   }
+
    // Reads the worker resource.log and returns the shared-memory usage rate as a percent
    // (memoryUsage / FootprintLimit * 100). Returns negative on transient error (partial line, file rotation);
    // WaitForWorkerMemRate retries silently so a transient read failure does not mark the test failed.
@@ -627,6 +639,7 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, BusyGuardSelfHealProbesAfterBudgetEla
     auto probeBaseline = GetTotalInjectCount(PROBE_POINT);
     auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
     auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
+    auto targetBaseline = GetTotalInjectCount(TARGET_MIGRATE_POINT, { WORKER1, WORKER2 });
     auto sourceBatch = WriteObjects(client0_, "rebalance_busy_after_budget", 9, 'b');
 
     WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
@@ -637,9 +650,13 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, BusyGuardSelfHealProbesAfterBudgetEla
     // RPC completes in ~50ms) and sleep briefly to let it finish before TearDown
     // kills the target. Without this, TearDown kills the target mid-RPC, the RPC
     // retries for 120s, and StopRebalanceExecutor()'s join hangs to the 80s timeout.
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, WORKER0, "migrate.limiter.is_busy_node"));
+    ClearInjectActionForAll(PROBE_POINT);
+    ClearInjectActionForAll("migrate.limiter.is_busy_node");
     WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 1, 5000);
-    SleepMs(500);
+    WaitForTotalInjectCount(TARGET_MIGRATE_POINT, targetBaseline + 1, { WORKER1, WORKER2 }, 15000);
+    ClearInjectAction(WORKER1, TARGET_MIGRATE_POINT);
+    ClearInjectAction(WORKER2, TARGET_MIGRATE_POINT);
+    SleepMs(3500);
     AssertReadable(client0_, sourceBatch);
 }
 
@@ -694,8 +711,8 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceTest, RebalanceConvergesToMidpointWithRealS
 // 3 probes returned rate=0, self-heal failed with K_NOT_READY, and only the first batch was
 // ever sent (selfHealAttempted_ then cached the error for the handler's lifetime). After the
 // fix, GetAvailableBandwidth prunes on read, so probe 2-3 sees the window drained after ~1s,
-// self-heal recovers, and all batches complete. Asserting >=2 source-send inject hits
-// distinguishes the two: old code stays at +1 (times out), fixed code reaches +2..3.
+// self-heal recovers, and all batches complete. Asserting repeated target migration handling
+// distinguishes the two: old code stalls after the first request, fixed code keeps making progress.
 class LEVEL1_KVClientMemoryRebalanceLowRateTest : public LEVEL1_KVClientMemoryRebalanceTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -715,7 +732,7 @@ public:
 TEST_F(LEVEL1_KVClientMemoryRebalanceLowRateTest, LowRateMigrateSucceedsAfterBusySelfHealRecovers)
 {
     WaitAllNodesActiveInHashRing(3);
-    auto sourceSendBaseline = GetInjectCount(WORKER0, SOURCE_SEND_POINT);
+    auto targetBaseline = GetInjectCount(WORKER1, TARGET_MIGRATE_POINT);
     auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
 
     // Pre-load worker2 so worker1 is the unambiguous lowest-usage target.
@@ -727,11 +744,12 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceLowRateTest, LowRateMigrateSucceedsAfterBus
     auto sourceBatch = WriteObjects(client0_, "rebalance_low_rate_source", 9, 'l');
 
     WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1);
-    // Before the fix, only the first 20MB batch was sent (self-heal then failed and cached the
-    // error for the handler's lifetime, blocking all subsequent batches). After the fix,
-    // self-heal recovers within ~1s once the sliding window is pruned on read, so all 3
-    // batches complete. Assert >=2 batches were sent within 30s.
-    WaitForInjectCount(WORKER0, SOURCE_SEND_POINT, sourceSendBaseline + 2, 30'000);
+    // Before the fix, only the first 20MB request could make progress (self-heal then failed and cached the
+    // error for the handler's lifetime, blocking subsequent migration). After the fix, self-heal recovers within
+    // ~1s once the sliding window is pruned on read, so the target keeps accepting migration RPCs and all
+    // batches complete. Assert target-side progress instead of source transport call count because one source
+    // task may coalesce multiple object batches before the transport inject point.
+    WaitForInjectCount(WORKER1, TARGET_MIGRATE_POINT, targetBaseline + 2, 30'000);
     AssertReadable(client1_, sourceBatch);
     AssertReadable(client2_, pressureBatch);
 }

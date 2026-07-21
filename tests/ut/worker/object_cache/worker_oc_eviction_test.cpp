@@ -53,6 +53,7 @@ DS_DECLARE_string(spill_directory);
 DS_DECLARE_uint64(spill_size_limit);
 DS_DECLARE_string(master_address);
 DS_DECLARE_string(etcd_address);
+DS_DECLARE_string(shared_disk_directory);
 
 namespace datasystem {
 namespace ut {
@@ -334,6 +335,18 @@ TEST_F(ScEvictionObjectTest, TestEvictScSizeMax)
     ASSERT_EQ(status.GetCode(), StatusCode::K_OUT_OF_MEMORY) << status.GetMsg();
     status = scAllocateManager_->AllocateMemoryForStream(DEFAULT_TENANT_ID, "qwer", size, true, *unit, true);
     ASSERT_TRUE(status.GetMsg().find("Stream cache memory size overflow, maxStreamSize") != std::string::npos);
+}
+
+TEST_F(ScEvictionObjectTest, DiskPressureBlocksGlobalDiskRecovery)
+{
+    constexpr uint64_t shmSize = 50 * MB_TO_BYTES;
+    constexpr int maxCachePercent = 100;
+    maxSize_ = shmSize;
+    scPercent_ = maxCachePercent;
+    ocPercent_ = maxCachePercent;
+    InitTest();
+
+    EXPECT_FALSE(evictionManager_->IsResourceRecovered(CacheType::DISK));
 }
 
 TEST_F(ScEvictionObjectTest, TestScNotEvictObject)

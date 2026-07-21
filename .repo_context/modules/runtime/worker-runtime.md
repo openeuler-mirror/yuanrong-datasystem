@@ -214,6 +214,79 @@
   - `src/datasystem/worker/worker_oc_server.cpp`
   - `src/datasystem/cluster/*`
 
+## Worker Isolation Recovery Plan
+
+- Scope:
+  - keep the worker isolation/recovery orchestration cohesive behind a runtime-facing facade rather than scattering direct
+    state checks through object-cache, KV, stream, and topology call sites;
+  - route cluster information access through `ICoordinationBackend` or a runtime facade backed by it. Other modules must
+    not call ETCD or Coordinator backend internals directly;
+  - keep object-cache metadata recovery injected through callbacks or narrow hooks. The event producer should report
+    isolation/recovery evidence, while object-cache owns the actual metadata/data operations.
+- Intended dependency shape:
+  - `EtcdStore` / Coordinator backend -> `ICoordinationBackend` -> topology runtime/controller -> worker runtime facade;
+  - worker services -> worker runtime facade admission APIs;
+  - worker runtime facade -> injected metadata-recovery/object-cache hooks for recovery evidence;
+  - object-cache internals stay behind metadata recovery, clear-data, and primary-copy APIs;
+  - object-cache public service headers must not expose runtime tracker/admission/state implementation headers. Recovery
+    generation is a recovery contract token, while `WorkerRecoveryEvidenceTracker` stays private behind object-cache
+    recovery state helpers;
+  - object-cache metadata/resource recovery state is owned by `ObjectCacheRecoveryState`, not by worker runtime. The
+    helper stores metadata recovery evidence, resource recovery requirements, and generation-aware evidence tracking;
+    `WorkerOCServiceImpl` keeps only service-specific readiness checks such as slot recovery and eviction/resource
+    probes, then exposes the existing service methods.
+- Runtime facade responsibilities:
+  - expose service-mode transitions (`RUNNING`, `DRAINING`, `LOCAL_ISOLATED`, `RECOVERING`, `STOPPING`);
+  - expose admission checks for read, write, migration/rebalance target, and recovery/cleanup RPC;
+  - aggregate recovery evidence and keep ordinary service closed until membership, ring, metadata, and data evidence pass;
+  - hide backend scope classification, retry budget, recovery evidence tracking, and recovery phase internals from
+    business services.
+- Boundary refactor order:
+  1. keep worker control-backend scope classification independent from `TopologyEngine`; worker code should use evidence
+     values and runtime/facade callbacks rather than the cluster engine composition root;
+  2. move central metadata address resolution out of `WorkerOCServer` direct table `CAS`/`Get` logic and behind a
+     coordination/runtime facade;
+  3. make slot-recovery coordination depend on a narrow recovery coordination store instead of directly depending on
+     `EtcdStore`, so ETCD and Coordinator-backed modes share the same worker recovery contract;
+  4. remove object-cache Get-path direct ETCD `RawGet` and physical-key construction by routing metadata reads through
+     metadata route or object metadata facades;
+  5. defer broader master object metadata store interface extraction to a follow-up because it touches legacy metadata
+     storage outside the worker-isolation critical path.
+- Completed boundary refactor slices:
+  1. `WorkerOCServiceImpl` no longer stores metadata recovery evidence locks, resource recovery flags, or
+     `WorkerRecoveryEvidenceTracker` directly; these are grouped in `ObjectCacheRecoveryState`.
+  2. object-cache recovery state has focused UT coverage for metadata evidence updates, stale resource generation
+     rejection, and recovery evidence generation invalidation.
+  3. runtime module boundary tests assert business service/public headers do not include runtime tracker/admission/state
+     internals directly.
+  4. the object-cache RPC adapter used to probe peer control-backend state is no longer part of the
+     `worker_object_cache` aggregate library; `WorkerOCServer` links it explicitly as a small composition dependency,
+     while backend-scope classification remains in the runtime module.
+- Acceptance coverage status against the worker-isolation story:
+  - Covered by current focused UT/ST: keepalive local isolation preserves process/peer data, global backend outage does
+    not self-isolate, coordination recovery enters evidence-gated recovery, recovery disconnect falls back to isolation,
+    migration targets filter isolated/recovering/draining workers, stale isolated-worker metadata cleanup allows new owner
+    rebuild, orphan local data recovery-or-cleanup, other workers recover metadata before cleanup, best-effort metadata
+    retry, local-isolation backend callback does not delete membership, global backend outage does not publish local
+    isolation or delete through the coordination backend, migration candidate selection skips unready workers, and
+    existing voluntary scale-down ST paths.
+  - Partial or follow-up: explicit HashRing self passive scale-down no-kill case, full Object/KV/Stream admission matrix,
+    old-primary downgrade after master primary changes, bounded object-table scan lock-hold performance case, and
+    scale-out/scale-in combined with local-isolation/global-outage faults.
+  - Additional case gaps to close before final story completion: direct recoverable-local-data metadata rebuild/update ST
+    and mixed-success metadata recovery under membership change.
+  - Follow-up scale/fault cases to add before claiming full story closure:
+    1. ScaleOut while one existing worker is `LOCAL_ISOLATED`; new-owner metadata rebuild must not read from the isolated
+       worker before evidence passes.
+    2. ScaleIn voluntary source plus concurrent peer local-isolation; voluntary source must keep controlled exit, isolated
+       peer must not be self-killed or selected as migration target.
+    3. ScaleIn/ScaleOut task overlap plus transient global backend outage; workers must not self-isolate from global
+       outage evidence and topology callbacks must remain idempotent.
+    4. Recovery metadata batch with mixed success/failure while membership changes; successful entries remain recovered,
+       failed entries stay invisible or enter cleanup without blocking other workers.
+    5. KV/Object/Stream ordinary requests during `LOCAL_ISOLATED` and `RECOVERING`; all must fail fast through the same
+       facade semantics, while recovery/cleanup RPCs stay allowed.
+
 ## Fast Verification
 
 - Build worker and tests:

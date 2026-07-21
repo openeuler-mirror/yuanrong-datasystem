@@ -66,6 +66,20 @@ protected:
     const int getThreadNum_ = 8;
 };
 
+class OCClientSingleWorkerSelfHealingTest : public OCClientCommon {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.numWorkers = 1;
+        opts.numEtcd = 1;
+        opts.numOcThreadNum = getThreadNum_;
+        opts.workerGflagParams = FormatString(" -shared_memory_size_mb=500 -v=2 -log_monitor=true");
+    }
+
+protected:
+    const int getThreadNum_ = 4;
+};
+
 TEST_F(OCClientGetTest, GetLocalTest)
 {
     FLAGS_v = 1;
@@ -878,6 +892,28 @@ TEST_F(OCClientGetTest, ClientRetryOutOfMemory)
     std::vector<Optional<Buffer>> dataList;
     DS_ASSERT_OK(client2->Get({ objectKey }, 2000, dataList));
     AssertBufferEqual(dataList[0].value(), data);
+}
+
+TEST_F(OCClientSingleWorkerSelfHealingTest, CreateOutOfMemoryKeepsClientInitAdmission)
+{
+    constexpr int timeoutMs = 60'000;
+    constexpr int requestTimeoutMs = 2'000;
+    constexpr int shortRequestTimeoutMs = 10;
+
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client, timeoutMs, requestTimeoutMs);
+
+    std::shared_ptr<Buffer> buffer;
+    constexpr uint64_t sizeLargerThanWorkerShm = 600ULL * 1024 * 1024;
+    auto rc = client->Create(NewObjectKey(), sizeLargerThanWorkerShm, CreateParam{}, buffer);
+    ASSERT_EQ(rc.GetCode(), K_OUT_OF_MEMORY);
+
+    ConnectOptions connectOptions;
+    InitConnectOpt(0, connectOptions, timeoutMs);
+    connectOptions.requestTimeoutMs = shortRequestTimeoutMs;
+    auto shortTimeoutClient = std::make_shared<ObjectClient>(connectOptions);
+    rc = shortTimeoutClient->Init();
+    ASSERT_EQ(rc.GetCode(), K_OK);
 }
 
 TEST_F(OCClientGetTest, ClientGetRetry)

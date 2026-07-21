@@ -12,12 +12,17 @@
  */
 
 #include <gtest/gtest.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <csignal>
 #include <chrono>
 #include <cstdint>
 #include <ctime>
+#include <fstream>
+#include <future>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <string>
@@ -29,14 +34,17 @@
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
+#include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/rpc/rpc_channel.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/random_data.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/object/object_enum.h"
+#include "datasystem/protos/object_posix.stub.rpc.pb.h"
 #include "datasystem/protos/ut_object.stub.rpc.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
@@ -47,6 +55,8 @@
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/protos/ut_object.brpc.stub.pb.h"
 #endif
+
+DS_DECLARE_bool(use_brpc);
 
 namespace datasystem {
 namespace st {
@@ -1369,6 +1379,30 @@ public:
         ASSERT_EQ(actual, expected) << tableName << " did not converge within " << kEventuallyWaitTimeoutMs << " ms";
     }
 
+    void AssertCmNodeTableReadyEventually(IUtOCStub &stub, const std::string &tableName)
+    {
+        Status lastRc = Status::OK();
+        uint32_t actual = 0;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kEventuallyWaitTimeoutMs);
+        do {
+            CmNodeTableReqPb req;
+            CmNodeTableRspPb rsp;
+            DS_ASSERT_OK(aksk_->GenerateSignature(req));
+            lastRc = stub.GetCmNodeTable(req, rsp);
+            if (lastRc.IsOk()) {
+                actual = rsp.cm_node_table_size();
+                if (actual == WORKER_NUM && rsp.cm_node_table().at(0).addition_event_type() == "ready"
+                    && rsp.cm_node_table().at(1).addition_event_type() == "ready") {
+                    return;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+        } while (std::chrono::steady_clock::now() < deadline);
+
+        ASSERT_TRUE(lastRc.IsOk()) << tableName << " query failed: " << lastRc.ToString();
+        ASSERT_EQ(actual, WORKER_NUM) << tableName << " did not converge within " << kEventuallyWaitTimeoutMs << " ms";
+    }
+
 protected:
     std::vector<std::shared_ptr<ObjectClient>> clients_;
     std::unique_ptr<IUtOCStub> utSvcStub0_;
@@ -1627,9 +1661,7 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL1_GiveUpReconciliation)
     DS_ASSERT_OK(utSvcStub0_->GetWorkerGRefTable(req, rsp));
     ASSERT_EQ(rsp.single_client_gref().size(), 2);
     // Phase2 excludes the stopped worker from routable membership, so master0 keeps only the healthy worker's ref.
-    rsp.clear_single_client_gref();
-    DS_ASSERT_OK(utSvcStub0_->GetMasterGRefTable(req, rsp));
-    ASSERT_EQ(rsp.single_client_gref().size(), 1);
+    AssertGRefTableSizeEventually(*utSvcStub0_, GRefTableKind::MASTER, 1, "worker0 master gref table");
 
     // restart node1
     DS_ASSERT_OK(cluster_->StartNode(
@@ -1819,37 +1851,20 @@ TEST_F(WorkerReconciliationDfxTest, LEVEL2_RecoverAgainNoExtraReconciliation)
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "heartbeat.sleep", "1*sleep(7000)"));
     int waitTimeSec = 15;
     std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "heartbeat.sleep"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, "heartbeat.sleep"));
 
     // cluster node table should not contain "recover" tag
-    CmNodeTableReqPb req;
-    CmNodeTableRspPb rsp;
-    DS_ASSERT_OK(aksk_->GenerateSignature(req));
-    utSvcStub0_->GetCmNodeTable(req, rsp);
-    ASSERT_EQ(rsp.cm_node_table_size(), 2);  // The number of worker is 2
-    ASSERT_EQ(rsp.cm_node_table().at(0).addition_event_type(), "ready");
-    ASSERT_EQ(rsp.cm_node_table().at(1).addition_event_type(), "ready");
-
-    rsp.clear_cm_node_table();
-    utSvcStub1_->GetCmNodeTable(req, rsp);
-    ASSERT_EQ(rsp.cm_node_table_size(), 2);  // The number of worker is 2
-    ASSERT_EQ(rsp.cm_node_table().at(0).addition_event_type(), "ready");
-    ASSERT_EQ(rsp.cm_node_table().at(1).addition_event_type(), "ready");
+    AssertCmNodeTableReadyEventually(*utSvcStub0_, "worker0 cm node table");
+    AssertCmNodeTableReadyEventually(*utSvcStub1_, "worker1 cm node table");
 
     // disconnect node 1 again
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "heartbeat.sleep", "1*sleep(7000)"));
     std::this_thread::sleep_for(std::chrono::seconds(waitTimeSec));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, "heartbeat.sleep"));
 
-    rsp.clear_cm_node_table();
-    utSvcStub0_->GetCmNodeTable(req, rsp);
-    ASSERT_EQ(rsp.cm_node_table_size(), 2);  // The number of worker is 2
-    ASSERT_EQ(rsp.cm_node_table().at(0).addition_event_type(), "ready");
-    ASSERT_EQ(rsp.cm_node_table().at(1).addition_event_type(), "ready");
-
-    rsp.clear_cm_node_table();
-    utSvcStub1_->GetCmNodeTable(req, rsp);
-    ASSERT_EQ(rsp.cm_node_table_size(), 2);  // The number of worker is 2
-    ASSERT_EQ(rsp.cm_node_table().at(0).addition_event_type(), "ready");
-    ASSERT_EQ(rsp.cm_node_table().at(1).addition_event_type(), "ready");
+    AssertCmNodeTableReadyEventually(*utSvcStub0_, "worker0 cm node table");
+    AssertCmNodeTableReadyEventually(*utSvcStub1_, "worker1 cm node table");
 }
 
 class StandbyWorkerDfxTest : public OCClientCommon {
@@ -2102,6 +2117,1037 @@ protected:
     int nodeDeadTimeout_ = 3;
 };
 
+class WorkerPushMetaTransportTest : public WorkerPushMetaTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        WorkerPushMetaTest::SetClusterSetupOptions(opts);
+        opts.workerGflagParams += " -use_brpc=true";
+    }
+
+    void SetUp() override
+    {
+        previousUseBrpc_ = FLAGS_use_brpc;
+        FLAGS_use_brpc = true;
+        ExternalClusterTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        ExternalClusterTest::TearDown();
+        FLAGS_use_brpc = previousUseBrpc_;
+    }
+
+private:
+    bool previousUseBrpc_{ false };
+};
+
+class WorkerStalePrimaryTest : public WorkerPushMetaTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.workerGflagParams =
+            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=1 "
+            "-node_dead_timeout_s=2 -heartbeat_interval_ms=500 -auto_del_dead_node=true";
+        opts.numWorkers = 2;
+        opts.enableDistributedMaster = "true";
+        opts.numEtcd = 1;
+        opts.disableRocksDB = false;
+    }
+};
+
+TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData)
+{
+    std::shared_ptr<ObjectClient> client0;
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(0, client0);
+    InitTestClient(1, client1);
+    HostPort workerAddr0;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
+    RpcCredential cred;
+    RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, cred);
+    auto channel = std::make_shared<RpcChannel>(workerAddr0, cred);
+    WorkerOCService_Stub worker0Stub(channel);
+    AkSkManager akSk;
+    DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    std::vector<std::string> worker0Keys;
+    std::vector<std::string> worker1Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 2, worker0Keys);
+    GetObjectKeysHashToWorker(db.get(), 1, 2, worker1Keys);
+    const auto &worker0ProbeKey = worker0Keys[0];
+    const auto &worker0RejectKey = worker0Keys[1];
+    const auto &peerProbeKey = worker1Keys[0];
+    const auto &peerObjectKey = worker1Keys[1];
+
+    AssertEventuallyOk(
+        [&]() {
+            std::shared_ptr<Buffer> buffer;
+            CreateParam param;
+            RETURN_IF_NOT_OK(client1->Create(peerProbeKey, 1, param, buffer));
+            uint8_t data = 1;
+            RETURN_IF_NOT_OK(buffer->MemoryCopy(&data, sizeof(data)));
+            return buffer->Publish();
+        },
+        "create on peer worker before local isolation");
+    AssertEventuallyOk(
+        [&]() {
+            std::shared_ptr<Buffer> buffer;
+            CreateParam param;
+            RETURN_IF_NOT_OK(client0->Create(worker0ProbeKey, 1, param, buffer));
+            uint8_t data = 1;
+            RETURN_IF_NOT_OK(buffer->MemoryCopy(&data, sizeof(data)));
+            return buffer->Publish();
+        },
+        "create on worker before local isolation");
+
+    std::string peerData = GenRandomString(1024);
+    CreateAndSealObject(client1, peerObjectKey, peerData);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.beforeValidate", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.begin", "call()"));
+
+    const auto isolatedWorkerPid = cluster_->GetWorkerPid(0);
+    ASSERT_GT(isolatedWorkerPid, 0);
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetLeaseExpiredMs", "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t beforeValidateBefore = 0;
+            uint64_t createBeginBefore = 0;
+            uint64_t beforeValidateAfter = 0;
+            uint64_t createBeginAfter = 0;
+            RETURN_IF_NOT_OK(
+                cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateBefore));
+            RETURN_IF_NOT_OK(
+                cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginBefore));
+            CreateReqPb req;
+            CreateRspPb rsp;
+            req.set_object_key(worker0RejectKey);
+            req.set_client_id("self-healing-direct-client");
+            req.set_data_size(1);
+            req.set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
+            req.set_request_timeout(1000);
+            req.set_is_routed(true);
+            RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
+            RpcOptions opts;
+            opts.SetTimeout(1000);
+            auto createStatus = worker0Stub.Create(opts, req, rsp);
+            RETURN_IF_NOT_OK(
+                cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateAfter));
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginAfter));
+            if (beforeValidateAfter > beforeValidateBefore && createBeginAfter == createBeginBefore) {
+                CHECK_FAIL_RETURN_STATUS(createStatus.GetCode() == K_NOT_READY, K_NOT_READY,
+                                         "isolated Create did not return K_NOT_READY");
+                CHECK_FAIL_RETURN_STATUS(createStatus.GetMsg().find("mode=LOCAL_ISOLATED") != std::string::npos,
+                                         K_NOT_READY, "isolated Create response has no fixed mode");
+                CHECK_FAIL_RETURN_STATUS(
+                    createStatus.GetMsg().find("reason=CONTROL_BACKEND_LOCAL_ISOLATION") != std::string::npos,
+                    K_NOT_READY, "isolated Create response has no fixed reason");
+                CHECK_FAIL_RETURN_STATUS(createStatus.GetMsg().find("phase=NONE") != std::string::npos, K_NOT_READY,
+                                         "isolated Create response has no fixed recovery phase");
+                CHECK_FAIL_RETURN_STATUS(createStatus.GetMsg().find(worker0RejectKey) == std::string::npos, K_NOT_READY,
+                                         "isolated Create response leaked the object key");
+                return Status::OK();
+            }
+            RETURN_STATUS(StatusCode::K_NOT_READY, "create request has not been blocked by worker admission yet");
+        },
+        "create admission blocks locally isolated worker before object allocation");
+
+    ASSERT_EQ(kill(isolatedWorkerPid, 0), 0);
+    std::vector<Optional<Buffer>> peerBuffers;
+    DS_ASSERT_OK(client1->Get({ peerObjectKey }, 0, peerBuffers));
+    ASSERT_TRUE(NotExistsNone(peerBuffers));
+    AssertBufferEqual(*peerBuffers[0], peerData);
+}
+
+TEST_F(WorkerPushMetaTest, LEVEL1_TestPeerWorkerKvDataSurvivesLocalIsolationAndRecovery)
+{
+    std::shared_ptr<KVClient> client0;
+    std::shared_ptr<KVClient> client1;
+    InitTestKVClient(0, client0, 60'000, false, 1'000);
+    InitTestKVClient(1, client1, 60'000, false, 1'000);
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    std::vector<std::string> worker0Keys;
+    std::vector<std::string> worker1Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 2, worker0Keys);
+    GetObjectKeysHashToWorker(db.get(), 1, 2, worker1Keys);
+
+    const std::string peerValueBefore = GenRandomString(1024);
+    const std::string peerValueDuring = GenRandomString(1024);
+    DS_ASSERT_OK(client1->Set(worker1Keys[0], peerValueBefore));
+    std::string actual;
+    DS_ASSERT_OK(client1->Get(worker1Keys[0], actual));
+    ASSERT_EQ(actual, peerValueBefore);
+
+    ServerProcess *workerProcess = nullptr;
+    DS_ASSERT_OK(cluster_->GetProcess(WORKER, 0, workerProcess));
+    ASSERT_NE(workerProcess, nullptr);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+    const auto workerPid = workerProcess->Pid();
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServer.LocalBackendIsolationCandidate", "call()"));
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetLeaseExpiredMs", "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(
+                WORKER, 0, "WorkerOCServer.LocalBackendIsolationCandidate", executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY,
+                                     "worker has not classified the keepalive failure as local isolation");
+            return Status::OK();
+        },
+        "worker classifies the keepalive failure as local isolation");
+    AssertEventuallyOk(
+        [&]() {
+            auto rc = client0->Set(worker0Keys[0], "isolated-write-must-fail");
+            CHECK_FAIL_RETURN_STATUS(
+                rc.GetCode() == K_NOT_READY, K_TRY_AGAIN,
+                "worker0 KV Set has not reached exact local-isolation admission: " + rc.ToString());
+            return Status::OK();
+        },
+        "locally isolated worker rejects KV Set with K_NOT_READY");
+
+    DS_ASSERT_OK(client1->Set(worker1Keys[1], peerValueDuring));
+    actual.clear();
+    DS_ASSERT_OK(client1->Get(worker1Keys[0], actual));
+    ASSERT_EQ(actual, peerValueBefore);
+    actual.clear();
+    DS_ASSERT_OK(client1->Get(worker1Keys[1], actual));
+    ASSERT_EQ(actual, peerValueDuring);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "GetLeaseExpiredMs"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"));
+    AssertEventuallyOk([&]() { return client0->Set(worker0Keys[1], "recovered-write"); },
+                       "same worker accepts KV Set after recovery");
+    ASSERT_EQ(workerProcess->Pid(), workerPid);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+
+    actual.clear();
+    DS_ASSERT_OK(client1->Get(worker1Keys[0], actual));
+    ASSERT_EQ(actual, peerValueBefore);
+    actual.clear();
+    DS_ASSERT_OK(client1->Get(worker1Keys[1], actual));
+    ASSERT_EQ(actual, peerValueDuring);
+}
+
+TEST_F(WorkerStalePrimaryTest, LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerRebuild)
+{
+    std::shared_ptr<ObjectClient> client0;
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(0, client0);
+    InitTestClient(1, client1);
+    HostPort workerAddr0;
+    HostPort workerAddr1;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, workerAddr1));
+    RpcCredential cred;
+    RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, cred);
+    auto channel = std::make_shared<RpcChannel>(workerAddr0, cred);
+    WorkerOCService_Stub worker0Stub(channel);
+    auto masterChannel = std::make_shared<RpcChannel>(workerAddr1, cred);
+    master::MasterOCService_Stub master1Stub(masterChannel);
+    AkSkManager akSk;
+    DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    SetWorkerHashInjection();
+    std::vector<std::string> worker1Keys;
+    GetObjectKeysHashToWorker(db.get(), 1, 1, worker1Keys);
+    const auto &key = worker1Keys[0];
+    const std::string initialValue = GenRandomString(1024);
+    const std::string promotedValue = GenRandomString(1024);
+    CreateParam param{ .consistencyType = ConsistencyType::CAUSAL };
+    DS_ASSERT_OK(client0->Put(key, reinterpret_cast<const uint8_t *>(initialValue.data()), initialValue.size(), param));
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(client1->Get({ key }, 1'000, buffers));
+    ASSERT_TRUE(NotExistsNone(buffers));
+    AssertBufferEqual(*buffers[0], initialValue);
+    AssertEventuallyOk(
+        [&]() {
+            master::QueryMetaReqPb req;
+            master::QueryMetaRspPb rsp;
+            std::vector<RpcMessage> payloads;
+            req.add_ids(key);
+            req.set_address(workerAddr1.ToString());
+            RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
+            RpcOptions opts;
+            opts.SetTimeout(1'000);
+            RETURN_IF_NOT_OK(master1Stub.QueryMeta(opts, req, rsp, payloads));
+            CHECK_FAIL_RETURN_STATUS(rsp.query_metas_size() == 1, K_NOT_READY,
+                                     "object metadata is not queryable before fault injection");
+            master::CheckObjectDataLocationReqPb locationReq;
+            master::CheckObjectDataLocationRspPb locationRsp;
+            auto *objectVersion = locationReq.add_object_versions();
+            objectVersion->set_object_key(key);
+            objectVersion->set_version(rsp.query_metas(0).meta().version());
+            locationReq.set_address(workerAddr1.ToString());
+            RETURN_IF_NOT_OK(akSk.GenerateSignature(locationReq));
+            RETURN_IF_NOT_OK(master1Stub.CheckObjectDataLocation(opts, locationReq, locationRsp));
+            CHECK_FAIL_RETURN_STATUS(locationRsp.no_need_clear_object_keys_size() == 1, K_NOT_READY,
+                                     "peer copy location has not been acknowledged by the metadata master");
+            return Status::OK();
+        },
+        "peer copy location is acknowledged before the old primary is isolated");
+
+    ServerProcess *workerProcess = nullptr;
+    DS_ASSERT_OK(cluster_->GetProcess(WORKER, 0, workerProcess));
+    ASSERT_NE(workerProcess, nullptr);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+    const auto workerPid = workerProcess->Pid();
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, "process.change.primary.copy", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "process.change.primary.copy", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServer.AfterMarkLocalIsolated", "call()"));
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetLeaseExpiredMs", "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
+    bool keepAliveFailureActive = true;
+    Raii clearKeepAliveFailure([&]() {
+        if (keepAliveFailureActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage"),
+                         "clear isolated-worker keepalive failure");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "GetLeaseExpiredMs"),
+                         "clear isolated-worker lease override");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"),
+                         "clear isolated-worker quick keepalive loop");
+        }
+    });
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t isolationCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "WorkerOCServer.AfterMarkLocalIsolated",
+                                                                   isolationCount));
+            CHECK_FAIL_RETURN_STATUS(isolationCount > 0, K_NOT_READY,
+                                     "old primary has not entered confirmed local isolation");
+            return Status::OK();
+        },
+        "old primary enters local isolation while its process remains alive");
+    ASSERT_EQ(workerProcess->Pid(), workerPid);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t promotionCount = 0;
+            RETURN_IF_NOT_OK(
+                cluster_->GetInjectActionExecuteCount(WORKER, 1, "process.change.primary.copy", promotionCount));
+            CHECK_FAIL_RETURN_STATUS(promotionCount > 0, K_NOT_READY,
+                                     "peer primary promotion has not completed after the old primary lease expired");
+            return Status::OK();
+        },
+        "peer becomes primary after the old primary lease expires");
+    AssertEventuallyOk(
+        [&]() {
+            master::QueryMetaReqPb req;
+            master::QueryMetaRspPb rsp;
+            std::vector<RpcMessage> payloads;
+            req.add_ids(key);
+            req.set_address(workerAddr1.ToString());
+            RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
+            RpcOptions opts;
+            opts.SetTimeout(1'000);
+            RETURN_IF_NOT_OK(master1Stub.QueryMeta(opts, req, rsp, payloads));
+            CHECK_FAIL_RETURN_STATUS(rsp.query_metas_size() == 1, K_NOT_READY,
+                                     "rebuilt object metadata is not queryable on the new owner");
+            CHECK_FAIL_RETURN_STATUS(rsp.query_metas(0).meta().primary_address() == workerAddr1.ToString(), K_NOT_READY,
+                                     "authoritative primary still points at the isolated worker");
+            return Status::OK();
+        },
+        "authoritative metadata points at the new owner after cleanup");
+    DS_ASSERT_OK(
+        client1->Put(key, reinterpret_cast<const uint8_t *>(promotedValue.data()), promotedValue.size(), param));
+    buffers.clear();
+    DS_ASSERT_OK(client1->Get({ key }, 1'000, buffers));
+    ASSERT_TRUE(NotExistsNone(buffers));
+    AssertBufferEqual(*buffers[0], promotedValue);
+
+    {
+        GetObjMetaInfoReqPb req;
+        GetObjMetaInfoRspPb rsp;
+        req.add_object_keys(key);
+        DS_ASSERT_OK(akSk.GenerateSignature(req));
+        RpcOptions opts;
+        opts.SetTimeout(1'000);
+        ASSERT_EQ(worker0Stub.GetObjMetaInfo(opts, req, rsp).GetCode(), K_NOT_READY);
+        ASSERT_EQ(rsp.objs_meta_info_size(), 0);
+    }
+    ASSERT_EQ(workerProcess->Pid(), workerPid);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "GetLeaseExpiredMs"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"));
+    keepAliveFailureActive = false;
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t downgradeCount = 0;
+            RETURN_IF_NOT_OK(
+                cluster_->GetInjectActionExecuteCount(WORKER, 0, "process.change.primary.copy", downgradeCount));
+            CHECK_FAIL_RETURN_STATUS(downgradeCount > 0, K_NOT_READY,
+                                     "old primary has not applied its persisted downgrade operation");
+            return Status::OK();
+        },
+        "old primary applies its downgrade before normal service reopens");
+    const std::string recoveryProbeKey = key + "_recovery_probe";
+    const uint8_t recoveryProbeValue = 1;
+    AssertEventuallyOk(
+        [&]() {
+            return client0->Put(recoveryProbeKey, &recoveryProbeValue, sizeof(recoveryProbeValue), CreateParam{});
+        },
+        "old worker reopens normal service after ownership reconciliation");
+    buffers.clear();
+    DS_ASSERT_OK(client0->Get({ key }, 1'000, buffers));
+    ASSERT_TRUE(NotExistsNone(buffers));
+    AssertBufferEqual(*buffers[0], promotedValue);
+    buffers.clear();
+    DS_ASSERT_OK(client1->Get({ key }, 1'000, buffers));
+    ASSERT_TRUE(NotExistsNone(buffers));
+    AssertBufferEqual(*buffers[0], promotedValue);
+    ASSERT_EQ(workerProcess->Pid(), workerPid);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerOCServer.AfterMarkLocalIsolated"));
+}
+
+TEST_F(WorkerPushMetaTest, LEVEL1_TestGlobalBackendOutageDoesNotSelfIsolateWorkers)
+{
+    std::shared_ptr<ObjectClient> client0;
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(0, client0);
+    InitTestClient(1, client1);
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+
+    std::vector<std::string> worker0Keys;
+    std::vector<std::string> worker1Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 3, worker0Keys);
+    GetObjectKeysHashToWorker(db.get(), 1, 3, worker1Keys);
+    std::string worker0Data = GenRandomString(1024);
+    std::string worker1Data = GenRandomString(1024);
+    CreateAndSealObject(client0, worker0Keys[0], worker0Data);
+    CreateAndSealObject(client1, worker1Keys[0], worker1Data);
+
+    RpcCredential credential;
+    RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, credential);
+    AkSkManager akSk;
+    DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
+    std::vector<HostPort> workerAddresses(2);
+    std::vector<pid_t> workerPids(2);
+    for (uint32_t workerIndex = 0; workerIndex < 2; ++workerIndex) {
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddresses[workerIndex]));
+        workerPids[workerIndex] = cluster_->GetWorkerPid(workerIndex);
+        ASSERT_GT(workerPids[workerIndex], 0);
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, "WorkerOCServer.GlobalBackendOutage", "call()"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, "worker.Create.beforeValidate", "call()"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, "worker.Create.begin", "call()"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, "GetLeaseExpiredMs", "call(1000)"));
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(WORKER, workerIndex, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
+    }
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServer.LocalBackendIsolationCandidate", "call()"));
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 1, "EtcdStore.ProcessKeepAliveFailure.beforeMarkTimeout", "pause()"));
+    auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    ASSERT_NE(externalCluster, nullptr);
+    DS_ASSERT_OK(externalCluster->ShutdownEtcds());
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(
+                WORKER, 1, "EtcdStore.ProcessKeepAliveFailure.beforeMarkTimeout", executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY,
+                                     "worker 1 has not reached the skewed backend failure barrier");
+            return Status::OK();
+        },
+        "worker 1 pauses before publishing its backend timeout");
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(
+                WORKER, 0, "WorkerOCServer.LocalBackendIsolationCandidate", executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY,
+                                     "worker 0 has not observed the intentionally skewed local candidate");
+            return Status::OK();
+        },
+        "worker 0 observes a local candidate before its peer reports the outage");
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 1, "EtcdStore.ProcessKeepAliveFailure.beforeMarkTimeout"));
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(
+                cluster_->GetInjectActionExecuteCount(WORKER, 1, "WorkerOCServer.GlobalBackendOutage", executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY,
+                                     "worker 1 has not classified the backend outage as global");
+            return Status::OK();
+        },
+        "worker 1 classifies the backend outage as global after the skewed barrier is released");
+
+    auto verifyAdmissionRemainsOpen = [&](uint32_t workerIndex, const std::string &objectKey) {
+        uint64_t beforeValidateBefore = 0;
+        uint64_t createBeginBefore = 0;
+        uint64_t beforeValidateAfter = 0;
+        uint64_t createBeginAfter = 0;
+        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, "worker.Create.beforeValidate",
+                                                               beforeValidateBefore));
+        RETURN_IF_NOT_OK(
+            cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, "worker.Create.begin", createBeginBefore));
+        auto channel = std::make_shared<RpcChannel>(workerAddresses[workerIndex], credential);
+        WorkerOCService_Stub stub(channel);
+        CreateReqPb req;
+        CreateRspPb rsp;
+        req.set_object_key(objectKey);
+        req.set_client_id("global-outage-direct-client");
+        req.set_data_size(1);
+        req.set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
+        req.set_request_timeout(1000);
+        req.set_is_routed(true);
+        RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
+        RpcOptions opts;
+        opts.SetTimeout(1000);
+        (void)stub.Create(opts, req, rsp);
+        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, "worker.Create.beforeValidate",
+                                                               beforeValidateAfter));
+        RETURN_IF_NOT_OK(
+            cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, "worker.Create.begin", createBeginAfter));
+        CHECK_FAIL_RETURN_STATUS(beforeValidateAfter > beforeValidateBefore && createBeginAfter > createBeginBefore,
+                                 K_NOT_READY, "global backend outage closed worker create admission");
+        return Status::OK();
+    };
+    DS_ASSERT_OK(verifyAdmissionRemainsOpen(0, worker0Keys[1]));
+    DS_ASSERT_OK(verifyAdmissionRemainsOpen(1, worker1Keys[1]));
+    ASSERT_EQ(kill(workerPids[0], 0), 0);
+    ASSERT_EQ(kill(workerPids[1], 0), 0);
+
+    for (uint32_t workerIndex = 0; workerIndex < 2; ++workerIndex) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, "GetLeaseExpiredMs"));
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"));
+    }
+    DS_ASSERT_OK(cluster_->StartEtcdCluster());
+    AssertEventuallyOk(
+        [&]() {
+            std::shared_ptr<Buffer> buffer;
+            CreateParam param;
+            RETURN_IF_NOT_OK(client0->Create(worker0Keys[2], 1, param, buffer));
+            return buffer->Publish();
+        },
+        "worker 0 accepts writes after global backend recovery");
+    AssertEventuallyOk(
+        [&]() {
+            std::shared_ptr<Buffer> buffer;
+            CreateParam param;
+            RETURN_IF_NOT_OK(client1->Create(worker1Keys[2], 1, param, buffer));
+            return buffer->Publish();
+        },
+        "worker 1 accepts writes after global backend recovery");
+
+    std::vector<Optional<Buffer>> worker0Buffers;
+    std::vector<Optional<Buffer>> worker1Buffers;
+    DS_ASSERT_OK(client0->Get({ worker0Keys[0] }, 0, worker0Buffers));
+    DS_ASSERT_OK(client1->Get({ worker1Keys[0] }, 0, worker1Buffers));
+    ASSERT_TRUE(NotExistsNone(worker0Buffers));
+    ASSERT_TRUE(NotExistsNone(worker1Buffers));
+    AssertBufferEqual(*worker0Buffers[0], worker0Data);
+    AssertBufferEqual(*worker1Buffers[0], worker1Data);
+}
+
+TEST_F(WorkerPushMetaTest, LEVEL1_TestTopologyJitterDoesNotKillLocalWorker)
+{
+    std::shared_ptr<ObjectClient> client0;
+    InitTestClient(0, client0);
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    std::vector<std::string> worker0Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 3, worker0Keys);
+    std::string preservedData = GenRandomString(1024);
+    CreateAndSealObject(client0, worker0Keys[0], preservedData);
+
+    HostPort workerAddr0;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
+    ServerProcess *workerProcess = nullptr;
+    DS_ASSERT_OK(cluster_->GetProcess(WORKER, 0, workerProcess));
+    ASSERT_NE(workerProcess, nullptr);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+    const auto workerPid = workerProcess->Pid();
+    ASSERT_GT(workerPid, 0);
+    RpcCredential credential;
+    RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, credential);
+    auto channel = std::make_shared<RpcChannel>(workerAddr0, credential);
+    WorkerOCService_Stub worker0Stub(channel);
+    AkSkManager akSk;
+    DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.beforeValidate", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.begin", "call()"));
+
+    std::string topologyBytes;
+    DS_ASSERT_OK(db->Get(GetTopologyTableName(), "", topologyBytes));
+    ClusterTopologyPb authoritativeTopology;
+    ASSERT_TRUE(authoritativeTopology.ParseFromString(topologyBytes));
+    ClusterTopologyPb jitteredTopology = authoritativeTopology;
+    auto *members = jitteredTopology.mutable_members();
+    auto localMember = members->find(workerAddr0.ToString());
+    ASSERT_NE(localMember, members->end());
+    auto peerMember = members->begin();
+    if (peerMember == localMember) {
+        ++peerMember;
+    }
+    ASSERT_NE(peerMember, members->end());
+    for (auto token : localMember->second.tokens()) {
+        peerMember->second.add_tokens(token);
+    }
+    members->erase(localMember);
+    jitteredTopology.set_version(authoritativeTopology.version() + 1);
+    jitteredTopology.clear_active_batch();
+    DS_ASSERT_OK(db->Put(GetTopologyTableName(), "", jitteredTopology.SerializeAsString()));
+
+    auto verifyCreateBlockedBeforeAllocation = [&]() {
+        uint64_t beforeValidateBefore = 0;
+        uint64_t createBeginBefore = 0;
+        uint64_t beforeValidateAfter = 0;
+        uint64_t createBeginAfter = 0;
+        RETURN_IF_NOT_OK(
+            cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateBefore));
+        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginBefore));
+        CreateReqPb req;
+        CreateRspPb rsp;
+        req.set_object_key(worker0Keys[1]);
+        req.set_client_id("topology-jitter-direct-client");
+        req.set_data_size(1);
+        req.set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
+        req.set_request_timeout(1000);
+        req.set_is_routed(true);
+        RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
+        RpcOptions opts;
+        opts.SetTimeout(1000);
+        (void)worker0Stub.Create(opts, req, rsp);
+        RETURN_IF_NOT_OK(
+            cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateAfter));
+        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginAfter));
+        CHECK_FAIL_RETURN_STATUS(beforeValidateAfter > beforeValidateBefore && createBeginAfter == createBeginBefore,
+                                 K_NOT_READY, "topology-isolated worker still admitted Create allocation");
+        return Status::OK();
+    };
+    AssertEventuallyOk(verifyCreateBlockedBeforeAllocation,
+                       "topology-isolated worker blocks Create before object allocation");
+
+    std::this_thread::sleep_for(std::chrono::seconds(nodeDeadTimeout_ + 1));
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+    std::string latestTopologyBytes;
+    DS_ASSERT_OK(db->Get(GetTopologyTableName(), "", latestTopologyBytes));
+    ClusterTopologyPb latestTopology;
+    ASSERT_TRUE(latestTopology.ParseFromString(latestTopologyBytes));
+    authoritativeTopology.set_version(latestTopology.version() + 1);
+    authoritativeTopology.clear_active_batch();
+    DS_ASSERT_OK(db->Put(GetTopologyTableName(), "", authoritativeTopology.SerializeAsString()));
+    AssertEventuallyOk(
+        [&]() {
+            std::shared_ptr<Buffer> buffer;
+            CreateParam param;
+            RETURN_IF_NOT_OK(client0->Create(worker0Keys[2], 1, param, buffer));
+            return buffer->Publish();
+        },
+        "same worker process accepts writes after authoritative topology returns");
+    ASSERT_EQ(workerProcess->Pid(), workerPid);
+    ASSERT_TRUE(workerProcess->IsProcessAlive());
+
+    std::vector<Optional<Buffer>> preservedBuffers;
+    DS_ASSERT_OK(client0->Get({ worker0Keys[0] }, 0, preservedBuffers));
+    ASSERT_TRUE(NotExistsNone(preservedBuffers));
+    AssertBufferEqual(*preservedBuffers[0], preservedData);
+}
+
+TEST_F(WorkerPushMetaTest, LEVEL1_TestVoluntaryScaleDownStillExitsControlled)
+{
+    constexpr uint32_t workerIndex = 0;
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    HostPort workerAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+    ServerProcess *process = nullptr;
+    DS_ASSERT_OK(cluster_->GetProcess(WORKER, workerIndex, process));
+    ASSERT_NE(process, nullptr);
+    ASSERT_TRUE(process->IsProcessAlive());
+
+    const std::string statusPath = cluster_->GetRootDir() + "/worker0/log/worker-status";
+    {
+        std::ofstream status(statusPath, std::ios::trunc);
+        ASSERT_TRUE(status.is_open());
+        status << "voluntary scale in\n";
+        status.flush();
+        ASSERT_TRUE(status.good());
+    }
+    DS_ASSERT_OK(process->Kill(SIGTERM));
+
+    bool topologyRemoved = false;
+    bool shutdownMarkerSeen = false;
+    bool processExited = false;
+    int processExitStatus = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::string topologyBytes;
+        if (db->Get(GetTopologyTableName(), "", topologyBytes).IsOk()) {
+            ClusterTopologyPb topology;
+            ASSERT_TRUE(topology.ParseFromString(topologyBytes));
+            topologyRemoved = topology.members().find(workerAddress.ToString()) == topology.members().end();
+        }
+        std::ifstream status(statusPath);
+        std::string marker{ std::istreambuf_iterator<char>(status), std::istreambuf_iterator<char>() };
+        shutdownMarkerSeen = shutdownMarkerSeen || marker == "worker_stop_status:ready";
+        const auto waitResult = waitpid(process->Pid(), &processExitStatus, WNOHANG);
+        if (waitResult == process->Pid()) {
+            processExited = true;
+        } else if (waitResult < 0 && errno != EINTR) {
+            ADD_FAILURE() << "waitpid failed while observing voluntary scale-down, errno=" << errno;
+            break;
+        }
+        if (topologyRemoved && shutdownMarkerSeen && processExited) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+    }
+
+    const bool gracefulProcessExited = processExited;
+    if (!processExited) {
+        LOG_IF_ERROR(process->Kill(SIGKILL), "force cleanup of voluntary scale-down test worker");
+        const auto reapDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < reapDeadline) {
+            const auto waitResult = waitpid(process->Pid(), &processExitStatus, WNOHANG);
+            if (waitResult == process->Pid() || (waitResult < 0 && errno == ECHILD)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+        }
+    }
+    EXPECT_FALSE(process->IsProcessAlive());
+
+    EXPECT_TRUE(topologyRemoved);
+    EXPECT_TRUE(shutdownMarkerSeen);
+    ASSERT_TRUE(gracefulProcessExited);
+    ASSERT_TRUE(WIFEXITED(processExitStatus));
+    EXPECT_EQ(WEXITSTATUS(processExitStatus), 0);
+}
+
+TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate)
+{
+    std::shared_ptr<ObjectClient> client0;
+    InitTestClient(0, client0);
+    HostPort workerAddr0;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
+    RpcCredential cred;
+    RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, cred);
+    auto channel = std::make_shared<RpcChannel>(workerAddr0, cred);
+    WorkerOCService_Stub worker0Stub(channel);
+    AkSkManager akSk;
+    DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    std::vector<std::string> worker0Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 3, worker0Keys);
+    const auto &preservedObjectKey = worker0Keys[0];
+    const auto &isolatedRejectKey = worker0Keys[1];
+    const auto &recoveredObjectKey = worker0Keys[2];
+
+    std::string preservedData = GenRandomString(1024);
+    CreateAndSealObject(client0, preservedObjectKey, preservedData);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.beforeValidate", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.begin", "call()"));
+
+    const auto isolatedWorkerPid = cluster_->GetWorkerPid(0);
+    ASSERT_GT(isolatedWorkerPid, 0);
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetLeaseExpiredMs", "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
+
+    auto verifyCreateBlockedBeforeAllocation = [&]() {
+        uint64_t beforeValidateBefore = 0;
+        uint64_t createBeginBefore = 0;
+        uint64_t beforeValidateAfter = 0;
+        uint64_t createBeginAfter = 0;
+        RETURN_IF_NOT_OK(
+            cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateBefore));
+        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginBefore));
+        CreateReqPb req;
+        CreateRspPb rsp;
+        req.set_object_key(isolatedRejectKey);
+        req.set_client_id("self-healing-recovery-client");
+        req.set_data_size(1);
+        req.set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
+        req.set_request_timeout(1000);
+        req.set_is_routed(true);
+        RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
+        RpcOptions opts;
+        opts.SetTimeout(1000);
+        (void)worker0Stub.Create(opts, req, rsp);
+        RETURN_IF_NOT_OK(
+            cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateAfter));
+        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginAfter));
+        CHECK_FAIL_RETURN_STATUS(beforeValidateAfter > beforeValidateBefore && createBeginAfter == createBeginBefore,
+                                 K_NOT_READY, "create request has not been blocked by worker admission");
+        return Status::OK();
+    };
+    AssertEventuallyOk(verifyCreateBlockedBeforeAllocation,
+                       "create admission blocks locally isolated worker before object allocation");
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", "1*pause"));
+    bool recoveryPauseActive = true;
+    Raii clearRecoveryPause([&]() {
+        if (recoveryPauseActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning"),
+                         "clear recovery evidence pause");
+        }
+    });
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "GetLeaseExpiredMs"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"));
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(
+                WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY, "recovery evidence gate has not run yet");
+            return Status::OK();
+        },
+        "recovery reaches the evidence gate after keepalive reconnects");
+    DS_ASSERT_OK(verifyCreateBlockedBeforeAllocation());
+    std::vector<Optional<Buffer>> isolatedBuffers;
+    ASSERT_EQ(client0->Get({ preservedObjectKey }, 0, isolatedBuffers).GetCode(), K_NOT_READY);
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning"));
+    recoveryPauseActive = false;
+
+    AssertEventuallyOk(
+        [&]() {
+            std::shared_ptr<Buffer> buffer;
+            CreateParam param;
+            RETURN_IF_NOT_OK(client0->Create(recoveredObjectKey, 1, param, buffer));
+            uint8_t data = 1;
+            RETURN_IF_NOT_OK(buffer->MemoryCopy(&data, sizeof(data)));
+            return buffer->Publish();
+        },
+        "normal write admission reopens after recovery evidence completes");
+
+    ASSERT_EQ(kill(isolatedWorkerPid, 0), 0);
+    std::vector<Optional<Buffer>> preservedBuffers;
+    DS_ASSERT_OK(client0->Get({ preservedObjectKey }, 0, preservedBuffers));
+    ASSERT_TRUE(NotExistsNone(preservedBuffers));
+    AssertBufferEqual(*preservedBuffers[0], preservedData);
+}
+
+TEST_F(WorkerPushMetaTest, LEVEL1_TestRecoveringWorkerFallsBackToLocalIsolatedOnDisconnect)
+{
+    std::shared_ptr<KVClient> client0;
+    InitTestKVClient(0, client0, 60'000, false, 1'000);
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    std::vector<std::string> worker0Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 3, worker0Keys);
+    const std::string preservedValue = GenRandomString(1024);
+    DS_ASSERT_OK(client0->Set(worker0Keys[0], preservedValue));
+
+    const auto workerPid = cluster_->GetWorkerPid(0);
+    ASSERT_GT(workerPid, 0);
+    constexpr const char *candidateInject = "WorkerOCServer.LocalBackendIsolationCandidate";
+    constexpr const char *isolatedInject = "WorkerOCServer.AfterMarkLocalIsolated";
+    constexpr const char *beforeRunningInject = "WorkerRecoveryController.BeforeMarkRunning";
+    constexpr const char *afterRunningInject = "WorkerRecoveryController.AfterTryMarkRunning";
+    constexpr const char *keepAliveInject = "EtcdKeepAlive.SendKeepAliveMessage";
+    constexpr const char *leaseInject = "GetLeaseExpiredMs";
+    constexpr const char *quickLoopInject = "EtcdStore.LaunchKeepAliveThreads.loopQuickly";
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, candidateInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, isolatedInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, afterRunningInject, "call()"));
+    bool injectsActive = true;
+    Raii clearInjects([&]() {
+        if (injectsActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, candidateInject), "clear isolation candidate");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, isolatedInject), "clear isolation barrier");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, beforeRunningInject), "clear recovery pause");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, afterRunningInject), "clear recovery barrier");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, keepAliveInject), "clear keepalive failure");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, leaseInject), "clear lease timeout");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, quickLoopInject), "clear quick loop");
+        }
+    });
+    auto enableKeepAliveFailure = [&]() {
+        RETURN_IF_NOT_OK(cluster_->SetInjectAction(WORKER, 0, keepAliveInject, "return(K_RPC_UNAVAILABLE)"));
+        RETURN_IF_NOT_OK(cluster_->SetInjectAction(WORKER, 0, leaseInject, "call(1000)"));
+        return cluster_->SetInjectAction(WORKER, 0, quickLoopInject, "call(0)");
+    };
+    auto disableKeepAliveFailure = [&]() {
+        RETURN_IF_NOT_OK(cluster_->ClearInjectAction(WORKER, 0, keepAliveInject));
+        RETURN_IF_NOT_OK(cluster_->ClearInjectAction(WORKER, 0, leaseInject));
+        return cluster_->ClearInjectAction(WORKER, 0, quickLoopInject);
+    };
+    auto waitForInjectCount = [&](const std::string &name, uint64_t expectedCount, const std::string &detail) {
+        AssertEventuallyOk(
+            [&]() {
+                uint64_t executeCount = 0;
+                RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, name, executeCount));
+                CHECK_FAIL_RETURN_STATUS(executeCount >= expectedCount, K_NOT_READY, detail);
+                return Status::OK();
+            },
+            detail);
+    };
+
+    DS_ASSERT_OK(enableKeepAliveFailure());
+    waitForInjectCount(isolatedInject, 1, "worker did not enter initial local isolation");
+    ASSERT_EQ(client0->Set(worker0Keys[1], "initial-isolation-write").GetCode(), K_NOT_READY);
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, beforeRunningInject, "1*pause"));
+    DS_ASSERT_OK(disableKeepAliveFailure());
+    waitForInjectCount(beforeRunningInject, 1, "worker did not reach the recovery evidence gate");
+
+    DS_ASSERT_OK(enableKeepAliveFailure());
+    waitForInjectCount(candidateInject, 2, "recovery did not observe the second local coordination loss");
+    waitForInjectCount(isolatedInject, 2, "recovering worker did not return to local isolation");
+    auto secondIsolationRc = client0->Set(worker0Keys[1], "recovery-interrupted-write");
+    ASSERT_EQ(secondIsolationRc.GetCode(), K_NOT_READY);
+    EXPECT_NE(secondIsolationRc.GetMsg().find("CONTROL_BACKEND_LOCAL_ISOLATION"), std::string::npos);
+    std::string actual;
+    ASSERT_EQ(client0->Get(worker0Keys[0], actual).GetCode(), K_NOT_READY);
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, beforeRunningInject));
+    waitForInjectCount(afterRunningInject, 1, "stale recovery attempt did not leave the evidence gate");
+    ASSERT_EQ(client0->Set(worker0Keys[1], "stale-recovery-write").GetCode(), K_NOT_READY);
+
+    DS_ASSERT_OK(disableKeepAliveFailure());
+    AssertEventuallyOk([&]() { return client0->Set(worker0Keys[2], "recovered-write"); },
+                       "worker did not reopen after the second recovery completed");
+    ASSERT_EQ(kill(workerPid, 0), 0);
+    DS_ASSERT_OK(client0->Get(worker0Keys[0], actual));
+    EXPECT_EQ(actual, preservedValue);
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, candidateInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, isolatedInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, afterRunningInject));
+    injectsActive = false;
+}
+
+TEST_F(WorkerPushMetaTransportTest, LEVEL1_TestTransportReadInvisibleUntilOwnershipEvidence)
+{
+    std::shared_ptr<ObjectClient> writer;
+    InitTestClient(0, writer);
+    ConnectOptions transportOptions;
+    InitConnectOpt(0, transportOptions);
+    transportOptions.enableLocalCache = false;
+    transportOptions.requestTimeoutMs = 20000;
+    auto reader = std::make_shared<ObjectClient>(transportOptions);
+    DS_ASSERT_OK(reader->Init());
+
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    std::vector<std::string> worker0Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 2, worker0Keys);
+    std::vector<std::string> preservedData = { GenRandomString(1024), GenRandomString(1024) };
+    CreateAndSealObject(writer, worker0Keys[0], preservedData[0]);
+    CreateAndSealObject(writer, worker0Keys[1], preservedData[1]);
+
+    std::vector<Optional<Buffer>> buffers;
+    DS_ASSERT_OK(reader->Get(worker0Keys, 0, buffers));
+    ASSERT_TRUE(NotExistsNone(buffers));
+    AssertBufferEqual(*buffers[0], preservedData[0]);
+    AssertBufferEqual(*buffers[1], preservedData[1]);
+
+    const std::string readPause = "worker.worker_worker_read_before_admission";
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, readPause, "pause()"));
+    auto inFlightRead = std::async(std::launch::async, [&]() {
+        std::vector<Optional<Buffer>> inFlightBuffers;
+        return reader->Get(worker0Keys, 0, inFlightBuffers);
+    });
+    bool readPauseActive = true;
+    Raii clearReadPause([&]() {
+        if (readPauseActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, readPause), "clear transport read pause");
+        }
+    });
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, readPause, executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY, "transport read has not reached handler yet");
+            return Status::OK();
+        },
+        "transport read pauses after entry admission");
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServer.LocalBackendIsolationCandidate", "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServer.AfterMarkLocalIsolated", "call()"));
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetLeaseExpiredMs", "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(
+                WORKER, 0, "WorkerOCServer.LocalBackendIsolationCandidate", executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY, "worker is not locally isolated yet");
+            return Status::OK();
+        },
+        "transport data owner enters local isolation");
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "WorkerOCServer.AfterMarkLocalIsolated",
+                                                                   executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY, "transport admission has not closed yet");
+            return Status::OK();
+        },
+        "transport admission closes before paused read resumes");
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, readPause));
+    readPauseActive = false;
+    ASSERT_EQ(inFlightRead.get().GetCode(), K_NOT_READY);
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", "1*pause"));
+    bool recoveryPauseActive = true;
+    Raii clearRecoveryPause([&]() {
+        if (recoveryPauseActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning"),
+                         "clear transport recovery evidence pause");
+        }
+    });
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "GetLeaseExpiredMs"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"));
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(
+                WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY, "recovery evidence gate has not run yet");
+            return Status::OK();
+        },
+        "transport recovery reaches the evidence gate");
+    buffers.clear();
+    ASSERT_EQ(reader->Get(worker0Keys, 0, buffers).GetCode(), K_NOT_READY);
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning"));
+    recoveryPauseActive = false;
+
+    AssertEventuallyOk(
+        [&]() {
+            buffers.clear();
+            auto rc = reader->Get(worker0Keys, 0, buffers);
+            if (rc.IsError()) {
+                return rc;
+            }
+            CHECK_FAIL_RETURN_STATUS(NotExistsNone(buffers), K_NOT_READY, "preserved transport object is unavailable");
+            return Status::OK();
+        },
+        "transport read reopens after ownership evidence completes");
+    AssertBufferEqual(*buffers[0], preservedData[0]);
+    AssertBufferEqual(*buffers[1], preservedData[1]);
+}
+
 TEST_F(WorkerPushMetaTest, TestWorkerTimeoutAndPushMeta)
 {
     std::shared_ptr<ObjectClient> client0;
@@ -2129,14 +3175,26 @@ TEST_F(WorkerPushMetaTest, TestWorkerTimeoutAndPushMeta)
 
     // Let hearbeat timeout and master will clear its metadata, then when worker reconnect,
     // master will ask us to send the metadata to master.
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.RunKeepAliveTask", "return(K_RPC_UNAVAILABLE)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.KeepAlive.send", "pause()"));
+    DS_ASSERT_OK(
+        cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetLeaseExpiredMs", "call(1000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
 
     std::this_thread::sleep_for(std::chrono::seconds(nodeDeadTimeout_ + 1));
-    cluster_->ClearInjectAction(WORKER, 0, "worker.RunKeepAliveTask");
-    cluster_->ClearInjectAction(WORKER, 0, "worker.KeepAlive.send");
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "GetLeaseExpiredMs"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"));
     std::this_thread::sleep_for(std::chrono::seconds(nodeDeadTimeout_));
+    AssertEventuallyOk(
+        [&]() {
+            std::shared_ptr<Buffer> probe;
+            CreateParam param;
+            RETURN_IF_NOT_OK(client0->Create("worker_timeout_recovery_probe", 1, param, probe));
+            uint8_t value = 1;
+            RETURN_IF_NOT_OK(probe->MemoryCopy(&value, sizeof(value)));
+            return probe->Publish();
+        },
+        "worker timeout recovery completes before push-meta validation");
 
     for (size_t i = 0; i < num; ++i) {
         DS_ASSERT_OK(buffers[i]->Seal());

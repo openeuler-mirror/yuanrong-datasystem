@@ -2027,6 +2027,27 @@ TEST_F(SlotStoreTest, SlotClientDeleteAllVersionsMakesKeyInvisible)
     ASSERT_EQ(client.GetWithoutVersion("tenant/keyG", 1000, 0, content).GetCode(), StatusCode::K_NOT_FOUND_IN_L2CACHE);
 }
 
+TEST_F(SlotStoreTest, SlotClientBoundedDeletePreservesNewerVersion)
+{
+    SlotClient client(baseDir_);
+    ASSERT_TRUE(client.Init().IsOk());
+
+    auto body1 = std::make_shared<std::stringstream>();
+    *body1 << "v1";
+    ASSERT_TRUE(client.Save("tenant/bounded-delete", 1, 1000, body1).IsOk());
+    auto body2 = std::make_shared<std::stringstream>();
+    *body2 << "v2";
+    ASSERT_TRUE(client.Save("tenant/bounded-delete", 2, 1000, body2).IsOk());
+
+    ASSERT_TRUE(client.Delete("tenant/bounded-delete", 1, false).IsOk());
+
+    auto oldContent = std::make_shared<std::stringstream>();
+    EXPECT_EQ(client.Get("tenant/bounded-delete", 1, 1000, oldContent).GetCode(), StatusCode::K_NOT_FOUND_IN_L2CACHE);
+    auto newContent = std::make_shared<std::stringstream>();
+    ASSERT_TRUE(client.Get("tenant/bounded-delete", 2, 1000, newContent).IsOk());
+    EXPECT_EQ(ReadAll(newContent), "v2");
+}
+
 TEST_F(SlotStoreTest, SlotClientCompactSlotWorks)
 {
     SlotClient client(baseDir_);

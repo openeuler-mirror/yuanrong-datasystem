@@ -178,6 +178,10 @@ def _index_inside_quoted_string(line: str, index: int) -> bool:
 
 def _credential_assignment_is_sensitive(line: str) -> bool:
     stripped_line = line.strip()
+    if re.match(r"^[+-]?\s*#\s*include\b", stripped_line):
+        return False
+    if re.match(r"^[+-]?\s*using\s+namespace\s+::?[A-Za-z_][A-Za-z0-9_:]*\s*;", stripped_line):
+        return False
     for match in CREDENTIAL_KEY_RE.finditer(line):
         if _index_inside_quoted_string(line, match.start()):
             continue

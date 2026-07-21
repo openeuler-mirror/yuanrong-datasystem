@@ -20,6 +20,7 @@
 #include "datasystem/worker/object_cache/async_send_manager.h"
 
 #include <chrono>
+#include <cstddef>
 #include <mutex>
 #include <shared_mutex>
 #include <utility>
@@ -100,7 +101,7 @@ Status AsyncSendManager::Sender(int threadNum, const std::shared_ptr<BlockingLis
         // 1. pop key
         std::shared_ptr<Element> element;
         static const int timeoutMs = 1000;
-        Status rc = list->Poll(element, timeoutMs);
+        Status rc = list->Poll(element, timeoutMs, true);
         if (rc.GetCode() == K_TRY_AGAIN || element == nullptr) {
             continue;
         }
@@ -122,7 +123,12 @@ Status AsyncSendManager::Sender(int threadNum, const std::shared_ptr<BlockingLis
                 }
                 return Status::OK();
             });
-            rc = LockAndSendToRemote(objectKey, entry, element->beginAsync);
+            if (!list->BeginPersistence(objectKey)) {
+                rc = Status(K_NOT_FOUND, FormatString("Async upload of %s was cancelled", objectKey));
+                break;
+            }
+            rc = LockAndSendToRemote(objectKey, entry, element->beginAsync,
+                                     [&list, &objectKey] { list->FinishPersistence(objectKey); });
             if (rc.IsOk() || rc.GetCode() == StatusCode::K_NOT_FOUND) {
                 break;
             }
@@ -133,16 +139,16 @@ Status AsyncSendManager::Sender(int threadNum, const std::shared_ptr<BlockingLis
         }
         element->promise.set_value(rc);
         (void)sendingCount_.fetch_sub(1);
+        list->Finish(objectKey);
     }
     return Status::OK();
 }
 
 Status AsyncSendManager::RLockAndSendToRemote(const std::string &objectKey, std::shared_ptr<SafeObjType> entryPtr,
-                                              bool &objIsValidInMem,
+                                              bool &objIsValidInMem, uint64_t &createTime,
                                               std::chrono::time_point<std::chrono::steady_clock> &beginTime)
 {
     auto &entry = *entryPtr;
-    uint64_t createTime;
     WriteMode writeMode = WriteMode::NONE_L2_CACHE;
     uint32_t ttlSecond = 0;
     auto buf = std::make_shared<std::stringstream>();
@@ -171,9 +177,7 @@ Status AsyncSendManager::RLockAndSendToRemote(const std::string &objectKey, std:
         ttlSecond = entry->GetTtlSecond();
         dataSize = entry->GetDataSize();
     }
-    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, writeMode, ttlSecond,
-                                        beginTime));
-    return AfterSendToRemote(objectKey, entry, createTime);
+    return SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, writeMode, ttlSecond, beginTime);
 }
 
 Status AsyncSendManager::SendToRemoteOnLock(const std::string &objectKey, std::shared_ptr<std::stringstream> buf,
@@ -196,20 +200,57 @@ Status AsyncSendManager::SendToRemoteOnLock(const std::string &objectKey, std::s
     return Status::OK();
 }
 
-Status AsyncSendManager::LockAndSendToRemote(const std::string &objectKey, std::shared_ptr<SafeObjType> entryPtr,
-                                             std::chrono::time_point<std::chrono::steady_clock> &beginTime)
+Status AsyncSendManager::PrepareRemoteSendBuffer(const std::string &objectKey,
+                                                 const std::shared_ptr<SafeObjType> &entryPtr,
+                                                 std::shared_ptr<std::stringstream> &buf, std::unique_ptr<char[]> &data,
+                                                 uint64_t &dataSize)
 {
+    auto &entry = *entryPtr;
+    dataSize = entry->GetDataSize();
+    if (entry->IsSpilled() && entry->GetShmUnit() == nullptr) {
+        try {
+            data = std::make_unique<char[]>(dataSize);
+        } catch (const std::bad_alloc &e) {
+            RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, e.what());
+        }
+        LOG(INFO) << FormatString("Object %s spilled to disk, prepare to get from disk.", objectKey);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Get(objectKey, data.get(), dataSize, 0UL),
+                                         FormatString("Read spilled object failed. objectKey:%s", objectKey));
+        buf->rdbuf()->pubsetbuf(data.get(), static_cast<std::streamsize>(dataSize));
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(entry->GetShmUnit() != nullptr, StatusCode::K_NOT_FOUND,
+                                         FormatString("Object %s is not found, ignore save to l2cache.", objectKey));
+    auto dataPointer = static_cast<std::byte *>(entry->GetShmUnit()->GetPointer()) + entry->GetMetadataSize();
+    buf->write(reinterpret_cast<const char *>(dataPointer), static_cast<std::streamsize>(entry->GetDataSize()));
+    return Status::OK();
+}
+
+Status AsyncSendManager::LockAndSendToRemote(const std::string &objectKey, std::shared_ptr<SafeObjType> entryPtr,
+                                             std::chrono::time_point<std::chrono::steady_clock> &beginTime,
+                                             const std::function<void()> &persistenceDone)
+{
+    bool persistenceFinished = false;
+    auto finishPersistence = [&] {
+        if (!persistenceFinished) {
+            persistenceFinished = true;
+            persistenceDone();
+        }
+    };
+    Raii ensurePersistenceFinished(finishPersistence);
     INJECT_POINT("worker.before_send_to_remote");
     // first, try the RLock instead of WLock to allow read the data parallel, not block by other reader.
     bool objIsValidInMem = true;
-    Status memGetRes = RLockAndSendToRemote(objectKey, entryPtr, objIsValidInMem, beginTime);
+    uint64_t createTime = 0;
+    Status memGetRes = RLockAndSendToRemote(objectKey, entryPtr, objIsValidInMem, createTime, beginTime);
     if (objIsValidInMem) {
-        return memGetRes;
+        finishPersistence();
+        RETURN_IF_NOT_OK(memGetRes);
+        return AfterSendToRemote(objectKey, *entryPtr, createTime);
     }
 
     // use TryWLock load object from disk for the first step failed because of object not in memory,
     auto &entry = *entryPtr;
-    uint64_t createTime;
     WriteMode writeMode = WriteMode::NONE_L2_CACHE;
     uint32_t ttlSecond = 0;
     std::unique_ptr<char[]> data;
@@ -218,37 +259,14 @@ Status AsyncSendManager::LockAndSendToRemote(const std::string &objectKey, std::
     {
         RETURN_IF_NOT_OK(entryPtr->TryWLock());
         Raii wUnlock([&entryPtr]() { entryPtr->WUnlock(); });
-        dataSize = entry->GetDataSize();
-        if (entry->IsSpilled()) {
-            if (entry->GetShmUnit() == nullptr) {
-                try {
-                    data = std::make_unique<char[]>(dataSize);
-                } catch (const std::bad_alloc &e) {
-                    RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, e.what());
-                }
-                LOG(INFO) << FormatString("Object %s spilled to disk, prepare to get from disk.", objectKey);
-                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Get(objectKey, data.get(), dataSize, 0ul),
-                                                 FormatString("Read spilled object failed. objectKey:%s", objectKey));
-                // zero copy.
-                buf->rdbuf()->pubsetbuf(data.get(), dataSize);
-            }
-        } else {
-            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-                entry->GetShmUnit() != nullptr, StatusCode::K_NOT_FOUND,
-                FormatString("Object %s is not found, ignore save to l2cache.", objectKey));
-        }
-
-        // Copy from shared memory.
-        if (entry->GetShmUnit() != nullptr) {
-            buf->write(static_cast<char *>(entry->GetShmUnit()->GetPointer()) + entry->GetMetadataSize(),
-                       entry->GetDataSize());
-        }
+        RETURN_IF_NOT_OK(PrepareRemoteSendBuffer(objectKey, entryPtr, buf, data, dataSize));
         createTime = entry->GetCreateTime();
         writeMode = entry->modeInfo.GetWriteMode();
         ttlSecond = entry->GetTtlSecond();
     }
-    RETURN_IF_NOT_OK(SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, writeMode, ttlSecond,
-                                        beginTime));
+    auto rc = SendToRemoteOnLock(objectKey, std::move(buf), createTime, dataSize, writeMode, ttlSecond, beginTime);
+    finishPersistence();
+    RETURN_IF_NOT_OK(rc);
     return AfterSendToRemote(objectKey, entry, createTime);
 }
 
@@ -287,9 +305,8 @@ void AsyncSendManager::TryEvict(const std::string &objectKey, uint64_t needSize)
 {
     auto memOccupied =
         static_cast<double>(datasystem::memory::Allocator::Instance()->GetTotalRealMemoryUsage() + needSize);
-    auto memThreshold =
-        static_cast<double>(datasystem::memory::Allocator::Instance()->GetMaxMemorySize())
-        * GetEvictionHighWaterFactor();
+    auto memThreshold = static_cast<double>(datasystem::memory::Allocator::Instance()->GetMaxMemorySize())
+                        * GetEvictionHighWaterFactor();
     LOG(INFO) << FormatString("Allocate memory for %s, size = %ld, memOccupied = %ld, memThreshold = %ld", objectKey,
                               needSize, memOccupied, memThreshold);
     if (memOccupied >= memThreshold) {
@@ -367,6 +384,13 @@ void AsyncSendManager::Remove(const std::string &objectKey)
     (void)queues_[index]->Remove(objectKey);
 }
 
+Status AsyncSendManager::CancelAndWait(const std::string &objectKey, uint64_t timeoutMs)
+{
+    size_t index = ObjectKey2QueueIndex(objectKey);
+    VLOG(1) << FormatString("AsyncSendManager cancel and wait for key %s in list %zu", objectKey, index);
+    return queues_[index]->CancelAndWait(objectKey, timeoutMs);
+}
+
 size_t AsyncSendManager::ObjectKey2QueueIndex(const std::string &objectKey) const
 {
     std::hash<std::string> hash;
@@ -406,7 +430,7 @@ bool AsyncSendManager::CheckHealth() const
     INJECT_POINT("AsyncSendManager.CheckHealth", []() { return false; });
     uint64_t successTimoutSeconds = 120;
     INJECT_POINT("AsyncSendManager.CheckHealth.modify_timout", [&successTimoutSeconds]() {
-        successTimoutSeconds = 1; // reduce to 1s for test.
+        successTimoutSeconds = 1;  // reduce to 1s for test.
         return true;
     });
 

@@ -18,9 +18,6 @@
  * Description: Tests worker-scoped slot integration.
  */
 
-#include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
-#include "datasystem/worker/worker_oc_server.h"
-
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -28,6 +25,12 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include "datasystem/worker/object_cache/slot_recovery_orchestrator.h"
+#define private public
+#include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
+#include "datasystem/worker/worker_oc_server.h"
+#undef private
 
 #include "common.h"
 #include "datasystem/common/l2cache/persistence_api.h"
@@ -37,6 +40,7 @@
 #include "datasystem/common/l2cache/slot_client/slot.h"
 #include "datasystem/common/l2cache/slot_client/slot_manifest.h"
 #include "datasystem/common/util/file_util.h"
+#include "tests/ut/worker/object_cache/test_metadata_route.h"
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(sfs_path);

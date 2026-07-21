@@ -133,6 +133,7 @@ ds_cc_library(
         "//src/datasystem/worker:authenticate",
         "//src/datasystem/worker/client_manager",
         "//src/datasystem/worker:worker_health_check",
+        "//src/datasystem/worker/runtime:worker_runtime_core",
     ],
 )
 
@@ -172,11 +173,9 @@ ds_cc_library(
     name = "worker_oc_server",
     srcs = [
         "worker_oc_server.cpp",
-        "worker_topology_phase_callbacks.cpp",
     ],
     hdrs = [
         "worker_oc_server.h",
-        "worker_topology_phase_callbacks.h",
     ],
     deps = [
         "//include/datasystem/utils:utils_headers",
@@ -196,6 +195,9 @@ ds_cc_library(
         "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:rebalance_executor",
+        "//src/datasystem/worker/object_cache:worker_control_backend_probe",
+        "//src/datasystem/worker/runtime:worker_runtime_core",
+        "//src/datasystem/worker/runtime:worker_topology_phase_callbacks",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/object_cache:object_base",

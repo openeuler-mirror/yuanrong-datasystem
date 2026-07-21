@@ -73,6 +73,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/protos:object_posix_cc_proto",
         "//src/datasystem/protos:object_posix_zmq_cc_proto",
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache:async_update_location_manager",
         "//src/datasystem/worker/object_cache:cache_hit_info",

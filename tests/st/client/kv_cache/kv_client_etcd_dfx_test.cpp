@@ -16,8 +16,12 @@
  */
 
 #include <gtest/gtest.h>
+#include <chrono>
 #include <memory>
+#include <netdb.h>
 #include <string>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 #include "client/kv_cache/kv_client_scale_common.h"
 #include "cluster/base_cluster.h"
@@ -31,6 +35,48 @@
 
 namespace datasystem {
 namespace st {
+namespace {
+Status TryConnectTcpPort(const HostPort &addr)
+{
+    struct addrinfo hints = {};
+    hints.ai_family = addr.IsIPv6() ? AF_INET6 : AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
+
+    struct addrinfo *rawResult = nullptr;
+    auto port = std::to_string(addr.Port());
+    auto ret = getaddrinfo(addr.Host().c_str(), port.c_str(), &hints, &rawResult);
+    CHECK_FAIL_RETURN_STATUS(ret == 0, K_RUNTIME_ERROR,
+                             FormatString("Resolve address %s failed: %s", addr.ToString(), gai_strerror(ret)));
+    std::unique_ptr<struct addrinfo, decltype(&freeaddrinfo)> result(rawResult, freeaddrinfo);
+
+    for (auto *item = result.get(); item != nullptr; item = item->ai_next) {
+        auto fd = socket(item->ai_family, item->ai_socktype, item->ai_protocol);
+        if (fd < 0) {
+            continue;
+        }
+        auto connRet = connect(fd, item->ai_addr, item->ai_addrlen);
+        close(fd);
+        if (connRet == 0) {
+            return Status::OK();
+        }
+    }
+    RETURN_STATUS(K_NOT_READY, FormatString("Address %s is not listening", addr.ToString()));
+}
+
+bool WaitForTcpPortListening(const HostPort &addr, std::chrono::milliseconds timeout)
+{
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    do {
+        if (TryConnectTcpPort(addr).IsOk()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+}  // namespace
+
 class KVClientEtcdDfxTest : public KVClientScaleCommon {
 public:
     void SetUp() override
@@ -152,6 +198,51 @@ TEST_F(KVClientEtcdDfxTest, LEVEL1_TestEtcdRestart)
     client.reset();
 }
 
+TEST_F(KVClientEtcdDfxTest, LEVEL1_TestStartingWorkerRejectsClientSetupBeforeReady)
+{
+    const int workerIndex = 0;
+    DS_ASSERT_OK(externalCluster_->StartWorker(
+        workerIndex, HostPort(),
+        " -inject_actions=test.start.notWait:call(0);worker.PreShutDown.skip:return(K_OK);"
+        "master.disableRocksDb:1*call();WorkerRecoveryController.BeforeMarkRunning:1*sleep(6000)"));
+
+    HostPort workerAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
+    ASSERT_TRUE(WaitForTcpPortListening(workerAddress, std::chrono::seconds(5)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+
+    ConnectOptions blockedOptions;
+    InitConnectOpt(workerIndex, blockedOptions, 500);
+    auto blockedClient = std::make_shared<KVClient>(blockedOptions);
+    auto blockedRc = blockedClient->Init();
+    EXPECT_EQ(blockedRc.GetCode(), StatusCode::K_NOT_READY) << blockedRc.ToString();
+
+    WaitAllMembersJoinClusterTopology(1, 20);
+    WaitTopologyTasksDrained({ workerIndex }, 20);
+
+    std::shared_ptr<KVClient> readyClient;
+    Status readyRc(StatusCode::K_NOT_READY, "ready client init has not been attempted");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    do {
+        ConnectOptions readyOptions;
+        InitConnectOpt(workerIndex, readyOptions, 2000);
+        readyClient = std::make_shared<KVClient>(readyOptions);
+        readyRc = readyClient->Init();
+        if (readyRc.IsOk()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    } while (std::chrono::steady_clock::now() < deadline);
+    DS_ASSERT_OK(readyRc);
+
+    const std::string key = "startup_admission_" + GetStringUuid();
+    const std::string value = "ready";
+    DS_ASSERT_OK(readyClient->Set(key, value));
+    std::string got;
+    DS_ASSERT_OK(readyClient->Get(key, got));
+    EXPECT_EQ(got, value);
+}
+
 TEST_F(KVClientEtcdDfxTest, DISABLED_TestWatchEventLost)
 {
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady(
@@ -234,8 +325,8 @@ TEST_F(KVClientEtcdDfxTestAdjustNodeTimeout, TestSetHealthProbe)
 {
     DS_ASSERT_OK(externalCluster_->StartWorkerAndWaitReady({ 0, 1, 2 }));
     DS_ASSERT_OK(externalCluster_->ShutdownNode(WORKER, 1));
-    DS_ASSERT_OK(externalCluster_->StartWorker(
-        1, HostPort(), " -inject_actions=worker.RunKeepAliveTask:3*return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(externalCluster_->StartWorker(1, HostPort(),
+                                               " -inject_actions=worker.RunKeepAliveTask:3*return(K_RPC_UNAVAILABLE)"));
     constexpr int recoveryWindowSec = 15;
     DS_ASSERT_OK(externalCluster_->WaitNodeReady(WORKER, 1, recoveryWindowSec));
 }

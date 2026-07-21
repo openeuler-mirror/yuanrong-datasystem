@@ -107,10 +107,12 @@
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/object_cache_recovery_state.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/verify_leaving_state.h"
+#include "datasystem/worker/object_cache/worker_recovery_evidence_adapter.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/worker_health_check.h"
 
@@ -277,12 +279,11 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
                                          std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<AkSkManager> manager,
                                          std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                                          std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
-                                         MasterOCServiceImpl *masterOCService,
-                                         cluster::TopologyEngine *topologyEngine,
+                                         cluster::ICoordinationBackend *coordinationBackend,
+                                         MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
                                          const worker::MetadataRouteResolver &metadataRoute,
                                          const cluster::MembershipEndpointView &membership,
-                                         const std::atomic<bool> *exitRequested,
-                                         bool isRestart,
+                                         const std::atomic<bool> *exitRequested, bool isRestart,
                                          bool controlBackendAvailableAtStartup)
     : WorkerOCService(std::move(serverAddr)),
       localMasterAddress_(std::move(masterAddr)),
@@ -290,6 +291,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
       objectTable_(std::move(objectTable)),
       evictionManager_(std::move(evictionManager)),
       etcdStore_(etcdStore),
+      coordinationBackend_(coordinationBackend),
       topologyEngine_(topologyEngine),
       metadataRoute_(metadataRoute),
       membership_(membership),
@@ -307,6 +309,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
     globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
     asyncSendManager_ = std::make_shared<AsyncSendManager>(persistApi, evictionManager_);
     slotRecoveryManager_ = std::make_shared<SlotRecoveryManager>();
+    recoveryState_ = std::make_unique<ObjectCacheRecoveryState>();
     exitFlag_ = std::make_shared<std::atomic_bool>(false);
 
     // Set async send manager and persistence api to eviction manager
@@ -344,6 +347,55 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
     for (auto &s : TenantAuthManager::Instance()->clientTokenTimer_) {
         TimerQueue::GetInstance()->Cancel(s.second);
     }
+}
+
+void WorkerOCServiceImpl::SetRuntimeFacade(worker::WorkerRuntimeFacade *runtime)
+{
+    runtime_ = runtime;
+}
+
+worker::WorkerRecoveryEvidenceReport WorkerOCServiceImpl::GetLastMetadataRecoveryEvidenceReport() const
+{
+    return recoveryState_->GetLastMetadataRecoveryEvidenceReport();
+}
+
+worker::WorkerRecoveryEvidenceReport WorkerOCServiceImpl::BuildObjectCacheRecoveryEvidenceReport(
+    uint64_t *resourceRecoveryGeneration) const
+{
+    auto metadataReport = recoveryState_->GetLastMetadataRecoveryEvidenceReport();
+    worker::WorkerRecoveryEvidenceBuilder builder;
+    const auto slotReport = slotRecoveryManager_ == nullptr
+                                ? builder.BuildReport("slot_manager_unavailable")
+                                : slotRecoveryManager_->BuildSlotRecoveryEvidenceReportFromStore();
+    const auto resourceSnapshot = recoveryState_->GetResourceRecoverySnapshot();
+    if (resourceRecoveryGeneration != nullptr) {
+        *resourceRecoveryGeneration = resourceSnapshot.generation;
+    }
+    const bool memoryReady =
+        !resourceSnapshot.memoryRequired
+        || (evictionManager_ != nullptr && evictionManager_->IsResourceRecovered(CacheType::MEMORY));
+    const bool diskReady = !resourceSnapshot.diskRequired
+                           || (memory::Allocator::Instance()->IsDiskAvailable() && evictionManager_ != nullptr
+                               && evictionManager_->IsResourceRecovered(CacheType::DISK));
+    const bool resourceReady = memoryReady && diskReady;
+    return object_cache::BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, resourceReady);
+}
+
+worker::WorkerRecoveryGeneration WorkerOCServiceImpl::BeginRecoveryEvidenceGeneration(std::string detail)
+{
+    return recoveryState_->BeginRecoveryEvidenceGeneration(std::move(detail));
+}
+
+worker::WorkerRecoveryEvidenceReport WorkerOCServiceImpl::BuildObjectCacheRecoveryEvidenceReport(
+    worker::WorkerRecoveryGeneration generation) const
+{
+    return recoveryState_->TrackEvidenceForGeneration(generation, BuildObjectCacheRecoveryEvidenceReport());
+}
+
+bool WorkerOCServiceImpl::PublishResourceRecoveryIfCurrent(uint64_t resourceRecoveryGeneration,
+                                                           const std::function<bool()> &publish)
+{
+    return recoveryState_->PublishResourceRecoveryIfCurrent(resourceRecoveryGeneration, publish);
 }
 
 Status WorkerOCServiceImpl::InitL2Cache()
@@ -384,26 +436,27 @@ void WorkerOCServiceImpl::InitServiceImpl()
     };
     createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, akSkManager_, localAddress_);
 
-    publishProc_ = std::make_shared<WorkerOcServicePublishImpl>(param, memCpyThreadPool_, akSkManager_,
-                                                                localAddress_);
+    publishProc_ = std::make_shared<WorkerOcServicePublishImpl>(param, memCpyThreadPool_, akSkManager_, localAddress_);
 
-    multiPublishProc_ = std::make_shared<WorkerOcServiceMultiPublishImpl>(param, memCpyThreadPool_,
-                                                                          threadPool_, akSkManager_, localAddress_);
+    multiPublishProc_ = std::make_shared<WorkerOcServiceMultiPublishImpl>(param, memCpyThreadPool_, threadPool_,
+                                                                          akSkManager_, localAddress_);
 
     migrateRateController_ =
         std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-    getProc_ =
-        std::make_shared<WorkerOcServiceGetImpl>(param, etcdStore_, memCpyThreadPool_, threadPool_,
-                                                 akSkManager_, localAddress_, migrateRateController_);
+    getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, coordinationBackend_, memCpyThreadPool_, threadPool_,
+                                                        akSkManager_, localAddress_, migrateRateController_);
 
-    deleteProc_ =
-        std::make_shared<WorkerOcServiceDeleteImpl>(param, akSkManager_, localAddress_, getProc_);
+    deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, akSkManager_, localAddress_, getProc_);
 
-    gRefProc_ = std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_,
-                                                                     akSkManager_, localAddress_);
+    gRefProc_ =
+        std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_, akSkManager_, localAddress_);
 
-    gMigrateProc_ = std::make_shared<WorkerOcServiceMigrateImpl>(
-        param, memCpyThreadPool_, akSkManager_, GetLocalAddr().ToString(), migrateRateController_);
+    gMigrateProc_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, memCpyThreadPool_, akSkManager_,
+                                                                 GetLocalAddr().ToString(), migrateRateController_);
+    gMigrateProc_->SetOutOfMemoryHandler(
+        [this](const Status &rc, const std::string &operation, memory::CacheType cacheType) {
+            MarkOutOfMemoryIfNeeded(rc, operation, cacheType);
+        });
 
     expireProc_ = std::make_shared<WorkerOcServiceExpireImpl>(param, akSkManager_);
     initOk_.set_value(Status::OK());
@@ -466,20 +519,20 @@ Status WorkerOCServiceImpl::InitThreadResources()
 Status WorkerOCServiceImpl::InitRecoveryServices()
 {
     MetaDataRecoveryManager::ClusterAccess clusterAccess;
-    clusterAccess.checkConnection = [this](const HostPort &addr) {
-        return endpointPolicy_.CheckEndpoint(addr, false);
-    };
-    metadataRecoveryManager_ =
-        std::make_unique<MetaDataRecoveryManager>(localAddress_, objectTable_, std::move(clusterAccess),
-                                                  workerMasterApiManager_, metadataRoute_, metadataSize_,
-                                                  evictionManager_, memCpyThreadPool_);
+    clusterAccess.checkConnection = [this](const HostPort &addr) { return endpointPolicy_.CheckEndpoint(addr, false); };
+    metadataRecoveryManager_ = std::make_unique<MetaDataRecoveryManager>(
+        localAddress_, objectTable_, std::move(clusterAccess), workerMasterApiManager_, metadataRoute_, metadataSize_,
+        evictionManager_, memCpyThreadPool_);
     AsyncResourceReleaser::Instance().Init(objectTable_);
     InitServiceImpl();
-    NodeSelector::Instance().Init(localAddress_.ToString(), membership_, exitRequested_,
-                                  workerMasterApiManager_);
+    NodeSelector::Instance().Init(localAddress_.ToString(), membership_, exitRequested_, workerMasterApiManager_);
     getProc_->Init();
-    RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, membership_, persistenceApi_,
-                                                workerMasterApiManager_, etcdStore_, metadataRecoveryManager_.get()));
+    std::shared_ptr<SlotRecoveryStore> slotRecoveryStore;
+    if (coordinationBackend_ != nullptr) {
+        slotRecoveryStore = std::make_shared<CoordinationSlotRecoveryStore>(coordinationBackend_);
+    }
+    RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, membership_, persistenceApi_, workerMasterApiManager_,
+                                                std::move(slotRecoveryStore), metadataRecoveryManager_.get()));
     clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
         objectTable_, globalRefTable_, workerMasterApiManager_, gRefProc_, deleteProc_, metadataRecoveryManager_.get(),
         metadataRoute_, endpointPolicy_, localAddress_.ToString());
@@ -498,7 +551,8 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
 {
     INJECT_POINT("worker.HealthCheck.begin");
     ReadLock noRecon;
-    auto rc = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
+    auto rc = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
+                                  worker::WorkerAdmissionKind::DIAGNOSTIC_RPC);
     if (rc.IsError()) {
         LOG(WARNING) << rc;
         return rc;
@@ -507,7 +561,13 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
         std::string tenantId;
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
     }
-    (void)resp;
+    if (runtime_ != nullptr) {
+        const auto snapshot = runtime_->GetSnapshot();
+        resp.set_worker_service_mode(worker::ToString(snapshot.mode));
+        resp.set_worker_service_reason(worker::ToString(snapshot.reason));
+        resp.set_worker_recovery_phase(worker::ToString(snapshot.recoveryPhase));
+        resp.set_recovery_evidence_mask(worker::RecoveryEvidenceMask(snapshot.evidence));
+    }
     if (exitRequested_ != nullptr && exitRequested_->load()) {
         constexpr int logInterval = 60;
         LOG_EVERY_T(INFO, logInterval) << "[HealthCheck] Worker is exiting now";
@@ -723,8 +783,7 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
     std::vector<std::string> waitIds;
     std::vector<std::string> l2Ids;
     RETURN_IF_NOT_OK(SelectTopologyScaleInObjects(copies, primaries));
-    RETURN_IF_NOT_OK(
-        PrepareTopologyScaleInData(copies, primaries, migrateIds, waitIds, l2Ids, businessOperationId));
+    RETURN_IF_NOT_OK(PrepareTopologyScaleInData(copies, primaries, migrateIds, waitIds, l2Ids, businessOperationId));
     RETURN_IF_NOT_OK(MigrateData(migrateIds, action.taskId, deadline, cancellation));
     std::vector<std::string> failures;
     GroupAndRemoveMeta(migrateIds, master::RemoveMetaReqPb::NORMAL, failures, migrateIds, waitIds, l2Ids,
@@ -742,9 +801,9 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::GetOrCreateTopologyScaleInCleanupState(
-    const cluster::IKeyFilter &filter, const std::string &businessOperationId,
-    std::shared_ptr<PreparedScaleInCleanupState> &state)
+Status WorkerOCServiceImpl::GetOrCreateTopologyScaleInCleanupState(const cluster::IKeyFilter &filter,
+                                                                   const std::string &businessOperationId,
+                                                                   std::shared_ptr<PreparedScaleInCleanupState> &state)
 {
     {
         std::lock_guard<std::mutex> lock(topologyScaleInCleanupMutex_);
@@ -780,8 +839,7 @@ Status WorkerOCServiceImpl::GetOrCreateTopologyScaleInCleanupState(
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::AuthorizeTopologyScaleInCleanup(
-    const std::shared_ptr<PreparedScaleInCleanupState> &state)
+Status WorkerOCServiceImpl::AuthorizeTopologyScaleInCleanup(const std::shared_ptr<PreparedScaleInCleanupState> &state)
 {
     std::lock_guard<std::mutex> lock(topologyScaleInCleanupMutex_);
     state->authorized = true;
@@ -802,9 +860,10 @@ Status WorkerOCServiceImpl::ApplyTopologyCleanupEffects(const std::vector<std::s
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::ApplyTopologyScaleInCleanup(
-    const std::string &businessOperationId, const std::shared_ptr<PreparedScaleInCleanupState> &state,
-    std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
+Status WorkerOCServiceImpl::ApplyTopologyScaleInCleanup(const std::string &businessOperationId,
+                                                        const std::shared_ptr<PreparedScaleInCleanupState> &state,
+                                                        std::chrono::steady_clock::time_point deadline,
+                                                        const cluster::CancellationToken &cancellation)
 {
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology cleanup cancelled");
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
@@ -847,9 +906,7 @@ Status WorkerOCServiceImpl::PrepareTopologyScaleInCleanup(const cluster::Topolog
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology cleanup cancelled");
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "topology cleanup deadline exceeded");
-    authorize = [this, state] {
-        return AuthorizeTopologyScaleInCleanup(state);
-    };
+    authorize = [this, state] { return AuthorizeTopologyScaleInCleanup(state); };
     apply = [this, businessOperationId, state](std::chrono::steady_clock::time_point applyDeadline,
                                                const cluster::CancellationToken &applyCancellation) {
         return ApplyTopologyScaleInCleanup(businessOperationId, state, applyDeadline, applyCancellation);
@@ -857,10 +914,11 @@ Status WorkerOCServiceImpl::PrepareTopologyScaleInCleanup(const cluster::Topolog
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::SubmitTopologyFailureCleanup(
-    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
-    const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
-    const cluster::CancellationToken &cancellation)
+Status WorkerOCServiceImpl::SubmitTopologyFailureCleanup(const cluster::TopologyPhaseAction &action,
+                                                         const cluster::IKeyFilter &filter,
+                                                         const std::string &businessOperationId,
+                                                         std::chrono::steady_clock::time_point deadline,
+                                                         const cluster::CancellationToken &cancellation)
 {
     CHECK_FAIL_RETURN_STATUS(clearDataFlow_ != nullptr, K_NOT_READY, "clear-data flow is not initialized");
     return clearDataFlow_->SubmitTopologyFailureCleanup(action, filter, businessOperationId, deadline, cancellation);
@@ -934,8 +992,8 @@ Status WorkerOCServiceImpl::CloseIncomingMigrationAdmissionAndWait(std::chrono::
 
 Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId)
 {
-    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, akSkManager_, objectTable_, taskId);
+    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_, exitRequested_,
+                          localAddress_, akSkManager_, objectTable_, taskId);
     migrator.Init();
     return migrator.Migrate(objectKeys, {});
 }
@@ -944,9 +1002,9 @@ Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKe
                                         std::chrono::steady_clock::time_point deadline,
                                         const cluster::CancellationToken &cancellation)
 {
-    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, akSkManager_, objectTable_, taskId,
-                          DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
+    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_, exitRequested_,
+                          localAddress_, akSkManager_, objectTable_, taskId, DataMigrator::UNLIMITED_RETRY_COUNT,
+                          deadline, &cancellation);
     migrator.Init();
     return migrator.Migrate(objectKeys, {});
 }
@@ -954,8 +1012,8 @@ Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKe
 Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &needMigrateL2CacheIds,
                                                const std::string &taskId)
 {
-    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, akSkManager_, objectTable_, taskId);
+    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_, exitRequested_,
+                          localAddress_, akSkManager_, objectTable_, taskId);
     migrator.Init();
     return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
 }
@@ -965,9 +1023,9 @@ Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &n
                                                std::chrono::steady_clock::time_point deadline,
                                                const cluster::CancellationToken &cancellation)
 {
-    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
-                          exitRequested_, localAddress_, akSkManager_, objectTable_, taskId,
-                          DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
+    DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_, exitRequested_,
+                          localAddress_, akSkManager_, objectTable_, taskId, DataMigrator::UNLIMITED_RETRY_COUNT,
+                          deadline, &cancellation);
     migrator.Init();
     return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
 }
@@ -1041,6 +1099,11 @@ void WorkerOCServiceImpl::GetAllObjectKeys(std::vector<std::string> &objectKeys)
         objectKeys.emplace_back(kv.first);
     }
     LOG(INFO) << "GetAllObjectKeys finished, objectKeys size:" << objectKeys.size();
+}
+
+Status WorkerOCServiceImpl::GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr) const
+{
+    return metadataRoute_.ResolveOwner(objKey, masterAddr);
 }
 
 void WorkerOCServiceImpl::FillMetadata(const std::string &objectKey, const HostPort &targetMasterAddr,
@@ -1133,11 +1196,56 @@ Status WorkerOCServiceImpl::RecoverMetadataOfData(const std::vector<std::string>
 {
     if (metadataRecoveryManager_ == nullptr) {
         failedIds = objectKeys;
+        MetaDataRecoveryManager::RecoverySummary summary;
+        summary.status = Status(K_RUNTIME_ERROR, "metadataRecoveryManager is null");
+        summary.requestedCount = objectKeys.size();
+        summary.failedIds = objectKeys;
+        recoveryState_->SetMetadataRecoverySummary(summary);
         return Status(K_RUNTIME_ERROR, "metadataRecoveryManager is null");
     }
     auto summary = metadataRecoveryManager_->RecoverMetadataWithSummary(objectKeys, standbyWorker);
     failedIds = std::move(summary.failedIds);
+    recoveryState_->SetMetadataRecoverySummary(summary);
     return summary.status;
+}
+
+Status WorkerOCServiceImpl::FinishRestartMetadataRecovery(const std::string &workerAddr,
+                                                          const std::vector<std::string> &matchObjIds,
+                                                          const std::vector<std::string> &failedIds)
+{
+    CHECK_FAIL_RETURN_STATUS(clearDataFlow_ != nullptr, K_NOT_READY, "clear-data flow is not initialized");
+
+    const std::unordered_set<std::string> matchedIds(matchObjIds.begin(), matchObjIds.end());
+    std::unordered_set<std::string> seenFailedIds;
+    std::vector<std::string> uniqueFailedIds;
+    uniqueFailedIds.reserve(failedIds.size());
+    for (const auto &objectKey : failedIds) {
+        CHECK_FAIL_RETURN_STATUS(matchedIds.count(objectKey) != 0, K_RUNTIME_ERROR,
+                                 "metadata recovery returned an unknown failed object");
+        if (seenFailedIds.emplace(objectKey).second) {
+            uniqueFailedIds.emplace_back(objectKey);
+        }
+    }
+
+    const size_t initiallyRecovered = matchObjIds.size() - uniqueFailedIds.size();
+    auto result = clearDataFlow_->RetryFailedMetadataRecoveryAndClearUnrecoverable(uniqueFailedIds);
+    const size_t resolvedCount = initiallyRecovered + result.recoveredCount + result.clearedCount;
+    std::ostringstream detail;
+    detail << "metadata_recovered=" << initiallyRecovered + result.recoveredCount << "/" << matchObjIds.size()
+           << "; cleared_orphan_local=" << result.clearedCount << "; unresolved=" << result.unresolvedCount;
+    LOG(INFO) << "Restart metadata ownership reconciliation finished, restart worker: " << workerAddr << ", "
+              << detail.str();
+    if (result.unresolvedCount == 0 && result.status.IsOk() && resolvedCount == matchObjIds.size()) {
+        worker::WorkerRecoveryEvidenceBuilder builder;
+        builder.MarkMetadataReady(detail.str());
+        recoveryState_->SetMetadataRecoveryEvidenceReport(builder.BuildReport(detail.str()));
+        return Status::OK();
+    }
+    if (result.unresolvedCount == 0) {
+        return Status(K_RUNTIME_ERROR, "restart metadata ownership reconciliation result is inconsistent");
+    }
+    return result.status.IsError() ? result.status
+                                   : Status(K_RUNTIME_ERROR, "restart metadata ownership reconciliation unresolved");
 }
 
 Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &workerAddr)
@@ -1149,13 +1257,13 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
     HostPort restartedAddress;
     RETURN_IF_NOT_OK(restartedAddress.ParseString(workerAddr));
 
+    INJECT_POINT_NO_RETURN("WorkerOCServiceImpl.BeforeRestartMetadataSelection");
     MetadataRecoverySelector selector(objectTable_);
     std::vector<std::string> matchObjIds;
     selector.Select(
         [this, &restartedAddress](const std::string &objectKey) {
             HostPort metadataOwner;
-            return metadataRoute_.ResolveOwner(objectKey, metadataOwner).IsOk()
-                   && metadataOwner == restartedAddress;
+            return metadataRoute_.ResolveOwner(objectKey, metadataOwner).IsOk() && metadataOwner == restartedAddress;
         },
         true, matchObjIds);
     RETURN_OK_IF_TRUE(matchObjIds.empty());
@@ -1163,11 +1271,7 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
     std::vector<std::string> failedIds;
     std::string standbyWorker;
     auto rc = RecoverMetadataOfData(matchObjIds, failedIds, standbyWorker);
-    if (!failedIds.empty()) {
-        LOG(WARNING) << "Recover metadata after node restart has failed object keys: " << VectorToString(failedIds)
-                     << ", restartWorker: " << workerAddr;
-    }
-    return rc;
+    return failedIds.empty() ? rc : FinishRestartMetadataRecovery(workerAddr, matchObjIds, failedIds);
 }
 
 Status WorkerOCServiceImpl::ClearObject(const ClearDataReqPb &req)
@@ -1194,11 +1298,18 @@ Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs)
+Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs, worker::WorkerAdmissionKind kind)
 {
     Timer timer;
+    if (runtime_ != nullptr) {
+        RETURN_IF_NOT_OK(runtime_->CheckAdmission(kind, "ObjectCacheService"));
+    }
     if (!IsHealthy()) {
-        RETURN_STATUS(K_NOT_READY, "Worker not ready");
+        const bool runtimeAdmissionOverridesLegacyGate =
+            runtime_ != nullptr && runtime_->GetSnapshot().mode != worker::WorkerServiceMode::RUNNING;
+        if (!runtimeAdmissionOverridesLegacyGate) {
+            RETURN_STATUS(K_NOT_READY, "Worker not ready");
+        }
     }
     using namespace std::chrono;
     static const int SEC_TO_MS = 1000;
@@ -1228,6 +1339,16 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
     return Status::OK();
 }
 
+void WorkerOCServiceImpl::MarkOutOfMemoryIfNeeded(const Status &rc, const std::string &operation,
+                                                  memory::CacheType cacheType)
+{
+    if (runtime_ == nullptr || rc.GetCode() != StatusCode::K_OUT_OF_MEMORY) {
+        return;
+    }
+    recoveryState_->MarkResourceRecoveryRequired(cacheType);
+    runtime_->MarkOutOfMemory(FormatString("%s returned K_OUT_OF_MEMORY: %s", operation, rc.GetMsg()));
+}
+
 Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
 {
     ScopedRequestContext ctx;
@@ -1235,10 +1356,12 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::VerifyLeavingState(exitRequested_, FLAGS_enable_leaving_intercept),
                                      "verify leaving state failed");
     ReadLock noRecon;
+    INJECT_POINT("worker.Create.beforeValidate");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     Status rc = createProc_->Create(req, resp);
+    MarkOutOfMemoryIfNeeded(rc, "Create", static_cast<memory::CacheType>(req.cache_type()));
     if (rc.IsOk()) {
         UpdateWorkerObjectGauge(objectTable_);
         METRIC_ADD(metrics::KvMetricId::WORKER_CREATE_ALLOCATED_BYTES,
@@ -1267,6 +1390,7 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
         return returnStatus;
     }
     returnStatus = createProc_->MultiCreate(req, resp);
+    MarkOutOfMemoryIfNeeded(returnStatus, "MultiCreate");
     if (returnStatus.IsOk()) {
         UpdateWorkerObjectGauge(objectTable_);
         uint64_t totalBytes = 0;
@@ -1285,6 +1409,25 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
     return returnStatus;
 }
 
+Status WorkerOCServiceImpl::PrepareRestartReconciliation(const PushMetaToWorkerReqPb &req)
+{
+    RETURN_OK_IF_TRUE(!req.is_restart());
+    lastReconTime_ = GetSteadyClockTimeStampMs();
+    // Wait for clients just once. No need to use atomic bool since reconciliation is serialized by lock.
+    // No need to wait in case of network recovery.
+    INJECT_POINT("WorkerOCServiceImpl.Reconciliation.SkipWait", [this]() {
+        waited_ = true;
+        return Status::OK();
+    });
+    if (!waited_) {
+        const size_t s2ms = 1000;  // seconds to milliseconds.
+        clientReconnectPost_.WaitFor(FLAGS_client_reconnect_wait_s * s2ms);
+        waited_ = true;
+    }
+    ClearDisconnectedClientRefsForReconciliation();
+    return Status::OK();
+}
+
 Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
 {
     ScopedRequestContext ctx;
@@ -1301,27 +1444,13 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     Status rc;
     if (req.event_timestamp() > timestamp_) {
         numRecon_ = 0;
+        reconciledMasters_.clear();
         timestamp_ = req.event_timestamp();
     } else if (req.event_timestamp() < timestamp_) {
         LOG(WARNING) << "The request is out of date. Reconciling for later event. Timestamp: " << timestamp_;
         return Status::OK();
     }
-    ++numRecon_;
-    if (req.is_restart()) {
-        lastReconTime_ = GetSteadyClockTimeStampMs();
-        // Wait for clients just once. No need to use atomic bool since reconciliation is serialized by lock.
-        // No need to wait in case of network recovery.
-        INJECT_POINT("WorkerOCServiceImpl.Reconciliation.SkipWait", [this]() {
-            waited_ = true;
-            return Status::OK();
-        });
-        if (!waited_) {
-            const size_t s2ms = 1000;  // seconds to milliseconds.
-            clientReconnectPost_.WaitFor(FLAGS_client_reconnect_wait_s * s2ms);
-            waited_ = true;
-        }
-        ClearDisconnectedClientRefsForReconciliation();
-    }
+    RETURN_IF_NOT_OK(PrepareRestartReconciliation(req));
     // reconciliation global references with master.
     std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     std::vector<std::string> needDelGrefIds;
@@ -1336,6 +1465,9 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     } else if (FLAGS_enable_reconciliation && (req.is_restart() || !req.gref_object_keys().empty())) {
         RETURN_STATUS(K_INVALID, "Reconciliation request missing source master address.");
     }
+    if (!req.source_address().empty() && reconciledMasters_.insert(req.source_address()).second) {
+        ++numRecon_;
+    }
     LOG(INFO) << "Reconciliation with master " << req.source_address() << " is done.";
     RETURN_IF_NOT_OK(GetReadyToWork(req));
 
@@ -1347,9 +1479,15 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
     ScopedRequestContext ctx;
     int hashWorkerNum = 0;
     RETURN_IF_NOT_OK(GetExpectedReconciliationCount(hashWorkerNum));
-    if ((hashWorkerNum > 0 && numRecon_ >= hashWorkerNum) || (hashWorkerNum < 0 && numRecon_ >= 1)) {
+    const bool hasReconciledWithSource = !req.source_address().empty() && numRecon_ >= 1;
+    const bool normalTopologyReconciled =
+        (hashWorkerNum > 0 && numRecon_ >= hashWorkerNum) || (hashWorkerNum < 0 && numRecon_ >= 1);
+    const bool emptyTopologyRecoveryReconciled = hashWorkerNum == 0 && hasReconciledWithSource;
+    if (normalTopologyReconciled || emptyTopologyRecoveryReconciled) {
         LOG(INFO) << "Reconciliation with all masters is done.";
-        RETURN_IF_NOT_OK(CheckWaitTopologyReady());
+        if (!emptyTopologyRecoveryReconciled) {
+            RETURN_IF_NOT_OK(CheckWaitTopologyReady());
+        }
         if (req.is_restart()) {
             LOG(INFO) << "Restart finish. Set health file.";
             if (!topologyEngine_->HasEstablishedMemberLease() && controlBackendAvailableAtStartup_) {
@@ -1378,6 +1516,13 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
     });
 
     return Status::OK();
+}
+
+bool WorkerOCServiceImpl::HasCompleteReconciliationSet(const std::set<std::string> &expected,
+                                                       const std::unordered_set<std::string> &completed)
+{
+    return std::all_of(expected.begin(), expected.end(),
+                       [&completed](const std::string &master) { return completed.count(master) != 0; });
 }
 
 Status WorkerOCServiceImpl::ReconciliationDecrRef(const HostPort &sourceMasterAddr,
@@ -1420,8 +1565,7 @@ Status WorkerOCServiceImpl::ReconciliationIncrRef(const HostPort &sourceMasterAd
 }
 
 Status WorkerOCServiceImpl::ReconcileGlobalRefsWithSourceMaster(
-    const PushMetaToWorkerReqPb &req,
-    const std::unordered_map<std::string, std::unordered_set<ClientKey>> &refTable,
+    const PushMetaToWorkerReqPb &req, const std::unordered_map<std::string, std::unordered_set<ClientKey>> &refTable,
     const std::vector<std::string> &needDelGrefIds)
 {
     HostPort sourceMasterAddr;
@@ -1444,7 +1588,8 @@ Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterR
     ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
+                            worker::WorkerAdmissionKind::NORMAL_READ),
         "validate worker state failed");
     return getProc_->Get(serverApi);
 }
@@ -1819,7 +1964,8 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
     Timer timer;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
+                            worker::WorkerAdmissionKind::CLEANUP_RPC),
         "validate worker state failed");
     Status decResult = Status::OK();
     for (const auto &shmId : shmIds) {
@@ -1875,7 +2021,8 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
                                      "Authenticate failed");
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
+                            worker::WorkerAdmissionKind::CLEANUP_RPC),
         "validate worker state failed");
 
     std::vector<ShmKey> confirmedExpiredShmIds;
@@ -1896,7 +2043,8 @@ Status WorkerOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGR
     ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
+                            worker::WorkerAdmissionKind::CLEANUP_RPC),
         "validate worker state failed");
 
     return gRefProc_->ReleaseGRefs(req, resp);
@@ -1918,7 +2066,8 @@ Status WorkerOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRsp
     ScopedRequestContext ctx;
     ReadLock noRecon;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
+                            worker::WorkerAdmissionKind::CLEANUP_RPC),
         "validate worker state failed");
 
     return gRefProc_->GDecreaseRef(req, resp);
@@ -2236,13 +2385,58 @@ Status WorkerOCServiceImpl::ReconcileMembershipChange()
                              "No committed metadata owner is available for restart reconciliation");
     const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
     for (const auto &masterAddress : masterAddresses) {
-        LOG_IF_ERROR(ScheduleReconciliationRequest(masterAddress, eventTimestamp),
+        LOG_IF_ERROR(ScheduleReconciliationRequest(masterAddress, eventTimestamp, ReconciliationQueryPb::RESTART),
                      "Failed to schedule restart reconciliation with metadata owner " + masterAddress);
     }
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::ScheduleReconciliationRequest(const std::string &masterAddress, int64_t eventTimestamp)
+Status WorkerOCServiceImpl::ReconcileLocalIsolationOwnership()
+{
+    std::set<std::string> masterAddresses;
+    if (centralizedMetadata_) {
+        masterAddresses.emplace(localMasterAddress_.ToString());
+    } else {
+        std::vector<std::string> committedAddresses;
+        RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
+        masterAddresses.insert(committedAddresses.begin(), committedAddresses.end());
+        masterAddresses.emplace(localAddress_.ToString());
+    }
+    CHECK_FAIL_RETURN_STATUS(!masterAddresses.empty(), K_NOT_READY,
+                             "No committed metadata owner is available for local-isolation handoff");
+    const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
+    for (const auto &masterAddress : masterAddresses) {
+        LOG_IF_ERROR(
+            ScheduleReconciliationRequest(masterAddress, eventTimestamp, ReconciliationQueryPb::LOCAL_ISOLATION),
+            "Failed to schedule local-isolation ownership handoff with metadata owner " + masterAddress);
+    }
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ReconcileNetworkRecoveryOwnership()
+{
+    std::set<std::string> masterAddresses;
+    if (centralizedMetadata_) {
+        masterAddresses.emplace(localMasterAddress_.ToString());
+    } else {
+        std::vector<std::string> committedAddresses;
+        RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
+        masterAddresses.insert(committedAddresses.begin(), committedAddresses.end());
+        masterAddresses.emplace(localAddress_.ToString());
+    }
+    CHECK_FAIL_RETURN_STATUS(!masterAddresses.empty(), K_NOT_READY,
+                             "No committed metadata owner is available for network recovery");
+    const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
+    for (const auto &masterAddress : masterAddresses) {
+        LOG_IF_ERROR(
+            ScheduleReconciliationRequest(masterAddress, eventTimestamp, ReconciliationQueryPb::NETWORK_RECOVERY),
+            "Failed to schedule network recovery with metadata owner " + masterAddress);
+    }
+    return Status::OK();
+}
+
+Status WorkerOCServiceImpl::ScheduleReconciliationRequest(const std::string &masterAddress, int64_t eventTimestamp,
+                                                          ReconciliationQueryPb::EventType eventType)
 {
     CHECK_FAIL_RETURN_STATUS(threadPool_ != nullptr && workerMasterApiManager_ != nullptr, K_NOT_READY,
                              "Reconciliation runtime is unavailable");
@@ -2251,14 +2445,16 @@ Status WorkerOCServiceImpl::ScheduleReconciliationRequest(const std::string &mas
     auto api = workerMasterApiManager_->GetWorkerMasterApi(address);
     CHECK_FAIL_RETURN_STATUS(api != nullptr, K_NOT_READY, "Getting metadata owner API failed: " + masterAddress);
     auto traceId = Trace::Instance().GetTraceID();
-    RETURN_IF_EXCEPTION_OCCURS(threadPool_->Execute([api = std::move(api), eventTimestamp, traceId, masterAddress] {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        ReconciliationQueryPb req;
-        ReconciliationRspPb rsp;
-        req.set_event_timestamp(eventTimestamp);
-        LOG_IF_ERROR(api->ReconcileMembershipChange(req, rsp),
-                     "Restart reconciliation request failed for metadata owner " + masterAddress);
-    }));
+    RETURN_IF_EXCEPTION_OCCURS(
+        threadPool_->Execute([api = std::move(api), eventTimestamp, eventType, traceId, masterAddress] {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
+            ReconciliationQueryPb req;
+            ReconciliationRspPb rsp;
+            req.set_event_timestamp(eventTimestamp);
+            req.set_event_type(eventType);
+            LOG_IF_ERROR(api->ReconcileMembershipChange(req, rsp),
+                         "Reconciliation request failed for metadata owner " + masterAddress);
+        }));
     return Status::OK();
 }
 
@@ -2528,19 +2724,19 @@ Status WorkerOCServiceImpl::GetDeviceObject(
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
-    threadPool_->Execute([objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this,
-                          traceID]() mutable {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
-        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
-        if (initRc.IsError()) {
-            LOG(ERROR) << initRc.GetMsg();
-            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
-            return;
-        }
-        workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
-        LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
-    });
+    threadPool_->Execute(
+        [objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this, traceID]() mutable {
+            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+            LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
+            auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+            if (initRc.IsError()) {
+                LOG(ERROR) << initRc.GetMsg();
+                LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+                return;
+            }
+            workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
+            LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
+        });
     return Status::OK();
 }
 
@@ -2706,8 +2902,7 @@ Status WorkerOCServiceImpl::RecvRootInfo(
             LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
             return;
         }
-        LOG_IF_ERROR(workerDevOcManager_->ProcessRecvRootInfoRequest(req, serverApi),
-                     "Process RecvRootInfo failed");
+        LOG_IF_ERROR(workerDevOcManager_->ProcessRecvRootInfoRequest(req, serverApi), "Process RecvRootInfo failed");
         LOG(INFO) << "Process RecvRootInfo done";
     });
     return Status::OK();
@@ -2783,7 +2978,8 @@ Status WorkerOCServiceImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, GetOb
 {
     ReadLock noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
+                            worker::WorkerAdmissionKind::NORMAL_READ),
         "validate worker state failed");
     return getProc_->GetObjMetaInfo(req, resp);
 }
@@ -2803,7 +2999,8 @@ Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
     ScopedRequestContext ctx;
     ReadLock noReconciliation;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
+        ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
+                            worker::WorkerAdmissionKind::NORMAL_READ),
         "validate worker state failed");
     PerfPoint perfPoint(PerfKey::WORKER_EXIST);
     return getProc_->Exist(req, rsp);

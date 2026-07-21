@@ -46,6 +46,52 @@ using TopologyReadinessCheck =
 using ObjectCacheServiceProvider = std::function<object_cache::WorkerOCServiceImpl *()>;
 
 /**
+ * @brief Inject Worker-local actions triggered by topology Failure callbacks.
+ */
+class IWorkerTopologyFailureActions {
+public:
+    /**
+     * @brief Destroy the injected action interface.
+     */
+    virtual ~IWorkerTopologyFailureActions() = default;
+
+    /**
+     * @brief Run object-cache local data cleanup for one Failure callback.
+     * @param[in] context Fenced callback context.
+     * @return Cleanup status.
+     */
+    virtual Status CleanupLocalData(const cluster::TopologyCallbackContext &context) = 0;
+
+    /**
+     * @brief Drop local RPC stubs that point to the failed member.
+     * @param[in] action Failure action facts.
+     * @return Cleanup status.
+     */
+    virtual Status CleanupRpcStub(const cluster::TopologyPhaseAction &action) = 0;
+};
+
+/**
+ * @brief Default Worker failure actions backed by the Worker object-cache service and local RPC cache.
+ */
+class WorkerTopologyFailureActions final : public IWorkerTopologyFailureActions {
+public:
+    /**
+     * @brief Construct default failure actions from a late-bound object-cache service provider.
+     * @param[in] objectCacheServiceProvider Provider used after Worker service construction.
+     */
+    explicit WorkerTopologyFailureActions(ObjectCacheServiceProvider objectCacheServiceProvider);
+
+    ~WorkerTopologyFailureActions() override = default;
+
+    Status CleanupLocalData(const cluster::TopologyCallbackContext &context) override;
+
+    Status CleanupRpcStub(const cluster::TopologyPhaseAction &action) override;
+
+private:
+    ObjectCacheServiceProvider objectCacheServiceProvider_;
+};
+
+/**
  * @brief Complete Worker dependencies required by topology phase callbacks.
  */
 struct WorkerTopologyPhaseCallbackDependencies {
@@ -55,6 +101,7 @@ struct WorkerTopologyPhaseCallbackDependencies {
     MetadataManagerHolder &metadataManagers;
     ObjectCacheServiceProvider objectCacheServiceProvider;
     TopologyReadinessCheck readinessCheck;
+    std::shared_ptr<IWorkerTopologyFailureActions> failureActions;
 };
 
 /**
@@ -197,6 +244,7 @@ private:
     MetadataManagerHolder &metadataManagers_;
     ObjectCacheServiceProvider objectCacheServiceProvider_;
     TopologyReadinessCheck readinessCheck_;
+    std::shared_ptr<IWorkerTopologyFailureActions> failureActions_;
     // Protects scaleInDrainState_; peer ScaleIn task callbacks wait on scaleInDrainChanged_.
     std::mutex scaleInDrainMutex_;
     std::condition_variable scaleInDrainChanged_;

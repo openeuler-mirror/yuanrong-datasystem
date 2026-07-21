@@ -45,6 +45,9 @@ public:
 
     explicit MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable);
 
+    MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable, size_t visitBudget,
+                             std::function<void()> batchYield);
+
     static SelectionRequest BuildSelectionRequest(const ClearDataReqPb &req, bool includeL2CacheIds);
 
     Status BuildMatchFunc(const SelectionRequest &request, MatchFunc &matchFunc) const;
@@ -55,6 +58,8 @@ public:
 
 private:
     std::shared_ptr<ObjectTable> objectTable_{ nullptr };
+    size_t visitBudget_;
+    std::function<void()> batchYield_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

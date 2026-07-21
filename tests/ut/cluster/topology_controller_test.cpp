@@ -249,10 +249,17 @@ TEST(TopologyControllerTest, PreservesRestartGenerationAcrossDoorbellCoalescing)
     TopologyControllerOptions options;
     options.reconcileTick = std::chrono::milliseconds(10);
     std::atomic<size_t> restartCalls{ 0 };
+    std::atomic<size_t> recoveryCalls{ 0 };
     options.membershipRestartHandler = [&](const std::string &address, int64_t timestamp) {
         EXPECT_EQ(address, "127.0.0.1:2");
         EXPECT_EQ(timestamp, 123);
         ++restartCalls;
+        return Status::OK();
+    };
+    options.membershipRecoveryHandler = [&](const std::string &address, int64_t timestamp) {
+        EXPECT_EQ(address, "127.0.0.1:2");
+        EXPECT_EQ(timestamp, 124);
+        ++recoveryCalls;
         return Status::OK();
     };
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
@@ -272,10 +279,11 @@ TEST(TopologyControllerTest, PreservesRestartGenerationAcrossDoorbellCoalescing)
     backend.EmitEvent(
         { CoordinationEventType::PUT, eventKey, EncodeMembership(MemberLifecycleState::RECOVERING, 124), 2, 3 });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
-    while (std::chrono::steady_clock::now() < deadline && restartCalls.load() == 0) {
+    while (std::chrono::steady_clock::now() < deadline && (restartCalls.load() == 0 || recoveryCalls.load() == 0)) {
         std::this_thread::yield();
     }
     EXPECT_EQ(restartCalls.load(), 1);
+    EXPECT_EQ(recoveryCalls.load(), 1);
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 

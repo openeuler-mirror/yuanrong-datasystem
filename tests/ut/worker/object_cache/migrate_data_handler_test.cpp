@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <chrono>
+#include <future>
 #include <memory>
 #include <string>
 #include <thread>
@@ -43,12 +44,14 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
+#include "datasystem/worker/object_cache/data_migrator/data_migrator.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/async_resource_releaser.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/spill_node_selector.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
+#include "datasystem/worker/runtime/worker_runtime_state.h"
 #include "eviction_manager_common.h"
 #include "test_metadata_route.h"
 
@@ -63,6 +66,27 @@ namespace datasystem {
 namespace ut {
 
 class ScaleDownNodeSelectorTest : public CommonTest {};
+
+class TestableNodeSelector : public NodeSelector {
+public:
+    using NodeSelector::IsLocalReadyForResourceReport;
+    using NodeSelector::MaybeNotifyResourceRecovered;
+    using NodeSelector::RegisterResourceRecoveredHandler;
+    using NodeSelector::SetRuntimeFacade;
+    using NodeSelector::UnregisterResourceRecoveredHandler;
+
+    void SetResourceSnapshot(std::vector<NodeInfo> nodes)
+    {
+        std::unique_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
+        rankList_ = std::move(nodes);
+        totalSize_ = 0;
+        for (const auto &node : rankList_) {
+            if (node.isReady) {
+                totalSize_ += node.availableMemory;
+            }
+        }
+    }
+};
 
 class WorkerRemoteWorkerRpcDiagnosticTest : public CommonTest {};
 
@@ -141,7 +165,135 @@ TEST_F(ScaleDownNodeSelectorTest, TestCheckCondition)
     ASSERT_EQ(migrateStrategy.CheckCondition(rsp, CacheType::MEMORY), false);
 }
 
+TEST_F(ScaleDownNodeSelectorTest, ResourceReportReadinessFollowsRuntimeState)
+{
+    TestableNodeSelector selector;
+    worker::WorkerRuntimeFacade runtime;
+    selector.SetRuntimeFacade(&runtime);
+
+    worker::WorkerRunningEvidence evidence;
+    evidence.membershipReady = true;
+    evidence.topologyReady = true;
+    evidence.metadataReady = true;
+    evidence.slotReady = true;
+    evidence.ownershipReady = true;
+    evidence.resourceReady = true;
+    ASSERT_TRUE(runtime.RuntimeState().TryMarkRunning(evidence, "test running"));
+    EXPECT_TRUE(selector.IsLocalReadyForResourceReport());
+
+    runtime.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "local isolation");
+    EXPECT_FALSE(selector.IsLocalReadyForResourceReport());
+}
+
+TEST_F(ScaleDownNodeSelectorTest, SelectNodeSkipsUnreadyPreferredWorker)
+{
+    TestableNodeSelector selector;
+    selector.SetResourceSnapshot({
+        NodeInfo("127.0.0.1:18482", 64 * MB_TO_BYTES, true),
+        NodeInfo("127.0.0.1:18483", 128 * MB_TO_BYTES, false),
+    });
+
+    std::string selected;
+    DS_ASSERT_OK(selector.SelectNode({}, "127.0.0.1:18483", 8 * MB_TO_BYTES, selected));
+
+    EXPECT_EQ(selected, "127.0.0.1:18482");
+}
+
+TEST_F(ScaleDownNodeSelectorTest, ResourceReportsRetryOutOfMemoryRecoveryUntilRunning)
+{
+    TestableNodeSelector selector;
+    worker::WorkerRuntimeFacade runtime;
+    worker::WorkerRunningEvidence evidence{ true, true, true, true, true, true };
+    ASSERT_TRUE(runtime.RuntimeState().TryMarkRunning(evidence, "ready"));
+    selector.SetRuntimeFacade(&runtime);
+    size_t recoveryCount = 0;
+    selector.RegisterResourceRecoveredHandler([&recoveryCount] { ++recoveryCount; });
+
+    selector.MaybeNotifyResourceRecovered(0);
+    EXPECT_EQ(recoveryCount, 0U);
+    runtime.MarkOutOfMemory("allocation failed");
+    selector.MaybeNotifyResourceRecovered(0);
+    EXPECT_EQ(recoveryCount, 1U);
+    runtime.MarkRecovering(worker::WorkerIsolationReason::OUT_OF_MEMORY, "checking evidence",
+                           worker::WorkerRecoveryPhase::RESOURCE);
+    selector.MaybeNotifyResourceRecovered(0);
+    EXPECT_EQ(recoveryCount, 2U);
+    ASSERT_TRUE(runtime.RuntimeState().TryMarkRunning(evidence, "recovered"));
+    selector.MaybeNotifyResourceRecovered(0);
+    EXPECT_EQ(recoveryCount, 2U);
+    selector.UnregisterResourceRecoveredHandler();
+}
+
+TEST_F(ScaleDownNodeSelectorTest, UnregisterResourceRecoveredHandlerWaitsForActiveCallback)
+{
+    TestableNodeSelector selector;
+    worker::WorkerRuntimeFacade runtime;
+    worker::WorkerRunningEvidence evidence{ true, true, true, true, true, true };
+    ASSERT_TRUE(runtime.RuntimeState().TryMarkRunning(evidence, "ready"));
+    runtime.MarkOutOfMemory("allocation failed");
+    selector.SetRuntimeFacade(&runtime);
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+    selector.RegisterResourceRecoveredHandler([&] {
+        entered.set_value();
+        releaseFuture.wait();
+    });
+
+    auto notify = std::async(std::launch::async, [&] { selector.MaybeNotifyResourceRecovered(0); });
+    ASSERT_EQ(entered.get_future().wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    auto unregister = std::async(std::launch::async, [&] { selector.UnregisterResourceRecoveredHandler(); });
+    EXPECT_EQ(unregister.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+    release.set_value();
+    EXPECT_EQ(unregister.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_EQ(notify.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+}
+
 class DataLimiterTest : public CommonTest {
+};
+
+class RedirectOnceStrategy : public SelectionStrategy {
+public:
+    explicit RedirectOnceStrategy(std::string nextTarget) : nextTarget_(std::move(nextTarget))
+    {
+    }
+
+    Status SelectNode(const std::string &originAddr, const std::string &preferNode, size_t needSize,
+                      std::string &outNode) override
+    {
+        (void)preferNode;
+        (void)needSize;
+        selectedFrom_.push_back(originAddr);
+        outNode = nextTarget_;
+        return Status::OK();
+    }
+
+    bool CheckCondition(const MigrateDataRspPb &rsp, const CacheType &type) override
+    {
+        (void)rsp;
+        (void)type;
+        return true;
+    }
+
+    void UpdateForRedirect(const std::string &node) override
+    {
+        redirectedFrom_.push_back(node);
+    }
+
+    const std::vector<std::string> &RedirectedFrom() const
+    {
+        return redirectedFrom_;
+    }
+
+    const std::vector<std::string> &SelectedFrom() const
+    {
+        return selectedFrom_;
+    }
+
+private:
+    std::string nextTarget_;
+    std::vector<std::string> redirectedFrom_;
+    std::vector<std::string> selectedFrom_;
 };
 
 TEST_F(DataLimiterTest, TestLimiterBasicFunction)
@@ -329,6 +481,57 @@ protected:
     std::shared_ptr<WorkerRemoteWorkerOCApi> remoteApi_;
 
     std::shared_ptr<SelectionStrategy> strategy_;
+};
+
+class DataMigratorRedirectTest : public CommonTest, public EvictionManagerCommon {
+public:
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        hostPort_ = HostPort("127.0.0.1", 18481);
+        objectTable_ = std::make_shared<ObjectTable>();
+        allocator = memory::Allocator::Instance();
+        DS_ASSERT_OK(allocator->Init(maxMemorySize));
+    }
+
+    void TearDown() override
+    {
+        RELEASE_STUBS
+        objectTable_.reset();
+        if (allocator != nullptr) {
+            allocator->Shutdown();
+            allocator = nullptr;
+        }
+        CommonTest::TearDown();
+    }
+
+    void CreateObjects(const std::string &prefix, uint64_t dataSize, uint32_t count,
+                       std::vector<ImmutableString> &objectKeys)
+    {
+        for (uint32_t i = 0; i < count; ++i) {
+            std::string objectKey = prefix + std::to_string(i);
+            auto obj = std::make_unique<ObjCacheShmUnit>();
+            objectBuffers_.emplace_back(dataSize);
+            auto shmUnit = std::make_shared<ShmUnit>();
+            shmUnit->pointer = objectBuffers_.back().data();
+            shmUnit->size = dataSize;
+            obj->SetShmUnit(std::move(shmUnit));
+            obj->SetDataSize(dataSize);
+            obj->SetCreateTime(1);
+            obj->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+            obj->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE);
+            obj->modeInfo.SetCacheType(CacheType::MEMORY);
+            obj->stateInfo.SetDataFormat(DataFormat::BINARY);
+            obj->stateInfo.SetPrimaryCopy(true);
+            DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(obj)));
+            objectKeys.emplace_back(objectKey);
+        }
+    }
+
+protected:
+    HostPort hostPort_;
+    MigrateType type_ = MigrateType::SCALE_DOWN;
+    std::vector<std::vector<uint8_t>> objectBuffers_;
 };
 
 TEST_F(MigrateDataHandlerTest, TestMigrateDataMeetsNoSpaceError)
@@ -891,6 +1094,72 @@ TEST_F(MigrateDataHandlerTest, TestUrmaReadTransportModeUsesMigrateDataDirect)
     DS_ASSERT_OK(result.status);
     ASSERT_EQ(result.successIds.size(), objectCount);
     ASSERT_TRUE(result.failedIds.empty());
+}
+
+TEST_F(DataMigratorRedirectTest, MigrateRedirectsAllFailedObjectsAfterTargetOutOfMemory)
+{
+    const std::string oldTransportMode = FLAGS_data_migrate_urma_transport_mode;
+    Raii restoreTransportMode([oldTransportMode]() { FLAGS_data_migrate_urma_transport_mode = oldTransportMode; });
+    FLAGS_data_migrate_urma_transport_mode = "read";
+    BINEXPECT_CALL(&datasystem::IsUrmaEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&datasystem::IsFastTransportEnabled, ()).WillRepeatedly(Return(true));
+    BINEXPECT_CALL(&object_cache::NodeSelector::TryGetAvailableMemory, (_, _))
+        .WillRepeatedly(DoAll(SetArgReferee<1>(1024ul * 1024ul), Return(Status::OK())));
+
+    constexpr uint64_t objectSize = 100;
+    constexpr uint64_t objectCount = 2;
+    std::vector<ImmutableString> objectKeys;
+    CreateObjects("RedirectAfterTargetOom", objectSize, objectCount, objectKeys);
+    std::vector<std::string> objectKeyStrings{ objectKeys.begin(), objectKeys.end() };
+    std::unordered_map<std::string, uint64_t> objectSizes;
+    for (const auto &objectKey : objectKeyStrings) {
+        objectSizes.emplace(objectKey, objectSize);
+    }
+
+    HostPort firstTarget("127.0.0.1", 18481);
+    HostPort secondTarget("127.0.0.1", 18482);
+    HostPort local("127.0.0.1", 18888);
+    std::vector<std::string> apiTargets;
+    ObjectTopologyTestRuntime topologyRuntime;
+    DS_ASSERT_OK(topologyRuntime.Init(local));
+    ObjectEndpointPolicy endpointPolicy(GetTestMetadataRoute(), topologyRuntime.Engine()->Membership());
+    std::atomic<bool> exitRequested{ false };
+    DataMigrator migrator(type_, GetTestMetadataRoute(), topologyRuntime.Engine()->Membership(), endpointPolicy,
+                          &exitRequested, local, nullptr, objectTable_, "", 1);
+    migrator.Init();
+    migrator.SetCreateRemoteApiHookForTest(
+        [&apiTargets, local](const HostPort &target, std::shared_ptr<WorkerRemoteWorkerOCApi> &api) {
+            apiTargets.emplace_back(target.ToString());
+            api = std::make_shared<WorkerRemoteWorkerOCApi>(target, local, nullptr);
+            return Status::OK();
+        });
+
+    uint32_t directCalls = 0;
+    BINEXPECT_CALL(&WorkerRemoteWorkerOCApi::MigrateDataDirect, (_, _))
+        .Times(2)
+        .WillRepeatedly(
+            Invoke([&directCalls, &objectKeyStrings](MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp) {
+                EXPECT_EQ(req.objects_size(), static_cast<int>(objectKeyStrings.size()));
+                rsp.set_remain_bytes(1024ul * 1024ul);
+                rsp.set_limit_rate(1024ul * 1024ul);
+                if (directCalls++ == 0) {
+                    for (const auto &objectKey : objectKeyStrings) {
+                        rsp.add_failed_object_keys(objectKey);
+                    }
+                    return Status(K_OUT_OF_MEMORY, "target worker is isolated");
+                }
+                return Status::OK();
+            }));
+
+    auto strategy = std::make_shared<RedirectOnceStrategy>(secondTarget.ToString());
+    DS_ASSERT_OK(migrator.MigrateToTargetWithRedirectForTest(objectKeyStrings, firstTarget, strategy, objectSizes));
+
+    std::vector<std::string> failedKeys;
+    migrator.GetFailedKeys(failedKeys);
+    ASSERT_TRUE(failedKeys.empty());
+    ASSERT_EQ(apiTargets, std::vector<std::string>({ firstTarget.ToString(), secondTarget.ToString() }));
+    ASSERT_EQ(strategy->RedirectedFrom(), std::vector<std::string>({ firstTarget.ToString() }));
+    ASSERT_EQ(strategy->SelectedFrom(), std::vector<std::string>({ firstTarget.ToString() }));
 }
 
 TEST_F(MigrateDataHandlerTest, TestFastTransportZeroRateRecoversByProbe)

@@ -18,9 +18,11 @@
 
 #include <algorithm>
 #include <sstream>
+#include <thread>
 
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"
@@ -38,7 +40,7 @@ bool RangeContains(const Range &range, uint32_t value)
     }
     return value > range.first || value <= range.second;
 }
-}
+}  // namespace
 
 bool MetadataRecoverySelector::SelectionRequest::Empty() const
 {
@@ -57,7 +59,13 @@ std::string MetadataRecoverySelector::SelectionRequest::ToString() const
 }
 
 MetadataRecoverySelector::MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable)
-    : objectTable_(objectTable)
+    : MetadataRecoverySelector(objectTable, GET_MATCH_OBJECT_BATCH, [] { std::this_thread::yield(); })
+{
+}
+
+MetadataRecoverySelector::MetadataRecoverySelector(const std::shared_ptr<ObjectTable> &objectTable, size_t visitBudget,
+                                                   std::function<void()> batchYield)
+    : objectTable_(objectTable), visitBudget_(visitBudget), batchYield_(std::move(batchYield))
 {
 }
 
@@ -77,9 +85,8 @@ Status MetadataRecoverySelector::BuildMatchFunc(const SelectionRequest &request,
     CHECK_FAIL_RETURN_STATUS(!request.ranges.empty(), K_INVALID, "metadata recovery selection ranges are empty");
     matchFunc = [ranges = request.ranges](const std::string &objKey) {
         const uint32_t objectHash = MurmurHash3_32(objKey);
-        return std::any_of(ranges.begin(), ranges.end(), [objectHash](const Range &range) {
-            return RangeContains(range, objectHash);
-        });
+        return std::any_of(ranges.begin(), ranges.end(),
+                           [objectHash](const Range &range) { return RangeContains(range, objectHash); });
     };
     return Status::OK();
 }
@@ -89,16 +96,9 @@ void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, bool includeL2
 {
     LOG(INFO) << "MetadataRecoverySelector.Select begin, includeL2CacheIds: " << includeL2CacheIds;
     Timer timer;
-    std::vector<std::string> allObjectKeys;
-    allObjectKeys.reserve(objectTable_->GetSize());
-    for (const auto &it : *objectTable_) {
-        allObjectKeys.emplace_back(it.first);
-    }
-    LOG(INFO) << "MetadataRecoverySelector.Select get all object keys elapsed ms: " << timer.ElapsedMilliSecond()
-              << ", object size: " << allObjectKeys.size();
-    timer.Reset();
-
-    auto batchFun = [this, &matchFunc, &objectKeys, includeL2CacheIds](std::vector<std::string> &batchObjectKeys) {
+    auto cursor = objectTable_->BeginRecoverySnapshot();
+    auto batchFun = [this, &cursor, &matchFunc, &objectKeys,
+                     includeL2CacheIds](std::vector<std::string> &batchObjectKeys) {
         for (const auto &objectKey : batchObjectKeys) {
             if (!matchFunc(objectKey)) {
                 continue;
@@ -107,12 +107,12 @@ void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, bool includeL2
             if (objectKey.rfind(URMA_WARMUP_KEY_PREFIX, 0) == 0) {
                 continue;
             }
-            if (includeL2CacheIds) {
-                objectKeys.emplace_back(objectKey);
+            std::shared_ptr<SafeObjType> entry;
+            if (objectTable_->GetRecoverySnapshotObject(cursor, objectKey, entry).IsError()) {
                 continue;
             }
-            std::shared_ptr<SafeObjType> entry;
-            if (objectTable_->Get(objectKey, entry).IsError()) {
+            if (includeL2CacheIds) {
+                objectKeys.emplace_back(objectKey);
                 continue;
             }
             if (entry->TryRLock().IsError()) {
@@ -125,20 +125,25 @@ void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, bool includeL2
         }
     };
 
-    std::vector<std::string> tmpObjectKeys;
-    for (const auto &objectKey : allObjectKeys) {
-        tmpObjectKeys.emplace_back(objectKey);
-        if (tmpObjectKeys.size() < GET_MATCH_OBJECT_BATCH) {
-            continue;
+    bool done = false;
+    size_t visitedObjectCount = 0;
+    while (!done) {
+        std::vector<std::string> batchObjectKeys;
+        auto status = objectTable_->NextRecoverySnapshotBatch(cursor, visitBudget_, batchObjectKeys, done);
+        if (status.IsError()) {
+            LOG(ERROR) << "MetadataRecoverySelector.Select snapshot failed: " << status.ToString();
+            return;
         }
-        batchFun(tmpObjectKeys);
-        tmpObjectKeys.clear();
+        visitedObjectCount += batchObjectKeys.size();
+        batchFun(batchObjectKeys);
+        if (!done) {
+            batchYield_();
+        }
     }
-    if (!tmpObjectKeys.empty()) {
-        batchFun(tmpObjectKeys);
-    }
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RECOVERY_CANDIDATE_COUNT))
+        .Observe(objectKeys.size());
     LOG(INFO) << "MetadataRecoverySelector.Select finish, objectKeys size: " << objectKeys.size()
-              << ", includeL2CacheIds: " << includeL2CacheIds
+              << ", includeL2CacheIds: " << includeL2CacheIds << ", snapshot object size: " << visitedObjectCount
               << ", elapsed ms: " << timer.ElapsedMilliSecond();
 }
 

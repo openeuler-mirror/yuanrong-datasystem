@@ -23,6 +23,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -80,6 +81,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_create_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_publish_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_multi_publish_impl.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_delete_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_global_reference_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
@@ -87,8 +89,15 @@
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 
 namespace datasystem {
+namespace cluster {
+class ICoordinationBackend;
+}
+
 namespace master {
 class MasterOCServiceImpl;
+}
+namespace worker {
+class WorkerMasterOCApi;
 }
 namespace object_cache {
 
@@ -99,13 +108,14 @@ class MasterWorkerOCServiceImpl;
 class WorkerWorkerOCServiceImpl;
 class WorkerDeviceOcManager;
 class WorkerRemoteWorkerOCApi;
+class ObjectCacheRecoveryState;
 
 enum LockMode { Read = 0, Write = 1 };
 
 class WorkerOCServiceImpl : public WorkerOCService, public IWorkerOCService {
 public:
-    using AsyncTasksDoneChecker = std::function<Status(
-        const std::string &, std::chrono::steady_clock::time_point, const cluster::CancellationToken &)>;
+    using AsyncTasksDoneChecker = std::function<Status(const std::string &, std::chrono::steady_clock::time_point,
+                                                       const cluster::CancellationToken &)>;
 
     /**
      * @brief Construct WorkerOCServiceImpl.
@@ -127,11 +137,11 @@ public:
     WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
                         std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                         std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
+                        cluster::ICoordinationBackend *coordinationBackend,
                         master::MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
                         const worker::MetadataRouteResolver &metadataRoute,
-                        const cluster::MembershipEndpointView &membership,
-                        const std::atomic<bool> *exitRequested, bool isRestart,
-                        bool controlBackendAvailableAtStartup);
+                        const cluster::MembershipEndpointView &membership, const std::atomic<bool> *exitRequested,
+                        bool isRestart, bool controlBackendAvailableAtStartup);
 
     ~WorkerOCServiceImpl() override;
 
@@ -148,6 +158,12 @@ public:
     void InitServiceImpl();
 
     /**
+     * @brief Borrow local runtime state for ordinary object-service admission.
+     * @param[in] runtimeState Runtime state owned by WorkerOCServer.
+     */
+    void SetRuntimeFacade(worker::WorkerRuntimeFacade *runtime);
+
+    /**
      * @brief Before calling RPC method, this method would be call to check whether this worker is doing reconciliation.
      * If it is doing reconciliation (write lock acquired), return error;
      * otherwise, acquire read lock to block reconciliation but allows other common RPCs.
@@ -155,7 +171,10 @@ public:
      * @param[in] reqTimeoutMs req timeout ms
      * @return Status of the call.
      */
-    Status ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs);
+    Status ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs,
+                               worker::WorkerAdmissionKind kind = worker::WorkerAdmissionKind::NORMAL_WRITE);
+    void MarkOutOfMemoryIfNeeded(const Status &rc, const std::string &operation,
+                                 memory::CacheType cacheType = memory::CacheType::MEMORY);
 
     /**
      * @brief GroupAndRemoveMeta
@@ -169,13 +188,10 @@ public:
      */
     void GroupAndRemoveMeta(const std::vector<std::string> &objKeys, const master::RemoveMetaReqPb::Cause &removeCase,
                             std::vector<std::string> &failedIds, std::vector<std::string> &needMigrateIds,
-                            std::vector<std::string> &needWaitIds,
-                            std::vector<std::string> &needMigrateL2CacheIds,
+                            std::vector<std::string> &needWaitIds, std::vector<std::string> &needMigrateL2CacheIds,
                             const std::string &topologyOperationId = "")
     {
-        INJECT_POINT("ProcessVoluntaryScaledown", [] {
-            return;
-        });
+        INJECT_POINT("ProcessVoluntaryScaledown", [] { return; });
         getProc_->GroupAndRemoveMeta(objKeys, removeCase, localAddress_.ToString(),
                                      std::unordered_map<std::string, uint64_t>{}, failedIds, needMigrateIds,
                                      needWaitIds, needMigrateL2CacheIds, topologyOperationId);
@@ -206,9 +222,9 @@ public:
      * @param[in] cancellation Executor-owned cooperative cancellation signal.
      * @return K_OK on success; a retryable or terminal business error otherwise.
      */
-    Status DrainTopologyScaleInData(
-        const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
-        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
+    Status DrainTopologyScaleInData(const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
+                                    std::chrono::steady_clock::time_point deadline,
+                                    const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Prepare task-scoped ScaleIn cleanup and return authorization plus a bounded effect.
@@ -221,11 +237,11 @@ public:
      * @param[out] apply Non-empty bounded idempotent effect closure on success.
      * @return K_OK on success; a preparation error otherwise.
      */
-    Status PrepareTopologyScaleInCleanup(
-        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
-        const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
-        const cluster::CancellationToken &cancellation, std::function<Status()> &authorize,
-        cluster::TopologyCleanupEffect &apply);
+    Status PrepareTopologyScaleInCleanup(const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+                                         const std::string &businessOperationId,
+                                         std::chrono::steady_clock::time_point deadline,
+                                         const cluster::CancellationToken &cancellation,
+                                         std::function<Status()> &authorize, cluster::TopologyCleanupEffect &apply);
 
     /**
      * @brief Submit owned local cleanup work for one failure task scope.
@@ -236,10 +252,10 @@ public:
      * @param[in] cancellation Executor-owned cooperative cancellation signal.
      * @return K_OK after owned work is accepted; an error otherwise.
      */
-    Status SubmitTopologyFailureCleanup(
-        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
-        const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
-        const cluster::CancellationToken &cancellation);
+    Status SubmitTopologyFailureCleanup(const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+                                        const std::string &businessOperationId,
+                                        std::chrono::steady_clock::time_point deadline,
+                                        const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Register callback for waiting until async tasks in server are done.
@@ -289,8 +305,7 @@ public:
      * @return Status of the migration.
      */
     Status MigrateData(const std::vector<std::string> &objectKeys, const std::string &taskId,
-                       std::chrono::steady_clock::time_point deadline,
-                       const cluster::CancellationToken &cancellation);
+                       std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Migrate L2 cache data with slot-based grouping.
@@ -534,12 +549,26 @@ public:
     Status ReconcileMembershipChange();
 
     /**
-     * @brief Schedule one restart reconciliation request to a metadata owner.
+     * @brief Ask every current metadata owner to hand off ownership held by this locally isolated Worker.
+     * @return Status of scheduling the local-isolation handoff requests.
+     */
+    Status ReconcileLocalIsolationOwnership();
+
+    /**
+     * @brief Ask every current metadata owner to reconcile ownership after this locally isolated Worker recovers.
+     * @return Status of scheduling the network recovery requests.
+     */
+    Status ReconcileNetworkRecoveryOwnership();
+
+    /**
+     * @brief Schedule one reconciliation request to a metadata owner.
      * @param[in] masterAddress Metadata owner address from the current topology.
-     * @param[in] eventTimestamp Stable timestamp shared by this restart fanout.
+     * @param[in] eventTimestamp Stable timestamp shared by this reconciliation fanout.
+     * @param[in] eventType Reconciliation event type consumed by the metadata owner.
      * @return Status of creating the API and scheduling the bounded asynchronous request.
      */
-    Status ScheduleReconciliationRequest(const std::string &masterAddress, int64_t eventTimestamp);
+    Status ScheduleReconciliationRequest(const std::string &masterAddress, int64_t eventTimestamp,
+                                         master::ReconciliationQueryPb::EventType eventType);
 
     /**
      * @brief Get the metadata size for specific data size.
@@ -710,11 +739,32 @@ public:
                                  std::string standbyWorker);
 
     /**
+     * @brief Return the latest metadata recovery evidence produced by RecoverMetadataOfData.
+     * @return Latest metadata recovery evidence report.
+     */
+    worker::WorkerRecoveryEvidenceReport GetLastMetadataRecoveryEvidenceReport() const;
+
+    /**
+     * @brief Build object-cache recovery evidence from metadata and slot recovery state.
+     * @return Object-cache recovery evidence report.
+     */
+    worker::WorkerRecoveryEvidenceReport BuildObjectCacheRecoveryEvidenceReport(
+        uint64_t *resourceRecoveryGeneration = nullptr) const;
+    worker::WorkerRecoveryGeneration BeginRecoveryEvidenceGeneration(std::string detail);
+    worker::WorkerRecoveryEvidenceReport BuildObjectCacheRecoveryEvidenceReport(
+        worker::WorkerRecoveryGeneration generation) const;
+
+    bool PublishResourceRecoveryIfCurrent(uint64_t resourceRecoveryGeneration, const std::function<bool()> &publish);
+
+    /**
      * @brief Recover metadata associated with a restarted worker.
      * @param[in] workerAddr Restarted worker address.
      * @return Status of the call.
      */
     Status RecoverMetadataOfRestartedWorker(const std::string &workerAddr);
+
+    Status FinishRestartMetadataRecovery(const std::string &workerAddr, const std::vector<std::string> &matchObjIds,
+                                         const std::vector<std::string> &failedIds);
 
     /**
      * @brief Handle worker restart event for metadata recovery.
@@ -895,9 +945,9 @@ private:
      * @param[out] state Existing or newly registered cleanup state.
      * @return K_OK on success; K_TRY_AGAIN when the bounded registry is full.
      */
-    Status GetOrCreateTopologyScaleInCleanupState(
-        const cluster::IKeyFilter &filter, const std::string &businessOperationId,
-        std::shared_ptr<PreparedScaleInCleanupState> &state);
+    Status GetOrCreateTopologyScaleInCleanupState(const cluster::IKeyFilter &filter,
+                                                  const std::string &businessOperationId,
+                                                  std::shared_ptr<PreparedScaleInCleanupState> &state);
 
     /**
      * @brief Select and classify only objects admitted by a topology task filter.
@@ -906,8 +956,7 @@ private:
      * @param[out] primaries Selected local primary object ids.
      * @return Status of the selection pass.
      */
-    Status SelectTopologyScaleInObjects(std::vector<std::string> &copies,
-                                        std::vector<std::string> &primaries) const;
+    Status SelectTopologyScaleInObjects(std::vector<std::string> &copies, std::vector<std::string> &primaries) const;
 
     /**
      * @brief Remove task-scoped metadata and materialize data migration inputs.
@@ -918,12 +967,9 @@ private:
      * @param[out] l2Ids Object ids requiring L2 cleanup.
      * @return Status of the preparation pass.
      */
-    Status PrepareTopologyScaleInData(const std::vector<std::string> &copies,
-                                      const std::vector<std::string> &primaries,
-                                      std::vector<std::string> &migrateIds,
-                                      std::vector<std::string> &waitIds,
-                                      std::vector<std::string> &l2Ids,
-                                      const std::string &businessOperationId);
+    Status PrepareTopologyScaleInData(const std::vector<std::string> &copies, const std::vector<std::string> &primaries,
+                                      std::vector<std::string> &migrateIds, std::vector<std::string> &waitIds,
+                                      std::vector<std::string> &l2Ids, const std::string &businessOperationId);
 
     /**
      * @brief Authorize one operation-keyed cleanup state without external work.
@@ -956,6 +1002,7 @@ private:
     friend class MasterWorkerOCServiceImpl;
     friend class WorkerWorkerOCServiceImpl;
     friend class WorkerDeviceOcManager;
+    friend class WorkerOcServiceImplTest;
 
     struct PublishParams {
         const ObjectLifeState lifeState;
@@ -1119,6 +1166,8 @@ private:
      */
     std::vector<ClientKey> CollectDisconnectedClientRefIds() const;
 
+    Status PrepareRestartReconciliation(const PushMetaToWorkerReqPb &req);
+
     /**
      * @brief Clear worker-side global refs left by clients that did not reconnect during restart reconciliation.
      */
@@ -1242,6 +1291,14 @@ private:
     void GetAllObjectKeys(std::vector<std::string> &objectKeys);
 
     /**
+     * @brief Resolve metadata owner without performing worker connection admission.
+     * @param[in] objKey Object key used for metadata placement.
+     * @param[out] masterAddr Resolved metadata owner.
+     * @return Status of the call.
+     */
+    Status GetMetaAddressNotCheckConnection(const std::string &objKey, HostPort &masterAddr) const;
+
+    /**
      * @brief Fill object metadata.
      * @param[in] objectKey The id of object.
      * @param[in] targetMasterAddr The metadata owner address.
@@ -1257,6 +1314,9 @@ private:
      * @return OK if success.
      */
     Status GetReadyToWork(const PushMetaToWorkerReqPb &req);
+
+    static bool HasCompleteReconciliationSet(const std::set<std::string> &expected,
+                                             const std::unordered_set<std::string> &completed);
 
     /**
      * @brief The rpc method used to delete the device objects.
@@ -1284,7 +1344,8 @@ private:
     // and every thread doing reconciliation won't go in parallel with other common RPC threads.
     // Also protects numRecon_, lastReconTime_.
     WriterPrefRWLock reconFlag_;
-    uint16_t numRecon_{ 0 };                    // the number of nodes which reconciled with this node.
+    uint16_t numRecon_{ 0 };  // the number of nodes which reconciled with this node.
+    std::unordered_set<std::string> reconciledMasters_;
     int64_t lastReconTime_{ 0 };                // the last time when reconciliation was done.
     std::atomic<bool> setHealthFile_{ false };  // health file set or not.
     int64_t timestamp_{ 0 };                    // the timestamp of the event that this node is reconciling for.
@@ -1292,6 +1353,7 @@ private:
     // this class manages list of all masters for our objects
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };
     std::unique_ptr<MetaDataRecoveryManager> metadataRecoveryManager_{ nullptr };
+    std::unique_ptr<ObjectCacheRecoveryState> recoveryState_{ nullptr };
     std::unique_ptr<WorkerOcServiceClearDataFlow> clearDataFlow_{ nullptr };
 
     WorkerRequestManager workerRequestManager_;
@@ -1309,7 +1371,8 @@ private:
     std::shared_ptr<SlotRecoveryManager> slotRecoveryManager_{ nullptr };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
-    EtcdStore *etcdStore_;                   // pointer to EtcdStore in WorkerOcServer
+    EtcdStore *etcdStore_;                                // pointer to EtcdStore in WorkerOcServer
+    cluster::ICoordinationBackend *coordinationBackend_;  // pointer to backend adapter in WorkerOcServer
     cluster::TopologyEngine *topologyEngine_{ nullptr };  // Non-owning lifecycle service owned by Worker Host.
     const worker::MetadataRouteResolver &metadataRoute_;
     const cluster::MembershipEndpointView &membership_;
@@ -1318,6 +1381,7 @@ private:
     const bool isRestart_;
     const bool centralizedMetadata_;
     const bool controlBackendAvailableAtStartup_;
+    worker::WorkerRuntimeFacade *runtime_{ nullptr };
     // Wait for client reconnect when worker crash and recovery.
     WaitPost clientReconnectPost_;
     bool waited_{ false };

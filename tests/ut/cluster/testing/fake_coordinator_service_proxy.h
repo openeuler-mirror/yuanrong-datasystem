@@ -10,8 +10,10 @@
 #define DATASYSTEM_TESTS_UT_CLUSTER_TESTING_FAKE_COORDINATOR_SERVICE_PROXY_H
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -64,11 +66,23 @@ public:
     Status Range(const std::string &key, const std::string &rangeEnd, std::vector<KeyValueEntry> &kvs,
                  int64_t &revision, int32_t, std::string *coordinatorId) override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (key == nextRangeFailureKey_ && nextRangeFailureCode_ != K_OK) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (key == nextBlockedRangeKey_) {
+            nextBlockedRangeKey_.clear();
+            rangeBlocked_ = true;
+            releaseBlockedRange_ = false;
+            ++rangeBlockCount_;
+            rangeCv_.notify_all();
+            rangeCv_.wait(lock, [this] { return releaseBlockedRange_; });
+            rangeBlocked_ = false;
+        }
+        if (key == nextRangeFailureKey_ && nextRangeFailureCode_ != K_OK && nextRangeFailureRemaining_ > 0) {
             const auto failureCode = nextRangeFailureCode_;
-            nextRangeFailureKey_.clear();
-            nextRangeFailureCode_ = K_OK;
+            --nextRangeFailureRemaining_;
+            if (nextRangeFailureRemaining_ == 0) {
+                nextRangeFailureKey_.clear();
+                nextRangeFailureCode_ = K_OK;
+            }
             return Status(failureCode, "injected Coordinator Range failure");
         }
         kvs.clear();
@@ -82,6 +96,7 @@ public:
                        int32_t) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        ++deleteRangeCount_;
         deleted = 0;
         auto iter = entries_.lower_bound(key);
         while (iter != entries_.end() && MatchesRange(iter->first, key, rangeEnd)) {
@@ -195,6 +210,45 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         nextRangeFailureKey_ = std::move(key);
         nextRangeFailureCode_ = code;
+        nextRangeFailureRemaining_ = 1;
+    }
+
+    void FailRangeForKeyTimes(std::string key, StatusCode code, uint32_t count)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        nextRangeFailureKey_ = std::move(key);
+        nextRangeFailureCode_ = code;
+        nextRangeFailureRemaining_ = count;
+    }
+
+    uint32_t RemainingRangeFailures() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return nextRangeFailureRemaining_;
+    }
+
+    void BlockNextRangeForKey(std::string key)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        nextBlockedRangeKey_ = std::move(key);
+    }
+
+    bool WaitUntilRangeBlocked(std::chrono::steady_clock::time_point deadline)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        const auto observedCount = observedRangeBlockCount_;
+        if (!rangeCv_.wait_until(lock, deadline, [this, observedCount] { return rangeBlockCount_ > observedCount; })) {
+            return false;
+        }
+        observedRangeBlockCount_ = rangeBlockCount_;
+        return true;
+    }
+
+    void ReleaseBlockedRange()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        releaseBlockedRange_ = true;
+        rangeCv_.notify_all();
     }
 
     void FailNextWatchForKey(std::string key, StatusCode code)
@@ -234,6 +288,12 @@ public:
         return cancelledWatchIds_.size();
     }
 
+    size_t DeleteRangeCount() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return deleteRangeCount_;
+    }
+
 private:
     struct Entry {
         std::string value;
@@ -265,15 +325,23 @@ private:
 
     // Protects entries_, revision/watch identity allocation, and captured calls.
     mutable std::mutex mutex_;
+    std::condition_variable rangeCv_;
     std::map<std::string, Entry> entries_;
     std::vector<WatchCall> watchCalls_;
     std::vector<int64_t> cancelledWatchIds_;
     std::vector<coordinator::ReportTopologyRecoveryCandidateReqPb> recoveryRequests_;
+    size_t deleteRangeCount_{ 0 };
     int64_t revision_{ 1 };
     int64_t nextWatchId_{ 1 };
     std::string coordinatorId_{ "coordinator-test" };
     std::string nextRangeFailureKey_;
     StatusCode nextRangeFailureCode_{ K_OK };
+    uint32_t nextRangeFailureRemaining_{ 0 };
+    std::string nextBlockedRangeKey_;
+    bool rangeBlocked_{ false };
+    bool releaseBlockedRange_{ false };
+    uint64_t rangeBlockCount_{ 0 };
+    uint64_t observedRangeBlockCount_{ 0 };
     std::string nextWatchFailureKey_;
     StatusCode nextWatchFailureCode_{ K_OK };
     bool requireRecoveryPayload_{ false };

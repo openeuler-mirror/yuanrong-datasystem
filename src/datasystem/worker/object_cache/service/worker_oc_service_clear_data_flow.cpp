@@ -28,8 +28,10 @@
 
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -48,7 +50,6 @@ namespace {
 constexpr uint64_t CLEAR_OBJECT_RETRY_INTERVAL_MS = 200;
 constexpr int CLEAR_DATA_THREAD_NUM = 1;
 constexpr size_t CHECK_OBJECT_DATA_LOCATION_BATCH = 500;
-constexpr size_t GET_MASTER_ERROR_SAMPLE_LIMIT = 3;
 const std::string WORKER_OC_SERVICE_CLEAR_DATA_FLOW = "WorkerOcServiceClearDataFlow";
 
 void InsertFailedIds(const std::vector<std::string> &objectKeys, std::unordered_set<std::string> &failedIds)
@@ -71,8 +72,31 @@ void HandleCheckObjectDataLocationRsp(const Status &rc, const master::CheckObjec
         LOG(WARNING) << "CheckObjectDataLocation need redirect or meta is moving";
         return;
     }
-    needClearObjectKeys.insert(needClearObjectKeys.end(), rsp.need_clear_object_keys().begin(),
-                               rsp.need_clear_object_keys().end());
+
+    std::unordered_set<std::string> requestedIds(requestObjectKeys.begin(), requestObjectKeys.end());
+    std::unordered_set<std::string> classifiedIds;
+    std::vector<std::string> validatedNeedClearIds;
+    validatedNeedClearIds.reserve(rsp.need_clear_object_keys_size());
+    bool isValidPartition = requestedIds.size() == requestObjectKeys.size();
+    auto validateClassifiedId = [&requestedIds, &classifiedIds, &isValidPartition](const std::string &objectKey) {
+        if (requestedIds.count(objectKey) == 0 || !classifiedIds.emplace(objectKey).second) {
+            isValidPartition = false;
+        }
+    };
+    for (const auto &objectKey : rsp.need_clear_object_keys()) {
+        validateClassifiedId(objectKey);
+        validatedNeedClearIds.emplace_back(objectKey);
+    }
+    for (const auto &objectKey : rsp.no_need_clear_object_keys()) {
+        validateClassifiedId(objectKey);
+    }
+    if (!isValidPartition || classifiedIds.size() != requestedIds.size()) {
+        InsertFailedIds(requestObjectKeys, failedIds);
+        LOG(ERROR) << "CheckObjectDataLocation returned an invalid object partition, requested size: "
+                   << requestObjectKeys.size() << ", classified size: " << classifiedIds.size();
+        return;
+    }
+    needClearObjectKeys.insert(needClearObjectKeys.end(), validatedNeedClearIds.begin(), validatedNeedClearIds.end());
 }
 
 void HandleGroupKeysByMetaOwnerFailures(const std::unordered_map<std::string, Status> &failures,
@@ -83,29 +107,22 @@ void HandleGroupKeysByMetaOwnerFailures(const std::unordered_map<std::string, St
     }
     struct GetMasterErrorSummary {
         size_t count = 0;
-        std::vector<std::string> sampleObjectKeys;
     };
     std::unordered_map<std::string, GetMasterErrorSummary> summaries;
     for (const auto &kv : failures) {
         failedIds.emplace(kv.first);
         auto &summary = summaries[kv.second.ToString()];
         summary.count++;
-        if (summary.sampleObjectKeys.size() < GET_MASTER_ERROR_SAMPLE_LIMIT) {
-            summary.sampleObjectKeys.emplace_back(kv.first);
-        }
     }
     for (const auto &kv : summaries) {
-        LOG(INFO) << "Get master for ClearObject failed, object size: " << kv.second.count
-                  << ", status: " << kv.first
-                  << ", sample object keys: " << VectorToString(kv.second.sampleObjectKeys);
+        LOG(INFO) << "Get master for ClearObject failed, object size: " << kv.second.count << ", status: " << kv.first;
     }
 }
 
 std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
     const ObjectEndpointPolicy &endpointPolicy,
     const std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> &workerMasterApiManager,
-    const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
-    std::unordered_set<std::string> &failedIds)
+    const HostPort &masterAddr, const std::vector<std::string> &objectKeys, std::unordered_set<std::string> &failedIds)
 {
     if (masterAddr.Empty()) {
         InsertFailedIds(objectKeys, failedIds);
@@ -126,7 +143,7 @@ std::shared_ptr<worker::WorkerMasterOCApi> GetWorkerMasterApiForClear(
     return workerMasterApi;
 }
 
-}
+}  // namespace
 
 WorkerOcServiceClearDataFlow::WorkerOcServiceClearDataFlow(
     std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<ObjectGlobalRefTable<ClientKey>> globalRefTable,
@@ -156,10 +173,11 @@ WorkerOcServiceClearDataFlow::~WorkerOcServiceClearDataFlow()
     clearDataThreadPool_.reset();
 }
 
-Status WorkerOcServiceClearDataFlow::SubmitTopologyFailureCleanup(
-    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
-    const std::string &businessOperationId, std::chrono::steady_clock::time_point deadline,
-    const cluster::CancellationToken &cancellation)
+Status WorkerOcServiceClearDataFlow::SubmitTopologyFailureCleanup(const cluster::TopologyPhaseAction &action,
+                                                                  const cluster::IKeyFilter &filter,
+                                                                  const std::string &businessOperationId,
+                                                                  std::chrono::steady_clock::time_point deadline,
+                                                                  const cluster::CancellationToken &cancellation)
 {
     CHECK_FAIL_RETURN_STATUS(action.failed.has_value(), K_INVALID, "failure cleanup lacks failed member");
     CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
@@ -260,8 +278,8 @@ void WorkerOcServiceClearDataFlow::SubmitRetryClearDataAsync(const ClearDataReqP
     });
 }
 
-void WorkerOcServiceClearDataFlow::RetryClearDataAsync(const ClearDataReqPb &req,
-                                                       const ClearDataRetryIds &retryIds, uint64_t retryTimes)
+void WorkerOcServiceClearDataFlow::RetryClearDataAsync(const ClearDataReqPb &req, const ClearDataRetryIds &retryIds,
+                                                       uint64_t retryTimes)
 {
     TimerQueue::TimerImpl timer;
     auto traceID = Trace::Instance().GetTraceID();
@@ -277,8 +295,7 @@ void WorkerOcServiceClearDataFlow::RetryClearDataAsync(const ClearDataReqPb &req
                  "Add retry ClearData timer failed");
 }
 
-Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req,
-                                                       std::vector<std::string> &matchObjIds)
+Status WorkerOcServiceClearDataFlow::GetMatchObjectIds(const ClearDataReqPb &req, std::vector<std::string> &matchObjIds)
 {
     bool includeL2CacheIds = FLAGS_enable_metadata_recovery;
     auto selectionRequest = MetadataRecoverySelector::BuildSelectionRequest(req, includeL2CacheIds);
@@ -301,14 +318,12 @@ Status WorkerOcServiceClearDataFlow::ClearDataImpl(const ClearDataReqPb &req, Cl
     return Status::OK();
 }
 
-void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req,
-                                                      const ClearDataRetryIds &retryIds,
+void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req, const ClearDataRetryIds &retryIds,
                                                       ClearDataRetryIds &nextRetryIds)
 {
-    LOG(INFO) << "retry clear data without meta in worker, clear failed object size: "
-              << retryIds.clearFailedIds.size() << ", increase failed object size: "
-              << retryIds.increaseFailedIds.size() << ", recover app ref failed object size: "
-              << retryIds.recoverAppRefFailedIds.size();
+    LOG(INFO) << "retry clear data without meta in worker, clear failed object size: " << retryIds.clearFailedIds.size()
+              << ", increase failed object size: " << retryIds.increaseFailedIds.size()
+              << ", recover app ref failed object size: " << retryIds.recoverAppRefFailedIds.size();
     std::vector<std::string> retryClearObjectKeys{ retryIds.clearFailedIds.begin(), retryIds.clearFailedIds.end() };
     (void)req;
     ClearMatchedObjects(retryClearObjectKeys, nextRetryIds);
@@ -322,7 +337,8 @@ void WorkerOcServiceClearDataFlow::ClearDataRetryImpl(const ClearDataReqPb &req,
 
 void WorkerOcServiceClearDataFlow::FillCheckObjectDataLocationReq(
     const std::vector<std::string> &objectKeys, master::CheckObjectDataLocationReqPb &req,
-    std::vector<std::string> &requestObjectKeys, std::unordered_set<std::string> &failedIds) const
+    std::vector<std::string> &requestObjectKeys, std::unordered_set<std::string> &failedIds,
+    std::unordered_map<std::string, uint64_t> &queriedVersions) const
 {
     req.set_address(localAddress_);
     req.set_redirect(true);
@@ -341,20 +357,22 @@ void WorkerOcServiceClearDataFlow::FillCheckObjectDataLocationReq(
         auto *objectVersion = req.add_object_versions();
         objectVersion->set_object_key(objectKey);
         objectVersion->set_version((*currSafeObj)->GetCreateTime());
+        queriedVersions[objectKey] = (*currSafeObj)->GetCreateTime();
         requestObjectKeys.emplace_back(objectKey);
     }
 }
 
 void WorkerOcServiceClearDataFlow::CheckNeedClearObjectsByMasterInBatches(
     const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi, const std::vector<std::string> &objectKeys,
-    std::vector<std::string> &needClearObjectKeys, std::unordered_set<std::string> &failedIds) const
+    std::vector<std::string> &needClearObjectKeys, std::unordered_set<std::string> &failedIds,
+    std::unordered_map<std::string, uint64_t> &queriedVersions) const
 {
     for (size_t start = 0; start < objectKeys.size(); start += CHECK_OBJECT_DATA_LOCATION_BATCH) {
         size_t end = std::min(start + CHECK_OBJECT_DATA_LOCATION_BATCH, objectKeys.size());
         std::vector<std::string> batchObjectKeys(objectKeys.begin() + start, objectKeys.begin() + end);
         master::CheckObjectDataLocationReqPb req;
         std::vector<std::string> requestObjectKeys;
-        FillCheckObjectDataLocationReq(batchObjectKeys, req, requestObjectKeys, failedIds);
+        FillCheckObjectDataLocationReq(batchObjectKeys, req, requestObjectKeys, failedIds, queriedVersions);
         if (req.object_versions_size() == 0) {
             continue;
         }
@@ -365,9 +383,9 @@ void WorkerOcServiceClearDataFlow::CheckNeedClearObjectsByMasterInBatches(
     }
 }
 
-void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(const std::vector<std::string> &objectKeys,
-                                                                  std::vector<std::string> &needClearObjectKeys,
-                                                                  std::unordered_set<std::string> &failedIds)
+void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(
+    const std::vector<std::string> &objectKeys, std::vector<std::string> &needClearObjectKeys,
+    std::unordered_set<std::string> &failedIds, std::unordered_map<std::string, uint64_t> &queriedVersions)
 {
     if (objectKeys.empty()) {
         return;
@@ -382,7 +400,8 @@ void WorkerOcServiceClearDataFlow::FilterObjectsNeedClearByMaster(const std::vec
         if (workerMasterApi == nullptr) {
             continue;
         }
-        CheckNeedClearObjectsByMasterInBatches(workerMasterApi, item.second, needClearObjectKeys, failedIds);
+        CheckNeedClearObjectsByMasterInBatches(workerMasterApi, item.second, needClearObjectKeys, failedIds,
+                                               queriedVersions);
     }
 }
 
@@ -390,27 +409,168 @@ void WorkerOcServiceClearDataFlow::ClearMatchedObjects(const std::vector<std::st
                                                        ClearDataRetryIds &retryIds)
 {
     std::vector<std::string> needClearObjIds;
-    FilterObjectsNeedClearByMaster(matchObjIds, needClearObjIds, retryIds.clearFailedIds);
-    ClearNeedClearObjects(needClearObjIds);
+    std::unordered_map<std::string, uint64_t> queriedVersions;
+    FilterObjectsNeedClearByMaster(matchObjIds, needClearObjIds, retryIds.clearFailedIds, queriedVersions);
+    ClearNeedClearObjects(needClearObjIds, retryIds);
     LOG(INFO) << "clear data without meta in worker finished";
 }
 
 void WorkerOcServiceClearDataFlow::ClearObject(const std::vector<std::string> &objectKeys)
 {
+    (void)ClearObjectsWithSummary(objectKeys, true);
+}
+
+WorkerOcServiceClearDataFlow::ClearObjectSummary WorkerOcServiceClearDataFlow::ClearObjectsWithSummary(
+    const std::vector<std::string> &objectKeys, bool logObjectKeys)
+{
+    return ClearObjectsWithSummaryImpl(objectKeys, logObjectKeys, nullptr);
+}
+
+WorkerOcServiceClearDataFlow::ClearObjectSummary WorkerOcServiceClearDataFlow::ClearObjectsWithSummary(
+    const std::vector<std::string> &objectKeys, bool logObjectKeys,
+    const std::unordered_map<std::string, uint64_t> &expectedVersions)
+{
+    return ClearObjectsWithSummaryImpl(objectKeys, logObjectKeys, &expectedVersions);
+}
+
+WorkerOcServiceClearDataFlow::ClearObjectSummary WorkerOcServiceClearDataFlow::ClearObjectsWithSummaryImpl(
+    const std::vector<std::string> &objectKeys, bool logObjectKeys,
+    const std::unordered_map<std::string, uint64_t> *expectedVersions)
+{
+    METRIC_TIMER(metrics::KvMetricId::WORKER_CLEANUP_BATCH_LATENCY);
+    ClearObjectSummary summary;
     for (const auto &objectKey : objectKeys) {
         std::shared_ptr<SafeObjType> entry;
         bool isInsert = false;
         auto status = objectTable_->ReserveGetAndLock(objectKey, entry, isInsert);
         if (status.IsError()) {
-            LOG(WARNING) << FormatString("objectKey: %s ReserveGetAndLock failed, status: %s", objectKey,
-                                         status.ToString());
+            if (status.GetCode() == K_NOT_FOUND) {
+                summary.clearedCount++;
+                continue;
+            }
+            if (logObjectKeys) {
+                LOG(WARNING) << FormatString("objectKey: %s ReserveGetAndLock failed, status: %s", objectKey,
+                                             status.ToString());
+            }
+            summary.unresolvedCount++;
+            summary.unresolvedIds.emplace(objectKey);
             continue;
         }
         Raii unlock([&entry]() { entry->WUnlock(); });
+        if (expectedVersions != nullptr) {
+            auto versionIt = expectedVersions->find(objectKey);
+            if (versionIt == expectedVersions->end() || entry->Get()->GetCreateTime() != versionIt->second) {
+                summary.unresolvedCount++;
+                summary.unresolvedIds.emplace(objectKey);
+                continue;
+            }
+        }
         ObjectKV objectKV(objectKey, *entry);
-        LOG_IF_ERROR(deleteProc_->ClearObject(objectKV),
-                     FormatString("Failed to erase object %s from object table", objectKey));
+        auto clearRc = deleteProc_->ClearObject(objectKV, expectedVersions != nullptr);
+        if (clearRc.IsError()) {
+            if (logObjectKeys) {
+                LOG(WARNING) << FormatString("Failed to erase object %s from object table, status: %s", objectKey,
+                                             clearRc.ToString());
+            }
+            summary.unresolvedCount++;
+            summary.unresolvedIds.emplace(objectKey);
+            continue;
+        }
+        summary.clearedCount++;
     }
+    return summary;
+}
+
+void WorkerOcServiceClearDataFlow::FinalizeRetryMetadataRecoveryResult(
+    const std::vector<std::string> &uniqueFailedObjectKeys,
+    const std::unordered_set<std::string> &authorityCheckFailedIds, const ClearObjectSummary &clearSummary,
+    RetryMetadataRecoveryResult &result) const
+{
+    result.clearedCount = clearSummary.clearedCount;
+    result.unresolvedIds = authorityCheckFailedIds;
+    result.unresolvedIds.insert(clearSummary.unresolvedIds.begin(), clearSummary.unresolvedIds.end());
+    result.unresolvedCount = result.unresolvedIds.size();
+    if (result.unresolvedCount != 0) {
+        result.status = Status(K_RUNTIME_ERROR, "failed to clear unrecoverable metadata");
+    }
+    if (result.recoveredCount + result.clearedCount + result.unresolvedCount != uniqueFailedObjectKeys.size()) {
+        result.status = Status(K_RUNTIME_ERROR, "metadata recovery cleanup returned inconsistent evidence");
+        result.unresolvedCount = uniqueFailedObjectKeys.size();
+        result.unresolvedIds.clear();
+        result.unresolvedIds.insert(uniqueFailedObjectKeys.begin(), uniqueFailedObjectKeys.end());
+    }
+}
+
+bool WorkerOcServiceClearDataFlow::BuildValidRetryFailedIds(
+    const std::unordered_set<std::string> &requestedIds, const MetaDataRecoveryManager::RecoverySummary &retrySummary,
+    size_t expectedCount, std::unordered_set<std::string> &retryFailedIds) const
+{
+    retryFailedIds.clear();
+    bool valid = retrySummary.requestedCount == expectedCount;
+    for (const auto &objectKey : retrySummary.failedIds) {
+        if (requestedIds.count(objectKey) == 0 || !retryFailedIds.emplace(objectKey).second) {
+            valid = false;
+        }
+    }
+    return valid && retrySummary.recoveredCount + retryFailedIds.size() == expectedCount;
+}
+
+auto WorkerOcServiceClearDataFlow::RetryFailedMetadataRecoveryAndClearUnrecoverable(
+    const std::vector<std::string> &failedObjectKeys) -> RetryMetadataRecoveryResult
+{
+    RetryMetadataRecoveryResult result;
+    std::unordered_set<std::string> requestedIds;
+    std::vector<std::string> uniqueFailedObjectKeys;
+    uniqueFailedObjectKeys.reserve(failedObjectKeys.size());
+    for (const auto &objectKey : failedObjectKeys) {
+        if (requestedIds.emplace(objectKey).second) {
+            uniqueFailedObjectKeys.emplace_back(objectKey);
+        }
+    }
+    if (uniqueFailedObjectKeys.empty()) {
+        return result;
+    }
+    if (metadataRecoveryManager_ == nullptr) {
+        result.status = Status(K_RUNTIME_ERROR, "metadata recovery manager is null");
+        result.unresolvedCount = uniqueFailedObjectKeys.size();
+        result.unresolvedIds.insert(uniqueFailedObjectKeys.begin(), uniqueFailedObjectKeys.end());
+        return result;
+    }
+
+    INJECT_POINT_NO_RETURN("WorkerOcServiceClearDataFlow.BeforeRetryFailedMetadataRecovery");
+    auto retrySummary = metadataRecoveryManager_->RecoverMetadataWithSummary(uniqueFailedObjectKeys, "");
+    std::unordered_set<std::string> retryFailedIds;
+    if (!BuildValidRetryFailedIds(requestedIds, retrySummary, uniqueFailedObjectKeys.size(), retryFailedIds)) {
+        result.status = Status(K_RUNTIME_ERROR, "metadata recovery retry returned inconsistent evidence");
+        result.unresolvedCount = uniqueFailedObjectKeys.size();
+        result.unresolvedIds.insert(uniqueFailedObjectKeys.begin(), uniqueFailedObjectKeys.end());
+        return result;
+    }
+
+    result.recoveredCount = retrySummary.recoveredCount;
+    if (retrySummary.failedIds.empty()) {
+        return result;
+    }
+
+    std::vector<std::string> uniqueRetryFailedIds(retryFailedIds.begin(), retryFailedIds.end());
+    std::vector<std::string> needClearObjectKeys;
+    std::unordered_set<std::string> authorityCheckFailedIds;
+    std::unordered_map<std::string, uint64_t> queriedVersions;
+    FilterObjectsNeedClearByMaster(uniqueRetryFailedIds, needClearObjectKeys, authorityCheckFailedIds, queriedVersions);
+
+    std::unordered_set<std::string> needClearIds(needClearObjectKeys.begin(), needClearObjectKeys.end());
+    for (const auto &objectKey : retryFailedIds) {
+        if (needClearIds.count(objectKey) == 0 && authorityCheckFailedIds.count(objectKey) == 0) {
+            result.recoveredCount++;
+        }
+    }
+
+    if (!needClearObjectKeys.empty()) {
+        INJECT_POINT_NO_RETURN("WorkerOcServiceClearDataFlow.BeforeClearUnrecoverableObjects");
+    }
+    auto clearSummary = ClearObjectsWithSummary(needClearObjectKeys, false, queriedVersions);
+    FinalizeRetryMetadataRecoveryResult(uniqueFailedObjectKeys, authorityCheckFailedIds, clearSummary, result);
+    return result;
 }
 
 void WorkerOcServiceClearDataFlow::FilterObjectsNeedRebuildRefByLocalRef(
@@ -497,19 +657,17 @@ void WorkerOcServiceClearDataFlow::RetryRecoverMasterAppRef(const std::vector<st
     }
 }
 
-void WorkerOcServiceClearDataFlow::ClearNeedClearObjects(const std::vector<std::string> &needClearObjIds)
+void WorkerOcServiceClearDataFlow::ClearNeedClearObjects(const std::vector<std::string> &needClearObjIds,
+                                                         ClearDataRetryIds &retryIds)
 {
     if (needClearObjIds.empty()) {
         return;
     }
-    if (FLAGS_enable_metadata_recovery) {
-        auto summary = metadataRecoveryManager_->RecoverMetadataWithSummary(needClearObjIds, "");
-        if (summary.status.IsError()) {
-            LOG(ERROR) << "RecoverMetadataWithSummary failed, status: " << summary.status.ToString();
-        }
-        ClearObject(summary.failedIds);
-    } else {
-        ClearObject(needClearObjIds);
+    auto result = RetryFailedMetadataRecoveryAndClearUnrecoverable(needClearObjIds);
+    retryIds.clearFailedIds.insert(result.unresolvedIds.begin(), result.unresolvedIds.end());
+    if (result.status.IsError()) {
+        LOG(ERROR) << "Recover or clear local objects without metadata failed, unresolved size: "
+                   << result.unresolvedCount << ", status: " << result.status.ToString();
     }
 }
 }  // namespace object_cache

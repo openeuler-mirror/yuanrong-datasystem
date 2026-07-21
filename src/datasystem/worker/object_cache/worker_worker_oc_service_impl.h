@@ -18,6 +18,7 @@
 #define DATASYSTEM_WORKER_OC_WORKER_SERVICE_IMPL_H
 
 #include <functional>
+#include <optional>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
@@ -29,6 +30,7 @@
 #include "datasystem/protos/worker_object.brpc.pb.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -62,6 +64,12 @@ public:
     Status Init() override;
 
     /**
+     * @brief Borrow local runtime facade for migration target admission.
+     * @param[in] runtime Runtime facade owned by WorkerOCServer.
+     */
+    void SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime);
+
+    /**
      * @brief Get object data from remote worker and load data from disk if necessary.
      * @param [in] serverApi The WriterReader in server side which holds unary rpc socket.
      * @return Status of the call.
@@ -78,8 +86,8 @@ public:
      * @param[in] isQueryAndGet Whether to use the metadata-query resident-data fast path.
      * @return Status of the call.
      */
-    Status GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                           std::vector<RpcMessage> &payload, bool isQueryAndGet = false);
+    Status GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+                           bool isQueryAndGet = false);
 
     /**
      * @brief Check etcd state.
@@ -133,6 +141,9 @@ public:
     Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override;
 
 private:
+    Status AcquireReadAdmission(const std::string &operation,
+                                std::optional<worker::WorkerRuntimeStateReadGuard> &guard) const;
+
     struct AggregateInfo {
         bool canBatchHandler = false;
         std::vector<uint64_t> batchReqSize;
@@ -195,15 +206,13 @@ private:
                                RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr,
                                BatchRh2dContext *batchRh2dContext = nullptr, bool isQueryAndGet = false);
 
-    Status LoadPayloadAndFillResponse(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                      SafeObjType &entry, std::vector<RpcMessage> &outPayload,
-                                      const std::string &objectKey, uint64_t offset, uint64_t size,
-                                      bool blocking, std::vector<uint64_t> &eventKeys,
+    Status LoadPayloadAndFillResponse(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
+                                      std::vector<RpcMessage> &outPayload, const std::string &objectKey,
+                                      uint64_t offset, uint64_t size, bool blocking, std::vector<uint64_t> &eventKeys,
                                       const std::shared_ptr<AggregateMemory> &batchPtr,
                                       RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
-                                      Status *fallbackStatus, bool isFastTransportEnabled,
-                                      bool isUrmaFastTransport, bool isPipelineH2DRequest,
-                                      PerfPoint &batchImplPoint, bool isQueryAndGet);
+                                      Status *fallbackStatus, bool isFastTransportEnabled, bool isUrmaFastTransport,
+                                      bool isPipelineH2DRequest, PerfPoint &batchImplPoint, bool isQueryAndGet);
 
     /**
      * @brief Load a spilled object for the regular remote-get path.
@@ -224,37 +233,34 @@ private:
      * @param[in,out] loadDataPoint Object-load performance point.
      * @param[in,out] batchImplPoint Remote-get implementation performance point.
      */
-    void FillGetObjectRemoteResponse(GetObjectRemoteRspPb &rsp, const SafeObjType &entry,
-                                     PerfPoint &loadDataPoint, PerfPoint &batchImplPoint);
+    void FillGetObjectRemoteResponse(GetObjectRemoteRspPb &rsp, const SafeObjType &entry, PerfPoint &loadDataPoint,
+                                     PerfPoint &batchImplPoint);
 
     Status LockEntryForRemoteGet(const std::string &objectKey, bool tryLock, uint64_t version,
                                  std::shared_ptr<SafeObjType> &safeEntry);
 
-    Status CheckFastTransportSize(const SafeObjType &entry, uint64_t expectedDataSize,
-                                  const std::string &objectKey, bool isFastTransportEnabled,
-                                  GetObjectRemoteRspPb &rsp);
+    Status CheckFastTransportSize(const SafeObjType &entry, uint64_t expectedDataSize, const std::string &objectKey,
+                                  bool isFastTransportEnabled, GetObjectRemoteRspPb &rsp);
 
     Status WriteViaFastTransport(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
                                  std::shared_ptr<ShmUnit> shmUnit, uint64_t localSegAddress, uint64_t localSegSize,
                                  uint64_t offset, uint64_t size, bool blocking, std::vector<uint64_t> &eventKeys,
                                  const std::shared_ptr<AggregateMemory> &batchPtr, bool isFastTransportEnabled,
                                  bool isPipelineH2DRequest, BatchRh2dContext *batchRh2dContext,
-                                 Status &fastTransportStatus,
-                                 std::string &fastTransportName);
+                                 Status &fastTransportStatus, std::string &fastTransportName);
 
     Status HandlePayloadFallback(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
                                  std::vector<RpcMessage> &outPayload, ShmGuard &shmGuard,
                                  std::shared_ptr<ShmUnit> shmUnit, Status &fastTransportStatus,
-                                 const std::string &fastTransportName,
-                                 const std::string &objectKey, bool isUrmaFastTransport,
-                                 bool isPipelineH2DRequest, bool blocking,
+                                 const std::string &fastTransportName, const std::string &objectKey,
+                                 bool isUrmaFastTransport, bool isPipelineH2DRequest, bool blocking,
                                  const std::shared_ptr<AggregateMemory> &batchPtr, Status *fallbackStatus,
                                  RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
                                  const ReadObjectKV &objKv, uint64_t localSegAddress, uint64_t localSegSize);
 
     Status ProcessFallbackTrackError(const Status &rc, const Status &fastTransportStatus, bool blocking,
-        Status *fallbackStatus, bool &canPrepareFallbackPayload,
-        const std::string &objectKey);
+                                     Status *fallbackStatus, bool &canPrepareFallbackPayload,
+                                     const std::string &objectKey);
 
     /**
      * @brief Helper function to GetObjectRemote, but specialized for the batch get path.
@@ -326,8 +332,7 @@ private:
      * @return Status of the call.
      */
     Status ParallelBatchGetObject(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
-                                  std::vector<ParallelRes> &parallelRes,
-                                  const BatchRh2dContext &batchTransportContext);
+                                  std::vector<ParallelRes> &parallelRes, const BatchRh2dContext &batchTransportContext);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to prepare the aggregate info.
@@ -416,6 +421,7 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_;
     const cluster::MembershipEndpointView &membership_;
     CoordinationAvailabilityProvider coordinationAvailable_;
+    const worker::WorkerRuntimeFacade *runtime_{ nullptr };
     BackendObservationProvider backendObservationProvider_;
     std::shared_ptr<ThreadPool> communicatorThreadPool_{ nullptr };
 };

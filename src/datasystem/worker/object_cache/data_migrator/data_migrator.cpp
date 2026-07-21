@@ -238,6 +238,29 @@ Status DataMigrator::MigrateL2CacheBySlot(const std::vector<std::string> &object
     return Status::OK();
 }
 
+#ifdef WITH_TESTS
+Status DataMigrator::MigrateToTargetWithRedirectForTest(const std::vector<std::string> &objectKeys,
+                                                        const HostPort &targetAddr,
+                                                        std::shared_ptr<SelectionStrategy> strategy,
+                                                        const std::unordered_map<std::string, uint64_t> &objectSizes)
+{
+    progress_ = CreateMigrateProgress(objectKeys.size());
+    failedKeys_.clear();
+    skippedKeys_.clear();
+
+    std::vector<std::future<MigrateDataHandler::MigrateResult>> futures;
+    futures.emplace_back(MigrateToTargetNode(objectKeys, targetAddr, std::move(strategy), false, 0, false));
+    while (!futures.empty()) {
+        std::vector<std::future<MigrateDataHandler::MigrateResult>> newFutures;
+        RETURN_IF_NOT_OK(HandleMigrateDataResult(objectSizes, futures, newFutures));
+        futures.swap(newFutures);
+    }
+    CHECK_FAIL_RETURN_STATUS(failedKeys_.empty(), K_RUNTIME_ERROR,
+                             FormatString("Migration still has failed objects: %zu", failedKeys_.size()));
+    return Status::OK();
+}
+#endif
+
 std::map<uint32_t, std::vector<std::string>> DataMigrator::GroupL2CacheObjectsBySlot(
     const std::vector<std::string> &objectKeys) const
 {
@@ -430,6 +453,11 @@ Status DataMigrator::ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorke
                       FormatString("[Migrate Data] The node [%s] to be migrated is the current node [%s]",
                                    workerAddr.ToString(), localAddress_.ToString()));
     }
+#ifdef WITH_TESTS
+    if (createRemoteApiHook_ != nullptr) {
+        return createRemoteApiHook_(workerAddr, remoteWorkerStub);
+    }
+#endif
 
     RETURN_IF_NOT_OK(endpointPolicy_.CheckEndpoint(workerAddr, false));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(workerAddr.ToString(), localAddress_, akSkManager_,

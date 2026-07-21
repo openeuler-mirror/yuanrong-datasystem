@@ -14,7 +14,7 @@
 /**
  * Description: Worker business adapter for cluster topology phase callbacks.
  */
-#include "datasystem/worker/worker_topology_phase_callbacks.h"
+#include "datasystem/worker/runtime/worker_topology_phase_callbacks.h"
 
 #include <algorithm>
 #include <utility>
@@ -69,8 +69,8 @@ Status EraseFailedWorkerWorkerStub(const cluster::TopologyPhaseAction &action)
     if (rc.IsError() || failedAddr.Empty()) {
         return Status(K_INVALID, "failed member address is invalid: " + action.failed->address);
     }
-    for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC,
-                       StubType::WORKER_WORKER_TRANS_SVC }) {
+    for (auto type :
+         { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC }) {
         auto removeRc = RpcStubCacheMgr::Instance().Remove(failedAddr, type);
         // K_NOT_FOUND: no cached stub for this worker<->worker direction; not an error.
         if (removeRc.IsError() && removeRc.GetCode() != StatusCode::K_NOT_FOUND) {
@@ -103,8 +103,30 @@ WorkerTopologyPhaseCallbacks::WorkerTopologyPhaseCallbacks(WorkerTopologyPhaseCa
       streamMetadataEnabled_(dependencies.streamMetadataEnabled),
       metadataManagers_(dependencies.metadataManagers),
       objectCacheServiceProvider_(std::move(dependencies.objectCacheServiceProvider)),
-      readinessCheck_(std::move(dependencies.readinessCheck))
+      readinessCheck_(std::move(dependencies.readinessCheck)),
+      failureActions_(std::move(dependencies.failureActions))
 {
+    if (failureActions_ == nullptr) {
+        failureActions_ = std::make_shared<WorkerTopologyFailureActions>(objectCacheServiceProvider_);
+    }
+}
+
+WorkerTopologyFailureActions::WorkerTopologyFailureActions(ObjectCacheServiceProvider objectCacheServiceProvider)
+    : objectCacheServiceProvider_(std::move(objectCacheServiceProvider))
+{
+}
+
+Status WorkerTopologyFailureActions::CleanupLocalData(const cluster::TopologyCallbackContext &context)
+{
+    auto *objectCacheService = objectCacheServiceProvider_ == nullptr ? nullptr : objectCacheServiceProvider_();
+    CHECK_FAIL_RETURN_STATUS(objectCacheService != nullptr, K_NOT_READY, "object-cache service is not initialized");
+    return objectCacheService->SubmitTopologyFailureCleanup(
+        context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation);
+}
+
+Status WorkerTopologyFailureActions::CleanupRpcStub(const cluster::TopologyPhaseAction &action)
+{
+    return EraseFailedWorkerWorkerStub(action);
 }
 
 Status WorkerTopologyPhaseCallbacks::OnScaleOut(const cluster::TopologyCallbackContext &context)
@@ -211,8 +233,7 @@ Status WorkerTopologyPhaseCallbacks::MigrateMetadata(const cluster::TopologyCall
         context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation);
 }
 
-Status WorkerTopologyPhaseCallbacks::AcquireScaleInDrain(const cluster::TopologyCallbackContext &context,
-                                                         bool &leader)
+Status WorkerTopologyPhaseCallbacks::AcquireScaleInDrain(const cluster::TopologyCallbackContext &context, bool &leader)
 {
     CHECK_FAIL_RETURN_STATUS(context.action.source.has_value(), K_INVALID, "ScaleIn callback lacks source");
     const auto &sourceId = context.action.source->id;
@@ -224,8 +245,8 @@ Status WorkerTopologyPhaseCallbacks::AcquireScaleInDrain(const cluster::Topology
         const auto wake = std::min(context.deadline, std::chrono::steady_clock::now() + SCALE_IN_DRAIN_WAIT_POLL);
         scaleInDrainChanged_.wait_until(lock, wake);
     }
-    const bool sameBatch = scaleInDrainState_.sourceId == sourceId
-                           && scaleInDrainState_.batchEpoch == context.action.batchEpoch;
+    const bool sameBatch =
+        scaleInDrainState_.sourceId == sourceId && scaleInDrainState_.batchEpoch == context.action.batchEpoch;
     if (sameBatch && scaleInDrainState_.complete) {
         leader = false;
         return Status::OK();
@@ -245,8 +266,7 @@ void WorkerTopologyPhaseCallbacks::CompleteScaleInDrain(const cluster::TopologyC
         scaleInDrainState_.complete = status.IsOk();
     }
     scaleInDrainChanged_.notify_all();
-    LOG(INFO) << "CLUSTER_SCALE_IN action=data_drain"
-              << " epoch=" << context.action.batchEpoch
+    LOG(INFO) << "CLUSTER_SCALE_IN action=data_drain" << " epoch=" << context.action.batchEpoch
               << " source=" << (source.has_value() ? source->address : "")
               << " source_id_prefix=" << (source.has_value() ? cluster::MemberIdForLog(source->id) : "")
               << " target=" << (context.action.target.has_value() ? context.action.target->address : "")
@@ -258,16 +278,16 @@ void WorkerTopologyPhaseCallbacks::CompleteScaleInDrain(const cluster::TopologyC
               << " status=" << status.ToString();
 }
 
-Status WorkerTopologyPhaseCallbacks::DrainScaleInData(
-    const cluster::TopologyCallbackContext &context, object_cache::WorkerOCServiceImpl &objectCacheService)
+Status WorkerTopologyPhaseCallbacks::DrainScaleInData(const cluster::TopologyCallbackContext &context,
+                                                      object_cache::WorkerOCServiceImpl &objectCacheService)
 {
     bool leader = false;
     RETURN_IF_NOT_OK(AcquireScaleInDrain(context, leader));
     if (!leader) {
         return Status::OK();
     }
-    auto status = objectCacheService.DrainTopologyScaleInData(
-        context.action, context.businessOperationId, context.deadline, context.cancellation);
+    auto status = objectCacheService.DrainTopologyScaleInData(context.action, context.businessOperationId,
+                                                              context.deadline, context.cancellation);
     CompleteScaleInDrain(context, status);
     return status;
 }
@@ -283,8 +303,8 @@ void WorkerTopologyPhaseCallbacks::RecordFailureStep(const std::string &step, co
     if (status.IsOk()) {
         return;
     }
-    LOG(ERROR) << "CLUSTER_FAILURE action=callback_step step=" << step << " outcome=failed status="
-               << status.ToString();
+    LOG(ERROR) << "CLUSTER_FAILURE action=callback_step step=" << step
+               << " outcome=failed status=" << status.ToString();
     if (firstError.IsOk()) {
         firstError = status;
     }
@@ -338,16 +358,11 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
                                                                   context.deadline, context.cancellation),
                           firstError);
     }
-    auto *objectCacheService = GetObjectCacheService();
-    if (objectCacheService != nullptr) {
-        RecordFailureStep(
-            "cleanup-local-data",
-            objectCacheService->SubmitTopologyFailureCleanup(
-                context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation),
-            firstError);
-    } else {
-        RecordFailureStep("cleanup-local-data", Status(K_NOT_READY, "object-cache service is not initialized"),
+    if (failureActions_ == nullptr) {
+        RecordFailureStep("cleanup-local-data", Status(K_NOT_READY, "Worker failure actions are not initialized"),
                           firstError);
+    } else {
+        RecordFailureStep("cleanup-local-data", failureActions_->CleanupLocalData(context), firstError);
     }
     if (!centralizedMetadata_ && ocMetadata != nullptr) {
         RecordFailureStep("cleanup-device",
@@ -361,7 +376,12 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
     // TCP link info and kept retrying the 25 kill-9'd workers.
     // Unconditional: every worker owns its own RpcStubCacheMgr regardless of
     // metadata mode. Remove is idempotent (K_NOT_FOUND is benign).
-    RecordFailureStep("cleanup-rpc-stub", EraseFailedWorkerWorkerStub(context.action), firstError);
+    if (failureActions_ == nullptr) {
+        RecordFailureStep("cleanup-rpc-stub", Status(K_NOT_READY, "Worker failure actions are not initialized"),
+                          firstError);
+    } else {
+        RecordFailureStep("cleanup-rpc-stub", failureActions_->CleanupRpcStub(context.action), firstError);
+    }
 }
 
 }  // namespace datasystem::worker

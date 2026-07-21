@@ -22,6 +22,7 @@
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 
 #include "datasystem/protos/worker_object.irpc.pb.h"
@@ -47,6 +48,8 @@ public:
      * @return Status of the call.
      */
     Status Init() override;
+
+    void SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime);
 
     /**
      * @brief Waiting for WorkerOCServiceImpl to be initialized
@@ -155,6 +158,8 @@ public:
     Status NotifyMasterDecNestedRefs(const NotifyMasterDecNestedReqPb &req, NotifyMasterDecNestedResPb &rsp) override;
 
 private:
+    Status CheckAdmission(worker::WorkerAdmissionKind kind, const std::string &operation) const;
+
     /**
      * @brief Cache invalidate an object.
      * @param[in] req The rpc request protobuf.
@@ -181,6 +186,7 @@ private:
 
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     std::shared_ptr<AkSkManager> akSkManager_;
+    const worker::WorkerRuntimeFacade *runtime_{ nullptr };
 };
 }  // namespace object_cache
 }  // namespace datasystem

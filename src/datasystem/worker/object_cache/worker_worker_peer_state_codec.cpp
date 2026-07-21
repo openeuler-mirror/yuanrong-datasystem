@@ -22,6 +22,7 @@
 
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -55,6 +56,16 @@ Status ValidateCanonicalAddress(const std::string &address)
     return Status::OK();
 }
 }  // namespace
+
+cluster::ControlBackendObservation RefreshControlBackendObservationState(cluster::ControlBackendObservation observation,
+                                                                         bool backendAvailable)
+{
+    observation.state =
+        backendAvailable ? cluster::ControlBackendState::AVAILABLE : cluster::ControlBackendState::UNAVAILABLE;
+    observation.observedAt = std::chrono::steady_clock::now();
+    return observation;
+}
+
 Status FillGetClusterStateRspPbFromControlBackendObservation(const cluster::ControlBackendObservation &observation,
                                                              GetClusterStateRspPb &rsp)
 {
@@ -72,7 +83,7 @@ Status FillGetClusterStateRspPbFromControlBackendObservation(const cluster::Cont
                              K_NOT_READY, "cluster control-backend evidence is stale");
     GetClusterStateRspPb candidate;
     candidate.set_coordinator_available(observation.state == cluster::ControlBackendState::AVAILABLE);
-    candidate.set_node_id(observation.reporter.id);
+    candidate.set_node_id(BytesUuidToString(observation.reporter.id));
     candidate.set_topology_version(static_cast<int64_t>(observation.topologyVersion));
     candidate.set_topology_revision(observation.topologyRevision);
     candidate.set_topology_digest(observation.topologyDigest);
@@ -88,10 +99,12 @@ Status FillControlBackendObservationFromGetClusterStateRspPb(const std::string &
 {
     CHECK_FAIL_RETURN_STATUS(rsp.ready(), K_NOT_READY, "cluster peer is not ready to report backend evidence");
     RETURN_IF_NOT_OK(ValidateCanonicalAddress(peerAddress));
-    RETURN_IF_NOT_OK(ValidateEvidenceFields(rsp.node_id(), rsp.topology_version(), rsp.topology_revision(),
-                                            rsp.topology_digest()));
+    std::string memberId;
+    RETURN_IF_NOT_OK(StringUuidToBytes(rsp.node_id(), memberId));
+    RETURN_IF_NOT_OK(
+        ValidateEvidenceFields(memberId, rsp.topology_version(), rsp.topology_revision(), rsp.topology_digest()));
     cluster::ControlBackendObservation candidate;
-    candidate.reporter = { rsp.node_id(), peerAddress };
+    candidate.reporter = { std::move(memberId), peerAddress };
     candidate.state = rsp.coordinator_available() ? cluster::ControlBackendState::AVAILABLE
                                                   : cluster::ControlBackendState::UNAVAILABLE;
     candidate.topologyVersion = static_cast<uint64_t>(rsp.topology_version());

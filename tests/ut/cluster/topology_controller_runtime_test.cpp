@@ -57,6 +57,16 @@ public:
         return backend_.Get(table, key, result, timeoutMs);
     }
 
+    Status CreateTable(const std::string &table, const std::string &tablePrefix) override
+    {
+        return backend_.CreateTable(table, tablePrefix);
+    }
+
+    Status Put(const std::string &table, const std::string &key, const std::string &value) override
+    {
+        return backend_.Put(table, key, value);
+    }
+
     Status CAS(const std::string &table, const std::string &key, const ProcessFunction &process,
                RangeSearchResult &result) override
     {
@@ -150,6 +160,16 @@ public:
     void SetEventHandler(EventHandler &&handler) override
     {
         backend_.SetEventHandler(std::move(handler));
+    }
+
+    void SetLocalIsolationHandler(LocalIsolationHandler handler) override
+    {
+        backend_.SetLocalIsolationHandler(std::move(handler));
+    }
+
+    void SetLocalRecoveryHandler(LocalRecoveryHandler handler) override
+    {
+        backend_.SetLocalRecoveryHandler(std::move(handler));
     }
 
     void SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler) override
@@ -306,8 +326,8 @@ TEST(TopologyControllerRuntimeTest, ExternalEventSourceSkipsBackendWatchAndAccep
     const auto attemptsBeforeEvent = backend.Backend().GetAttemptCount();
     DS_ASSERT_OK(runtime->SubmitCoordinationEvent(
         { CoordinationEventType::PUT, "/datasystem/external-event-source/topology/", "", 1, 1 }));
-    ASSERT_TRUE(backend.Backend().WaitForGetAttempts(attemptsBeforeEvent + 1,
-                                                     std::chrono::steady_clock::now() + TEST_WAIT));
+    ASSERT_TRUE(
+        backend.Backend().WaitForGetAttempts(attemptsBeforeEvent + 1, std::chrono::steady_clock::now() + TEST_WAIT));
 
     DS_ASSERT_OK(runtime->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
     EXPECT_EQ(backend.ShutdownEventSourceCalls(), 0U);

@@ -448,8 +448,14 @@ message PushMetaToMasterRspPb {
 }
 
 message ReconciliationQueryPb {
+  enum EventType {
+    RESTART = 0;
+    LOCAL_ISOLATION = 1;
+    NETWORK_RECOVERY = 2;
+  }
   string hostport = 1;
   int64 event_timestamp = 2;
+  EventType event_type = 3;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

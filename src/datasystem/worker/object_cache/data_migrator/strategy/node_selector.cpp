@@ -13,16 +13,18 @@
 
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 
+#include <exception>
+
 #include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
 
-
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
@@ -107,6 +109,25 @@ void NodeSelector::UnregisterRebalanceTaskHandler()
     rebalanceTaskHandler_ = nullptr;
 }
 
+void NodeSelector::RegisterResourceRecoveredHandler(std::function<void()> handler)
+{
+    std::lock_guard<std::mutex> lock(resourceRecoveredHandlerMutex_);
+    resourceRecoveredHandler_ = std::move(handler);
+}
+
+void NodeSelector::UnregisterResourceRecoveredHandler()
+{
+    std::unique_lock<std::mutex> lock(resourceRecoveredHandlerMutex_);
+    resourceRecoveredHandler_ = nullptr;
+    resourceRecoveryPending_ = false;
+    resourceRecoveredHandlerCv_.wait(lock, [this] { return activeResourceRecoveredHandlers_ == 0; });
+}
+
+void NodeSelector::SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime)
+{
+    runtime_ = runtime;
+}
+
 Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNodes, const std::string &preferNode,
                                 size_t needSize, std::string &outNode)
 {
@@ -121,8 +142,7 @@ Status NodeSelector::SelectNode(const std::unordered_set<std::string> &excludeNo
         return GetLocalStandbyWorker(excludeNodes, outNode);
     }
     auto maxLeftMemory = rankList_[0].availableMemory;
-    CHECK_FAIL_RETURN_STATUS(maxLeftMemory > 1 * MB_TO_BYTES,
-                             K_NO_SPACE, "The max available memory in not enough");
+    CHECK_FAIL_RETURN_STATUS(maxLeftMemory > 1 * MB_TO_BYTES, K_NO_SPACE, "The max available memory in not enough");
 
     auto it = std::find_if(rankList_.begin(), rankList_.end(),
                            [&preferNode](NodeInfo info) { return info.nodeId == preferNode; });
@@ -219,14 +239,14 @@ Status NodeSelector::TryGetAvailableMemoryFromSnapshot(const std::string &addres
     std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
     hasSnapshot = !rankList_.empty();
     if (!hasSnapshot) {
-        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
-                                                localAddress_));
+        RETURN_STATUS(K_NOT_FOUND,
+                      FormatString("Remote node %s resource info not found, local node %s", address, localAddress_));
     }
     auto it = std::find_if(rankList_.begin(), rankList_.end(),
                            [&address](const NodeInfo &info) { return info.nodeId == address; });
     if (it == rankList_.end()) {
-        RETURN_STATUS(K_NOT_FOUND, FormatString("Remote node %s resource info not found, local node %s", address,
-                                                localAddress_));
+        RETURN_STATUS(K_NOT_FOUND,
+                      FormatString("Remote node %s resource info not found, local node %s", address, localAddress_));
     }
     if (!it->isReady) {
         RETURN_STATUS(K_NOT_READY, FormatString("Remote node %s is not ready for resource selection, local node %s",
@@ -240,6 +260,14 @@ bool NodeSelector::HasEnoughAvailableMemory(size_t needMemory)
 {
     std::shared_lock<std::shared_timed_mutex> lock(nodeInfosMutex_);
     return totalSize_ > needMemory;
+}
+
+bool NodeSelector::IsLocalReadyForResourceReport() const
+{
+    if (exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed)) {
+        return false;
+    }
+    return runtime_ == nullptr || runtime_->GetSnapshot().mode == worker::WorkerServiceMode::RUNNING;
 }
 
 void NodeSelector::WorkerThread()
@@ -287,6 +315,7 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
     master::WorkerStat *stat = req.mutable_stat();
     auto *allocator = datasystem::memory::Allocator::Instance();
     const auto availableMemory = allocator->GetMemoryAvailToHighWater();
+    MaybeNotifyResourceRecovered(availableMemory);
     const auto usedMemory = allocator->GetTotalRealMemoryUsage();
     const auto memoryLimit = allocator->GetTotalMemoryLimit();
     stat->set_address(localAddress_);
@@ -295,8 +324,7 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
     stat->set_memory_limit(memoryLimit);
     // Report capacity as current used memory plus memory still available to the high watermark.
     stat->set_memory_capacity(usedMemory + availableMemory);
-    const bool exitRequested = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
-    stat->set_is_ready(!exitRequested);
+    stat->set_is_ready(IsLocalReadyForResourceReport());
     {
         std::lock_guard<std::mutex> lck(token_->mutex_);
         if (!token_->alive) {
@@ -310,6 +338,44 @@ Status NodeSelector::ReportResource(const std::shared_ptr<worker::WorkerMasterOC
         token_->working = false;
     }
     return rc;
+}
+
+void NodeSelector::MaybeNotifyResourceRecovered(uint64_t availableMemory)
+{
+    (void)availableMemory;
+    if (runtime_ == nullptr) {
+        return;
+    }
+    const auto mode = runtime_->GetSnapshot().mode;
+    if (mode == worker::WorkerServiceMode::OUT_OF_MEMORY) {
+        resourceRecoveryPending_ = true;
+    } else if (mode != worker::WorkerServiceMode::RECOVERING) {
+        resourceRecoveryPending_ = false;
+    }
+    if (!resourceRecoveryPending_) {
+        return;
+    }
+    std::function<void()> handler;
+    {
+        std::lock_guard<std::mutex> lock(resourceRecoveredHandlerMutex_);
+        if (!resourceRecoveredHandler_) {
+            return;
+        }
+        handler = resourceRecoveredHandler_;
+        ++activeResourceRecoveredHandlers_;
+    }
+    Raii finish([this] {
+        std::lock_guard<std::mutex> lock(resourceRecoveredHandlerMutex_);
+        --activeResourceRecoveredHandlers_;
+        resourceRecoveredHandlerCv_.notify_all();
+    });
+    try {
+        handler();
+    } catch (const std::exception &error) {
+        LOG(ERROR) << "Resource recovery handler threw: " << error.what();
+    } catch (...) {
+        LOG(ERROR) << "Resource recovery handler threw an unknown exception";
+    }
 }
 
 Status NodeSelector::CollectClusterInfo()

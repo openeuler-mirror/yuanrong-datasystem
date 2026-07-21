@@ -18,6 +18,7 @@
 #define DATASYSTEM_COMMON_KVSTORE_ETCD_ETCD_STORE_H
 
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -454,7 +455,7 @@ public:
 
     bool IsFirstKeepAliveSent()
     {
-        return keepAliveValue_.state == cluster::MemberLifecycleState::RECOVERING;
+        return firstKeepAliveSent_.load(std::memory_order_acquire);
     }
 
     /**
@@ -472,6 +473,16 @@ public:
     void SetCheckEtcdStateWhenNetworkFailedHandler(std::function<bool()> CheckEtcdStateWhenNetworkFailedHandler)
     {
         checkEtcdStateWhenNetworkFailedHandler_ = std::move(CheckEtcdStateWhenNetworkFailedHandler);
+    }
+
+    void SetLocalIsolationHandler(std::function<void(const Status &)> localIsolationHandler)
+    {
+        localIsolationHandler_ = std::move(localIsolationHandler);
+    }
+
+    void SetLocalRecoveryHandler(std::function<void()> localRecoveryHandler)
+    {
+        localRecoveryHandler_ = std::move(localRecoveryHandler);
     }
 
     /**
@@ -515,24 +526,21 @@ private:
     /**
      * @brief Launches the internal thread that loops the actual keep-alive logic
      * timestamp and tag, and each time reconnecting the etcd use the same value.
-     * @param[in,out] keepAliveTimeoutTimer Timer measuring continuous local keepalive failure.
-     * @param[in,out] deathTimer Backup suicide timer armed after confirmed local isolation.
      * @return Status of the call.
      */
-    Status RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTimer);
+    Status RunKeepAliveTask(Timer &keepAliveTimeoutTimer, int &networkFailedConfirmTimes,
+                            bool &needHandleKeepAliveFailure);
+    void HandleKeepAliveRenewal(std::atomic<bool> &keepAliveRenewed, int &networkFailedConfirmTimes,
+                                bool &needHandleKeepAliveFailure);
 
     /**
      * @brief Classify one failed keepalive attempt and publish local-isolation evidence when confirmed.
-     *        On confirmed local isolation past node_dead_timeout_s (and auto_del_dead_node), raises SIGKILL.
      * @param[in] status Failed keepalive status.
-     * @param[in,out] observedLeaseId Lease generation used by the current confirmation counter.
      * @param[in,out] confirmTimes Consecutive local-isolation confirmations.
      * @param[in,out] needHandleFailure Whether a fake DELETE still needs to be published for this lease.
-     * @param[in,out] deathTimer Backup suicide timer armed after confirmed local isolation.
      * @return True when the lease-expiry threshold was reached and the caller should delay before retrying.
      */
-    bool ProcessKeepAliveFailure(const Status &status, int64_t &observedLeaseId, int &confirmTimes,
-                                 bool &needHandleFailure, Timer &deathTimer);
+    bool ProcessKeepAliveFailure(const Status &status, int &confirmTimes, bool &needHandleFailure);
 
     /**
      * @brief Helper function to kick off the threading and loops for the keep alive
@@ -554,8 +562,7 @@ private:
      * @return Status of the call
      */
     Status InitWatch(std::unique_ptr<std::unordered_map<std::string, int64_t>> &&prefixMap,
-                     std::unordered_set<std::string> exactKeys,
-                     const std::function<Status()> &writable);
+                     std::unordered_set<std::string> exactKeys, const std::function<Status()> &writable);
 
     /**
      * @brief Runs the background threads for watch
@@ -598,11 +605,12 @@ private:
     Status PerformAuthRequest();
     // Background loop that refreshes the token
     void TokenRefreshLoop();
-    std::string address_;                         // etcd address
-    std::string keepAliveTableName_;              // The table on etcd for the leased kv's
-    std::string keepAliveKey_;                    // The key that is associated with the lease
+    std::string address_;                        // etcd address
+    std::string keepAliveTableName_;             // The table on etcd for the leased kv's
+    std::string keepAliveKey_;                   // The key that is associated with the lease
     cluster::MemberServiceInfo keepAliveValue_;  // The value that is associated with the lease
-    std::atomic<int64_t> leaseId_;                // The lease id for the keep alive.
+    std::atomic<bool> firstKeepAliveSent_{ false };
+    std::atomic<int64_t> leaseId_;  // The lease id for the keep alive.
     std::unique_ptr<GrpcSession<etcdserverpb::KV>> rpcSession_;
     mutable std::shared_timed_mutex mutex_;
     TableMap tableMap_;
@@ -634,6 +642,8 @@ private:
     Timer keepAliveTimeoutTimer_;
 
     std::function<bool()> checkEtcdStateWhenNetworkFailedHandler_;
+    std::function<void(const Status &)> localIsolationHandler_;
+    std::function<void()> localRecoveryHandler_;
 
     std::atomic<bool> keepAliveTimeout_{ true };
 
@@ -742,11 +752,14 @@ private:
     // The current mod revision of the ring.
     int64_t revision_{ 0 };
 
-    // Initialize flag.
-    static std::once_flag flag_;
-
     // RPC session connect to ETCD cluster, all txn share on rpc session.
     static std::unique_ptr<GrpcSession<etcdserverpb::KV>> rpcSession_;
+
+    // The backend address currently bound to the shared transaction RPC session.
+    static std::string backendAddress_;
+
+    // Protect shared transaction session initialization and shutdown.
+    static std::mutex sessionMutex_;
 
     // Record how many txn construct.
     static std::atomic<int> num_;

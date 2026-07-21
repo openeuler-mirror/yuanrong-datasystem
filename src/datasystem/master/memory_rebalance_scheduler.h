@@ -107,6 +107,8 @@ private:
                                   const cluster::TopologySnapshot *topologySnapshot) const;
     bool IsSourceCandidateLocked(const NodeInfo &node, uint64_t nowMs,
                                  const cluster::TopologySnapshot *topologySnapshot) const;
+    bool IsTargetCandidateLocked(const NodeInfo &node, uint64_t nowMs,
+                                 const cluster::TopologySnapshot *topologySnapshot) const;
     void CollectWorkerCandidatesLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                                        const std::string &sourceWorker, uint64_t nowMs,
                                        const cluster::TopologySnapshot *topologySnapshot,

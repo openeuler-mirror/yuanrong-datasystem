@@ -41,6 +41,10 @@ message HealthCheckRequestPb {
 };
 
 message HealthCheckReplyPb {
+  string worker_service_mode = 1;
+  string worker_service_reason = 2;
+  string worker_recovery_phase = 3;
+  uint32 recovery_evidence_mask = 4;
 };
 
 message CreateReqPb {

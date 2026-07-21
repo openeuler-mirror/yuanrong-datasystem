@@ -971,6 +971,7 @@ Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFd
 #ifdef WITH_TESTS
     INJECT_POINT("ClientWorkerCommonApi.GetClientFd.preReceive");
 #endif
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(status, "GetClientFd failed");
     if (status.IsOk()) {
         RecvFdAfterNotify(workerFds, requestId, time, clientFds);
     }

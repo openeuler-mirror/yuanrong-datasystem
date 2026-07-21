@@ -2557,6 +2557,17 @@ public:
         StartWorkerAndWaitReady(indexes, workerFlags, maxWaitTimeSec);
     }
 
+    void AssertGetEventuallyEquals(const std::shared_ptr<KVClient> &client, const std::string &key,
+                                   const std::string &expected)
+    {
+        std::string value;
+        ASSERT_TRUE(WaitUntil([&] {
+            value.clear();
+            return client->Get(key, value).IsOk() && value == expected;
+        })) << "voluntary scale-down data did not become readable, key="
+            << key;
+    }
+
 protected:
     ExternalCluster *externalCluster_ = nullptr;
 };
@@ -2622,11 +2633,8 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeVoluntaryScaleDown)
     DS_ASSERT_OK(client1->Set(key1, data));
 
     VoluntaryScaleDownInject(0);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
 
-    std::string val;
-    DS_ASSERT_OK(client1->Get(key1, val));
-    ASSERT_EQ(val, data);
+    AssertGetEventuallyEquals(client1, key1, data);
 }
 
 TEST_F(KVClientWriteRocksdbTest, TestVoluntaryScaleDownWaitsForCopyMetaConfirmation)
@@ -2730,11 +2738,8 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeVoluntaryScaleDown)
     DS_ASSERT_OK(client1->Set(key1, data));
 
     VoluntaryScaleDownInject(0);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
 
-    std::string val;
-    DS_ASSERT_OK(client1->Get(key1, val));
-    ASSERT_EQ(val, data);
+    AssertGetEventuallyEquals(client1, key1, data);
 }
 
 TEST_F(KVClientWriteRocksdbTest, TestSyncModeScaleUp)
@@ -2815,11 +2820,8 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeVoluntaryScaleDown)
     DS_ASSERT_OK(client1->Set(key1, data));
 
     VoluntaryScaleDownInject(0);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
 
-    std::string val;
-    DS_ASSERT_OK(client1->Get(key1, val));
-    ASSERT_EQ(val, data);
+    AssertGetEventuallyEquals(client1, key1, data);
 }
 
 TEST_F(KVClientWriteRocksdbTest, TestASyncModeScaleUp)

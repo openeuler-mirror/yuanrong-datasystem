@@ -14,6 +14,7 @@
 /**
  * Description: Test interface to ETCD
  */
+#include <atomic>
 #include <cassert>
 #include <condition_variable>
 #include <mutex>
@@ -57,6 +58,8 @@ DS_DECLARE_string(etcd_passphrase_path);
 
 namespace datasystem {
 namespace st {
+
+constexpr uint32_t TEST_LOCAL_FAILURE_TIMEOUT_S = 60;
 
 class EtcdStoreTest : public ExternalClusterTest {
 protected:
@@ -490,6 +493,11 @@ TEST_F(EtcdStoreTest, TestKeepAliveFailedDueToNetworkerFailure)
 
     // "return true" means networker failure.
     db_->SetCheckEtcdStateWhenNetworkFailedHandler([]() { return true; });
+    std::atomic<uint32_t> localIsolationCount{ 0 };
+    db_->SetLocalIsolationHandler([&localIsolationCount](const Status &status) {
+        EXPECT_TRUE(status.IsError()) << status.ToString();
+        localIsolationCount.fetch_add(1);
+    });
     LOG(INFO) << "Create a watcher for monitoring events";
     db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents(std::move(event)); });
     DS_ASSERT_OK(db_->WatchEvents(tableName_, "keyA", 1));
@@ -502,6 +510,40 @@ TEST_F(EtcdStoreTest, TestKeepAliveFailedDueToNetworkerFailure)
     sleep(waitWriteFakeEventTimeS);
     int eventNum = 2;  // event1: put; event2: fake delete
     EXPECT_EQ(eventCount_, eventNum);
+    EXPECT_EQ(localIsolationCount.load(), 1ul);
+}
+
+TEST_F(EtcdStoreTest, TestKeepAliveGlobalEtcdFailureDoesNotReportLocalIsolation)
+{
+    FLAGS_node_timeout_s = 3;  // node timeout is 3 s
+    FLAGS_node_dead_timeout_s = TEST_LOCAL_FAILURE_TIMEOUT_S;
+    FLAGS_auto_del_dead_node = true;
+    datasystem::inject::Set("EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)");
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+
+    watchKey_.push_back("keyA1");
+    watchValue_.push_back("pass");
+
+    db_->SetCheckEtcdStateWhenNetworkFailedHandler([]() { return false; });
+    std::atomic<uint32_t> localIsolationCount{ 0 };
+    db_->SetLocalIsolationHandler([&localIsolationCount](const Status &status) {
+        EXPECT_TRUE(status.IsOk()) << status.ToString();
+        localIsolationCount.fetch_add(1);
+    });
+    LOG(INFO) << "Create a watcher for monitoring events";
+    db_->SetEventHandler([this](mvccpb::Event &&event) { ReceivedEvents(std::move(event)); });
+    DS_ASSERT_OK(db_->WatchEvents(tableName_, "keyA", 1));
+    DS_ASSERT_OK(db_->InitKeepAlive(tableName_, watchKey_[0], false));
+    sleep(1);  // wait etcd notify new event before shutdown.
+    auto externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+    inject::Set("etcd.sendrpc", "call(2000)");
+    DS_ASSERT_OK(externalCluster->ShutdownEtcds());
+    int waitRetryTimeS = 5;
+    sleep(waitRetryTimeS);
+    int eventNum = 1;  // event1: put; no fake delete for global etcd failure.
+    EXPECT_EQ(eventCount_, eventNum);
+    EXPECT_EQ(localIsolationCount.load(), 0ul);
 }
 
 TEST_F(EtcdStoreTest, LEVEL1_TestRetrieveEvent)

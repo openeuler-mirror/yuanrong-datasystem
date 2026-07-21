@@ -76,10 +76,7 @@ namespace master {
 enum MULTI_SET_STATE { IDLE = 0, PENDING = 1 };
 struct SubscribeMeta {
     SubscribeMeta(std::string reqId, std::list<std::string> objects, std::string address)
-        : reqId_(std::move(reqId)),
-          objects_(std::move(objects)),
-          address_(std::move(address)),
-          timer_(nullptr)
+        : reqId_(std::move(reqId)), objects_(std::move(objects)), address_(std::move(address)), timer_(nullptr)
     {
     }
     // request id
@@ -229,7 +226,6 @@ using TbbRemoteClientIdRefTable = tbb::concurrent_hash_map<ImmutableString, std:
 
 class OCMetadataManager : public MetadataRedirectHelper, public std::enable_shared_from_this<OCMetadataManager> {
 public:
-
     /**
      * @brief Construct a new OCMetadataManager object
      * @param[in] akSkManager Used to do AK/SK authenticate.
@@ -487,7 +483,8 @@ public:
      * @param[in] removeFailWorkerMetaData remove meta info about failed worker.
      * @return Status of the call.
      */
-    Status ProcessWorkerTimeout(const std::string &workerAddr, bool changePrimaryCopy, bool removeFailWorkerMetaData);
+    Status ProcessWorkerTimeout(const std::string &workerAddr, bool changePrimaryCopy, bool removeFailWorkerMetaData,
+                                bool requireAcknowledgedReplacement = true);
 
     /**
      * @brief Processing After the Worker Restart.
@@ -514,6 +511,13 @@ public:
      * @return Status of the call.
      */
     Status ProcessWorkerNetworkRecovery(const std::string &workerAddr, int64_t timestamp, bool isOffline);
+
+    /**
+     * @brief Fence primary ownership held by a live worker that entered local isolation.
+     * @param[in] workerAddr The rpc service endpoint of the isolated worker.
+     * @return Status of the ownership handoff.
+     */
+    Status ProcessWorkerLocalIsolation(const std::string &workerAddr);
 
     /**
      * @brief After the worker dies, clears data and process pushed data by the worker.
@@ -544,8 +548,7 @@ public:
      * @param[out] payloads Optional object data returned with the metadata.
      * @return K_OK on success; the error code otherwise.
      */
-    Status QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &rsp,
-                       std::vector<RpcMessage> &payloads);
+    Status QueryAndGet(const QueryAndGetReqPb &req, QueryAndGetRspPb &rsp, std::vector<RpcMessage> &payloads);
 
     /**
      * @brief Delete metadata and notify other workers to delete these objects synchronously.
@@ -849,10 +852,9 @@ public:
      * @param[in] serverApi The WriterReader in server side which holds unary rpc socket.
      * @param[in] needReleaseRpc Whether to release master rpc thread when notify worker detele.
      */
-    Status GDecreaseRefImpl(
-        const GDecreaseReqPb &req, GDecreaseRspPb &resp,
-        const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi,
-        bool needReleaseRpc);
+    Status GDecreaseRefImpl(const GDecreaseReqPb &req, GDecreaseRspPb &resp,
+                            const std::shared_ptr<ServerUnaryWriterReader<GDecreaseRspPb, GDecreaseReqPb>> &serverApi,
+                            bool needReleaseRpc);
 
     /**
      * @brief Send request to master to decrease the global reference count.
@@ -1066,10 +1068,10 @@ public:
      * @param[in] cancellation Executor-owned cooperative cancellation signal.
      * @return K_OK on success; the first recovery error otherwise.
      */
-    Status RecoverTopologyFailure(
-        const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
-        const cluster::StorageScanPlan &plan, const std::string &businessOperationId,
-        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
+    Status RecoverTopologyFailure(const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
+                                  const cluster::StorageScanPlan &plan, const std::string &businessOperationId,
+                                  std::chrono::steady_clock::time_point deadline,
+                                  const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Remove residual object metadata for one confirmed failed member.
@@ -1079,9 +1081,10 @@ public:
      * @param[in] cancellation Executor-owned cooperative cancellation signal.
      * @return K_OK on success; the cleanup error otherwise.
      */
-    Status CleanupTopologyFailedMember(
-        const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
-        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
+    Status CleanupTopologyFailedMember(const cluster::TopologyPhaseAction &action,
+                                       const std::string &businessOperationId,
+                                       std::chrono::steady_clock::time_point deadline,
+                                       const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Release device-client metadata for one confirmed failed member.
@@ -1091,9 +1094,10 @@ public:
      * @param[in] cancellation Executor-owned cooperative cancellation signal.
      * @return K_OK on success; the cleanup error otherwise.
      */
-    Status CleanupTopologyDeviceClientMeta(
-        const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
-        std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation);
+    Status CleanupTopologyDeviceClientMeta(const cluster::TopologyPhaseAction &action,
+                                           const std::string &businessOperationId,
+                                           std::chrono::steady_clock::time_point deadline,
+                                           const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Shutdown the oc metadata manager module.
@@ -1152,13 +1156,13 @@ public:
 
     std::array<MetaTableShard, kMetaTableShardCount> metaShards_;
 
-    size_t GetShardIndex(const std::string& key) const
+    size_t GetShardIndex(const std::string &key) const
     {
         return std::hash<std::string>{}(key) % kMetaTableShardCount;
     }
 
     template <typename Func>
-    void WithAllShardsLocked(Func&& func)
+    void WithAllShardsLocked(Func &&func)
     {
         size_t lockedCount = 0;
         try {
@@ -1187,14 +1191,14 @@ public:
     size_t GetMetaTableSize() const
     {
         size_t total = 0;
-        for (const auto& shard : metaShards_) {
+        for (const auto &shard : metaShards_) {
             total += shard.table.size();
         }
         return total;
     }
 
     // Public helper for friend classes to access sharded meta table.
-    MetaTableShard& GetShardFor(const std::string& key)
+    MetaTableShard &GetShardFor(const std::string &key)
     {
         return metaShards_[GetShardIndex(key)];
     }
@@ -1317,7 +1321,6 @@ public:
     Status LivenessCheck();
 
 protected:
-
     /**
      * @brief Recovery object locations
      * @param[in] objLocMap The map record object and locations.
@@ -1337,6 +1340,11 @@ protected:
 
 private:
     using PrimaryChangeMap = std::unordered_map<std::string, std::unordered_set<std::string>>;
+    struct PromotionCandidates {
+        uint64_t version{ 0 };
+        std::vector<std::string> workers;
+    };
+    using PromotionCandidateMap = std::unordered_map<std::string, PromotionCandidates>;
 
     /**
      * @brief Apply one validated ReplacePrimary item under its metadata shard lock.
@@ -1344,8 +1352,25 @@ private:
      * @param[in] info Object identity and expected version.
      * @param[out] rsp Batch response receiving success or expired object ids.
      */
-    void ReplacePrimaryObject(const ReplacePrimaryReqPb &req,
-                              const ReplacePrimaryReqPb::ObjectInfoPb &info, ReplacePrimaryRspPb &rsp);
+    void ReplacePrimaryObject(const ReplacePrimaryReqPb &req, const ReplacePrimaryReqPb::ObjectInfoPb &info,
+                              ReplacePrimaryRspPb &rsp);
+
+    /**
+     * @brief Synchronously promote trusted copies before failed-worker metadata cleanup.
+     * @param[in] workerAddr Confirmed failed worker whose primary copies must be replaced.
+     * @return K_OK when every selected replacement accepted primary ownership.
+     */
+    Status ReconcilePrimaryCopyByWorkerTimeout(const std::string &workerAddr,
+                                               bool requireAcknowledgedReplacement = true);
+
+    PromotionCandidateMap CollectPrimaryPromotionCandidates(const std::string &workerAddr);
+
+    Status PromotePrimaryCopyCandidate(const std::string &workerAddr, const std::string &objectKey,
+                                       const PromotionCandidates &candidates, bool requireAcknowledgedReplacement);
+
+    Status CommitPrimaryCopyPromotion(const std::string &objectKey, const std::string &oldPrimary,
+                                      const std::string &newPrimary, uint64_t expectedVersion,
+                                      bool &oldPrimaryFencePersisted);
 
     struct QueryAndGetMetaSnapshot {
         uint64_t dataSize = 0;
@@ -1355,6 +1380,7 @@ private:
 
     friend class MasterOCServiceImpl;
     friend class OCNotifyWorkerManager;
+    friend class OCNotifyWorkerManagerTest;
     friend class OCGlobalCacheDeleteManager;
     friend class ExpiredObjectManager;
     friend class OCMigrateMetadataManager;
@@ -1497,10 +1523,8 @@ private:
      * @param[in] extraRanges Load the data of specified hash ranges if not empty.
      * @return Status of the call.
      */
-    Status HandleLoadMeta(
-        std::vector<std::pair<std::string, std::string>> &metas,
-        std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
-        bool &isFromRocksdb);
+    Status HandleLoadMeta(std::vector<std::pair<std::string, std::string>> &metas,
+                          std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects, bool &isFromRocksdb);
 
     /**
      * @brief Load meta into the cache from the object meta table.
@@ -1519,8 +1543,7 @@ private:
      * @param[in] plan Opaque storage scan plan valid for this callback invocation.
      * @return Status of the best-effort recovery pass.
      */
-    Status RecoverTopologyObjectMetadata(const cluster::TopologyPhaseAction &action,
-                                         const cluster::IKeyFilter &filter,
+    Status RecoverTopologyObjectMetadata(const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
                                          const cluster::StorageScanPlan &plan);
 
     /**
@@ -1529,8 +1552,7 @@ private:
      * @param[in] plan Opaque storage scan plan valid for this callback invocation.
      * @return Status of the best-effort auxiliary recovery pass.
      */
-    Status RecoverTopologyAuxiliaryMetadata(const cluster::IKeyFilter &filter,
-                                            const cluster::StorageScanPlan &plan);
+    Status RecoverTopologyAuxiliaryMetadata(const cluster::IKeyFilter &filter, const cluster::StorageScanPlan &plan);
 
     /**
      * @brief SendChangePrimaryCopy
@@ -1652,8 +1674,7 @@ private:
      * @param[in] address Request address.
      * @param[out] response Rsp of RemoveMetaRspPb
      */
-    Status GiveUpPrimaryLocation(const RemoveMetaReqPb &request, const std::string &address,
-                                 RemoveMetaRspPb &response);
+    Status GiveUpPrimaryLocation(const RemoveMetaReqPb &request, const std::string &address, RemoveMetaRspPb &response);
 
     /**
      * @brief Process one object while its current primary gives up ownership.
@@ -1888,9 +1909,8 @@ private:
      * @param[out] payloads Optional TCP payloads.
      * @return K_OK on success; the error code otherwise.
      */
-    Status ReadLocalQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex,
-                                    const std::string &objectKey, const QueryAndGetMetaSnapshot &meta,
-                                    std::vector<RpcMessage> &payloads);
+    Status ReadLocalQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex, const std::string &objectKey,
+                                    const QueryAndGetMetaSnapshot &meta, std::vector<RpcMessage> &payloads);
 
     /**
      * @brief Fill object locations and snapshot fields while holding the metadata accessor.
@@ -1913,8 +1933,8 @@ private:
      * @param[out] payloads Response payloads.
      */
     void TryGetQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex, const std::string &objectKey,
-                               const QueryAndGetMetaSnapshot &meta, QueryAndGetResultPb &result,
-                               uint64_t &payloadSize, std::vector<RpcMessage> &payloads);
+                               const QueryAndGetMetaSnapshot &meta, QueryAndGetResultPb &result, uint64_t &payloadSize,
+                               std::vector<RpcMessage> &payloads);
 
     /**
      * @brief Add heavy operation.

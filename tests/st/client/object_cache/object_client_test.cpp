@@ -2215,7 +2215,9 @@ TEST_F(ObjectClientTest, LEVEL1_GetClientFdRpcError)
     std::string objectKey = NewObjectKey();
     Timer time;
     Status status = client->Create(objectKey, SHM_SIZE, CreateParam{}, buffer1);
-    DS_ASSERT_TRUE(status.GetCode(), K_RUNTIME_ERROR);
+    ASSERT_TRUE(status.IsError()) << status.ToString();
+    EXPECT_TRUE(status.GetCode() == K_RUNTIME_ERROR || status.GetCode() == K_RPC_DEADLINE_EXCEEDED)
+        << status.ToString();
     LOG(INFO) << "use time: " << time.ElapsedMilliSecond();
     int32_t expectTime = timeout + 50;  // actual value 5001
     ASSERT_LE(time.ElapsedMilliSecond(), expectTime);

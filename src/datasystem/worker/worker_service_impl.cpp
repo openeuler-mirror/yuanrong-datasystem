@@ -153,6 +153,7 @@ Status WorkerServiceImpl::Init()
 
 Status WorkerServiceImpl::GetClientFd(const GetClientFdReqPb &req, GetClientFdRspPb &rsp)
 {
+    RETURN_IF_NOT_OK(CheckRuntimeAdmission("GetClientFd", worker::WorkerAdmissionKind::RESOURCE_RECOVERY_RPC));
     INJECT_POINT("worker.before_GetClientFd");
     (void)rsp;
     int socketFd;
@@ -285,6 +286,7 @@ Status WorkerServiceImpl::RegisterClient(const RegisterClientReqPb &req, Registe
 
 Status WorkerServiceImpl::ValidateRegisterClientRequest(const RegisterClientReqPb &req, std::string &tenantId) const
 {
+    RETURN_IF_NOT_OK(CheckRuntimeAdmission("RegisterClient", worker::WorkerAdmissionKind::INTERNAL_JOINING_RPC));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
                                      "Authenticate failed");
     if (localExiting_.load(std::memory_order_acquire)) {
@@ -292,6 +294,14 @@ Status WorkerServiceImpl::ValidateRegisterClientRequest(const RegisterClientReqP
         RETURN_STATUS(StatusCode::K_NOT_READY, "Worker is draining for ScaleIn");
     }
     return Status::OK();
+}
+
+Status WorkerServiceImpl::CheckRuntimeAdmission(const std::string &operation, worker::WorkerAdmissionKind kind) const
+{
+    if (runtime_ == nullptr) {
+        return Status::OK();
+    }
+    return runtime_->CheckAdmission(kind, operation);
 }
 
 Status WorkerServiceImpl::ConsumeRegisterClientFd(const RegisterClientReqPb &req)
@@ -310,10 +320,10 @@ Status WorkerServiceImpl::ConsumeRegisterClientFd(const RegisterClientReqPb &req
     return Status::OK();
 }
 
-Status WorkerServiceImpl::AddRegisteringClient(
-    const RegisterClientReqPb &req, const ClientKey &clientId, const std::string &tenantId,
-    const CompatibilityVersion &compatibilityVersion, uint32_t &lockId, uint32_t &pipelineQueueId,
-    bool &supportMultiShmRefCount)
+Status WorkerServiceImpl::AddRegisteringClient(const RegisterClientReqPb &req, const ClientKey &clientId,
+                                               const std::string &tenantId,
+                                               const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
+                                               uint32_t &pipelineQueueId, bool &supportMultiShmRefCount)
 {
     auto shmEnabled = req.shm_enabled();
     int32_t socketFd = shmEnabled ? req.server_fd() : INVALID_SOCKET_FD;
@@ -337,10 +347,11 @@ Status WorkerServiceImpl::AddRegisteringClient(
     return Status::OK();
 }
 
-void WorkerServiceImpl::PopulateRegisterClientResponse(
-    RegisterClientRspPb &rsp, const ClientKey &clientId, const std::string &tenantId, uint32_t lockId,
-    uint32_t pipelineQueueId, bool supportMultiShmRefCount, bool shmEnabled, int fd, uint64_t mmapSize,
-    ptrdiff_t offset, const ShmKey &id)
+void WorkerServiceImpl::PopulateRegisterClientResponse(RegisterClientRspPb &rsp, const ClientKey &clientId,
+                                                       const std::string &tenantId, uint32_t lockId,
+                                                       uint32_t pipelineQueueId, bool supportMultiShmRefCount,
+                                                       bool shmEnabled, int fd, uint64_t mmapSize, ptrdiff_t offset,
+                                                       const ShmKey &id)
 {
     (void)shmEnabled;
     rsp.set_page_size(FLAGS_page_size);
@@ -350,8 +361,7 @@ void WorkerServiceImpl::PopulateRegisterClientResponse(
     rsp.set_worker_start_id(workerStartId_);
     rsp.set_shm_threshold(FLAGS_oc_shm_transfer_threshold_kb * KB);
     rsp.set_worker_uuid(workerUuid_);
-    rsp.set_worker_compatibility_version(
-        CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
+    rsp.set_worker_compatibility_version(CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString());
     rsp.set_standby_worker(GetLocalStandbyWorker());
     rsp.set_node_timeout_s(FLAGS_node_timeout_s);
     rsp.set_store_fd(fd);
@@ -430,6 +440,7 @@ std::set<int> WorkerServiceImpl::GetExpiredFdsForClient(const ClientKey &clientI
 
 Status WorkerServiceImpl::GetSocketPath(const GetSocketPathReqPb &req, GetSocketPathRspPb &rsp)
 {
+    RETURN_IF_NOT_OK(CheckRuntimeAdmission("GetSocketPath", worker::WorkerAdmissionKind::INTERNAL_JOINING_RPC));
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, req.tenant_id(), tenantId),
                                      "Authenticate failed");
@@ -477,7 +488,9 @@ Status WorkerServiceImpl::operator()()
             CloseExpiredUnixSockFd();
             checkCacheFdTimer.Reset();
         }
-        struct pollfd pfd{ .fd = listenFd_, .events = POLLIN, .revents = 0 };
+        struct pollfd pfd {
+            .fd = listenFd_, .events = POLLIN, .revents = 0
+        };
         int n = poll(&pfd, 1, RPC_POLL_TIME);
         if (n <= 0) {
             continue;

@@ -651,6 +651,7 @@ Status WorkerRemoteMasterOCApi::QueryGlobalRefNum(QueryGlobalRefNumReqPb &req, Q
 Status WorkerRemoteMasterOCApi::PushMetadataToMaster(master::PushMetaToMasterReqPb &req,
                                                      master::PushMetaToMasterRspPb &rsp)
 {
+    INJECT_POINT("WorkerMaster.PushMetadataToMaster");
     INJECT_POINT("WorkerRemote.PushMetadataToMaster");
     // Single attempt: app-level retry (RetryOnRPCError) was removed and mesh channels
     // run with brpc max_retry=0, so give the one call the full RPC_TIMEOUT budget.
@@ -1385,6 +1386,7 @@ Status WorkerLocalMasterOCApi::QueryGlobalRefNum(QueryGlobalRefNumReqPb &req, Qu
 Status WorkerLocalMasterOCApi::PushMetadataToMaster(master::PushMetaToMasterReqPb &req,
                                                     master::PushMetaToMasterRspPb &rsp)
 {
+    INJECT_POINT("WorkerMaster.PushMetadataToMaster");
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
     return masterOC_->PushMetaToMaster(req, rsp);
 }

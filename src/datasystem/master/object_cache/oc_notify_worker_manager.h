@@ -284,7 +284,7 @@ public:
      * @param[in] timestamp timestamp of the event triggering reconciliation.
      * @param[in] isRestart Whether this function is called due to node restart.
      */
-    void PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart);
+    Status PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart);
 
     /**
      * @brief Remove operator from async worker op table.
@@ -354,6 +354,7 @@ public:
     Status ProcessAsyncDeleteNotifyOpImpl();
 
 private:
+    friend class OCMetadataManager;
     friend class OCNotifyWorkerManagerTest;
 
     struct NotifyWorkerOpPersistenceState;
@@ -431,7 +432,7 @@ private:
      * @param[in] workerAddr Destination worker address.
      * @param[in] timestamp timestamp of the event triggering reconciliation.
      */
-    void NotifyOpToWorker(const std::string &workerAddr, int64_t timestamp);
+    Status NotifyOpToWorker(const std::string &workerAddr, int64_t timestamp);
 
     /**
      * @brief Handle worker disconnection when notify worker delete a object data.

@@ -61,6 +61,16 @@ Status MasterWorkerOCServiceImpl::Init()
     return MasterWorkerOCService::Init();
 }
 
+void MasterWorkerOCServiceImpl::SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime)
+{
+    runtime_ = runtime;
+}
+
+Status MasterWorkerOCServiceImpl::CheckAdmission(worker::WorkerAdmissionKind kind, const std::string &operation) const
+{
+    return runtime_ == nullptr ? Status::OK() : runtime_->CheckAdmission(kind, operation);
+}
+
 Status MasterWorkerOCServiceImpl::WaitWorkerOCServiceImplInit()
 {
     return ocClientWorkerSvc_->WaitInit();
@@ -71,6 +81,7 @@ Status MasterWorkerOCServiceImpl::UpdateNotification(const UpdateObjectReqPb &re
     ScopedRequestContext ctx;
     INJECT_POINT("worker.UpdateNotification.begin");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(reqs), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::CLEANUP_RPC, "UpdateNotification"));
     LOG(INFO) << "Received UpdateNotification request";
     std::vector<std::string> updateFailIds;
     for (const UpdateObjectInfoPb &req : reqs.object_infos()) {
@@ -141,6 +152,7 @@ Status MasterWorkerOCServiceImpl::MetaChange(const MetaChangeReqPb &req, MetaCha
     // Deprecated
     (void)req;
     (void)rsp;
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::DIAGNOSTIC_RPC, "MetaChange"));
     return Status::OK();
 }
 
@@ -148,19 +160,25 @@ Status MasterWorkerOCServiceImpl::PublishMeta(const PublishMetaReqPb &req, Publi
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::MIGRATION_TARGET, "PublishMeta"));
     (void)resp;
     LOG(INFO) << FormatString("[ObjectKey %s] Publish meta for object", req.meta().object_key());
     auto traceID = Trace::Instance().GetTraceID();
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before PublishMeta dispatch, remaining %ld us.", remainingUs));
     auto dispatchTime = std::chrono::steady_clock::now();
     ocClientWorkerSvc_->threadPool_->Execute([this, req, traceID, remainingUs, dispatchTime] {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
         if (initRc.IsError()) {
-            LOG(ERROR) << FormatString("[ObjectKey %s] PublishMeta dropped: %s",
-                                       req.meta().object_key(), initRc.GetMsg());
+            LOG(ERROR) << FormatString("[ObjectKey %s] PublishMeta dropped: %s", req.meta().object_key(),
+                                       initRc.GetMsg());
+            return;
+        }
+        auto admissionRc = CheckAdmission(worker::WorkerAdmissionKind::MIGRATION_TARGET, "PublishMetaAsync");
+        if (admissionRc.IsError()) {
             return;
         }
         Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
@@ -197,6 +215,7 @@ void MasterWorkerOCServiceImpl::RetryGetObjectFromRemote(const ReadKey &readKey,
 Status MasterWorkerOCServiceImpl::ClearData(const ClearDataReqPb &req, ClearDataRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::CLEANUP_RPC, "ClearData"));
     RETURN_IF_NOT_OK(ocClientWorkerSvc_->ClearObject(req));
     (void)rsp;
     return Status::OK();
@@ -206,8 +225,8 @@ Status MasterWorkerOCServiceImpl::DeleteNotification(const DeleteObjectReqPb &re
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    VLOG(1) << FormatString("DeleteNotification, async: %d, object count: %d",
-              req.is_async(), req.object_keys_size());
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::CLEANUP_RPC, "DeleteNotification"));
+    VLOG(1) << FormatString("DeleteNotification, async: %d, object count: %d", req.is_async(), req.object_keys_size());
     if (req.is_async()) {
         auto traceID = Trace::Instance().GetTraceID();
         ocClientWorkerSvc_->threadPool_->Execute([this, req, traceID] {
@@ -232,6 +251,7 @@ Status MasterWorkerOCServiceImpl::DeletePersistenceObject(const DeletePersistenc
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::CLEANUP_RPC, "DeletePersistenceObject"));
     LOG(INFO) << "Delete persistence object: " << req.object_key();
     auto rc = ocClientWorkerSvc_->DeletePersistenceObject(req, rsp);
     rsp.mutable_last_rc()->set_error_code(rc.GetCode());
@@ -245,6 +265,7 @@ Status MasterWorkerOCServiceImpl::QueryGlobalRefNumOnWorker(const QueryGlobalRef
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::RECOVERY_RPC, "QueryGlobalRefNumOnWorker"));
     LOG(INFO) << "[GRef] Query All Objs Global References Rpc Received";
     std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     ocClientWorkerSvc_->globalRefTable_->GetAllRef(refTable);
@@ -306,6 +327,7 @@ Status MasterWorkerOCServiceImpl::PushMetaToWorker(const PushMetaToWorkerReqPb &
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::RECOVERY_RPC, "PushMetaToWorker"));
     (void)rsp;
     LOG(INFO) << "Worker receive PushMetaToWorker request from master: " << req.source_address();
     for (auto &cacheInvalid : req.cache_invalids()) {
@@ -346,6 +368,7 @@ Status MasterWorkerOCServiceImpl::RequestMetaFromWorker(const RequestMetaFromWor
     LOG(INFO) << FormatString("worker(%s) received RequestMetaFromWorker request: %s", localAddress_.ToString(),
                               req.address());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::RECOVERY_RPC, "RequestMetaFromWorker"));
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocClientWorkerSvc_->FillRequestMetaByMaster(req, rsp),
                                      "worker FillRequestMetaByMaster failed");
     LOG(INFO) << "RequestMetaFromWorker done";
@@ -354,15 +377,20 @@ Status MasterWorkerOCServiceImpl::RequestMetaFromWorker(const RequestMetaFromWor
 
 Status MasterWorkerOCServiceImpl::ProcessChangePrimaryCopy(const std::string &objectKey, bool isPrimaryCopy)
 {
-    INJECT_POINT("process.change.primary.copy");
     LOG(INFO) << FormatString("ProcessChangePrimaryCopy for object:%s", objectKey);
     std::shared_ptr<SafeObjType> safeEntry;
     RETURN_IF_NOT_OK(ocClientWorkerSvc_->objectTable_->Get(objectKey, safeEntry));
     RETURN_IF_NOT_OK(safeEntry->WLock());
     Raii unlockRaii([safeEntry]() { safeEntry->WUnlock(); });
     if ((*safeEntry)->IsBinary()) {
+        CHECK_FAIL_RETURN_STATUS(!isPrimaryCopy || !(*safeEntry)->stateInfo.IsCacheInvalid(), K_NOT_READY,
+                                 "cache-invalid copy cannot become primary");
         (*safeEntry)->stateInfo.SetPrimaryCopy(isPrimaryCopy);
+        if (!isPrimaryCopy) {
+            (*safeEntry)->stateInfo.SetCacheInvalid(true);
+        }
     }
+    INJECT_POINT("process.change.primary.copy");
     return Status::OK();
 }
 
@@ -370,6 +398,7 @@ Status MasterWorkerOCServiceImpl::ChangePrimaryCopy(const ChangePrimaryCopyReqPb
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::MIGRATION_TARGET, "ChangePrimaryCopy"));
     LOG(INFO) << "worker(" << localAddress_.ToString() << ") receive ChangePrimaryCopy request";
     // If migrate data task (Scale-In) has been started, we should not change primary copy in this node.
     if (ocClientWorkerSvc_->MigrateDataStarted()) {
@@ -394,6 +423,7 @@ Status MasterWorkerOCServiceImpl::NotifyMasterIncNestedRefs(const NotifyMasterIn
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::NORMAL_WRITE, "NotifyMasterIncNestedRefs"));
     (void)rsp;  // empty response
     std::vector<std::string> nested_objs(req.nested_object_keys().begin(), req.nested_object_keys().end());
     LOG(INFO) << "worker received NotifyMasterIncNestedRefs, nested objectkeys: " << VectorToString(nested_objs);
@@ -407,6 +437,7 @@ Status MasterWorkerOCServiceImpl::NotifyMasterDecNestedRefs(const NotifyMasterDe
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    RETURN_IF_NOT_OK(CheckAdmission(worker::WorkerAdmissionKind::CLEANUP_RPC, "NotifyMasterDecNestedRefs"));
     (void)rsp;  // empty response
     std::vector<std::string> nested_objs(req.nested_object_keys().begin(), req.nested_object_keys().end());
     LOG(INFO) << "worker received NotifyMasterDecNestedRefs, nested objectkeys: " << VectorToString(nested_objs);

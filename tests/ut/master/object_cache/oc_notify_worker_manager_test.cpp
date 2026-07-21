@@ -54,6 +54,7 @@ public:
     void TearDown() override
     {
         (void)inject::Clear("master.rocksdb.put");
+        (void)inject::Clear("OCNotifyWorkerManager.NotifyOpToWorker");
         objectStore_.reset();
         rocksStore_.reset();
         FLAGS_rocksdb_write_mode = rocksdbWriteMode_;
@@ -75,6 +76,75 @@ public:
                             const std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> &snapshots)
     {
         return manager.ClearAsyncWorkerOpSnapshots(worker, snapshots);
+    }
+
+    void AttachNotifyManager(const std::shared_ptr<OCMetadataManager> &metadataManager)
+    {
+        metadataManager->objectStore_ = objectStore_;
+        DS_ASSERT_OK(metadataManager->InitGlobalRef());
+        metadataManager->notifyWorkerManager_ =
+            std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, metadataManager.get());
+    }
+
+    Status InsertMetadataNotifyOp(const std::shared_ptr<OCMetadataManager> &metadataManager, const std::string &worker,
+                                  const std::string &objectKey, NotifyWorkerOpType type)
+    {
+        return metadataManager->notifyWorkerManager_->InsertAsyncWorkerOp(worker, objectKey, { type });
+    }
+
+    bool HasMetadataNotifyOp(const std::shared_ptr<OCMetadataManager> &metadataManager, const std::string &worker,
+                             const std::string &objectKey, NotifyWorkerOpType type)
+    {
+        return metadataManager->notifyWorkerManager_->CheckExistAsyncWorkerOp(worker, objectKey, type);
+    }
+
+    Status CommitPromotion(const std::shared_ptr<OCMetadataManager> &metadataManager, const std::string &objectKey,
+                           const std::string &oldPrimary, const std::string &newPrimary, uint64_t expectedVersion)
+    {
+        bool oldPrimaryFencePersisted = false;
+        return metadataManager->CommitPrimaryCopyPromotion(objectKey, oldPrimary, newPrimary, expectedVersion,
+                                                           oldPrimaryFencePersisted);
+    }
+
+    Status ReconcileTimeoutPromotion(const std::shared_ptr<OCMetadataManager> &metadataManager,
+                                     const std::string &oldPrimary)
+    {
+        return metadataManager->ReconcilePrimaryCopyByWorkerTimeout(oldPrimary);
+    }
+
+    Status ReconcileLocalIsolationPromotion(const std::shared_ptr<OCMetadataManager> &metadataManager,
+                                            const std::string &oldPrimary)
+    {
+        return metadataManager->ProcessWorkerLocalIsolation(oldPrimary);
+    }
+
+    Status ReconcileNetworkRecovery(const std::shared_ptr<OCMetadataManager> &metadataManager,
+                                    const std::string &workerAddr)
+    {
+        return metadataManager->ProcessWorkerNetworkRecovery(workerAddr, 1, false);
+    }
+
+    Status CheckMetadataWorkerHealth(const std::shared_ptr<OCMetadataManager> &metadataManager,
+                                     const std::string &worker)
+    {
+        return metadataManager->notifyWorkerManager_->CheckWorkerIsHealthy(worker);
+    }
+
+    void SetMetadataWorkerFault(const std::shared_ptr<OCMetadataManager> &metadataManager, const std::string &worker)
+    {
+        metadataManager->notifyWorkerManager_->SetFaultWorker(worker);
+    }
+
+    void ExpectNetworkRecoveryPushOk()
+    {
+        BINEXPECT_CALL(&OCNotifyWorkerManager::NotifyOpToWorker, (_, _)).WillRepeatedly(Return(Status::OK()));
+        BINEXPECT_CALL(&OCNotifyWorkerManager::PushMetaToWorker, (_, _, _)).WillRepeatedly(Return(Status::OK()));
+    }
+
+    std::shared_ptr<OCMetadataManager> MakeMetadataManager()
+    {
+        return std::make_shared<OCMetadataManager>(akSkManager_, nullptr, nullptr, nullptr, "127.0.0.1:900", nullptr,
+                                                   nullptr, false, HostPort(), "", nullptr, "workerId");
     }
 };
 
@@ -187,11 +257,301 @@ TEST_F(OCNotifyWorkerManagerTest, TestSnapshotClearKeepsNewerAsyncWorkerOp)
     ASSERT_TRUE(manager->CheckExistAsyncWorkerOp(worker, newerObjectKey, NotifyWorkerOpType::CACHE_INVALID));
 }
 
+TEST_F(OCNotifyWorkerManagerTest, ReselectPrimaryCopyRequiresAcknowledgedLocation)
+{
+    auto metadataManager = MakeMetadataManager();
+    const std::string objectKey = "reselect_acknowledged_location";
+    const std::string oldPrimary = "127.0.0.1:901";
+    const std::string candidate = "127.0.0.1:902";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor insertAccessor;
+    ASSERT_TRUE(shard.table.insert(insertAccessor, objectKey));
+    insertAccessor->second.meta.set_object_key(objectKey);
+    insertAccessor->second.meta.set_primary_address(oldPrimary);
+    insertAccessor->second.locations[oldPrimary] = AckState::ACK;
+    insertAccessor->second.locations[candidate] = AckState::UNACK;
+    insertAccessor.release();
+    BINEXPECT_CALL(&OCNotifyWorkerManager::CheckWorkerIsHealthy, (_))
+        .WillRepeatedly(Return(Status(K_WORKER_ABNORMAL, "old primary unavailable")));
+
+    TbbMetaTable::accessor accessor;
+    std::string selectedPrimary;
+    auto rc = metadataManager->ReselectPrimaryCopy(objectKey, {}, accessor, selectedPrimary);
+    EXPECT_EQ(rc.GetCode(), K_UNKNOWN_ERROR);
+    accessor.release();
+
+    TbbMetaTable::accessor updateAccessor;
+    ASSERT_TRUE(shard.table.find(updateAccessor, objectKey));
+    updateAccessor->second.locations[candidate] = AckState::ACK;
+    updateAccessor.release();
+    DS_ASSERT_OK(metadataManager->ReselectPrimaryCopy(objectKey, {}, accessor, selectedPrimary));
+    EXPECT_EQ(selectedPrimary, candidate);
+    RELEASE_STUBS
+}
+
+TEST_F(OCNotifyWorkerManagerTest, WorkerTimeoutWithoutAcknowledgedCopyKeepsPendingOperations)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "timeout_without_acknowledged_copy";
+    const std::string oldPrimary = "127.0.0.1:901";
+    DS_ASSERT_OK(InsertMetadataNotifyOp(metadataManager, oldPrimary, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(oldPrimary);
+    accessor->second.locations[oldPrimary] = AckState::ACK;
+    accessor.release();
+
+    auto rc = metadataManager->ProcessWorkerTimeout(oldPrimary, false, true);
+
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+    EXPECT_TRUE(HasMetadataNotifyOp(metadataManager, oldPrimary, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, TopologyCleanupKeepsLocalPrimaryWhenNoAcknowledgedReplacementExists)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "topology_cleanup_local_only_primary";
+    const std::string failedWorker = "127.0.0.1:901";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(failedWorker);
+    accessor->second.locations[failedWorker] = AckState::ACK;
+    accessor.release();
+    cluster::TopologyPhaseAction action;
+    action.failed = cluster::MemberIdentity{ "failed-worker", failedWorker };
+    cluster::CancellationToken cancellation;
+
+    DS_ASSERT_OK(metadataManager->CleanupTopologyFailedMember(
+        action, "topology-cleanup-local-only-primary", std::chrono::steady_clock::now() + std::chrono::seconds(5),
+        cancellation));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, LocalIsolationPromotesAcknowledgedPeerWithoutRemovingOldLocation)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "local_isolation_promotes_ack_peer";
+    const std::string oldPrimary = "127.0.0.1:901";
+    const std::string candidate = "127.0.0.1:902";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(oldPrimary);
+    accessor->second.meta.set_version(1);
+    accessor->second.locations[oldPrimary] = AckState::ACK;
+    accessor->second.locations[candidate] = AckState::ACK;
+    accessor.release();
+    std::unordered_set<std::string> promoted{ objectKey };
+    BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _))
+        .WillRepeatedly(DoAll(SetArgReferee<2>(promoted), Return(Status::OK())));
+    BINEXPECT_CALL(&OCNotifyWorkerManager::AsyncNotifyOpToWorker, (_, _)).WillRepeatedly(Return());
+
+    DS_ASSERT_OK(ReconcileLocalIsolationPromotion(metadataManager, oldPrimary));
+
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.meta.primary_address(), candidate);
+    EXPECT_NE(accessor->second.locations.find(oldPrimary), accessor->second.locations.end());
+    accessor.release();
+    EXPECT_TRUE(HasMetadataNotifyOp(metadataManager, oldPrimary, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    EXPECT_EQ(CheckMetadataWorkerHealth(metadataManager, oldPrimary).GetCode(), K_WORKER_ABNORMAL);
+    RELEASE_STUBS
+}
+
+TEST_F(OCNotifyWorkerManagerTest, PrimaryFenceAndCacheInvalidOpsAreBothRetained)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "combined_primary_fence_and_cache_invalid";
+    const std::string reverseObjectKey = objectKey + "_reverse";
+    const std::string worker = "127.0.0.1:901";
+
+    DS_ASSERT_OK(InsertMetadataNotifyOp(metadataManager, worker, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    DS_ASSERT_OK(InsertMetadataNotifyOp(metadataManager, worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+    EXPECT_TRUE(HasMetadataNotifyOp(metadataManager, worker, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    EXPECT_TRUE(HasMetadataNotifyOp(metadataManager, worker, objectKey, NotifyWorkerOpType::CACHE_INVALID));
+
+    DS_ASSERT_OK(InsertMetadataNotifyOp(metadataManager, worker, reverseObjectKey, NotifyWorkerOpType::CACHE_INVALID));
+    DS_ASSERT_OK(
+        InsertMetadataNotifyOp(metadataManager, worker, reverseObjectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    EXPECT_TRUE(
+        HasMetadataNotifyOp(metadataManager, worker, reverseObjectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    EXPECT_TRUE(HasMetadataNotifyOp(metadataManager, worker, reverseObjectKey, NotifyWorkerOpType::CACHE_INVALID));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, PromotionVersionRaceDoesNotPersistPrimaryFences)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "promotion_version_race";
+    const std::string oldPrimary = "127.0.0.1:901";
+    const std::string newPrimary = "127.0.0.1:902";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(oldPrimary);
+    accessor->second.meta.set_version(2);
+    accessor->second.locations[oldPrimary] = AckState::ACK;
+    accessor->second.locations[newPrimary] = AckState::ACK;
+    accessor.release();
+
+    auto rc = CommitPromotion(metadataManager, objectKey, oldPrimary, newPrimary, 1);
+
+    EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
+    EXPECT_FALSE(HasMetadataNotifyOp(metadataManager, oldPrimary, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    EXPECT_FALSE(HasMetadataNotifyOp(metadataManager, newPrimary, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+}
+
+TEST_F(OCNotifyWorkerManagerTest, PromotionMetadataPersistenceFailureKeepsAcceptedCandidate)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "promotion_metadata_persistence_failure";
+    const std::string oldPrimary = "127.0.0.1:901";
+    const std::string newPrimary = "127.0.0.1:902";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(oldPrimary);
+    accessor->second.meta.set_version(1);
+    accessor->second.locations[oldPrimary] = AckState::ACK;
+    accessor->second.locations[newPrimary] = AckState::ACK;
+    accessor.release();
+    BINEXPECT_CALL(&OCNotifyWorkerManager::CheckWorkerIsHealthy, (_)).WillRepeatedly(Return(Status::OK()));
+    std::unordered_set<std::string> promoted{ objectKey };
+    BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _))
+        .WillRepeatedly(DoAll(SetArgReferee<2>(promoted), Return(Status::OK())));
+    BINEXPECT_CALL(&OCNotifyWorkerManager::AsyncNotifyOpToWorker, (_, _)).WillRepeatedly(Return());
+    DS_ASSERT_OK(inject::Set("master.rocksdb.put", "1*sleep(0)->1*return(K_RUNTIME_ERROR)"));
+
+    auto rc = ReconcileTimeoutPromotion(metadataManager, oldPrimary);
+    DS_ASSERT_OK(inject::Clear("master.rocksdb.put"));
+
+    EXPECT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_TRUE(HasMetadataNotifyOp(metadataManager, oldPrimary, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    EXPECT_FALSE(HasMetadataNotifyOp(metadataManager, newPrimary, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.meta.primary_address(), oldPrimary);
+    accessor.release();
+
+    DS_ASSERT_OK(ReconcileTimeoutPromotion(metadataManager, oldPrimary));
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.meta.primary_address(), newPrimary);
+    RELEASE_STUBS
+}
+
+TEST_F(OCNotifyWorkerManagerTest, NetworkRecoveryStopsBeforeMetadataPushWhenFenceDeliveryFails)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string recoveringWorker = "127.0.0.1:901";
+    const Status fenceFailure(K_RPC_UNAVAILABLE, "ownership fence delivery failed");
+    DS_ASSERT_OK(inject::Set("OCNotifyWorkerManager.NotifyOpToWorker", "return(K_RPC_UNAVAILABLE)"));
+    BINEXPECT_CALL(&OCNotifyWorkerManager::AsyncPushMetaToWorker, (_, _, _)).Times(0);
+
+    auto rc = metadataManager->ProcessWorkerNetworkRecovery(recoveringWorker, 1, false);
+
+    EXPECT_EQ(rc.GetCode(), fenceFailure.GetCode());
+    EXPECT_EQ(CheckMetadataWorkerHealth(metadataManager, recoveringWorker).GetCode(), K_WORKER_ABNORMAL);
+    RELEASE_STUBS
+}
+
+TEST_F(OCNotifyWorkerManagerTest, NetworkRecoveryKeepsLocalPrimaryWhenNoAcknowledgedReplacementExists)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "network_recovery_local_only_primary";
+    const std::string recoveringWorker = "127.0.0.1:901";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(recoveringWorker);
+    accessor->second.locations[recoveringWorker] = AckState::ACK;
+    accessor.release();
+    SetMetadataWorkerFault(metadataManager, recoveringWorker);
+    ExpectNetworkRecoveryPushOk();
+
+    DS_ASSERT_OK(ReconcileNetworkRecovery(metadataManager, recoveringWorker));
+
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.meta.primary_address(), recoveringWorker);
+    accessor.release();
+    EXPECT_EQ(CheckMetadataWorkerHealth(metadataManager, recoveringWorker), Status::OK());
+    RELEASE_STUBS
+}
+
+TEST_F(OCNotifyWorkerManagerTest, PromotionRpcUncertaintyDoesNotInvalidateAcknowledgedCandidate)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "promotion_rpc_uncertain";
+    const std::string oldPrimary = "127.0.0.1:901";
+    const std::string candidate = "127.0.0.1:902";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(oldPrimary);
+    accessor->second.locations[oldPrimary] = AckState::ACK;
+    accessor->second.locations[candidate] = AckState::ACK;
+    accessor.release();
+    BINEXPECT_CALL(&OCNotifyWorkerManager::CheckWorkerIsHealthy, (_)).WillRepeatedly(Return(Status::OK()));
+    BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _))
+        .WillOnce(Return(Status(K_RPC_UNAVAILABLE, "promotion response lost")));
+
+    auto rc = ReconcileTimeoutPromotion(metadataManager, oldPrimary);
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_FALSE(HasMetadataNotifyOp(metadataManager, candidate, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    RELEASE_STUBS
+}
+
+TEST_F(OCNotifyWorkerManagerTest, AcceptedPromotionVersionRaceDoesNotInvalidateCandidate)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "accepted_promotion_version_race";
+    const std::string oldPrimary = "127.0.0.1:901";
+    const std::string candidate = "127.0.0.1:902";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(oldPrimary);
+    accessor->second.meta.set_version(1);
+    accessor->second.locations[oldPrimary] = AckState::ACK;
+    accessor->second.locations[candidate] = AckState::ACK;
+    accessor.release();
+    BINEXPECT_CALL(&OCNotifyWorkerManager::CheckWorkerIsHealthy, (_)).WillRepeatedly(Return(Status::OK()));
+    BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _))
+        .WillOnce(Invoke([&](const std::string &, const std::unordered_set<std::string> &,
+                             std::unordered_set<std::string> &successIds) {
+            TbbMetaTable::accessor updateAccessor;
+            EXPECT_TRUE(shard.table.find(updateAccessor, objectKey));
+            updateAccessor->second.meta.set_version(2);
+            successIds.emplace(objectKey);
+            return Status::OK();
+        }));
+
+    auto rc = ReconcileTimeoutPromotion(metadataManager, oldPrimary);
+
+    EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
+    EXPECT_FALSE(HasMetadataNotifyOp(metadataManager, candidate, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    RELEASE_STUBS
+}
+
 TEST_F(OCNotifyWorkerManagerTest, TestChangePrimaryCopy)
 {
-    auto ocMetaManager = std::make_shared<OCMetadataManager>(
-        akSkManager_, nullptr, nullptr, nullptr, "127.0.0.1:900", nullptr, nullptr, false, HostPort(), "", nullptr,
-        "workerId");
+    auto ocMetaManager = MakeMetadataManager();
     auto manager = std::make_unique<OCNotifyWorkerManager>(objectStore_, true, akSkManager_, ocMetaManager.get());
 
     BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _)).WillRepeatedly(Return(Status::OK()));

@@ -42,8 +42,8 @@ namespace datasystem {
 namespace ut {
 class EvictionManagerCommon {
 public:
-    using SafeObjType = SafeObject<ObjectInterface>;
-    using ObjectTable = SafeTable<ImmutableString, ObjectInterface>;
+    using SafeObjType = object_cache::ObjectTable::SafeObjType;
+    using ObjectTable = object_cache::ObjectTable;
 
     uint64_t GetMaxMemorySize()
     {

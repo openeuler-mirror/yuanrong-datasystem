@@ -14,6 +14,23 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name="fast_transport_base_test_stub",
+    srcs=["fast_transport_base.cpp"],
+    copts=[
+        "-UUSE_URMA",
+        "-UUSE_RDMA",
+        "-UUSE_NPU",
+    ],
+    deps=[
+        ":fast_transport_base_header",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+    ],
+    visibility=["//tests:__subpackages__"],
+)
+
+ds_cc_library(
     name="urma_send_lane",
     hdrs=["urma_send_lane.h"],
 )

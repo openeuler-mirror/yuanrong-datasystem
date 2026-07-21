@@ -29,7 +29,6 @@
 
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/protos/slot_recovery.pb.h"
@@ -37,6 +36,7 @@
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
+#include "datasystem/worker/runtime/worker_recovery_controller.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -143,14 +143,14 @@ public:
      * @param[in] membership Read-only topology membership view.
      * @param[in] persistApi Persistence API reserved for later recovery execution.
      * @param[in] apiManager Worker-master API manager reserved for later recovery execution.
-     * @param[in] etcdStore EtcdStore pointer used to construct default slot-recovery store.
+     * @param[in] store Slot-recovery coordination store.
      * @param[in] metadataRecoveryManager Metadata recovery implementation used by recovered slots.
      * @return Status of the call.
      */
     Status Init(const HostPort &localAddress, const cluster::MembershipEndpointView &membership,
                 std::shared_ptr<PersistenceApi> persistApi,
                 std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> apiManager,
-                datasystem::EtcdStore *etcdStore, MetaDataRecoveryManager *metadataRecoveryManager = nullptr);
+                std::shared_ptr<SlotRecoveryStore> store, MetaDataRecoveryManager *metadataRecoveryManager = nullptr);
 
     /**
      * @brief Shutdown the manager.
@@ -176,8 +176,13 @@ public:
      */
     Status ScheduleLocalPendingTasksFromStore();
 
-protected:
+    /**
+     * @brief Build slot recovery evidence from the current persisted incident snapshot.
+     * @return Slot recovery evidence report for the worker recovery controller.
+     */
+    worker::WorkerRecoveryEvidenceReport BuildSlotRecoveryEvidenceReportFromStore();
 
+protected:
     /**
      * @brief Plan the incident of one failed worker with its own tasks and inherited tasks in one CAS.
      * If the incident already exists, the current worker reuses that published plan directly.
@@ -381,15 +386,7 @@ protected:
      */
     bool ShouldDeferMetaRetry(const Status &recoverRc, const std::vector<std::string> &failedIds) const;
 
-    /**
-     * @brief Create slot-recovery store instance.
-     * @param[in] etcdStore EtcdStore pointer used by concrete store.
-     * @return Slot-recovery store instance.
-     */
-    virtual std::shared_ptr<SlotRecoveryStore> CreateStore(datasystem::EtcdStore *etcdStore) const;
-
 private:
-
     /**
      * @brief Check whether slot recovery coordination is enabled.
      * @return True if enabled.

@@ -220,6 +220,8 @@ add_executable(cluster_topology_contract_ut
 if (BUILD_WITH_URMA_MOCK)
         target_compile_definitions(ds_ut PRIVATE USE_URMA USE_URMA_MOCK)
         target_link_libraries(ds_ut PRIVATE common_urma_mock_obj)
+        target_compile_definitions(ds_ut_object PRIVATE USE_URMA USE_URMA_MOCK)
+        target_link_libraries(ds_ut_object PRIVATE common_urma_mock_obj)
 endif()
 
 target_link_libraries(ds_ut PRIVATE

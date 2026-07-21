@@ -172,6 +172,13 @@ public:
     }
 
     /**
+     * @brief Check whether object-cache usage has returned below the recovery low watermark.
+     * @param[in] cacheType The cache lane to inspect.
+     * @return true when the lane has enough recovered capacity to reopen admission.
+     */
+    bool IsResourceRecovered(CacheType cacheType = CacheType::MEMORY);
+
+    /**
      * @brief Try to mark an object as being rebalanced.
      * @param[in] objectKey The object key.
      * @return true if this call marks the object successfully, false if it has been marked already.

@@ -33,6 +33,8 @@ public:
     Status Get(const std::string &table, const std::string &key, std::string &value) override;
     Status Get(const std::string &table, const std::string &key, RangeSearchResult &result,
                int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT) override;
+    Status CreateTable(const std::string &table, const std::string &tablePrefix) override;
+    Status Put(const std::string &table, const std::string &key, const std::string &value) override;
     Status CAS(const std::string &table, const std::string &key, const ProcessFunction &process,
                RangeSearchResult &result) override;
     Status CAS(const std::string &table, const std::string &key, const ProcessFunction &process) override;
@@ -50,6 +52,8 @@ public:
     bool IsKeepAliveTimeout() override;
     bool IsFirstKeepAliveSent() override;
     void SetEventHandler(EventHandler &&handler) override;
+    void SetLocalIsolationHandler(LocalIsolationHandler handler) override;
+    void SetLocalRecoveryHandler(LocalRecoveryHandler handler) override;
     void SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler) override;
 
     void PutBytes(const std::string &table, const std::string &key, std::string value);
@@ -61,6 +65,8 @@ public:
     void ReturnNotReadyOnNextGet();
     void ReturnNotReadyOnNextGets(size_t count);
     void EmitEvent(CoordinationEvent event);
+    void EmitLocalIsolation(const Status &status);
+    void EmitLocalRecovery();
     std::vector<WatchKey> WatchKeys() const;
     std::vector<std::string> LifecycleCalls() const;
     bool HasEventHandler() const;
@@ -71,6 +77,7 @@ public:
     void ReleaseBlockedGet();
     void SetBeforeCasHandler(std::function<void()> handler);
     void SetBeforeDeleteHandler(std::function<void()> handler);
+    size_t DeleteAttemptCount() const;
 
 private:
     std::string FullKey(const std::string &table, const std::string &key) const;
@@ -79,6 +86,8 @@ private:
     std::map<std::string, std::pair<std::string, int64_t>> values_;
     int64_t revision_{ 0 };
     EventHandler handler_;
+    LocalIsolationHandler localIsolationHandler_;
+    LocalRecoveryHandler localRecoveryHandler_;
     std::vector<WatchKey> watchKeys_;
     std::vector<std::string> lifecycleCalls_;
     bool failNextCasAfterCommit_{ false };
@@ -89,6 +98,7 @@ private:
     // Uses mutex_ to signal changes to getBlocked_ and releaseGet_.
     std::condition_variable getCv_;
     size_t getAttempts_{ 0 };
+    size_t deleteAttempts_{ 0 };
     bool blockNextGet_{ false };
     bool getBlocked_{ false };
     bool releaseGet_{ false };

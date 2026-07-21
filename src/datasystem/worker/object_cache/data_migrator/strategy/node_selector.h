@@ -30,6 +30,7 @@
 #include "datasystem/common/util/wait_post.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
 #include "datasystem/utils/status.h"
 
@@ -104,6 +105,16 @@ public:
      * @brief Clear the registered memory rebalance task callback.
      */
     void UnregisterRebalanceTaskHandler();
+
+    void RegisterResourceRecoveredHandler(std::function<void()> handler);
+
+    void UnregisterResourceRecoveredHandler();
+
+    /**
+     * @brief Bind worker runtime facade to the resource readiness report.
+     */
+    void SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime);
+
 protected:
     NodeSelector();
     ~NodeSelector();
@@ -123,6 +134,13 @@ protected:
      */
     Status ReportResource(const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
                           master::ResourceReportReqPb &req, master::ResourceReportRspPb &rsp);
+
+    /**
+     * @brief Whether this worker can be reported as a source/target candidate for new resource placement.
+     */
+    bool IsLocalReadyForResourceReport() const;
+
+    void MaybeNotifyResourceRecovered(uint64_t availableMemory);
 
     /**
      * @brief Get worker master api.
@@ -149,9 +167,10 @@ protected:
     Status TryGetAvailableMemoryFromSnapshot(const std::string &address, size_t &availableMemory,
                                              bool &hasSnapshot) const;
 
-    mutable std::shared_timed_mutex  nodeInfosMutex_;
+    mutable std::shared_timed_mutex nodeInfosMutex_;
     std::vector<NodeInfo> rankList_;
     size_t totalSize_ = 0;
+
 private:
     NodeSelector(const NodeSelector &) = delete;
     NodeSelector(NodeSelector &&) = delete;
@@ -174,15 +193,21 @@ private:
     std::condition_variable taskCv_;
     std::mutex rebalanceTaskHandlerMutex_;
     RebalanceTaskHandler rebalanceTaskHandler_;
+    std::mutex resourceRecoveredHandlerMutex_;
+    std::condition_variable resourceRecoveredHandlerCv_;
+    std::function<void()> resourceRecoveredHandler_;
+    uint64_t activeResourceRecoveredHandlers_{ 0 };
+    std::atomic<bool> resourceRecoveryPending_{ false };
+    const worker::WorkerRuntimeFacade *runtime_{ nullptr };
     std::atomic<bool> subSuccess_{ false };
     WaitPost subReadyPost_;
     struct Token {
         std::mutex mutex_;
         bool working = false;
 
-        std::atomic<bool> alive{true};
+        std::atomic<bool> alive{ true };
     };
-    Token* token_;
+    Token *token_;
 };
 }  // namespace object_cache
 }  // namespace datasystem

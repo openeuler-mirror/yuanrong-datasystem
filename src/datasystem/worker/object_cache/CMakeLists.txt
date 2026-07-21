@@ -17,9 +17,12 @@ set(WORKER_OC_SRCS
         async_send_manager.cpp
         async_update_location_manager.cpp
         metadata_recovery_manager.cpp
+        object_cache_recovery_state.cpp
+        worker_recovery_evidence_adapter.cpp
         metadata_recovery_selector.cpp
         rebalance_candidate_provider.cpp
         slot_recovery_orchestrator.cpp
+        object_table.cpp
         object_kv.cpp
         eviction_list.cpp
         cache_hit_info.cpp
@@ -98,6 +101,7 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         nlohmann_json::nlohmann_json
         ${BRPC_LIBRARIES}
         ${ZeroMQ_LIBRARY}
+        worker_runtime_core
         )
 
 list(APPEND WORKER_OBJECT_CACHE_DEPEND_LIBS common_rdma)
@@ -108,6 +112,10 @@ add_dependencies(worker_transport_api worker_object_protos)
 
 add_library(worker_object_cache STATIC ${WORKER_OC_SRCS} ${WORKER_TRANSPORT_API_SRCS})
 target_link_libraries(worker_object_cache PRIVATE ${WORKER_OBJECT_CACHE_DEPEND_LIBS})
+
+add_library(worker_control_backend_probe STATIC worker_control_backend_probe.cpp)
+target_include_directories(worker_control_backend_probe PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(worker_control_backend_probe PRIVATE worker_object_cache)
 
 # Reduce optimization for protobuf-heavy source files to prevent cc1plus OOM during parallel builds.
 # Each of these files transitively includes multiple .pb.h headers; with -O2 each cc1plus process

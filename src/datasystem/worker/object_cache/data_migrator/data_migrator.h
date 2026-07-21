@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
@@ -127,6 +128,19 @@ public:
          */
     Status ConnectAndCreateRemoteApi(std::shared_ptr<WorkerRemoteWorkerOCApi> &remoteWorkerStub,
                                      const HostPort &workerAddr);
+
+#ifdef WITH_TESTS
+    using CreateRemoteApiHook = std::function<Status(const HostPort &, std::shared_ptr<WorkerRemoteWorkerOCApi> &)>;
+
+    void SetCreateRemoteApiHookForTest(CreateRemoteApiHook hook)
+    {
+        createRemoteApiHook_ = std::move(hook);
+    }
+
+    Status MigrateToTargetWithRedirectForTest(const std::vector<std::string> &objectKeys, const HostPort &targetAddr,
+                                              std::shared_ptr<SelectionStrategy> strategy,
+                                              const std::unordered_map<std::string, uint64_t> &objectSizes);
+#endif
 
     /**
      * @brief Signal all in-flight migration handlers to stop as soon as possible.
@@ -339,6 +353,9 @@ private:
     std::shared_ptr<MigrateProgress> progress_;
 
     std::atomic<bool> stopping_{ false };
+#ifdef WITH_TESTS
+    CreateRemoteApiHook createRemoteApiHook_;
+#endif
 };
 
 }  // namespace object_cache

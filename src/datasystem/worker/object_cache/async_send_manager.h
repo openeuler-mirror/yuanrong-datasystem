@@ -46,11 +46,10 @@ namespace datasystem {
 namespace object_cache {
 class WorkerOcEvictionManager;
 }
-}
+}  // namespace datasystem
 
 namespace datasystem {
 namespace object_cache {
-
 
 const int QUEUE_NUM = 8;
 const int QUEUE_CAPACITY = 10000;
@@ -107,9 +106,8 @@ public:
             lock.unlock();
             RETURN_IF_NOT_OK(Poll(removedElement, 0));
             lock.lock();
-            LOG(WARNING) << FormatString(
-                "The queue of 'Async op to cloud storage' is full, remove an operation for %s",
-                removedElement->key);
+            LOG(WARNING) << FormatString("The queue of 'Async op to cloud storage' is full, remove an operation for %s",
+                                         removedElement->key);
         }
         auto newone = list_.insert(list_.end(), element);
         (void)indexTable_.emplace(element->key, newone);
@@ -160,7 +158,7 @@ public:
      * @param[in] timeoutMs in milliseconds.
      * @return Status K_OK or K_TRY_AGAIN (if timeout expires).
      */
-    Status Poll(std::shared_ptr<Element> &out, uint64_t timeoutMs)
+    Status Poll(std::shared_ptr<Element> &out, uint64_t timeoutMs, bool markActive = false)
     {
         std::unique_lock<std::mutex> lock(mux_);
         cvEmpty_.wait_for(lock, std::chrono::milliseconds(timeoutMs), IsNotEmpty);
@@ -171,7 +169,65 @@ public:
         out = list_.front();
         list_.pop_front();
         (void)indexTable_.erase(out->key);
+        if (markActive) {
+            activeKey_ = out->key;
+        }
         return Status::OK();
+    }
+
+    Status CancelAndWait(const std::string &objectKey, uint64_t timeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(mux_);
+        auto iter = indexTable_.find(objectKey);
+        if (iter != indexTable_.end()) {
+            (void)list_.erase(iter->second);
+            (void)indexTable_.erase(iter);
+        }
+        cancelledKeys_.emplace(objectKey);
+        const bool wasActive = activeKey_ == objectKey;
+        if (!cvFinished_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                                  [this, &objectKey] { return persistenceKey_ != objectKey; })) {
+            RETURN_STATUS(StatusCode::K_TRY_AGAIN, "Timed out waiting for async L2 write of " + objectKey);
+        }
+        if (!wasActive) {
+            (void)cancelledKeys_.erase(objectKey);
+        }
+        return Status::OK();
+    }
+
+    bool BeginPersistence(const std::string &objectKey)
+    {
+        std::unique_lock<std::mutex> lock(mux_);
+        if (cancelledKeys_.count(objectKey) != 0) {
+            return false;
+        }
+        persistenceKey_ = objectKey;
+        return true;
+    }
+
+    void FinishPersistence(const std::string &objectKey)
+    {
+        std::unique_lock<std::mutex> lock(mux_);
+        if (persistenceKey_ == objectKey) {
+            persistenceKey_.clear();
+        }
+        cvFinished_.notify_all();
+    }
+
+    bool IsCancelled(const std::string &objectKey)
+    {
+        std::unique_lock<std::mutex> lock(mux_);
+        return cancelledKeys_.count(objectKey) != 0;
+    }
+
+    void Finish(const std::string &objectKey)
+    {
+        std::unique_lock<std::mutex> lock(mux_);
+        if (activeKey_ == objectKey) {
+            activeKey_.clear();
+        }
+        (void)cancelledKeys_.erase(objectKey);
+        cvFinished_.notify_all();
     }
 
     /**
@@ -226,9 +282,13 @@ public:
 private:
     size_t capacity_;
     std::condition_variable cvEmpty_;
+    std::condition_variable cvFinished_;
     std::mutex mux_;
     std::list<std::shared_ptr<Element>> list_;
     std::unordered_map<std::string, std::list<std::shared_ptr<Element>>::iterator> indexTable_;
+    std::unordered_set<std::string> cancelledKeys_;
+    std::string activeKey_;
+    std::string persistenceKey_;
     std::function<bool()> IsNotFull = [this]() -> bool { return list_.size() < capacity_; };
     std::function<bool()> IsNotEmpty = [this]() -> bool { return !list_.empty(); };
 };
@@ -267,6 +327,14 @@ public:
      * @param[in] objectKey The ID of the object need to remove.
      */
     void Remove(const std::string &objectKey);
+
+    /**
+     * @brief Cancel a queued or running object upload and wait until it can no longer write L2.
+     * @param[in] objectKey The object to fence.
+     * @param[in] timeoutMs Maximum wait for an in-flight persistence call.
+     * @return K_OK when fenced, or K_TRY_AGAIN when the in-flight call has not completed.
+     */
+    Status CancelAndWait(const std::string &objectKey, uint64_t timeoutMs);
 
     /**
      * @brief Check whether some async L2 cache tasks in the list.
@@ -311,7 +379,8 @@ private:
      * @return Status of the call.
      */
     Status LockAndSendToRemote(const std::string &objectKey, std::shared_ptr<SafeObjType> entryPtr,
-                               std::chrono::time_point<std::chrono::steady_clock> &beginTime);
+                               std::chrono::time_point<std::chrono::steady_clock> &beginTime,
+                               const std::function<void()> &persistenceDone);
 
     /**
      * @brief RLock object and send to L2 cache, for the purpose read the obj data not blocking by other reader.
@@ -322,7 +391,7 @@ private:
      * @return Status of the call.
      */
     Status RLockAndSendToRemote(const std::string &objectKey, std::shared_ptr<SafeObjType> entryPtr,
-                                bool &objIsValidInMem,
+                                bool &objIsValidInMem, uint64_t &createTime,
                                 std::chrono::time_point<std::chrono::steady_clock> &beginTime);
 
     /**
@@ -345,6 +414,9 @@ private:
     Status SendToRemoteOnLock(const std::string &objectKey, std::shared_ptr<std::stringstream> buf, uint64_t createTime,
                               uint64_t &dataSize, WriteMode writeMode, uint32_t ttlSecond,
                               std::chrono::time_point<std::chrono::steady_clock> &beginTime);
+    Status PrepareRemoteSendBuffer(const std::string &objectKey, const std::shared_ptr<SafeObjType> &entryPtr,
+                                   std::shared_ptr<std::stringstream> &buf, std::unique_ptr<char[]> &data,
+                                   uint64_t &dataSize);
 
     /**
      * @brief Try to evict when memory size reach high water maker.

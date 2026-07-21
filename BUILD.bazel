@@ -655,16 +655,6 @@ copy_file(
     out = "yr/datasystem/coordinator_config.json",
 )
 
-# --- Tools ---
-copy_file(
-    name = "hashring_parser_file",
-    src = "//tests/st:hashring_parser",
-    out = "yr/datasystem/tools/hashring_parser",
-    visibility = [
-        "//bazel:__pkg__",
-    ],
-)
-
 copy_file(
     name = "curve_keygen_file",
     src = "//tests/st/common/rpc:curvekey_generator",

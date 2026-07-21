@@ -24,6 +24,9 @@
 namespace datasystem {
 namespace object_cache {
 
+cluster::ControlBackendObservation RefreshControlBackendObservationState(cluster::ControlBackendObservation observation,
+                                                                         bool backendAvailable);
+
 /**
  * @brief Encode fresh identity-bound control-backend evidence into the existing peer RPC response.
  * @param[in] observation Fresh complete local observation.

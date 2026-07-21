@@ -33,12 +33,12 @@
 #include "datasystem/protos/share_memory.brpc.pb.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem {
 namespace worker {
 class WorkerServiceImpl : public WorkerService, public IWorkerService, public Callable {
 public:
-
     /**
      * @brief Create a new WorkerServiceImpl object.
      * @param[in] serverAddr The address of worker.
@@ -52,8 +52,7 @@ public:
      */
     WorkerServiceImpl(HostPort serverAddr, HostPort masterAddr, double timeoutMult, CommonServer *worker,
                       std::shared_ptr<AkSkManager> akSkManager, std::string workerUuid,
-                      const cluster::MembershipEndpointView &membership,
-                      const std::atomic<bool> &localExiting);
+                      const cluster::MembershipEndpointView &membership, const std::atomic<bool> &localExiting);
 
     ~WorkerServiceImpl() override;
 
@@ -135,12 +134,23 @@ public:
         workerUuid_ = uuid;
     }
 
+    /**
+     * @brief Assign borrowed Worker runtime dependency.
+     * @param[in] runtime Runtime facade owned by WorkerOCServer.
+     */
+    void SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime)
+    {
+        runtime_ = runtime;
+    }
+
 private:
+    Status CheckRuntimeAdmission(const std::string &operation,
+                                 worker::WorkerAdmissionKind kind = worker::WorkerAdmissionKind::NORMAL_WRITE) const;
     Status ValidateRegisterClientRequest(const RegisterClientReqPb &req, std::string &tenantId) const;
     Status ConsumeRegisterClientFd(const RegisterClientReqPb &req);
-    Status AddRegisteringClient(const RegisterClientReqPb &req, const ClientKey &clientId,
-                                const std::string &tenantId, const CompatibilityVersion &compatibilityVersion,
-                                uint32_t &lockId, uint32_t &pipelineQueueId, bool &supportMultiShmRefCount);
+    Status AddRegisteringClient(const RegisterClientReqPb &req, const ClientKey &clientId, const std::string &tenantId,
+                                const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
+                                uint32_t &pipelineQueueId, bool &supportMultiShmRefCount);
     void PopulateRegisterClientResponse(RegisterClientRspPb &rsp, const ClientKey &clientId,
                                         const std::string &tenantId, uint32_t lockId, uint32_t pipelineQueueId,
                                         bool supportMultiShmRefCount, bool shmEnabled, int fd, uint64_t mmapSize,
@@ -196,7 +206,8 @@ private:
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::string workerUuid_;
     const cluster::MembershipEndpointView &membership_;  // Read-only view owned by WorkerOCServer's Engine.
-    const std::atomic<bool> &localExiting_;             // WorkerOCServer-owned local admission gate.
+    const std::atomic<bool> &localExiting_;              // WorkerOCServer-owned local admission gate.
+    const worker::WorkerRuntimeFacade *runtime_{ nullptr };
 
     std::shared_timed_mutex mutex_;                           // for unboundedUnixSockFds_
     std::unordered_map<int, uint64_t> unboundedUnixSockFds_;  // This is the fd that is not bound to the client.

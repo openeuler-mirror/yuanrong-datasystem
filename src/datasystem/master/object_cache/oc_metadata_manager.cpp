@@ -32,7 +32,6 @@
 #include <utility>
 #include <vector>
 
-
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
@@ -218,7 +217,7 @@ void OCMetadataManager::StartMetaMonitor()
             std::stringstream ss;
             ss << "Metadata size info: {";
             size_t metaTableTotalSize = 0;
-            for (const auto& shard : metaShards_) {
+            for (const auto &shard : metaShards_) {
                 metaTableTotalSize += shard.table.size();
             }
             ss << "metaTable:" << metaTableTotalSize;
@@ -383,8 +382,8 @@ Status OCMetadataManager::LoadRefFromRocks(const std::string &tableName,
             std::string objectKey = info.first.substr(pos + 1, objKeySize);
             func(workerAddrOrRemoteClientId, objectKey, isRemoteClient);
         } else {
-            LOG(WARNING) << "The meta restored from rockdb is in an invalid format:"
-                         << " key=" << info.first << ", value=" << info.second;
+            LOG(WARNING) << "The meta restored from rockdb is in an invalid format:" << " key=" << info.first
+                         << ", value=" << info.second;
         }
     }
     return Status::OK();
@@ -426,8 +425,8 @@ Status OCMetadataManager::DecreaseNestedRefCnt(const GDecNestedRefReqPb &req, GD
         }
         // ObjectKey has no more references
         if (nestedRefManager_->CheckIsNoneNestedRefById(objectKey)) {
-        size_t shardIdx = GetShardIndex(objectKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objectKey);
+            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::accessor accessor;
             auto found = metaShards_[shardIdx].table.find(accessor, objectKey);
             // Check for object end of life
@@ -540,9 +539,8 @@ Status OCMetadataManager::HandleNestedRefsOnCreate(const std::string &objectKey,
         redirectAddr = route.targetAddress;
         HostPort nestedMasterAddr;
         RETURN_IF_NOT_OK(nestedMasterAddr.ParseString(redirectAddr));
-        INJECT_POINT("IncreaseNestedRefCnt.local.addr", [this, &nestedObjectKey]() {
-            return nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey);
-        });
+        INJECT_POINT("IncreaseNestedRefCnt.local.addr",
+                     [this, &nestedObjectKey]() { return nestedRefManager_->IncreaseNestedRefCnt(nestedObjectKey); });
         // Check if object to add belongs to this master and then add locally.
         // if scale up and obj is hash to find master, need redirect will be true, if obj spilt with workerid,
         // masterAddrInfo is master addr.
@@ -856,8 +854,8 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
     point.RecordAndReset(PerfKey::MASTER_CREATE_MULTI_META_ASYN_EXEC);
     ExecuteAsyncTask([this, objsFirst = std::move(objsFirst)]() {
         for (const auto &objKey : objsFirst) {
-        size_t shardIdx = GetShardIndex(objKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objKey);
+            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::const_accessor accessor;
             if (!metaShards_[shardIdx].table.find(accessor, objKey)) {
                 LOG(WARNING) << "Object " << objKey << " can't found in metaTable, notify subscribe failed";
@@ -880,8 +878,8 @@ Status OCMetadataManager::AddLocationForExistingKeyOnNx(const std::string &objec
 {
     bool needStoreLocation = false;
     {
-    size_t shardIdx = GetShardIndex(objectKey);
-    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+        size_t shardIdx = GetShardIndex(objectKey);
+        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
         TbbMetaTable::accessor accessor;
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             metaShards_[shardIdx].table.find(accessor, objectKey), K_NOT_FOUND,
@@ -898,8 +896,8 @@ Status OCMetadataManager::AddLocationForExistingKeyOnNx(const std::string &objec
     }
     auto rc = objectStore_->AddObjectLocation(objectKey, address, "");
     if (rc.IsError() && needStoreLocation) {
-    size_t shardIdx = GetShardIndex(objectKey);
-    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+        size_t shardIdx = GetShardIndex(objectKey);
+        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
         TbbMetaTable::accessor accessor;
         if (metaShards_[shardIdx].table.find(accessor, objectKey)) {
             (void)accessor->second.locations.erase(address);
@@ -954,8 +952,8 @@ Status OCMetadataManager::PublishMultiMeta(const std::vector<std::string> &objec
 {
     std::unordered_map<std::string, std::string> metaInfos;
     for (const auto &objKey : objectKeys) {
-    size_t shardIdx = GetShardIndex(objKey);
-    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+        size_t shardIdx = GetShardIndex(objKey);
+        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
         TbbMetaTable::accessor accessor;
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
             metaShards_[shardIdx].table.find(accessor, objKey), K_RUNTIME_ERROR,
@@ -986,8 +984,8 @@ void OCMetadataManager::RollBackMultiMetaWhenCreateFailed(const std::vector<std:
     }
     LOG(INFO) << FormatString("Start to rollback multiMeta for objectKey(%s)", VectorToString(rollBackIds));
     for (const auto &objKey : rollBackIds) {
-    size_t shardIdx = GetShardIndex(objKey);
-    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+        size_t shardIdx = GetShardIndex(objKey);
+        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
         TbbMetaTable::accessor accessor;
         if (!metaShards_[shardIdx].table.find(accessor, objKey)) {
             LOG(WARNING) << FormatString("[ObjectKey %s] The object key not exists in metaTable_", objKey);
@@ -1018,8 +1016,8 @@ Status OCMetadataManager::CreateMeta(const CreateMetaReqPb &request, CreateMetaR
     if (status.GetCode() == K_OC_KEY_ALREADY_EXIST && request.meta().existence() == ExistenceOptPb::NX) {
         status = AddLocationForExistingKeyOnNx(objectKey, address);
         if (status.IsOk()) {
-        size_t shardIdx = GetShardIndex(objectKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objectKey);
+            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::const_accessor accessor;
             if (metaShards_[shardIdx].table.find(accessor, objectKey)) {
                 version = accessor->second.meta.version();
@@ -1152,9 +1150,8 @@ Status OCMetadataManager::ProcessCopyMetaHelper(const std::string &address, cons
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!objectKey.empty(), StatusCode::K_INVALID, "The objectKey can not be empty.");
     size_t shardIdx = GetShardIndex(objectKey);
     auto found = this->metaShards_[shardIdx].table.find(accessor, objectKey);
-    CHECK_FAIL_RETURN_STATUS(
-        found, StatusCode::K_NOT_FOUND,
-        FormatString("The objectKey(%s) does not exist, can not create copy meta.", objectKey));
+    CHECK_FAIL_RETURN_STATUS(found, StatusCode::K_NOT_FOUND,
+                             FormatString("The objectKey(%s) does not exist, can not create copy meta.", objectKey));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(accessor->second.meta.config().data_format() == dataFormat, K_INVALID,
                                          FormatString("Invalid data format of objectKey(%s)", objectKey));
 
@@ -1378,8 +1375,8 @@ Status OCMetadataManager::TryToSubscribeCache(int64_t timeout, const QueryMetaRe
     subMeta->timer_ = std::make_unique<TimerQueue::TimerImpl>(timer);
     RETURN_IF_NOT_OK(AddSubscribeCache(subMeta));
     for (const auto &objKey : objectKeys) {
-    size_t shardIdx = GetShardIndex(objKey);
-    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+        size_t shardIdx = GetShardIndex(objKey);
+        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
         TbbMetaTable::const_accessor accessor;
         if (!metaShards_[shardIdx].table.find(accessor, objKey)) {
             continue;
@@ -2461,10 +2458,9 @@ void OCMetadataManager::InsertExpireObjects(ObjectMetaPb &metaPb,
     }
 }
 
-Status OCMetadataManager::HandleLoadMeta(
-    std::vector<std::pair<std::string, std::string>> &metas,
-    std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
-    bool &isFromRocksdb)
+Status OCMetadataManager::HandleLoadMeta(std::vector<std::pair<std::string, std::string>> &metas,
+                                         std::vector<std::tuple<std::string, uint64_t, uint32_t>> &expireObjects,
+                                         bool &isFromRocksdb)
 {
     std::set<std::string> workers;
     if (!IsCentralizedMetadata()) {
@@ -2526,7 +2522,7 @@ Status OCMetadataManager::LoadMeta(bool isFromRocksdb)
 void OCMetadataManager::GetWorkerAddress(std::set<std::string> &workerAddresses)
 {
     WithAllShardsLocked([&]() {
-        for (auto& shard : metaShards_) {
+        for (auto &shard : metaShards_) {
             for (const auto &meta : shard.table) {
                 for (const auto &addr : meta.second.locations) {
                     workerAddresses.insert(addr.first);
@@ -3273,9 +3269,8 @@ Status OCMetadataManager::ReleaseGRefsToMaster(const std::string &remoteClientId
     req.set_timeout(remainingTime);
     req.set_remote_client_id(remoteClientId);
     RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
-        api->ReleaseGRefsOfRemoteClientId(req, rsp),
-        FormatString("ReleaseGRefsToMaster failed. masterAddr:%s", masterAddr.ToString()));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api->ReleaseGRefsOfRemoteClientId(req, rsp),
+                                     FormatString("ReleaseGRefsToMaster failed. masterAddr:%s", masterAddr.ToString()));
     std::shared_lock<std::shared_timed_mutex> lck(clientIdRefTableMutex_);
     TbbRemoteClientIdRefTable::accessor accessor;
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(clientIdRefTable_.find(accessor, remoteClientId), StatusCode::K_RUNTIME_ERROR,
@@ -3318,8 +3313,8 @@ void OCMetadataManager::ConstructRequestObjectKeyMap(const std::vector<std::stri
     for (const auto &objKey : finishDecIds) {
         bool needDelete = false;
         if (std::find(failedDecIds.begin(), failedDecIds.end(), objKey) == failedDecIds.end()) {
-        size_t shardIdx = GetShardIndex(objKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objKey);
+            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::const_accessor accessor;
             auto found = metaShards_[shardIdx].table.find(accessor, objKey);
             needDelete = found && nestedRefManager_->CheckIsNoneNestedRefById(objKey);
@@ -3414,8 +3409,8 @@ Status OCMetadataManager::GDecreaseRefImpl(
     for (const auto &objKey : finishDecIds) {
         bool needDelete = false;
         if (std::find(failedDecIds.begin(), failedDecIds.end(), objKey) == failedDecIds.end()) {
-        size_t shardIdx = GetShardIndex(objKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objKey);
+            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::const_accessor accessor;
             auto found = metaShards_[shardIdx].table.find(accessor, objKey);
             Status rc = Status::OK();
@@ -3553,7 +3548,7 @@ Status OCMetadataManager::CreateHashMeta(const ObjectMetaPb &meta, const std::st
 void OCMetadataManager::GetMetasMatch(std::function<bool(const std::string &)> &&matchFunc,
                                       std::vector<std::string> &objKeys, bool *exitEarly)
 {
-    for (auto& shard : metaShards_) {
+    for (auto &shard : metaShards_) {
         std::shared_lock<std::shared_timed_mutex> lck(shard.mutex);
         for (const auto &it : shard.table) {
             if (exitEarly && *exitEarly) {
@@ -3611,8 +3606,7 @@ Status OCMetadataManager::RemoveMetaByWorkerForKey(const std::string &objectKey,
             VLOG(1) << FormatString("[Objects %s] Primary copy(%s) was cleaned up", objectKey, workerAddr);
         }
         std::string serializedStr;
-        RETURN_IF_NOT_OK(
-            objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr));
+        RETURN_IF_NOT_OK(objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr));
         (void)objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
                                                WriteMode2MetaType(accessor->second.meta.config().write_mode()));
     }
@@ -3627,7 +3621,7 @@ Status OCMetadataManager::RemoveMetaByWorker(const std::string &workerAddr)
         Timer timer;
         WithAllShardsLocked([&]() {
             GetMasterTimeCost().Append("RemoveMetaByWorker get lock", timer.ElapsedMilliSecond());
-            for (auto& shard : metaShards_) {
+            for (auto &shard : metaShards_) {
                 for (const auto &it : shard.table) {
                     const std::string &objectKey = it.first;
                     if (it.second.locations.count(workerAddr) || it.second.meta.primary_address() == workerAddr) {
@@ -3686,7 +3680,7 @@ Status OCMetadataManager::ReselectPrimaryCopy(const std::string &objectKey,
         }
         for (const auto &addr : accessor->second.locations) {
             if (addr.first != accessor->second.meta.primary_address()
-                && excludedAddr.find(addr.first) == excludedAddr.end()) {
+                && excludedAddr.find(addr.first) == excludedAddr.end() && addr.second == AckState::ACK) {
                 primaryCopy = addr.first;
                 return Status::OK();
             }
@@ -3700,7 +3694,7 @@ void OCMetadataManager::ProcessPrimaryCopyByWorkerTimeout(const std::string &wor
     std::vector<std::string> primaryCopyObjs;
     {
         WithAllShardsLocked([&]() {
-            for (auto& shard : metaShards_) {
+            for (auto &shard : metaShards_) {
                 for (const auto &it : shard.table) {
                     if (it.second.meta.primary_address() == workerAddr) {
                         primaryCopyObjs.emplace_back(it.first);
@@ -3724,8 +3718,118 @@ void OCMetadataManager::ProcessPrimaryCopyByWorkerTimeout(const std::string &wor
     notifyWorkerManager_->AsyncChangePrimaryCopy(toBeChanged, ifvoluntaryScaleDown);
 }
 
+auto OCMetadataManager::CollectPrimaryPromotionCandidates(const std::string &workerAddr) -> PromotionCandidateMap
+{
+    std::unordered_map<std::string, PromotionCandidates> candidatesByObject;
+    WithAllShardsLocked([&]() {
+        for (auto &shard : metaShards_) {
+            for (const auto &entry : shard.table) {
+                if (entry.second.meta.primary_address() != workerAddr) {
+                    continue;
+                }
+                auto &candidates = candidatesByObject[entry.first];
+                candidates.version = entry.second.meta.version();
+                for (const auto &location : entry.second.locations) {
+                    if (location.first != workerAddr && location.second == AckState::ACK) {
+                        candidates.workers.emplace_back(location.first);
+                    }
+                }
+                std::sort(candidates.workers.begin(), candidates.workers.end());
+            }
+        }
+    });
+    return candidatesByObject;
+}
+
+Status OCMetadataManager::PromotePrimaryCopyCandidate(const std::string &workerAddr, const std::string &objectKey,
+                                                      const PromotionCandidates &candidates,
+                                                      bool requireAcknowledgedReplacement)
+{
+    if (candidates.workers.empty()) {
+        CHECK_FAIL_RETURN_STATUS(!requireAcknowledgedReplacement, K_NOT_READY,
+                                 "failed primary has no acknowledged replacement copy");
+        LOG(INFO) << "Keep primary copy on recovering worker because no acknowledged replacement exists. worker:"
+                  << workerAddr << ", object:" << objectKey;
+        return Status::OK();
+    }
+    bool promoted = false;
+    for (const auto &candidate : candidates.workers) {
+        if (notifyWorkerManager_->CheckWorkerIsHealthy(candidate).IsError()) {
+            continue;
+        }
+        std::unordered_set<std::string> successIds;
+        auto sendRc = notifyWorkerManager_->SendChangePrimaryCopy(candidate, { objectKey }, successIds);
+        if (sendRc.IsError()) {
+            return sendRc;
+        }
+        if (successIds.find(objectKey) == successIds.end()) {
+            continue;
+        }
+        bool oldPrimaryFencePersisted = false;
+        RETURN_IF_NOT_OK(
+            CommitPrimaryCopyPromotion(objectKey, workerAddr, candidate, candidates.version, oldPrimaryFencePersisted));
+        promoted = true;
+        break;
+    }
+    CHECK_FAIL_RETURN_STATUS(promoted, K_NOT_READY, "no healthy acknowledged replacement accepted promotion");
+    return Status::OK();
+}
+
+Status OCMetadataManager::ReconcilePrimaryCopyByWorkerTimeout(const std::string &workerAddr,
+                                                              bool requireAcknowledgedReplacement)
+{
+    const auto candidatesByObject = CollectPrimaryPromotionCandidates(workerAddr);
+    for (const auto &object : candidatesByObject) {
+        RETURN_IF_NOT_OK(
+            PromotePrimaryCopyCandidate(workerAddr, object.first, object.second, requireAcknowledgedReplacement));
+    }
+    return Status::OK();
+}
+
+Status OCMetadataManager::CommitPrimaryCopyPromotion(const std::string &objectKey, const std::string &oldPrimary,
+                                                     const std::string &newPrimary, uint64_t expectedVersion,
+                                                     bool &oldPrimaryFencePersisted)
+{
+    oldPrimaryFencePersisted = false;
+    size_t shardIdx = GetShardIndex(objectKey);
+    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+    TbbMetaTable::accessor accessor;
+    CHECK_FAIL_RETURN_STATUS(metaShards_[shardIdx].table.find(accessor, objectKey), K_NOT_FOUND,
+                             "object metadata disappeared during primary-copy promotion");
+    auto &objectMeta = accessor->second;
+    if (objectMeta.meta.primary_address() != oldPrimary && objectMeta.meta.primary_address() != newPrimary) {
+        RETURN_STATUS(K_TRY_AGAIN, "primary-copy ownership changed while promotion was in flight");
+    }
+    auto location = objectMeta.locations.find(newPrimary);
+    CHECK_FAIL_RETURN_STATUS(location != objectMeta.locations.end() && location->second == AckState::ACK, K_NOT_READY,
+                             "replacement primary location is no longer acknowledged");
+    if (objectMeta.meta.primary_address() == oldPrimary) {
+        CHECK_FAIL_RETURN_STATUS(objectMeta.meta.version() == expectedVersion, K_TRY_AGAIN,
+                                 "object metadata version changed while promotion was in flight");
+    }
+    RETURN_IF_NOT_OK(
+        notifyWorkerManager_->InsertAsyncWorkerOp(oldPrimary, objectKey, { NotifyWorkerOpType::PRIMARY_COPY_INVALID },
+                                                  true, WriteMode2MetaType(objectMeta.meta.config().write_mode())));
+    oldPrimaryFencePersisted = true;
+    if (objectMeta.meta.primary_address() == oldPrimary) {
+        objectMeta.meta.set_primary_address(newPrimary);
+        std::string serializedStr;
+        auto rc = objectStore_->CreateSerializedStringForMeta(objectKey, objectMeta.meta, serializedStr);
+        if (rc.IsOk()) {
+            rc = objectStore_->CreateOrUpdateMeta(objectKey, serializedStr,
+                                                  WriteMode2MetaType(objectMeta.meta.config().write_mode()));
+        }
+        if (rc.IsError()) {
+            // Keep the accepted copy intact, but make the failed promotion discoverable by the next recovery retry.
+            objectMeta.meta.set_primary_address(oldPrimary);
+            return rc;
+        }
+    }
+    return Status::OK();
+}
+
 Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bool changePrimaryCopy,
-                                               bool removeFailWorkerMetaData)
+                                               bool removeFailWorkerMetaData, bool requireAcknowledgedReplacement)
 {
     // ignore for current node timeout.
     if (workerAddr == masterAddress_) {
@@ -3735,8 +3839,14 @@ Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bo
     LOG(WARNING) << "ProcessWorkerTimeout start. lost worker : " << workerAddr
                  << ", isDead:" << removeFailWorkerMetaData;
     notifyWorkerManager_->SetFaultWorker(workerAddr);
+    std::vector<OCNotifyWorkerManager::AsyncWorkerOpSnapshot> pendingOpsBeforeCleanup;
+    if (removeFailWorkerMetaData) {
+        pendingOpsBeforeCleanup = notifyWorkerManager_->SnapshotAsyncWorkerOps(workerAddr);
+    }
     if (changePrimaryCopy) {
         ProcessPrimaryCopyByWorkerTimeout(workerAddr);
+    } else if (removeFailWorkerMetaData) {
+        RETURN_IF_NOT_OK(ReconcilePrimaryCopyByWorkerTimeout(workerAddr, requireAcknowledgedReplacement));
     }
     if (removeFailWorkerMetaData) {
         {
@@ -3758,8 +3868,9 @@ Status OCMetadataManager::ProcessWorkerTimeout(const std::string &workerAddr, bo
         RETURN_IF_NOT_OK(OCMetadataManager::GDecreaseRef(req, resp));
         Status respRc(static_cast<StatusCode>(resp.last_rc().error_code()), resp.last_rc().error_msg());
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(respRc, "GDecreaseRef failed in ProcessWorkerTimeout");
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr),
-                                         "ClearAsyncWorkerOp failed in ProcessWorkerTimeout");
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            notifyWorkerManager_->ClearAsyncWorkerOpSnapshots(workerAddr, pendingOpsBeforeCleanup),
+            "ClearAsyncWorkerOp snapshots failed in ProcessWorkerTimeout");
     }
     return Status::OK();
 }
@@ -3776,7 +3887,7 @@ Status OCMetadataManager::ProcessWorkerRestart(const std::string &workerAddr, in
                                      "ClearAsyncWorkerOp failed in ProcessWorkerRestart");
     if (FLAGS_enable_reconciliation) {
         if (sync) {
-            notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, true);
+            RETURN_IF_NOT_OK(notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, true));
         } else {
             notifyWorkerManager_->AsyncPushMetaToWorker(workerAddr, timestamp, true);
         }
@@ -3793,13 +3904,28 @@ Status OCMetadataManager::ProcessWorkerNetworkRecovery(const std::string &worker
     LOG(INFO) << "ProcessWorkerNetworkRecovery. Lost worker:" << workerAddr << ", isOffline:" << isOffline;
     notifyWorkerManager_->RemoveFaultWorker(workerAddr);
     if (!isOffline) {
-        notifyWorkerManager_->AsyncPushMetaToWorker(workerAddr, timestamp, false);
-        notifyWorkerManager_->AsyncNotifyOpToWorker(workerAddr, timestamp);
+        bool recoveryComplete = false;
+        Raii restoreFaultWorker([this, &recoveryComplete, &workerAddr] {
+            if (!recoveryComplete) {
+                notifyWorkerManager_->SetFaultWorker(workerAddr);
+            }
+        });
+        RETURN_IF_NOT_OK(ReconcilePrimaryCopyByWorkerTimeout(workerAddr, false));
+        RETURN_IF_NOT_OK(notifyWorkerManager_->NotifyOpToWorker(workerAddr, timestamp));
+        RETURN_IF_NOT_OK(notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, false));
+        recoveryComplete = true;
     }
     if (workerAddr == masterAddress_) {
         ExecuteAsyncTask([this]() { notifyWorkerManager_->ProcessAsyncDeleteNotifyOpImpl(); });
     }
     return Status::OK();
+}
+
+Status OCMetadataManager::ProcessWorkerLocalIsolation(const std::string &workerAddr)
+{
+    LOG(WARNING) << "ProcessWorkerLocalIsolation start. isolated worker: " << workerAddr;
+    notifyWorkerManager_->SetFaultWorker(workerAddr);
+    return ReconcilePrimaryCopyByWorkerTimeout(workerAddr, false);
 }
 
 Status OCMetadataManager::RequestMetaFromWorker(const std::string &masterAddr, const std::string &workerAddr)
@@ -4180,7 +4306,7 @@ bool OCMetadataManager::CheckMetaTableEmpty()
     // return true even though the table is no longer empty. Callers already tolerate
     // TOCTOU (the original pre-sharding code had the same race), so we don't take the
     // 64-shard shared-lock hit just to get a tighter snapshot.
-    for (const auto& shard : metaShards_) {
+    for (const auto &shard : metaShards_) {
         if (!shard.table.empty()) {
             return false;
         }
@@ -4375,9 +4501,9 @@ Status OCMetadataManager::RecoverTopologyFailure(const cluster::TopologyPhaseAct
     return firstError;
 }
 
-Status OCMetadataManager::RecoverTopologyObjectMetadata(
-    const cluster::TopologyPhaseAction &action, const cluster::IKeyFilter &filter,
-    const cluster::StorageScanPlan &plan)
+Status OCMetadataManager::RecoverTopologyObjectMetadata(const cluster::TopologyPhaseAction &action,
+                                                        const cluster::IKeyFilter &filter,
+                                                        const cluster::StorageScanPlan &plan)
 {
     std::vector<std::pair<std::string, std::string>> metas;
     auto collect = [&action, &metas](const std::string &key, const std::string &value) {
@@ -4429,21 +4555,23 @@ Status OCMetadataManager::RecoverTopologyAuxiliaryMetadata(const cluster::IKeyFi
     return firstError;
 }
 
-Status OCMetadataManager::CleanupTopologyFailedMember(
-    const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
-    std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
+Status OCMetadataManager::CleanupTopologyFailedMember(const cluster::TopologyPhaseAction &action,
+                                                      const std::string &businessOperationId,
+                                                      std::chrono::steady_clock::time_point deadline,
+                                                      const cluster::CancellationToken &cancellation)
 {
     CHECK_FAIL_RETURN_STATUS(action.failed.has_value(), K_INVALID, "failure cleanup lacks failed member");
     CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology cleanup cancelled");
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "topology cleanup deadline exceeded");
-    return ProcessWorkerTimeout(action.failed->address, false, true);
+    return ProcessWorkerTimeout(action.failed->address, false, true, false);
 }
 
-Status OCMetadataManager::CleanupTopologyDeviceClientMeta(
-    const cluster::TopologyPhaseAction &action, const std::string &businessOperationId,
-    std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
+Status OCMetadataManager::CleanupTopologyDeviceClientMeta(const cluster::TopologyPhaseAction &action,
+                                                          const std::string &businessOperationId,
+                                                          std::chrono::steady_clock::time_point deadline,
+                                                          const cluster::CancellationToken &cancellation)
 {
     CHECK_FAIL_RETURN_STATUS(action.failed.has_value(), K_INVALID, "device cleanup lacks failed member");
     CHECK_FAIL_RETURN_STATUS(!businessOperationId.empty(), K_INVALID, "empty topology business operation id");
@@ -4499,15 +4627,13 @@ Status OCMetadataManager::ValidateQueryAndGetDataRequest(const QueryAndGetReqPb 
 }
 
 void OCMetadataManager::TryGetQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex,
-                                              const std::string &objectKey,
-                                              const QueryAndGetMetaSnapshot &meta,
+                                              const std::string &objectKey, const QueryAndGetMetaSnapshot &meta,
                                               QueryAndGetResultPb &result, uint64_t &payloadSize,
                                               std::vector<RpcMessage> &payloads)
 {
     if (localApi_ == nullptr || !meta.localCopyAvailable
         || notifyWorkerManager_->CheckExistAsyncWorkerOp(
-            masterAddress_, objectKey,
-            NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
+            masterAddress_, objectKey, NotifyWorkerOpType::CACHE_INVALID | NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
         return;
     }
 
@@ -4541,8 +4667,7 @@ void OCMetadataManager::TryGetQueryAndGetData(const QueryAndGetReqPb &req, size_
 }
 
 Status OCMetadataManager::ReadLocalQueryAndGetData(const QueryAndGetReqPb &req, size_t requestIndex,
-                                                   const std::string &objectKey,
-                                                   const QueryAndGetMetaSnapshot &meta,
+                                                   const std::string &objectKey, const QueryAndGetMetaSnapshot &meta,
                                                    std::vector<RpcMessage> &payloads)
 {
     GetObjectRemoteReqPb localReq;
@@ -4576,8 +4701,7 @@ void OCMetadataManager::TryGetObjectData(const std::string &objectKey, const Tbb
         return;
     }
     uint64_t dataSize = accessor->second.meta.data_size();
-    if (payloadSize > QUERY_AND_GET_MAX_PAYLOAD_SIZE
-        || dataSize > QUERY_AND_GET_MAX_PAYLOAD_SIZE - payloadSize) {
+    if (payloadSize > QUERY_AND_GET_MAX_PAYLOAD_SIZE || dataSize > QUERY_AND_GET_MAX_PAYLOAD_SIZE - payloadSize) {
         return;
     }
     auto iter = accessor->second.locations.find(masterAddress_);
@@ -4680,8 +4804,8 @@ Status OCMetadataManager::CreateDeviceMeta(const ObjectMetaPb &newMeta, const st
     objMeta.locations[address] = AckState::ACK;
     LOG(INFO) << "Master create device meta: object_key: " << objectKey << ", worker_address: " << address;
     {
-    size_t shardIdx = GetShardIndex(objectKey);
-    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+        size_t shardIdx = GetShardIndex(objectKey);
+        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
         TbbMetaTable::accessor accessor;
         auto found = metaShards_[shardIdx].table.find(accessor, objectKey);
         if (found) {
@@ -4746,8 +4870,7 @@ Status OCMetadataManager::ReplacePrimary(const ReplacePrimaryReqPb &req, Replace
 }
 
 void OCMetadataManager::ReplacePrimaryObject(const ReplacePrimaryReqPb &req,
-                                             const ReplacePrimaryReqPb::ObjectInfoPb &info,
-                                             ReplacePrimaryRspPb &rsp)
+                                             const ReplacePrimaryReqPb::ObjectInfoPb &info, ReplacePrimaryRspPb &rsp)
 {
     const auto &objectKey = info.object_key();
     const uint64_t version = info.version();
@@ -4767,8 +4890,8 @@ void OCMetadataManager::ReplacePrimaryObject(const ReplacePrimaryReqPb &req,
 
     if (accessor->second.meta.version() == version
         && accessor->second.meta.primary_address() == req.new_primary_addr()) {
-        LOG(INFO) << FormatString(
-            "[ObjectKey %s] The object has been changed to this primary, set success directly", objectKey);
+        LOG(INFO) << FormatString("[ObjectKey %s] The object has been changed to this primary, set success directly",
+                                  objectKey);
         rsp.add_success_ids(objectKey);
         return;
     }
@@ -4789,8 +4912,8 @@ void OCMetadataManager::ReplacePrimaryObject(const ReplacePrimaryReqPb &req,
         accessor->second.locations.erase(req.origin_primary_addr());
     }
     rsp.add_success_ids(objectKey);
-    VLOG(1) << FormatString("[ObjectKey %s] Change primary copy from %s to %s", objectKey,
-                            req.origin_primary_addr(), req.new_primary_addr());
+    VLOG(1) << FormatString("[ObjectKey %s] Change primary copy from %s to %s", objectKey, req.origin_primary_addr(),
+                            req.new_primary_addr());
     std::string serializedStr;
     LOG_IF_ERROR(objectStore_->CreateSerializedStringForMeta(objectKey, accessor->second.meta, serializedStr),
                  "serialize meta to rocksdb failed");
@@ -4893,8 +5016,8 @@ Status OCMetadataManager::RollbackMultiMeta(const RollbackMultiMetaReqPb &req, R
                 rsp.add_failed_object_keys(objKey);
             }
         } else {
-        size_t shardIdx = GetShardIndex(objKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objKey);
+            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::accessor accessor;
             if (!metaShards_[shardIdx].table.find(accessor, objKey)) {
                 LOG(INFO) << FormatString("[ObjectKey %s] Skip rollback because not in the meta table", objKey);
@@ -4946,8 +5069,8 @@ Status OCMetadataManager::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
     for (auto it = notRedirectObjectKeys.begin(); it != notRedirectObjectKeys.end(); ++it) {
         const std::string &objectKey = *it;
         {
-        size_t shardIdx = GetShardIndex(objectKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
+            size_t shardIdx = GetShardIndex(objectKey);
+            std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
             TbbMetaTable::accessor accessor;
             if (!metaShards_[shardIdx].table.find(accessor, objectKey)) {
                 LOG(INFO) << "The object " << objectKey << " was not found in metaTable_.";

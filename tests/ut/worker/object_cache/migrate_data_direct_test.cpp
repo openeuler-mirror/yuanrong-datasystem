@@ -251,6 +251,29 @@ TEST_F(MigrateDataDirectTest, TestMigrateDataDirectOOM)
     ASSERT_EQ(rsp.failed_object_keys_size(), 1);
 }
 
+TEST_F(MigrateDataDirectTest, SlotAggregateOutOfMemoryNotifiesBeforeNoSpaceConversion)
+{
+    EnableUrma(true);
+    BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::IsMemoryAvailable, (_, _))
+        .WillOnce(Return(true))
+        .WillOnce(Return(false));
+    BINEXPECT_CALL(&WorkerOcEvictionManager::Erase, (_)).Times(1).WillRepeatedly(Return());
+    MockQueryMasterMetadataOk();
+    size_t oomCount = 0;
+    impl_->SetOutOfMemoryHandler([&oomCount](const Status &, const std::string &, memory::CacheType cacheType) {
+        EXPECT_EQ(cacheType, memory::CacheType::MEMORY);
+        ++oomCount;
+    });
+    auto req = MakeReq({ { .objectKey = "slot-object", .version = 1, .dataSize = defaultDataSize_ } });
+    req.set_is_slot_migration(true);
+    MigrateDataDirectRspPb rsp;
+
+    const auto rc = impl_->MigrateDataDirect(req, rsp);
+
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_NO_SPACE);
+    EXPECT_EQ(oomCount, 1U);
+}
+
 TEST_F(MigrateDataDirectTest, TestMigrateDataDirectSuccess)
 {
     EnableUrma(true);

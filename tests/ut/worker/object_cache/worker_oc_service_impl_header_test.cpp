@@ -78,8 +78,8 @@ public:
         auto evictionManager = std::make_shared<WorkerOcEvictionManager>(
             objectTable_, hostPort, hostPort, GetTestMetadataRoute(), nullptr);
         impl_ = std::make_shared<WorkerOCServiceImpl>(
-            hostPort, hostPort, objectTable_, nullptr, evictionManager, nullptr, nullptr, nullptr,
-            nullptr, GetTestMetadataRoute(), membership_, &exitRequested_, false, false);
+            hostPort, hostPort, objectTable_, nullptr, evictionManager, nullptr, nullptr, nullptr, nullptr, nullptr,
+            GetTestMetadataRoute(), membership_, &exitRequested_, false, false);
         impl_->InitMetaSize();
         impl_->InitServiceImpl();
     }

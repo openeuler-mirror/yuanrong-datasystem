@@ -95,6 +95,31 @@ void MovePayload(std::vector<RpcMessage> &src, std::vector<RpcMessage> &dst)
     dst.insert(dst.end(), std::make_move_iterator(src.begin()), std::make_move_iterator(src.end()));
 }
 
+void FillRejectedMigrateDataResponse(const MigrateDataReqPb &req, const Status &status, MigrateDataRspPb &rsp)
+{
+    for (const auto &object : req.objects()) {
+        rsp.add_fail_ids(object.object_key());
+    }
+    if (status.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
+        rsp.set_remain_bytes(0);
+        rsp.set_disk_remain_bytes(0);
+        rsp.set_limit_rate(0);
+    }
+    rsp.set_scale_down_state(MigrateDataRspPb::NONE);
+}
+
+void FillRejectedMigrateDataDirectResponse(const MigrateDataDirectReqPb &req, const Status &status,
+                                           MigrateDataDirectRspPb &rsp)
+{
+    for (const auto &object : req.objects()) {
+        rsp.add_failed_object_keys(object.object_key());
+    }
+    if (status.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
+        rsp.set_remain_bytes(0);
+        rsp.set_limit_rate(0);
+    }
+}
+
 std::string GetRemoteAddressForLog(const GetObjectRemoteReqPb &req)
 {
     if (req.has_urma_info()) {
@@ -179,6 +204,20 @@ Status WorkerWorkerOCServiceImpl::Init()
     return WorkerWorkerOCService::Init();
 }
 
+void WorkerWorkerOCServiceImpl::SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime)
+{
+    runtime_ = runtime;
+}
+
+Status WorkerWorkerOCServiceImpl::AcquireReadAdmission(const std::string &operation,
+                                                       std::optional<worker::WorkerRuntimeStateReadGuard> &guard) const
+{
+    if (runtime_ == nullptr) {
+        return Status::OK();
+    }
+    return runtime_->AcquireNormalReadGuard(operation, guard);
+}
+
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi)
 {
@@ -247,6 +286,9 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     // detached UUID that does not correlate with the SDK request.
     ScopedRequestContext ctx;
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
+    INJECT_POINT("worker.worker_worker_read_before_admission");
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK(AcquireReadAdmission("GetObjectRemote", admissionGuard));
     if (isQueryAndGet) {
         RETURN_IF_NOT_OK(CheckConnectionStable(req));
     }
@@ -839,6 +881,10 @@ Status WorkerWorkerOCServiceImpl::CheckCoordinatorState(const CheckCoordinatorSt
                                                         CheckCoordinatorStateRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    if (runtime_ != nullptr) {
+        RETURN_IF_NOT_OK(
+            runtime_->CheckAdmission(worker::WorkerAdmissionKind::DIAGNOSTIC_RPC, "CheckCoordinatorState"));
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(coordinationAvailable_), K_NOT_READY,
                              "Coordination availability provider is not initialized.");
@@ -851,6 +897,9 @@ Status WorkerWorkerOCServiceImpl::CheckCoordinatorState(const CheckCoordinatorSt
 Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &req, GetClusterStateRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    if (runtime_ != nullptr) {
+        RETURN_IF_NOT_OK(runtime_->CheckAdmission(worker::WorkerAdmissionKind::DIAGNOSTIC_RPC, "GetClusterState"));
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(coordinationAvailable_), K_NOT_READY,
                              "Coordination availability provider is not initialized.");
@@ -858,7 +907,8 @@ Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &re
     rsp.set_coordinator_available(isCoordinationAvailable);
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(backendObservationProvider_), K_NOT_READY,
                              "Control-backend observation provider is not initialized.");
-    RETURN_IF_NOT_OK(FillGetClusterStateRspPbFromControlBackendObservation(backendObservationProvider_(), rsp));
+    auto observation = RefreshControlBackendObservationState(backendObservationProvider_(), isCoordinationAvailable);
+    RETURN_IF_NOT_OK(FillGetClusterStateRspPbFromControlBackendObservation(observation, rsp));
     LOG_IF(INFO, isCoordinationAvailable) << "Coordination backend is available";
     return Status::OK();
 }
@@ -867,12 +917,26 @@ Status WorkerWorkerOCServiceImpl::MigrateData(const MigrateDataReqPb &req, Migra
                                               std::vector<::datasystem::RpcMessage> payloads)
 {
     ScopedRequestContext ctx;
+    if (runtime_ != nullptr) {
+        auto admissionRc = runtime_->CheckAdmission(worker::WorkerAdmissionKind::MIGRATION_TARGET, "MigrateData");
+        if (admissionRc.IsError()) {
+            FillRejectedMigrateDataResponse(req, admissionRc, rsp);
+            return admissionRc;
+        }
+    }
     return ocClientWorkerSvc_->MigrateData(req, rsp, std::move(payloads));
 }
 
 Status WorkerWorkerOCServiceImpl::MigrateDataDirect(const MigrateDataDirectReqPb &req, MigrateDataDirectRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    if (runtime_ != nullptr) {
+        auto admissionRc = runtime_->CheckAdmission(worker::WorkerAdmissionKind::MIGRATION_TARGET, "MigrateDataDirect");
+        if (admissionRc.IsError()) {
+            FillRejectedMigrateDataDirectResponse(req, admissionRc, rsp);
+            return admissionRc;
+        }
+    }
     return ocClientWorkerSvc_->MigrateDataDirect(req, rsp);
 }
 
@@ -974,6 +1038,9 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
                                                            BatchGetObjectRemoteRspPb &rsp,
                                                            std::vector<RpcMessage> &payload)
 {
+    INJECT_POINT("worker.worker_worker_read_before_admission");
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK(AcquireReadAdmission("BatchGetObjectRemote", admissionGuard));
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE);
     BatchRh2dContext batchTransportContext;
     if (IsUrmaEnabled()) {
@@ -1205,6 +1272,9 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
 Status WorkerWorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    if (runtime_ != nullptr) {
+        RETURN_IF_NOT_OK(runtime_->CheckAdmission(worker::WorkerAdmissionKind::MIGRATION_TARGET, "NotifyRemoteGet"));
+    }
     LOG(INFO) << PIPLN_LOG_PREFIX "NotifyRemoteGet request: object_count=" << req.object_keys_size();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocClientWorkerSvc_->NotifyRemoteGet(req, rsp), "NotifyRemoteGet failed");
     LOG(INFO) << PIPLN_LOG_PREFIX "NotifyRemoteGet success";

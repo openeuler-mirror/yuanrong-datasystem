@@ -47,6 +47,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "object_cache_recovery_state_test",
+    srcs = ["object_cache/object_cache_recovery_state_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/object_cache:object_cache_recovery_state",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "worker_leaving_intercept_test",
     srcs = ["worker_leaving_intercept_test.cpp"],
     deps = [
@@ -535,6 +544,82 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "worker_control_backend_scope_test",
+    srcs = ["worker_control_backend_scope_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rdma:fast_transport_base_test_stub",
+        "//src/datasystem/worker/runtime:worker_control_backend_scope_classification",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_runtime_state_test",
+    srcs = ["worker_runtime_state_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_runtime_state",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_service_admission_test",
+    srcs = ["worker_service_admission_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rdma:fast_transport_base_test_stub",
+        "//src/datasystem/worker:metadata_route_resolver",
+        "//src/datasystem/worker/runtime:worker_service_admission",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_admission_facade_test",
+    srcs = ["worker_admission_facade_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_admission_facade",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_runtime_facade_test",
+    srcs = ["worker_runtime_facade_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_runtime_facade",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_topology_availability_admission_test",
+    srcs = ["worker_topology_availability_admission_test.cpp"],
+    deps = [
+        "//src/datasystem/common/rdma:fast_transport_base_test_stub",
+        "//src/datasystem/worker/runtime:worker_topology_availability_admission",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_recovery_controller_test",
+    srcs = ["worker_recovery_controller_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_recovery_controller",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_recovery_evidence_tracker_test",
+    srcs = ["worker_recovery_evidence_tracker_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_recovery_evidence_tracker",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_isolation_coordinator_test",
+    srcs = ["worker_isolation_coordinator_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_isolation_coordinator",
+    ],
+)
+
 # 汇总测试套件
 test_suite(
     name = "all_worker_tests",
@@ -553,6 +638,7 @@ test_suite(
         "migrate_data_handler_test",
         "migrate_data_service_test",
         "node_selector_test",
+        "object_cache_recovery_state_test",
         "object_endpoint_policy_test",
         "rebalance_worker_test",
         "shared_page_queue_group_test",
@@ -568,6 +654,15 @@ test_suite(
         "worker_oc_service_impl_test",
         "worker_oc_spill_eviction_test",
         "worker_oc_spill_test",
+        "worker_control_backend_scope_test",
+        "worker_runtime_state_test",
+        "worker_isolation_coordinator_test",
+        "worker_recovery_controller_test",
+        "worker_recovery_evidence_tracker_test",
+        "worker_service_admission_test",
+        "worker_admission_facade_test",
+        "worker_runtime_facade_test",
+        "worker_topology_availability_admission_test",
         "worker_worker_peer_state_codec_test",
         "worker_worker_oc_gather_layout_test",
         "worker_worker_oc_api_test",

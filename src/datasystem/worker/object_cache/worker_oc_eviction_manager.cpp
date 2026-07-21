@@ -536,6 +536,18 @@ bool WorkerOcEvictionManager::IsAboveLowWaterMark(uint64_t needSize, size_t pend
     return realMemoryUsage > lowWater;
 }
 
+bool WorkerOcEvictionManager::IsResourceRecovered(CacheType cacheType)
+{
+    const auto memoryCacheType = static_cast<memory::CacheType>(cacheType);
+    auto *allocator = datasystem::memory::Allocator::Instance();
+    const auto limit = allocator->GetMaxMemoryLimit(memoryCacheType);
+    if (limit == 0) {
+        return false;
+    }
+    const auto requiredFree = static_cast<uint64_t>(static_cast<double>(limit) * (1.0 - GetEvictionLowWaterFactor()));
+    return allocator->GetTotalRealMemoryFree(memoryCacheType) >= requiredFree;
+}
+
 void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheType)
 {
     EvictFailedList evictFailedIds;

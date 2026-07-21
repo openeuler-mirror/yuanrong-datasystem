@@ -387,6 +387,54 @@ TEST_F(MemoryRebalanceSchedulerTest, TargetInflightBytesPreventsOverAssigningTar
     EXPECT_EQ(secondRsp.rebalance_task().target_worker(), targetFree);
 }
 
+TEST_F(MemoryRebalanceSchedulerTest, RunningSourceIsNotSelectedAsNewTarget)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string runningSource = "127.0.0.1:9005";
+    const std::string firstTarget = "127.0.0.1:1005";
+    const std::string otherSource = "127.0.0.1:8505";
+    const std::string fallbackTarget = "127.0.0.1:3005";
+    auto firstSnapshot = MakeSnapshot({
+        MakeNode(runningSource, 900, 100),
+        MakeNode(firstTarget, 100, 900),
+    });
+
+    auto firstRsp = ScheduleAndGetRsp(scheduler, runningSource, firstSnapshot);
+    ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
+    ASSERT_EQ(firstRsp.rebalance_task().source_worker(), runningSource);
+    ASSERT_EQ(firstRsp.rebalance_task().target_worker(), firstTarget);
+
+    auto secondSnapshot = MakeSnapshot({
+        MakeNode(runningSource, 50, 950),
+        MakeNode(otherSource, 850, 150),
+        MakeNode(fallbackTarget, 300, 700),
+    });
+    auto secondRsp = ScheduleAndGetRsp(scheduler, otherSource, secondSnapshot);
+
+    ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(secondRsp.rebalance_task().source_worker(), otherSource);
+    EXPECT_EQ(secondRsp.rebalance_task().target_worker(), fallbackTarget);
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, NotReadyTargetIsSkipped)
+{
+    MemoryRebalanceScheduler scheduler;
+    const std::string source = "127.0.0.1:9006";
+    const std::string notReadyTarget = "127.0.0.1:1006";
+    const std::string fallbackTarget = "127.0.0.1:3006";
+    auto snapshot = MakeSnapshot({
+        MakeNode(source, 900, 100),
+        MakeNode(notReadyTarget, 100, 900, false),
+        MakeNode(fallbackTarget, 300, 700),
+    });
+
+    auto rsp = ScheduleAndGetRsp(scheduler, source, snapshot);
+
+    ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(rsp.rebalance_task().source_worker(), source);
+    EXPECT_EQ(rsp.rebalance_task().target_worker(), fallbackTarget);
+}
+
 TEST_F(MemoryRebalanceSchedulerTest, DoesNotCreateTaskWhenReportingWorkerIsNotSource)
 {
     MemoryRebalanceScheduler scheduler;

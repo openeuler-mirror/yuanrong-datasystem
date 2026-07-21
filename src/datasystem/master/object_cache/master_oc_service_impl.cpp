@@ -760,6 +760,23 @@ Status MasterOCServiceImpl::IfNeedTriggerReconciliationImpl(const Reconciliation
     std::shared_ptr<master::OCMetadataManager> ocMetadataManager;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(metadataManagerHolder_->GetOcMetadataManager(ocMetadataManager),
                                      "GetOcMetadataManager failed");
+    if (req.event_type() == ReconciliationQueryPb::LOCAL_ISOLATION) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ocMetadataManager->ProcessWorkerLocalIsolation(workerAddr.ToString()),
+                                         "Master process local-isolation ownership handoff failed");
+        GetMasterTimeCost().Append("Total ReconcileMembershipChange", timer.ElapsedMilliSecond());
+        LOG(INFO) << FormatString("The operations of master ReconcileMembershipChange %s",
+                                  GetMasterTimeCost().GetInfo());
+        return Status::OK();
+    }
+    if (req.event_type() == ReconciliationQueryPb::NETWORK_RECOVERY) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            ocMetadataManager->ProcessWorkerNetworkRecovery(workerAddr.ToString(), req.event_timestamp(), false),
+            "Master process worker network recovery failed");
+        GetMasterTimeCost().Append("Total ReconcileMembershipChange", timer.ElapsedMilliSecond());
+        LOG(INFO) << FormatString("The operations of master ReconcileMembershipChange %s",
+                                  GetMasterTimeCost().GetInfo());
+        return Status::OK();
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ocMetadataManager->ProcessWorkerRestart(workerAddr.ToString(), req.event_timestamp(), true),
         "Master process worker restart failed");

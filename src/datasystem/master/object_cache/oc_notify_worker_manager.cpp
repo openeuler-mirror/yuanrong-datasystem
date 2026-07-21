@@ -760,6 +760,15 @@ NotifyWorkerOp OCNotifyWorkerManager::MergeAsyncWorkerOpEntry(NotifyWorkerOpEntr
         return entry.op;
     }
     auto currWorkerOp = ClearNotifyMasterOp(entry.op.type);
+    auto canCombineWorkerOps = [](NotifyWorkerOpType op) {
+        return !TESTFLAG(op, NotifyWorkerOpType::DELETE)
+               && (TESTFLAG(op, NotifyWorkerOpType::PRIMARY_COPY_INVALID)
+                   || TESTFLAG(op, NotifyWorkerOpType::CACHE_INVALID));
+    };
+    if (canCombineWorkerOps(currWorkerOp) && canCombineWorkerOps(notifyWorkerOp)) {
+        SETFLAG(entry.op.type, notifyWorkerOp);
+        return entry.op;
+    }
     if (static_cast<uint32_t>(currWorkerOp) >= static_cast<uint32_t>(op.type)) {
         VLOG(1) << FormatString(
             "The existing operation(%d) of the object is greater than or equal to the new operation(%d). objectKey:%s, "
@@ -1039,7 +1048,7 @@ void OCNotifyWorkerManager::AsyncPushMetaToWorker(const std::string &workerAddr,
     auto traceID = Trace::Instance().GetTraceID();
     auto func = [this, workerAddr, timestamp, isRestart, traceID]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        PushMetaToWorker(workerAddr, timestamp, isRestart);
+        LOG_IF_ERROR(PushMetaToWorker(workerAddr, timestamp, isRestart), "Push metadata to worker failed");
     };
     ocMetadataManager_->ExecuteAsyncTask(std::move(func));
 }
@@ -1132,7 +1141,7 @@ Status OCNotifyWorkerManager::RequestMetaFromWorker(const std::string &masterAdd
     return Status::OK();
 }
 
-void OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart)
+Status OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart)
 {
     LOG(INFO) << "PushMetaToWorker start. From master: " << masterAddr_.ToString() << " to worker:" << workerAddr;
     std::vector<std::string> refIds;
@@ -1147,7 +1156,7 @@ void OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int6
     if (rc.IsError()) {
         LOG(WARNING) << FormatString("The worker status is abnormal during PushMetaToWorker. workerAddr:%s, status:%s",
                                      workerAddr, rc.ToString());
-        return;
+        return rc;
     }
     std::shared_ptr<MasterWorkerOCApi> masterWorkerApi;
     rc = GetMasterWorkerApi(workerAddr, masterWorkerApi);
@@ -1155,7 +1164,7 @@ void OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int6
         LOG(WARNING) << FormatString(
             "Get MasterWorkerOCApi failed is abnormal during PushMetaToWorker. workerAddr:%s, status:%s", workerAddr,
             rc.ToString());
-        return;
+        return rc;
     }
 
     static const int RETRY_TIMEOUT_MS = 60000;  // 1 min
@@ -1168,25 +1177,29 @@ void OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int6
         []() { return Status::OK(); }, retryOn);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("PushMetaToWorker failed. workerAddr:%s, status:%s", workerAddr, rc.ToString());
-        return;
+        return rc;
     }
     LOG(INFO) << "PushMetaToWorker end. workerAddr:" << workerAddr;
+    return Status::OK();
 }
 
 void OCNotifyWorkerManager::AsyncNotifyOpToWorker(const std::string &workerAddr, int64_t timestamp)
 {
-    ocMetadataManager_->ExecuteAsyncTask(&OCNotifyWorkerManager::NotifyOpToWorker, this, workerAddr, timestamp);
+    ocMetadataManager_->ExecuteAsyncTask([this, workerAddr, timestamp] {
+        LOG_IF_ERROR(NotifyOpToWorker(workerAddr, timestamp), "Notify pending worker operations failed");
+    });
 }
 
-void OCNotifyWorkerManager::NotifyOpToWorker(const std::string &workerAddr, int64_t timestamp)
+Status OCNotifyWorkerManager::NotifyOpToWorker(const std::string &workerAddr, int64_t timestamp)
 {
+    INJECT_POINT("OCNotifyWorkerManager.NotifyOpToWorker");
     TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
     LOG(INFO) << "NotifyOpToWorker start. workerAddr:" << workerAddr;
     Status rc = CheckWorkerIsHealthy(workerAddr);
     if (rc.IsError()) {
         LOG(WARNING) << FormatString("The worker status is abnormal during NotifyOpToWorker. workerAddr:%s, status:%s",
                                      workerAddr, rc.ToString());
-        return;
+        return rc;
     }
     std::shared_ptr<MasterWorkerOCApi> masterWorkerApi;
     rc = GetMasterWorkerApi(workerAddr, masterWorkerApi);
@@ -1194,12 +1207,12 @@ void OCNotifyWorkerManager::NotifyOpToWorker(const std::string &workerAddr, int6
         LOG(WARNING) << FormatString(
             "Get MasterWorkerOCApi failed is abnormal during NotifyOpToWorker. workerAddr:%s, status:%s", workerAddr,
             rc.ToString());
-        return;
+        return rc;
     }
 
     auto pendingOps = SnapshotAsyncWorkerOps(workerAddr);
     if (pendingOps.empty()) {
-        return;
+        return Status::OK();
     }
 
     PushMetaToWorkerReqPb req;
@@ -1209,9 +1222,11 @@ void OCNotifyWorkerManager::NotifyOpToWorker(const std::string &workerAddr, int6
     for (const auto &it : pendingOps) {
         if (TESTFLAG(it.op.type, NotifyWorkerOpType::CACHE_INVALID)) {
             (void)FillUpdateObjectInfoPb(it.objectKey, req.add_cache_invalids());
-        } else if (TESTFLAG(it.op.type, NotifyWorkerOpType::DELETE)) {
+        }
+        if (TESTFLAG(it.op.type, NotifyWorkerOpType::DELETE)) {
             req.add_delete_object_keys(it.objectKey);
-        } else if (TESTFLAG(it.op.type, NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
+        }
+        if (TESTFLAG(it.op.type, NotifyWorkerOpType::PRIMARY_COPY_INVALID)) {
             req.add_primary_copy_invalid_ids(it.objectKey);
         }
         // There is no need to process the request to notify the master here.
@@ -1220,10 +1235,10 @@ void OCNotifyWorkerManager::NotifyOpToWorker(const std::string &workerAddr, int6
     rc = masterWorkerApi->PushMetaToWorker(req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("PushMetaToWorker failed. workerAddr:%s, status:%s", workerAddr, rc.ToString());
-        return;
+        return rc;
     }
     LOG(INFO) << "PushMetaToWorker end. workerAddr:" << workerAddr;
-    (void)ClearAsyncWorkerOpSnapshots(workerAddr, pendingOps);
+    return ClearAsyncWorkerOpSnapshots(workerAddr, pendingOps);
 }
 
 void OCNotifyWorkerManager::AssignLocalWorker(object_cache::MasterWorkerOCServiceImpl *service,

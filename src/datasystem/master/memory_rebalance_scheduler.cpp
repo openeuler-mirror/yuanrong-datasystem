@@ -443,6 +443,14 @@ bool MemoryRebalanceScheduler::IsSourceCandidateLocked(
            && !IsInCooldownLocked(node.nodeId, nowMs);
 }
 
+bool MemoryRebalanceScheduler::IsTargetCandidateLocked(const NodeInfo &node, uint64_t nowMs,
+                                                       const cluster::TopologySnapshot *topologySnapshot) const
+{
+    return node.isReady && IsWorkerActiveInTopology(node.nodeId, topologySnapshot) && node.memoryLimit > 0
+           && activeTasksBySource_.find(node.nodeId) == activeTasksBySource_.end()
+           && !IsInCooldownLocked(node.nodeId, nowMs);
+}
+
 void MemoryRebalanceScheduler::CollectWorkerCandidatesLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                                                              const std::string &sourceWorker, uint64_t nowMs,
                                                              const cluster::TopologySnapshot *topologySnapshot,
@@ -456,8 +464,7 @@ void MemoryRebalanceScheduler::CollectWorkerCandidatesLocked(const std::unordere
         if (node.nodeId == sourceWorker && IsSourceCandidateLocked(node, nowMs, topologySnapshot)) {
             sources.emplace_back(&node);
         }
-        if (node.isReady && IsWorkerActiveInTopology(node.nodeId, topologySnapshot) && node.memoryLimit > 0
-            && !IsInCooldownLocked(node.nodeId, nowMs)) {
+        if (IsTargetCandidateLocked(node, nowMs, topologySnapshot)) {
             targets.emplace_back(&node);
         }
     }

@@ -15,6 +15,22 @@
 
 # Description: Bazel build functions for datasystem.
 
+function _bazel_cmd() {
+  echo "${BAZEL_BIN:-bazel}"
+}
+
+function _bazel_startup_options() {
+  if [[ -n "${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
+    echo "--output_user_root=${BAZEL_OUTPUT_USER_ROOT}"
+  fi
+}
+
+function _bazel_repository_options() {
+  if [[ -n "${BAZEL_DISTDIR:-}" ]]; then
+    echo "--distdir=${BAZEL_DISTDIR}"
+  fi
+}
+
 # Map sanitizer name from build.sh value to bazel config name.
 function _sanitizer_to_bazel_config() {
   case "$1" in
@@ -151,10 +167,19 @@ function build_datasystem_bazel() {
     echo -e "-- [INFO] bazel mode: -A (RDMA) not yet supported."
   fi
 
-  # Check bazel is available
-  if ! command -v bazel &>/dev/null; then
-    go_die "ERROR: bazel not found in PATH. Please install bazel first."
+  local bazel_cmd
+  bazel_cmd="$(_bazel_cmd)"
+  if ! command -v "${bazel_cmd}" &>/dev/null; then
+    go_die "ERROR: bazel not found: ${bazel_cmd}. Please install bazel first or set BAZEL_BIN."
   fi
+  local -a startup_options
+  while IFS= read -r opt; do
+    startup_options+=("${opt}")
+  done < <(_bazel_startup_options)
+  local -a repository_options
+  while IFS= read -r opt; do
+    repository_options+=("${opt}")
+  done < <(_bazel_repository_options)
 
   # Build configs as array (avoid eval)
   local -a configs
@@ -172,7 +197,7 @@ function build_datasystem_bazel() {
   fi
   # Tools (only when tests enabled, matching CMake behavior)
   if [[ "${RUN_TESTS}" != "off" ]]; then
-    targets+=("//:hashring_parser_file" "//:curve_keygen_file")
+    targets+=("//:curve_keygen_file")
   fi
   # Strip/sym artifacts (only for non-debug builds)
   if [[ "${BUILD_TYPE}" != "Debug" ]] && is_on "${ENABLE_STRIP}"; then
@@ -193,9 +218,11 @@ function build_datasystem_bazel() {
   local baseTime_s
   baseTime_s=$(date +%s)
 
-  echo -e "-- bazel command: bazel build ${configs[@]} --jobs=${BUILD_THREAD_NUM} ${targets[@]}"
+  echo -e "-- bazel command: ${bazel_cmd} ${startup_options[*]} build ${configs[@]} ${repository_options[*]} " \
+    "--jobs=${BUILD_THREAD_NUM} ${targets[@]}"
   cd "${DATASYSTEM_DIR}"
-  bazel build "${configs[@]}" --jobs="${BUILD_THREAD_NUM}" "${targets[@]}" || go_die "-- bazel build failed!"
+  "${bazel_cmd}" "${startup_options[@]}" build "${configs[@]}" "${repository_options[@]}" \
+    --jobs="${BUILD_THREAD_NUM}" "${targets[@]}" || go_die "-- bazel build failed!"
   echo -e "---- [TIMER] Build source: $(($(date +%s)-$baseTime_s)) seconds"
 
   # Install outputs
@@ -221,7 +248,7 @@ function _bazel_install_outputs() {
   local sdk_tar="${bazel_bin}/bazel/datasystem_sdk.tar"
   if [[ -f "${sdk_tar}" ]]; then
     local sdk_tmp
-    sdk_tmp=$(mktemp -d)
+    sdk_tmp=$(mktemp -d "${INSTALL_DIR}/datasystem_sdk.XXXXXX")
     tar -xf "${sdk_tar}" -C "${sdk_tmp}" || go_die "-- failed to extract SDK tar"
 
     # Verify expected structure
@@ -270,7 +297,8 @@ function _bazel_install_outputs() {
 
   # Worker shared library (rename to match CMake output name)
   if [[ -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" ]]; then
-    cp -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" "${DS_DIR}/service/lib/libdatasystem_worker.so"
+    cp -f "${bazel_bin}/src/datasystem/worker/libdatasystem_worker_shared.so" \
+      "${DS_DIR}/service/lib/libdatasystem_worker.so"
   fi
 
   # Coordinator binary (stripped if available)
@@ -299,9 +327,6 @@ function _bazel_install_outputs() {
   # --- 5. Tools (only when tests enabled, matching CMake behavior) ---
   if [[ "${RUN_TESTS}" != "off" ]]; then
     mkdir -p "${DS_DIR}/tools"
-    if [[ -f "${bazel_bin}/yr/datasystem/tools/hashring_parser" ]]; then
-      cp -f "${bazel_bin}/yr/datasystem/tools/hashring_parser" "${DS_DIR}/tools/"
-    fi
     if [[ -f "${bazel_bin}/yr/datasystem/tools/curve_keygen" ]]; then
       cp -f "${bazel_bin}/yr/datasystem/tools/curve_keygen" "${DS_DIR}/tools/"
     fi
@@ -337,7 +362,8 @@ function _bazel_install_outputs() {
   version=$(cat "${DATASYSTEM_DIR}/VERSION")
   if [[ -d "${DS_DIR}" ]]; then
     cd "${INSTALL_DIR}"
-    tar --remove-files -zcf "yr-datasystem-v${version}.tar.gz" datasystem || go_die "-- failed to create deployment tarball"
+    tar --remove-files -zcf "yr-datasystem-v${version}.tar.gz" datasystem \
+      || go_die "-- failed to create deployment tarball"
     cd "${DATASYSTEM_DIR}"
   fi
 
@@ -371,12 +397,24 @@ function run_bazel_testcases() {
   sanitizer_lower=$(echo "${USE_SANITIZER}" | tr '[:upper:]' '[:lower:]')
   local sanitizer_config
   sanitizer_config=$(_sanitizer_to_bazel_config "${sanitizer_lower}")
+  local bazel_cmd
+  bazel_cmd="$(_bazel_cmd)"
+  local -a startup_options
+  while IFS= read -r opt; do
+    startup_options+=("${opt}")
+  done < <(_bazel_startup_options)
+  local -a repository_options
+  while IFS= read -r opt; do
+    repository_options+=("${opt}")
+  done < <(_bazel_repository_options)
 
   cd "${DATASYSTEM_DIR}"
   if [[ "${sanitizer_config}" != "asan" && "${sanitizer_config}" != "tsan" ]]; then
-    echo -e "-- bazel test command: bazel test ${configs[*]} --jobs=${TEST_PARALLEL_JOBS} " \
+    echo -e "-- bazel test command: ${bazel_cmd} ${startup_options[*]} test ${configs[*]} ${repository_options[*]} " \
+      "--jobs=${TEST_PARALLEL_JOBS} " \
       "--test_timeout=${LLT_TIMEOUT_S} //..."
-    bazel test "${configs[@]}" --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" //... \
+    "${bazel_cmd}" "${startup_options[@]}" test "${configs[@]}" "${repository_options[@]}" \
+      --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" //... \
       || go_die "-- bazel test failed!"
     echo -e "---- run datasystem testcases success!"
     echo -e "---- [TIMER] Run bazel test: $(($(date +%s)-$baseTime_s)) seconds"
@@ -390,7 +428,7 @@ function run_bazel_testcases() {
 
   echo -e "-- bazel test query: ${test_query_expr}"
   test_targets_file=$(mktemp)
-  bazel query "${test_query_expr}" --output=label > "${test_targets_file}" || {
+  "${bazel_cmd}" "${startup_options[@]}" query "${test_query_expr}" --output=label > "${test_targets_file}" || {
     rm -f "${test_targets_file}"
     go_die "-- bazel test query failed!"
   }
@@ -404,9 +442,10 @@ function run_bazel_testcases() {
   fi
 
   echo -e "-- bazel test targets: ${#test_targets[@]}"
-  echo -e "-- bazel test command: bazel test ${configs[*]} --build_tag_filters=-manual --jobs=${TEST_PARALLEL_JOBS} " \
-    "--test_timeout=${LLT_TIMEOUT_S} <${#test_targets[@]} targets>"
-  bazel test "${configs[@]}" --build_tag_filters=-manual \
+  echo -e "-- bazel test command: ${bazel_cmd} ${startup_options[*]} test ${configs[*]} ${repository_options[*]} " \
+    "--build_tag_filters=-manual --jobs=${TEST_PARALLEL_JOBS} --test_timeout=${LLT_TIMEOUT_S} " \
+    "<${#test_targets[@]} targets>"
+  "${bazel_cmd}" "${startup_options[@]}" test "${configs[@]}" "${repository_options[@]}" --build_tag_filters=-manual \
     --jobs="${TEST_PARALLEL_JOBS}" --test_timeout="${LLT_TIMEOUT_S}" "${test_targets[@]}" \
     || go_die "-- bazel test failed!"
   echo -e "---- run datasystem testcases success!"

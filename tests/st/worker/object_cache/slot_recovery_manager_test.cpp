@@ -33,6 +33,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
+#include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_string(etcd_address);
@@ -41,6 +42,8 @@ namespace datasystem {
 namespace st {
 using datasystem::RecoveryTaskPb;
 using datasystem::SlotRecoveryInfoPb;
+using datasystem::cluster::EtcdCoordinationBackend;
+using datasystem::object_cache::CoordinationSlotRecoveryStore;
 using datasystem::object_cache::SlotRecoveryManager;
 using datasystem::object_cache::SlotRecoveryStore;
 using namespace ::testing;
@@ -118,7 +121,7 @@ public:
                 }
                 return Status::OK();
             }));
-        return SlotRecoveryManager::Init(localAddress_, membership_, nullptr, nullptr, nullptr);
+        return SlotRecoveryManager::Init(localAddress_, membership_, nullptr, nullptr, store_);
     }
 
     void SetActiveWorkers(const std::vector<std::string> &workers)
@@ -137,12 +140,6 @@ public:
     }
 
 private:
-    std::shared_ptr<SlotRecoveryStore> CreateStore(datasystem::EtcdStore *etcdStore) const override
-    {
-        (void)etcdStore;
-        return store_;
-    }
-
     cluster::TopologySnapshotState snapshots_;
     cluster::MembershipEndpointView membership_{ snapshots_ };
     HostPort localAddress_;
@@ -170,7 +167,8 @@ public:
         LOG(INFO) << "Real ETCD test uses endpoint: " << FLAGS_etcd_address;
         etcdStore_ = std::make_unique<EtcdStore>(FLAGS_etcd_address);
         DS_ASSERT_OK(etcdStore_->Init());
-        store_ = std::make_shared<SlotRecoveryStore>(etcdStore_.get());
+        coordinationBackend_ = std::make_unique<EtcdCoordinationBackend>(etcdStore_.get());
+        store_ = std::make_shared<CoordinationSlotRecoveryStore>(coordinationBackend_.get());
         DS_ASSERT_OK(store_->Init());
     }
 
@@ -181,6 +179,9 @@ public:
         CleanupIncident("127.0.0.1:8001");
         CleanupIncident("127.0.0.1:8002");
         CleanupIncident("127.0.0.1:8003");
+        store_.reset();
+        coordinationBackend_.reset();
+        etcdStore_.reset();
         ExternalClusterTest::TearDown();
     }
 
@@ -210,6 +211,7 @@ protected:
     }
 
     std::unique_ptr<EtcdStore> etcdStore_;
+    std::unique_ptr<EtcdCoordinationBackend> coordinationBackend_;
     std::shared_ptr<SlotRecoveryStore> store_;
 };
 
@@ -504,8 +506,7 @@ TEST_F(SlotRecoveryEtcdTest, RebuildsLocalIncidentFirst)
         }
         const auto &task = localCurrent.recovery_tasks(0);
         return task.failed_worker() == localWorker && task.owner_worker() == localWorker
-               && task.task_status() == RecoveryTaskPb::IN_PROGRESS
-               && CollectSlots(task) == expectedLocalSlots;
+               && task.task_status() == RecoveryTaskPb::IN_PROGRESS && CollectSlots(task) == expectedLocalSlots;
     }));
 
     // Source incident may already be deleted once terminal.
@@ -707,10 +708,10 @@ TEST_F(SlotRecoveryEtcdTest, HandlesMultipleWorkersFailingTogether)
         SlotRecoveryInfoPb info2;
         auto rc1 = store_->GetIncident(worker1, info1);
         auto rc2 = store_->GetIncident(worker2, info2);
-        const bool completed1 = info1.total_slots() != 0 && info1.completed_slots() == info1.total_slots()
-                                && info1.failed_slots() == 0;
-        const bool completed2 = info2.total_slots() != 0 && info2.completed_slots() == info2.total_slots()
-                                && info2.failed_slots() == 0;
+        const bool completed1 =
+            info1.total_slots() != 0 && info1.completed_slots() == info1.total_slots() && info1.failed_slots() == 0;
+        const bool completed2 =
+            info2.total_slots() != 0 && info2.completed_slots() == info2.total_slots() && info2.failed_slots() == 0;
         const bool done1 = rc1.IsOk() ? completed1 : rc1.GetCode() == K_NOT_FOUND;
         const bool done2 = rc2.IsOk() ? completed2 : rc2.GetCode() == K_NOT_FOUND;
         return done1 && done2;

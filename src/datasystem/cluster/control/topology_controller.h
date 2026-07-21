@@ -50,6 +50,11 @@ struct TopologyControllerOptions {
     std::function<Status(const std::string &, int64_t)> membershipRestartHandler;
 
     /**
+     * @brief Host hook for a newly observed RECOVERING member process.
+     */
+    std::function<Status(const std::string &, int64_t)> membershipRecoveryHandler;
+
+    /**
      * @brief Semantic policy clock; production uses steady time and tests may inject virtual time.
      */
     std::function<std::chrono::steady_clock::time_point()> now{ [] { return std::chrono::steady_clock::now(); } };
@@ -94,7 +99,7 @@ public:
      */
     TopologyController(ICoordinationBackend &backend, TopologyRepository &repository, const TopologyKeyHelper &keys,
                        const IPlanningAlgorithm &algorithm, CoordinationEventDispatcher &dispatcher,
-                       TopologyControllerOptions options);
+                       const TopologyControllerOptions &options);
 
     /**
      * @brief Stop and join the state thread before releasing Controller state.
@@ -165,6 +170,12 @@ private:
     void ObserveMembershipRestarts(const std::vector<MembershipRecord> &memberships);
 
     /**
+     * @brief Preserve recovery generations recovered by a full membership read.
+     * @param[in] memberships Successful authoritative membership read.
+     */
+    void ObserveMembershipRecoveries(const std::vector<MembershipRecord> &memberships);
+
+    /**
      * @brief De-duplicate one restarting address generation.
      * @param[in] address Canonical member address.
      * @param[in] timestamp Membership process-generation timestamp.
@@ -172,9 +183,21 @@ private:
     void RecordMembershipRestart(const std::string &address, int64_t timestamp);
 
     /**
+     * @brief De-duplicate one recovering address generation.
+     * @param[in] address Canonical member address.
+     * @param[in] timestamp Membership process-generation timestamp.
+     */
+    void RecordMembershipRecovery(const std::string &address, int64_t timestamp);
+
+    /**
      * @brief Deliver preserved restart generations on the serial state thread.
      */
     void DrainMembershipRestarts();
+
+    /**
+     * @brief Deliver preserved recovery generations on the serial state thread.
+     */
+    void DrainMembershipRecoveries();
 
     /**
      * @brief Run the serial state loop.
@@ -305,6 +328,13 @@ private:
      */
     Status CommitBatchFinal(const TopologySnapshot &latest);
 
+    std::vector<MemberIdentity> CollectBatchParticipants(const TopologySnapshot &latest,
+                                                         const ActiveBatch &batch) const;
+
+    void LogBatchFinalized(const TopologySnapshot &latest, const ActiveBatch &batch,
+                           const std::vector<MemberIdentity> &participants,
+                           const std::shared_ptr<const TopologySnapshot> &committed) const;
+
     /**
      * @brief Remove incomplete ScaleOut generations and replan retained members.
      * @param[in] latest Snapshot.
@@ -394,10 +424,12 @@ private:
     // State-thread-owned monotonic task progress cache for progress reads bounded across reconciliation ticks.
     std::unordered_set<std::string> finishedTaskIds_;
     std::string membershipEventPrefix_;
-    // Protects membershipEventPrefix_, latestRestartTimestampByAddress_, and pendingRestartTimestampByAddress_.
+    // Protects the membership event prefix and lifecycle generation queues.
     std::mutex membershipRestartMutex_;
     std::unordered_map<std::string, int64_t> latestRestartTimestampByAddress_;
     std::unordered_map<std::string, int64_t> pendingRestartTimestampByAddress_;
+    std::unordered_map<std::string, int64_t> latestRecoveryTimestampByAddress_;
+    std::unordered_map<std::string, int64_t> pendingRecoveryTimestampByAddress_;
     // State-thread-owned admission quarantine for exhausted READY process generations.
     std::unordered_map<std::string, int64_t> quarantinedReadyTimestampByAddress_;
     std::string lastMembershipObservationDigest_;

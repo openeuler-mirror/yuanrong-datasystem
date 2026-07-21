@@ -22,6 +22,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -46,9 +47,8 @@ using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
                                public std::enable_shared_from_this<WorkerOcServiceGetImpl> {
 public:
-    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdStore *etcdStore,
-                           std::shared_ptr<ThreadPool> memCpyThreadPool,
-                           std::shared_ptr<ThreadPool> threadPool,
+    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, cluster::ICoordinationBackend *coordinationBackend,
+                           std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<ThreadPool> threadPool,
                            std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                            std::shared_ptr<MigrateDataRateController> rateController);
 
@@ -531,15 +531,15 @@ private:
                                            std::vector<RpcMessage> &payloads);
 
     /**
-     * @brief Query metadata from etcd by complete object-key hash.
-     * @param[in] objectKeys The object keys need to get from ETCD.
+     * @brief Query metadata from the coordination store by object key.
+     * @param[in] objectKeys The object keys to query.
      * @param[out] queryMetas The vector stored meta info.
      * @param[out] absentObjectKeys The keys that could not be found.
-     * @return Status of the ETCD metadata query.
+     * @return Status of the coordination-store metadata query.
      */
-    Status QueryMetaDataFromEtcd(const std::unordered_set<std::string> &objectKeys,
-                                 std::vector<master::QueryMetaInfoPb> &queryMetas,
-                                 std::vector<std::string> &absentObjectKeys);
+    Status QueryMetadataFromCoordinationStore(const std::unordered_set<std::string> &objectKeys,
+                                              std::vector<master::QueryMetaInfoPb> &queryMetas,
+                                              std::vector<std::string> &absentObjectKeys);
 
     /**
      * @brief Mark absent Get objects as runtime errors when they still have global references.
@@ -1069,7 +1069,7 @@ private:
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
 
-    EtcdStore *etcdStore_;  // pointer to EtcdStore in WorkerOcServer
+    cluster::ICoordinationBackend *coordinationBackend_;  // pointer to backend adapter in WorkerOcServer
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
 

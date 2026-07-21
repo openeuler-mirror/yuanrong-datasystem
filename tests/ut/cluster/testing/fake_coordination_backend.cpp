@@ -68,6 +68,7 @@ Status FakeCoordinationBackend::Get(const std::string &table, const std::string 
     if (blockNextGet_) {
         blockNextGet_ = false;
         getBlocked_ = true;
+        releaseGet_ = false;
         getCv_.notify_all();
         getCv_.wait(lock, [this] { return releaseGet_; });
     }
@@ -77,6 +78,19 @@ Status FakeCoordinationBackend::Get(const std::string &table, const std::string 
     result.value = iter->second.first;
     result.version = 1;
     result.modRevision = iter->second.second;
+    return Status::OK();
+}
+
+Status FakeCoordinationBackend::CreateTable(const std::string &table, const std::string &tablePrefix)
+{
+    (void)table;
+    (void)tablePrefix;
+    return Status::OK();
+}
+
+Status FakeCoordinationBackend::Put(const std::string &table, const std::string &key, const std::string &value)
+{
+    PutBytes(table, key, value);
     return Status::OK();
 }
 
@@ -147,6 +161,7 @@ Status FakeCoordinationBackend::Delete(const std::string &table, const std::stri
     }
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        ++deleteAttempts_;
         values_.erase(FullKey(table, key));
         ++revision_;
     }
@@ -219,6 +234,18 @@ void FakeCoordinationBackend::SetEventHandler(EventHandler &&handler)
     handler_ = std::move(handler);
 }
 
+void FakeCoordinationBackend::SetLocalIsolationHandler(LocalIsolationHandler handler)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    localIsolationHandler_ = std::move(handler);
+}
+
+void FakeCoordinationBackend::SetLocalRecoveryHandler(LocalRecoveryHandler handler)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    localRecoveryHandler_ = std::move(handler);
+}
+
 void FakeCoordinationBackend::SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()>)
 {
 }
@@ -278,6 +305,30 @@ void FakeCoordinationBackend::EmitEvent(CoordinationEvent event)
     }
     if (handler != nullptr) {
         handler(std::move(event));
+    }
+}
+
+void FakeCoordinationBackend::EmitLocalIsolation(const Status &status)
+{
+    LocalIsolationHandler handler;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        handler = localIsolationHandler_;
+    }
+    if (handler != nullptr) {
+        handler(status);
+    }
+}
+
+void FakeCoordinationBackend::EmitLocalRecovery()
+{
+    LocalRecoveryHandler handler;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        handler = localRecoveryHandler_;
+    }
+    if (handler != nullptr) {
+        handler();
     }
 }
 
@@ -342,6 +393,12 @@ void FakeCoordinationBackend::SetBeforeDeleteHandler(std::function<void()> handl
 {
     std::lock_guard<std::mutex> lock(mutex_);
     beforeDeleteHandler_ = std::move(handler);
+}
+
+size_t FakeCoordinationBackend::DeleteAttemptCount() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return deleteAttempts_;
 }
 
 }  // namespace datasystem::cluster

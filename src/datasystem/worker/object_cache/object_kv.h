@@ -29,18 +29,17 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/safe_object.h"
-#include "datasystem/common/object_cache/safe_table.h"
 #include "datasystem/common/util/request_table.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/utils.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/worker/object_cache/device/device_obj_cache.h"
+#include "datasystem/worker/object_cache/object_table.h"
 
 namespace datasystem {
 namespace object_cache {
 
-using SafeObjType = SafeObject<ObjectInterface>;
-using ObjectTable = SafeTable<ImmutableString, ObjectInterface>;
+using SafeObjType = ObjectTable::SafeObjType;
 
 struct ReadKey : public OffsetInfo {
     explicit ReadKey(const std::string &objectKey, uint64_t offset = 0, uint64_t size = 0)

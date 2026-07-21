@@ -62,6 +62,12 @@ class SensitiveScanTests(unittest.TestCase):
         self.assertEqual(scan_text("source", credential_key + ": str"), [])
         self.assertEqual(scan_text("source", 'LOG(INFO) << "token=" << token'), [])
 
+    def test_allows_code_syntax_that_contains_credential_words(self) -> None:
+        self.assertEqual(scan_text("source", '+#include "datasystem/common/token/client_access_token.h"'), [])
+        self.assertEqual(scan_text("source", "+using namespace datasystem::token;"), [])
+        self.assertEqual([match.category for match in scan_text("source", "token=abc123")],
+                         ["credential or account assignment"])
+
     def test_allows_repo_safe_test_endpoints_and_blocks_private_endpoint(self) -> None:
         self.assertEqual(scan_text("test", "127.0.0.1:8080"), [])
         self.assertEqual(scan_text("test", "urma-mock-peer-a:9090"), [])

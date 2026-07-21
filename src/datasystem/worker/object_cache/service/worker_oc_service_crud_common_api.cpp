@@ -310,7 +310,7 @@ Status WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(const std::string &t
     return Status::OK();
 }
 
-Status WorkerOcServiceCrudCommonApi::ClearObject(ObjectKV &objectKV)
+Status WorkerOcServiceCrudCommonApi::ClearObject(ObjectKV &objectKV, bool deletePersistenceObject)
 {
     const auto &objectKey = objectKV.GetObjKey();
     SafeObjType &entry = objectKV.GetObjEntry();
@@ -330,7 +330,23 @@ Status WorkerOcServiceCrudCommonApi::ClearObject(ObjectKV &objectKV)
                                         FormatString("Failed delete object %s from disk.", objectKey));
         }
         if (entry->IsWriteBackMode() && IsSupportL2Storage(supportL2Storage_)) {
-            asyncSendManager_->Remove(objectKey);
+            RETURN_RUNTIME_ERROR_IF_NULL(asyncSendManager_);
+            if (deletePersistenceObject) {
+                constexpr uint64_t cancelTimeoutMs = 5'000;
+                RETURN_IF_NOT_OK_APPEND_MSG(asyncSendManager_->CancelAndWait(objectKey, cancelTimeoutMs),
+                                            FormatString("Failed to fence async L2 write for %s", objectKey));
+            } else {
+                asyncSendManager_->Remove(objectKey);
+            }
+        }
+        if (deletePersistenceObject && entry->HasL2Cache() && IsSupportL2Storage(supportL2Storage_)) {
+            RETURN_RUNTIME_ERROR_IF_NULL(persistenceApi_);
+            const uint64_t objectVersion = entry->GetCreateTime();
+            const bool deleteAllVersion = supportL2Storage_ != L2StorageType::DISTRIBUTED_DISK;
+            RETURN_IF_NOT_OK_APPEND_MSG(
+                persistenceApi_->Del(objectKey, objectVersion, deleteAllVersion, 0, &objectVersion, true),
+                FormatString("Failed to delete authoritative orphan %s version %zu from L2 cache", objectKey,
+                             objectVersion));
         }
     }
     INJECT_POINT("worker.ClearObject.BeforeErase");

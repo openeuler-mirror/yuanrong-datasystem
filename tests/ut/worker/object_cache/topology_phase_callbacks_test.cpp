@@ -17,7 +17,7 @@
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
-#include "datasystem/worker/worker_topology_phase_callbacks.h"
+#include "datasystem/worker/runtime/worker_topology_phase_callbacks.h"
 
 #include "gtest/gtest.h"
 
@@ -93,6 +93,13 @@ TEST(TopologyBusinessContractTest, ExposesOnlyOpaqueTaskLevelBusinessEntryPoints
     EXPECT_TRUE((std::is_same_v<decltype(static_cast<ScaleInWorkerDataDrain>(
                                     &worker::WorkerTopologyPhaseCallbacks::OnScaleInDataDrain)),
                                 ScaleInWorkerDataDrain>));
+}
+
+TEST(TopologyBusinessContractTest, FailureLocalActionsAreInjectedBehindHook)
+{
+    EXPECT_TRUE((std::is_class_v<worker::IWorkerTopologyFailureActions>));
+    EXPECT_TRUE((std::is_same_v<decltype(worker::WorkerTopologyPhaseCallbackDependencies::failureActions),
+                                std::shared_ptr<worker::IWorkerTopologyFailureActions>>));
 }
 
 TEST(TopologyBusinessContractTest, RemoveMetaCarriesTopologyOperationIdentity)

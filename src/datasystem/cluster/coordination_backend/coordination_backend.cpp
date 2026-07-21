@@ -35,4 +35,33 @@ std::string CoordinationEvent::ToString() const
     return stream.str();
 }
 
+void ICoordinationBackend::SetMembershipReadyHandler(const MembershipReadyHandler &handler)
+{
+    (void)handler;
+}
+
+bool ICoordinationBackend::OwnsWatchIdentity(const std::string &coordinatorId, int64_t watchId) const
+{
+    (void)coordinatorId;
+    (void)watchId;
+    return false;
+}
+
+bool ICoordinationBackend::IsWatchRegistrationInProgress() const
+{
+    return false;
+}
+
+void ICoordinationBackend::InvalidateWatches()
+{
+}
+
+void ICoordinationBackend::HandleWatchEvent(const std::string &coordinatorId, int64_t watchId,
+                                            CoordinationEvent &&event)
+{
+    (void)coordinatorId;
+    (void)watchId;
+    (void)event;
+}
+
 }  // namespace datasystem::cluster
