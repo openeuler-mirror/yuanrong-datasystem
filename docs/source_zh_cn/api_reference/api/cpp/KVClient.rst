@@ -204,6 +204,10 @@ KVClient
             - **val** - 传出参数，返回缓存数据。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
 
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
         返回：
             - 返回 ``StatusCode::K_OK`` 表示获取成功。
             - 返回 ``StatusCode::K_INVALID`` 表示 ``key`` 校验不通过。
@@ -220,6 +224,10 @@ KVClient
             - **readOnlyBuffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的只读共享内存 :cpp:class:`ReadOnlyBuffer` 。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
 
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
         返回：
             - 返回 ``StatusCode::K_OK`` 表示获取成功。
             - 返回 ``StatusCode::K_INVALID`` 表示 ``key`` 校验不通过。
@@ -234,6 +242,11 @@ KVClient
         参数：
             - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
             - **buffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` ，当 Get 返回失败时，``buffer`` 的值为 ``nullptr``。
 
         返回：
@@ -251,6 +264,11 @@ KVClient
         参数：
             - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
             - **vals** - 传出参数，返回一组获取的数据。若有部分数据获取不成功，则对应位置的vector的对象为空。
 
         返回：
@@ -268,6 +286,10 @@ KVClient
             - **keys** - 需要获取的一组key.
             - **readOnlyBuffers** - 传出参数，返回的一组使用 :cpp:class:`Optional` 封装的只读共享内存 :cpp:class:`ReadOnlyBuffer` 。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
@@ -298,6 +320,11 @@ KVClient
         参数：
             - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
             - **buffers** - 传出参数，返回的一组使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` 。若有部分数据获取不成功，则对应位置的vector的对象为空。
 
         返回：

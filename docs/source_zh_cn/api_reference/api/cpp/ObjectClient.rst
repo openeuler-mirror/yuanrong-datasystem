@@ -105,6 +105,11 @@ ObjectClient
         参数：
             - **objectKeys** - 对象名称. 需要获取buffer的一组对象名称，最多不超过10000个。对象名称的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个对象名称最大长度为1024字节。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
             - **buffer** - 出参数，返回的一组使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` 。若有部分数据获取不成功，则对应位置的vector的对象为空。
 
         返回：

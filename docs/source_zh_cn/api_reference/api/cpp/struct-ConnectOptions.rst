@@ -26,6 +26,11 @@ ConnectOptions
 
         客户端请求超时时间，单位为毫秒。默认值0，表示与connectTimeoutMs一致，数值约束>=0。
 
+        .. note::
+
+            此值为 client 全局 RPC 超时上限。Get 类接口的 ``subTimeoutMs`` 参数实际生效值不超过此值，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
+
     .. cpp:member:: std::string clientPublicKey = "";
 
         用于 curve 认证的客户端公钥。默认值：""。
