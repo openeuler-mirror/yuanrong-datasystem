@@ -482,11 +482,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "const flowNodeX = [0.11,0.36,0.70,0.70,0.89].map(r => Math.round(graphWidth * r))" in html
     assert "const flowNodeY = [260,260,118,404,404]" in html
     assert "function flowEdgeBriefText(edge)" in html
+    assert "function flowEdgeLabelDistance(edge)" in html
     assert "function flowGraphNodeSize()" in html
     assert "symbol:'roundRect'" in html
     assert "symbolSize:flowGraphNodeSize()" in html
     assert "label:{show:true, position:'inside', fontSize:15" in html
     assert "edgeLabel:{show:true, position:'middle'" in html
+    assert "distance:flowEdgeLabelDistance(edge)" in html
     assert "fontSize:14" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html

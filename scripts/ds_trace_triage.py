@@ -3874,7 +3874,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const latency = Number.isFinite(Number(rollup.max_ms)) ? `max=${Number(rollup.max_ms).toFixed(3)}ms` :
       Number.isFinite(Number(rollup.p99_ms)) ? `p99=${Number(rollup.p99_ms).toFixed(3)}ms` : '';
     const worker = (rollup.top_workers || []).map(workerRelationName).filter(Boolean)[0];
-    return [edge.operation, latency, worker].filter(Boolean).join('\\n');
+    return [edge.operation, [latency, worker].filter(Boolean).join(' ')].filter(Boolean).join('\\n');
+  }
+  function flowEdgeLabelDistance(edge) {
+    return edge.operation === 'URMA Write' ? 8 : -8;
   }
   function flowGraphNodeSize() {
     return [180, 70];
@@ -3910,12 +3913,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         lineHeight:18,
         width:210,
         overflow:'break',
-        backgroundColor:'rgba(255,255,255,.92)',
+        backgroundColor:'rgba(255,255,255,.82)',
         borderColor:'#dbeafe',
         borderWidth:1,
         borderRadius:4,
         padding:[2,5],
-        rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.92)',borderRadius:4,padding:[2,5]}}
+        rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.82)',borderRadius:4,padding:[2,5]}}
       },
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(graph.nodes || []).map((node, idx) => ({
@@ -3940,6 +3943,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         reason:edge.reason,
         rollup:edge.rollup,
         status:edge.status,
+        label:{distance:flowEdgeLabelDistance(edge), position:'middle'},
         lineStyle:{color:edge.rollup?.max_ms >= 20 ? '#dc2626' : edge.rollup?.max_ms >= 5 ? '#ea580c' : edge.status === 'present' ? '#2563eb' : '#cbd5e1', width:edge.rollup?.max_ms >= 20 ? 4 : 2, type:edge.status === 'present' ? 'solid' : 'dashed', curveness:edge.operation === 'URMA Write' ? -0.28 : .08}
       }))
     }]
