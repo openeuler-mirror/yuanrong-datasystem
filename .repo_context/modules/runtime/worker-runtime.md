@@ -277,9 +277,10 @@
     `CoordinationBackendContractTest.LocalIsolationSignalsDoNotDeleteMembershipThroughBackend`.
   - `EtcdKeepAliveIsolationTest.GlobalEtcdOutageDoesNotPublishDeleteOrCloseAdmission`: covered by
     `EtcdStoreTest.TestKeepAliveGlobalEtcdFailureDoesNotReportLocalIsolation` and coordination-backend contract tests.
-  - `HashRingSelfPassiveScaleDownDoesNotKill`: partial. Current implementation maps role-isolated topology availability
-    to `LOCAL_ISOLATED` through runtime admission, but the explicit legacy HashRing no-kill acceptance name still needs
-    a focused test or a documented obsolete-path replacement.
+  - `HashRingSelfPassiveScaleDownDoesNotKill`: covered by
+    `WorkerTopologyAvailabilityAdmissionTest.HashRingSelfPassiveScaleDownDoesNotKillWorker`, which verifies
+    role-isolated topology availability closes admission as `LOCAL_ISOLATED` instead of killing the process and can
+    reopen after complete recovery evidence.
   - `VoluntaryScaleDownStillStopsAfterDrain`: covered by
     `WorkerPushMetaTest.LEVEL1_TestVoluntaryScaleDownStillExitsControlled` and existing KV/object scale-down paths.
   - `RecoveredOldPrimaryDoesNotOverrideMasterPrimary`: covered by

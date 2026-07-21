@@ -213,6 +213,30 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, IsolatedAndNotReadyLevelsCloseRunt
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN);
 }
 
+TEST(WorkerTopologyAvailabilityAdmissionTest, HashRingSelfPassiveScaleDownDoesNotKillWorker)
+{
+    WorkerRuntimeFacade runtime;
+    WorkerRecoveryEvidenceReport completeReport = CompleteTopologyRecoveryReport();
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &completeReport);
+    ASSERT_EQ(runtime.GetSnapshot().mode, WorkerServiceMode::RUNNING);
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::ROLE_ISOLATED, runtime,
+                                            &completeReport);
+    auto snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, WorkerServiceMode::LOCAL_ISOLATED);
+    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN);
+    EXPECT_NE(snapshot.mode, WorkerServiceMode::STOPPING);
+    EXPECT_EQ(
+        runtime.CheckAdmission(WorkerAdmissionKind::NORMAL_WRITE, "legacy hash-ring passive scale-down").GetCode(),
+        K_NOT_READY);
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &completeReport);
+    snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
+    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
+}
+
 TEST(WorkerTopologyAvailabilityAdmissionTest, ShuttingDownIsTerminal)
 {
     WorkerRuntimeStateManager state;
