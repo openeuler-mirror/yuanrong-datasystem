@@ -320,6 +320,9 @@
   19. `TopologyCleanupEffect` moved out of the full callback executor contract into
       `cluster/executor/topology_cleanup_effect.h`. `WorkerOCServiceImpl` now depends on action/filter/cancellation
       and cleanup-effect contracts directly, without including the `ITopologyPhaseCallbacks` executor interface.
+  20. master object/stream metadata recovery managers now include only the topology metadata input contracts they use:
+      action, key filter, storage scan plan, and cancellation token. They no longer inherit the full topology callback
+      executor interface through `topology_phase_callbacks.h`.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -660,6 +663,17 @@
     tests/scripts/test_worker_runtime_module_boundary.py` passed 21/21 tests in 0.008s.
   - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 233s with third-party cache hit (`Compile thirdparty
     libraries success, total wall time: 0s`), source build time 148s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
+    database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_master_metadata_managers_use_narrow_topology_callback_inputs`.
+  - Initial RED: the boundary suite failed 1/22 in 0.006s because master object/stream metadata manager headers still
+    included `datasystem/cluster/executor/topology_phase_callbacks.h`.
+  - GREEN: changed `oc_metadata_manager.h`, `oc_migrate_metadata_manager.h`, `sc_metadata_manager.h`, and
+    `sc_migrate_metadata_manager.h` to include only action/filter/storage-scan/cancellation topology input headers.
+    `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 22/22 tests in 0.012s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 211s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), source build time 120s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
     database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
 - Build worker and tests:

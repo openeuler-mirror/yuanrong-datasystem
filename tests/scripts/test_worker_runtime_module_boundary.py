@@ -144,6 +144,23 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should avoid the full topology callback executor contract")
 
+    def test_master_metadata_managers_use_narrow_topology_callback_inputs(self):
+        files = [
+            REPO_ROOT / "src/datasystem/master/object_cache/oc_metadata_manager.h",
+            REPO_ROOT / "src/datasystem/master/object_cache/oc_migrate_metadata_manager.h",
+            REPO_ROOT / "src/datasystem/master/stream_cache/sc_metadata_manager.h",
+            REPO_ROOT / "src/datasystem/master/stream_cache/sc_migrate_metadata_manager.h",
+        ]
+
+        forbidden_tokens = [
+            "datasystem/cluster/executor/topology_phase_callbacks.h",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should depend on metadata recovery input contracts only")
+
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/slot_recovery/BUILD.bazel",

@@ -33,8 +33,10 @@
 #include <google/protobuf/repeated_field.h>
 #include <tbb/concurrent_hash_map.h>
 
+#include "datasystem/cluster/executor/cancellation_token.h"
+#include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/cluster/executor/storage_scan_plan.h"
-#include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/executor/topology_phase_action.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/log/log.h"

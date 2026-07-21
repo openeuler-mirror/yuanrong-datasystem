@@ -28,7 +28,9 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/thread_pool.h"
-#include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/executor/cancellation_token.h"
+#include "datasystem/cluster/executor/key_filter.h"
+#include "datasystem/cluster/executor/topology_phase_action.h"
 #include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/protos/master_stream.stub.rpc.pb.h"
 

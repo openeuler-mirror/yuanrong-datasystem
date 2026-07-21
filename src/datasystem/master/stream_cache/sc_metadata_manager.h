@@ -22,7 +22,9 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include "datasystem/common/log/log.h"
-#include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/executor/cancellation_token.h"
+#include "datasystem/cluster/executor/key_filter.h"
+#include "datasystem/cluster/executor/topology_phase_action.h"
 #include "datasystem/common/stream_cache/stream_fields.h"
 #include "datasystem/common/util/lock_helper.h"
 #include "datasystem/common/util/net_util.h"
