@@ -97,22 +97,17 @@ TEST_F(HeteroD2HThroughTcpGpuTest, SetGet)
     for (auto j = 0ul; j < numOfObjs; j++) {
         inObjectKeys.emplace_back(FormatString("key_%s", j));
     }
-    auto retcode = -1;
-    auto hook = [&retcode]() { exit(retcode); };
-    auto setPid = fork();
-    if (setPid == 0) {
-        Raii raii(hook);
+    // Use ForkForTest instead of raw fork(): in brpc mode it runs func in-process
+    // (brpc channel/bthread global state is not fork-safe).
+    auto setPid = ForkForTest([&]() {
         InitCuda(setDeviceId);
         InitTestHeteroClient(0, c0);
         PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, setDeviceId);
         DS_ASSERT_OK(c0->MSetD2H(inObjectKeys, devSetBlobList));
         c0.reset();
-        retcode = 0;
-    }
+    });
     ASSERT_FALSE(WaitForChildFork(setPid));
-    auto getPid = fork();
-    if (getPid == 0) {
-        Raii raii(hook);
+    auto getPid = ForkForTest([&]() {
         InitTestHeteroClient(1, c1);
         InitCuda(getDeviceId);
         PrePareDevData(numOfObjs, blksPerObj, blkSz, devGetBlobList, devSetBlobList, getDeviceId);
@@ -120,8 +115,7 @@ TEST_F(HeteroD2HThroughTcpGpuTest, SetGet)
         ASSERT_TRUE(failedKeys.empty());
         DS_ASSERT_OK(IsSameContent(devGetBlobList, devSetBlobList, 'b'));
         c1.reset();
-        retcode = 0;
-    }
+    });
     ASSERT_FALSE(WaitForChildFork(getPid));
 }
 

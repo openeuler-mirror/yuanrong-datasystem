@@ -322,7 +322,17 @@ void Logging::ShutdownLoggingWrapper()
         return;
     }
 
-    Trace::Instance().SetTraceNewID("Shutdown;" + GetStringUuid(), true);
+    // Note: do NOT call Trace::Instance().SetTraceNewID("Shutdown;...") here.
+    // ShutdownLoggingWrapper runs only from ~Logging (a static-storage-duration
+    // destructor during process teardown). C++ destroys the main thread's
+    // thread_local objects before static-storage-duration ones, so the
+    // thread_local Trace returned by Trace::Instance() is already destroyed
+    // here — calling SetTraceNewID (writing traceID_/cachedHash_) is a
+    // heap-use-after-free. This is the bug exposed by
+    // ObjectClientTest.TestObjectClientDestructor (which sets FLAGS_v=3 and
+    // holds a static ObjectClient to exercise the exit path) under brpc, and
+    // by TestTraceDestructorHeapUseAfterFree. The shutdown trace ID was only
+    // for correlating the few remaining shutdown logs; losing it is safe.
 
     OperationLogger::Instance().Shutdown();
 

@@ -15,6 +15,7 @@
  * Description: State client offset read tests.
  */
 
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/kv_client.h"
 

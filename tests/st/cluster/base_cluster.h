@@ -174,6 +174,15 @@ public:
             cfg.endpoint = HostPort(addr_.Host(), addr_.Port() + kBrpcPortOffset).ToString();
             cfg.timeout_ms = 500;
             cfg.connect_timeout_ms = 500;
+            // Disable the circuit breaker on the test control-plane channel. ST tests
+            // deliberately kill/restart workers (crash/restart DFX), which trips the
+            // breaker on a transiently-unreachable peer and isolates the socket —
+            // after that the harness keeps hitting E112 "Not connected yet" on
+            // QueryGlobalProducersNum / CloseProducer etc. instead of reconnecting.
+            // The worker<->worker mesh channels (rpc_stub_cache_mgr) already disable
+            // the breaker for the same reason; the test harness control channel must
+            // too, or worker-restart stream/OC tests never recover.
+            cfg.enable_circuit_breaker = false;
             brpcChannel_ = BrpcChannelFactory::Create(cfg);
             if (brpcChannel_ != nullptr) {
                 brpcSession_ = std::make_unique<GenericService_BrpcGenericStub>(brpcChannel_.get(), 500);

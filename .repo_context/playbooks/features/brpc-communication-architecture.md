@@ -21,7 +21,7 @@
 
 brpc is a transport backend for control-plane and metadata RPCs. It is not the primary large-object data plane.
 
-The repository keeps brpc and ZMQ as two interchangeable backends selected by `FLAGS_use_brpc` / `DATASYSTEM_USE_BRPC` (default `false`, i.e. ZMQ). They share the same configured worker/master port because `kBrpcPortOffset = 0`; only one backend should bind the endpoint in a process.
+The repository uses brpc as the **default** RPC backend (`FLAGS_use_brpc` / `DATASYSTEM_USE_BRPC` defaults to `true`). ZMQ remains available as a fallback (`DATASYSTEM_USE_BRPC=false`). Both backends share the same configured worker/master port (`kBrpcPortOffset = 0`); only one backend binds the endpoint in a process.
 
 The worker process may host both worker-side and master-side services. When worker and master addresses resolve to the same local process, worker-master and master-worker APIs can bypass RPC and call local service objects directly.
 

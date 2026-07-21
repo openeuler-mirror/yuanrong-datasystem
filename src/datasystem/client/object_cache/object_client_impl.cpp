@@ -26,6 +26,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <optional>
 #include <mutex>
 #include <numeric>
 #include <shared_mutex>
@@ -391,7 +392,19 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     if (!needRollbackState) {
         return rc;
     }
-    TraceGuard traceGuard = Trace::Instance().SetTraceUUID();
+    // When invoked from ~ObjectClientImpl (isDestruct=true), this runs during process
+    // teardown if the client is process-static (e.g. a static shared_ptr<ObjectClient>
+    // in a test, or a global in an embedding host). C++ destroys thread_local objects
+    // before process-static ones, so the main thread's thread_local Trace (returned by
+    // Trace::Instance()) may already be destroyed here. Touching it — SetTraceUUID
+    // writing traceID_/cachedHash_, and ~TraceGuard clearing them — is then a
+    // heap-use-after-free (the bug exposed by TestTraceDestructorHeapUseAfterFree under
+    // brpc). Skip the trace guard on the destruct path; the trace is for in-flight RPC
+    // correlation and is useless once the client is being torn down anyway.
+    std::optional<TraceGuard> traceGuard;
+    if (!isDestruct) {
+        traceGuard.emplace(Trace::Instance().SetTraceUUID());
+    }
 
     // Stop new release submissions and drain queued reference releases while worker transports are still alive.
     auto asyncReleasePool = asyncReleasePool_;

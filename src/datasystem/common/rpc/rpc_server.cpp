@@ -20,6 +20,7 @@
 #include "datasystem/common/rpc/rpc_server.h"
 
 #include <brpc/server.h>
+#include <brpc/protocol.h>  // for brpc::FLAGS_max_body_size (DECLARE_uint64)
 // brpc headers above override LOG/VLOG/DLOG via butil/logging.h.
 // Re-include log.h to restore datasystem's spdlog-based macros.
 #include "datasystem/common/log/log.h"

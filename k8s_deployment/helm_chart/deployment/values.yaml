@@ -60,8 +60,8 @@ global:
     # Config ETCD table prefix, the value should only contain english alphabetics (a-zA-Z), numbers (0-9) only.
     clusterName: "AZ1"
   rpc:
-    # Use brpc instead of ZMQ for RPC communication. Set to false (default) to use ZMQ.
-    useBrpc: false
+    # Use brpc instead of ZMQ for RPC communication. Set to false to fall back to ZMQ.
+    useBrpc: true
     # Config rpc server thread number, must be greater than 0.
     rpcThreadNum: 128
     # The number of worker service for object cache.
