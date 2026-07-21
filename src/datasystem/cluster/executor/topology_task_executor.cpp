@@ -21,6 +21,7 @@
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/executor/hash_key_filter.h"
 #include "datasystem/cluster/executor/storage_scan_plan.h"
+#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
@@ -34,13 +35,23 @@ constexpr uint32_t MAX_BACKOFF_SHIFT = 20;
 constexpr size_t MAX_CALLBACK_THREADS = 16;
 constexpr size_t MAX_CALLBACK_QUEUE_CAPACITY = 1'024;
 constexpr int32_t EXECUTOR_AUTHORITY_READ_TIMEOUT_MS = 3'000;
-constexpr size_t TASK_DIAGNOSTIC_PREFIX_SIZE = 12;
 constexpr size_t OPERATION_ID_PREFIX_SIZE = sizeof("op-") - 1;
 std::atomic<uint64_t> g_retrySeed{ 0 };
 
-std::string DiagnosticPrefix(const std::string &value)
+const char *CallbackPhaseName(TopologyCallbackPhase phase)
 {
-    return value.substr(0, TASK_DIAGNOSTIC_PREFIX_SIZE);
+    switch (phase) {
+        case TopologyCallbackPhase::SCALE_OUT:
+            return "SCALE_OUT";
+        case TopologyCallbackPhase::SCALE_IN:
+            return "SCALE_IN";
+        case TopologyCallbackPhase::SCALE_IN_CLEANUP:
+            return "SCALE_IN_CLEANUP";
+        case TopologyCallbackPhase::FAILURE:
+            return "FAILURE";
+        default:
+            return "UNKNOWN";
+    }
 }
 
 bool ValidOptions(const TopologyTaskExecutorOptions &options)
@@ -287,21 +298,25 @@ Status TopologyTaskExecutor::HandleNotify(const TopologyTaskNotify &notify)
     RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
     const auto activeBatch = snapshot->GetActiveBatch();
     if (!activeBatch.has_value() || activeBatch->type != notify.type) {
-        VLOG(1) << "CLUSTER_TASK action=ignore_stale_notify type=" << static_cast<uint32_t>(notify.type)
-                << " topology_version=" << snapshot->Version();
+        VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
+            << "CLUSTER_TASK action=ignore_stale_notify type=" << static_cast<uint32_t>(notify.type)
+            << " type_name=" << TopologyChangeTypeName(notify.type)
+            << " topology_version=" << snapshot->Version();
         return Status::OK();
     }
     const auto epoch = activeBatch->epoch;
     std::string scaleInMetadataGate;
     RETURN_IF_NOT_OK(BuildScaleInMetadataGateForNotify(notify, *snapshot, epoch, scaleInMetadataGate));
-    VLOG(1) << "CLUSTER_TASK action=notify type=" << static_cast<uint32_t>(notify.type)
-            << " epoch=" << epoch << " task_count=" << notify.taskIds.size();
+    LOG(INFO) << "CLUSTER_TASK action=notify type=" << static_cast<uint32_t>(notify.type)
+              << " type_name=" << TopologyChangeTypeName(notify.type)
+              << " epoch=" << epoch
+              << " local_address=" << localAddress_ << " task_count=" << notify.taskIds.size();
     if (notify.type == TopologyChangeType::SCALE_IN) {
         LOG(INFO) << "CLUSTER_SCALE_IN action=notify"
                   << " epoch=" << epoch
                   << " executor=" << localAddress_
                   << " task_count=" << notify.taskIds.size()
-                  << " gate_prefix=" << DiagnosticPrefix(scaleInMetadataGate);
+                  << " gate_prefix=" << TopologyDiagnosticPrefix(scaleInMetadataGate);
     }
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -388,11 +403,14 @@ Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyEx
     CHECK_FAIL_RETURN_STATUS(operation.size() > OPERATION_ID_PREFIX_SIZE, K_RUNTIME_ERROR,
                              "build topology callback operation digest failed");
     std::shared_ptr<CancellationToken> cancellation;
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     RETURN_IF_NOT_OK(AdmitCallbackLocked(task, fence, operation, allowScaleInDataDrain, cancellation));
     if (cancellation == nullptr) {
         return Status::OK();
     }
+    const auto batchType = fence.batchType;
+    const auto batchEpoch = fence.batchEpoch;
+    const auto taskPrefix = TopologyDiagnosticPrefix(fence.taskId);
     try {
         // Keep callbackPool_ protected until the work item is accepted so Stop() cannot reset it concurrently.
         callbackPool_->Execute([this, fence = std::move(fence), operation, cancellation]() mutable {
@@ -423,6 +441,13 @@ Status TopologyTaskExecutor::SubmitCallback(const TopologyTask &task, TopologyEx
         drained_.notify_all();
         RETURN_STATUS(K_RUNTIME_ERROR, diagnostics_.lastError);
     }
+    lock.unlock();
+    LOG(INFO) << "CLUSTER_TASK action=callback_submitted phase=" << CallbackPhaseName(phase)
+              << " type=" << static_cast<uint32_t>(batchType)
+              << " type_name=" << TopologyChangeTypeName(batchType)
+              << " epoch=" << batchEpoch
+              << " task_prefix=" << taskPrefix
+              << " local_address=" << localAddress_;
     return Status::OK();
 }
 
@@ -506,6 +531,7 @@ Status TopologyTaskExecutor::RunCallback(const TopologyExecutionFence &fence, co
                                          std::unique_ptr<TopologyPreparedCleanup> &cleanup,
                                          std::chrono::steady_clock::time_point &deadline)
 {
+    const auto start = std::chrono::steady_clock::now();
     std::shared_ptr<const TopologySnapshot> snapshot;
     std::unique_ptr<IKeyFilter> filter;
     std::unique_ptr<StorageScanPlan> plan;
@@ -530,6 +556,14 @@ Status TopologyTaskExecutor::RunCallback(const TopologyExecutionFence &fence, co
             rc = Status(K_RPC_DEADLINE_EXCEEDED, "topology callback exceeded its deadline");
         }
     }
+    LOG(INFO) << "CLUSTER_TASK action=callback_finished phase=" << CallbackPhaseName(fence.phase)
+              << " type=" << static_cast<uint32_t>(fence.batchType)
+              << " type_name=" << TopologyChangeTypeName(fence.batchType)
+              << " epoch=" << fence.batchEpoch
+              << " task_prefix=" << TopologyDiagnosticPrefix(fence.taskId)
+              << " local_address=" << localAddress_
+              << " elapsed_ms=" << DurationMs(start, std::chrono::steady_clock::now())
+              << " status=" << rc.ToString();
     return rc;
 }
 
@@ -752,7 +786,7 @@ Status TopologyTaskExecutor::HandleCompletion(TopologyCallbackCompletion complet
     }
     if (completion.fence.phase == TopologyCallbackPhase::FAILURE) {
         LOG(WARNING) << "CLUSTER_FAILURE action=recover epoch=" << completion.fence.batchEpoch
-                     << " task_prefix=" << completion.fence.taskId.substr(0, TASK_DIAGNOSTIC_PREFIX_SIZE)
+                     << " task_prefix=" << TopologyDiagnosticPrefix(completion.fence.taskId)
                      << " outcome=best_effort_failed status=" << rc.ToString();
         completion.status = rc;
         return CompleteProgress(completion, operation);
@@ -778,34 +812,41 @@ Status TopologyTaskExecutor::CompleteProgress(TopologyCallbackCompletion &comple
     if (outcome != TaskProgressOutcome::UPDATED && outcome != TaskProgressOutcome::ALREADY_FINISHED) {
         return CompleteStale(operation, Status(K_INVALID, "topology task progress fence is stale"));
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    inFlightByOperation_.erase(operation);
-    pendingByOperation_.erase(operation);
-    nextAttemptByOperation_.erase(operation);
-    progressReadyByOperation_.erase(operation);
-    EraseScaleInOperationLocked(operation);
-    const bool bestEffortFailure = bestEffortFailureByOperation_.erase(operation) > 0;
-    if (bestEffortFailure) {
-        ++diagnostics_.failed;
-    } else {
-        ++diagnostics_.succeeded;
+    bool bestEffortFailure = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        inFlightByOperation_.erase(operation);
+        pendingByOperation_.erase(operation);
+        nextAttemptByOperation_.erase(operation);
+        progressReadyByOperation_.erase(operation);
+        EraseScaleInOperationLocked(operation);
+        bestEffortFailure = bestEffortFailureByOperation_.erase(operation) > 0;
+        if (bestEffortFailure) {
+            ++diagnostics_.failed;
+        } else {
+            ++diagnostics_.succeeded;
+        }
     }
-    VLOG(1) << "CLUSTER_TASK action=progress type=" << static_cast<uint32_t>(completion.fence.batchType)
-            << " epoch=" << completion.fence.batchEpoch
-            << " task_prefix=" << completion.fence.taskId.substr(0, TASK_DIAGNOSTIC_PREFIX_SIZE)
-            << " outcome=" << (bestEffortFailure ? "best_effort_failed" : "finished");
+    LOG(INFO) << "CLUSTER_TASK action=progress type=" << static_cast<uint32_t>(completion.fence.batchType)
+              << " type_name=" << TopologyChangeTypeName(completion.fence.batchType)
+              << " phase=" << CallbackPhaseName(completion.fence.phase)
+              << " epoch=" << completion.fence.batchEpoch
+              << " task_prefix=" << TopologyDiagnosticPrefix(completion.fence.taskId)
+              << " local_address=" << localAddress_
+              << " outcome=" << (bestEffortFailure ? "best_effort_failed" : "finished")
+              << " repository_outcome=" << static_cast<uint32_t>(outcome);
     if (completion.fence.phase == TopologyCallbackPhase::SCALE_IN) {
         LOG(INFO) << "CLUSTER_SCALE_IN action=progress"
                   << " epoch=" << completion.fence.batchEpoch
                   << " source=" << (completion.fence.source.has_value() ? completion.fence.source->address : "")
                   << " source_id_prefix="
-                  << (completion.fence.source.has_value() ? DiagnosticPrefix(completion.fence.source->id) : "")
+                  << (completion.fence.source.has_value() ? MemberIdForLog(completion.fence.source->id) : "")
                   << " target=" << (completion.fence.target.has_value() ? completion.fence.target->address : "")
                   << " target_id_prefix="
-                  << (completion.fence.target.has_value() ? DiagnosticPrefix(completion.fence.target->id) : "")
+                  << (completion.fence.target.has_value() ? MemberIdForLog(completion.fence.target->id) : "")
                   << " executor=" << completion.fence.executor.address
-                  << " operation_prefix=" << DiagnosticPrefix(operation)
-                  << " task_prefix=" << DiagnosticPrefix(completion.fence.taskId)
+                  << " operation_prefix=" << TopologyDiagnosticPrefix(operation)
+                  << " task_prefix=" << TopologyDiagnosticPrefix(completion.fence.taskId)
                   << " outcome=" << (bestEffortFailure ? "best_effort_failed" : "finished");
     }
     return Status::OK();
@@ -846,11 +887,11 @@ Status TopologyTaskExecutor::CompleteScaleInMetadata(TopologyCallbackCompletion 
     diagnostics_.inFlightCallbacks = inFlightByOperation_.size();
     LOG(INFO) << "CLUSTER_SCALE_IN action=metadata_done epoch=" << completion.fence.batchEpoch
               << " source=" << completion.fence.source->address
-              << " source_id_prefix=" << DiagnosticPrefix(completion.fence.source->id)
+              << " source_id_prefix=" << MemberIdForLog(completion.fence.source->id)
               << " target=" << (completion.fence.target.has_value() ? completion.fence.target->address : "")
               << " executor=" << completion.fence.executor.address
-              << " operation_prefix=" << DiagnosticPrefix(operation)
-              << " task_prefix=" << DiagnosticPrefix(completion.fence.taskId)
+              << " operation_prefix=" << TopologyDiagnosticPrefix(operation)
+              << " task_prefix=" << TopologyDiagnosticPrefix(completion.fence.taskId)
               << " range_count=" << completion.fence.ranges.size()
               << " gate=" << (ready ? "ready" : "waiting");
     return Status::OK();
@@ -916,6 +957,12 @@ Status TopologyTaskExecutor::CompleteFailure(const TopologyExecutionFence &fence
     const bool failurePhase = fence.phase == TopologyCallbackPhase::FAILURE;
     if ((progressFailure || (!failurePhase && IsOrdinaryRetryable(status)))
         && ScheduleRetryLocked(fence.phase, operation)) {
+        LOG(WARNING) << "CLUSTER_TASK action=callback_failed phase=" << CallbackPhaseName(fence.phase)
+                     << " type=" << static_cast<uint32_t>(fence.batchType)
+                     << " type_name=" << TopologyChangeTypeName(fence.batchType)
+                     << " epoch=" << fence.batchEpoch
+                     << " task_prefix=" << TopologyDiagnosticPrefix(fence.taskId)
+                     << " local_address=" << localAddress_ << " retry_scheduled=true status=" << status.ToString();
         return progressFailure ? status : Status::OK();
     }
     pendingByOperation_.erase(operation);
@@ -923,6 +970,12 @@ Status TopologyTaskExecutor::CompleteFailure(const TopologyExecutionFence &fence
     progressReadyByOperation_.erase(operation);
     EraseScaleInOperationLocked(operation);
     bestEffortFailureByOperation_.erase(operation);
+    LOG(ERROR) << "CLUSTER_TASK action=callback_failed phase=" << CallbackPhaseName(fence.phase)
+               << " type=" << static_cast<uint32_t>(fence.batchType)
+               << " type_name=" << TopologyChangeTypeName(fence.batchType)
+               << " epoch=" << fence.batchEpoch
+               << " task_prefix=" << TopologyDiagnosticPrefix(fence.taskId)
+               << " local_address=" << localAddress_ << " retry_scheduled=false status=" << status.ToString();
     return status;
 }
 
@@ -937,6 +990,9 @@ Status TopologyTaskExecutor::CompleteStale(const std::string &operation, const S
     bestEffortFailureByOperation_.erase(operation);
     ++diagnostics_.stale;
     diagnostics_.lastError = status.ToString();
+    LOG(WARNING) << "CLUSTER_TASK action=completion_stale local_address=" << localAddress_
+                 << " operation_prefix=" << TopologyDiagnosticPrefix(operation)
+                 << " status=" << status.ToString();
     return status;
 }
 

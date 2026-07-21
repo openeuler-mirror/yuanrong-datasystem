@@ -33,6 +33,27 @@
   and derived task directories; Engine routes physical-key doorbells to the Worker and Controller dispatchers, and a
   topology event wakes both. Coordinator keeps role-specific backend watch registrations. Observer watches exact
   topology only.
+- Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and
+  queue overflow/coalescing, membership observations with bounded samples and digests, member join/leave/failure
+  transitions, batch start/deadline/finalization, task notify/callback/progress, and Worker/Observer snapshot
+  publication.
+
+  | Keyword | Main source | Trigger and useful fields |
+  | --- | --- | --- |
+  | `CLUSTER_WATCH` | Controller/Worker/Observer loops | watch registration, resync, or fatal watch exits; includes role/scope/status. |
+  | `CLUSTER_WATCH_EVENT` | Controller/Worker/Observer watch callbacks | topology, membership, task, notify, or observer watch ingress; includes action/revision/key. |
+  | `CLUSTER_WATCH_QUEUE` | `CoordinationEventDispatcher` | queued event overflow/coalescing and reset doorbells; includes event counters and depth. |
+  | `CLUSTER_MEMBERSHIP` | Controller membership reconciliation | membership read failures or per-cycle membership summary; includes version and member counts. |
+  | `CLUSTER_MEMBERSHIP_OBSERVED` | Controller membership reconciliation | changed membership digest/sample after membership watch dirties state. |
+  | `CLUSTER_MEMBER_TRANSITION` | Controller planner | member state changes such as INITIAL/JOINING/LEAVING/FAILED. |
+  | `CLUSTER_FAILURE_DETECT` | Failure classifier/controller | endpoint or membership failures promoted to topology change candidates. |
+  | `CLUSTER_CHANGE_BATCH` | Controller batch commit path | batch start, deadline expiration, finalization, and preemption; includes batch type/epoch/version. |
+  | `CLUSTER_MEMBER_JOIN_SUMMARY` | Controller scale-out commit | summarized joining members admitted into a scale-out batch. |
+  | `CLUSTER_MEMBER_LEAVE_SUMMARY` | Controller scale-in/failure commit | summarized leaving or failed members in a removal batch. |
+  | `CLUSTER_CHANGE` | Controller decisions | scale-in wait, completion, abort, or no-op decisions with version and batch context. |
+  | `CLUSTER_RECONCILE` | Controller serialized loop | successful reconciliation after queued events or commits; includes elapsed time and queue counters. |
+  | `CLUSTER_RING` | Controller topology publication | ring build/publication diagnostics with topology version and membership counts. |
+  | `CLUSTER_TASK` | Materializer/executor | task materialization, notify, callback submission/finish/failure, and progress outcomes. |
 - Foreground routing uses `PlacementFacade` and one immutable snapshot per single-key or batch decision. Batch-level
   failures leave the output unchanged; one item vector returns each per-key status beside its decision so successful
   results from the same snapshot survive without an extra aligned-vector allocation. Routing never performs backend IO

@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <utility>
 
+#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -33,12 +34,6 @@
 namespace datasystem::worker {
 namespace {
 constexpr auto SCALE_IN_DRAIN_WAIT_POLL = std::chrono::milliseconds(100);
-constexpr size_t TASK_DIAGNOSTIC_PREFIX_SIZE = 12;
-
-std::string DiagnosticPrefix(const std::string &value)
-{
-    return value.substr(0, TASK_DIAGNOSTIC_PREFIX_SIZE);
-}
 
 /**
  * @brief Calculate one callback's remaining monotonic budget.
@@ -49,7 +44,6 @@ int64_t RemainingCallbackBudgetUs(std::chrono::steady_clock::time_point deadline
 {
     return std::chrono::duration_cast<std::chrono::microseconds>(deadline - std::chrono::steady_clock::now()).count();
 }
-
 
 /**
  * @brief Remove cached worker<->worker RPC stubs pointing at a failed member.
@@ -89,6 +83,18 @@ Status EraseFailedWorkerWorkerStub(const cluster::TopologyPhaseAction &action)
     }
     return rc;
 }
+
+void LogCallbackResult(const std::string &phase, const cluster::TopologyCallbackContext &context,
+                       std::chrono::steady_clock::time_point start, const Status &status)
+{
+    LOG(INFO) << "CLUSTER_TASK_CALLBACK phase=" << phase << " batch_epoch=" << context.action.batchEpoch
+              << " task_prefix=" << cluster::TopologyDiagnosticPrefix(context.action.taskId)
+              << " source=" << (context.action.source.has_value() ? context.action.source->address : "")
+              << " target=" << (context.action.target.has_value() ? context.action.target->address : "")
+              << " failed=" << (context.action.failed.has_value() ? context.action.failed->address : "")
+              << " elapsed_ms=" << cluster::DurationMs(start, std::chrono::steady_clock::now())
+              << " status=" << status.ToString();
+}
 }  // namespace
 
 WorkerTopologyPhaseCallbacks::WorkerTopologyPhaseCallbacks(WorkerTopologyPhaseCallbackDependencies dependencies)
@@ -103,51 +109,84 @@ WorkerTopologyPhaseCallbacks::WorkerTopologyPhaseCallbacks(WorkerTopologyPhaseCa
 
 Status WorkerTopologyPhaseCallbacks::OnScaleOut(const cluster::TopologyCallbackContext &context)
 {
-    RETURN_IF_NOT_OK(CheckContext(context));
-    ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
-    return MigrateMetadata(context);
+    const auto start = std::chrono::steady_clock::now();
+    auto rc = CheckContext(context);
+    if (rc.IsOk()) {
+        ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
+        rc = MigrateMetadata(context);
+    }
+    LogCallbackResult("scale_out", context, start, rc);
+    return rc;
 }
 
 Status WorkerTopologyPhaseCallbacks::OnScaleIn(const cluster::TopologyCallbackContext &context)
 {
-    RETURN_IF_NOT_OK(CheckContext(context));
-    ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
-    return MigrateMetadata(context);
+    const auto start = std::chrono::steady_clock::now();
+    auto rc = CheckContext(context);
+    if (rc.IsOk()) {
+        ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
+        rc = MigrateMetadata(context);
+    }
+    LogCallbackResult("scale_in_metadata", context, start, rc);
+    return rc;
 }
 
 Status WorkerTopologyPhaseCallbacks::OnScaleInDataDrain(const cluster::TopologyCallbackContext &context)
 {
-    RETURN_IF_NOT_OK(CheckContext(context));
-    ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
-    CHECK_FAIL_RETURN_STATUS(readinessCheck_ != nullptr, K_NOT_READY, "Worker readiness check is not initialized");
-    RETURN_IF_NOT_OK(readinessCheck_(context.deadline, context.cancellation));
-    auto *objectCacheService = GetObjectCacheService();
-    CHECK_FAIL_RETURN_STATUS(objectCacheService != nullptr, K_NOT_READY,
-                             "Worker object-cache service is not initialized");
-    return DrainScaleInData(context, *objectCacheService);
+    const auto start = std::chrono::steady_clock::now();
+    auto rc = CheckContext(context);
+    if (rc.IsOk()) {
+        ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
+        if (readinessCheck_ == nullptr) {
+            rc = Status(K_NOT_READY, "Worker readiness check is not initialized");
+        } else {
+            rc = readinessCheck_(context.deadline, context.cancellation);
+        }
+        auto *objectCacheService = GetObjectCacheService();
+        if (rc.IsOk() && objectCacheService == nullptr) {
+            rc = Status(K_NOT_READY, "Worker object-cache service is not initialized");
+        }
+        if (rc.IsOk()) {
+            rc = DrainScaleInData(context, *objectCacheService);
+        }
+    }
+    LogCallbackResult("scale_in_data_drain", context, start, rc);
+    return rc;
 }
 
 Status WorkerTopologyPhaseCallbacks::PrepareScaleInCleanup(const cluster::TopologyCallbackContext &context,
                                                            std::unique_ptr<cluster::TopologyPreparedCleanup> &prepared)
 {
-    RETURN_IF_NOT_OK(CheckContext(context));
+    const auto start = std::chrono::steady_clock::now();
+    auto rc = CheckContext(context);
     auto *objectCacheService = GetObjectCacheService();
-    CHECK_FAIL_RETURN_STATUS(objectCacheService != nullptr, K_NOT_READY,
-                             "Worker object-cache service is not initialized");
+    if (rc.IsOk() && objectCacheService == nullptr) {
+        rc = Status(K_NOT_READY, "Worker object-cache service is not initialized");
+    }
     std::function<Status()> authorize;
     cluster::TopologyCleanupEffect apply;
-    RETURN_IF_NOT_OK(objectCacheService->PrepareTopologyScaleInCleanup(context.action, context.keyFilter,
-                                                                       context.businessOperationId, context.deadline,
-                                                                       context.cancellation, authorize, apply));
-    prepared = std::make_unique<cluster::TopologyPreparedCleanup>(std::move(authorize), std::move(apply));
-    return Status::OK();
+    if (rc.IsOk()) {
+        rc = objectCacheService->PrepareTopologyScaleInCleanup(context.action, context.keyFilter,
+                                                               context.businessOperationId, context.deadline,
+                                                               context.cancellation, authorize, apply);
+    }
+    if (rc.IsOk()) {
+        prepared = std::make_unique<cluster::TopologyPreparedCleanup>(std::move(authorize), std::move(apply));
+    }
+    LogCallbackResult("scale_in_cleanup_prepare", context, start, rc);
+    return rc;
 }
 
 Status WorkerTopologyPhaseCallbacks::OnFailure(const cluster::TopologyCallbackContext &context)
 {
-    RETURN_IF_NOT_OK(CheckContext(context));
-    ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
-    return RunFailureBestEffort(context);
+    const auto start = std::chrono::steady_clock::now();
+    auto rc = CheckContext(context);
+    if (rc.IsOk()) {
+        ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
+        rc = RunFailureBestEffort(context);
+    }
+    LogCallbackResult("failure", context, start, rc);
+    return rc;
 }
 
 Status WorkerTopologyPhaseCallbacks::CheckContext(const cluster::TopologyCallbackContext &context)
@@ -209,13 +248,13 @@ void WorkerTopologyPhaseCallbacks::CompleteScaleInDrain(const cluster::TopologyC
     LOG(INFO) << "CLUSTER_SCALE_IN action=data_drain"
               << " epoch=" << context.action.batchEpoch
               << " source=" << (source.has_value() ? source->address : "")
-              << " source_id_prefix=" << (source.has_value() ? DiagnosticPrefix(source->id) : "")
+              << " source_id_prefix=" << (source.has_value() ? cluster::MemberIdForLog(source->id) : "")
               << " target=" << (context.action.target.has_value() ? context.action.target->address : "")
               << " target_id_prefix="
-              << (context.action.target.has_value() ? DiagnosticPrefix(context.action.target->id) : "")
+              << (context.action.target.has_value() ? cluster::MemberIdForLog(context.action.target->id) : "")
               << " executor=" << context.action.executor.address
-              << " operation_prefix=" << DiagnosticPrefix(context.businessOperationId)
-              << " task_prefix=" << DiagnosticPrefix(context.action.taskId)
+              << " operation_prefix=" << cluster::TopologyDiagnosticPrefix(context.businessOperationId)
+              << " task_prefix=" << cluster::TopologyDiagnosticPrefix(context.action.taskId)
               << " status=" << status.ToString();
 }
 
