@@ -30,6 +30,20 @@ protected:
     RandomData rand_;
 };
 
+TEST_F(RandomDataTest, TimerStopCachesEndpoint)
+{
+    Timer timer;
+    timer.Stop();
+    const auto startUs = timer.GetStartTimeStampUs();
+    const auto endUs = timer.GetEndTimeStampUs();
+    EXPECT_GE(endUs, startUs);
+    const auto elapsedUs = timer.ElapsedMicroSecond();
+
+    timer.Stop();
+    EXPECT_EQ(timer.GetEndTimeStampUs(), endUs);
+    EXPECT_EQ(timer.ElapsedMicroSecond(), elapsedUs);
+}
+
 TEST_F(RandomDataTest, TestGetRandomUint8)
 {
     LOG(INFO) << "Test get random uint8.";

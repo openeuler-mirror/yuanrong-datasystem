@@ -64,6 +64,17 @@ enum class JettyType : uint8_t {
     RECV = 1,
 };
 
+struct UrmaWriteTrace {
+    uint64_t postUs{ 0 };
+    uint64_t waitUs{ 0 };
+    uint64_t pollBeginUs{ 0 };
+    uint64_t sleepStartUs{ 0 };
+    uint64_t sleepEndUs{ 0 };
+    uint64_t pollEndUs{ 0 };
+    uint64_t notifyUs{ 0 };
+    uint64_t awakeUs{ 0 };
+};
+
 class UrmaEvent : public Event {
 public:
     enum class OperationType : uint8_t { UNKNOWN = 0, READ = 1, WRITE = 2 };
@@ -117,6 +128,35 @@ public:
     uint64_t GetWakeSchedLatencyUs() const
     {
         return wakeSchedLatencyUs_.load(std::memory_order_relaxed);
+    }
+
+    void SetWritePostTimeUs(uint64_t postUs)
+    {
+        if (operationType_ == OperationType::WRITE) {
+            writeTrace_.postUs = postUs;
+        }
+    }
+
+    void SetWriteWaitTimeUs(uint64_t waitUs)
+    {
+        if (operationType_ == OperationType::WRITE) {
+            writeTrace_.waitUs = waitUs;
+        }
+    }
+
+    void SetPollTrace(const UrmaWriteTrace &pollTrace)
+    {
+        if (operationType_ == OperationType::WRITE) {
+            writeTrace_.pollBeginUs = pollTrace.pollBeginUs;
+            writeTrace_.sleepStartUs = pollTrace.sleepStartUs;
+            writeTrace_.sleepEndUs = pollTrace.sleepEndUs;
+            writeTrace_.pollEndUs = pollTrace.pollEndUs;
+        }
+    }
+
+    UrmaWriteTrace GetWriteTrace() const
+    {
+        return writeTrace_;
     }
 
     /**
@@ -223,6 +263,9 @@ public:
         {
             std::unique_lock<std::mutex> lock(eventMutex_);
             notifyTimeUs_ = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+            if (operationType_ == OperationType::WRITE) {
+                writeTrace_.notifyUs = notifyTimeUs_;
+            }
             ready_ = true;
         }
         if (waiter_) {
@@ -243,6 +286,9 @@ private:
             return;
         }
         const auto nowUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+        if (operationType_ == OperationType::WRITE) {
+            writeTrace_.awakeUs = nowUs;
+        }
         wakeSchedLatencyUs_.store(nowUs >= notifyTimeUs_ ? nowUs - notifyTimeUs_ : 0, std::memory_order_relaxed);
     }
 
@@ -265,6 +311,7 @@ private:
     uint64_t notifyTimeUs_{ 0 };
     bool wakeSchedLatencyRecorded_{ false };
     std::atomic<uint64_t> wakeSchedLatencyUs_{ 0 };
+    UrmaWriteTrace writeTrace_;
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
     std::atomic<bool> laneEventSettled_{ false };
 };
