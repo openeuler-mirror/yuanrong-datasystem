@@ -2212,6 +2212,26 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   }
+  function workerNameParts(raw) {
+    const text = String(raw || '');
+    let match = text.match(/client-?(\\d+).*?worker-?(\\d+)/i);
+    if (match) return {kind:'client', left:match[1], worker:match[2]};
+    match = text.match(/worker-?(\\d+).*?worker-?(\\d+)/i);
+    if (match) return {kind:'worker', left:match[1], worker:match[2]};
+    match = text.match(/(?:^|[-_/])worker-?(\\d+)/i);
+    if (match) return {kind:'worker', worker:match[1]};
+    return {kind:'unknown', raw:text};
+  }
+  function workerDisplayName(raw) {
+    const parts = workerNameParts(raw);
+    return parts.worker ? `worker ${parts.worker}` : (parts.raw || 'unknown worker');
+  }
+  function workerRelationName(raw) {
+    const parts = workerNameParts(raw);
+    if (parts.kind === 'client' && parts.left && parts.worker) return `client ${parts.left} → worker ${parts.worker}`;
+    if (parts.kind === 'worker' && parts.left && parts.worker) return `worker ${parts.left} → worker ${parts.worker}`;
+    return workerDisplayName(raw);
+  }
   function pctText(item) {
     if (!item || !item.count) return '';
     return `count=${item.count} p50=${item.p50} p90=${item.p90} p99=${item.p99} max=${item.max}`;
@@ -2798,10 +2818,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function renderWorkerSection(operation, title) {
     const chartRows = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-filter`));
     const tableRowsForOperation = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-table-filter`));
-    const tableRows = tableRowsForOperation.map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0]);
+    const tableRows = tableRowsForOperation.map(([worker,item]) => {
+      const display_worker = workerRelationName(worker);
+      return [display_worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0];
+    });
     renderPagedTable(`${operation}-worker-table`, `${operation}-worker-table-pager`, ['worker','roles','lines','traces','slow','errors'], tableRows,
       row => (Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
-    chart(`${operation}-worker-chart`, chartRows.length ? axisBase(`${title} Workers by Trace/Error`, {xAxis:{type:'category', data:chartRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
+    chart(`${operation}-worker-chart`, chartRows.length ? axisBase(`${title} Workers by Trace/Error`, {xAxis:{type:'category', data:chartRows.slice(0,20).map(r => workerRelationName(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
       {name:'traces',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
       {name:'slow',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
       {name:'errors',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].error_count || 0), itemStyle:{color:'#dc2626'}, label:{show:true, position:'top'}}
@@ -2830,28 +2853,32 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const tableUbWorkerRows = filterUbWorkerRows(roleTableWorker);
     const chartUbWorkerTimeRows = filterUbWorkerTimeRows(timeChartWorker);
     const tableUbWorkerTimeRows = filterUbWorkerTimeRows(timeTableWorker);
-    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], tableUbWorkerRows.map(([worker,item]) => [
-      worker,
-      item.role || '',
-      item.entry_events || 0,
-      item.exit_events || 0,
-      item.trace_count || 0,
-      item.latency_ms?.p99 || '',
-      item.latency_ms?.max || '',
-      (item.top_edges || []).join(', ')
-    ]), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`, 5);
+    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], tableUbWorkerRows.map(([worker,item]) => {
+      const display_worker = workerRelationName(worker);
+      const display_top_edges = (item.top_edges || []).map(edge => edge.replace(/\\s*->\\s*/g, ' → ')).join(', ');
+      return [
+        display_worker,
+        item.role || '',
+        item.entry_events || 0,
+        item.exit_events || 0,
+        item.trace_count || 0,
+        item.latency_ms?.p99 || '',
+        item.latency_ms?.max || '',
+        display_top_edges
+      ];
+    }), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`, 5);
     renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], tableUbWorkerTimeRows.map(item => [
       item.bucket_start || '',
       item.entry_events || 0,
       item.exit_events || 0,
       item.latency_ms?.p99 || '',
       item.latency_ms?.max || '',
-      (item.top_entry_workers || []).join(', '),
-      (item.top_exit_workers || []).join(', ')
+      (item.top_entry_workers || []).map(workerRelationName).join(', '),
+      (item.top_exit_workers || []).map(workerRelationName).join(', ')
     ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
     chart('ub-worker-role-chart', chartUbWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
       tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
-      xAxis:{type:'category', data:chartUbWorkerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
+      xAxis:{type:'category', data:chartUbWorkerRows.slice(0,20).map(r => workerRelationName(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
       yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
       series:[
         {name:'入口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
@@ -2986,7 +3013,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         traceAccessLatencyMs(item),
         JSON.stringify(item.errors || {}),
         pctText(item.access_latency_ms),
-        Object.keys(item.workers || {}).slice(0, 6).join(', ')
+        Object.keys(item.workers || {}).slice(0, 6).map(workerRelationName).join(', ')
       ]);
     }
     const topTraceHeaders = ['time','trace','classification','latency ms','errors','access','workers'];
@@ -3089,7 +3116,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   document.getElementById('class-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   const traceWorkerNames = [...new Set(traceRows.flatMap(([, item]) => Object.keys(item.workers || {})))].sort();
   document.getElementById('worker-filter').innerHTML = '<option value="">全部 Worker</option>' +
-    traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(workerRelationName(name))}</option>`).join('');
   document.getElementById('worker-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   const workerScopedFilterIds = [
     'read-worker-filter',
@@ -3105,7 +3132,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const node = document.getElementById(id);
     if (!node) return;
     node.innerHTML = '<option value="">全部 Worker</option>' +
-      traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+      traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(workerRelationName(name))}</option>`).join('');
     node.addEventListener('change', renderWorkerDependentViews);
   });
   document.getElementById('trace-page-size').addEventListener('change', event => {
@@ -3211,7 +3238,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(graph.nodes || []).map((node, idx) => ({
         name:node.id,
-        label:[node.label, ...(node.top_workers || []), ...(node.top_ips || [])].slice(0, 3).join('\\n'),
+        label:[node.label, ...(node.top_workers || []).map(workerRelationName), ...(node.top_ips || [])].slice(0, 3).join('\\n'),
         top_ips:node.top_ips || [],
         x:[80,280,480,480,680][idx] || 80,
         y:[170,170,80,260,260][idx] || 170,
@@ -3261,7 +3288,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function topWorkerText(rows) {
     const [worker, item] = firstEntry(rows);
     if (!item) return '无 worker 聚合样本';
-    return `${worker}: traces=${fmtCount(item.trace_count)}, slow=${fmtCount(item.slow_trace_count)}, errors=${fmtCount(item.error_count)}`;
+    return `${workerRelationName(worker)}: traces=${fmtCount(item.trace_count)}, slow=${fmtCount(item.slow_trace_count)}, errors=${fmtCount(item.error_count)}`;
   }
   function topFlowStageText(graph) {
     const edge = (graph.edges || []).slice().sort((a,b) =>

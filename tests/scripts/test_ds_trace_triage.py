@@ -467,6 +467,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "workerRowsForOperation" in html
     assert "renderWorkerSection" in html
     assert "renderUbSection" in html
+    assert "function workerDisplayName(raw)" in html
+    assert "function workerRelationName(raw)" in html
+    assert "client ${parts.left} → worker ${parts.worker}" in html
+    assert "worker ${parts.left} → worker ${parts.worker}" in html
+    assert "value=\"${escapeHtml(name)}\">${escapeHtml(workerRelationName(name))}</option>" in html
+    assert "display_worker" in html
+    assert "display_top_edges" in html
     assert "id=\"read-worker-table-pager\"" in html
     assert "id=\"write-worker-table-pager\"" in html
     for worker_filter_id in [
