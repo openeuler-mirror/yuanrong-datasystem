@@ -174,7 +174,16 @@ Status WorkerOcServiceGetImpl::BatchGetRetrieveRemotePayload(uint64_t completeDa
     CHECK_FAIL_RETURN_STATUS(!(payloads.empty() || payloadLen == 0), K_INVALID,
                              "Payload is null or no bytes to write.");
     CHECK_FAIL_RETURN_STATUS(needReceiveSz == payloadLen, K_RUNTIME_ERROR, "Data size does not match.");
-    RETURN_IF_NOT_OK(entry->GetShmUnit()->MemoryCopy(payloadData, memCpyThreadPool_, metaSz + offset));
+    auto memStatus = entry->GetShmUnit()->MemoryCopy(payloadData, memCpyThreadPool_, metaSz + offset);
+    if (memStatus.IsError()) {
+        // On MemoryCopy failure, free the ShmUnit and drop it from the entry so a retry reallocates
+        // instead of reusing a freed unit whose pointer is null. Mirrors the #783 fix applied to
+        // RetrieveRemotePayload and SaveBinaryObjectToMemory. See issues #783/#803.
+        entry->GetShmUnit()->SetHardFreeMemory();
+        entry->GetShmUnit()->FreeMemory();
+        entry->SetShmUnit(nullptr);
+        return memStatus;
+    }
     return Status::OK();
 }
 
