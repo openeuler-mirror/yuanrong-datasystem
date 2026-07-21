@@ -33,6 +33,10 @@ constexpr size_t TASK_DIGEST_SIZE = 32;
 constexpr size_t TASK_KIND_PREFIX_SIZE = 3;
 constexpr size_t MIN_TASK_ID_SIZE = TASK_KIND_PREFIX_SIZE + 1 + 1 + TASK_DIGEST_SIZE;
 constexpr size_t MAX_SOURCE_ID_SIZE = 128;
+constexpr size_t HEX_ENCODED_BYTES_PER_INPUT_BYTE = 2;
+constexpr size_t HEX_HIGH_NIBBLE_SHIFT = 4;
+constexpr unsigned char HEX_LOW_NIBBLE_MASK = 0x0f;
+constexpr char LOWER_HEX[] = "0123456789abcdef";
 constexpr char ROOT_PREFIX[] = "/datasystem";
 const std::string EMPTY_KEY;
 
@@ -111,9 +115,18 @@ Status ValidateSourceId(const std::string &sourceId)
 {
     CHECK_FAIL_RETURN_STATUS(!sourceId.empty() && sourceId.size() <= MAX_SOURCE_ID_SIZE, K_INVALID,
                              "invalid ScaleIn metadata source id");
-    CHECK_FAIL_RETURN_STATUS(sourceId.find('/') == std::string::npos, K_INVALID,
-                             "ScaleIn metadata source id must not contain slash");
     return Status::OK();
+}
+
+std::string EncodeScaleInMetadataSourceId(const std::string &sourceId)
+{
+    std::string encoded;
+    encoded.reserve(sourceId.size() * HEX_ENCODED_BYTES_PER_INPUT_BYTE);
+    for (unsigned char value : sourceId) {
+        encoded.push_back(LOWER_HEX[value >> HEX_HIGH_NIBBLE_SHIFT]);
+        encoded.push_back(LOWER_HEX[value & HEX_LOW_NIBBLE_MASK]);
+    }
+    return encoded;
 }
 
 }  // namespace
@@ -251,7 +264,7 @@ Status TopologyKeyHelper::ScaleInMetadataDonePrefix(uint64_t batchEpoch, const s
 {
     CHECK_FAIL_RETURN_STATUS(batchEpoch > 0, K_INVALID, "invalid ScaleIn metadata batch epoch");
     RETURN_IF_NOT_OK(ValidateSourceId(sourceId));
-    prefix = "e" + std::to_string(batchEpoch) + "/" + sourceId + "/";
+    prefix = "e" + std::to_string(batchEpoch) + "/" + EncodeScaleInMetadataSourceId(sourceId) + "/";
     return Status::OK();
 }
 

@@ -27,6 +27,10 @@ namespace {
 
 constexpr size_t LARGE_MEMBERSHIP_COUNT = 10'000;
 constexpr uint32_t LARGE_MEMBERSHIP_PORT_BASE = 10'000;
+constexpr size_t BINARY_SOURCE_ID_SIZE = 16;
+constexpr size_t BINARY_SOURCE_ID_SLASH_INDEX = 4;
+constexpr uint64_t BINARY_SOURCE_ID_SCALE_IN_EPOCH = 7;
+constexpr size_t EXPECTED_BINARY_SOURCE_MARKER_COUNT = 1;
 
 TEST(TopologyRepositoryTest, TopologyCasCommitsAndReadsBackConflict)
 {
@@ -133,6 +137,23 @@ TEST(TopologyRepositoryTest, ScaleInMetadataDoneMarkersArePerSourceBatchAndIdemp
     EXPECT_EQ(count, 2);
     DS_ASSERT_OK(repository.CountScaleInMetadataDone(8, sourceId, count));
     EXPECT_EQ(count, 0);
+}
+
+TEST(TopologyRepositoryTest, ScaleInMetadataDoneAcceptsBinarySourceIds)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("repo", keys));
+    TopologyRepository repository(backend, *keys);
+    std::string sourceId(BINARY_SOURCE_ID_SIZE, 'a');
+    sourceId[BINARY_SOURCE_ID_SLASH_INDEX] = '/';
+    const std::string taskId = "m-e7-0123456789abcdef0123456789abcdef";
+    size_t count = 0;
+
+    DS_ASSERT_OK(
+        repository.MarkScaleInMetadataDone({ BINARY_SOURCE_ID_SCALE_IN_EPOCH, sourceId, taskId, "operation-a" }));
+    DS_ASSERT_OK(repository.CountScaleInMetadataDone(BINARY_SOURCE_ID_SCALE_IN_EPOCH, sourceId, count));
+    EXPECT_EQ(count, EXPECTED_BINARY_SOURCE_MARKER_COUNT);
 }
 
 TEST(TopologyRepositoryTest, ScaleInMetadataDoneTombstoneMakesConcurrentRewriteRetryable)
