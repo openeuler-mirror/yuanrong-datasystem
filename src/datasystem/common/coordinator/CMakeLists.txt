@@ -1,3 +1,8 @@
+# Fixed-address Coordinator discovery shared by client, Worker, and Coordinator startup.
+add_library(static_coordinator_discovery STATIC static_coordinator_discovery.cpp)
+target_include_directories(static_coordinator_discovery PUBLIC ${CMAKE_SOURCE_DIR})
+target_link_libraries(static_coordinator_discovery PUBLIC common_util)
+
 # Coordinator store library - lightweight in-memory coordinator with TTL and watch support
 
 set(COORDINATOR_STORE_SRCS

@@ -86,6 +86,31 @@ Status IdentityChangedStatus()
 }
 }  // namespace
 
+Status CoordinatorServiceProxyBase::Init()
+{
+    if (!cachedLeader_.Empty()) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(coordinatorDiscovery_ != nullptr, StatusCode::K_INVALID, "Coordinator Discovery is null");
+
+    std::vector<std::string> candidates;
+    Status discoveryStatus;
+    try {
+        discoveryStatus = coordinatorDiscovery_->GetCoordinators(candidates);
+    } catch (...) {
+        return Status(StatusCode::K_RUNTIME_ERROR, "Coordinator Discovery threw an exception");
+    }
+    RETURN_IF_NOT_OK(discoveryStatus);
+    CHECK_FAIL_RETURN_STATUS(!candidates.empty(), StatusCode::K_INVALID, "Coordinator Discovery returned no addresses");
+
+    HostPort candidate;
+    const auto parseStatus = candidate.ParseString(candidates.front());
+    CHECK_FAIL_RETURN_STATUS(parseStatus.IsOk() && !candidate.Empty(), StatusCode::K_INVALID,
+                             "Coordinator Discovery returned an invalid front address");
+    cachedLeader_ = std::move(candidate);
+    return Status::OK();
+}
+
 class CoordinatorServiceProxyBase::InFlightScope final {
 public:
     InFlightScope(CoordinatorServiceProxyBase &owner, std::string startedCoordinatorId, int32_t timeoutMs)
@@ -130,13 +155,14 @@ private:
 template <typename ReqT, typename RspT, typename CallT>
 Status CoordinatorServiceProxyBase::CallRaw(RpcOptions &options, const ReqT &req, RspT &rsp, CallT call)
 {
+    RETURN_IF_NOT_OK(CheckCoordinatorAddress(cachedLeader_));
     if (GetTransport() == Transport::ZMQ) {
         std::shared_ptr<coordinator::CoordinatorService_Stub> stub;
-        RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr_, stub));
+        RETURN_IF_NOT_OK(GetCoordinatorStub(cachedLeader_, stub));
         return call(*stub, options, req, rsp);
     }
     std::shared_ptr<coordinator::CoordinatorService_BrpcGenericStub> stub;
-    RETURN_IF_NOT_OK(GetCoordinatorStub(coordinatorAddr_, stub));
+    RETURN_IF_NOT_OK(GetCoordinatorStub(cachedLeader_, stub));
     return call(*stub, options, req, rsp);
 }
 
@@ -422,8 +448,7 @@ Status CoordinatorServiceProxyBase::CAS(const std::string &key, const CasProcess
         std::vector<KeyValueEntry> kvs;
         int64_t rangeRevision = 0;
         std::string rangeCoordinatorId;
-        RETURN_IF_NOT_OK(Range(key, "", kvs, rangeRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
-                               &rangeCoordinatorId));
+        RETURN_IF_NOT_OK(Range(key, "", kvs, rangeRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &rangeCoordinatorId));
         std::string oldValue;
         int64_t expectedVersion = COORDINATOR_KEY_NOT_EXISTS_VERSION;
         if (!kvs.empty()) {
@@ -450,8 +475,8 @@ Status CoordinatorServiceProxyBase::CAS(const std::string &key, const CasProcess
             continue;
         }
         std::string putCoordinatorId;
-        Status rc = Put(key, *newValue, 0, expectedVersion, version, revision,
-                        DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &putCoordinatorId, rangeCoordinatorId);
+        Status rc = Put(key, *newValue, 0, expectedVersion, version, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                        &putCoordinatorId, rangeCoordinatorId);
         if (rc.IsOk() && putCoordinatorId != rangeCoordinatorId) {
             rc = IdentityChangedStatus();
         }

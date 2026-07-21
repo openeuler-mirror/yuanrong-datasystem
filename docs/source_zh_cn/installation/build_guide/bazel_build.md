@@ -450,11 +450,26 @@ cc_binary(
 ### 4. C++ 代码
 ```cpp
 #include "datasystem/data_worker.h"
+#include "datasystem/utils/coordinator_discovery.h"
+
 #include <cstdio>
+#include <memory>
+#include <string>
+#include <vector>
+
+class UserCoordinatorDiscovery final : public datasystem::ICoordinatorDiscovery {
+public:
+    datasystem::Status GetCoordinators(std::vector<std::string> &addresses) override
+    {
+        addresses = { "coordinator.example.com:31501" };
+        return datasystem::Status::OK();
+    }
+};
 
 int main() {
     datasystem::DataWorkerOptions options;
     options.configFilePath = "/path/to/worker_config.json";
+    options.coordinatorDiscovery = std::make_shared<UserCoordinatorDiscovery>();
 
     auto status = datasystem::DataWorker::GetInstance()->InitAndRun(options);
     if (status.IsError()) {
@@ -465,6 +480,10 @@ int main() {
     return 0;
 }
 ```
+
+`coordinatorDiscovery`在带参数启动时必须非空，带参数入口始终使用它选择并访问Coordinator后端，
+无需在配置中设置`coordinator_address`。命令行和嵌入式静态启动入口才通过`coordinator_address`选择
+Coordinator或ETCD/metastore。`onStart`和`onStop`为可选回调，但必须同时配置或同时留空。
 
 ### 5. 编译命令
 ```bash
@@ -564,11 +583,27 @@ int main(int argc, char **argv) {
 
 ```cpp
 #include "datasystem/coordinator_server.h"
+#include "datasystem/utils/coordinator_discovery.h"
+
 #include <cstdio>
+#include <memory>
+#include <string>
+#include <vector>
+
+class UserCoordinatorDiscovery final : public datasystem::ICoordinatorDiscovery {
+public:
+    datasystem::Status GetCoordinators(std::vector<std::string> &addresses) override
+    {
+        addresses = { "coordinator.example.com:31501" };
+        return datasystem::Status::OK();
+    }
+};
 
 int main() {
     datasystem::CoordinatorOptions options;
     options.configFilePath = "/path/to/coordinator_config.json";
+    options.coordinatorDiscovery = std::make_shared<UserCoordinatorDiscovery>();
+    options.expectedMemberCount = 1;
 
     auto status = datasystem::CoordinatorServer::GetInstance()->InitAndRun(options);
     if (status.IsError()) {
@@ -579,6 +614,9 @@ int main() {
     return 0;
 }
 ```
+
+`CoordinatorServer`只能通过`GetInstance()`获取。带参数启动要求`coordinatorDiscovery`非空且
+`expectedMemberCount > 0`；`onStart`和`onStop`必须同时配置或同时留空。
 
 ### 6. 编译命令
 

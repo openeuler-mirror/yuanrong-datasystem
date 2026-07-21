@@ -27,6 +27,7 @@
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -218,7 +219,10 @@ Status ClusterQueryClient::Impl::InitCoordinator()
     CHECK_FAIL_RETURN_STATUS(address.ToString() == options_.coordinatorAddress, K_INVALID,
                              "coordinator address is not canonical");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(QUERY_RPC_STUB_CACHE_SIZE));
-    coordinatorProxy_ = std::make_unique<CoordinatorServiceProxyZmqImpl>(address);
+    auto coordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(options_.coordinatorAddress);
+    auto coordinatorProxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
+    RETURN_IF_NOT_OK(coordinatorProxy->Init());
+    coordinatorProxy_ = std::move(coordinatorProxy);
     return Status::OK();
 }
 

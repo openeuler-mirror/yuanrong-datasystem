@@ -133,7 +133,7 @@
 - Routing: `src/datasystem/cluster/routing/placement_facade.{h,cpp}`
 - Backend: `src/datasystem/cluster/coordination_backend/etcd_coordination_backend.{h,cpp}`
 - Existing Coordinator transport: `src/datasystem/cluster/coordination_backend/ds_coordination_backend.{h,cpp}`
-- Worker composition: `src/datasystem/worker/worker_oc_server.cpp`
+- Worker composition: `src/datasystem/worker/data_worker.cpp`, `src/datasystem/worker/worker_oc_server.cpp`
 - Worker metadata routing adapter: `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
 - Standalone observer consumer: `src/datasystem/client/router_client.cpp`
 - Read-only operator query: `src/datasystem/client/cluster_query/*` and
@@ -146,6 +146,7 @@
 - Normal scale-out/scale-in must keep business traffic lossless. Data or metadata loss is accepted only after confirmed
   member Failure.
 - Temporary endpoint observations stay process local. Only confirmed Failure enters the authoritative topology.
+- Worker startup selects the coordination backend once: a non-null `ICoordinatorDiscovery` selects Coordinator mode, while a null pointer selects ETCD/metastore. All Worker composition branches use that constructor-selected pointer instead of independently re-reading `coordinator_address`.
 - At most one change type is active at a time; one batch may contain many members. Failure has highest priority and may
   preempt ordinary work. Scale-in waits for an already-running scale-out batch to finish.
 - All callbacks must be deadline-aware, cooperatively cancellable, idempotent by operation ID, and safe under duplicate

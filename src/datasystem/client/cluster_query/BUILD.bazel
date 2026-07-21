@@ -29,6 +29,7 @@ ds_cc_library(
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/ak_sk:hasher",
         "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/coordinator:static_coordinator_discovery",
         "//src/datasystem/common/kvstore:kv_store",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/rpc:rpc_stub_cache_mgr",

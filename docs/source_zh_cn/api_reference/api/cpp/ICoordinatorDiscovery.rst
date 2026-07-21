@@ -3,7 +3,7 @@ ICoordinatorDiscovery
 
 .. cpp:class:: ICoordinatorDiscovery
 
-    :header-file: #include <datasystem/utils/service_discovery.h>
+    :header-file: #include <datasystem/utils/coordinator_discovery.h>
     :namespace: datasystem
 
     Coordinator 地址发现接口。用户可以实现该接口，并通过
@@ -15,8 +15,9 @@ ICoordinatorDiscovery
 
         获取 Coordinator 地址列表。
 
-        当前 :cpp:class:`CoordinatorServiceDiscovery` 要求该接口返回且仅返回一个 Coordinator 地址；
-        返回空列表或多个地址时，查询 Worker 将失败。
+        实现可以在发现操作成功但当前没有候选地址时返回 ``OK`` 和空列表，具体消费者负责判断空列表
+        是否可接受。当前 :cpp:class:`CoordinatorServiceDiscovery` 初始化时拒绝空列表；非空列表只缓存
+        并使用首个 Coordinator 地址，后续查询不会重新调用该接口。
 
         参数：
             - **serviceList** - 传出参数。Coordinator 地址列表，每个地址的格式为 ``host:port``。

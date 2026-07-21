@@ -21,11 +21,13 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <exception>
 #include <mutex>
 #include <string>
 #include <utility>
 #include <sys/prctl.h>
 
+#include "datasystem/common/coordinator/static_coordinator_discovery.h"
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "datasystem/common/flags/flag_manager.h"
 #include "datasystem/common/flags/flags.h"
@@ -58,6 +60,7 @@
 DS_DECLARE_string(worker_address);
 DS_DECLARE_string(bind_address);
 DS_DECLARE_string(master_address);
+DS_DECLARE_string(coordinator_address);
 DS_DECLARE_uint64(shared_memory_size_mb);
 DS_DECLARE_bool(enable_curve_zmq);
 DS_DECLARE_string(log_filename);
@@ -223,6 +226,46 @@ void InitWorkerLogConfig()
     }
 }
 
+void PreserveFirstError(Status &firstError, const Status &status, const char *operation)
+{
+    if (status.IsOk()) {
+        return;
+    }
+    if (firstError.IsOk()) {
+        firstError = status;
+        return;
+    }
+    LOG(ERROR) << operation << " failed during cleanup, status=" << status.ToString();
+}
+
+Status ValidateOptions(const DataWorkerOptions &options)
+{
+    CHECK_FAIL_RETURN_STATUS(options.coordinatorDiscovery != nullptr, K_INVALID,
+                             "coordinatorDiscovery must not be null");
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(options.onStart) == static_cast<bool>(options.onStop), K_INVALID,
+                             "onStart and onStop must be configured together");
+    return Status::OK();
+}
+
+Status InvokeLifecycleCallback(const std::function<Status()> &callback, const char *callbackName)
+{
+    try {
+        return callback();
+    } catch (const std::exception &error) {
+        return Status(K_RUNTIME_ERROR, FormatString("%s threw an exception: %s", callbackName, error.what()));
+    } catch (...) {
+        return Status(K_RUNTIME_ERROR, FormatString("%s threw an unknown exception", callbackName));
+    }
+}
+
+std::shared_ptr<ICoordinatorDiscovery> CreateStaticCoordinatorDiscovery(const std::string &coordinatorAddress)
+{
+    if (coordinatorAddress.empty()) {
+        return nullptr;
+    }
+    return std::make_shared<StaticCoordinatorDiscovery>(coordinatorAddress);
+}
+
 DataWorker *DataWorker::GetInstance()
 {
     static DataWorker instance;
@@ -249,10 +292,39 @@ Status DataWorker::PreShutDown()
     return Status::OK();
 }
 
+Status DataWorker::InvokeOnStart()
+{
+    if (callbackState_ != LifecycleCallbackState::READY) {
+        return Status::OK();
+    }
+    callbackState_ = LifecycleCallbackState::START_ATTEMPTED;
+    return InvokeLifecycleCallback(onStart_, "Worker lifecycle onStart");
+}
+
+Status DataWorker::InvokeOnStop()
+{
+    if (callbackState_ != LifecycleCallbackState::START_ATTEMPTED) {
+        return Status::OK();
+    }
+    callbackState_ = LifecycleCallbackState::STOP_INVOKED;
+    return InvokeLifecycleCallback(onStop_, "Worker lifecycle onStop");
+}
+
+Status DataWorker::FinishShutdown(Status firstError)
+{
+    PreserveFirstError(firstError, InvokeOnStop(), "Worker lifecycle onStop");
+    PreserveFirstError(firstError, PreShutDown(), "Worker pre-shutdown");
+    PreserveFirstError(firstError, ShutDown(), "Worker shutdown");
+    coordinatorDiscovery_.reset();
+    onStart_ = {};
+    onStop_ = {};
+    callbackState_ = LifecycleCallbackState::NOT_CONFIGURED;
+    return firstError;
+}
+
 DataWorker::~DataWorker()
 {
-    LOG_IF_ERROR(PreShutDown(), "worker pre-shutdown failed");
-    LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
+    LOG_IF_ERROR(FinishShutdown(Status::OK()), "worker lifecycle cleanup failed during destruction");
 }
 
 Status DataWorker::Stop()
@@ -266,9 +338,7 @@ Status DataWorker::Stop()
 Status DataWorker::StopEmbeddedWorker()
 {
     LOG(INFO) << "DataWorker::StopEmbeddedWorker() called";
-    LOG_IF_ERROR(PreShutDown(), "worker pre-shutdown failed");
-    LOG_IF_ERROR(ShutDown(), "worker shut down failed");
-    return Status::OK();
+    return FinishShutdown(Status::OK());
 }
 
 Status DataWorker::UpdateConfig(const std::string &configJson)
@@ -307,8 +377,8 @@ Status DataWorker::InitWorker(DynamicFlagConfig &flags, const bool isEmbeddedCli
 
     WorkerServerOptions options;
     RETURN_IF_NOT_OK(options.LoadParameters());
-    worker_ = std::make_unique<worker::WorkerOCServer>(
-        options.workerAddress, options.bindAddress, options.masterAddress);
+    worker_ = std::make_unique<worker::WorkerOCServer>(options.workerAddress, options.bindAddress,
+                                                       options.masterAddress, coordinatorDiscovery_);
     worker_->SetFlags(&flags);
 
     LOG_IF_ERROR(PreInitRocksDB(), "Failed to initialize the rocksdb database in advance.");
@@ -354,19 +424,24 @@ Status DataWorker::InitEmbeddedWorker(const EmbeddedConfig &config)
     flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
     AdjustNodeTimeoutFlags();
     CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID, "invalid evict/spill watermark flag configuration");
+    coordinatorDiscovery_ = CreateStaticCoordinatorDiscovery(FLAGS_coordinator_address);
+    onStart_ = {};
+    onStop_ = {};
+    callbackState_ = LifecycleCallbackState::NOT_CONFIGURED;
     auto rc = InitWorker(flags, true);
-    if (rc.IsOk()) {
-        worker::WorkerServiceAccessor::Instance().Register(worker_.get());
-        started_.store(true);
+    if (rc.IsError()) {
+        return FinishShutdown(rc);
     }
+    worker::WorkerServiceAccessor::Instance().Register(worker_.get());
+    started_.store(true);
     LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
-    return rc;
+    return Status::OK();
 }
 
 /// @brief Run the event loop, then perform PreShutDown and ShutDown.
 /// @details Blocks until a termination signal or Stop() is received.
 ///          Shared by both InitAndRun overloads.
-void DataWorker::RunEventLoopAndShutdown(DynamicFlagConfig &flags)
+Status DataWorker::RunEventLoopAndShutdown(DynamicFlagConfig &flags)
 {
     Trace::Instance().SetTraceNewID("WorkerMain;" + GetStringUuid(), true);
     PerfManager *perfManager = PerfManager::Instance();
@@ -397,8 +472,7 @@ void DataWorker::RunEventLoopAndShutdown(DynamicFlagConfig &flags)
     }
     metrics::PrintSummary();
 
-    LOG_IF_ERROR(PreShutDown(), "worker pre-shutdown failed");
-    LOG_IF_ERROR(ShutDown(), "worker shutdown failed");
+    return FinishShutdown(Status::OK());
 }
 
 Status DataWorker::DoInit(DynamicFlagConfig &flags, const char *crashReporterLabel)
@@ -445,16 +519,30 @@ Status DataWorker::InitAndRun(int argc, char **argv)
         CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID,
                                  "invalid evict/spill watermark flag configuration");
         RETURN_IF_NOT_OK(flags.EraseInfo(argc, argv));
-        RETURN_IF_NOT_OK(DoInit(flags, argv[0]));
+        coordinatorDiscovery_ = CreateStaticCoordinatorDiscovery(FLAGS_coordinator_address);
+        onStart_ = {};
+        onStop_ = {};
+        callbackState_ = LifecycleCallbackState::NOT_CONFIGURED;
+        auto rc = DoInit(flags, argv[0]);
+        if (rc.IsError()) {
+            return FinishShutdown(rc);
+        }
         LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
     }  // initMutex_ released here; subsequent threads will see started_==true
 
-    RunEventLoopAndShutdown(flags);
-    return Status::OK();
+    Status callbackStatus = Status::OK();
+    if (!IsTermSignalReceived()) {
+        callbackStatus = InvokeOnStart();
+    }
+    if (callbackStatus.IsError() || IsTermSignalReceived()) {
+        return FinishShutdown(callbackStatus);
+    }
+    return RunEventLoopAndShutdown(flags);
 }
 
 Status DataWorker::InitAndRun(const DataWorkerOptions &options)
 {
+    RETURN_IF_NOT_OK(ValidateOptions(options));
     DynamicFlagConfig flags;
     {
         std::lock_guard<std::mutex> lock(initMutex_);
@@ -474,20 +562,32 @@ Status DataWorker::InitAndRun(const DataWorkerOptions &options)
 
         LinkCommonFlagsValidators();
         std::string errMsg;
-        CHECK_FAIL_RETURN_STATUS(
-            FlagManager::GetInstance()->ParseConfigFile(options.configFilePath, errMsg),
-            K_INVALID, FormatString("Parse config file %s error: %s", options.configFilePath, errMsg));
+        CHECK_FAIL_RETURN_STATUS(FlagManager::GetInstance()->ParseConfigFile(options.configFilePath, errMsg), K_INVALID,
+                                 FormatString("Parse config file %s error: %s", options.configFilePath, errMsg));
 
         flags.StartConfigFileHandle(FLAGS_monitor_config_file, std::chrono::steady_clock::now());
         AdjustNodeTimeoutFlags();
         CHECK_FAIL_RETURN_STATUS(ValidateWatermarkFlags(), K_INVALID,
                                  "invalid evict/spill watermark flag configuration");
-        RETURN_IF_NOT_OK(DoInit(flags, "datasystem_worker"));
+        coordinatorDiscovery_ = options.coordinatorDiscovery;
+        onStart_ = options.onStart;
+        onStop_ = options.onStop;
+        callbackState_ = onStart_ ? LifecycleCallbackState::READY : LifecycleCallbackState::NOT_CONFIGURED;
+        auto rc = DoInit(flags, "datasystem_worker");
+        if (rc.IsError()) {
+            return FinishShutdown(rc);
+        }
         LOG(INFO) << "Worker non-default flags:\n" << flags.GetNonDefaultFlags(defaultGflagMap);
     }  // initMutex_ released here; subsequent threads will see started_==true
 
-    RunEventLoopAndShutdown(flags);
-    return Status::OK();
+    Status callbackStatus = Status::OK();
+    if (!IsTermSignalReceived()) {
+        callbackStatus = InvokeOnStart();
+    }
+    if (callbackStatus.IsError() || IsTermSignalReceived()) {
+        return FinishShutdown(callbackStatus);
+    }
+    return RunEventLoopAndShutdown(flags);
 }
 
 }  // namespace datasystem

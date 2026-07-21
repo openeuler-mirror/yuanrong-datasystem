@@ -12,6 +12,7 @@ target_link_libraries(cluster_query_client PUBLIC
         cluster_topology_keyspace
         common_ak_sk
         common_coordinator_store
+        static_coordinator_discovery
         common_etcd_client
         common_util
         rpc_stub_cache_mgr)

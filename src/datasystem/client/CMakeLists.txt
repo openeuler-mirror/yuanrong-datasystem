@@ -91,6 +91,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         common_rdma
         common_parallel
         common_coordinator_store
+        static_coordinator_discovery
         coordinator_protos_client
         cluster_membership_codec_client
         cluster_topology_keyspace

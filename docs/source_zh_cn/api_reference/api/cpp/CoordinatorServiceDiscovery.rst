@@ -9,8 +9,8 @@ CoordinatorServiceDiscovery
     基于 Coordinator 的 Worker 服务发现实现。该类型从配置的 Coordinator 获取就绪 Worker，
     并根据 :cpp:class:`ServiceAffinityPolicy` 选择客户端连接的 Worker。
 
-    当前实现只支持访问一个 Coordinator 地址。使用自定义 :cpp:class:`ICoordinatorDiscovery` 时，
-    其查询结果必须包含且仅包含一个地址。
+    当前实现在初始化时调用一次 :cpp:class:`ICoordinatorDiscovery`，拒绝空候选列表，并缓存非空列表的
+    首个 Coordinator 地址。后续 Worker 查询固定访问该地址，不执行运行期刷新或跨地址重试。
 
     **公共函数**
 

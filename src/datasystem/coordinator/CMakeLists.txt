@@ -30,6 +30,7 @@ add_library(coordinator_server STATIC coordinator_server.cpp)
 target_include_directories(coordinator_server PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
 target_link_libraries(coordinator_server PUBLIC
     coordinator_service_impl
+    static_coordinator_discovery
 )
 target_link_libraries(coordinator_server PRIVATE
     common_log
@@ -43,6 +44,7 @@ add_library(datasystem_coordinator_shared SHARED coordinator_server.cpp)
 target_include_directories(datasystem_coordinator_shared PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
 target_link_libraries(datasystem_coordinator_shared PUBLIC
     coordinator_service_impl
+    static_coordinator_discovery
 )
 target_link_libraries(datasystem_coordinator_shared PRIVATE
     common_log
@@ -56,6 +58,7 @@ add_library(datasystem_coordinator_static STATIC coordinator_server.cpp)
 target_include_directories(datasystem_coordinator_static PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
 target_link_libraries(datasystem_coordinator_static PUBLIC
     coordinator_service_impl
+    static_coordinator_discovery
 )
 target_link_libraries(datasystem_coordinator_static PRIVATE
     common_log

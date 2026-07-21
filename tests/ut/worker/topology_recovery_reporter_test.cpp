@@ -64,6 +64,11 @@ class FakeCoordinatorServiceProxy final : public ICoordinatorServiceProxy {
 public:
     ~FakeCoordinatorServiceProxy() override = default;
 
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
     Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &, int64_t &, int32_t,
                std::string *, const std::string &) override
     {

@@ -83,6 +83,7 @@ list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/test_main\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/st_oc_service_impl\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/client/object_cache/oc_client_common\\.cpp$)
 list(FILTER DS_ST_OBJECT_CACHE_SRCS EXCLUDE REGEX .*/client/object_cache/oc_client_common\\.cpp$)
+list(FILTER DS_ST_OBJECT_CACHE_SRCS EXCLUDE REGEX .*/worker/object_cache/coordinator_backend_cluster_test\\.cpp$)
 list(FILTER DS_ST_STREAM_CACHE_SRCS EXCLUDE REGEX .*/common/stream_cache/element_generator\\.cpp$)
 
 if (NOT ENABLE_PERF)
@@ -104,7 +105,8 @@ add_library(_ds_st_other_obj OBJECT ${DS_TEST_ST_SRCS})
 target_link_libraries(_ds_st_main_obj GTest::gtest GTest::gmock)
 target_link_libraries(_ds_st_group_common_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_stream_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
-target_link_libraries(_ds_st_object_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
+target_link_libraries(_ds_st_object_cache_obj nlohmann_json::nlohmann_json generic_service_protos
+        datasystem_worker_static datasystem static_coordinator_discovery)
 target_link_libraries(_ds_st_kv_cache_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_link_libraries(_ds_st_other_obj nlohmann_json::nlohmann_json generic_service_protos datasystem_worker_static datasystem)
 target_compile_definitions(_ds_st_other_obj PRIVATE LLT_BIN_PATH="${CMAKE_CURRENT_BINARY_DIR}/.")
@@ -129,6 +131,10 @@ add_executable(ds_st_embedded_client ${DS_ST_EMBEDDED_CLIENT_SRCS} $<TARGET_OBJE
 add_executable(braft_cluster_test
         common/raft/braft_cluster_test.cpp
         $<TARGET_OBJECTS:_ds_st_main_obj>)
+add_executable(ds_st_coordinator_backend_manual
+        worker/object_cache/coordinator_backend_cluster_test.cpp
+        $<TARGET_OBJECTS:_ds_st_main_obj>
+        $<TARGET_OBJECTS:_ds_st_group_common_obj>)
 
 # Heavy ST link targets (ds_st / ds_st_stream_cache / ds_st_object_cache /
 # ds_st_kv_cache) pull in worker+master+rocksdb+zmq and trip the OOM killer on
@@ -141,10 +147,14 @@ target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-m
 target_link_libraries(ds_st_embedded_client GTest::gtest GTest::gmock common_etcd nlohmann_json::nlohmann_json
         generic_service_protos datasystem cluster cluster_topology_protos_client)
 target_link_libraries(braft_cluster_test PRIVATE GTest::gtest GTest::gmock common_test test_port_allocator ${BRAFT_LIBRARIES})
+target_link_libraries(ds_st_coordinator_backend_manual PRIVATE
+        ${DS_ST_DEPEND_LIBS} binmock static_coordinator_discovery -Wl,--reduce-memory-overheads)
 if (BUILD_WITH_URMA_MOCK)
+    target_compile_definitions(ds_st_coordinator_backend_manual PRIVATE USE_URMA USE_URMA_MOCK)
     target_link_libraries(ds_st PRIVATE common_urma_mock_obj)
     target_link_libraries(ds_st_object_cache PRIVATE common_urma_mock_obj)
     target_link_libraries(ds_st_kv_cache PRIVATE common_urma_mock_obj)
+    target_link_libraries(ds_st_coordinator_backend_manual PRIVATE common_urma_mock_obj)
 endif()
 
 find_package(absl PATHS absl_PKG_PATH)

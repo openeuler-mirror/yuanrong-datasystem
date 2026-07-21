@@ -201,7 +201,8 @@ python3 -m unittest
 - Verified from `tests/st/CMakeLists.txt`:
   - `ds_st`: default ST bucket after excluding cluster, stream, object, KV, embedded-client, device, and helper files.
   - `ds_st_stream_cache`: ST files under `**/stream_cache`.
-  - `ds_st_object_cache`: ST files under `**/object_cache`; topology coverage in this phase uses the ETCD backend.
+  - `ds_st_object_cache`: default CTest-registered ST files under `**/object_cache`, excluding the manual Coordinator backend cluster suite; the remaining topology ST coverage uses the ETCD backend.
+  - `ds_st_coordinator_backend_manual`: manually executed CMake target for `coordinator_backend_cluster_test.cpp`; it covers Coordinator-backed cross-worker access, scale-out, graceful/passive scale-in, and Worker restart topology propagation, but is intentionally not registered with default CTest. Bazel exposes the matching `coordinator_backend_cluster_test` target with the `manual` tag.
   - `ds_st_kv_cache`: ST files under `**/kv_cache`.
   - `ds_st_embedded_client`: `tests/st/embedded_client` plus cluster helper sources.
   - `ds_device_llt`: device tests; generic hetero ST sources prefer a real runtime backend when

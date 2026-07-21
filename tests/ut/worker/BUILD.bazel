@@ -6,6 +6,15 @@ load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test(
+    name = "data_worker_options_test",
+    srcs = ["data_worker_options_test.cpp"],
+    deps = [
+        "//src/datasystem/worker:worker",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "metadata_route_resolver_test",
     srcs = ["metadata_route_resolver_test.cpp"],
     deps = [

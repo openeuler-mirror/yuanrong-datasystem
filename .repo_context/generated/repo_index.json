@@ -1,6 +1,6 @@
 {
   "repo_root": ".",
-  "generated_at_utc": "2026-07-17T12:18:16+00:00",
+  "generated_at_utc": "2026-07-17T17:03:34+00:00",
   "root_files": [
     "README.md",
     "build.sh",
@@ -259,6 +259,7 @@
         "- utils/",
         "  - BUILD.bazel",
         "  - connection.h",
+        "  - coordinator_discovery.h",
         "  - device_blob.h",
         "  - embedded_config.h",
         "  - kv_client_config.h",
@@ -604,6 +605,8 @@
         "    - urma_mock/",
         "    - util/",
         "  - coordinator/",
+        "    - BUILD.bazel",
+        "    - coordinator_server_options_test.cpp",
         "    - topology_recovery_manager_test.cpp",
         "  - device/",
         "    - ascend/",
@@ -619,6 +622,7 @@
         "    - client_manager_test.cpp",
         "    - coordinator_topology_recovery_component_test.cpp",
         "    - coordinator_watch_service_test.cpp",
+        "    - data_worker_options_test.cpp",
         "    - metadata_route_resolver_test.cpp",
         "    - topology_recovery_reporter_test.cpp",
         "  - BUILD.bazel",

@@ -21,9 +21,13 @@
 #define DATASYSTEM_COORDINATOR_SERVER_H
 
 #include <atomic>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 
+#include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -36,6 +40,13 @@ class CoordinatorServiceImpl;
 struct CoordinatorOptions {
     // Absolute path to coordinator_config.json file.
     std::string configFilePath;
+    // Required candidate provider for parameterized startup.
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery;
+    // Target voting member count for the Coordinator Raft group.
+    int expectedMemberCount = 0;
+    // Optional lifecycle callbacks. Both must be configured together or both left empty.
+    std::function<Status()> onStart;
+    std::function<Status()> onStop;
 };
 
 class CoordinatorServer {
@@ -63,19 +74,34 @@ public:
     Status Stop();
 
 private:
+    enum class LifecycleCallbackState : uint8_t { NOT_CONFIGURED, READY, START_ATTEMPTED, STOP_INVOKED };
+
     CoordinatorServer() = default;
 
+    /// @brief Validate and run one configured Coordinator lifecycle.
+    Status InitAndRunInternal(const CoordinatorOptions *options);
     /// @brief Initialize environment and delegate to service_->Init().
     Status Init();
     /// @brief Delegate to service_->Start().
     Status Start();
+    /// @brief Invoke the configured start callback once.
+    /// @note Called by the owning InitAndRun lifecycle thread. callbackState_ is not independently synchronized.
+    Status InvokeOnStart();
+    /// @brief Invoke the configured stop callback once after any start attempt.
+    /// @note Must be serialized with InvokeOnStart. Destruction may call it only after lifecycle execution has stopped.
+    Status InvokeOnStop();
     /// @brief Delegate to service_->Shutdown() and reset resources.
     Status Shutdown();
     /// @brief Blocking event loop until termination signal or Stop().
     void RunEventLoop();
 
     std::unique_ptr<coordinator::CoordinatorServiceImpl> service_;
-    std::atomic<bool> isStarted_{false};
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
+    std::function<Status()> onStart_;
+    std::function<Status()> onStop_;
+    int expectedMemberCount_{ 0 };
+    LifecycleCallbackState callbackState_{ LifecycleCallbackState::NOT_CONFIGURED };
+    std::atomic<bool> isStarted_{ false };
     std::mutex initMutex_;
 };
 

@@ -24,11 +24,13 @@
 #include <string>
 #include <vector>
 
+#include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/sensitive_value.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
 class EtcdStore;
+class ICoordinatorServiceProxy;
 class RandomData;
 }  // namespace datasystem
 
@@ -112,7 +114,6 @@ struct ServiceDiscoveryOptions {
 
 class __attribute((visibility("default"))) ServiceDiscovery : public IServiceDiscovery {
 public:
-
     /**
      * @brief Construct ServiceDiscovery. If certificate authentication is enabled for the etcd to be connected, must
      * specify etcdCa, etcdCert, etcdKey and etcdNameOverride.
@@ -180,7 +181,6 @@ public:
     }
 
 private:
-
     /**
      * @brief Fetch ready worker addresses from etcd and partition by host affinity. When hostId_
      * is empty, every worker goes into `other`.
@@ -207,29 +207,6 @@ private:
     std::shared_ptr<EtcdStore> etcdStore_;
 };
 
-class __attribute((visibility("default"))) ICoordinatorDiscovery {
-public:
-    virtual ~ICoordinatorDiscovery() = default;
-
-    /**
-     * @brief Get the coordinator address. Current SDK coordinator service discovery supports exactly one address.
-     * @param[out] serviceList Coordinator address in "host:port" format.
-     * @return Status of the call.
-     */
-    virtual Status GetCoordinators(std::vector<std::string> &serviceList) = 0;
-};
-
-class __attribute((visibility("default"))) DefaultCoordinatorDiscovery : public ICoordinatorDiscovery {
-public:
-    explicit DefaultCoordinatorDiscovery(std::string serviceAddress);
-    ~DefaultCoordinatorDiscovery() override = default;
-
-    Status GetCoordinators(std::vector<std::string> &serviceList) override;
-
-private:
-    std::string serviceAddress_;
-};
-
 struct CoordinatorServiceDiscoveryOptions {
     std::string serviceAddress;
     // Optional cluster namespace. Empty selects the default /datasystem/cluster membership table.
@@ -241,7 +218,6 @@ struct CoordinatorServiceDiscoveryOptions {
 
 class __attribute((visibility("default"))) CoordinatorServiceDiscovery : public IServiceDiscovery {
 public:
-
     /**
      * @brief Construct CoordinatorServiceDiscovery.
      * @param[in] opts Coordinator-backed service discovery options.
@@ -250,6 +226,11 @@ public:
 
     ~CoordinatorServiceDiscovery() override = default;
 
+    /**
+     * @brief Validate the Coordinator provider and initialize the long-lived Coordinator proxy.
+     * Repeated calls after successful initialization are idempotent.
+     * @return Status of the call.
+     */
     Status Init() override;
 
     Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr,
@@ -272,7 +253,6 @@ public:
 private:
     Status ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other);
 
-    std::string serviceAddress_;
     std::string clusterName_;
     std::string membershipTable_;
     std::string hostIdEnvName_;
@@ -280,6 +260,7 @@ private:
     ServiceAffinityPolicy affinityPolicy_;
     std::shared_ptr<RandomData> randomData_;
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
+    std::shared_ptr<ICoordinatorServiceProxy> coordinatorProxy_;
 };
 }  // namespace datasystem
 #endif  // DATASYSTEM_SERVICE_DISCOVERY_H

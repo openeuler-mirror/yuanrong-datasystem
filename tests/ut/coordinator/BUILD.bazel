@@ -1,0 +1,12 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "coordinator_server_options_test",
+    srcs = ["coordinator_server_options_test.cpp"],
+    deps = [
+        "//src/datasystem/coordinator:coordinator_server",
+        "//tests/ut:ut_common",
+    ],
+)

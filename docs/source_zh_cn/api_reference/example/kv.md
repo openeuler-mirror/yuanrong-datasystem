@@ -157,7 +157,7 @@ int main()
 
 #### 通过 Coordinator 发现 Worker
 
-使用 `CoordinatorServiceDiscovery` 从 Coordinator 获取可用 Worker。当前仅支持配置一个 Coordinator 地址。
+使用 `CoordinatorServiceDiscovery` 从 Coordinator 获取可用 Worker。初始化时选择并固定访问一个 Coordinator 地址。
 
 ```cpp
 #include "datasystem/datasystem.h"
@@ -177,7 +177,8 @@ ASSERT_TRUE(client->Init().IsOk());
 ```
 
 如果 Coordinator 地址由外部服务发现系统提供，可以实现 `ICoordinatorDiscovery` 并注入
-`CoordinatorServiceDiscoveryOptions`。当前 `GetCoordinators` 需要返回且仅返回一个地址。
+`CoordinatorServiceDiscoveryOptions`。Discovery 操作成功但暂无候选时可以返回空列表；当前
+`CoordinatorServiceDiscovery` 会拒绝空列表，非空列表只缓存并使用首个地址。
 
 ```cpp
 class CustomCoordinatorDiscovery : public ICoordinatorDiscovery {

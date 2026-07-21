@@ -65,6 +65,7 @@ ds_cc_library(
         ":coordinator_service_impl",
         "//include/datasystem:headers",
         "//src/datasystem/common/flags:dynamic_flag_config",
+        "//src/datasystem/common/coordinator:static_coordinator_discovery",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/signal:signal",
         "//src/datasystem/common/util:status_helper",

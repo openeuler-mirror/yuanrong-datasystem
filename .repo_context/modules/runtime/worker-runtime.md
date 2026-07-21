@@ -12,7 +12,7 @@
 - Primary source files to verify against:
   - `src/datasystem/worker/CMakeLists.txt`
   - `src/datasystem/worker/worker_main.cpp`
-  - `src/datasystem/worker/worker.cpp`
+  - `src/datasystem/worker/data_worker.cpp`
   - `src/datasystem/worker/worker_service_impl.cpp`
   - `src/datasystem/worker/worker_oc_server.cpp`
   - `src/datasystem/worker/worker_cli.cpp`
@@ -31,7 +31,8 @@
     - integration with `src/datasystem/cluster`
     - `perf_service` when enabled
   - `worker_main.cpp` initializes the singleton worker, runs a signal-driven loop, performs periodic perf ticking and config monitoring, then runs `PreShutDown` and `ShutDown`.
-  - `worker.cpp` owns top-level startup/shutdown orchestration, log initialization, THP handling, RocksDB pre-init, and embedded-worker entrypoints exported through C symbols.
+  - `data_worker.cpp` owns top-level startup/shutdown orchestration, log initialization, THP handling, RocksDB pre-init, and embedded-worker entrypoints exported through C symbols.
+  - Parameterized `DataWorker::InitAndRun` requires a non-null `ICoordinatorDiscovery`; that overload always selects the Coordinator backend and passes the injected Discovery to `WorkerOCServer`, while paired `onStart`/`onStop` callbacks remain optional. Command-line and embedded static startup instead use `coordinator_address` to select Coordinator versus ETCD/metastore mode and construct a static Discovery only for Coordinator mode. Coordinator proxy initialization calls its provider once, validates and caches only the first returned address, and keeps all later RPCs fixed to it. Provider updates require rebuilding the runtime object or restarting the Worker.
   - `worker_service_impl.cpp` implements common worker service behavior such as client registration, client disconnect, shared-memory FD transfer, version checks, and auth-related request handling.
   - object-cache Create, MultiCreate, Publish, and MultiPublish handlers select authentication by request origin:
     routed requests with `is_routed=true` call `worker::AuthenticateRequest` using the signed request tenant, while
@@ -77,8 +78,8 @@
 - Process entry:
   - `src/datasystem/worker/worker_main.cpp`
 - Singleton orchestrator:
-  - `Worker::GetInstance()`
-- Embedded worker hooks exported from `worker.cpp`:
+  - `DataWorker::GetInstance()`
+- Embedded worker hooks exported from `data_worker.cpp`:
   - `CreateWorker`
   - `WorkerDestroy`
   - `InitEmbeddedWorker`
@@ -94,9 +95,8 @@
   - initialize logs and worker flags
   - pre-initialize RocksDB storage
   - set up runtime services and signal handling
-  - `WorkerOCServer::Init()` selects ETCD or Coordinator transport through `TopologyEngine::Builder`. The Engine creates
-    and owns both role backends, the hash algorithm, Worker runtime, Controller runtime, Janitor, and optional recovery
-    reporter. Worker code does not assemble or retain those concrete components. Callback targets are initialized before
+  - `DataWorker` selects the coordination backend before constructing `WorkerOCServer`: parameterized startup always passes its required injected Discovery and therefore selects Coordinator mode, while command-line and embedded static startup wrap a non-empty `coordinator_address` in internal `StaticCoordinatorDiscovery` or pass null for ETCD/metastore.
+  - `WorkerOCServer::Init()` constructs and explicitly initializes a discovery-backed Coordinator proxy from the injected provider, or selects ETCD/metastore, then configures `TopologyEngine::Builder`. Coordinator proxy `Init` requires a non-empty provider result, caches only `front()`, and ignores the remaining candidates. All subsequent RPCs use that cached address once. Changing the provider output or selected endpoint requires rebuilding the runtime object or restarting the Worker, while multi-node Coordinator availability remains the responsibility of the Coordinator Raft layer. The Engine creates and owns both role backends, the hash algorithm, Worker runtime, Controller runtime, Janitor, and optional recovery reporter. Worker code does not assemble or retain those concrete components. Callback targets are initialized before
     `TopologyEngine::Start()`, so callbacks cannot run against partially constructed services. A missing initial topology
     keeps Engine `NOT_READY` while the co-located Controller establishes authority. The Worker publishes READY only after
     the first membership lease succeeds, and writes the ready-check file only after committed membership, a placement
@@ -116,6 +116,7 @@
   - serve object-cache and stream-cache requests
   - tick perf manager, drive lightweight metrics summary emission, and monitor config changes
 - Shutdown:
+  - Parameterized lifecycle callbacks run outside `initMutex_`; once `onStart` is attempted, cleanup invokes `onStop` exactly once. The first lifecycle error is returned while later cleanup errors are logged, and internal shutdown always continues.
   - `PreShutDown` then `ShutDown`
   - `DataWorker` relinquishes its `WorkerOCServer` owner before returning from `ShutDown`, including error paths. The
     server and topology component destructors provide the final safe-stop/join fallback, so runtime-owned objects are
@@ -159,6 +160,7 @@
 - Verified:
   - current docs and code support ETCD, Coordinator transport, and Metastore-based metadata paths.
   - `worker_oc_server.cpp` enforces that at least one of `etcd_address` or `metastore_address` is set.
+  - `WorkerOCServer` uses the constructor-selected Discovery pointer for proxy creation, Controller Store construction, watch-service construction, and `TopologyEngine` backend selection; these branches must not independently re-read `coordinator_address`.
   - `WorkerOCServer` constructs `TopologyEngine` only through its nested Builder. ETCD supplies existing role Store
     resources and Coordinator supplies a Proxy plus bind/drain ingress; Engine internally creates the role backends,
     algorithm and Controller Runtime. Engine also registers the ETCD topology keyspace on both role Stores.
@@ -199,7 +201,7 @@
     of redirecting back to the committed source or mutating metadata while migration is in flight.
 - Useful files during debugging:
   - `src/datasystem/worker/worker_main.cpp`
-  - `src/datasystem/worker/worker.cpp`
+  - `src/datasystem/worker/data_worker.cpp`
   - `src/datasystem/worker/worker_service_impl.cpp`
   - `src/datasystem/worker/worker_oc_server.cpp`
   - `src/datasystem/cluster/*`

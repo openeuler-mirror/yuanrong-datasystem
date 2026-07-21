@@ -12,6 +12,8 @@
  */
 #include "datasystem/utils/service_discovery.h"
 
+#include "datasystem/common/coordinator/static_coordinator_discovery.h"
+
 #include <iterator>
 #include <memory>
 #include <unordered_map>
@@ -213,12 +215,13 @@ Status ApplyGetAllWorkersPolicy(ServiceAffinityPolicy affinityPolicy, bool hostA
     return Status::OK();
 }
 
-std::unique_ptr<ICoordinatorServiceProxy> CreateCoordinatorProxy(const HostPort &coordinatorAddr)
+std::shared_ptr<ICoordinatorServiceProxy> CreateCoordinatorProxy(
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery)
 {
     if (FLAGS_use_brpc) {
-        return std::make_unique<CoordinatorServiceProxyBrpcImpl>(coordinatorAddr);
+        return std::make_shared<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
     }
-    return std::make_unique<CoordinatorServiceProxyZmqImpl>(coordinatorAddr);
+    return std::make_shared<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
 }
 }  // namespace
 
@@ -309,55 +312,50 @@ Status ServiceDiscovery::GetAllWorkers(std::vector<std::string> &sameHostAddrs, 
     return ApplyGetAllWorkersPolicy(affinityPolicy_, HasHostAffinity(), sameHostAddrs, otherAddrs);
 }
 
-DefaultCoordinatorDiscovery::DefaultCoordinatorDiscovery(std::string serviceAddress)
-    : serviceAddress_(std::move(serviceAddress))
-{
-}
-
-Status DefaultCoordinatorDiscovery::GetCoordinators(std::vector<std::string> &serviceList)
-{
-    serviceList = { serviceAddress_ };
-    return Status::OK();
-}
-
 CoordinatorServiceDiscovery::CoordinatorServiceDiscovery(const CoordinatorServiceDiscoveryOptions &opts)
-    : serviceAddress_(opts.serviceAddress),
-      clusterName_(opts.clusterName),
+    : clusterName_(opts.clusterName),
       hostIdEnvName_(opts.hostIdEnvName),
       affinityPolicy_(opts.affinityPolicy),
       coordinatorDiscovery_(opts.coordinatorDiscovery)
 {
-    if (coordinatorDiscovery_ == nullptr && !serviceAddress_.empty()) {
-        coordinatorDiscovery_ = std::make_shared<DefaultCoordinatorDiscovery>(serviceAddress_);
+    if (coordinatorDiscovery_ == nullptr && !opts.serviceAddress.empty()) {
+        coordinatorDiscovery_ = std::make_shared<StaticCoordinatorDiscovery>(opts.serviceAddress);
     }
 }
 
 Status CoordinatorServiceDiscovery::Init()
 {
     Logging::GetInstance()->Start(CLIENT_LOG_FILENAME, LogProcessRole::CLIENT);
+    if (coordinatorProxy_ != nullptr) {
+        return Status::OK();
+    }
+
     CHECK_FAIL_RETURN_STATUS(coordinatorDiscovery_ != nullptr, K_INVALID,
                              "coordinatorDiscovery should not be null when serviceAddress is empty.");
     std::unique_ptr<cluster::TopologyKeyHelper> keys;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(cluster::TopologyKeyHelper::Create(clusterName_, keys),
                                      "Invalid cluster name for coordinator service discovery.");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(COORDINATOR_SERVICE_DISCOVERY_RPC_STUB_CACHE_SIZE));
-    ResolveHostId(hostIdEnvName_, hostId_);
-    membershipTable_ = keys->MembershipTable();
-    randomData_ = std::make_shared<RandomData>();
+
+    std::string hostId;
+    ResolveHostId(hostIdEnvName_, hostId);
+    auto membershipTable = keys->MembershipTable();
+    auto randomData = std::make_shared<RandomData>();
+    auto coordinatorProxy = CreateCoordinatorProxy(coordinatorDiscovery_);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(coordinatorProxy->Init(), "Failed to initialize coordinator proxy.");
+
+    hostId_ = std::move(hostId);
+    membershipTable_ = std::move(membershipTable);
+    randomData_ = std::move(randomData);
+    coordinatorProxy_ = std::move(coordinatorProxy);
     return Status::OK();
 }
 
 Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &sameHost, std::vector<std::string> &other)
 {
-    if (randomData_ == nullptr) {
+    if (coordinatorProxy_ == nullptr) {
         RETURN_IF_NOT_OK(Init());
     }
-
-    std::vector<std::string> coordinatorList;
-    RETURN_IF_NOT_OK(coordinatorDiscovery_->GetCoordinators(coordinatorList));
-    CHECK_FAIL_RETURN_STATUS(!coordinatorList.empty(), K_INVALID, "No coordinator address is detected.");
-    CHECK_FAIL_RETURN_STATUS(coordinatorList.size() == 1, K_INVALID,
-                             "Only one coordinator address is supported by coordinator service discovery.");
 
     sameHost.clear();
     other.clear();
@@ -366,22 +364,15 @@ Status CoordinatorServiceDiscovery::ObtainWorkers(std::vector<std::string> &same
     auto rangeEnd = PrefixRangeEnd(clusterTablePrefix);
     CHECK_FAIL_RETURN_STATUS(!rangeEnd.empty(), K_INVALID, "Failed to build coordinator cluster table range.");
 
-    const auto &coordinatorAddrStr = coordinatorList.front();
-    HostPort coordinatorAddr;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(coordinatorAddr.ParseString(coordinatorAddrStr),
-                                     "Invalid coordinator address " + coordinatorAddrStr);
-
     std::vector<KeyValueEntry> kvs;
     int64_t revision = 0;
-    auto proxy = CreateCoordinatorProxy(coordinatorAddr);
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(proxy->Range(clusterTablePrefix, rangeEnd, kvs, revision),
-                                     "Failed to fetch cluster info from coordinator " + coordinatorAddrStr);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(coordinatorProxy_->Range(clusterTablePrefix, rangeEnd, kvs, revision),
+                                     "Failed to fetch cluster info from coordinator.");
 
     for (const auto &kv : kvs) {
         AppendReadyWorkerFromProto(kv.key, kv.value, hostId_, sameHost, other, workersStateCount);
     }
-    LOG(INFO) << "The workers state count from coordinator " << coordinatorAddrStr << " is "
-              << MapToString(workersStateCount);
+    LOG(INFO) << "The workers state count from coordinator is " << MapToString(workersStateCount);
     return Status::OK();
 }
 
