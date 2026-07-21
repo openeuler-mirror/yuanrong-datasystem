@@ -1666,6 +1666,11 @@ Status OCMetadataManager::RemoveMetaLocation(const RemoveMetaReqPb &request, con
     if (response.meta_is_moving()) {
         return Status::OK();
     }
+    if (!notRedirectObjectKeys.empty() && IsLocalExitRequested() && request.topology_operation_id().empty()
+        && request.redirect() && FLAGS_enable_redirect) {
+        response.set_meta_is_moving(true);
+        return Status::OK();
+    }
     uint64_t compareVersion;
     VLOG(1) << FormatString("[Objects %s] Start to remove meta location %s", VectorToString(notRedirectObjectKeys),
                             address);

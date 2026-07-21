@@ -52,6 +52,7 @@ class AsyncSendManager;
 
 namespace datasystem {
 namespace ut {
+class EvictionManagerTest;
 class SpillEvictionTest;
 }
 }  // namespace datasystem
@@ -61,6 +62,7 @@ namespace datasystem {
 namespace master {
 class DeleteAllCopyMetaRspPb;
 class MasterOCServiceImpl;
+class RemoveMetaReqPb;
 }
 namespace object_cache {
 
@@ -319,6 +321,18 @@ private:
     void RemoveEvictionMetaGroup(const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
                                  const EvictDeletedObjects &objectKeyVersions, EvictDeletedObjects &failedObjects,
                                  Status &lastRc);
+
+    /**
+     * @brief Build the remove-meta request used by eviction metadata cleanup.
+     * @param[in] objectKeys Object keys routed to the metadata owner.
+     * @param[in] objectKeyVersions Object versions supplied by the eviction caller.
+     * @param[in] localAddress Local worker address.
+     * @param[in] redirect Whether the contacted metadata owner may redirect the request.
+     * @return Remove-meta request for eviction cleanup.
+     */
+    static master::RemoveMetaReqPb BuildEvictionRemoveMetaReq(const std::vector<std::string> &objectKeys,
+                                                              const EvictDeletedObjects &objectKeyVersions,
+                                                              const HostPort &localAddress, bool redirect);
 
     /**
      * @brief Execute the selected eviction action for a locked object.
@@ -669,6 +683,7 @@ private:
     // Replaces the single-task primaryEndLifeDrainRunning_ flag so up to
     // PRIMARY_END_LIFE_THREAD_NUM workers can drain the end-life queue concurrently.
     int activeDrainWorkers_{ 0 };
+    friend class ::datasystem::ut::EvictionManagerTest;
     friend class ::datasystem::ut::SpillEvictionTest;
 };
 

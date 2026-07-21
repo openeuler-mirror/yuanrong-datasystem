@@ -336,6 +336,24 @@ Status WorkerOcEvictionManager::RemoveMetaFromMasterForEviction(EvictDeletedObje
     return objectKeyVersions.empty() ? Status::OK() : lastRc;
 }
 
+master::RemoveMetaReqPb WorkerOcEvictionManager::BuildEvictionRemoveMetaReq(
+    const std::vector<std::string> &objectKeys, const EvictDeletedObjects &objectKeyVersions,
+    const HostPort &localAddress, bool redirect)
+{
+    master::RemoveMetaReqPb req;
+    req.set_address(localAddress.ToString());
+    req.set_cause(master::RemoveMetaReqPb::EVICTION);
+    req.set_version(UINT64_MAX);
+    req.set_redirect(redirect);
+    *req.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
+    for (const auto &objectKey : objectKeys) {
+        auto *objectVersion = req.add_id_with_version();
+        objectVersion->set_id(objectKey);
+        objectVersion->set_version(objectKeyVersions.at(objectKey));
+    }
+    return req;
+}
+
 void WorkerOcEvictionManager::RemoveEvictionMetaGroup(
     const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
     const EvictDeletedObjects &objectKeyVersions, EvictDeletedObjects &failedObjects, Status &lastRc)
@@ -361,17 +379,8 @@ void WorkerOcEvictionManager::RemoveEvictionMetaGroup(
         addFailedObjects(objectKeys, rc);
         return;
     }
-    master::RemoveMetaReqPb req;
     master::RemoveMetaRspPb rsp;
-    req.set_address(localAddress_.ToString());
-    req.set_cause(master::RemoveMetaReqPb::EVICTION);
-    req.set_version(UINT64_MAX);
-    *req.mutable_ids() = { objectKeys.begin(), objectKeys.end() };
-    for (const auto &objectKey : objectKeys) {
-        auto *objectVersion = req.add_id_with_version();
-        objectVersion->set_id(objectKey);
-        objectVersion->set_version(objectKeyVersions.at(objectKey));
-    }
+    auto req = BuildEvictionRemoveMetaReq(objectKeys, objectKeyVersions, localAddress_, true);
     rc = workerMasterApi->RemoveMeta(req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("RemoveMeta failed, object count %zu, status: %s.", objectKeys.size(),
@@ -379,7 +388,20 @@ void WorkerOcEvictionManager::RemoveEvictionMetaGroup(
         addFailedObjects(objectKeys, rc);
     } else if (rsp.meta_is_moving()) {
         addFailedObjects(objectKeys, { K_TRY_AGAIN, "Meta is moving." });
-    } else if (!rsp.failed_ids().empty()) {
+    } else {
+        for (const auto &redirectInfo : rsp.info()) {
+            std::vector<std::string> redirectKeys(redirectInfo.change_meta_ids().begin(),
+                                                  redirectInfo.change_meta_ids().end());
+            HostPort redirectMasterAddr;
+            rc = redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address());
+            if (rc.IsError()) {
+                addFailedObjects(redirectKeys, rc);
+                continue;
+            }
+            RemoveEvictionMetaGroup(redirectMasterAddr, redirectKeys, objectKeyVersions, failedObjects, lastRc);
+        }
+    }
+    if (!rsp.failed_ids().empty()) {
         std::vector<std::string> failedIds(rsp.failed_ids().begin(), rsp.failed_ids().end());
         addFailedObjects(failedIds, { K_TRY_AGAIN, "RemoveMeta returned failed ids." });
     }
