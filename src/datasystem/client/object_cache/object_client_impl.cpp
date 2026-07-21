@@ -5232,7 +5232,7 @@ Status ObjectClientImpl::GetObjMetaInfo(const std::string &tenantId, const std::
 {
     RETURN_IF_NOT_OK(IsClientReady());
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
-    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys, false, OBJ_META_MAX_SIZE_LIMIT));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(objectKeys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() <= OBJ_META_MAX_SIZE_LIMIT, K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", OBJ_META_MAX_SIZE_LIMIT));
     std::shared_ptr<IClientWorkerApi> workerApi;
@@ -5714,7 +5714,7 @@ Status ObjectClientImpl::Exist(const std::vector<std::string> &keys, std::vector
     PerfPoint perfPoint(PerfKey::CLIENT_EXIST);
     RETURN_IF_NOT_OK(IsClientReady());
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
-    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys, false, EXIST_KEYS_MAX_SIZE_LIMIT));
+    RETURN_IF_NOT_OK(CheckValidObjectKeyVector(keys));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsExistBatchSizeUnderLimit(keys.size()), K_INVALID,
                                          FormatString("The objectKeys size exceed %d.", EXIST_KEYS_MAX_SIZE_LIMIT));
     auto config = GetClientLatencyTraceConfig();
