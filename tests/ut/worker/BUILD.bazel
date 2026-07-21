@@ -47,6 +47,17 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "central_metadata_address_resolver_test",
+    srcs = ["object_cache/central_metadata_address_resolver_test.cpp"],
+    deps = [
+        "//src/datasystem/common/kvstore:kv_store",
+        "//src/datasystem/worker/object_cache:central_metadata_address_resolver",
+        "//tests/ut:ut_common",
+        "//tests/ut/cluster/testing:fake_coordination_backend",
+    ],
+)
+
+ds_cc_test(
     name = "object_cache_recovery_state_test",
     srcs = ["object_cache/object_cache_recovery_state_test.cpp"],
     deps = [

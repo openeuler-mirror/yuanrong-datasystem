@@ -239,6 +239,7 @@ ds_cc_library(
         "//src/datasystem/worker/coordinator:coordinator_watch_service_impl",
         "//src/datasystem/cluster/coordination_backend:topology_recovery_reporter",
         "//src/datasystem/worker/object_cache/data_migrator/strategy:node_selector",
+        "//src/datasystem/worker/object_cache:central_metadata_address_resolver",
         "//src/datasystem/worker/object_cache:master_worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//src/datasystem/worker/object_cache:object_kv",

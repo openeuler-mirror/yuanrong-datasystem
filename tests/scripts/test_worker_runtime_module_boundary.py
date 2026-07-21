@@ -171,6 +171,21 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use object metadata reader abstraction")
 
+    def test_worker_oc_server_uses_central_metadata_address_resolver(self):
+        server = REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp"
+        text = server.read_text(encoding="utf-8")
+        resolver_slice = text.split("Status WorkerOCServer::ResolveCentralMetadataAddress", 1)[0]
+
+        forbidden_tokens = [
+            "ClaimOrReadCentralMetadataAddress",
+            "COORDINATION_MASTER_ADDRESS_TABLE",
+            "COORDINATION_MASTER_ADDRESS_KEY",
+        ]
+
+        for token in forbidden_tokens:
+            self.assertNotIn(token, resolver_slice, "WorkerOCServer should delegate central metadata address policy")
+        self.assertIn("CentralMetadataAddressResolver", text)
+
     def test_worker_composition_uses_runtime_facade_methods(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp",

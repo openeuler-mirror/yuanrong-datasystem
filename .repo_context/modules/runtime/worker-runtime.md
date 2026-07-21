@@ -285,6 +285,10 @@
       `CoordinationObjectMetadataReader` owns backend availability checks, logical metadata key construction, and
       metadata protobuf parsing. Boundary tests assert the Get service implementation and service Bazel package do not
       regress to direct coordination-backend coupling.
+  11. centralized metadata endpoint claim/read policy moved behind `CentralMetadataAddressResolver`. `WorkerOCServer`
+      still chooses the concrete ETCD or Coordinator-backed `ICoordinationBackend`, but the metadata table creation,
+      CAS claim, Get fallback, and coordination key names are now object-cache metadata policy. Boundary tests assert the
+      worker composition root delegates this policy instead of inlining it.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -326,6 +330,18 @@
   - `ds_ut_object --gtest_filter=TopologyBusinessContractTest.*`: 3 tests, 0.05s.
   - `ds_ut --gtest_filter=WorkerRuntimeFacadeTest.*:WorkerTopologyAvailabilityAdmissionTest.*:WorkerServiceAdmissionTest.*`:
     20 tests, 0.10s.
+  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 13 tests, 0.016s after adding the
+    central metadata resolver composition-boundary assertion.
+  - `scripts/clion_remote_build.sh tests-index`: incremental build green in 98s, source build 19s, third-party cache
+    hit in 1s, `BUILD_WITH_URMA_MOCK` enabled, generated 1154 compile-command entries including
+    `central_metadata_address_resolver.cpp`, `central_metadata_address_resolver_test.cpp`,
+    `fake_coordination_backend.cpp`, and `worker_oc_server.cpp`.
+  - `ds_ut_object --gtest_filter=CentralMetadataAddressResolverTest.*`: 2 tests, 0.05s; covers first-worker CAS claim
+    and existing-address Get fallback through the resolver.
+  - `ds_ut_object --gtest_filter=NotifyRemoteGetMigrationTest.QueryMetadataUsesCoordinationStoreLogicalKey:NotifyRemoteGetMigrationTest.QueryMetadataRejectsUnavailableCoordinationBackend:TopologyBusinessContractTest.*`:
+    5 tests, 0.05s.
+  - `ds_ut --gtest_filter=WorkerRuntimeFacadeTest.*:WorkerTopologyAvailabilityAdmissionTest.*:WorkerServiceAdmissionTest.*`:
+    20 tests, 0.11s.
 - Acceptance coverage status against the worker-isolation story:
   - `EtcdKeepAliveIsolationTest.ConfirmedLocalIsolationPublishesDeleteAndIsolationCallbackOnce`: covered by
     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData`,

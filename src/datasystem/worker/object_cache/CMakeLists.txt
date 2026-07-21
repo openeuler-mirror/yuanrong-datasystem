@@ -10,6 +10,7 @@ set(WORKER_OC_SRCS
         worker_worker_oc_service_impl.cpp
         worker_worker_transport_service_impl.cpp
         master_worker_oc_service_impl.cpp
+        central_metadata_address_resolver.cpp
         object_metadata_coordination_reader.cpp
         worker_topology_object_cache_actions.cpp
         worker_oc_eviction_manager.cpp

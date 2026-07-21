@@ -283,6 +283,21 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "central_metadata_address_resolver",
+    srcs = [
+        "central_metadata_address_resolver.cpp",
+    ],
+    hdrs = [
+        "central_metadata_address_resolver.h",
+    ],
+    deps = [
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
+        "//src/datasystem/common/kvstore:kv_store",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
     name = "object_metadata_coordination_reader",
     srcs = [
         "object_metadata_coordination_reader.cpp",

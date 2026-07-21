@@ -3,6 +3,17 @@ load("//bazel:build_defs.bzl", "ds_cc_test_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test_library(
+    name = "fake_coordination_backend",
+    srcs = ["fake_coordination_backend.cpp"],
+    hdrs = ["fake_coordination_backend.h"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_test_library(
     name = "fake_coordinator_service_proxy",
     hdrs = ["fake_coordinator_service_proxy.h"],
     deps = [

@@ -46,7 +46,6 @@
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/kvstore/etcd/etcd_health.h"
 #include "datasystem/common/log/log.h"
@@ -84,6 +83,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
+#include "datasystem/worker/object_cache/central_metadata_address_resolver.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/worker_topology_object_cache_actions.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
@@ -963,8 +963,9 @@ Status WorkerOCServer::InitCoordinationBackend()
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
-    RETURN_IF_NOT_OK_EXCEPT(
-        etcdStore_->CreateTable(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_TABLE), K_DUPLICATED);
+    cluster::EtcdCoordinationBackend backend(etcdStore_.get());
+    object_cache::CentralMetadataAddressResolver resolver(backend);
+    RETURN_IF_NOT_OK(resolver.EnsureTable());
     return Status::OK();
 }
 
@@ -1119,37 +1120,13 @@ Status WorkerOCServer::ResolveCentralMetadataAddress(std::string &address)
     const auto localAddress = hostPort_.ToString();
     if (coordinatorServiceProxy_ == nullptr) {
         CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_NOT_READY, "ETCD Store is not initialized");
-        auto rc = etcdStore_->CAS(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_KEY, "", localAddress);
-        if (rc.IsOk()) {
-            address = localAddress;
-            return Status::OK();
-        }
-        return etcdStore_->Get(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_KEY, address);
+        cluster::EtcdCoordinationBackend backend(etcdStore_.get());
+        object_cache::CentralMetadataAddressResolver resolver(backend);
+        return resolver.ClaimOrRead(localAddress, address);
     }
-    const std::string physicalKey =
-        std::string(COORDINATION_MASTER_ADDRESS_TABLE) + "/" + COORDINATION_MASTER_ADDRESS_KEY;
-    std::vector<KeyValueEntry> entries;
-    int64_t revision = 0;
-    std::string coordinatorId;
-    RETURN_IF_NOT_OK(coordinatorServiceProxy_->Range(physicalKey, "", entries, revision,
-                                                     DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId));
-    if (!entries.empty()) {
-        address = entries.front().value;
-        return Status::OK();
-    }
-    int64_t version = 0;
-    auto rc = coordinatorServiceProxy_->Put(physicalKey, localAddress, 0, COORDINATOR_KEY_NOT_EXISTS_VERSION, version,
-                                            revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr, coordinatorId);
-    if (rc.IsOk()) {
-        address = localAddress;
-        return Status::OK();
-    }
-    entries.clear();
-    RETURN_IF_NOT_OK(coordinatorServiceProxy_->Range(physicalKey, "", entries, revision,
-                                                     DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr));
-    CHECK_FAIL_RETURN_STATUS(!entries.empty(), K_NOT_FOUND, "centralized metadata address is absent after CAS");
-    address = entries.front().value;
-    return Status::OK();
+    cluster::DsCoordinationBackend backend(coordinatorServiceProxy_.get(), localAddress);
+    object_cache::CentralMetadataAddressResolver resolver(backend);
+    return resolver.ClaimOrRead(localAddress, address);
 }
 
 Status WorkerOCServer::StartTopologyRuntime()

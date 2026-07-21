@@ -148,6 +148,7 @@ add_ds_ut_executable(ds_ut_stream
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
 add_ds_ut_executable(ds_ut_object
         ${DS_UT_OBJECT_SRCS}
+        cluster/testing/fake_coordination_backend.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
 if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)
