@@ -3134,11 +3134,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }
   renderSourceAppendixTables();
   function renderFlowStageTable(id, graph) {
-    renderTable(id, ['stage','summary','operation','IPs','reason','status'], (graph.edges || []).map(edge => [
+    renderTable(id, ['stage','summary','operation','IPs','异常 IP','reason','status'], (graph.edges || []).map(edge => [
       edge.name,
       edge.summary || '',
       edge.operation,
       (edge.rollup?.top_ips || []).join(', '),
+      flowEdgeAbnormalIps(edge),
       edge.reason || edge.report_reading,
       edge.status
     ]));
@@ -3873,7 +3874,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const latency = hasSamples && Number.isFinite(maxMs) && maxMs > 0 ? `max=${maxMs.toFixed(3)}ms` :
       hasSamples && Number.isFinite(p99Ms) && p99Ms > 0 ? `p99=${p99Ms.toFixed(3)}ms` : '';
     const worker = (rollup.top_workers || []).map(workerRelationName).filter(Boolean)[0];
-    return [edge.operation, latency || '未采样', worker].filter(Boolean).join('\\n');
+    const abnormalIp = flowEdgeAbnormalIps(edge).split(', ')[0];
+    return [edge.operation, latency || '未采样', abnormalIp ? `异常IP ${abnormalIp}` : worker].filter(Boolean).join('\\n');
+  }
+  function flowEdgeAbnormalIps(edge) {
+    const isSlow = Number(edge.rollup?.max_ms || 0) >= 20 || Number(edge.rollup?.p99_ms || 0) >= 20;
+    const isMissing = edge.status && edge.status !== 'present';
+    if (!isSlow && !isMissing) return '';
+    return (edge.rollup?.top_ips || []).slice(0, 4).join(', ');
   }
   function flowEdgeCurveness(edge) {
     if (edge.operation === 'CreateBuffer') return .24;
@@ -3882,11 +3890,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return .08;
   }
   function flowEdgeLabelOffset(edge) {
-    if (edge.operation === 'CreateBuffer') return [0, -44];
-    if (edge.operation === 'Client Publish') return [0, 44];
+    if (edge.operation === 'CreateBuffer') return [0, -32];
+    if (edge.operation === 'Client Publish') return [0, 32];
     if (edge.operation === 'Client→Entry RPC/UB') return [-42, -48];
-    if (edge.operation === 'URMA Write') return [46, 54];
-    if (edge.operation === 'Entry→Data RPC') return [38, 48];
+    if (edge.operation === 'URMA Write') return [76, 72];
+    if (edge.operation === 'Entry→Data RPC') return [-28, 54];
     if (edge.operation === 'Entry→Meta RPC') return [34, -46];
     return [0, -32];
   }
@@ -3899,7 +3907,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       rotate:0,
       align:'center',
       verticalAlign:'middle',
-      fontSize:14,
+      fontSize:15,
       lineHeight:18,
       width:210,
       overflow:'break',
@@ -3940,7 +3948,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     textStyle:chartTextStyle,
     toolbox:flowToolbox(),
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
-      ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
+      ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>异常 IP: ${escapeHtml(p.data.abnormal_ips || '')}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
       : `${escapeHtml(p.data.label || p.data.name)}<br>${escapeHtml((p.data.top_ips || []).join(', '))}`},
     series:[{
       type:'graph',
@@ -3955,7 +3963,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         rotate:0,
         align:'center',
         verticalAlign:'middle',
-        fontSize:14,
+        fontSize:15,
         lineHeight:18,
         width:210,
         overflow:'break',
@@ -3976,6 +3984,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         evidence:edge.evidence,
         summary:edge.summary,
         edge_label:flowEdgeBriefText(edge),
+        abnormal_ips:flowEdgeAbnormalIps(edge),
         reason:edge.reason,
         rollup:edge.rollup,
         status:edge.status,

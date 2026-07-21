@@ -484,21 +484,26 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function flowEdgeBriefText(edge)" in html
     assert "Number(rollup.trace_count || 0) > 0" in html
     assert "return [edge.operation, latency || '未采样'" in html
+    assert "function flowEdgeAbnormalIps(edge)" in html
+    assert "Number(edge.rollup?.max_ms || 0) >= 20" in html
+    assert "const abnormalIp = flowEdgeAbnormalIps(edge).split(', ')[0]" in html
+    assert "abnormalIp ? `异常IP ${abnormalIp}` : worker" in html
+    assert "异常 IP" in html
     assert "function flowEdgeLabelOffset(edge)" in html
     assert "function flowEdgeAutoLabel(edge)" in html
     assert "function flowEdgeCurveness(edge)" in html
     assert "edge.operation === 'CreateBuffer'" in html
-    assert "return [0, -44]" in html
+    assert "return [0, -32]" in html
     assert "edge.operation === 'Client Publish'" in html
-    assert "return [0, 44]" in html
+    assert "return [0, 32]" in html
     assert "edge.operation === 'Client→Entry RPC/UB'" in html
     assert "return [-42, -48]" in html
     assert "edge.operation === 'Entry→Data RPC'" in html
-    assert "return [38, 48]" in html
+    assert "return [-28, 54]" in html
     assert "edge.operation === 'Entry→Meta RPC'" in html
     assert "return [34, -46]" in html
     assert "edge.operation === 'URMA Write'" in html
-    assert "return [46, 54]" in html
+    assert "return [76, 72]" in html
     assert "function flowGraphNodeSize()" in html
     assert "symbol:'roundRect'" in html
     assert "symbolSize:flowGraphNodeSize()" in html
@@ -512,7 +517,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "label:flowEdgeAutoLabel(edge)" in html
     assert "offset:flowEdgeLabelOffset(edge)" in html
     assert "edge_annotation" not in html
-    assert "fontSize:14" in html
+    assert "fontSize:15" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html
     assert "return node.label" in html
@@ -591,6 +596,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "worker " in html
     assert "p.data.edge_label || p.data.status" in html
     assert "edge.reason" in html
+    assert "abnormal_ips:flowEdgeAbnormalIps(edge)" in html
+    assert "p.data.abnormal_ips || ''" in html
     assert "rollup" in html
     assert "id=\"read-worker-chart\"" in html
     assert "id=\"write-worker-chart\"" in html
