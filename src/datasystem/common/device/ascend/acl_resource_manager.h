@@ -22,16 +22,20 @@
 #define DATASYSTEM_CLIENT_OBJECT_CACHE_DEVICE_ACL_MEM_MGR_H
 
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
 #include <vector>
 
 #include "datasystem/common/device/ascend/acl_device_manager.h"
+#include "datasystem/common/device/ascend/acl_parallel_direct_executor.h"
+#include "datasystem/common/device/ascend/acl_parallel_ffts_executor.h"
 #include "datasystem/common/device/ascend/callback_thread.h"
 #include "datasystem/common/device/ascend/cann_types.h"
 #include "datasystem/common/device/ascend/ffts_dispatcher.h"
 #include "datasystem/common/device/device_batch_copy_helper.h"
 #include "datasystem/common/device/device_resource_manager.h"
+#include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/common/util/thread_pool.h"
 #include "datasystem/common/util/wait_post.h"
@@ -49,6 +53,7 @@ struct DataMetaInfo {
 };
 
 class AclResourceManager;
+
 class AclMemCopyPool {
 public:
     AclMemCopyPool(AclResourceManager *resourceMgr);
@@ -68,27 +73,45 @@ public:
 
 private:
     bool ShouldFallbackToDirectForH2D(const DeviceBatchCopyHelper &helper, MemcopyPolicy policy);
+    bool ShouldUseParallelDirect(const DeviceBatchCopyHelper &helper, const ParallelH2DConfig &config) const;
+    bool ShouldUseParallelDirect(const DeviceBatchCopyHelper &helper, const ParallelD2HConfig &config) const;
+    bool ShouldUseParallelFfts(const DeviceBatchCopyHelper &helper, const ParallelFftsH2DConfig &config) const;
+    bool ShouldUseParallelFfts(const DeviceBatchCopyHelper &helper, const ParallelFftsD2HConfig &config) const;
+    Status MemcpyFftsH2DSerial(uint32_t deviceId, DeviceBatchCopyHelper &helper);
+    Status MemcpyFftsD2HSerial(uint32_t deviceId, DeviceBatchCopyHelper &helper);
+    Status ExecuteFftsH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper, bool parallelShard,
+                          ThreadPool *deviceSubmitPool);
+    Status ExecuteFftsD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper, bool parallelShard,
+                          ThreadPool *deviceSubmitPool);
+    Status MemcpyBatchDirect(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind kind, PerfPoint &point);
+    Status MemcpyBatchFftsD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper, PerfPoint &point);
+    Status MemcpyBatchFftsH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy, PerfPoint &point);
+    Status RunFftsD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper);
+    Status RunFftsH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper);
+    Status HandleFftsResult(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind kind, Status fftsRc);
+    Status GetOrCreateParallelFftsExecutor(MemcpyKind kind, AclParallelFftsExecutor *&executor);
+    Status GetOrCreateParallelDirectExecutor(uint32_t deviceId, MemcpyKind kind,
+                                             std::shared_ptr<AclParallelDirectExecutor> &executor);
     Status AclMemcpyBatch(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind copyKind);
     std::unique_ptr<ThreadPool> copyPool_;
     std::unique_ptr<ThreadPool> h2hCopyPool_;
     std::unique_ptr<ThreadPool> fftsCopyPool_;
+    std::unique_ptr<AclParallelFftsExecutor> parallelFftsH2DExecutor_;
+    std::unique_ptr<AclParallelFftsExecutor> parallelFftsD2HExecutor_;
     std::vector<void *> copyStreams_;
     int32_t deviceNow_ = -1;
     DeviceManagerBase *devInterImpl_;
     AclResourceManager *resourceMgr_;
+    std::mutex parallelExecutorMutex_;
+    // Bound outstanding FFTS work to one call and at most workerNum parallel tasks.
+    std::mutex parallelFftsCallMutex_;
+    std::unordered_map<uint32_t, std::shared_ptr<AclParallelDirectExecutor>> parallelH2DExecutors_;
+    std::unordered_map<uint32_t, std::shared_ptr<AclParallelDirectExecutor>> parallelD2HExecutors_;
 };
 
 class AclResourceManager : public DeviceResourceManager {
 public:
-    AclResourceManager()
-    {
-        deviceResources_.reserve(MAX_DEVICE_COUNT);
-        for (size_t deviceId = 0; deviceId < MAX_DEVICE_COUNT; deviceId++) {
-            deviceResources_.emplace_back(std::make_unique<DeviceResource>(deviceId));
-        }
-        swapOutPool_ = std::make_unique<AclMemCopyPool>(this);
-        swapInPool_ = std::make_unique<AclMemCopyPool>(this);
-    };
+    AclResourceManager();
     ~AclResourceManager() = default;
 
     Status MemcpyBatchD2H(const std::vector<DeviceBlobList> &devBlobList, std::vector<Buffer *> &bufferList) override;
@@ -100,14 +123,56 @@ public:
     Status CreateRtNotify(uint32_t deviceIdx, rtNotify_t &notify);
     Status FreeRtNotify(uint32_t deviceId, rtNotify_t notify);
 
+    const ParallelH2DConfig &GetParallelH2DConfig() const
+    {
+        return parallelH2DConfig_;
+    }
+
+    const Status &GetParallelH2DConfigStatus() const
+    {
+        return parallelH2DConfigStatus_;
+    }
+
+    const ParallelD2HConfig &GetParallelD2HConfig() const
+    {
+        return parallelD2HConfig_;
+    }
+
+    const Status &GetParallelD2HConfigStatus() const
+    {
+        return parallelD2HConfigStatus_;
+    }
+
+    const ParallelFftsH2DConfig &GetParallelFftsH2DConfig() const
+    {
+        return parallelFftsH2DConfig_;
+    }
+
+    const Status &GetParallelFftsH2DConfigStatus() const
+    {
+        return parallelFftsH2DConfigStatus_;
+    }
+
+    const ParallelFftsD2HConfig &GetParallelFftsD2HConfig() const
+    {
+        return parallelFftsD2HConfig_;
+    }
+
+    const Status &GetParallelFftsD2HConfigStatus() const
+    {
+        return parallelFftsD2HConfigStatus_;
+    }
+
     void SetPolicyByHugeTlb(bool enableHugeTlb) override
     {
         if (enableHugeTlb && policyD2H == MemcopyPolicy::FFTS) {
             policyD2H = MemcopyPolicy::HUGE_FFTS;
-            hostMemSize = 0;
         }
         if (enableHugeTlb && policyH2D == MemcopyPolicy::FFTS) {
             policyH2D = MemcopyPolicy::HUGE_FFTS;
+        }
+        // FftsPipelineCopierBase skips the host staging pool only when both directions use HUGE_FFTS.
+        if (enableHugeTlb && policyD2H == MemcopyPolicy::HUGE_FFTS && policyH2D == MemcopyPolicy::HUGE_FFTS) {
             hostMemSize = 0;
         }
     }
@@ -136,6 +201,14 @@ public:
     };
 
 private:
+    ParallelH2DConfig parallelH2DConfig_;
+    Status parallelH2DConfigStatus_;
+    ParallelD2HConfig parallelD2HConfig_;
+    Status parallelD2HConfigStatus_;
+    ParallelFftsH2DConfig parallelFftsH2DConfig_;
+    Status parallelFftsH2DConfigStatus_;
+    ParallelFftsD2HConfig parallelFftsD2HConfig_;
+    Status parallelFftsD2HConfigStatus_;
     std::vector<std::unique_ptr<DeviceResource>> deviceResources_;
     std::unique_ptr<AclMemCopyPool> swapOutPool_;
     std::unique_ptr<AclMemCopyPool> swapInPool_;
@@ -215,9 +288,16 @@ public:
 
     Status ExecuteMemcpy(const std::vector<BufferView> &deviceBuffers, const std::vector<BufferView> &hostBuffers);
 
+    // Used by the bounded outer FFTS executor; running inline avoids serializing again on fftsCopyPool_.
+    Status ExecuteMemcpyInlineFfts(const std::vector<BufferView> &deviceBuffers,
+                                   const std::vector<BufferView> &hostBuffers);
+
     Status AddFftsNotifyTask(size_t index, const std::vector<BufferView> &deviceBuffers, bool addTask = true);
 
 private:
+    Status ExecuteMemcpyImpl(const std::vector<BufferView> &deviceBuffers, const std::vector<BufferView> &hostBuffers,
+                             bool inlineFfts);
+    Status RunFfts();
     void AddTask(size_t index, const std::vector<BufferView> &deviceBuffers);
     Status SubmitToStream(const std::vector<BufferView> &srcBuffers, const std::vector<BufferView> &destBuffers,
                           const std::vector<BufferMetaInfo> &bufferMetas);

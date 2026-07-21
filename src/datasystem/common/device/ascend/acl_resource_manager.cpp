@@ -17,6 +17,10 @@
 #include "datasystem/common/device/ascend/acl_resource_manager.h"
 
 #include <algorithm>
+#include <exception>
+#include <future>
+#include <limits>
+#include <new>
 #include <securec.h>
 #include <cstring>
 #include <sstream>
@@ -28,7 +32,6 @@
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"
 
 #define CHECK_ACL_RESULT(aclRet, apiName)                                                             \
@@ -42,6 +45,37 @@
 
 namespace datasystem {
 const size_t MAX_FFTS_TASKS_COUNT = 8;
+AclResourceManager::AclResourceManager()
+{
+    parallelH2DConfigStatus_ = parallelH2DConfig_.LoadFromEnv();
+    LOG_IF_ERROR(parallelH2DConfigStatus_, "Load parallel H2D config failed");
+    parallelD2HConfigStatus_ = parallelD2HConfig_.LoadFromEnv();
+    LOG_IF_ERROR(parallelD2HConfigStatus_, "Load parallel D2H config failed");
+    parallelFftsH2DConfigStatus_ = parallelFftsH2DConfig_.LoadFromEnv();
+    LOG_IF_ERROR(parallelFftsH2DConfigStatus_, "Load parallel FFTS H2D config failed");
+    parallelFftsD2HConfigStatus_ = parallelFftsD2HConfig_.LoadFromEnv();
+    LOG_IF_ERROR(parallelFftsD2HConfigStatus_, "Load parallel FFTS D2H config failed");
+    if (policyH2D == MemcopyPolicy::DIRECT && parallelH2DConfigStatus_.IsOk() && parallelH2DConfig_.workerNum > 1) {
+        LOG(INFO) << parallelH2DConfig_.ToString();
+    }
+    if (policyD2H == MemcopyPolicy::DIRECT && parallelD2HConfigStatus_.IsOk() && parallelD2HConfig_.workerNum > 1) {
+        LOG(INFO) << parallelD2HConfig_.ToString();
+    }
+    if ((policyH2D == MemcopyPolicy::FFTS || policyH2D == MemcopyPolicy::HUGE_FFTS)
+        && parallelFftsH2DConfigStatus_.IsOk() && parallelFftsH2DConfig_.workerNum > 1) {
+        LOG(INFO) << parallelFftsH2DConfig_.ToString();
+    }
+    if ((policyD2H == MemcopyPolicy::FFTS || policyD2H == MemcopyPolicy::HUGE_FFTS)
+        && parallelFftsD2HConfigStatus_.IsOk() && parallelFftsD2HConfig_.workerNum > 1) {
+        LOG(INFO) << parallelFftsD2HConfig_.ToString();
+    }
+    deviceResources_.reserve(MAX_DEVICE_COUNT);
+    for (size_t deviceId = 0; deviceId < MAX_DEVICE_COUNT; deviceId++) {
+        deviceResources_.emplace_back(std::make_unique<DeviceResource>(deviceId));
+    }
+    swapOutPool_ = std::make_unique<AclMemCopyPool>(this);
+    swapInPool_ = std::make_unique<AclMemCopyPool>(this);
+}
 
 Status AclResourceManager::MemcpyBatchD2H(const std::vector<DeviceBlobList> &devBlobList,
                                           std::vector<Buffer *> &bufferList)
@@ -223,7 +257,8 @@ bool AclMemCopyPool::ShouldFallbackToDirectForH2D(const DeviceBatchCopyHelper &h
     uint64_t totalObjectSize = 0;
     for (const auto &meta : helper.bufferMetas) {
         totalObjectSize += meta.size;
-        if (meta.size * FFTS_PIPELINE > deviceMemSize) {
+        // Divide instead of multiplying to avoid unsigned wrap-around.
+        if (meta.size > deviceMemSize / FFTS_PIPELINE) {
             LOG(WARNING) << FormatString("Fallback h2dPolicy to DIRECT, device pin memory pool size %zu, need size %zu",
                                          static_cast<size_t>(deviceMemSize),
                                          static_cast<size_t>(meta.size * FFTS_PIPELINE));
@@ -231,8 +266,7 @@ bool AclMemCopyPool::ShouldFallbackToDirectForH2D(const DeviceBatchCopyHelper &h
         }
         if (!skipHostPinMemcpy && totalObjectSize > hostMemSize) {
             LOG(WARNING) << FormatString("Fallback h2dPolicy to DIRECT, host pin memory pool size %zu, need size %zu",
-                                         static_cast<size_t>(hostMemSize),
-                                         static_cast<size_t>(totalObjectSize));
+                                         static_cast<size_t>(hostMemSize), static_cast<size_t>(totalObjectSize));
             return true;
         }
     }
@@ -240,58 +274,273 @@ bool AclMemCopyPool::ShouldFallbackToDirectForH2D(const DeviceBatchCopyHelper &h
     return false;
 }
 
+template <typename Config>
+bool ShouldUseParallelDirectImpl(const DeviceBatchCopyHelper &helper, const Config &config)
+{
+    const size_t descriptorCount = helper.dataSizeList.size();
+    if (config.workerNum <= 1 || descriptorCount <= config.aggregateNum) {
+        return false;
+    }
+    const size_t taskCount = (descriptorCount - 1) / config.aggregateNum + 1;
+    if (taskCount < config.workerNum) {
+        return false;
+    }
+
+    uint64_t totalBytes = 0;
+    for (auto size : helper.dataSizeList) {
+        if (size > std::numeric_limits<uint64_t>::max() - totalBytes) {
+            return true;
+        }
+        totalBytes += size;
+    }
+    return totalBytes >= config.minBytes;
+}
+
+bool AclMemCopyPool::ShouldUseParallelDirect(const DeviceBatchCopyHelper &helper, const ParallelH2DConfig &config) const
+{
+    return ShouldUseParallelDirectImpl(helper, config);
+}
+
+bool AclMemCopyPool::ShouldUseParallelDirect(const DeviceBatchCopyHelper &helper, const ParallelD2HConfig &config) const
+{
+    return ShouldUseParallelDirectImpl(helper, config);
+}
+
+template <typename Config>
+bool ShouldUseParallelFftsImpl(const DeviceBatchCopyHelper &helper, const Config &config)
+{
+    if (config.workerNum <= 1 || helper.bufferMetas.size() < config.workerNum) {
+        return false;
+    }
+    uint64_t totalBytes = 0;
+    for (const auto &meta : helper.bufferMetas) {
+        if (meta.size > std::numeric_limits<uint64_t>::max() - totalBytes) {
+            return true;
+        }
+        totalBytes += meta.size;
+    }
+    return totalBytes >= config.minBytes;
+}
+
+bool AclMemCopyPool::ShouldUseParallelFfts(const DeviceBatchCopyHelper &helper,
+                                           const ParallelFftsH2DConfig &config) const
+{
+    return ShouldUseParallelFftsImpl(helper, config);
+}
+
+bool AclMemCopyPool::ShouldUseParallelFfts(const DeviceBatchCopyHelper &helper,
+                                           const ParallelFftsD2HConfig &config) const
+{
+    return ShouldUseParallelFftsImpl(helper, config);
+}
+
+Status AclMemCopyPool::MemcpyFftsH2DSerial(uint32_t deviceId, DeviceBatchCopyHelper &helper)
+{
+    return ExecuteFftsH2D(deviceId, helper, false, nullptr);
+}
+
+Status AclMemCopyPool::MemcpyFftsD2HSerial(uint32_t deviceId, DeviceBatchCopyHelper &helper)
+{
+    return ExecuteFftsD2H(deviceId, helper, false, nullptr);
+}
+
+Status AclMemCopyPool::ExecuteFftsH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper, bool parallelShard,
+                                      ThreadPool *deviceSubmitPool)
+{
+    (void)deviceSubmitPool;
+    FftsPipelineH2DCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(), fftsCopyPool_.get());
+    return parallelShard ? copier.ExecuteMemcpyInlineFfts(helper.dstBuffers, helper.srcBuffers)
+                         : copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
+}
+
+Status AclMemCopyPool::ExecuteFftsD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper, bool parallelShard,
+                                      ThreadPool *deviceSubmitPool)
+{
+    auto *submitPool = parallelShard ? deviceSubmitPool : fftsCopyPool_.get();
+    CHECK_FAIL_RETURN_STATUS(submitPool != nullptr, K_INVALID, "D2H FFTS device submit pool is null");
+    FftsPipelineD2HCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(), submitPool);
+    return copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
+}
+
+Status AclMemCopyPool::GetOrCreateParallelDirectExecutor(uint32_t deviceId, MemcpyKind kind,
+                                                         std::shared_ptr<AclParallelDirectExecutor> &executor)
+{
+    CHECK_FAIL_RETURN_STATUS(
+        deviceId < MAX_DEVICE_COUNT, K_INVALID,
+        FormatString("Invalid device id %u, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+
+    std::lock_guard<std::mutex> lock(parallelExecutorMutex_);
+    auto &executors = kind == MemcpyKind::DEVICE_TO_HOST ? parallelD2HExecutors_ : parallelH2DExecutors_;
+    auto iter = executors.find(deviceId);
+    if (iter != executors.end()) {
+        executor = iter->second;
+        return Status::OK();
+    }
+
+    try {
+        std::shared_ptr<AclParallelDirectExecutor> newExecutor;
+        if (kind == MemcpyKind::DEVICE_TO_HOST) {
+            newExecutor = std::make_shared<AclParallelDirectExecutor>(deviceId, devInterImpl_,
+                                                                      resourceMgr_->GetParallelD2HConfig());
+        } else {
+            newExecutor = std::make_shared<AclParallelDirectExecutor>(deviceId, devInterImpl_,
+                                                                      resourceMgr_->GetParallelH2DConfig());
+        }
+        RETURN_IF_NOT_OK(newExecutor->Init());
+        executors.emplace(deviceId, newExecutor);
+        executor = std::move(newExecutor);
+    } catch (const std::bad_alloc &) {
+        RETURN_STATUS(K_OUT_OF_MEMORY, "Allocate parallel direct executor failed");
+    }
+    return Status::OK();
+}
+
+Status AclMemCopyPool::GetOrCreateParallelFftsExecutor(MemcpyKind kind, AclParallelFftsExecutor *&executor)
+{
+    auto &holder = kind == MemcpyKind::DEVICE_TO_HOST ? parallelFftsD2HExecutor_ : parallelFftsH2DExecutor_;
+    if (holder == nullptr) {
+        try {
+            if (kind == MemcpyKind::DEVICE_TO_HOST) {
+                auto copyFunction = [this](uint32_t deviceId, DeviceBatchCopyHelper &helper, bool parallelShard,
+                                           ThreadPool *deviceSubmitPool) {
+                    return ExecuteFftsD2H(deviceId, helper, parallelShard, deviceSubmitPool);
+                };
+                holder = std::make_unique<AclParallelFftsExecutor>(resourceMgr_, devInterImpl_, std::move(copyFunction),
+                                                                   resourceMgr_->GetParallelFftsD2HConfig());
+            } else {
+                auto copyFunction = [this](uint32_t deviceId, DeviceBatchCopyHelper &helper, bool parallelShard,
+                                           ThreadPool *deviceSubmitPool) {
+                    return ExecuteFftsH2D(deviceId, helper, parallelShard, deviceSubmitPool);
+                };
+                holder = std::make_unique<AclParallelFftsExecutor>(resourceMgr_, devInterImpl_, std::move(copyFunction),
+                                                                   resourceMgr_->GetParallelFftsH2DConfig());
+            }
+        } catch (const std::bad_alloc &) {
+            RETURN_STATUS(K_OUT_OF_MEMORY, "Allocate parallel FFTS executor failed");
+        }
+    }
+    executor = holder.get();
+    return Status::OK();
+}
+
 Status AclMemCopyPool::MemcpyBatchD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy)
 {
     PerfPoint point(PerfKey::CLIENT_D2H_MEMCPY_INIT);
-    if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
-        if (deviceNow_ != static_cast<int32_t>(deviceId)) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
-        }
-        RETURN_IF_NOT_OK(resourceMgr_->EnsureInitialized());
-        point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY_RUN);
-        CHECK_FAIL_RETURN_STATUS(
-            deviceId < MAX_DEVICE_COUNT, K_INVALID,
-            FormatString("Invalid device id %zu, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
-        FftsPipelineD2HCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(),
-                                     fftsCopyPool_.get());
-        return copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
-    } else {
-        PerfPoint point(PerfKey::TOTAL_D2H_BATCH_MEMCPY);
-        return AclMemcpyBatch(deviceId, helper, MemcpyKind::DEVICE_TO_HOST);
+    if (policy == MemcopyPolicy::DIRECT) {
+        return MemcpyBatchDirect(deviceId, helper, MemcpyKind::DEVICE_TO_HOST, point);
     }
+    if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
+        return MemcpyBatchFftsD2H(deviceId, helper, point);
+    }
+    PerfPoint directPoint(PerfKey::TOTAL_D2H_BATCH_MEMCPY);
+    return AclMemcpyBatch(deviceId, helper, MemcpyKind::DEVICE_TO_HOST);
 }
 
 Status AclMemCopyPool::MemcpyBatchH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy)
 {
     PerfPoint point(PerfKey::CLIENT_H2D_MEMCPY_INIT);
-    if (ShouldFallbackToDirectForH2D(helper, policy)) {
-        policy = MemcopyPolicy::DIRECT;
+    if (policy == MemcopyPolicy::DIRECT) {
+        return MemcpyBatchDirect(deviceId, helper, MemcpyKind::HOST_TO_DEVICE, point);
     }
     if (policy == MemcopyPolicy::FFTS || policy == MemcopyPolicy::HUGE_FFTS) {
-        if (deviceNow_ != static_cast<int32_t>(deviceId)) {
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
-        }
-        RETURN_IF_NOT_OK(resourceMgr_->EnsureInitialized());
-        point.RecordAndReset(PerfKey::CLIENT_H2D_MEMCPY_RUN);
-        CHECK_FAIL_RETURN_STATUS(
-            deviceId < MAX_DEVICE_COUNT, K_INVALID,
-            FormatString("Invalid device id %zu, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
-        Status fftsRc;
-        {
-            FftsPipelineH2DCopier copier(deviceId, resourceMgr_, helper.bufferMetas, h2hCopyPool_.get(),
-                                         fftsCopyPool_.get());
-            fftsRc = copier.ExecuteMemcpy(helper.dstBuffers, helper.srcBuffers);
-        }
-        if (fftsRc.GetCode() == K_OUT_OF_MEMORY) {
-            LOG(WARNING) << FormatString("Fallback h2dPolicy to DIRECT after FFTS OOM, status: %s",
-                                         fftsRc.ToString());
-            return AclMemcpyBatch(deviceId, helper, MemcpyKind::HOST_TO_DEVICE);
-        }
-        return fftsRc;
-    } else {
-        PerfPoint point(PerfKey::TOTAL_H2D_BATCH_MEMCPY);
+        return MemcpyBatchFftsH2D(deviceId, helper, policy, point);
+    }
+    PerfPoint directPoint(PerfKey::TOTAL_H2D_BATCH_MEMCPY);
+    return AclMemcpyBatch(deviceId, helper, MemcpyKind::HOST_TO_DEVICE);
+}
+
+Status AclMemCopyPool::MemcpyBatchDirect(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind kind,
+                                         PerfPoint &point)
+{
+    const auto &configStatus = kind == MemcpyKind::DEVICE_TO_HOST ? resourceMgr_->GetParallelD2HConfigStatus()
+                                                                  : resourceMgr_->GetParallelH2DConfigStatus();
+    RETURN_IF_NOT_OK(configStatus);
+    const bool useParallel = kind == MemcpyKind::DEVICE_TO_HOST
+                                 ? ShouldUseParallelDirect(helper, resourceMgr_->GetParallelD2HConfig())
+                                 : ShouldUseParallelDirect(helper, resourceMgr_->GetParallelH2DConfig());
+    if (useParallel) {
+        point.RecordAndReset(kind == MemcpyKind::DEVICE_TO_HOST ? PerfKey::CLIENT_D2H_MEMCPY_RUN
+                                                                : PerfKey::CLIENT_H2D_MEMCPY_RUN);
+        std::shared_ptr<AclParallelDirectExecutor> executor;
+        RETURN_IF_NOT_OK(GetOrCreateParallelDirectExecutor(deviceId, kind, executor));
+        return executor->MemcpyBatch(helper);
+    }
+    PerfPoint directPoint(kind == MemcpyKind::DEVICE_TO_HOST ? PerfKey::TOTAL_D2H_BATCH_MEMCPY
+                                                             : PerfKey::TOTAL_H2D_BATCH_MEMCPY);
+    return AclMemcpyBatch(deviceId, helper, kind);
+}
+
+Status AclMemCopyPool::MemcpyBatchFftsD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper, PerfPoint &point)
+{
+    RETURN_IF_NOT_OK(resourceMgr_->GetParallelFftsD2HConfigStatus());
+    if (deviceNow_ != static_cast<int32_t>(deviceId)) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
+    }
+    RETURN_IF_NOT_OK(resourceMgr_->EnsureInitialized());
+    point.RecordAndReset(PerfKey::CLIENT_D2H_MEMCPY_RUN);
+    CHECK_FAIL_RETURN_STATUS(
+        deviceId < MAX_DEVICE_COUNT, K_INVALID,
+        FormatString("Invalid device id %zu, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+    return HandleFftsResult(deviceId, helper, MemcpyKind::DEVICE_TO_HOST, RunFftsD2H(deviceId, helper));
+}
+
+Status AclMemCopyPool::MemcpyBatchFftsH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcopyPolicy policy,
+                                          PerfPoint &point)
+{
+    RETURN_IF_NOT_OK(resourceMgr_->GetParallelFftsH2DConfigStatus());
+    if (ShouldFallbackToDirectForH2D(helper, policy)) {
+        PerfPoint directPoint(PerfKey::TOTAL_H2D_BATCH_MEMCPY);
         return AclMemcpyBatch(deviceId, helper, MemcpyKind::HOST_TO_DEVICE);
     }
+    if (deviceNow_ != static_cast<int32_t>(deviceId)) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(devInterImpl_->SetDevice(deviceId), "Failed to init.");
+    }
+    RETURN_IF_NOT_OK(resourceMgr_->EnsureInitialized());
+    point.RecordAndReset(PerfKey::CLIENT_H2D_MEMCPY_RUN);
+    CHECK_FAIL_RETURN_STATUS(
+        deviceId < MAX_DEVICE_COUNT, K_INVALID,
+        FormatString("Invalid device id %zu, exceed max device id %zu", deviceId, MAX_DEVICE_COUNT));
+    return HandleFftsResult(deviceId, helper, MemcpyKind::HOST_TO_DEVICE, RunFftsH2D(deviceId, helper));
+}
+
+Status AclMemCopyPool::RunFftsD2H(uint32_t deviceId, DeviceBatchCopyHelper &helper)
+{
+    if (resourceMgr_->GetParallelFftsD2HConfig().workerNum <= 1) {
+        return MemcpyFftsD2HSerial(deviceId, helper);
+    }
+    std::lock_guard<std::mutex> parallelCallLock(parallelFftsCallMutex_);
+    if (!ShouldUseParallelFfts(helper, resourceMgr_->GetParallelFftsD2HConfig())) {
+        return MemcpyFftsD2HSerial(deviceId, helper);
+    }
+    AclParallelFftsExecutor *executor = nullptr;
+    RETURN_IF_NOT_OK(GetOrCreateParallelFftsExecutor(MemcpyKind::DEVICE_TO_HOST, executor));
+    return executor->Memcpy(deviceId, helper);
+}
+
+Status AclMemCopyPool::RunFftsH2D(uint32_t deviceId, DeviceBatchCopyHelper &helper)
+{
+    if (resourceMgr_->GetParallelFftsH2DConfig().workerNum <= 1) {
+        return MemcpyFftsH2DSerial(deviceId, helper);
+    }
+    std::lock_guard<std::mutex> parallelCallLock(parallelFftsCallMutex_);
+    if (!ShouldUseParallelFfts(helper, resourceMgr_->GetParallelFftsH2DConfig())) {
+        return MemcpyFftsH2DSerial(deviceId, helper);
+    }
+    AclParallelFftsExecutor *executor = nullptr;
+    RETURN_IF_NOT_OK(GetOrCreateParallelFftsExecutor(MemcpyKind::HOST_TO_DEVICE, executor));
+    return executor->Memcpy(deviceId, helper);
+}
+
+Status AclMemCopyPool::HandleFftsResult(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind kind,
+                                        Status fftsRc)
+{
+    if (fftsRc.GetCode() != K_OUT_OF_MEMORY) {
+        return fftsRc;
+    }
+    const char *direction = kind == MemcpyKind::DEVICE_TO_HOST ? "d2h" : "h2d";
+    LOG(WARNING) << FormatString("Fallback %sPolicy to DIRECT after FFTS OOM, status: %s", direction,
+                                 fftsRc.ToString());
+    return AclMemcpyBatch(deviceId, helper, kind);
 }
 
 Status AclMemCopyPool::AclMemcpyBatch(uint32_t deviceId, DeviceBatchCopyHelper &helper, MemcpyKind copyKind)
@@ -299,8 +548,7 @@ Status AclMemCopyPool::AclMemcpyBatch(uint32_t deviceId, DeviceBatchCopyHelper &
     size_t leftNum = helper.dataSizeList.size();
     size_t startIndex = 0;
     while (leftNum > 0) {
-        auto maxBatchSize = 4096UL;
-        auto batchNum = std::min(leftNum, maxBatchSize);
+        auto batchNum = std::min(leftNum, ACL_MEMCPY_BATCH_LIMIT);
         size_t failedIdx = 0;
         auto res =
             devInterImpl_->MemcpyBatch(helper.dstList.data() + startIndex, helper.dataSizeList.data() + startIndex,
@@ -318,6 +566,22 @@ Status AclMemCopyPool::AclMemcpyBatch(uint32_t deviceId, DeviceBatchCopyHelper &
 
 AclMemCopyPool::~AclMemCopyPool()
 {
+    // Hold the call mutex so no RunFfts* is mid-Memcpy on an executor being destroyed.
+    {
+        std::lock_guard<std::mutex> parallelCallLock(parallelFftsCallMutex_);
+        parallelFftsH2DExecutor_.reset();
+        parallelFftsD2HExecutor_.reset();
+    }
+
+    std::unordered_map<uint32_t, std::shared_ptr<AclParallelDirectExecutor>> h2dExecutors;
+    std::unordered_map<uint32_t, std::shared_ptr<AclParallelDirectExecutor>> d2hExecutors;
+    {
+        std::lock_guard<std::mutex> lock(parallelExecutorMutex_);
+        h2dExecutors.swap(parallelH2DExecutors_);
+        d2hExecutors.swap(parallelD2HExecutors_);
+    }
+    h2dExecutors.clear();
+    d2hExecutors.clear();
     for (auto &stream : copyStreams_) {
         if (stream != nullptr) {
             LOG_IF_ERROR(devInterImpl_->DestroyStream(stream), "Destory stream failed.");
@@ -472,6 +736,18 @@ Status FftsPipelineH2DCopier::AddFftsNotifyTask(size_t index, const std::vector<
 Status FftsPipelineH2DCopier::ExecuteMemcpy(const std::vector<BufferView> &deviceBuffers,
                                             const std::vector<BufferView> &hostBuffers)
 {
+    return ExecuteMemcpyImpl(deviceBuffers, hostBuffers, false);
+}
+
+Status FftsPipelineH2DCopier::ExecuteMemcpyInlineFfts(const std::vector<BufferView> &deviceBuffers,
+                                                      const std::vector<BufferView> &hostBuffers)
+{
+    return ExecuteMemcpyImpl(deviceBuffers, hostBuffers, true);
+}
+
+Status FftsPipelineH2DCopier::ExecuteMemcpyImpl(const std::vector<BufferView> &deviceBuffers,
+                                                const std::vector<BufferView> &hostBuffers, bool inlineFfts)
+{
     PerfPoint point(PerfKey::CLIENT_H2D_ALLOC_TRANS_BUFFERS);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AllocAndInitTransferBuffers(hostBuffers), "AllocAndInitTransferBuffers failed");
     point.Record();
@@ -494,35 +770,13 @@ Status FftsPipelineH2DCopier::ExecuteMemcpy(const std::vector<BufferView> &devic
         }));
     }
 
-    auto h2dFut = fftsCopyPool_->Submit([this] {
-        PerfPoint point(PerfKey::CLIENT_H2D_FFTS_INIT);
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitAclResource(false), "InitDeviceResource failed");
-        point.RecordAndReset(PerfKey::CLIENT_H2D_FFTS_NOTIFY_START);
-        RETURN_IF_NOT_OK(NotifyStart());
-        point.RecordAndReset(PerfKey::CLIENT_H2D_FFTS_WAIT_AND_RUN);
-        while (true) {
-            PipelineH2DTasks tasks;
-            {
-                std::unique_lock<std::mutex> locker(mutex_);
-                cv_.wait(locker, [this] { return !tasks_.IsEmpty() || IsFinish(); });
-                if (IsFinish() && tasks_.IsEmpty()) {
-                    PerfPoint point(PerfKey::CLIENT_H2D_FFTS_WAIT_FINISH);
-                    VLOG(1) << "Start WaitFinish";
-                    return WaitFinish();
-                }
-                std::swap(tasks, tasks_);
-                blobOffset_ = 0;
-            }
-            if (tasks.IsEmpty()) {
-                continue;
-            }
-            PerfPoint::RecordElapsed(PerfKey::CLIENT_H2D_FFTS_TASK_COUNT, tasks.srcBuffers.size());
-            PerfPoint point(PerfKey::CLIENT_H2D_FFTS_SUBMIT);
-            RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SubmitToStream(tasks.srcBuffers, tasks.destBuffers, tasks.bufferMetas),
-                                             "SubmitToStreamForH2D failed");
-        }
-        return Status::OK();
-    });
+    std::future<Status> h2dFut;
+    Status h2dRc;
+    if (inlineFfts) {
+        h2dRc = RunFfts();
+    } else {
+        h2dFut = fftsCopyPool_->Submit([this] { return RunFfts(); });
+    }
 
     Status lastRc;
     for (auto &fut : futs) {
@@ -530,12 +784,46 @@ Status FftsPipelineH2DCopier::ExecuteMemcpy(const std::vector<BufferView> &devic
         lastRc = rc.IsError() ? rc : lastRc;
     }
     point.RecordAndReset(PerfKey::CLIENT_H2D_FFTS_TAIL_WAIT);
-    auto h2dRc = h2dFut.get();
+    if (!inlineFfts) {
+        h2dRc = h2dFut.get();
+    }
     point.Record();
     if (h2dRc.IsError()) {
         lastRc = h2dRc;
     }
     return lastRc;
+}
+
+Status FftsPipelineH2DCopier::RunFfts()
+{
+    PerfPoint point(PerfKey::CLIENT_H2D_FFTS_INIT);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitAclResource(false), "InitDeviceResource failed");
+    point.RecordAndReset(PerfKey::CLIENT_H2D_FFTS_NOTIFY_START);
+    RETURN_IF_NOT_OK(NotifyStart());
+    point.RecordAndReset(PerfKey::CLIENT_H2D_FFTS_WAIT_AND_RUN);
+    bool finished = false;
+    while (!finished) {
+        PipelineH2DTasks tasks;
+        {
+            std::unique_lock<std::mutex> locker(mutex_);
+            cv_.wait(locker, [this] { return !tasks_.IsEmpty() || IsFinish(); });
+            finished = IsFinish() && tasks_.IsEmpty();
+            if (!finished) {
+                std::swap(tasks, tasks_);
+                blobOffset_ = 0;
+            }
+        }
+        if (finished || tasks.IsEmpty()) {
+            continue;
+        }
+        PerfPoint::RecordElapsed(PerfKey::CLIENT_H2D_FFTS_TASK_COUNT, tasks.srcBuffers.size());
+        PerfPoint submitPoint(PerfKey::CLIENT_H2D_FFTS_SUBMIT);
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SubmitToStream(tasks.srcBuffers, tasks.destBuffers, tasks.bufferMetas),
+                                         "SubmitToStreamForH2D failed");
+    }
+    PerfPoint waitPoint(PerfKey::CLIENT_H2D_FFTS_WAIT_FINISH);
+    VLOG(1) << "Start WaitFinish";
+    return WaitFinish();
 }
 
 void FftsPipelineH2DCopier::AddTask(size_t index, const std::vector<BufferView> &deviceBuffers)
@@ -662,20 +950,35 @@ Status FftsPipelineD2HCopier::ExecuteMemcpy(const std::vector<BufferView> &hostB
         auto rc = WaitFinish();
         point.Record();
         afterFftsFinishTimer.Reset();
-        return Status::OK();
+        return rc;
     };
 
-    auto d2hFut = fftsCopyPool_->Submit([this, &d2hTask] {
-        auto rc = d2hTask();
-        if (rc.IsError()) {
-            LOG(ERROR) << "force finish with rc:" << rc.GetMsg();
-            ForceFinish();
-        }
-        return rc;
-    });
-
     std::vector<std::future<Status>> futs;
-    futs.reserve(hostBuffers.size());
+    try {
+        futs.reserve(hostBuffers.size());
+    } catch (const std::bad_alloc &) {
+        RETURN_STATUS(K_OUT_OF_MEMORY, "Reserve D2H H2H futures failed");
+    }
+
+    std::future<Status> d2hFut;
+    try {
+        d2hFut = fftsCopyPool_->Submit([this, &d2hTask] {
+            auto rc = d2hTask();
+            if (rc.IsError()) {
+                LOG(ERROR) << "force finish with rc:" << rc.GetMsg();
+                ForceFinish();
+            }
+            return rc;
+        });
+    } catch (const std::bad_alloc &) {
+        RETURN_STATUS(K_OUT_OF_MEMORY, "Submit FFTS D2H device task failed");
+    } catch (const std::exception &e) {
+        RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Submit FFTS D2H device task failed: %s", e.what()));
+    } catch (...) {
+        RETURN_STATUS(K_RUNTIME_ERROR, "Submit FFTS D2H device task failed with unknown exception");
+    }
+
+    Status submitRc;
     while (true) {
         PerfPoint point(PerfKey::CLIENT_D2H_H2H_WAIT_START);
         PipelineH2HTasks tasks;
@@ -689,33 +992,62 @@ Status FftsPipelineD2HCopier::ExecuteMemcpy(const std::vector<BufferView> &hostB
             }
             std::swap(tasks, tasks_);
         }
-        if (tasks.IsEmpty() || skipH2HMemcpy_) {
+        if (tasks.IsEmpty() || skipH2HMemcpy_ || submitRc.IsError()) {
             continue;
         }
         PerfPoint::RecordElapsed(PerfKey::CLIENT_D2H_H2H_TASK_COUNT, tasks.indexes.size());
         for (auto index : tasks.indexes) {
-            futs.emplace_back(h2hCopyPool_->Submit([this, index, hostBuffers] {
-                CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-                    index < bufferMetas_.size(), K_RUNTIME_ERROR,
-                    FormatString("Invalid index %zu, out range of [0, %zu)", index, bufferMetas_.size()));
-                PerfPoint::RecordElapsed(PerfKey::CLIENT_D2H_H2H_MEMLEN, hostBuffers[index].size);
-                PerfPoint point(PerfKey::CLIENT_D2H_H2H_MEMCPY);
-                Status rc =
-                    aclResourceMgr_->Host()->HostMemoryCopy(hostBuffers[index].ptr, hostBuffers[index].size,
-                                                            transferHostBuffers_[index].ptr, hostBuffers[index].size);
-                return rc;
-            }));
+            try {
+                futs.emplace_back(h2hCopyPool_->Submit([this, index, hostBuffers] {
+                    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+                        index < bufferMetas_.size(), K_RUNTIME_ERROR,
+                        FormatString("Invalid index %zu, out range of [0, %zu)", index, bufferMetas_.size()));
+                    PerfPoint::RecordElapsed(PerfKey::CLIENT_D2H_H2H_MEMLEN, hostBuffers[index].size);
+                    PerfPoint point(PerfKey::CLIENT_D2H_H2H_MEMCPY);
+                    Status rc = aclResourceMgr_->Host()->HostMemoryCopy(hostBuffers[index].ptr, hostBuffers[index].size,
+                                                                        transferHostBuffers_[index].ptr,
+                                                                        hostBuffers[index].size);
+                    return rc;
+                }));
+            } catch (const std::bad_alloc &) {
+                submitRc = Status(K_OUT_OF_MEMORY, "Submit FFTS D2H H2H task failed");
+                break;
+            } catch (const std::exception &e) {
+                submitRc = Status(K_RUNTIME_ERROR, FormatString("Submit FFTS D2H H2H task failed: %s", e.what()));
+                break;
+            } catch (...) {
+                submitRc = Status(K_RUNTIME_ERROR, "Submit FFTS D2H H2H task failed with unknown exception");
+                break;
+            }
         }
     }
 
-    auto lastRc = d2hFut.get();
+    Status lastRc;
+    try {
+        lastRc = d2hFut.get();
+    } catch (const std::bad_alloc &) {
+        lastRc = Status(K_OUT_OF_MEMORY, "FFTS D2H device task failed due to out of memory");
+    } catch (const std::exception &e) {
+        lastRc = Status(K_RUNTIME_ERROR, FormatString("FFTS D2H device task threw exception: %s", e.what()));
+    } catch (...) {
+        lastRc = Status(K_RUNTIME_ERROR, "FFTS D2H device task threw unknown exception");
+    }
     for (auto &fut : futs) {
-        auto rc = fut.get();
+        Status rc;
+        try {
+            rc = fut.get();
+        } catch (const std::bad_alloc &) {
+            rc = Status(K_OUT_OF_MEMORY, "FFTS D2H H2H task failed due to out of memory");
+        } catch (const std::exception &e) {
+            rc = Status(K_RUNTIME_ERROR, FormatString("FFTS D2H H2H task threw exception: %s", e.what()));
+        } catch (...) {
+            rc = Status(K_RUNTIME_ERROR, "FFTS D2H H2H task threw unknown exception");
+        }
         lastRc = rc.IsError() ? rc : lastRc;
     }
     const int microToNano = 1000;
     PerfPoint::RecordElapsed(PerfKey::CLIENT_D2H_H2H_WAIT, afterFftsFinishTimer.ElapsedMicroSecond() * microToNano);
-    return lastRc;
+    return submitRc.IsError() ? submitRc : lastRc;
 }
 
 Status FftsPipelineD2HCopier::SubmitToStream(const std::vector<BufferView> &srcBuffers,

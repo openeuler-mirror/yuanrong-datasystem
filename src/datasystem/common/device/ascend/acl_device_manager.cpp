@@ -52,6 +52,8 @@ namespace acl {
 constexpr auto AclPluginLibrary = "libacl_plugin.so";
 constexpr int ACLPLUGIN_SO_MAX_LIMIT = 10 * 1024 * 1024;
 constexpr size_t MAX_DEVICE_MALLOC_SIZE = 12UL * 1024 * 1024 * 1024;
+// AscendCL defines ACL_ERROR_RT_MEMORY_ALLOCATION as 207001.
+constexpr int ACL_RT_MEMORY_ALLOCATION_ERROR = 207001;
 
 std::once_flag AclDeviceManager::init_;
 std::once_flag AclDeviceManager::hasLoadPlugin_;
@@ -489,7 +491,13 @@ Status AclDeviceManager::aclrtMalloc(void **devPtr, size_t size, aclrtMemMallocP
 {
     RETURN_IF_NOT_OK(CheckPluginOk());
     RETURN_RUNTIME_ERROR_IF_NULL(DSAclrtMallocFunc_);
-    RETURN_ACL_RESULT(DSAclrtMallocFunc_(devPtr, size, policy));
+    auto aclRet = DSAclrtMallocFunc_(devPtr, size, policy);
+    if (aclRet == ACL_RT_MEMORY_ALLOCATION_ERROR) {
+        RETURN_STATUS(
+            K_OUT_OF_MEMORY,
+            FormatString("ACL api failed to allocate %zu bytes of device memory, error code %d", size, aclRet));
+    }
+    RETURN_ACL_RESULT(aclRet);
 }
 
 Status AclDeviceManager::aclrtFree(void *devPtr)

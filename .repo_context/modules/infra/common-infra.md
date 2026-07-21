@@ -142,6 +142,26 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available
     because `hccs_transport.cpp` is not compiled and `ASCEND_HIXL_AVAILABLE` is not defined.
+  - Ascend local Direct H2D supports opt-in descriptor parallelism through `DS_H2D_PARALLEL_WORKER_NUM`; the default
+    value `1` keeps Direct serial. It preserves the synchronous `MGetH2D` contract and uses byte-balanced bounded ACL
+    batches only when the configured worker count is greater than one and the estimated task count can cover all
+    workers. The default aggregate size is 512 descriptors and requests below 24 MiB use serial Direct. A per-device
+    bounded worker pool binds the device once per worker; caller-runs binds before its inline task. Both paths share one
+    inflight limit, and a request drains all submitted tasks before returning the lowest-index failure. The default
+    policy remains unchanged; focused mock-backed coverage lives in
+    `tests/st/device/acl_resource_manager_fallback_test.cpp`.
+  - FFTS and Huge FFTS H2D additionally support default-off object-level parallelism through
+    `DS_H2D_FFTS_PARALLEL_WORKER_NUM` (default `1`) and `DS_H2D_FFTS_PARALLEL_MIN_BYTES` (default 24 MiB). Complete
+    objects are byte-balanced by `AclParallelFftsExecutor` across independent copier instances; every instance owns its
+    dispatcher, streams, notifies, and two device staging buffers. The executor validates the aggregate per-shard
+    staging requirement against `DS_DEVICE_ACL_SIZE` before submitting work, drains all submitted shards before
+    returning the first shard failure, and serializes calls so only one call can hold staging resources; insufficient
+    work/resources uses serial FFTS. For object sizes `S[j]` and shard maxima `M[i]`, serial FFTS needs
+    `2 * max(S[j])` device staging bytes while parallel FFTS needs `2 * sum(M[i])`; ordinary FFTS host staging remains
+    `sum(S[j])` and is not multiplied by the worker count. Only when both directions use Huge FFTS is the caller's
+    HugeTLB host buffer reused and the internal host pool skipped.
+    Execution is observable through
+    `TOTAL_H2D_PARALLEL_FFTS_MEMCPY`; configuration logging alone is not execution proof.
   - `os_transport_pipeline` is optional and only exists when pipeline H2D support is enabled.
 
 ## Observability Notes

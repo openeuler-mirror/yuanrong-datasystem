@@ -196,6 +196,11 @@
   `ConnectOptions.serviceDiscovery`. Python callers must call `service_discovery.init()` before constructing
   `KVClient`. Existing-client failover to another discovered Worker still follows the shared client contract: callers
   must set `enable_cross_node_connection=True` / `ConnectOptions::enableCrossNodeConnection=true`.
+- Ascend `MSetD2H` can opt into bounded Direct descriptor parallelism with `DS_D2H_PARALLEL_WORKER_NUM>1`, or
+  object-level FFTS parallelism with `DS_D2H_FFTS_PARALLEL_WORKER_NUM>1`; D2H uses its own `DS_D2H_PARALLEL_*` and
+  `DS_D2H_FFTS_PARALLEL_*` namespaces so Set tuning does not change the H2D Get path. Both remain synchronous at the
+  public API boundary and drain accepted tasks before returning. Parallel D2H FFTS keeps separate control and
+  device-submit pools so each object shard preserves the existing device-to-host/host-to-host pipeline overlap.
 
 ### Verified Python/C++ differences to remember
 
@@ -320,7 +325,6 @@
   - `bash build.sh -t run_cases -l st`
 - Narrow by test binary when iterating:
   - inspect `tests/ut/CMakeLists.txt` and `tests/st/CMakeLists.txt` for binaries such as `ds_ut`, `ds_ut_object`, `ds_st_object_cache`, `ds_st_kv_cache`
-
 ## Open Questions
 
 - Should service discovery be documented as a C++-only advanced entrypoint for now, since Python constructors do not currently expose it directly?
