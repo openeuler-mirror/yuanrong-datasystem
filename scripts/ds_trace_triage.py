@@ -3023,7 +3023,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   renderFlowStageTable('flow-stage-table', flowStages);
   renderFlowStageTable('read-flow-stage-table', readFlowStages);
   renderFlowStageTable('write-flow-stage-table', writeFlowStages);
-  renderPagedTable('worker-ip-alias-table', 'worker-ip-alias-table-pager', ['worker','alias','worker name','POD IP','roles','entry worker events','data worker events','trace count','lines'], buildWorkerIpAliasRows(), null, 5);
+  renderPagedTable('worker-ip-alias-table', 'worker-ip-alias-table-pager', ['worker full name','worker short name','POD IP'], buildWorkerIpAliasRows(), null, 5);
   renderTable('error-table', ['error','count'], errorRows);
   const latencyRowsForTable = [
     ['access', pctText(dim.latency_ms?.access)],
@@ -3123,77 +3123,30 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const ensure = (worker, podIp='') => {
       const key = workerPodIpKey(worker, podIp);
       return rows[key] || (rows[key] = {
-        worker:workerDisplayName(worker),
-        aliases:new Set(),
-        worker_names:new Set(),
-        pod_ips:new Set(),
-        roles:new Set(),
-        trace_ids:new Set(),
-        line_count:0,
-        entry_events:0,
-        data_events:0
+        worker_full_name:worker || 'unknown',
+        worker_short_name:workerDisplayName(worker),
+        pod_ip:podIp || ''
       });
     };
     Object.entries(dim.worker_summary || {}).forEach(([worker, item]) => {
-      const target = ensure(worker);
-      target.worker_names.add(worker);
-      target.aliases.add(workerRelationName(worker));
-      (item.roles || []).forEach(role => target.roles.add(role));
-      target.line_count += Number(item.line_count || 0);
+      ensure(worker);
     });
     traceRows.forEach(([traceId, item]) => {
       (item.evidence || []).forEach(evidence => {
         const worker = evidence.worker || '';
         if (!worker) return;
-        const target = ensure(worker, evidence.host_ip || '');
-        target.worker_names.add(worker);
-        target.aliases.add(workerRelationName(worker));
-        target.trace_ids.add(traceId);
-        if (evidence.host_ip) {
-          target.pod_ips.add(evidence.host_ip);
-        }
+        ensure(worker, evidence.host_ip || '');
       });
       Object.keys(item.workers || {}).forEach(worker => {
-        const matched = Object.values(rows).filter(row => row.worker_names.has(worker));
-        const targets = matched.length ? matched : [ensure(worker)];
-        targets.forEach(target => {
-          target.worker_names.add(worker);
-          target.aliases.add(workerRelationName(worker));
-          target.trace_ids.add(traceId);
-        });
-      });
-      (item.ub_events || []).forEach(event => {
-        const worker = event.worker || '';
-        if (!worker) return;
-        const matched = Object.values(rows).filter(row => row.worker_names.has(worker) && row.trace_ids.has(traceId));
-        const targets = matched.length ? matched : [ensure(worker)];
-        targets.forEach(target => {
-          target.worker_names.add(worker);
-          target.aliases.add(workerRelationName(worker));
-          target.trace_ids.add(traceId);
-          if (['transfer_path','remote_get_start'].includes(event.event_type)) {
-            target.roles.add('entry_worker');
-            target.entry_events += 1;
-          }
-          if (['total','poll_jfc','notify','thread_sched'].includes(event.event_type)) {
-            target.roles.add('data_worker');
-            target.data_events += 1;
-          }
-        });
+        ensure(worker);
       });
     });
     return Object.values(rows)
-      .sort((a,b) => b.trace_ids.size - a.trace_ids.size || b.line_count - a.line_count || a.worker.localeCompare(b.worker))
+      .sort((a,b) => a.worker_full_name.localeCompare(b.worker_full_name) || a.pod_ip.localeCompare(b.pod_ip))
       .map(item => [
-        item.worker,
-        [...item.aliases].sort().join(', '),
-        [...item.worker_names].sort().join(', '),
-        [...item.pod_ips].sort().join(', '),
-        [...item.roles].sort().join(', '),
-        item.entry_events,
-        item.data_events,
-        item.trace_ids.size,
-        item.line_count
+        item.worker_full_name,
+        item.worker_short_name,
+        item.pod_ip || 'unknown'
       ]);
   }
   function workerRowsForOperation(operation, selectedWorker='') {
