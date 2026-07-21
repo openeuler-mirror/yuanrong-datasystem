@@ -241,6 +241,21 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "routing_topology_convergence_test",
+    srcs = ["routing_topology_convergence_test.cpp"],
+    tags = ["manual"],
+    deps = KV_COMMON_DEPS + [
+        "//src/datasystem/client/routing:routing",
+        "//src/datasystem/client:client_transport",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
     name = "kv_client_dist_master_test",
     srcs = ["kv_client_dist_master_test.cpp"],
     tags = ["manual"],
