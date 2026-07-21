@@ -2104,17 +2104,29 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return String(name || '').replace(/^DS_/, '').replace(/_/g, ' ');
   }
   const tableSortStates = {};
-  function sortCellValue(value) {
+  function sortCellValue(value, header) {
+    const lowerHeader = String(header || '').toLowerCase();
     const text = String(value ?? '').replace(/<[^>]*>/g, '').trim();
-    const numberMatch = text.match(/-?\\d+(?:\\.\\d+)?/);
-    if (numberMatch) return {type:'number', value:Number(numberMatch[0]), text};
+    const distributionMatch = text.match(/\\b(max|p99|p90|p50|count)=(-?\\d+(?:\\.\\d+)?)/gi);
+    if (distributionMatch && /(distribution|latency|access)/.test(lowerHeader)) {
+      const scores = Object.fromEntries(distributionMatch.map(part => {
+        const [, key, raw] = part.match(/(max|p99|p90|p50|count)=(-?\\d+(?:\\.\\d+)?)/i);
+        return [key.toLowerCase(), Number(raw)];
+      }));
+      return {type:'number', value:scores.max ?? scores.p99 ?? scores.p90 ?? scores.p50 ?? scores.count ?? 0, text};
+    }
+    if (/(time|trace|worker|edge|classification|status|access)/.test(lowerHeader) && !/(latency ms|p50|p90|p99|max|count|events|lines|traces|slow|errors|duration|total|wait|wake|poll|notify|sched|data size|cpuid)/.test(lowerHeader)) {
+      return {type:'text', value:text.toLowerCase(), text};
+    }
+    if (typeof value === 'number') return {type:'number', value, text};
+    if (/^-?\\d+(?:\\.\\d+)?$/.test(text)) return {type:'number', value:Number(text), text};
     return {type:'text', value:text.toLowerCase(), text};
   }
-  function sortRowsForTable(rows, sort) {
+  function sortRowsForTable(rows, sort, headers=[]) {
     if (!sort || sort.index === undefined || sort.index === null) return rows.slice();
     return rows.map((row, originalIndex) => ({row, originalIndex})).sort((a, b) => {
-      const av = sortCellValue(a.row[sort.index]);
-      const bv = sortCellValue(b.row[sort.index]);
+      const av = sortCellValue(a.row[sort.index], headers[sort.index]);
+      const bv = sortCellValue(b.row[sort.index], headers[sort.index]);
       let cmp = 0;
       if (av.type === 'number' && bv.type === 'number') cmp = av.value - bv.value;
       else cmp = av.text.localeCompare(bv.text, 'zh-CN', {numeric:true});
@@ -2130,7 +2142,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const table = document.getElementById(id);
     const sortable = options.sortable !== false;
     const sortState = options.sortState || tableSortStates[id];
-    const visibleRows = options.skipSort ? rows.slice() : sortRowsForTable(rows, sortState);
+    const visibleRows = options.skipSort ? rows.slice() : sortRowsForTable(rows, sortState, headers);
     const headerHtml = headers.map((h, index) => {
       const active = sortState && sortState.index === index;
       const mark = active ? `<span class="sort-mark">${sortState.dir === 'asc' ? '▲' : '▼'}</span>` : '<span class="sort-mark">↕</span>';
@@ -2185,7 +2197,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const pagedTables = {};
   function renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize=5) {
     const state = pagedTables[id] || (pagedTables[id] = {page:0, sort:null});
-    const sortedRows = sortRowsForTable(rows, state.sort);
+    const sortedRows = sortRowsForTable(rows, state.sort, headers);
     const pages = Math.max(1, Math.ceil(sortedRows.length / pageSize));
     state.page = Math.min(Math.max(state.page, 0), pages - 1);
     const start = state.page * pageSize;
@@ -2788,14 +2800,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         Object.keys(item.workers || {}).slice(0, 6).join(', ')
       ]);
     }
-    const sortedDisplayRows = sortRowsForTable(topTraceDisplayRows(filteredTraceRows), topTraceSort);
+    const topTraceHeaders = ['time','trace','classification','latency ms','errors','access','workers'];
+    const sortedDisplayRows = sortRowsForTable(topTraceDisplayRows(filteredTraceRows), topTraceSort, topTraceHeaders);
     if (!sortedDisplayRows.some(row => row[1] === selectedTraceId)) {
       selectedTraceId = sortedDisplayRows[0]?.[1] || null;
     }
     const totalPages = Math.max(Math.ceil(sortedDisplayRows.length / pageSize), 1);
     currentPage = Math.min(Math.max(currentPage, 0), totalPages - 1);
     const pageRows = sortedDisplayRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-    renderTable('top-trace-table', ['time','trace','classification','latency ms','errors','access','workers'], pageRows,
+    renderTable('top-trace-table', topTraceHeaders, pageRows,
       row => `data-trace="${escapeHtml(row[1])}" class="${row[1] === selectedTraceId ? 'selected-row' : ''}"`,
       {
         skipSort:true,
