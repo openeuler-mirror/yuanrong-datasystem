@@ -275,12 +275,34 @@
      runtime composition dependency and no longer appears in the object-cache aggregate library or Bazel package.
      Boundary tests assert the file stays out of `worker/object_cache`, while the scope-classification target remains
      independent of object-cache transport details.
+  9. topology callback object-cache actions are injected through `IWorkerTopologyObjectCacheActions`. Runtime callback
+     code now owns the event sequencing and no longer includes or depends on `WorkerOCServiceImpl`; object-cache owns the
+     concrete `WorkerTopologyObjectCacheActions` adapter that drains ScaleIn data, prepares ScaleIn cleanup, and submits
+     Failure local cleanup. Boundary tests assert `worker_topology_phase_callbacks` stays free of
+     `worker_oc_service_impl` build and include dependencies.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
     in 124s with third-party cache hit in 0s, `worker_control_backend_probe`, `datasystem_worker_static`,
     `datasystem_worker_shared`, and `datasystem_worker_bin` all green.
-  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 10 tests, 0.011s.
+  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 11 tests, 0.006s after adding the
+    topology-callback/object-cache boundary assertion.
+  - `scripts/clion_remote_build.sh index`: source build green in 298s, total 379s, third-party cache hit in 0s,
+    `BUILD_WITH_URMA_MOCK` enabled; `worker_topology_phase_callbacks`, `worker_object_cache`,
+    `datasystem_worker_static`, `datasystem_worker_shared`, and `datasystem_worker_bin` all green. The script emitted
+    known repeated-strip `debuglink section already exists` diagnostics but exited 0.
+  - `scripts/clion_remote_build.sh tests-index`: full UT/ST index build green in 506s, third-party cache hit in 1s,
+    `BUILD_WITH_URMA_MOCK` enabled, generated 1150 compile-command entries including
+    `worker_topology_object_cache_actions.cpp`, `worker_topology_phase_callbacks.cpp`,
+    `topology_phase_callbacks_test.cpp`, `worker_runtime_facade.cpp`, `worker_oc_server.cpp`, and
+    `metadata_recovery_manager_test.cpp`.
+  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 11 tests, 0.004s after the final
+    topology-callback/object-cache boundary split.
+  - `ds_ut_object --gtest_filter=TopologyBusinessContractTest.*`: 3 tests, 0.05s; covers opaque topology business
+    entrypoints, object-cache failure local actions injected behind the hook, and topology operation identity on
+    RemoveMeta.
+  - `ds_ut --gtest_filter=WorkerRuntimeFacadeTest.*:WorkerTopologyAvailabilityAdmissionTest.*:WorkerServiceAdmissionTest.*`:
+    20 tests, 0.11s.
   - `ds_ut --gtest_filter=WorkerControlBackendScopeTest.*:WorkerRuntimeFacadeTest.*:WorkerTopologyAvailabilityAdmissionTest.*`:
     19 tests, 0.05s.
   - `cluster_topology_contract_ut --gtest_filter=TopologyEngineTest.*:TopologyFailureClassifierTest.*:HashAlgorithmTest.ScaleOutDoesNotUseFailedWorkerAsMigrationSource`:

@@ -30,10 +30,6 @@ namespace datasystem {
 
 class MetadataManagerHolder;
 
-namespace object_cache {
-class WorkerOCServiceImpl;
-}
-
 namespace master {
 class OCMetadataManager;
 class SCMetadataManager;
@@ -43,17 +39,32 @@ namespace worker {
 
 using TopologyReadinessCheck =
     std::function<Status(std::chrono::steady_clock::time_point, const cluster::CancellationToken &)>;
-using ObjectCacheServiceProvider = std::function<object_cache::WorkerOCServiceImpl *()>;
 
 /**
- * @brief Inject Worker-local actions triggered by topology Failure callbacks.
+ * @brief Inject object-cache actions triggered by Worker topology callbacks.
  */
-class IWorkerTopologyFailureActions {
+class IWorkerTopologyObjectCacheActions {
 public:
     /**
      * @brief Destroy the injected action interface.
      */
-    virtual ~IWorkerTopologyFailureActions() = default;
+    virtual ~IWorkerTopologyObjectCacheActions() = default;
+
+    /**
+     * @brief Drain local object-cache data for one ScaleIn batch.
+     * @param[in] context Fenced callback context.
+     * @return Drain status.
+     */
+    virtual Status DrainScaleInData(const cluster::TopologyCallbackContext &context) = 0;
+
+    /**
+     * @brief Prepare object-cache ScaleIn cleanup authorization and effect.
+     * @param[in] context Fenced callback context.
+     * @param[out] prepared Executor-owned cleanup authorization and effect.
+     * @return Preparation status.
+     */
+    virtual Status PrepareScaleInCleanup(const cluster::TopologyCallbackContext &context,
+                                         std::unique_ptr<cluster::TopologyPreparedCleanup> &prepared) = 0;
 
     /**
      * @brief Run object-cache local data cleanup for one Failure callback.
@@ -61,34 +72,6 @@ public:
      * @return Cleanup status.
      */
     virtual Status CleanupLocalData(const cluster::TopologyCallbackContext &context) = 0;
-
-    /**
-     * @brief Drop local RPC stubs that point to the failed member.
-     * @param[in] action Failure action facts.
-     * @return Cleanup status.
-     */
-    virtual Status CleanupRpcStub(const cluster::TopologyPhaseAction &action) = 0;
-};
-
-/**
- * @brief Default Worker failure actions backed by the Worker object-cache service and local RPC cache.
- */
-class WorkerTopologyFailureActions final : public IWorkerTopologyFailureActions {
-public:
-    /**
-     * @brief Construct default failure actions from a late-bound object-cache service provider.
-     * @param[in] objectCacheServiceProvider Provider used after Worker service construction.
-     */
-    explicit WorkerTopologyFailureActions(ObjectCacheServiceProvider objectCacheServiceProvider);
-
-    ~WorkerTopologyFailureActions() override = default;
-
-    Status CleanupLocalData(const cluster::TopologyCallbackContext &context) override;
-
-    Status CleanupRpcStub(const cluster::TopologyPhaseAction &action) override;
-
-private:
-    ObjectCacheServiceProvider objectCacheServiceProvider_;
 };
 
 /**
@@ -99,9 +82,8 @@ struct WorkerTopologyPhaseCallbackDependencies {
     bool localMetadataMaster;
     bool streamMetadataEnabled;
     MetadataManagerHolder &metadataManagers;
-    ObjectCacheServiceProvider objectCacheServiceProvider;
     TopologyReadinessCheck readinessCheck;
-    std::shared_ptr<IWorkerTopologyFailureActions> failureActions;
+    std::shared_ptr<IWorkerTopologyObjectCacheActions> objectCacheActions;
 };
 
 /**
@@ -185,11 +167,9 @@ private:
     /**
      * @brief Run or join the member-wide local data drain for one ScaleIn batch.
      * @param[in] context Fenced callback context.
-     * @param[in] objectCacheService Late-bound Worker object-cache service.
      * @return Drain status or a bounded wait error.
      */
-    Status DrainScaleInData(const cluster::TopologyCallbackContext &context,
-                            object_cache::WorkerOCServiceImpl &objectCacheService);
+    Status DrainScaleInData(const cluster::TopologyCallbackContext &context);
 
     /**
      * @brief Acquire the member-wide drain leadership or observe a completed drain.
@@ -205,12 +185,6 @@ private:
      * @param[in] status Drain attempt result.
      */
     void CompleteScaleInDrain(const cluster::TopologyCallbackContext &context, const Status &status);
-
-    /**
-     * @brief Resolve the late-bound object-cache service after Worker service construction.
-     * @return Worker-owned service pointer, or nullptr before construction or when object cache is disabled.
-     */
-    object_cache::WorkerOCServiceImpl *GetObjectCacheService() const;
 
     /**
      * @brief Retain and log the first best-effort Failure step error.
@@ -242,9 +216,8 @@ private:
     const bool localMetadataMaster_;
     const bool streamMetadataEnabled_;
     MetadataManagerHolder &metadataManagers_;
-    ObjectCacheServiceProvider objectCacheServiceProvider_;
     TopologyReadinessCheck readinessCheck_;
-    std::shared_ptr<IWorkerTopologyFailureActions> failureActions_;
+    std::shared_ptr<IWorkerTopologyObjectCacheActions> objectCacheActions_;
     // Protects scaleInDrainState_; peer ScaleIn task callbacks wait on scaleInDrainChanged_.
     std::mutex scaleInDrainMutex_;
     std::condition_variable scaleInDrainChanged_;

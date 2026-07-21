@@ -97,9 +97,9 @@ TEST(TopologyBusinessContractTest, ExposesOnlyOpaqueTaskLevelBusinessEntryPoints
 
 TEST(TopologyBusinessContractTest, FailureLocalActionsAreInjectedBehindHook)
 {
-    EXPECT_TRUE((std::is_class_v<worker::IWorkerTopologyFailureActions>));
-    EXPECT_TRUE((std::is_same_v<decltype(worker::WorkerTopologyPhaseCallbackDependencies::failureActions),
-                                std::shared_ptr<worker::IWorkerTopologyFailureActions>>));
+    EXPECT_TRUE((std::is_class_v<worker::IWorkerTopologyObjectCacheActions>));
+    EXPECT_TRUE((std::is_same_v<decltype(worker::WorkerTopologyPhaseCallbackDependencies::objectCacheActions),
+                                std::shared_ptr<worker::IWorkerTopologyObjectCacheActions>>));
 }
 
 TEST(TopologyBusinessContractTest, RemoveMetaCarriesTopologyOperationIdentity)

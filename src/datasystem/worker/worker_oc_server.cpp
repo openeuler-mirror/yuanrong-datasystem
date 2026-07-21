@@ -85,6 +85,7 @@
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
+#include "datasystem/worker/object_cache/worker_topology_object_cache_actions.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
@@ -997,9 +998,10 @@ Status WorkerOCServer::ConstructTopologyCallbacks()
         }
         return Status::OK();
     };
+    auto objectCacheProvider = [this] { return objCacheClientWorkerSvc_.get(); };
     topologyTaskCallbacks_ = std::make_unique<WorkerTopologyPhaseCallbacks>(WorkerTopologyPhaseCallbackDependencies{
-        centralizedMetadata, localMetadataMaster, EnableSCService(), *metadataManagerHolder_,
-        [this] { return objCacheClientWorkerSvc_.get(); }, std::move(readinessCheck) });
+        centralizedMetadata, localMetadataMaster, EnableSCService(), *metadataManagerHolder_, std::move(readinessCheck),
+        std::make_shared<object_cache::WorkerTopologyObjectCacheActions>(objectCacheProvider) });
     return Status::OK();
 }
 

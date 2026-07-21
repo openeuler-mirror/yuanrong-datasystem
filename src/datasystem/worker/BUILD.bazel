@@ -242,6 +242,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:master_worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:object_endpoint_policy",
         "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_topology_object_cache_actions",
         "//src/datasystem/worker/object_cache:worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:worker_worker_oc_service_impl",
         "//src/datasystem/worker/object_cache:worker_worker_peer_state_codec",

@@ -47,6 +47,31 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         runtime_bazel = REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel"
         self.assertIn('name = "worker_control_backend_probe"', runtime_bazel.read_text(encoding="utf-8"))
 
+    def test_topology_phase_callbacks_do_not_depend_on_object_cache_service_impl(self):
+        runtime_files = [
+            REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel",
+            REPO_ROOT / "src/datasystem/worker/runtime/CMakeLists.txt",
+            REPO_ROOT / "src/datasystem/worker/runtime/worker_topology_phase_callbacks.h",
+            REPO_ROOT / "src/datasystem/worker/runtime/worker_topology_phase_callbacks.cpp",
+        ]
+
+        forbidden_tokens = [
+            "worker_oc_service_impl",
+            "//src/datasystem/worker/object_cache:worker_oc_service_impl",
+            "datasystem/worker/object_cache/worker_oc_service_impl.h",
+            "object_cache::WorkerOCServiceImpl",
+        ]
+
+        for file_path in runtime_files:
+            text = file_path.read_text(encoding="utf-8")
+            if file_path.name == "BUILD.bazel":
+                text = text.split('name = "worker_topology_phase_callbacks"', 1)[1]
+                text = text.split("ds_cc_library(", 1)[0]
+            elif file_path.name == "CMakeLists.txt":
+                text = text.split("add_library(worker_topology_phase_callbacks", 1)[1]
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use injected topology object-cache actions")
+
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/slot_recovery/BUILD.bazel",

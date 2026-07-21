@@ -186,6 +186,5 @@ ds_cc_library(
         "//src/datasystem/master/object_cache:oc_migrate_metadata_manager",
         "//src/datasystem/master/stream_cache:sc_metadata_manager",
         "//src/datasystem/master/stream_cache:sc_migrate_metadata_manager",
-        "//src/datasystem/worker/object_cache:worker_oc_service_impl",
     ],
 )

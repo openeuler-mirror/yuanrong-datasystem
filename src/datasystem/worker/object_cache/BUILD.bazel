@@ -738,6 +738,21 @@ ds_cc_library(
     ],
 )
 
+ds_cc_library(
+    name = "worker_topology_object_cache_actions",
+    srcs = [
+        "worker_topology_object_cache_actions.cpp",
+    ],
+    hdrs = [
+        "worker_topology_object_cache_actions.h",
+    ],
+    deps = [
+        ":worker_oc_service_impl",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/worker/runtime:worker_topology_phase_callbacks",
+    ],
+)
+
 # success
 ds_cc_library(
     name = "obj_cache_hashmap",

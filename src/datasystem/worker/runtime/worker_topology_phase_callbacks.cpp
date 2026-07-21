@@ -29,7 +29,6 @@
 #include "datasystem/master/object_cache/oc_migrate_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_metadata_manager.h"
 #include "datasystem/master/stream_cache/sc_migrate_metadata_manager.h"
-#include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 
 namespace datasystem::worker {
 namespace {
@@ -102,31 +101,9 @@ WorkerTopologyPhaseCallbacks::WorkerTopologyPhaseCallbacks(WorkerTopologyPhaseCa
       localMetadataMaster_(dependencies.localMetadataMaster),
       streamMetadataEnabled_(dependencies.streamMetadataEnabled),
       metadataManagers_(dependencies.metadataManagers),
-      objectCacheServiceProvider_(std::move(dependencies.objectCacheServiceProvider)),
       readinessCheck_(std::move(dependencies.readinessCheck)),
-      failureActions_(std::move(dependencies.failureActions))
+      objectCacheActions_(std::move(dependencies.objectCacheActions))
 {
-    if (failureActions_ == nullptr) {
-        failureActions_ = std::make_shared<WorkerTopologyFailureActions>(objectCacheServiceProvider_);
-    }
-}
-
-WorkerTopologyFailureActions::WorkerTopologyFailureActions(ObjectCacheServiceProvider objectCacheServiceProvider)
-    : objectCacheServiceProvider_(std::move(objectCacheServiceProvider))
-{
-}
-
-Status WorkerTopologyFailureActions::CleanupLocalData(const cluster::TopologyCallbackContext &context)
-{
-    auto *objectCacheService = objectCacheServiceProvider_ == nullptr ? nullptr : objectCacheServiceProvider_();
-    CHECK_FAIL_RETURN_STATUS(objectCacheService != nullptr, K_NOT_READY, "object-cache service is not initialized");
-    return objectCacheService->SubmitTopologyFailureCleanup(
-        context.action, context.keyFilter, context.businessOperationId, context.deadline, context.cancellation);
-}
-
-Status WorkerTopologyFailureActions::CleanupRpcStub(const cluster::TopologyPhaseAction &action)
-{
-    return EraseFailedWorkerWorkerStub(action);
 }
 
 Status WorkerTopologyPhaseCallbacks::OnScaleOut(const cluster::TopologyCallbackContext &context)
@@ -164,12 +141,8 @@ Status WorkerTopologyPhaseCallbacks::OnScaleInDataDrain(const cluster::TopologyC
         } else {
             rc = readinessCheck_(context.deadline, context.cancellation);
         }
-        auto *objectCacheService = GetObjectCacheService();
-        if (rc.IsOk() && objectCacheService == nullptr) {
-            rc = Status(K_NOT_READY, "Worker object-cache service is not initialized");
-        }
         if (rc.IsOk()) {
-            rc = DrainScaleInData(context, *objectCacheService);
+            rc = DrainScaleInData(context);
         }
     }
     LogCallbackResult("scale_in_data_drain", context, start, rc);
@@ -181,19 +154,12 @@ Status WorkerTopologyPhaseCallbacks::PrepareScaleInCleanup(const cluster::Topolo
 {
     const auto start = std::chrono::steady_clock::now();
     auto rc = CheckContext(context);
-    auto *objectCacheService = GetObjectCacheService();
-    if (rc.IsOk() && objectCacheService == nullptr) {
-        rc = Status(K_NOT_READY, "Worker object-cache service is not initialized");
-    }
-    std::function<Status()> authorize;
-    cluster::TopologyCleanupEffect apply;
     if (rc.IsOk()) {
-        rc = objectCacheService->PrepareTopologyScaleInCleanup(context.action, context.keyFilter,
-                                                               context.businessOperationId, context.deadline,
-                                                               context.cancellation, authorize, apply);
-    }
-    if (rc.IsOk()) {
-        prepared = std::make_unique<cluster::TopologyPreparedCleanup>(std::move(authorize), std::move(apply));
+        if (objectCacheActions_ == nullptr) {
+            rc = Status(K_NOT_READY, "Worker object-cache topology actions are not initialized");
+        } else {
+            rc = objectCacheActions_->PrepareScaleInCleanup(context, prepared);
+        }
     }
     LogCallbackResult("scale_in_cleanup_prepare", context, start, rc);
     return rc;
@@ -278,23 +244,18 @@ void WorkerTopologyPhaseCallbacks::CompleteScaleInDrain(const cluster::TopologyC
               << " status=" << status.ToString();
 }
 
-Status WorkerTopologyPhaseCallbacks::DrainScaleInData(const cluster::TopologyCallbackContext &context,
-                                                      object_cache::WorkerOCServiceImpl &objectCacheService)
+Status WorkerTopologyPhaseCallbacks::DrainScaleInData(const cluster::TopologyCallbackContext &context)
 {
     bool leader = false;
     RETURN_IF_NOT_OK(AcquireScaleInDrain(context, leader));
     if (!leader) {
         return Status::OK();
     }
-    auto status = objectCacheService.DrainTopologyScaleInData(context.action, context.businessOperationId,
-                                                              context.deadline, context.cancellation);
+    auto status = objectCacheActions_ == nullptr
+                      ? Status(K_NOT_READY, "Worker object-cache topology actions are not initialized")
+                      : objectCacheActions_->DrainScaleInData(context);
     CompleteScaleInDrain(context, status);
     return status;
-}
-
-object_cache::WorkerOCServiceImpl *WorkerTopologyPhaseCallbacks::GetObjectCacheService() const
-{
-    return objectCacheServiceProvider_ == nullptr ? nullptr : objectCacheServiceProvider_();
 }
 
 void WorkerTopologyPhaseCallbacks::RecordFailureStep(const std::string &step, const Status &status,
@@ -358,11 +319,11 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
                                                                   context.deadline, context.cancellation),
                           firstError);
     }
-    if (failureActions_ == nullptr) {
-        RecordFailureStep("cleanup-local-data", Status(K_NOT_READY, "Worker failure actions are not initialized"),
+    if (objectCacheActions_ == nullptr) {
+        RecordFailureStep("cleanup-local-data", Status(K_NOT_READY, "Worker object-cache actions are not initialized"),
                           firstError);
     } else {
-        RecordFailureStep("cleanup-local-data", failureActions_->CleanupLocalData(context), firstError);
+        RecordFailureStep("cleanup-local-data", objectCacheActions_->CleanupLocalData(context), firstError);
     }
     if (!centralizedMetadata_ && ocMetadata != nullptr) {
         RecordFailureStep("cleanup-device",
@@ -376,12 +337,7 @@ void WorkerTopologyPhaseCallbacks::RunFailureCleanup(const cluster::TopologyCall
     // TCP link info and kept retrying the 25 kill-9'd workers.
     // Unconditional: every worker owns its own RpcStubCacheMgr regardless of
     // metadata mode. Remove is idempotent (K_NOT_FOUND is benign).
-    if (failureActions_ == nullptr) {
-        RecordFailureStep("cleanup-rpc-stub", Status(K_NOT_READY, "Worker failure actions are not initialized"),
-                          firstError);
-    } else {
-        RecordFailureStep("cleanup-rpc-stub", failureActions_->CleanupRpcStub(context.action), firstError);
-    }
+    RecordFailureStep("cleanup-rpc-stub", EraseFailedWorkerWorkerStub(context.action), firstError);
 }
 
 }  // namespace datasystem::worker
