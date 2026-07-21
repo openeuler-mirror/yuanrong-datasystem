@@ -52,8 +52,8 @@ URMA_THREAD_LOOP_GAP_RE = re.compile(
 )
 URMA_PERF_RE = re.compile(r"\[URMA_PERF\].*?([A-Za-z][A-Za-z0-9_./-]*)\s*[:=]\s*([\d.]+)\s*(us|ms)?", re.I)
 REQUEST_ID_RE = re.compile(r"(?:request id\s*:|requestId[:=])\s*([A-Za-z0-9_-]+)", re.I)
-SRC_ADDR_RE = re.compile(r"src address:([^\s,]+)", re.I)
-DST_ADDR_RE = re.compile(r"(?:target|dst) address:([^\s,]+)", re.I)
+SRC_ADDR_RE = re.compile(r"src address:\s*([^\s,]+)", re.I)
+DST_ADDR_RE = re.compile(r"(?:target|dst) address:\s*([^\s,]+)", re.I)
 DATA_SIZE_RE = re.compile(r"dataSize:(\d+)|size\[(\d+)\]", re.I)
 CPUID_RE = re.compile(r"cpuid:\s*(\d+)", re.I)
 STATUS_RE = re.compile(r"status:\s*([^,]+)", re.I)
@@ -3401,7 +3401,7 @@ def _make_self_test_bundle(path):
         f"2026-07-18T19:20:03.110000 | INFO | client | 192.0.2.10 | 42 | {trace_id} | Get done latencySummary:{{client.rpc.get:20298, client.process.get:10}}",
         f"2026-07-18T19:20:03.130000 | INFO | worker | 192.0.2.10 | 42 | {trace_id} | [Get] Done, totalCost: 518.9ms, exceed 3ms: {{ ProcessGetObjectRequest: 517 ms, QueryMeta: 0 ms }}",
         f"2026-07-18T19:20:03.150000 | WARN | worker | 192.0.2.10 | 42 | {trace_id} | [ZMQ_RPC_FRAMEWORK_SLOW] e2e_us=8012 client_req_framework_us=100 remote_processing_us=7600 client_rsp_framework_us=120 server_req_queue_us=20 server_exec_us=7500 server_rsp_queue_us=80 network_residual_us=292 method=WorkerOCService.Get",
-        f"2026-07-18T19:20:03.200000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_TOTAL] cost 517.732ms, request id:77, src address:192.0.2.20:31501, target address:192.0.2.10:31501, dataSize:4194304, cpuid:12, status: OK",
+        f"2026-07-18T19:20:03.200000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_TOTAL] cost 517.732ms, request id:77, src address: 192.0.2.20, target address: 192.0.2.10, dataSize:4194304, cpuid:12, status: OK",
         f"2026-07-18T19:20:03.201000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_POLL_JFC] cost 0.309ms, request id:77",
         f"2026-07-18T19:20:03.202000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_NOTIFY] cost 0.041ms, request id:77",
         f"2026-07-18T19:20:03.203000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_THREAD_SHED] cost 12.500ms, request id:77",
