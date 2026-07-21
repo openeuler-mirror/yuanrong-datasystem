@@ -2470,6 +2470,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const instance = echarts.getInstanceByDom(node) || echarts.init(node);
     instance.setOption(option, true);
   }
+  function autoCenterFlowGraph(chartInstance) {
+    if (!chartInstance) return;
+    if (chartInstance.dispatchAction) chartInstance.dispatchAction({type:'restore'});
+    if (chartInstance.resize) chartInstance.resize();
+  }
   function downloadText(filename, text) {
     const blob = new Blob([text], {type:'text/plain;charset=utf-8'});
     const link = document.createElement('a');
@@ -3160,6 +3165,17 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function renderFlowGraph(id, graph, title) {
     chart(id, {
     title:{show:false,text:title},
+    toolbox:{right:10,feature:{
+      saveAsImage:{},
+      dataView:{readOnly:true},
+      restore:{},
+      myAutoCenter:{
+        show:true,
+        title:'自适应居中',
+        icon:'path://M512 128l96 96-48 48-16-16v160h160l-16-16 48-48 96 96-96 96-48-48 16-16H544v160l16-16 48 48-96 96-96-96 48-48 16 16V608H320l16 16-48 48-96-96 96-96 48 48-16 16h160V384H320l16 16-48 48-96-96 96-96 48 48-16 16h160V256l-16 16-48-48 96-96z',
+        onclick:(ecModel, api) => autoCenterFlowGraph(api)
+      }
+    }},
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
       : `${escapeHtml(p.data.label || p.data.name)}<br>${escapeHtml((p.data.top_ips || []).join(', '))}`},

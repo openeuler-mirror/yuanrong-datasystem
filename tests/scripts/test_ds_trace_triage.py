@@ -382,6 +382,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"flow-stage-chart\"" in html
     assert "id=\"read-flow-stage-chart\"" in html
     assert "id=\"write-flow-stage-chart\"" in html
+    assert "function autoCenterFlowGraph(chartInstance)" in html
+    assert "myAutoCenter" in html
+    assert "title:'自适应居中'" in html
+    assert "dataView:{readOnly:true}" in html
     assert "id=\"flow-stage-table\"" in html
     assert "id=\"read-flow-stage-table\"" in html
     assert "id=\"write-flow-stage-table\"" in html
