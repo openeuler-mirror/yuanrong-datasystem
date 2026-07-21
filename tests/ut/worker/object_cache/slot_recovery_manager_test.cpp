@@ -136,6 +136,25 @@ std::shared_ptr<FakePersistenceApi> BuildSingleMetaPreloadApi(const std::string 
         });
 }
 
+std::shared_ptr<FakePersistenceApi> BuildTwoMetaPreloadApi(const std::string &expectedSourceWorker,
+                                                           uint32_t expectedSlot, const std::string &firstObjectKey,
+                                                           const std::string &secondObjectKey)
+{
+    return std::make_shared<FakePersistenceApi>(
+        [expectedSourceWorker, expectedSlot, firstObjectKey, secondObjectKey](
+            const std::string &sourceWorkerAddress, uint32_t slotId, const SlotPreloadCallback &callback) {
+            EXPECT_EQ(sourceWorkerAddress, expectedSourceWorker);
+            EXPECT_EQ(slotId, expectedSlot);
+            for (const auto &objectKey : { firstObjectKey, secondObjectKey }) {
+                SlotPreloadMeta meta{ objectKey, 1, WriteMode::WRITE_THROUGH_L2_CACHE, 11 };
+                auto content = std::make_shared<std::stringstream>();
+                (*content) << "payload";
+                RETURN_IF_NOT_OK(callback(meta, content));
+            }
+            return Status::OK();
+        });
+}
+
 void ExpectRecoverLocalEntriesAlwaysOk()
 {
     BINEXPECT_CALL((RecoverLocalEntriesMethod)&MetaDataRecoveryManager::RecoverLocalEntries, (_, _, _))
@@ -1286,6 +1305,59 @@ TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskDeferOnRpcUnavailable)
     DS_ASSERT_OK(manager.ExecuteRecoveryTask(task));
     ASSERT_TRUE(WaitUntil([&recoverMetadataCalls]() { return recoverMetadataCalls.load() >= 2; }));
     manager.Shutdown();
+}
+
+TEST_F(SlotRecoveryTest, RecoveryMetadataBatchRetriesOnlyFailedIdsAfterMembershipChange)
+{
+    LOG(INFO) << "Scenario: mixed metadata recovery should keep succeeded entries recovered while retrying only "
+              << "the failed ids after the coordination path becomes available again.";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 7201), store);
+    constexpr const char *kSucceededObject = "tenant/object_succeeded";
+    constexpr const char *kDeferredObject = "tenant/object_deferred";
+    auto persistApi = BuildTwoMetaPreloadApi("127.0.0.1:7200", 1, kSucceededObject, kDeferredObject);
+    MetaDataRecoveryManager metadataManager(HostPort("127.0.0.1", 7201), nullptr,
+                                            MetaDataRecoveryManager::ClusterAccess{}, nullptr, GetTestMetadataRoute());
+    ExpectRecoverLocalEntriesAlwaysOk();
+
+    std::atomic<int> recoverMetadataCalls{ 0 };
+    std::mutex pushedMutex;
+    std::vector<std::vector<std::string>> pushedBatches;
+    BINEXPECT_CALL((RecoverMetadataMethod)&MetaDataRecoveryManager::RecoverMetadata, (_, _, _))
+        .WillRepeatedly(
+            Invoke([&](const std::vector<ObjectMetaPb> &metas, std::vector<std::string> &failedIds, std::string) {
+                std::vector<std::string> objectKeys;
+                for (const auto &meta : metas) {
+                    objectKeys.emplace_back(meta.object_key());
+                }
+                {
+                    std::lock_guard<std::mutex> lock(pushedMutex);
+                    pushedBatches.emplace_back(objectKeys);
+                }
+
+                if (++recoverMetadataCalls == 1) {
+                    EXPECT_THAT(objectKeys,
+                                UnorderedElementsAre(std::string(kSucceededObject), std::string(kDeferredObject)));
+                    failedIds = { kDeferredObject };
+                    return Status(K_RPC_UNAVAILABLE, __LINE__, __FILE__, "membership transition");
+                }
+                EXPECT_THAT(objectKeys, ElementsAre(std::string(kDeferredObject)));
+                failedIds.clear();
+                return Status::OK();
+            }));
+
+    auto task = BuildSingleSlotTask("127.0.0.1:7200", 1);
+
+    DS_ASSERT_OK(manager.InitForTest(persistApi, &metadataManager));
+    DS_ASSERT_OK(manager.ExecuteRecoveryTask(task));
+    ASSERT_TRUE(WaitUntil([&recoverMetadataCalls]() { return recoverMetadataCalls.load() >= 2; }));
+    manager.Shutdown();
+
+    std::lock_guard<std::mutex> lock(pushedMutex);
+    ASSERT_GE(pushedBatches.size(), 2U);
+    EXPECT_THAT(pushedBatches.front(),
+                UnorderedElementsAre(std::string(kSucceededObject), std::string(kDeferredObject)));
+    EXPECT_THAT(pushedBatches.back(), ElementsAre(std::string(kDeferredObject)));
 }
 
 TEST_F(SlotRecoveryTest, ExecuteRecoveryTaskUsesExplicitSourceWorkerInsteadOfFailedWorker)

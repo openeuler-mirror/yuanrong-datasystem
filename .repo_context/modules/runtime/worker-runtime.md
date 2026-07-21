@@ -314,6 +314,10 @@
     `MetadataRecoverySelectorTest.SelectionReleasesObjectTableLockBeforeMatchAndBatching` and
     `MetadataRecoverySelectorTest.MetadataRecoveryUsesBoundedGenerationSnapshot`, which verify per-object matching and
     concurrent table mutations are not blocked by full-scan selection.
+  - `RecoveryMetadataBatchRetriesOnlyFailedIdsAfterMembershipChange`: covered by
+    `SlotRecoveryTest.RecoveryMetadataBatchRetriesOnlyFailedIdsAfterMembershipChange`, which verifies a mixed metadata
+    recovery batch keeps already-pushed entries out of the deferred retry payload while retrying only failed ids after
+    the coordination path becomes available again.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV STs have been
     run during development, but full CI, Bazel, Stream ST, and complete Object/KV ST are not yet green in this session.
   - Follow-up scale/fault cases to add before claiming full story closure:
@@ -323,8 +327,8 @@
        peer must not be self-killed or selected as migration target.
     3. ScaleIn/ScaleOut task overlap plus transient global backend outage; workers must not self-isolate from global
        outage evidence and topology callbacks must remain idempotent.
-    4. Recovery metadata batch with mixed success/failure while membership changes; successful entries remain recovered,
-       failed entries stay invisible or enter cleanup without blocking other workers.
+    4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
+       deferred retry payload; broader ST-level membership churn around the same path remains pending.
     5. ST-level KV/Object/Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; unit coverage now
        verifies Stream client-facing admission for both modes through the same facade semantics, while full protocol ST
        remains pending.

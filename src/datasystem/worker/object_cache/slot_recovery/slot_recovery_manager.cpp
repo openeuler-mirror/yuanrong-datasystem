@@ -22,7 +22,7 @@
 #include <limits>
 #include <random>
 #include <unordered_map>
-
+#include <unordered_set>
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/inject/inject_point.h"
@@ -100,6 +100,23 @@ std::string SlotsSummary(const google::protobuf::RepeatedField<uint32_t> &slots)
     std::vector<uint32_t> sortedSlots(slots.begin(), slots.end());
     std::sort(sortedSlots.begin(), sortedSlots.end());
     return BuildSortedSlotsSummary(sortedSlots);
+}
+
+std::vector<ObjectMetaPb> SelectRetryMetas(const std::vector<ObjectMetaPb> &recoveredMetas,
+                                           const std::vector<std::string> &failedIds)
+{
+    if (failedIds.empty()) {
+        return recoveredMetas;
+    }
+    std::unordered_set<std::string> failedIdSet(failedIds.begin(), failedIds.end());
+    std::vector<ObjectMetaPb> retryMetas;
+    retryMetas.reserve(std::min(recoveredMetas.size(), failedIds.size()));
+    for (const auto &meta : recoveredMetas) {
+        if (failedIdSet.find(meta.object_key()) != failedIdSet.end()) {
+            retryMetas.emplace_back(meta);
+        }
+    }
+    return retryMetas;
 }
 
 std::string IncidentSummary(const SlotRecoveryInfoPb &info)
@@ -1274,7 +1291,7 @@ Status SlotRecoveryManager::EnqueueDeferredMetaRetry(const std::string &incident
     retryTask.ownerWorker = task.owner_worker();
     retryTask.sourceWorker = GetTaskSourceWorker(task);
     retryTask.slotsSummary = SlotsSummary(task.slots());
-    retryTask.pendingMetas = recoveredMetas;
+    retryTask.pendingMetas = SelectRetryMetas(recoveredMetas, failedIds);
     retryTask.failedIds = failedIds;
     retryTask.firstStatus = recoverRc;
     retryTask.enqueueTimeMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
