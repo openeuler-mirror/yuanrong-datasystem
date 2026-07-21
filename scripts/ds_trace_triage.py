@@ -2092,7 +2092,7 @@ th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
-.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
+.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-details{padding:8px 12px;background:#fff7ed;border-top:1px solid #fed7aa;color:#7c2d12;font-size:12px;line-height:1.55}.trace-log-details div+div{margin-top:3px}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
 code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 @media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards,.chapter-guide{grid-template-columns:1fr}}
 </style>"""
@@ -2676,6 +2676,65 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       `<span class="trace-log-focus ${escapeHtml(item.tone)}">${escapeHtml(item.label)}</span>`
     ).join('');
   }
+  function extractLatencyDetails(text) {
+    const details = [];
+    const seen = new Set();
+    const add = (label, value, unitHint='') => {
+      const raw = Number(value);
+      if (!Number.isFinite(raw)) return;
+      const unit = (unitHint || '').toLowerCase();
+      const ms = unit === 'us' || /(?:costUs|_us|LatencyUs)$/i.test(label) ? raw / 1000 : raw;
+      const key = `${label}:${ms.toFixed(3)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        details.push({label, ms});
+      }
+    };
+    for (const match of text.matchAll(/\\b(costUs|cost|totalCost|framework_us|e2e_us|server_exec_us|network_residual_us|remote_processing_us|wakeSchedLatencyUs)[:=]?\\s*([\\d.]+)\\s*(us|ms)?/gi)) {
+      add(match[1], match[2], match[3] || '');
+    }
+    for (const match of text.matchAll(/\\b([A-Za-z][A-Za-z0-9_. -]{1,80})\\s*:\\s*([\\d.]+)\\s*ms\\b/g)) {
+      add(match[1].trim(), match[2], 'ms');
+    }
+    return details.sort((a,b) => b.ms - a.ms).slice(0, 8);
+  }
+  function extractDirectionDetails(text) {
+    const out = [];
+    const patterns = [
+      /\\bsrc=([^,\\s]+),\\s*dst=([^,\\s]+)/gi,
+      /\\bsrc address:\\s*([^,\\s]+),\\s*target address:\\s*([^,\\s]+)/gi,
+      /\\bsource address:\\s*([^,\\s]+),\\s*dst address:\\s*([^,\\s]+)/gi,
+      /Get->\\[([^\\]]+)\\]/gi
+    ];
+    patterns.forEach(regex => {
+      for (const match of text.matchAll(regex)) {
+        const right = match[2] || match[1];
+        const left = match[2] ? match[1] : 'client';
+        const value = `${left} → ${right}`;
+        if (!out.includes(value)) out.push(value);
+      }
+    });
+    return out.slice(0, 5);
+  }
+  function extractRemainingTimeWarnings(text) {
+    const warnings = [];
+    for (const match of text.matchAll(/\\b(?:remainingTime|start remainingTime)[:=]?\\s*([\\d.]+)/gi)) {
+      const value = Number(match[1]);
+      if (Number.isFinite(value) && value > 20) warnings.push(`remainingTime 远大于 20ms: ${value}ms`);
+    }
+    return [...new Set(warnings)].slice(0, 5);
+  }
+  function traceLogBlockDetails(group) {
+    const text = group.lines.join('\\n');
+    const rows = [];
+    const remaining = extractRemainingTimeWarnings(text);
+    if (remaining.length) rows.push(`<div><b>告警:</b> ${remaining.map(escapeHtml).join('；')}</div>`);
+    const directions = extractDirectionDetails(text);
+    if (directions.length) rows.push(`<div><b>方向:</b> ${directions.map(escapeHtml).join('；')}</div>`);
+    const latencies = extractLatencyDetails(text);
+    if (latencies.length) rows.push(`<div><b>耗时明细:</b> ${latencies.map(item => `${escapeHtml(item.label)}=${item.ms.toFixed(3)}ms`).join('；')}</div>`);
+    return rows.length ? `<div class="trace-log-details">${rows.join('')}</div>` : '';
+  }
   function renderTraceLogBlocks(evidence) {
     const groups = [];
     (evidence || []).forEach(e => {
@@ -2691,6 +2750,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return groups.map(group =>
       `<div class="trace-log-block trace-log-${escapeHtml(group.component)}">` +
       `<h4><span class="trace-log-heading"><span>${escapeHtml(componentLabels[group.component] || group.component)}</span><span class="trace-log-summary">${traceLogBlockSummary(group)}</span></span><span class="trace-log-count">${group.lines.length} lines</span></h4>` +
+      traceLogBlockDetails(group) +
       `<pre>${group.lines.map(highlightLogLine).join('\\n')}</pre></div>`
     ).join('');
   }

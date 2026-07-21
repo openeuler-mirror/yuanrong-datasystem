@@ -609,6 +609,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "highlightLogLine" in html
     assert "renderTraceLogBlocks" in html
     assert "traceLogBlockSummary" in html
+    assert "traceLogBlockDetails" in html
+    assert "extractLatencyDetails" in html
+    assert "extractDirectionDetails" in html
+    assert "extractRemainingTimeWarnings" in html
+    assert "remainingTime 远大于 20ms" in html
+    assert "方向:" in html
+    assert "耗时明细:" in html
+    assert "class=\"trace-log-details\"" in html
     assert "trace-log-summary" in html
     assert "trace-log-focus" in html
     assert "重点:" in html
