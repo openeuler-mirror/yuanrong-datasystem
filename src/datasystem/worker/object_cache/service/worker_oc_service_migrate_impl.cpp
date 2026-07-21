@@ -183,7 +183,8 @@ Status WorkerOcServiceMigrateImpl::CloseIncomingMigrationAdmissionAndWait(
     std::chrono::steady_clock::time_point deadline)
 {
     std::unique_lock<std::mutex> lock(incomingMigrationMutex_);
-    incomingMigrationAdmissionClosed_ = true;
+    incomingMigrationAdmissionClosed_.store(true, std::memory_order_release);
+    INJECT_POINT_NO_RETURN("WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed");
     if (incomingMigrationCount_ > 0) {
         LOG(INFO) << "[Graceful exit] Waiting for " << incomingMigrationCount_
                   << " admitted incoming migration request(s) to finish.";
@@ -191,6 +192,8 @@ Status WorkerOcServiceMigrateImpl::CloseIncomingMigrationAdmissionAndWait(
     const bool drained =
         incomingMigrationCv_.wait_until(lock, deadline, [this] { return incomingMigrationCount_ == 0; });
     if (!drained) {
+        incomingMigrationDrainTimedOut_.store(true, std::memory_order_release);
+        INJECT_POINT_NO_RETURN("WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.timedOut");
         LOG(ERROR) << "[Graceful exit] Timed out with " << incomingMigrationCount_
                    << " incoming migration request(s) still running; admission remains closed.";
         RETURN_STATUS(StatusCode::K_RPC_DEADLINE_EXCEEDED,
@@ -208,12 +211,25 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
     INJECT_POINT("worker.migrate_service.return");
     RETURN_IF_NOT_OK(CheckMigrateDataAdmission(req, rsp));
     Raii admission([this] { ReleaseIncomingMigrationAdmission(); });
-#ifdef WITH_TESTS
-    if (afterAdmissionTestHook_) {
-        afterAdmissionTestHook_();
+    INJECT_POINT_NO_RETURN("WorkerOcServiceMigrateImpl.MigrateData.afterAdmission");
+    if (IsIncomingMigrationAdmissionClosed()) {
+        std::unordered_set<std::string> failedIds;
+        std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
+                       [](const auto &info) { return info.object_key(); });
+        FillMigrateDataResponse(req, {}, failedIds, false, rsp);
+        rsp.set_scale_down_state(MigrateDataRspPb::DATA_MIGRATION_STARTED);
+        return Status(StatusCode::K_NOT_READY, "admission closed before data processing");
     }
-#endif
-    return MigrateDataImpl(req, rsp, std::move(payloads));
+    auto rc = MigrateDataImpl(req, rsp, std::move(payloads));
+    if (rc.IsOk() && IsIncomingMigrationDrainTimedOut()) {
+        // Data may already be written to target; intentionally return failure so Source
+        // keeps its local copy, accepting a transient double-write rather than data loss.
+        LOG(WARNING) << "[Migrate Data] Drain timed out during processing; "
+                     << "returning K_NOT_READY so Source keeps its local copy "
+                     << "(target may already have the data; transient double-write is expected)";
+        return Status(StatusCode::K_NOT_READY, "admission drain timed out during processing");
+    }
+    return rc;
 }
 
 Status WorkerOcServiceMigrateImpl::MigrateDataImpl(const MigrateDataReqPb &req, MigrateDataRspPb &rsp,
@@ -281,13 +297,23 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqP
         return PrepareMigrateDataDirectError(req, rsp, admissionRc.GetCode(), admissionRc.GetMsg());
     }
     Raii admission([this] { ReleaseIncomingMigrationAdmission(); });
-#ifdef WITH_TESTS
-    if (afterAdmissionTestHook_) {
-        afterAdmissionTestHook_();
+    INJECT_POINT_NO_RETURN("WorkerOcServiceMigrateImpl.MigrateDataDirect.afterAdmission");
+    if (IsIncomingMigrationAdmissionClosed()) {
+        return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_NOT_READY,
+                                             "admission closed before data processing");
     }
-#endif
     RETURN_IF_NOT_OK(PreCheckMigrateDataDirect(req, rsp));
-    return MigrateDataDirectImpl(req, rsp);
+    auto rc = MigrateDataDirectImpl(req, rsp);
+    if (rc.IsOk() && IsIncomingMigrationDrainTimedOut()) {
+        // Data may already be written to target; intentionally return failure so Source
+        // keeps its local copy, accepting a transient double-write rather than data loss.
+        LOG(WARNING) << "[Migrate Data Direct] Drain timed out during processing; "
+                     << "returning K_NOT_READY so Source keeps its local copy "
+                     << "(target may already have the data; transient double-write is expected)";
+        return PrepareMigrateDataDirectError(req, rsp, StatusCode::K_NOT_READY,
+                                             "admission drain timed out during processing");
+    }
+    return rc;
 }
 
 Status WorkerOcServiceMigrateImpl::PrepareMigrateDataDirectError(const MigrateDataDirectReqPb &req,

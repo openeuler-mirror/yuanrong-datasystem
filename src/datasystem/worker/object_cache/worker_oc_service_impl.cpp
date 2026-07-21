@@ -2861,6 +2861,12 @@ void WorkerOCServiceImpl::InitShmRefForClient(const ClientKey &clientId, bool su
 Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
     ScopedRequestContext ctx;
+    RETURN_IF_NOT_OK(gMigrateProc_->AcquireIncomingMigrationAdmission());
+    Raii admission([this] { gMigrateProc_->ReleaseIncomingMigrationAdmission(); });
+    INJECT_POINT_NO_RETURN("WorkerOCServiceImpl.NotifyRemoteGet.afterAdmission");
+    if (gMigrateProc_->IsIncomingMigrationAdmissionClosed()) {
+        return Status(StatusCode::K_NOT_READY, "admission closed before data processing");
+    }
     std::unordered_set<std::string> objectKeySet(req.object_keys().begin(), req.object_keys().end());
     QueryMetaMap queryMetas;
     std::unordered_set<std::string> failedIds;
@@ -2870,6 +2876,14 @@ Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, Not
     rsp.mutable_failed_object_keys()->Add(failedIds.begin(), failedIds.end());
 
     Status rc = getProc_->NotifyRemoteGet(req, std::move(queryMetas), rsp);
+    if (rc.IsOk() && gMigrateProc_->IsIncomingMigrationDrainTimedOut()) {
+        // Data may already be written to target; intentionally return failure so Source
+        // keeps its local copy, accepting a transient double-write rather than data loss.
+        LOG(WARNING) << "[NotifyRemoteGet] Drain timed out during processing; "
+                     << "returning K_NOT_READY so Source keeps its local copy "
+                     << "(target may already have the data; transient double-write is expected)";
+        return Status(StatusCode::K_NOT_READY, "admission drain timed out during processing");
+    }
 
     // Set remain_bytes based on current available memory
     // If any object was successfully processed, set remain_bytes even if there were some failures

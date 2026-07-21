@@ -15,6 +15,7 @@
  * Description: Test WorkerOcServiceImpl.
  */
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -1007,6 +1008,102 @@ TEST_F(WorkerOcServiceImplTest, ClearDataRetryImplShouldRouteFailedIdsToRetrySta
     EXPECT_THAT(nextRetryIds.clearFailedIds, UnorderedElementsAre("clear-next"));
     EXPECT_THAT(nextRetryIds.increaseFailedIds, UnorderedElementsAre("increase-next"));
     EXPECT_THAT(nextRetryIds.recoverAppRefFailedIds, UnorderedElementsAre("recover-next"));
+}
+
+TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetRejectsAfterLocalScaleInStarts)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    // Simulate voluntary scale-in by flipping the local exit flag that AcquireIncomingMigrationAdmission polls.
+    exitRequested_.store(true, std::memory_order_relaxed);
+
+    NotifyRemoteGetReqPb req;
+    req.add_object_keys("late-notify-remote-get-object");
+    NotifyRemoteGetRspPb rsp;
+    EXPECT_EQ(impl_->NotifyRemoteGet(req, rsp).GetCode(), StatusCode::K_NOT_READY);
+}
+
+TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetHoldsAdmissionUntilRequestReturns)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    constexpr std::chrono::seconds schedulingTimeout(1);
+    constexpr std::chrono::seconds closeBudget(2);
+    constexpr std::chrono::milliseconds observationWindow(50);
+    const std::string injectPoint = "WorkerOCServiceImpl.NotifyRemoteGet.afterAdmission";
+
+    // Block the RPC at the afterAdmission inject point so the test can assert
+    // that CloseIncomingMigrationAdmissionAndWait waits while admission is held.
+    DS_ASSERT_OK(inject::Set(injectPoint, "pause()"));
+
+    NotifyRemoteGetReqPb req;
+    req.add_object_keys("admission-hold-object");
+    NotifyRemoteGetRspPb rsp;
+    auto requestFuture = std::async(std::launch::async, [this, &req, &rsp] {
+        return impl_->NotifyRemoteGet(req, rsp);
+    });
+    // Wait until the RPC hits the inject point - admission is acquired and held.
+    const bool requestAdmitted = WaitForInjectPointExecuteCount(injectPoint, 1, schedulingTimeout);
+
+    auto closeFuture = std::async(std::launch::async, [this, closeBudget] {
+        return impl_->gMigrateProc_->CloseIncomingMigrationAdmissionAndWait(
+            std::chrono::steady_clock::now() + closeBudget);
+    });
+    Status lateAdmission(K_RUNTIME_ERROR, "Migration admission gate did not close");
+    const auto gateDeadline = std::chrono::steady_clock::now() + schedulingTimeout;
+    do {
+        lateAdmission = impl_->gMigrateProc_->AcquireIncomingMigrationAdmission();
+        if (lateAdmission.IsOk()) {
+            impl_->gMigrateProc_->ReleaseIncomingMigrationAdmission();
+            std::this_thread::yield();
+        }
+    } while (lateAdmission.IsOk() && std::chrono::steady_clock::now() < gateDeadline);
+    const auto closeStateWhileRequestPaused = closeFuture.wait_for(observationWindow);
+
+    // Release the RPC by clearing the inject action.
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+    (void)requestFuture.get();
+    const auto closeStatus = closeFuture.get();
+
+    EXPECT_TRUE(requestAdmitted);
+    EXPECT_EQ(lateAdmission.GetCode(), StatusCode::K_NOT_READY);
+    EXPECT_EQ(closeStateWhileRequestPaused, std::future_status::timeout);
+    DS_EXPECT_OK(closeStatus);
+}
+
+TEST_F(WorkerOcServiceImplTest, NotifyRemoteGetReturnsFailureWhenDrainTimesOut)
+{
+    ASSERT_NE(impl_->gMigrateProc_, nullptr);
+    constexpr std::chrono::seconds schedulingTimeout(1);
+    constexpr std::chrono::milliseconds closeBudget(100);
+    const std::string injectPoint = "WorkerOCServiceImpl.NotifyRemoteGet.afterAdmission";
+
+    // Block the RPC at the afterAdmission inject point so drain will time out.
+    DS_ASSERT_OK(inject::Set(injectPoint, "pause()"));
+
+    NotifyRemoteGetReqPb req;
+    req.add_object_keys("drain-timeout-object");
+    NotifyRemoteGetRspPb rsp;
+    auto requestFuture = std::async(std::launch::async, [this, &req, &rsp] {
+        return impl_->NotifyRemoteGet(req, rsp);
+    });
+    // Wait until the RPC hits the inject point - admission is acquired and held.
+    const bool requestAdmitted = WaitForInjectPointExecuteCount(injectPoint, 1, schedulingTimeout);
+
+    // Drain with an already-expired deadline so it times out immediately.
+    auto closeFuture = std::async(std::launch::async, [this, closeBudget] {
+        return impl_->gMigrateProc_->CloseIncomingMigrationAdmissionAndWait(
+            std::chrono::steady_clock::now() + closeBudget);
+    });
+    // Wait for drain to time out.
+    const auto closeStatus = closeFuture.get();
+    EXPECT_EQ(closeStatus.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_TRUE(impl_->gMigrateProc_->IsIncomingMigrationDrainTimedOut());
+
+    // Release the RPC. It should return K_NOT_READY (checkpoint A: admission closed).
+    DS_ASSERT_OK(inject::Clear(injectPoint));
+    const auto requestStatus = requestFuture.get();
+
+    EXPECT_TRUE(requestAdmitted);
+    EXPECT_EQ(requestStatus.GetCode(), StatusCode::K_NOT_READY);
 }
 
 }  // namespace ut

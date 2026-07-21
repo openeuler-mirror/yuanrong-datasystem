@@ -18,6 +18,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MIGRATE_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MIGRATE_IMPL_H
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -59,6 +60,8 @@ using RedirectMap =
 
 class WorkerOcServiceMigrateImpl : public WorkerOcServiceCrudCommonApi,
                                    std::enable_shared_from_this<WorkerOcServiceMigrateImpl> {
+    friend class WorkerOCServiceImpl;
+
 public:
 
     /**
@@ -103,16 +106,23 @@ public:
      */
     Status CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::time_point deadline);
 
-#ifdef WITH_TESTS
     /**
-     * @brief Install a deterministic test hook invoked while an incoming request owns admission.
-     * @param[in] hook Hook installed before the test request starts.
+     * @brief Whether the admission gate has been closed by CloseIncomingMigrationAdmissionAndWait.
+     * @return true once the drain starts; admitted requests use this to short-circuit.
      */
-    void SetAfterAdmissionTestHook(std::function<void()> hook)
+    bool IsIncomingMigrationAdmissionClosed() const
     {
-        afterAdmissionTestHook_ = std::move(hook);
+        return incomingMigrationAdmissionClosed_.load(std::memory_order_acquire);
     }
-#endif
+
+    /**
+     * @brief Whether the admission drain timed out with in-flight requests still running.
+     * @return true after CloseIncomingMigrationAdmissionAndWait exceeded its deadline.
+     */
+    bool IsIncomingMigrationDrainTimedOut() const
+    {
+        return incomingMigrationDrainTimedOut_.load(std::memory_order_acquire);
+    }
 
     /**
      * @brief Query metadata from master.
@@ -660,13 +670,9 @@ private:
     // Protects incomingMigrationAdmissionClosed_ and incomingMigrationCount_.
     std::mutex incomingMigrationMutex_;
     std::condition_variable incomingMigrationCv_;
-    bool incomingMigrationAdmissionClosed_{ false };
+    std::atomic<bool> incomingMigrationAdmissionClosed_{ false };
+    std::atomic<bool> incomingMigrationDrainTimedOut_{ false };
     uint64_t incomingMigrationCount_{ 0 };
-
-#ifdef WITH_TESTS
-    // Test-only hook installed before a request starts and left immutable until that request returns.
-    std::function<void()> afterAdmissionTestHook_;
-#endif
 
     std::shared_timed_mutex unitMutex_;
     std::unordered_map<std::string, std::shared_ptr<ShmUnit>> failedSlotUnits_;
