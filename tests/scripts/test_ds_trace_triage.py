@@ -471,6 +471,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function workerAggregateKey(raw)" in html
     assert "function workerMatchesFilter(raw, selectedWorker)" in html
     assert "function workerFilterOptions()" in html
+    assert "function workerRoleBreakdownForTrace(item, worker)" in html
+    assert "function workerRoleSummaryText(item)" in html
+    assert "数据读取发起端(entry get)=" in html
+    assert "数据提供端(data provider)=" in html
     assert "function aggregateUbWorkerRowsByIdentity(rows, selectedWorker='')" in html
     assert "function ubWorkerRoleLabel(role)" in html
     assert "数据读取发起端(entry get)" in html

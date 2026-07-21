@@ -2759,6 +2759,23 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const node = document.getElementById(id);
     return node ? node.value : '';
   }
+  function workerRoleBreakdownForTrace(item, worker) {
+    const out = {entry_get:0,data_provider:0,other:0};
+    (item.ub_events || []).forEach(event => {
+      if (!workerMatchesFilter(event.worker, workerAggregateKey(worker))) return;
+      if (['transfer_path','remote_get_start'].includes(event.event_type)) out.entry_get += 1;
+      else if (['total','poll_jfc','notify','thread_sched'].includes(event.event_type)) out.data_provider += 1;
+    });
+    if (!out.entry_get && !out.data_provider) out.other += 1;
+    return out;
+  }
+  function workerRoleSummaryText(item) {
+    const parts = [];
+    if (item.entry_get_count) parts.push(`数据读取发起端(entry get)=${item.entry_get_count}`);
+    if (item.data_provider_count) parts.push(`数据提供端(data provider)=${item.data_provider_count}`);
+    if (!parts.length && item.other_role_count) parts.push(`其他/未归因=${item.other_role_count}`);
+    return parts.join(', ') || (item.roles || []).join(',');
+  }
   function workerRowsForOperation(operation, selectedWorker='') {
     const workers = {};
     traceRowsForOperation(operation).forEach(([, item]) => {
@@ -2770,10 +2787,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         if (!workerMatchesFilter(worker, selectedWorker) || seenWorkerKeys.has(key)) return;
         seenWorkerKeys.add(key);
         const source = dim.worker_summary?.[worker] || {};
-        const target = workers[key] || (workers[key] = {display_worker:workerAggregateLabel(key),roles:[],line_count:0,trace_count:0,slow_trace_count:0,error_count:0,relations:new Set()});
+        const target = workers[key] || (workers[key] = {display_worker:workerAggregateLabel(key),roles:[],line_count:0,trace_count:0,slow_trace_count:0,error_count:0,entry_get_count:0,data_provider_count:0,other_role_count:0,relations:new Set()});
+        const roleBreakdown = workerRoleBreakdownForTrace(item, worker);
         target.roles = [...new Set([...(target.roles || []), ...(source.roles || [])])];
         target.line_count += source.line_count || 0;
         target.relations.add(workerRelationName(worker));
+        target.entry_get_count += roleBreakdown.entry_get;
+        target.data_provider_count += roleBreakdown.data_provider;
+        target.other_role_count += roleBreakdown.other;
         target.trace_count += 1;
         target.slow_trace_count += isSlow ? 1 : 0;
         target.error_count += errorCount;
@@ -2821,7 +2842,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const tableRowsForOperation = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-table-filter`));
     const tableRows = tableRowsForOperation.map(([,item]) => {
       const display_worker = item.display_worker || '';
-      return [display_worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0];
+      return [display_worker, workerRoleSummaryText(item), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0];
     });
     renderPagedTable(`${operation}-worker-table`, `${operation}-worker-table-pager`, ['worker','roles','lines','traces','slow','errors'], tableRows,
       row => (Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
