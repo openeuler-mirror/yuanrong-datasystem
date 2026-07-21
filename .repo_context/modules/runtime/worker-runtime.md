@@ -309,6 +309,10 @@
       so the runtime target no longer links or includes object-cache transport/codec implementation details. Boundary
       tests assert the runtime target/source stays free of `worker_object_cache`, `worker_worker_oc_api`, and
       `worker_worker_peer_state_codec` dependencies.
+  17. `CancellationToken` moved out of the broad topology callback contract into
+      `cluster/executor/cancellation_token.h`. `data_migrator` now depends only on the narrow cooperative-cancellation
+      signal instead of including `topology_phase_callbacks.h`, so object-cache migration code does not inherit the
+      topology callback executor contract.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -617,6 +621,18 @@
     database entries.
   - GREEN: `ds_st_object_cache --gtest_filter="WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate"`
     passed 1/1 test in 11.87s wall time.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_data_migrator_does_not_depend_on_topology_callback_executor`.
+  - Initial RED: the boundary suite failed 1/19 in 0.011s because `data_migrator.cpp` still included
+    `datasystem/cluster/executor/topology_phase_callbacks.h`. Removing only that include exposed the true build-time
+    dependency: `CancellationToken` was defined inside the broader callback header.
+  - GREEN: split `CancellationToken` into `cluster/executor/cancellation_token.h` and changed `data_migrator.cpp` to
+    include only that narrow header. `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed
+    19/19 tests in 0.016s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 247s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), source build time 151s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
+    database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

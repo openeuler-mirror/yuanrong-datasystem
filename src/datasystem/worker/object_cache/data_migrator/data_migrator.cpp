@@ -20,7 +20,7 @@
 #include <chrono>
 #include <thread>
 
-#include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/executor/cancellation_token.h"
 #include "datasystem/common/l2cache/slot_client/slot_internal_config.h"
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/scale_down_node_selector.h"

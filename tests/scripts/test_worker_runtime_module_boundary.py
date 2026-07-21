@@ -100,6 +100,21 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use injected topology object-cache actions")
 
+    def test_data_migrator_does_not_depend_on_topology_callback_executor(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/data_migrator/data_migrator.cpp",
+            REPO_ROOT / "src/datasystem/worker/object_cache/data_migrator/data_migrator.h",
+        ]
+
+        forbidden_tokens = [
+            "datasystem/cluster/executor/topology_phase_callbacks.h",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should avoid topology callback executor coupling")
+
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/slot_recovery/BUILD.bazel",
