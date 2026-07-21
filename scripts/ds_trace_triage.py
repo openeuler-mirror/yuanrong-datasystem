@@ -4052,7 +4052,7 @@ class TraceSitePublisher:
         else:
             self._copy_and_verify(source_html, site_target)
             live_markers = "verified"
-            status = "published"
+            status = "copied"
         self._record_publish(run_dir, site_target, status, live_markers, size_guard)
         return site_target.get("url", "")
 
@@ -4082,6 +4082,7 @@ class TraceSitePublisher:
             **site_target,
             "publish": {
                 "status": status,
+                "catalog_status": "not-registered" if status == "copied" else "not-run",
                 "url": site_target.get("url", ""),
                 "target_path": site_target.get("target_path", ""),
                 "live_markers": live_markers,

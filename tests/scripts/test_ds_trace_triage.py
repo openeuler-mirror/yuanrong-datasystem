@@ -1037,6 +1037,7 @@ def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
     assert "DRY-RUN" in publish_output
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["render_targets"]["site"]["publish"]["status"] == "dry-run"
+    assert manifest["render_targets"]["site"]["publish"]["catalog_status"] == "not-run"
 
 
 def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypatch):
@@ -1075,7 +1076,8 @@ def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypa
     assert calls[2][1]["capture_output"] is True
     assert calls[2][1]["text"] is True
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["render_targets"]["site"]["publish"]["status"] == "published"
+    assert manifest["render_targets"]["site"]["publish"]["status"] == "copied"
+    assert manifest["render_targets"]["site"]["publish"]["catalog_status"] == "not-registered"
     assert manifest["render_targets"]["site"]["publish"]["live_markers"] == "verified"
     assert manifest["render_targets"]["site"]["publish"]["source_size_bytes"] > 0
     assert manifest["render_targets"]["site"]["publish"]["max_site_html_bytes"] == mod.DEFAULT_SITE_HTML_MAX_BYTES
