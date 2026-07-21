@@ -88,6 +88,30 @@ TEST(HashAlgorithmTest, PlansMultiMemberScaleOutAsOneDeterministicOwnerChangeSet
     EXPECT_EQ(first.next.members[1].tokens, second.next.members[1].tokens);
 }
 
+TEST(HashAlgorithmTest, ScaleOutDoesNotUseFailedWorkerAsMigrationSource)
+{
+    HashAlgorithm algorithm;
+    ScaleOutPlanInput input;
+    input.current.clusterHasInit = true;
+    input.current.version = 1;
+    input.current.members = {
+        Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 10 } },
+        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::FAILED, { 100 } },
+    };
+    input.joining = { { std::string(16, 'c'), "127.0.0.1:3" } };
+
+    TopologyPlan plan;
+    DS_ASSERT_OK(algorithm.PlanScaleOut(input, plan));
+
+    ASSERT_FALSE(plan.ownerChanges.empty());
+    for (const auto &change : plan.ownerChanges) {
+        ASSERT_TRUE(change.source.has_value());
+        EXPECT_NE(change.source->address, "127.0.0.1:2");
+        EXPECT_EQ(change.source->address, "127.0.0.1:1");
+        EXPECT_EQ(change.target.address, "127.0.0.1:3");
+    }
+}
+
 TEST(HashAlgorithmTest, PlansScaleInAndFailureWithoutChangingCurrentCommittedTokens)
 {
     HashAlgorithm algorithm;

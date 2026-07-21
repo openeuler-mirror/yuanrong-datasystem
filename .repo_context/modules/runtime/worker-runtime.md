@@ -326,11 +326,15 @@
     `TopologyFailureClassifierTest.ScaleOutMembersSurviveGlobalBackendOutagePause`, which verifies a transient global
     membership-read outage during ScaleOut does not accumulate missing time or remove/fail present ACTIVE/JOINING
     members after the backend becomes readable again.
+  - `ScaleOutDoesNotUseFailedWorkerAsMigrationSource`: covered by
+    `HashAlgorithmTest.ScaleOutDoesNotUseFailedWorkerAsMigrationSource`, which verifies ScaleOut owner-change
+    materialization does not use a failed member as the migration/rebuild source for the joining target.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV STs have been
     run during development, but full CI, Bazel, Stream ST, and complete Object/KV ST are not yet green in this session.
   - Follow-up scale/fault cases to add before claiming full story closure:
-    1. ScaleOut while one existing worker is `LOCAL_ISOLATED`; new-owner metadata rebuild must not read from the isolated
-       worker before evidence passes.
+    1. ScaleOut while one existing worker is isolated is now covered at topology planning level by
+       `ScaleOutDoesNotUseFailedWorkerAsMigrationSource`; full worker metadata-rebuild ST with an actual
+       `LOCAL_ISOLATED` process remains a broader follow-up.
     2. ScaleIn voluntary source plus concurrent peer local-isolation is now covered at topology replan level by
        `ScaleInSourceStaysLeavingWhenPeerFails`; migration-target filtering for the same combined path remains covered
        indirectly by active-target admission and needs a dedicated ST if we want end-to-end evidence.
