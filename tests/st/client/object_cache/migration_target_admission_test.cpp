@@ -41,6 +41,11 @@ namespace {
 constexpr int kEventuallyWaitTimeoutMs = 15'000;
 constexpr int kEventuallyPollIntervalMs = 100;
 constexpr char kMigrationServiceInject[] = "worker.migrate_service.return";
+constexpr char kKeepAliveFailureInject[] = "EtcdKeepAlive.SendKeepAliveMessage";
+constexpr char kKeepAliveQuickLoopInject[] = "EtcdStore.LaunchKeepAliveThreads.loopQuickly";
+constexpr char kLeaseExpiredInject[] = "GetLeaseExpiredMs";
+constexpr char kLocalIsolatedInject[] = "WorkerOCServer.AfterMarkLocalIsolated";
+constexpr char kBeforeMarkRunningInject[] = "WorkerRecoveryController.BeforeMarkRunning";
 
 template <typename Operation>
 void AssertEventuallyOk(Operation operation, const std::string &operationName)
@@ -56,6 +61,13 @@ void AssertEventuallyOk(Operation operation, const std::string &operationName)
     } while (std::chrono::steady_clock::now() < deadline);
     ASSERT_TRUE(rc.IsOk()) << operationName << " stayed non-OK for " << kEventuallyWaitTimeoutMs
                            << " ms, last status: " << rc.ToString();
+}
+
+void ExpectAdmissionRejected(const Status &rc, const std::string &mode, StatusCode expectedCode,
+                             const std::string &operation)
+{
+    ASSERT_EQ(rc.GetCode(), expectedCode) << operation << " status: " << rc.ToString();
+    EXPECT_NE(rc.GetMsg().find(mode), std::string::npos) << operation << " status: " << rc.ToString();
 }
 
 class MigrationTargetProbe {
@@ -149,24 +161,23 @@ TEST_F(MigrationTargetIsolationTest, LEVEL1_MigrationTargetFiltersIsolatedAndRec
     MigrationTargetProbe probe;
     DS_ASSERT_OK(probe.Init(cluster_.get(), 0, 1));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kMigrationServiceInject, "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServer.AfterMarkLocalIsolated", "call()"));
-    DS_ASSERT_OK(
-        cluster_->SetInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage", "return(K_RPC_UNAVAILABLE)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetLeaseExpiredMs", "call(1000)"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kLocalIsolatedInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kKeepAliveFailureInject, "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kLeaseExpiredInject, "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kKeepAliveQuickLoopInject, "call(0)"));
     bool keepAliveFailureActive = true;
     bool recoveryPauseActive = false;
     Raii clearFaults([&]() {
         if (recoveryPauseActive) {
-            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning"),
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, kBeforeMarkRunningInject),
                          "clear migration-target recovery pause");
         }
         if (keepAliveFailureActive) {
-            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage"),
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveFailureInject),
                          "clear migration-target keepalive failure");
-            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "GetLeaseExpiredMs"),
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, kLeaseExpiredInject),
                          "clear migration-target lease override");
-            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"),
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveQuickLoopInject),
                          "clear migration-target quick keepalive loop");
         }
     });
@@ -174,8 +185,7 @@ TEST_F(MigrationTargetIsolationTest, LEVEL1_MigrationTargetFiltersIsolatedAndRec
     AssertEventuallyOk(
         [&]() {
             uint64_t count = 0;
-            RETURN_IF_NOT_OK(
-                cluster_->GetInjectActionExecuteCount(WORKER, 0, "WorkerOCServer.AfterMarkLocalIsolated", count));
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, kLocalIsolatedInject, count));
             CHECK_FAIL_RETURN_STATUS(count > 0, K_NOT_READY, "worker has not entered local isolation");
             return Status::OK();
         },
@@ -183,24 +193,23 @@ TEST_F(MigrationTargetIsolationTest, LEVEL1_MigrationTargetFiltersIsolatedAndRec
     DS_ASSERT_OK(
         probe.ExpectRejected(cluster_.get(), 0, "LOCAL_ISOLATED", K_NOT_READY, "migration-target-local-isolated"));
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", "1*pause"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kBeforeMarkRunningInject, "1*pause"));
     recoveryPauseActive = true;
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdKeepAlive.SendKeepAliveMessage"));
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "GetLeaseExpiredMs"));
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveFailureInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kLeaseExpiredInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveQuickLoopInject));
     keepAliveFailureActive = false;
     AssertEventuallyOk(
         [&]() {
             uint64_t count = 0;
-            RETURN_IF_NOT_OK(
-                cluster_->GetInjectActionExecuteCount(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", count));
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, kBeforeMarkRunningInject, count));
             CHECK_FAIL_RETURN_STATUS(count > 0, K_NOT_READY, "worker has not entered the recovery evidence gate");
             return Status::OK();
         },
         "migration target enters recovering mode");
     DS_ASSERT_OK(probe.ExpectRejected(cluster_.get(), 0, "RECOVERING", K_NOT_READY, "migration-target-recovering"));
 
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning"));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kBeforeMarkRunningInject));
     recoveryPauseActive = false;
     AssertEventuallyOk(
         [&]() {
@@ -209,6 +218,89 @@ TEST_F(MigrationTargetIsolationTest, LEVEL1_MigrationTargetFiltersIsolatedAndRec
             return buffer->Publish();
         },
         "worker reopens after migration target recovery evidence completes");
+}
+
+TEST_F(MigrationTargetIsolationTest, LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering)
+{
+    std::shared_ptr<ObjectClient> client;
+    InitTestClient(0, client);
+    const std::string objectKey = NewObjectKey();
+    std::shared_ptr<Buffer> buffer;
+    DS_ASSERT_OK(client->Create(objectKey, 1, CreateParam{}, buffer));
+    DS_ASSERT_OK(buffer->Publish());
+    std::shared_ptr<Buffer> localIsolatedWriteBuffer;
+    DS_ASSERT_OK(client->Create(NewObjectKey(), 1, CreateParam{}, localIsolatedWriteBuffer));
+    std::shared_ptr<Buffer> recoveringWriteBuffer;
+    DS_ASSERT_OK(client->Create(NewObjectKey(), 1, CreateParam{}, recoveringWriteBuffer));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kLocalIsolatedInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kKeepAliveFailureInject, "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kLeaseExpiredInject, "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kKeepAliveQuickLoopInject, "call(0)"));
+    bool keepAliveFailureActive = true;
+    bool recoveryPauseActive = false;
+    Raii clearFaults([&]() {
+        if (recoveryPauseActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, kBeforeMarkRunningInject),
+                         "clear object-client recovery pause");
+        }
+        if (keepAliveFailureActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveFailureInject),
+                         "clear object-client keepalive failure");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, kLeaseExpiredInject),
+                         "clear object-client lease override");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveQuickLoopInject),
+                         "clear object-client quick keepalive loop");
+        }
+    });
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t count = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, kLocalIsolatedInject, count));
+            CHECK_FAIL_RETURN_STATUS(count > 0, K_NOT_READY, "worker has not entered local isolation");
+            return Status::OK();
+        },
+        "object client target enters local isolation");
+
+    std::vector<Optional<Buffer>> getBuffers;
+    ExpectAdmissionRejected(client->Get({ objectKey }, 1'000, getBuffers), "LOCAL_ISOLATED", K_NOT_READY,
+                            "object get during local isolation");
+    ExpectAdmissionRejected(localIsolatedWriteBuffer->Publish(), "LOCAL_ISOLATED", K_NOT_READY,
+                            "object publish during local isolation");
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kBeforeMarkRunningInject, "1*pause"));
+    recoveryPauseActive = true;
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveFailureInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kLeaseExpiredInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveQuickLoopInject));
+    keepAliveFailureActive = false;
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t count = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, kBeforeMarkRunningInject, count));
+            CHECK_FAIL_RETURN_STATUS(count > 0, K_NOT_READY, "worker has not entered the recovery evidence gate");
+            return Status::OK();
+        },
+        "object client target enters recovering mode");
+
+    getBuffers.clear();
+    ExpectAdmissionRejected(client->Get({ objectKey }, 1'000, getBuffers), "RECOVERING", K_NOT_READY,
+                            "object get during recovery");
+    ExpectAdmissionRejected(recoveringWriteBuffer->Publish(), "RECOVERING", K_NOT_READY,
+                            "object publish during recovery");
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kBeforeMarkRunningInject));
+    recoveryPauseActive = false;
+    AssertEventuallyOk(
+        [&]() {
+            std::vector<Optional<Buffer>> recoveredBuffers;
+            RETURN_IF_NOT_OK(client->Get({ objectKey }, 1'000, recoveredBuffers));
+            CHECK_FAIL_RETURN_STATUS(!recoveredBuffers.empty() && recoveredBuffers[0], K_NOT_READY,
+                                     "object get returned no buffer after recovery");
+            return Status::OK();
+        },
+        "object client reopens after recovery evidence completes");
 }
 
 class MigrationTargetOomTest : public OCClientCommon {

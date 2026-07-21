@@ -382,8 +382,10 @@
     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate`,
     `WorkerIsolationCoordinatorTest.LocalRecoveryStartsRecoveringBeforeTopologyReconciliation`, and runtime recovery UTs.
   - `WorkerServiceAdmissionRejectsReadWriteDuringIsolation`: covered for the shared service-mode matrix by
-    `WorkerServiceAdmissionTest.AppliesServiceModeMatrix`; Object/KV paths have focused admission checks. Stream
-    client-facing read/write entrypoints are covered by
+    `WorkerServiceAdmissionTest.AppliesServiceModeMatrix`; Object protocol read/write rejection during
+    `LOCAL_ISOLATED` and `RECOVERING` is covered by
+    `MigrationTargetIsolationTest.LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering`. KV paths have
+    focused admission checks. Stream client-facing read/write entrypoints are covered by
     `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringIsolation` and
     `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringRecovering`; full Stream ST
     remains follow-up.
@@ -442,9 +444,9 @@
        broader follow-up.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
        deferred retry payload; broader ST-level membership churn around the same path remains pending.
-    5. ST-level KV/Object/Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; unit coverage now
-       verifies Stream client-facing admission for both modes through the same facade semantics, while full protocol ST
-       remains pending.
+    5. ST-level KV/Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; Object protocol ST now
+       covers ordinary read/write admission for both modes, and unit coverage verifies Stream client-facing admission for
+       both modes through the same facade semantics. Full KV/Stream protocol ST remains pending.
 
 ## Fast Verification
 
@@ -517,6 +519,21 @@
   - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 13/13 tests in 0.005s.
   - GREEN: `git diff --check` and `git clang-format --diff HEAD -- tests/ut/cluster/topology_task_executor_test.cpp`
     were clean.
+  - Added 1 ST case:
+    `MigrationTargetIsolationTest.LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering`.
+  - Initial RED: the first version treated `ObjectClient::Create` as a write RPC and failed in 71.25s because Create can
+    succeed as local buffer allocation while the real write/admission point is `Buffer::Publish`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed twice after the test edits, with third-party cache hit
+    (`Compile thirdparty libraries success, total wall time: 0s`), URMA Mock enabled, 1154 compile database entries, and
+    total script times 117s / 110s. The script still emitted repeated-strip `debuglink section already exists`
+    diagnostics during install but exited 0.
+  - GREEN: `ds_st_object_cache --gtest_filter="MigrationTargetIsolationTest.LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering"`
+    passed 1/1 test in 10.584s gtest time, 10.66s wall time, covering `NORMAL_READ` and `NORMAL_WRITE` rejection during
+    both `LOCAL_ISOLATED` and `RECOVERING`.
+  - GREEN: `ds_st_object_cache --gtest_filter="MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker:MigrationTargetIsolationTest.LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering:MigrationTargetOomTest.LEVEL1_MigrationTargetFiltersOutOfMemoryWorker:MigrationTargetDrainingTest.LEVEL1_MigrationTargetFiltersDrainingWorker"`
+    passed 4/4 tests in 35.874s gtest time, 35.95s wall time.
+  - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 16/16 tests in 0.010s.
+  - GREEN: `git diff --check` clean.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
