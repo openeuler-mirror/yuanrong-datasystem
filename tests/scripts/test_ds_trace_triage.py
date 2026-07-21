@@ -394,16 +394,30 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "读取流程证据块" in html
     assert "写入流程证据块" in html
     assert "flow-section" in html
+    assert "href=\"#cohort-table\">表 2-1 Cohort" in html
+    assert "href=\"#classification-table\">表 2-2 分类" in html
     assert "href=\"#read-flow-stage-chart\">图 4-1 读取流程" in html
+    assert "href=\"#read-flow-stage-table\">表 4-1 读取流程" in html
     assert "href=\"#read-worker-chart\">图 4-2 读取 Worker" in html
+    assert "href=\"#read-worker-table\">表 4-2 读取 Worker" in html
     assert "href=\"#write-flow-stage-chart\">图 4-3 写入流程" in html
+    assert "href=\"#write-flow-stage-table\">表 4-3 写入流程" in html
     assert "href=\"#write-worker-chart\">图 4-4 写入 Worker" in html
+    assert "href=\"#write-worker-table\">表 4-4 写入 Worker" in html
+    assert "href=\"#ub-lifecycle-table\">表 5-1 生命周期" in html
     assert "href=\"#ub-wr-count-chart\">图 5-2 WR / Inflight" in html
+    assert "href=\"#ub-request-table\">表 5-2 UB Request" in html
     assert "href=\"#ub-worker-time-chart\">图 5-4 UB 时间桶" in html
+    assert "href=\"#ub-worker-time-table\">表 5-4 UB 时间桶" in html
     assert "href=\"#read-ub-edge-chart\">图 5-5 读取 UB Edge" in html
     assert "href=\"#write-ub-edge-chart\">图 5-6 写入 UB Edge" in html
     assert "href=\"#selected-trace-chart\">图 6-1 选中 Trace" in html
     assert "href=\"#selected-trace-log\">日志框 6-3 全量日志" in html
+    assert "--report-font-size:13px" in html
+    assert ".caption{text-align:center;color:#64748b;font-size:var(--report-font-size)" in html
+    assert "th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size)" in html
+    assert "const chartTextStyle = {fontSize:13" in html
+    assert "textStyle:chartTextStyle" in html
     assert "图 4-1 读取流程证据块：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
     assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html

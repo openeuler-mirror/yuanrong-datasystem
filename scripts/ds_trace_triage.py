@@ -1970,7 +1970,7 @@ def _render_html(report, title, site=False, manifest=None):
     data = json.dumps(report, ensure_ascii=False).replace("</script>", "<\\/script>")
     manifest_data = json.dumps(manifest or {}, ensure_ascii=False).replace("</script>", "<\\/script>")
     base_style = """<style>
-:root{--bg:#f6f8fb;--card:#fff;--text:#172033;--muted:#5f6b7a;--border:#dfe5ee;--blue:#2563eb;--orange:#ea580c;--red:#dc2626;--green:#059669;--purple:#7c3aed;--amber:#ca8a04}
+:root{--bg:#f6f8fb;--card:#fff;--text:#172033;--muted:#5f6b7a;--border:#dfe5ee;--blue:#2563eb;--orange:#ea580c;--red:#dc2626;--green:#059669;--purple:#7c3aed;--amber:#ca8a04;--report-font-size:13px}
 *{box-sizing:border-box}body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--text);font-family:'Microsoft YaHei',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
 .layout{display:flex;align-items:flex-start;min-height:100vh}aside{position:sticky;left:0;top:0;flex:0 0 245px;width:245px;height:100vh;background:#fff;border-right:1px solid var(--border);padding:18px 14px;overflow:auto}
 aside h2{font-size:16px;margin:0 0 12px}nav a{display:block;color:#324055;text-decoration:none;padding:8px 10px;border-radius:6px;font-size:13px;margin:2px 0}
@@ -1985,10 +1985,10 @@ tr.summaryrow td{background:#f8fafc}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
-.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
-table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
+table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size);word-break:break-word}
 th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none}.sortable-th:hover{background:#eaf2ff}.sort-mark{color:#2563eb;font-size:11px;margin-left:4px}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
-.table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table{font-size:12px}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
+.table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
@@ -2014,30 +2014,48 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a class="sub" href="#overall-guide">表 1-1 整体导读</a>
       <a href="#s2">2. 根因分布</a>
       <a class="sub" href="#cohort-chart">图 2-1 输入包 / Cohort</a>
+      <a class="sub" href="#cohort-table">表 2-1 Cohort</a>
       <a class="sub" href="#classification-chart">图 2-2 分类分布</a>
+      <a class="sub" href="#classification-table">表 2-2 分类</a>
       <a class="sub" href="#error-chart">图 2-3 错误分布</a>
+      <a class="sub" href="#error-table">表 2-3 Error</a>
       <a href="#s3">3. 时延 Breakdown</a>
       <a class="sub" href="#read-latency-chart">图 3-1 读取时延</a>
+      <a class="sub" href="#read-latency-table">表 3-1 读取时延</a>
       <a class="sub" href="#read-flow-chart">图 3-2 读取 Flow</a>
+      <a class="sub" href="#read-flow-table">表 3-3 读取 Flow</a>
       <a class="sub" href="#read-time-breakdown-chart">图 3-3 读取时间桶</a>
       <a class="sub" href="#write-latency-chart">图 3-4 写入时延</a>
+      <a class="sub" href="#write-latency-table">表 3-2 写入时延</a>
       <a class="sub" href="#write-flow-chart">图 3-5 写入 Flow</a>
+      <a class="sub" href="#write-flow-table">表 3-4 写入 Flow</a>
       <a class="sub" href="#write-time-breakdown-chart">图 3-6 写入时间桶</a>
       <a href="#s4">4. Worker / 流程</a>
       <a class="sub" href="#read-flow-stage-chart">图 4-1 读取流程</a>
+      <a class="sub" href="#read-flow-stage-table">表 4-1 读取流程</a>
       <a class="sub" href="#read-worker-chart">图 4-2 读取 Worker</a>
+      <a class="sub" href="#read-worker-table">表 4-2 读取 Worker</a>
       <a class="sub" href="#write-flow-stage-chart">图 4-3 写入流程</a>
+      <a class="sub" href="#write-flow-stage-table">表 4-3 写入流程</a>
       <a class="sub" href="#write-worker-chart">图 4-4 写入 Worker</a>
+      <a class="sub" href="#write-worker-table">表 4-4 写入 Worker</a>
       <a href="#s5">5. UB / URMA</a>
       <a class="sub" href="#ub-lifecycle-chart">图 5-1 UB 生命周期</a>
+      <a class="sub" href="#ub-lifecycle-table">表 5-1 生命周期</a>
       <a class="sub" href="#ub-wr-count-chart">图 5-2 WR / Inflight</a>
+      <a class="sub" href="#ub-request-table">表 5-2 UB Request</a>
       <a class="sub" href="#ub-worker-role-chart">图 5-3 入口/出口 Worker</a>
+      <a class="sub" href="#ub-worker-role-table">表 5-3 Worker 角色</a>
       <a class="sub" href="#ub-worker-time-chart">图 5-4 UB 时间桶</a>
+      <a class="sub" href="#ub-worker-time-table">表 5-4 UB 时间桶</a>
       <a class="sub" href="#read-ub-edge-chart">图 5-5 读取 UB Edge</a>
+      <a class="sub" href="#read-ub-edge-table">表 5-5 读取 Edge</a>
       <a class="sub" href="#write-ub-edge-chart">图 5-6 写入 UB Edge</a>
+      <a class="sub" href="#write-ub-edge-table">表 5-6 写入 Edge</a>
       <a href="#s6">6. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 6-1 Top Trace</a>
       <a class="sub" href="#selected-trace-chart">图 6-1 选中 Trace</a>
+      <a class="sub" href="#selected-trace-table">表 6-2 Trace 摘要</a>
       <a class="sub" href="#selected-trace-log">日志框 6-3 全量日志</a>
       <a href="#s7">7. 建议与口径</a>
       <a class="sub" href="#recommendation-table">表 7-1 建议</a>
@@ -2443,10 +2461,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return percentileFromValues(traceRowsForOperation(operation).map(([, item]) => item.access_latency_ms?.max ?? item.access_latency_ms?.p99 ?? item.access_latency_ms?.p50));
   }
   const palette = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
+  const chartTextStyle = {fontSize:13, color:'#475569'};
   function axisBase(title, extra) {
     return Object.assign({
       title:{show:false,text:title},
       color:palette,
+      textStyle:chartTextStyle,
       grid:{left:58,right:24,top:72,bottom:76,containLabel:true},
       legend:{top:30,type:'scroll'},
       toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}},
@@ -2458,7 +2478,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return {left:left,right:24,top:top,bottom:bottom,containLabel:false};
   }
   function noDataOption(title) {
-    return {title:{text:title, left:'center', top:'center', textStyle:{fontSize:14,color:'#94a3b8'}}};
+    return {title:{text:title, left:'center', top:'center', textStyle:Object.assign({}, chartTextStyle, {color:'#94a3b8'})}};
   }
   function chart(id, option) {
     const node = document.getElementById(id);
@@ -3156,7 +3176,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }
     navLinks.forEach(link => link.classList.toggle('active', link === active));
   });
-  chart('classification-chart', classificationRows.length ? {title:{show:false}, color:palette, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['38%','66%'], center:['50%','48%'], avoidLabelOverlap:true, data:classificationRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No classification data'));
+  chart('classification-chart', classificationRows.length ? {title:{show:false}, color:palette, textStyle:chartTextStyle, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['38%','66%'], center:['50%','48%'], avoidLabelOverlap:true, data:classificationRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No classification data'));
   chart('cohort-chart', cohortRows.length ? axisBase('Input Cohort Comparison', {xAxis:{type:'category', data:cohortRows.map(r => r[0]), axisLabel:{rotate:20, width:110, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
     {name:'traces',type:'bar',barMaxWidth:42,data:cohortRows.map(r => r[1].trace_count || 0), label:{show:true, position:'top'}},
     {name:'errors',type:'bar',barMaxWidth:42,data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0)), label:{show:true, position:'top'}, itemStyle:{color:'#dc2626'}}
@@ -3165,6 +3185,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function renderFlowGraph(id, graph, title) {
     chart(id, {
     title:{show:false,text:title},
+    textStyle:chartTextStyle,
     toolbox:{right:10,feature:{
       saveAsImage:{},
       dataView:{readOnly:true},
@@ -3185,8 +3206,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       roam:true,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true},
-      edgeLabel:{show:true, formatter:p => p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:11, width:120, overflow:'break'},
+      label:{show:true, fontSize:13},
+      edgeLabel:{show:true, formatter:p => p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:13, width:120, overflow:'break'},
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(graph.nodes || []).map((node, idx) => ({
         name:node.id,
