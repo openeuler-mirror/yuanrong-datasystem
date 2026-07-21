@@ -148,6 +148,29 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use injected coordination/metadata capabilities")
 
+    def test_get_service_uses_metadata_reader_not_coordination_backend(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/service/BUILD.bazel",
+            REPO_ROOT / "src/datasystem/worker/object_cache/service/worker_oc_service_get_impl.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/service/worker_oc_service_get_impl.cpp",
+        ]
+
+        forbidden_tokens = [
+            "cluster::ICoordinationBackend",
+            "coordination_backend/coordination_backend.h",
+            "coordinationBackend_",
+            "EnsureCoordinationBackendAvailable",
+            "QueryObjectMetadataFromCoordination",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            if file_path.name == "BUILD.bazel":
+                text = text.split('name = "worker_oc_service_get_impl_header"', 1)[1]
+                text = text.split('name = "worker_oc_service_delete_impl_header"', 1)[0]
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use object metadata reader abstraction")
+
     def test_worker_composition_uses_runtime_facade_methods(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp",

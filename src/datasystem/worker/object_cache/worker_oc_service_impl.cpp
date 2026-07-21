@@ -108,6 +108,7 @@
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/worker/object_cache/object_cache_recovery_state.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/object_metadata_coordination_reader.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/verify_leaving_state.h"
@@ -438,8 +439,10 @@ void WorkerOCServiceImpl::InitServiceImpl()
 
     migrateRateController_ =
         std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-    getProc_ = std::make_shared<WorkerOcServiceGetImpl>(param, coordinationBackend_, memCpyThreadPool_, threadPool_,
-                                                        akSkManager_, localAddress_, migrateRateController_);
+    auto metadataReader = std::make_shared<CoordinationObjectMetadataReader>(coordinationBackend_);
+    getProc_ =
+        std::make_shared<WorkerOcServiceGetImpl>(param, std::move(metadataReader), memCpyThreadPool_, threadPool_,
+                                                 akSkManager_, localAddress_, migrateRateController_);
 
     deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, akSkManager_, localAddress_, getProc_);
 

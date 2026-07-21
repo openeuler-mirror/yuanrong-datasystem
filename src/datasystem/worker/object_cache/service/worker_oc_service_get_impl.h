@@ -22,7 +22,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -33,6 +32,7 @@
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/object_kv.h"
+#include "datasystem/worker/object_cache/service/object_metadata_reader.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
 #include "datasystem/worker/object_cache/worker_worker_transport_api.h"
@@ -47,7 +47,7 @@ using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
 class WorkerOcServiceGetImpl : public WorkerOcServiceCrudCommonApi,
                                public std::enable_shared_from_this<WorkerOcServiceGetImpl> {
 public:
-    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, cluster::ICoordinationBackend *coordinationBackend,
+    WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<IObjectMetadataReader> metadataReader,
                            std::shared_ptr<ThreadPool> memCpyThreadPool, std::shared_ptr<ThreadPool> threadPool,
                            std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                            std::shared_ptr<MigrateDataRateController> rateController);
@@ -1069,7 +1069,7 @@ private:
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
 
-    cluster::ICoordinationBackend *coordinationBackend_;  // pointer to backend adapter in WorkerOcServer
+    std::shared_ptr<IObjectMetadataReader> metadataReader_;
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
 

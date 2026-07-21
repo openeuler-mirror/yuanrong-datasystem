@@ -27,12 +27,10 @@
 
 #include <nlohmann/json.hpp>
 
-#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/common/device/device_helper.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/kvstore/etcd/etcd_constants.h"
 #include "datasystem/common/l2cache/l2_storage.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase.h"
@@ -87,7 +85,6 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 
-static constexpr int DEBUG_LOG_LEVEL = 2;
 static constexpr uint32_t K_URMA_WARNING_LOG_EVERY_N = 100;
 static constexpr double EXIST_LOCAL_CHECK_TIMEOUT_US = 50.0;
 static const char *const EXIST_REDIRECTS_FIELD = "exist_redirects";
@@ -114,39 +111,6 @@ Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeO
     return Status::OK();
 }
 
-Status EnsureCoordinationBackendAvailable(cluster::ICoordinationBackend *backend)
-{
-    CHECK_FAIL_RETURN_STATUS(backend != nullptr, K_NOT_READY, "coordination backend is not initialized");
-    CHECK_FAIL_RETURN_STATUS(!backend->IsKeepAliveTimeout(), K_RPC_UNAVAILABLE, "coordination backend is unavailable");
-    return Status::OK();
-}
-
-std::string BuildMetadataTableName()
-{
-    return std::string(ETCD_META_TABLE_PREFIX) + ETCD_HASH_SUFFIX;
-}
-
-std::string BuildMetadataKey(const std::string &objectKey)
-{
-    return FormatString("%010u/%s", MurmurHash3_32(objectKey), objectKey);
-}
-
-Status QueryObjectMetadataFromCoordination(cluster::ICoordinationBackend *backend, const std::string &objectKey,
-                                           int32_t timeoutMs, master::QueryMetaInfoPb &queryMeta)
-{
-    RETURN_IF_NOT_OK(EnsureCoordinationBackendAvailable(backend));
-    RangeSearchResult res;
-    RETURN_IF_NOT_OK(backend->Get(BuildMetadataTableName(), BuildMetadataKey(objectKey), res, timeoutMs));
-
-    auto metaPb = std::make_unique<ObjectMetaPb>();
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(metaPb->ParseFromString(res.value), StatusCode::K_RUNTIME_ERROR,
-                                         FormatString("Parse string to ObjectMetaPb failed. String is: %s", res.value));
-    VLOG(DEBUG_LOG_LEVEL) << "Success to get ObjectKey " << objectKey << ", metadata primary addr "
-                          << metaPb->primary_address() << " from coordination store";
-    queryMeta.set_address(metaPb->primary_address());
-    queryMeta.set_allocated_meta(metaPb.release());
-    return Status::OK();
-}
 }  // namespace
 
 std::string BuildExistRedirectExtra(const google::protobuf::RepeatedPtrField<RedirectMetaInfo> &infos)
@@ -184,13 +148,13 @@ std::string BuildExistRedirectExtra(const google::protobuf::RepeatedPtrField<Red
 }
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam,
-                                               cluster::ICoordinationBackend *coordinationBackend,
+                                               std::shared_ptr<IObjectMetadataReader> metadataReader,
                                                std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
                                                std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
                                                std::shared_ptr<MigrateDataRateController> rateController)
     : WorkerOcServiceCrudCommonApi(initParam),
-      coordinationBackend_(coordinationBackend),
+      metadataReader_(std::move(metadataReader)),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
       akSkManager_(std::move(akSkManager)),
@@ -1892,7 +1856,7 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromCoordinationStore(const std::uno
                                                                   std::vector<std::string> &absentObjectKeys)
 {
     INJECT_POINT("worker.QueryMetadataFromCoordinationStore_failure");
-    RETURN_IF_NOT_OK(EnsureCoordinationBackendAvailable(coordinationBackend_));
+    CHECK_FAIL_RETURN_STATUS(metadataReader_ != nullptr, K_NOT_READY, "object metadata reader is not initialized");
     for (const std::string &objKey : objectKeys) {
         LOG(INFO) << "Query objKey: " << objKey << ", AZ name: " << FLAGS_cluster_name
                   << ", query coordination metadata key: " << objKey;
@@ -1900,10 +1864,10 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromCoordinationStore(const std::uno
         int64_t remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRemainingTime();
         CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(remainingTime), K_RUNTIME_ERROR,
                                              "Remaining time is out of range.");
-        Status rc = QueryObjectMetadataFromCoordination(coordinationBackend_, objKey,
-                                                        static_cast<int32_t>(remainingTime), queryMeta);
+        Status rc = metadataReader_->QueryObjectMetadata(objKey, static_cast<int32_t>(remainingTime), queryMeta);
         if (rc.IsError()) {
             LOG(ERROR) << "Can not get meta: " << rc.ToString();
+            RETURN_IF_NOT_OK_EXCEPT(rc, K_NOT_FOUND);
             absentObjectKeys.emplace_back(objKey);
             continue;
         }

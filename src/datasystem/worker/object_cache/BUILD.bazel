@@ -283,6 +283,26 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "object_metadata_coordination_reader",
+    srcs = [
+        "object_metadata_coordination_reader.cpp",
+    ],
+    hdrs = [
+        "object_metadata_coordination_reader.h",
+    ],
+    deps = [
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
+        "//src/datasystem/common/kvstore/etcd:etcd_constants",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:hash_algorithm",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/protos:object_posix_cc_proto",
+        "//src/datasystem/worker/object_cache/service:object_metadata_reader",
+    ],
+)
+
+ds_cc_library(
     name = "worker_oc_service_impl",
     srcs = [
         "slot_recovery_orchestrator.cpp",
@@ -299,6 +319,7 @@ ds_cc_library(
         "//src/datasystem/cluster:cluster_topology_scope",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker/object_cache:object_endpoint_policy",
+        "//src/datasystem/worker/object_cache:object_metadata_coordination_reader",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/flags:ds_flags",

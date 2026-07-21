@@ -54,6 +54,7 @@
 #include "datasystem/cluster/routing/placement_facade.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/object_metadata_coordination_reader.h"
 #define private public
 #include "datasystem/worker/object_cache/service/worker_oc_service_get_impl.h"
 #undef private
@@ -1230,7 +1231,8 @@ public:
         };
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, nullptr, nullptr, nullptr, nullptr,
+        metadataReader_ = std::make_shared<CoordinationObjectMetadataReader>(nullptr);
+        impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, metadataReader_, nullptr, nullptr, nullptr,
                                                          HostPort("127.0.0.1:18888"), rateController_);
     }
 
@@ -1255,6 +1257,7 @@ protected:
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<MigrateTestWorkerMasterApiManager> workerMasterApiManager_;
     WorkerRequestManager requestManager_;
+    std::shared_ptr<IObjectMetadataReader> metadataReader_;
     std::shared_ptr<WorkerOcServiceGetImpl> impl_;
     std::shared_ptr<MigrateDataRateController> rateController_;
 };
@@ -1271,7 +1274,7 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataUsesCoordinationStoreLogicalKe
 
     FakeMetadataCoordinationBackend backend;
     backend.values.emplace(std::make_pair(tableName, logicalKey), meta.SerializeAsString());
-    impl_->coordinationBackend_ = &backend;
+    impl_->metadataReader_ = std::make_shared<CoordinationObjectMetadataReader>(&backend);
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(timeoutMs);
 
@@ -1292,7 +1295,7 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataRejectsUnavailableCoordination
 {
     FakeMetadataCoordinationBackend backend;
     backend.keepAliveTimeout = true;
-    impl_->coordinationBackend_ = &backend;
+    impl_->metadataReader_ = std::make_shared<CoordinationObjectMetadataReader>(&backend);
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(1'000);
 

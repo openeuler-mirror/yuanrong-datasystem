@@ -280,6 +280,11 @@
      concrete `WorkerTopologyObjectCacheActions` adapter that drains ScaleIn data, prepares ScaleIn cleanup, and submits
      Failure local cleanup. Boundary tests assert `worker_topology_phase_callbacks` stays free of
      `worker_oc_service_impl` build and include dependencies.
+  10. object-cache Get metadata fallback now depends on the narrow `IObjectMetadataReader` hook instead of retaining
+      `cluster::ICoordinationBackend` or constructing coordination keys in `WorkerOcServiceGetImpl`. The concrete
+      `CoordinationObjectMetadataReader` owns backend availability checks, logical metadata key construction, and
+      metadata protobuf parsing. Boundary tests assert the Get service implementation and service Bazel package do not
+      regress to direct coordination-backend coupling.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -307,6 +312,20 @@
     19 tests, 0.05s.
   - `cluster_topology_contract_ut --gtest_filter=TopologyEngineTest.*:TopologyFailureClassifierTest.*:HashAlgorithmTest.ScaleOutDoesNotUseFailedWorkerAsMigrationSource`:
     27 tests, 1.95s.
+  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 12 tests, 0.014s after adding the Get
+    service metadata-reader boundary assertion.
+  - `scripts/clion_remote_build.sh tests-index`: full UT/ST index build green in 515s, source build 431s, third-party
+    cache hit in 1s, `BUILD_WITH_URMA_MOCK` enabled, generated 1151 compile-command entries including
+    `object_metadata_coordination_reader.cpp`, `worker_oc_service_get_impl.cpp`, `migrate_data_service_test.cpp`,
+    `worker_topology_object_cache_actions.cpp`, and worker service composition files.
+  - incremental `scripts/clion_remote_build.sh tests-index` after the Get metadata unavailable-error behavior fix:
+    green in 164s, source build 54s, third-party cache hit in 1s, 1151 compile-command entries.
+  - `ds_ut_object --gtest_filter=NotifyRemoteGetMigrationTest.QueryMetadataUsesCoordinationStoreLogicalKey:NotifyRemoteGetMigrationTest.QueryMetadataRejectsUnavailableCoordinationBackend`:
+    2 tests, 0.05s; covers coordination logical-key lookup through the injected reader and non-absent propagation when
+    the coordination backend is unavailable.
+  - `ds_ut_object --gtest_filter=TopologyBusinessContractTest.*`: 3 tests, 0.05s.
+  - `ds_ut --gtest_filter=WorkerRuntimeFacadeTest.*:WorkerTopologyAvailabilityAdmissionTest.*:WorkerServiceAdmissionTest.*`:
+    20 tests, 0.10s.
 - Acceptance coverage status against the worker-isolation story:
   - `EtcdKeepAliveIsolationTest.ConfirmedLocalIsolationPublishesDeleteAndIsolationCallbackOnce`: covered by
     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData`,
