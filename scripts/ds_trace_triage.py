@@ -2121,7 +2121,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         </div>
         <div class="panel"><div class="controls"><label>Worker 筛选 <select id="ub-worker-time-filter"><option value="">全部 Worker</option></select></label></div><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-4 UB 时间桶：按秒观察入口/出口事件与尾部时延。</div></div>
         <div class="flow-section ub-table-stack">
-          <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><div class="table-scroll"><table id="ub-lifecycle-table" class="nowrap-table"></table></div><div id="ub-lifecycle-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><div class="table-scroll"><table id="ub-lifecycle-table" class="nowrap-table"></table></div></div>
           <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table" class="adaptive-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-3 UB Worker 角色</h3><div class="controls"><label>Worker 筛选 <select id="ub-worker-role-table-filter"><option value="">全部 Worker</option></select></label></div><table id="ub-worker-role-table" class="adaptive-table"></table><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-4 UB 时间桶</h3><div class="controls"><label>Worker 筛选 <select id="ub-worker-time-table-filter"><option value="">全部 Worker</option></select></label></div><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
@@ -2868,8 +2868,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       ...ubLifecycleMetrics.map(([name,item]) => [lifecycleLabel(name), item.count || 0, item.p50 ?? '', item.p90 ?? '', item.p99 ?? '', item.max ?? '']),
       ...ubChipInflightRows.map(([chip,item]) => [`Chip ${chip} inflight`, item.count || 0, item.p50 ?? '', item.p90 ?? '', item.p99 ?? '', item.max ?? ''])
     ];
-    renderPagedTable('ub-lifecycle-table', 'ub-lifecycle-table-pager', ['metric','count','p50','p90','p99','max'], metricRows,
-      row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0))}"`, 5);
+    renderTable('ub-lifecycle-table', ['metric','count','p50','p90','p99','max'], metricRows,
+      row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0))}"`);
     renderPagedTable('ub-request-table', 'ub-request-table-pager',
       ['time','trace','request','worker','total ms','wait ms','wake ms','remote wr','urma wr','poll ms','notify ms','sched ms','edge','cpuid','data size','status','chip inflight'],
       ubRequestRows.map(item => [

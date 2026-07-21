@@ -431,11 +431,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "class=\"nowrap-table\"" in html
     assert "#ub-lifecycle-table" in html
     assert "white-space:nowrap" in html
+    assert "renderTable('ub-lifecycle-table', ['metric','count','p50','p90','p99','max'], metricRows" in html
+    assert "ub-lifecycle-table-pager" not in html
     assert "id=\"ub-request-table\"" in html
     assert "class=\"flow-section ub-table-stack\"" in html
     assert "id=\"ub-worker-role-table-pager\"" in html
     assert "id=\"ub-worker-time-table-pager\"" in html
-    assert "id=\"ub-lifecycle-table-pager\"" in html
     assert "id=\"ub-request-table-pager\"" in html
     assert "ub_worker_summary" in html
     assert "ub_lifecycle_summary" in html
