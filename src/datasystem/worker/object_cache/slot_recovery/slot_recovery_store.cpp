@@ -19,6 +19,7 @@
  */
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
 
 namespace datasystem {

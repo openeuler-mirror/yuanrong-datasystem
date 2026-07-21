@@ -91,6 +91,12 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should go through ICoordinationBackend")
 
+    def test_slot_recovery_store_header_hides_coordination_backend_detail(self):
+        header = REPO_ROOT / "src/datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
+        text = header.read_text(encoding="utf-8")
+        self.assertIn("class ICoordinationBackend;", text)
+        self.assertNotIn("coordination_backend/coordination_backend.h", text)
+
     def test_node_selector_uses_runtime_facade_not_runtime_state_manager(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/data_migrator/strategy/node_selector.h",

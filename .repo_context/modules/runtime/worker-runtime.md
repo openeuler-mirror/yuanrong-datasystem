@@ -289,6 +289,9 @@
       still chooses the concrete ETCD or Coordinator-backed `ICoordinationBackend`, but the metadata table creation,
       CAS claim, Get fallback, and coordination key names are now object-cache metadata policy. Boundary tests assert the
       worker composition root delegates this policy instead of inlining it.
+  12. slot recovery keeps the `ICoordinationBackend` dependency in `CoordinationSlotRecoveryStore` implementation only;
+      `slot_recovery_store.h` exposes the store contract and a forward declaration, so slot recovery manager users do
+      not inherit coordination backend implementation headers.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -438,6 +441,14 @@
 ## Fast Verification
 
 - Recent focused verification for scale/fault overlap coverage:
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_slot_recovery_store_header_hides_coordination_backend_detail`.
+  - Initial RED: the new boundary test failed because `slot_recovery_store.h` directly included
+    `coordination_backend/coordination_backend.h` and did not forward declare `ICoordinationBackend`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 201s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), URMA Mock enabled, and 1154 compile database entries.
+  - GREEN: `ds_ut_object --gtest_filter="SlotRecoveryTest.*"` passed 22/22 tests in 175ms gtest time, 0.23s wall time.
+  - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 14/14 tests in 0.004s.
   - Hardened 3 existing ST cases:
     `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker`,
     `MigrationTargetOomTest.LEVEL1_MigrationTargetFiltersOutOfMemoryWorker`, and
