@@ -479,8 +479,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "labelLayout:{hideOverlap:false}" in html
     assert "roam:false" in html
     assert "const graphWidth = Math.max(760, node?.clientWidth || 0)" in html
-    assert "const flowNodeX = [0.11,0.36,0.70,0.70,0.89].map(r => Math.round(graphWidth * r))" in html
-    assert "const flowNodeY = [260,260,118,404,404]" in html
+    assert "const flowNodeX = [0.11,0.36,0.63,0.63,0.89].map(r => Math.round(graphWidth * r))" in html
+    assert "const flowNodeY = [250,250,118,374,374]" in html
     assert "function flowEdgeBriefText(edge)" in html
     assert "Number(rollup.trace_count || 0) > 0" in html
     assert "return [edge.operation, latency || '未采样'" in html
@@ -507,7 +507,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function flowGraphNodeSize()" in html
     assert "symbol:'roundRect'" in html
     assert "symbolSize:flowGraphNodeSize()" in html
-    assert "label:{show:true, position:'inside', fontSize:15" in html
+    assert "return [128, 54]" in html
+    assert "label:{show:true, position:'inside', fontSize:16" in html
     assert "edgeLabel:{show:true, position:'middle'" in html
     assert "rotate:0" in html
     assert "align:'center'" in html
@@ -517,7 +518,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "label:flowEdgeAutoLabel(edge)" in html
     assert "offset:flowEdgeLabelOffset(edge)" in html
     assert "edge_annotation" not in html
-    assert "fontSize:15" in html
+    assert "fontSize:14" in html
+    assert "width:150" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html
     assert "return node.label" in html

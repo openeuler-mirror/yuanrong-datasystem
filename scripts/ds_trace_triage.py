@@ -3907,9 +3907,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       rotate:0,
       align:'center',
       verticalAlign:'middle',
-      fontSize:15,
+      fontSize:14,
       lineHeight:18,
-      width:210,
+      width:150,
       overflow:'break',
       backgroundColor:'rgba(255,255,255,.68)',
       borderColor:'#dbeafe',
@@ -3920,7 +3920,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     };
   }
   function flowGraphNodeSize() {
-    return [180, 70];
+    return [128, 54];
   }
   function edgeLabelSeverity(value) {
     const n = Number(value || 0);
@@ -3930,8 +3930,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     chartRenderers.set(id, () => renderFlowGraph(id, graph, title));
     const node = document.getElementById(id);
     const graphWidth = Math.max(760, node?.clientWidth || 0);
-    const flowNodeX = [0.11,0.36,0.70,0.70,0.89].map(r => Math.round(graphWidth * r));
-    const flowNodeY = [260,260,118,404,404];
+    const flowNodeX = [0.11,0.36,0.63,0.63,0.89].map(r => Math.round(graphWidth * r));
+    const flowNodeY = [250,250,118,374,374];
     const graphNodeData = (graph.nodes || []).map((node, idx) => ({
       name:node.id,
       symbol:'roundRect',
@@ -3956,16 +3956,16 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       roam:false,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true, position:'inside', fontSize:15, width:164, overflow:'break', lineHeight:19},
+      label:{show:true, position:'inside', fontSize:16, width:112, overflow:'break', lineHeight:19},
       labelLayout:{hideOverlap:false},
       edgeLabel:{show:true, position:'middle',
         formatter:p => `{${edgeLabelSeverity(p.data.rollup?.max_ms)}|${p.data.edge_label || p.data.status || ''}}`,
         rotate:0,
         align:'center',
         verticalAlign:'middle',
-        fontSize:15,
+        fontSize:14,
         lineHeight:18,
-        width:210,
+        width:150,
         overflow:'break',
         backgroundColor:'rgba(255,255,255,.68)',
         borderColor:'#dbeafe',
