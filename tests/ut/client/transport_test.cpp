@@ -350,7 +350,10 @@ public:
         if (multiCreateInvokeStatus.IsError()) {
             return multiCreateInvokeStatus;
         }
-        for (int i = 0; i < request.object_key_size(); ++i) {
+        // Default: one result per requested key. If multiCreateResultCount >= 0, return that many
+        // (used to test the count-mismatch Release branch in ShmTransporter::MCreate).
+        int resultCount = multiCreateResultCount < 0 ? request.object_key_size() : multiCreateResultCount;
+        for (int i = 0; i < resultCount; ++i) {
             auto *item = response.add_results();
             item->set_shm_id("multi-shm-" + std::to_string(i));
             if (createResponseHasUrmaInfo) {
@@ -439,6 +442,7 @@ public:
     int createInvokeCount = 0;
     int setInvokeCount = 0;
     int multiCreateInvokeCount = 0;
+    int multiCreateResultCount = -1;  // <0 = per request key count; >=0 = fixed (mismatch test)
     int multiSetInvokeCount = 0;
     int decreaseReferenceCount = 0;
     Status createInvokeStatus = Status::OK();
@@ -1567,6 +1571,87 @@ TEST(WorkerSnapshotTest, AcceptsEmptyTopologyAsCleanupAll)
         BuildWorkerSnapshot(9, ring, std::unordered_map<std::string, std::string>{}, "", snapshot).IsOk());
     EXPECT_EQ(snapshot.ringVersion, 9u);
     EXPECT_TRUE(snapshot.Empty());
+}
+
+// canPartition=true: workers whose hostId==sdkHostId go to sameHostAddrs, others to otherAddrs.
+TEST(WorkerSnapshotTest, PartitionsByHostIdWhenSdkHostIdAndHostIdMapPresent)
+{
+    ::datasystem::ClusterTopologyPb ring;
+    const HostPort sameA = MakeAddress(200);
+    const HostPort sameB = MakeAddress(201);
+    const HostPort crossC = MakeAddress(202);
+    (*ring.mutable_members())[sameA.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+    (*ring.mutable_members())[sameB.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+    (*ring.mutable_members())[crossC.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+
+    std::unordered_map<std::string, std::string> hostIdMap = {
+        { sameA.ToString(), "node05" },
+        { sameB.ToString(), "node05" },
+        { crossC.ToString(), "node06" },
+    };
+    WorkerSnapshot snapshot;
+    ASSERT_TRUE(BuildWorkerSnapshot(11, ring, hostIdMap, "node05", snapshot).IsOk());
+    EXPECT_EQ(snapshot.ringVersion, 11u);
+    EXPECT_EQ(snapshot.sameHostAddrs.size(), 2u);
+    EXPECT_EQ(snapshot.otherAddrs.size(), 1u);
+    // same-host and other are disjoint
+    EXPECT_NE(std::find(snapshot.sameHostAddrs.begin(), snapshot.sameHostAddrs.end(), sameA),
+              snapshot.sameHostAddrs.end());
+    EXPECT_NE(std::find(snapshot.sameHostAddrs.begin(), snapshot.sameHostAddrs.end(), sameB),
+              snapshot.sameHostAddrs.end());
+    EXPECT_EQ(snapshot.otherAddrs.front(), crossC);
+}
+
+// A worker present in the ring but whose hostId != sdkHostId must NOT appear in sameHostAddrs.
+TEST(WorkerSnapshotTest, WorkerInRingButMismatchedHostIdGoesToOtherAddrs)
+{
+    ::datasystem::ClusterTopologyPb ring;
+    const HostPort w = MakeAddress(300);
+    (*ring.mutable_members())[w.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+
+    std::unordered_map<std::string, std::string> hostIdMap = { { w.ToString(), "node06" } };
+    WorkerSnapshot snapshot;
+    ASSERT_TRUE(BuildWorkerSnapshot(12, ring, hostIdMap, "node05", snapshot).IsOk());
+    EXPECT_TRUE(snapshot.sameHostAddrs.empty());
+    EXPECT_EQ(snapshot.otherAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.otherAddrs.front(), w);
+}
+
+// sdkHostId empty or hostIdMap empty → canPartition=false, every worker to otherAddrs.
+TEST(WorkerSnapshotTest, NoPartitionWhenSdkHostIdOrHostIdMapEmpty)
+{
+    ::datasystem::ClusterTopologyPb ring;
+    const HostPort w = MakeAddress(400);
+    (*ring.mutable_members())[w.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+    std::unordered_map<std::string, std::string> hostIdMap = { { w.ToString(), "node05" } };
+
+    WorkerSnapshot snapA;
+    ASSERT_TRUE(BuildWorkerSnapshot(13, ring, hostIdMap, "", snapA).IsOk());
+    EXPECT_TRUE(snapA.sameHostAddrs.empty());
+    EXPECT_EQ(snapA.otherAddrs.size(), 1u);
+
+    WorkerSnapshot snapB;
+    ASSERT_TRUE(BuildWorkerSnapshot(14, ring, std::unordered_map<std::string, std::string>{}, "node05", snapB).IsOk());
+    EXPECT_TRUE(snapB.sameHostAddrs.empty());
+    EXPECT_EQ(snapB.otherAddrs.size(), 1u);
+}
+
+// A ring member missing from hostIdMap goes to otherAddrs (not crash, not sameHost).
+TEST(WorkerSnapshotTest, RingMemberMissingFromHostIdMapGoesToOtherAddrs)
+{
+    ::datasystem::ClusterTopologyPb ring;
+    const HostPort known = MakeAddress(500);
+    const HostPort unknown = MakeAddress(501);
+    (*ring.mutable_members())[known.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+    (*ring.mutable_members())[unknown.ToString()].set_state(::datasystem::MembershipPb::ACTIVE);
+
+    std::unordered_map<std::string, std::string> hostIdMap = { { known.ToString(), "node05" } };
+    WorkerSnapshot snapshot;
+    ASSERT_TRUE(BuildWorkerSnapshot(15, ring, hostIdMap, "node05", snapshot).IsOk());
+    EXPECT_EQ(snapshot.sameHostAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.sameHostAddrs.front(), known);
+    EXPECT_EQ(snapshot.otherAddrs.size(), 1u);
+    EXPECT_EQ(snapshot.otherAddrs.front(), unknown);
 }
 
 TEST(DataPlaneManagerTest, ReusesRpcClientAndTransporterForSameAddress)
@@ -3457,6 +3542,190 @@ TEST(ShmTransporterTest, RejectsGetWhenRpcClientAbsent)
     DataGetResult result;
     EXPECT_EQ(transporter.Get({ "key", 1 }, result).GetCode(), K_RUNTIME_ERROR);
 }
+
+// Create with store_fd=0 (default) → fallback path: no mmap entry, buffer malloc'd for payload inline.
+TEST(ShmTransporterTest, CreateFallsBackToPayloadWhenNoStoreFd)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    ShmTransporter transporter(rpc);
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(transporter.Create(MakeAddress(9100), "k1", 1024, MakeCreateParam(), buffer).IsOk());
+    ASSERT_NE(buffer, nullptr);
+    const auto &info = ObjectBufferInternal::GetInfo(*buffer);
+    EXPECT_EQ(info.mmapEntry, nullptr);  // no mmap → fallback payload inline
+    EXPECT_NE(info.pointer, nullptr);    // ObjectBuffer::Init mallocs a local buffer for the payload
+    EXPECT_FALSE(info.shmId.Empty());
+    EXPECT_EQ(rpc->createInvokeCount, 1);
+}
+
+// Set on a fallback (non-mmap) buffer sends payload inline (InvokeSet called with non-empty payloads).
+TEST(ShmTransporterTest, SetSendsPayloadInlineForFallbackBuffer)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    ShmTransporter transporter(rpc);
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(transporter.Create(MakeAddress(9101), "k2", 64, MakeCreateParam(), buffer).IsOk());
+    TransportSetParam sp = MakeSetParam();
+    ASSERT_TRUE(transporter.Set(*buffer, sp).IsOk());
+    ASSERT_EQ(rpc->setInvokeCount, 1);
+    ASSERT_FALSE(rpc->invokedSetPayloadSizes.empty());
+    EXPECT_EQ(rpc->invokedSetPayloadSizes.back(), 1u);  // one MemView payload inline
+}
+
+// MCreate: worker returns fewer results than requested → client releases the reported shm_ids.
+TEST(ShmTransporterTest, MCreateReleasesShmIdsOnResponseCountMismatch)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    rpc->multiCreateResultCount = 2;  // return 2 results for 3 keys → count mismatch
+    ShmTransporter transporter(rpc);
+    std::vector<std::string> keys = { "mk1", "mk2", "mk3" };
+    std::vector<uint64_t> sizes = { 64, 64, 64 };
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    // Mismatch → K_RUNTIME_ERROR; the 2 reported shm_ids must be released via InvokeDecreaseReference.
+    EXPECT_EQ(transporter.MCreate(MakeAddress(9102), keys, sizes, MakeCreateParam(), buffers).GetCode(),
+              K_RUNTIME_ERROR);
+    EXPECT_TRUE(buffers.empty());
+    EXPECT_EQ(rpc->decreaseReferenceCount, 2);
+    EXPECT_EQ(rpc->decreaseReferenceShmIds.size(), 2u);
+    EXPECT_EQ(rpc->decreaseReferenceShmIds[0], ShmKey::Intern("multi-shm-0"));
+    EXPECT_EQ(rpc->decreaseReferenceShmIds[1], ShmKey::Intern("multi-shm-1"));
+}
+
+// MCreate success path: worker returns one result per key → buffers built, no Release.
+TEST(ShmTransporterTest, MCreateSucceedsBuildsBuffers)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    ShmTransporter transporter(rpc);
+    std::vector<std::string> keys = { "ok1", "ok2" };
+    std::vector<uint64_t> sizes = { 32, 32 };
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    ASSERT_TRUE(transporter.MCreate(MakeAddress(9103), keys, sizes, MakeCreateParam(), buffers).IsOk());
+    ASSERT_EQ(buffers.size(), keys.size());
+    EXPECT_EQ(rpc->decreaseReferenceCount, 0);
+}
+
+// Release propagates the worker-side error (InvokeDecreaseReference failure).
+TEST(ShmTransporterTest, ReleasePropagatesDecreaseReferenceError)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    rpc->decreaseReferenceStatus = Status(K_RPC_UNAVAILABLE, "worker gone");
+    ShmTransporter transporter(rpc);
+    TransportRequestContext ctx;
+    EXPECT_EQ(transporter.Release(ShmKey::Intern("shm-x"), ctx).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(rpc->decreaseReferenceCount, 1);
+}
+
+// BatchGet single-element: a transport-level failure (status error + response error_code==K_OK) must propagate
+// the status up instead of being swallowed into item.status (review 180849217 contract).
+TEST(ShmTransporterTest, BatchGetSinglePropagatesTransportLevelFailure)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    rpc->getObjectStatus = Status(K_RPC_UNAVAILABLE, "rpc failed");
+    // getObjectResponseCode defaults to K_OK → BatchGetOne treats this as a transport-level failure.
+    ShmTransporter transporter(rpc);
+    DataGetBatchRequest inputs;
+    DataGetRequest req;
+    req.objectKey = "bg1";
+    req.expectedSize = 16;
+    inputs.push_back(req);
+    DataGetBatchResult outputs;
+    EXPECT_EQ(transporter.BatchGet(inputs, outputs).GetCode(), K_RPC_UNAVAILABLE);
+    // Transport failure: outputs unchanged (not emplaced), aligned with TcpTransporter (review 181252346).
+    EXPECT_TRUE(outputs.empty());
+}
+
+// BatchGet single-element: a worker business error (response error_code != K_OK) is swallowed into item.status,
+// BatchGet returns OK (matching TcpTransporter per-item semantics).
+TEST(ShmTransporterTest, BatchGetSingleSwallowsBusinessErrorIntoItemStatus)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    rpc->getObjectStatus = Status(K_NOT_FOUND, "worker business error");
+    rpc->getObjectResponseCode = K_NOT_FOUND;  // non-K_OK → business error, not transport
+    ShmTransporter transporter(rpc);
+    DataGetBatchRequest inputs;
+    DataGetRequest req;
+    req.objectKey = "bg2";
+    req.expectedSize = 16;
+    inputs.push_back(req);
+    DataGetBatchResult outputs;
+    EXPECT_TRUE(transporter.BatchGet(inputs, outputs).IsOk());
+    ASSERT_EQ(outputs.size(), 1u);
+    EXPECT_FALSE(outputs[0].status.IsOk());
+    EXPECT_EQ(outputs[0].status.GetCode(), K_NOT_FOUND);
+}
+
+// MSet uses a single InvokeMultiSet RPC (not N serial Set calls). Verifies the batch path is taken.
+TEST(ShmTransporterTest, MSetUsesSingleInvokeMultiSetNotSerialSet)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    ShmTransporter transporter(rpc);
+    // Build 3 buffers via Create (store_fd=0 → fallback, mmapEntry null).
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    for (int i = 0; i < 3; ++i) {
+        std::shared_ptr<ObjectBuffer> buf;
+        ASSERT_TRUE(transporter.Create(MakeAddress(9200), "mset-k" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
+        buffers.push_back(buf);
+    }
+    TransportSetParam sp = MakeSetParam();
+    TransportMSetResult result;
+    ASSERT_TRUE(transporter.MSet(buffers, sp, result).IsOk());
+    EXPECT_EQ(rpc->multiSetInvokeCount, 1);
+    EXPECT_EQ(rpc->setInvokeCount, 0);
+    ASSERT_EQ(rpc->invokedMultiSetRequests.size(), 1u);
+    EXPECT_TRUE(result.lastRc.IsOk());
+    EXPECT_EQ(result.actualKind, AccessTransportKind::SHM);
+    EXPECT_TRUE(result.publishAttempted);
+}
+
+// MSet partial failure: worker reports some failed_object_keys → result.failedKeys filled, return OK.
+TEST(ShmTransporterTest, MSetPartialFailureReturnsOkWithFailedKeys)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    rpc->multiSetFailedKeys = { "mset-p1" };  // 1 of 3 fails
+    rpc->multiSetLastCode = K_NOT_FOUND;
+    rpc->multiSetLastMessage = "not found";
+    ShmTransporter transporter(rpc);
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    for (int i = 0; i < 3; ++i) {
+        std::shared_ptr<ObjectBuffer> buf;
+        ASSERT_TRUE(transporter.Create(MakeAddress(9201), "mset-p" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
+        buffers.push_back(buf);
+    }
+    TransportSetParam sp = MakeSetParam();
+    TransportMSetResult result;
+    EXPECT_TRUE(transporter.MSet(buffers, sp, result).IsOk());
+    ASSERT_EQ(result.failedKeys.size(), 1u);
+    EXPECT_EQ(result.failedKeys[0], "mset-p1");
+    EXPECT_EQ(result.lastRc.GetCode(), K_NOT_FOUND);
+    EXPECT_TRUE(result.publishAttempted);
+}
+
+// MSet full failure: every key fails + last_rc error → returns the last error.
+TEST(ShmTransporterTest, MSetAllFailureReturnsLastError)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    rpc->multiSetFailedKeys = { "mset-a0", "mset-a1" };
+    rpc->multiSetLastCode = K_RPC_UNAVAILABLE;
+    rpc->multiSetLastMessage = "worker gone";
+    ShmTransporter transporter(rpc);
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    for (int i = 0; i < 2; ++i) {
+        std::shared_ptr<ObjectBuffer> buf;
+        ASSERT_TRUE(transporter.Create(MakeAddress(9202), "mset-a" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
+        buffers.push_back(buf);
+    }
+    TransportSetParam sp = MakeSetParam();
+    TransportMSetResult result;
+    EXPECT_EQ(transporter.MSet(buffers, sp, result).GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_EQ(result.failedKeys.size(), 2u);
+    EXPECT_EQ(result.lastRc.GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_TRUE(result.publishAttempted);
+}
+
+// The 5 new shm metrics must register without ID collision (InitKvMetrics returns OK). This guards
+// against the PR#1558 regression where worker_kv_event IDs collided with client_shm IDs.
+// Metric ID collision is verified by the test fixture's InitBatchGetMetrics() (SetUp calls
+// InitKvMetrics which returns OK only if all IDs are unique). No separate test needed here.
 
 TEST(DataPlaneExecutorTest, UrmaReconnectResetsOnlyDataPlaneAndRetriesOnce)
 {

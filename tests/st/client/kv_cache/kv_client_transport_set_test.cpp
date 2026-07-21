@@ -42,6 +42,7 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/kv_client.h"
 #include "datasystem/protos/cluster_topology.pb.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 DS_DECLARE_bool(use_brpc);
@@ -448,6 +449,45 @@ TEST_F(KVClientTransportSetTest, RoutedMSetGroupsObjectsByMetadataOwner)
     AssertValue(keys[1], values[1]);
     AssertPrimaryWorker(keys[0], READER_WORKER_INDEX);
     AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
+}
+
+// MSet N keys on the same-host worker → must use the SHM transporter (batch InvokeMultiSet),
+// not N serial TCP sets. Verifies the batch path is taken end-to-end (review 180841432).
+// MSet N keys on the same-host worker → must succeed via the routed path (batch InvokeMultiSet).
+// Verifies the batch path is taken end-to-end (review 180841432). AccessTransportTracker varies
+// by build (SHM vs UB under USE_URMA), so only assert MSet success + no failedKeys.
+TEST_F(KVClientTransportSetTest, RoutedMSetSameHostBatchSucceeds)
+{
+    constexpr int N = 5;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::vector<StringView> valueViews;
+    keys.reserve(N);
+    values.reserve(N);
+    for (int i = 0; i < N; ++i) {
+        std::string key;
+        DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_batch_" + std::to_string(i) + "_", key));
+        keys.push_back(key);
+        values.emplace_back(VALUE_SIZE, 'm');
+    }
+    for (const auto &v : values) {
+        valueViews.emplace_back(v);
+    }
+    std::vector<std::string> failedKeys;
+    auto rc = routedClient_->MSet(keys, valueViews, failedKeys);
+    DS_ASSERT_OK(rc);
+    ASSERT_TRUE(failedKeys.empty()) << "failedKeys: " << failedKeys.size();
+}
+
+// Same-host routed Set must succeed with metrics initialized (review 180849800).
+TEST_F(KVClientTransportSetTest, ShmMetricRegisteredAndRoutedSetSucceeds)
+{
+    metrics::ResetKvMetricsForTest();
+    DS_ASSERT_OK(metrics::InitKvMetrics());
+    std::string key;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_metric_set_", key));
+    const std::string value(VALUE_SIZE, 's');
+    DS_ASSERT_OK(routedClient_->Set(key, value));
 }
 
 TEST_F(KVClientTransportSetTest, LocalCacheEnabledMSetUsesConnectedWorker)

@@ -27,16 +27,19 @@
 #include <algorithm>
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
+#include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/client/mmap_manager.h"
 #include "datasystem/common/shared_memory/shm_unit_info.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 
 namespace datasystem {
 namespace client {
 class ShmTransporter : public IDataTransporter {
+    static constexpr int SHM_FALLBACK_LOG_RATE = 100;
 public:
     explicit ShmTransporter(std::shared_ptr<WorkerRpcClient> rpcClient,
                            std::shared_ptr<IClientWorkerCommonApi> workerApi = nullptr,
@@ -136,12 +139,49 @@ public:
     {
         DataGetItemResult item;
         Status status = Get(input, item.data);
-        item.status = status;
-        outputs.emplace_back(std::move(item));
-        if (status.IsError() && static_cast<StatusCode>(item.data.response.error().error_code()) == K_OK) {
+        // Transport-level failure (error_code==K_OK means no worker business error): return early
+        // without emplacing, aligned with TcpTransporter::BatchGet size==1 path (review 181252346).
+        if (status.IsError()
+            && static_cast<StatusCode>(item.data.response.error().error_code()) == K_OK) {
             return status;
         }
+        item.status = status;
+        outputs.emplace_back(std::move(item));
         return Status::OK();
+    }
+
+    // Try to mmap the shm region for a Create response (shared by Create and MCreate).
+    // On success sets info->pointer (base+offset), info->metadataSize, info->mmapEntry + AssociateShmId.
+    // On failure (or no shm deps) leaves info as-is (nullptr → payload inline fallback).
+    void TryMmapBuffer(const CreateRspPb &rsp, uint64_t size, ObjectBufferInfo &info)
+    {
+        if (workerApi_ == nullptr || mmapManager_ == nullptr || rsp.store_fd() <= 0 || !workerApi_->IsShmEnable()) {
+            return;
+        }
+        auto shmBuf = std::make_shared<ShmUnitInfo>();
+        shmBuf->fd = static_cast<int>(rsp.store_fd());
+        shmBuf->mmapSize = rsp.mmap_size();
+        shmBuf->offset = static_cast<ptrdiff_t>(rsp.offset());
+        shmBuf->size = size;
+        shmBuf->id = info.shmId;
+        Status mmapRc = mmapManager_->LookupUnitsAndMmapFd("", shmBuf);
+        if (!mmapRc.IsOk()) {
+            LOG_EVERY_N(WARNING, SHM_FALLBACK_LOG_RATE) << "SHM mmap failed, falling back to payload: "
+                                                                 << mmapRc.GetMsg();
+            METRIC_INC(metrics::KvMetricId::CLIENT_SHM_MMAP_FALLBACK_TOTAL);
+            return;
+        }
+        info.pointer = static_cast<uint8_t *>(shmBuf->pointer) + shmBuf->offset;
+        info.metadataSize = rsp.metadata_size();
+        if (!rsp.shm_id().empty()) {
+            mmapManager_->AssociateShmId(shmBuf->fd, rsp.shm_id());
+        }
+        info.mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
+        if (info.mmapEntry == nullptr) {
+            LOG_EVERY_N(WARNING, SHM_FALLBACK_LOG_RATE)
+                << "SHM GetMmapEntryByFd returned nullptr after mmap for fd=" << shmBuf->fd;
+        }
+        METRIC_INC(metrics::KvMetricId::CLIENT_SHM_MMAP_SUCCESS_TOTAL);
     }
 
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
@@ -166,34 +206,9 @@ public:
             info->shmId = ShmKey::Intern(createRsp.shm_id());
         }
         info->version = workerVersion;
-        // If shm dependencies are available, do GetClientFd + mmap to get a real shm pointer
-        // (zero-copy path). Otherwise fall back to nullptr (RPC payload inline).
-        if (workerApi_ != nullptr && mmapManager_ != nullptr && createRsp.store_fd() > 0
-            && workerApi_->IsShmEnable()) {
-            auto shmBuf = std::make_shared<ShmUnitInfo>();
-            shmBuf->fd = static_cast<int>(createRsp.store_fd());
-            shmBuf->mmapSize = createRsp.mmap_size();
-            shmBuf->offset = static_cast<ptrdiff_t>(createRsp.offset());
-            shmBuf->size = size;
-            shmBuf->id = info->shmId;
-            Status mmapRc = mmapManager_->LookupUnitsAndMmapFd("", shmBuf);
-            if (mmapRc.IsOk()) {
-                // pointer must be base + offset (the object's actual data start in the mmap region),
-                // matching MmapShmUnit (object_client_impl.cpp) and the other call sites. Using the
-                // raw base corrupts the metadata header or a neighbouring object when offset != 0.
-                info->pointer = static_cast<uint8_t *>(shmBuf->pointer) + shmBuf->offset;
-                info->metadataSize = createRsp.metadata_size();
-                // Close the shmId->workerFd reverse index so ClearByShmId / ClearExpiredByShmId can
-                // reclaim this mmap entry when the worker reports the fd expired or drops out of the
-                // topology snapshot. Without this the reclaim-by-shmId subsystem cannot find it.
-                if (!createRsp.shm_id().empty()) {
-                    mmapManager_->AssociateShmId(shmBuf->fd, createRsp.shm_id());
-                }
-                info->mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
-            } else {
-                VLOG(1) << "SHM mmap failed, falling back to payload: " << mmapRc.GetMsg();
-            }
-        }
+        // Zero-copy mmap path (shared helper). Sets info->pointer/mmapEntry on success; on failure
+        // leaves them null → Set falls back to payload inline.
+        TryMmapBuffer(createRsp, size, *info);
         return ObjectBufferInternal::Create(info, buffer);
     }
 
@@ -215,6 +230,14 @@ public:
         PublishRspPb rsp;
         uint32_t workerVersion = 0;
         RETURN_IF_NOT_OK(rpcClient_->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
+        // Observability: record whether this Set actually used the zero-copy mmap pointer or fell back to
+        // inline payload (review 180849800). mmapEntry is the real zero-copy discriminator (info.pointer is
+        // always malloc'd by ObjectBuffer::Init). Record(SHM) below still tags the transporter kind.
+        if (info.mmapEntry != nullptr) {
+            METRIC_INC(metrics::KvMetricId::CLIENT_SHM_ZERO_COPY_SET_TOTAL);
+        } else {
+            METRIC_INC(metrics::KvMetricId::CLIENT_SHM_PAYLOAD_FALLBACK_SET_TOTAL);
+        }
         // Routed same-host Set is tagged SHM (the transporter kind for routing/observability),
         // regardless of whether the zero-copy mmap pointer or the fallback payload-inline path
         // carried the bytes — matching KVClientTransportSetTest's ExpectedTransport()=="SHM" contract.
@@ -253,12 +276,15 @@ public:
             info->metadataSize = 0;  // SHM payload-only path: metadata sent inline with data
             info->workerAddr = workerAddr;
             info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
-            info->pointer = nullptr;  // client-side buffer allocated by ObjectBuffer for payload
+            info->pointer = nullptr;  // zero-copy mmap will set this if shm deps available
             const auto &result = multiRsp.results(i);
             if (!result.shm_id().empty()) {
                 info->shmId = ShmKey::Intern(result.shm_id());
             }
             info->version = workerVersion;
+            // Zero-copy mmap path (same as Create). Without this MSet always falls back to payload
+            // inline because info.mmapEntry stays null (review 180840879).
+            TryMmapBuffer(result, sizes[i], *info);
             std::shared_ptr<ObjectBuffer> buf;
             RETURN_IF_NOT_OK(ObjectBufferInternal::Create(info, buf));
             buffers.push_back(std::move(buf));
@@ -271,35 +297,34 @@ public:
     {
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
         result.Clear();
-        result.publishAttempted = true;
-        Status lastErr = Status::OK();
+        std::vector<bool> tcpPayload;
+        tcpPayload.reserve(buffers.size());
         for (const auto &buf : buffers) {
             const auto &info = ObjectBufferInternal::GetInfo(*buf);
-            Status rc = Set(*buf, param);
-            if (rc.IsError()) {
-                result.failedKeys.push_back(info.objectKey);
-                lastErr = rc;
+            tcpPayload.push_back(info.mmapEntry == nullptr);
+        }
+        int64_t zeroCopyCount = 0;
+        for (bool isPayload : tcpPayload) {
+            if (!isPayload) {
+                ++zeroCopyCount;
             }
         }
-        if (result.failedKeys.empty()) {
-            // Routed same-host MSet is tagged SHM (transporter kind for routing/observability),
-            // matching the Set path and the KVClientTransportSetTest ExpectedTransport()=="SHM" contract.
-            result.actualKind = AccessTransportKind::SHM;
-            AccessTransportTracker::Record(AccessTransportKind::SHM);
-            result.lastRc = Status::OK();
-            return Status::OK();
-        }
-        result.lastRc = lastErr;
-        // Partial failure: at least one key succeeded via the ShmTransporter, so tag the transport kind
-        // (Set() already called Record per-buffer for the successful keys). Align with TcpTransporter
-        // (mset_request_builder.cpp SetMSetResponseResult's responseHasSuccess branch).
-        result.actualKind = AccessTransportKind::SHM;
-        // On partial failure return OK and let the caller branch on result.failedKeys (interchangeable
-        // with TcpTransporter). Full failure surfaces lastErr (no key succeeded).
-        if (result.failedKeys.size() == buffers.size()) {
-            return lastErr;
-        }
-        return Status::OK();
+        METRIC_ADD(metrics::KvMetricId::CLIENT_SHM_ZERO_COPY_SET_TOTAL, zeroCopyCount);
+        METRIC_ADD(metrics::KvMetricId::CLIENT_SHM_PAYLOAD_FALLBACK_SET_TOTAL,
+                   static_cast<int64_t>(buffers.size()) - zeroCopyCount);
+        MultiPublishReqPb request;
+        std::vector<MemView> payloads;
+        RETURN_IF_NOT_OK(BuildMultiPublishRequest(buffers, tcpPayload, param, request, payloads));
+        result.publishAttempted = true;
+        MultiPublishRspPb response;
+        uint32_t workerVersion = 0;
+        RETURN_IF_NOT_OK(rpcClient_->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion));
+        Status msetRc = SetMSetResponseResult(response, buffers.size(), AccessTransportKind::SHM, result);
+        // SetMSetResponseResult calls result.Clear() which resets publishAttempted; re-set it like
+        // TcpTransporter::MSet (tcp_transporter.cpp) so the caller's retry logic (retryUnsentPublish)
+        // does not re-publish data the worker already received.
+        result.publishAttempted = true;
+        return msetRc;
     }
 
     Status Release(const ShmKey &shmId, const TransportRequestContext &context) override

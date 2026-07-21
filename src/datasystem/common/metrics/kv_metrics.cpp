@@ -136,6 +136,11 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 107, "worker_kv_event_skipped_unparsed_keys_total", MetricType::COUNTER, "count" },
     { 108, "worker_shm_fresh_extent_oom_total", MetricType::COUNTER, "count" },
     { 109, "worker_shm_reusable_extent_oom_total", MetricType::COUNTER, "count" },
+    { 110, "client_shm_mmap_success_total", MetricType::COUNTER, "count" },
+    { 111, "client_shm_mmap_fallback_total", MetricType::COUNTER, "count" },
+    { 112, "client_shm_zero_copy_set_total", MetricType::COUNTER, "count" },
+    { 113, "client_shm_payload_fallback_set_total", MetricType::COUNTER, "count" },
+    { 114, "client_shm_get_degrade_to_transport_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
