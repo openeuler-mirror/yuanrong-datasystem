@@ -30,16 +30,16 @@
 namespace datasystem {
 namespace client {
 Status ShmMmapTable::MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize,
-                                    const std::string &tenantId)
+                                    const std::string &tenantId, const std::string &clientId)
 {
     std::lock_guard<std::shared_timed_mutex> l(mutex_);
     auto entry = mmapTable_.find(workerFd);
     if (entry == mmapTable_.end()) {
         // Check the workerFd and clientFd whether is valid.
         if (workerFd > 0 && clientFd > 0) {
-            LOG(INFO) << FormatString("Worker fd: %d, Mmap the client fd %d, mmap size is %llu", workerFd, clientFd,
-                                      mmapSize);
-            auto newEntry = std::make_unique<ShmMmapTableEntry>(clientFd, mmapSize);
+            LOG(INFO) << FormatString("Client id: %s, worker fd: %d, mmap the client fd %d, mmap size is %llu",
+                                      clientId, workerFd, clientFd, mmapSize);
+            auto newEntry = std::make_unique<ShmMmapTableEntry>(clientFd, mmapSize, clientId);
             RETURN_IF_NOT_OK(newEntry->Init(enableHugeTlb_, tenantId));
             mmapTable_[workerFd] = std::move(newEntry);
         }

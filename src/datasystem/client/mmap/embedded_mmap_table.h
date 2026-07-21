@@ -44,10 +44,12 @@ public:
      * @param[in] clientFd The client share memory file descriptor.
      * @param[in] workerFd The worker share memory file descriptor.
      * @param[in] mmapSize The share memory file mmap size.
+     * @param[in] tenantId The tenant ID.
+     * @param[in] clientId The client ID associated with the mmap operation.
      * @return Status of the call.
      */
     Status MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize,
-                          const std::string &tenantId) override;
+                          const std::string &tenantId, const std::string &clientId = "") override;
 };
 }  // namespace client
 }  // namespace datasystem

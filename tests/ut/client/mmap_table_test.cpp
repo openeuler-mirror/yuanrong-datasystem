@@ -19,6 +19,8 @@
  */
 #include "datasystem/client/mmap/immap_table.h"
 
+#include <algorithm>
+
 #ifdef __linux__
 #include <linux/memfd.h>
 #endif
@@ -104,11 +106,11 @@ TEST_F(MmapTableTest, TestMmapTableEntryInvalidParameter)
     status = entry1->Init(false, "");
     ASSERT_EQ(status.GetCode(), StatusCode::K_RUNTIME_ERROR);
 }
- 
+
 TEST_F(MmapTableTest, TestGetMmapEntry)
 {
     LOG(INFO) << "Test mmap table decrease mmap ref.";
- 
+
     int workerFd1 = 10;
     int workerFd2 = 11;
     int32_t mmapSize = 1024;
@@ -116,15 +118,24 @@ TEST_F(MmapTableTest, TestGetMmapEntry)
     DS_ASSERT_OK(mmapTable_->MmapAndStoreFd(clientFd2_, workerFd2, mmapSize, ""));
     ASSERT_TRUE(mmapTable_->FindFd(workerFd1));
     ASSERT_TRUE(mmapTable_->FindFd(workerFd2));
- 
+
     ASSERT_TRUE(mmapTable_->GetMmapEntryByFd(workerFd1) != nullptr);
     ASSERT_TRUE(mmapTable_->GetMmapEntryByFd(workerFd2) != nullptr);
- 
+
     ASSERT_TRUE(mmapTable_->FindFd(workerFd1));
     ASSERT_TRUE(mmapTable_->FindFd(workerFd2));
- 
-    mmapTable_->CleanInvalidMmapTable();
+
+    auto fds = mmapTable_->GetFds();
+    ASSERT_EQ(fds.size(), 2);
+    EXPECT_NE(std::find(fds.begin(), fds.end(), workerFd1), fds.end());
+    EXPECT_NE(std::find(fds.begin(), fds.end(), workerFd2), fds.end());
+
+    mmapTable_->ClearExpiredFds({ workerFd1 });
     ASSERT_FALSE(mmapTable_->FindFd(workerFd1));
+    ASSERT_TRUE(mmapTable_->FindFd(workerFd2));
+
+    mmapTable_->CleanInvalidMmapTable();
+    ASSERT_FALSE(mmapTable_->FindFd(workerFd2));
 }
 }  // namespace ut
 }  // namespace datasystem

@@ -292,6 +292,7 @@
     verifies successful data and metadata publication, complete transaction rerouting after a Publish-time scale-down
     response, and the rule that an ambiguous Publish connection failure is not replayed on another worker.
   - standby failover candidate order is randomized per switch attempt, so when one worker fails a batch of clients can spread across the remaining ready workers instead of stampeding to the first candidate in a shared list.
+  - after a standby switch publishes the new current worker, cleanup of the previous worker's mmap fds captured at switch commit runs immediately when that worker API has no pending invocations; otherwise cleanup is deferred until its invocation count reaches zero. Cleanup removes only the captured fds, so mappings added for another worker before the deferred callback runs are preserved.
   - Python `DsTensorClient` depends on `HeteroClient`; tensor features are not an independent transport stack.
 - Useful debug points:
   - `src/datasystem/client/object_cache/object_client_impl.cpp`

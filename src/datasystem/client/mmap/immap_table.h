@@ -26,6 +26,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <unordered_map>
+#include <vector>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/client/mmap/immap_table_entry.h"
@@ -45,10 +46,12 @@ public:
      * @param[in] clientFd The client share memory file descriptor.
      * @param[in] workerFd The worker share memory file descriptor.
      * @param[in] mmapSize The share memory file mmap size.
+     * @param[in] tenantId The tenant ID.
+     * @param[in] clientId The client ID associated with the mmap operation.
      * @return Status of the call.
      */
     virtual Status MmapAndStoreFd(const int &clientFd, const int &workerFd, const uint64_t &mmapSize,
-                                  const std::string &tenantId) = 0;
+                                  const std::string &tenantId, const std::string &clientId = "") = 0;
 
     /**
      * @brief Look up the mmapped share memory file.
@@ -118,6 +121,12 @@ public:
      * cannot race (review fix #4).
      */
     void ClearByShmId(const std::string &shmId);
+
+    /*
+     * @brief Get all worker file descriptors in the mmap table.
+     * @return Worker file descriptors currently stored in the mmap table.
+     */
+    std::vector<int64_t> GetFds();
 
 protected:
     // Protects 'mmapTable_' and 'shmIdToWorkerFd_'.

@@ -1244,17 +1244,23 @@ bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, 
                                            const std::shared_ptr<client::ListenWorker> &candidateListenWorker)
 {
     std::shared_ptr<client::ListenWorker> retiredLocalListenWorker;
+    std::shared_ptr<IClientWorkerApi> previousWorkerApi;
+    client::MmapManager *mmapManagerToClean = nullptr;
+    std::vector<int64_t> mmapFdsToClean;
+
     {
         std::lock_guard<std::mutex> lock(switchNodeMutex_);
         if (!switchInProgress_ || switchGeneration_ != switchGeneration || currentNode_ != current
             || (clientStateManager_->GetState() & (uint16_t)ClientState::EXITED)) {
             return false;
         }
+        previousWorkerApi = workerApi_[current];
         workerApi_[next] = candidateWorkerApi;
         listenWorker_[next] = candidateListenWorker;
         currentNode_ = next;
         if (mmapManager_ != nullptr) {
-            mmapManager_->CleanInvalidMmapTable();
+            mmapManagerToClean = mmapManager_.get();
+            mmapFdsToClean = mmapManager_->GetFds();
         }
         // Stop the LOCAL_WORKER listener only when standby-side rediscovery can take over;
         // otherwise it is still the only recovery path.
@@ -1268,6 +1274,24 @@ bool ObjectClientImpl::CommitStandbySwitch(WorkerNode current, WorkerNode next, 
         retiredLocalListenWorker->StopListenWorker(false);
         retiredLocalListenWorker->JoinListenWorker();
         LOG_IF_ERROR(retiredLocalListenWorker->NotifyClientRemovable(), "[Switch] Notify old local client removable");
+    }
+    if (previousWorkerApi != nullptr && mmapManagerToClean != nullptr && !mmapFdsToClean.empty()) {
+        auto weakThis = weak_from_this();
+        std::weak_ptr<IClientWorkerApi> weakPreviousWorkerApi = previousWorkerApi;
+        auto func = [weakThis, weakPreviousWorkerApi, current, mmapManagerToClean,
+                     mmapFdsToClean = std::move(mmapFdsToClean)]() {
+            auto client = weakThis.lock();
+            auto previousApi = weakPreviousWorkerApi.lock();
+            if (client == nullptr || previousApi == nullptr) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(client->switchNodeMutex_);
+            if (client->currentNode_ != current && client->workerApi_[current] == previousApi
+                && client->mmapManager_.get() == mmapManagerToClean) {
+                client->mmapManager_->ClearExpiredFds(mmapFdsToClean);
+            }
+        };
+        previousWorkerApi->RunWhenInvokeCountZero(std::move(func));
     }
     return true;
 }

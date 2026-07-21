@@ -22,6 +22,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
+#include <utility>
 
 #include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/utils/status.h"
@@ -30,7 +32,10 @@ namespace datasystem {
 namespace client {
 class ShmMmapTableEntry : public IMmapTableEntry {
 public:
-    ShmMmapTableEntry(int fd, size_t mmapSize) : IMmapTableEntry(fd, mmapSize) {};
+    ShmMmapTableEntry(int fd, size_t mmapSize, std::string clientId = "")
+        : IMmapTableEntry(fd, mmapSize), clientId_(std::move(clientId))
+    {
+    }
     ~ShmMmapTableEntry();
 
     /**
@@ -48,6 +53,9 @@ public:
     {
         return pointer_;
     }
+
+private:
+    const std::string clientId_;
 };
 }  // namespace client
 }  // namespace datasystem

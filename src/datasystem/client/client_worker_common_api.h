@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -138,10 +139,50 @@ struct ClientWorkerCommonApiAttribute {
      */
     void DecreaseInvokeCount()
     {
-        // Fixme: not atomic.
-        if (invokeCount_.fetch_sub(1, std::memory_order_relaxed) == 0) {
+        auto previous = invokeCount_.fetch_sub(1, std::memory_order_acq_rel);
+        if (previous == 0) {
             LOG(WARNING) << "invoke count error happen!";
-            invokeCount_.store(0, std::memory_order_relaxed);
+            invokeCount_.store(0, std::memory_order_release);
+            return;
+        }
+        if (previous != 1) {
+            return;
+        }
+
+        std::vector<std::function<void()>> callbacks;
+        {
+            std::lock_guard<std::mutex> lock(invokeCountZeroMutex_);
+            if (invokeCount_.load(std::memory_order_acquire) == 0) {
+                callbacks.swap(invokeCountZeroCallbacks_);
+            }
+        }
+        if (callbacks.empty()) {
+            return;
+        }
+        for (auto &callback : callbacks) {
+            callback();
+        }
+    }
+
+    /**
+     * @brief Run callback immediately when no invocation is pending, or defer it until invoke count reaches zero.
+     * @param[in] callback The callback to run once all pending invocations have completed.
+     */
+    void RunWhenInvokeCountZero(std::function<void()> callback)
+    {
+        std::vector<std::function<void()>> callbacks;
+        size_t current = 0;
+        {
+            std::lock_guard<std::mutex> lock(invokeCountZeroMutex_);
+            invokeCountZeroCallbacks_.emplace_back(std::move(callback));
+            current = invokeCount_.load(std::memory_order_acquire);
+            if (current == 0) {
+                callbacks.swap(invokeCountZeroCallbacks_);
+            }
+        }
+        LOG(INFO) << "RunWhenInvokeCountZero: current " << current;
+        for (auto &callbackToRun : callbacks) {
+            callbackToRun();
         }
     }
 
@@ -220,6 +261,8 @@ protected:
 private:
     std::atomic<uint32_t> memoryAlignment_{ 64 };
     std::atomic<uint64_t> invokeCount_{ 0 };
+    std::mutex invokeCountZeroMutex_;
+    std::vector<std::function<void()>> invokeCountZeroCallbacks_;
 };
 
 class IClientWorkerCommonApi : public ClientWorkerCommonApiAttribute {
