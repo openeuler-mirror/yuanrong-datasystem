@@ -40,7 +40,7 @@ Cross-agent invariants:
   time range, dominant classifications, error counts, and access latency
   percentiles when present.
 - If the report is larger than the yche publish gate, keep it local and say so.
-- Never publish to yche.me unless explicitly asked; use `publish-site --dry-run`
+- Never publish to <publish-site> unless explicitly asked; use `publish-site --dry-run`
   first.
 
 Minimal command template for any agent:
@@ -52,7 +52,7 @@ python3 scripts/ds_trace_triage.py run <input1.gz> <input2.gz> \
   --code-ref "$(git rev-parse main/master 2>/dev/null || git rev-parse HEAD)" \
   --case <case-name> \
   --scenario <scenario-name> \
-  --out /tmp/ds-trace-user-runs \
+  --out <local-run-root> \
   --force
 ```
 
@@ -79,8 +79,8 @@ publish: local only / dry-run / published
 2. Build or refresh CodeGraph on a clean `main/master` worktree when source
    causality is requested:
    ```bash
-   /home/t14s/.local/bin/codegraph init <clean-worktree>
-   /home/t14s/.local/bin/codegraph index <clean-worktree>
+   codegraph init <clean-worktree>
+   codegraph index <clean-worktree>
    ```
 3. Run the deterministic parser first:
    ```bash
@@ -88,7 +88,7 @@ publish: local only / dry-run / published
        --code-ref "$(git rev-parse main/master)" \
        --case <case-name> \
        --scenario <scenario> \
-       --out /tmp/ds-trace-runs
+       --out <local-run-root>
    ```
    For manual debugging or CI artifact checks, the same pipeline can be run as
    explicit stages:
@@ -97,7 +97,7 @@ publish: local only / dry-run / published
        --code-ref "$(git rev-parse main/master)" \
        --case <case-name> \
        --scenario <scenario> \
-       --out /tmp/ds-trace-runs)
+       --out <local-run-root>)
    python3 scripts/ds_trace_triage.py aggregate "$run_dir"
    python3 scripts/ds_trace_triage.py triage "$run_dir"
    python3 scripts/ds_trace_triage.py render-local "$run_dir"
@@ -113,10 +113,10 @@ publish: local only / dry-run / published
 - `summary.json`: time/worker/flow/latency/RPC/UB/error dimensions
    - `triage.json` and `triage.md`: classifications and issue candidates
    - `report.local.html`: self-contained local report
-   - `report.site.html`: yche.me-shaped report draft; keep the same core
+   - `report.site.html`: <publish-site>-shaped report draft; keep the same core
      components as local HTML and include `/assets/css/site.css` plus
      `/assets/js/site.js`
-   - `site_publish.md`: xqyun/yche.me publish checklist with target path,
+   - `site_publish.md`: <publish-host>/<publish-site> publish checklist with target path,
      URL, HTML size, copy command, validation command, and the default publish
      size limit
    - `manifest.json` `render_targets.site.publish`: dry-run/publish status
@@ -154,7 +154,7 @@ python3 scripts/ds_trace_triage.py verify
 python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
 
-Real yche.me publish has a default 2 MiB `report.site.html` size gate to avoid
+Real <publish-site> publish has a default 2 MiB `report.site.html` size gate to avoid
 publishing oversized throw-away pages. If a large page is intentional, review
 the report first and pass `--max-site-html-mb <N>` explicitly.
 
@@ -200,7 +200,7 @@ The script keeps these responsibilities separated inside one file:
 - `TraceReportRenderer`: renders events, triage, Markdown, and HTML.
 - `TraceRunStore`: owns staged run directories, cache, manifest, raw inputs, and
   artifact reads/writes.
-- `TraceSitePublisher`: owns yche.me size guard, copy, and live-marker
+- `TraceSitePublisher`: owns <publish-site> size guard, copy, and live-marker
   validation.
 - `TraceRunPipeline`: only orchestrates parse, aggregate, triage, render-local,
   and render-site stage order.
@@ -266,7 +266,7 @@ For customer-facing reports, write like a diagnosis note:
   the run, unmarked peers are the `无底噪(wudizao)` baseline.
 - For generic multiple packages without noise markers, keep each package as a
   separate cohort and compare distributions before carrying over root-cause labels.
-- The HTML report should follow the `/var/www/html/perf` trace-report pattern:
+- The HTML report should follow the `<publish-root>/perf` trace-report pattern:
   fixed left navigation, KPI cards, a core-judgment panel, ECharts with
   captions, cohort comparison, trace search/filter/pagination, selected-trace
   breakdown, highlighted full logs, run/input provenance from `manifest.json`,

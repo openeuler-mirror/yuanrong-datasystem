@@ -23,7 +23,7 @@ python3 scripts/ds_trace_triage.py run <trace_dir_or_tar_gz> \
   --code-ref "$(git rev-parse main/master)" \
   --case <case-name> \
   --scenario <scenario> \
-  --out /tmp/ds-trace-runs
+  --out <local-run-root>
 ```
 
 run 目录包含：
@@ -34,8 +34,8 @@ run 目录包含：
 - `summary.json`：时间、worker、flow、latency、RPC、UB、error 等聚合维度。
 - `triage.json` / `triage.md`：分类、issue candidates、代表 trace。
 - `report.local.html`：本地自包含 HTML，可直接打开。
-- `report.site.html`：yche.me 站点版 HTML 草稿，供后续发布流程使用。
-- `site_publish.md`：发布准备清单，记录 `xqyun-32c32g:/var/www/html/perf/*.html` 目标路径、yche.me URL、HTML 大小、复制命令和 HTTP 验证命令；生成该文件不代表已经发布成功。
+- `report.site.html`：<publish-site> 站点版 HTML 草稿，供后续发布流程使用。
+- `site_publish.md`：发布准备清单，记录 `<publish-host>:<publish-root>/perf/*.html` 目标路径、<publish-site> URL、HTML 大小、复制命令和 HTTP 验证命令；生成该文件不代表已经发布成功。
 
 也可以显式分阶段执行，便于人工检查中间产物：
 
@@ -44,7 +44,7 @@ run_dir=$(python3 scripts/ds_trace_triage.py parse <trace_dir_or_tar_gz> \
   --code-ref "$(git rev-parse main/master)" \
   --case <case-name> \
   --scenario <scenario> \
-  --out /tmp/ds-trace-runs)
+  --out <local-run-root>)
 python3 scripts/ds_trace_triage.py aggregate "$run_dir"
 python3 scripts/ds_trace_triage.py triage "$run_dir"
 python3 scripts/ds_trace_triage.py render-local "$run_dir"
@@ -58,8 +58,8 @@ python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
 ```bash
 python3 scripts/ds_trace_triage.py <trace_dir_or_tar_gz> \
   --code-ref "$(git rev-parse main/master)" \
-  --output-json /tmp/ds_trace_summary.json \
-  --output-md /tmp/ds_trace_summary.md
+  --output-json <local-summary-json> \
+  --output-md <local-summary-md>
 ```
 
 脚本支持自验证：
@@ -74,7 +74,7 @@ python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 
 当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us->ms 转换、`exceed 3ms` breakdown、`latencySummary` 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、UB request id/src/target/dataSize/cpuid/status/inflight 字段、时间桶、worker/edge 聚合、目录化 run 产物、本地/站点 HTML、内联 JS 语法检查、yche 发布清单、dry-run manifest 状态、真实发布大小门禁、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。
 
-yche.me 发布默认拒绝超过 2 MiB 的 `report.site.html`，避免把临时大页面或垃圾页面发布到站点。确有必要发布大报告时，必须先人工确认报告内容和体积来源，再显式传入 `--max-site-html-mb <N>`。
+<publish-site> 发布默认拒绝超过 2 MiB 的 `report.site.html`，避免把临时大页面或垃圾页面发布到站点。确有必要发布大报告时，必须先人工确认报告内容和体积来源，再显式传入 `--max-site-html-mb <N>`。
 
 日志字段小步演进时，优先通过 parser 扩展点接入：
 
@@ -115,10 +115,10 @@ git log -1 --oneline main/master
 需要源码因果时，在干净 worktree 上建 CodeGraph：
 
 ```bash
-git worktree add --detach /tmp/ds-trace-main main/master
-/home/t14s/.local/bin/codegraph init /tmp/ds-trace-main
-/home/t14s/.local/bin/codegraph index /tmp/ds-trace-main
-/home/t14s/.local/bin/codegraph callees WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl --path /tmp/ds-trace-main
+git worktree add --detach <clean-main-worktree> main/master
+codegraph init <clean-main-worktree>
+codegraph index <clean-main-worktree>
+codegraph callees WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl --path <clean-main-worktree>
 ```
 
 CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktrees`、生成代码和动态分发会导致重复或缺边，不能把“没有边”当成“没有调用”。
@@ -215,10 +215,10 @@ python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```bash
 python3 scripts/ds_trace_triage.py tests/fixtures/trace_triage/*.tar.gz \
   --code-ref fixture \
-  --output-json /tmp/trace_triage_fixture.json
+  --output-json <fixture-summary-json>
 python3 - <<'PY'
 import json
-data = json.load(open('/tmp/trace_triage_fixture.json'))
+data = json.load(open('<fixture-summary-json>'))
 assert data['trace_count'] > 0
 assert 'time' in data['dimensions']
 assert 'workers' in data['dimensions']
@@ -269,7 +269,7 @@ UB/URMA 相关报告要用时序口径：
 - 对比图优先展示“同一表象下服务端阶段是否变化”，例如 CPU/内存底噪消失后，URMA 秒级 tail 是否消失，是否残留 20ms deadline。
 - 不要用旧轮次根因覆盖新轮次；同一 trace 报告中必须标注输入包、case、scenario 和 run 时间。
 
-从 `/var/www/html/perf` 参考报告抽取出的 HTML 组件要求：
+从 `<publish-root>/perf` 参考报告抽取出的 HTML 组件要求：
 
 - 左侧固定目录：主章节 + 图/表子项，滚动时高亮当前章节。
 - 首屏：标题、输入范围、KPI cards、核心判断 panel。
@@ -279,7 +279,7 @@ UB/URMA 相关报告要用时序口径：
 - Trace 区：搜索、分类/worker 过滤、分页、选中 trace 联动 breakdown、摘要和全量日志。
 - 下载区：至少支持下载当前 trace 裸日志和当前过滤证据。
 - 摘要导出区：支持下载本次分析 Markdown 摘要，包含输入来源、诊断口径、coverage、recommendations 和源码字段映射。
-- 站点版一致性：`report.site.html` 必须保留 local 版关键组件，并额外包含 `/assets/css/site.css` 与 `/assets/js/site.js`，用于 yche.me 发布后的站点样式/脚本集成。
+- 站点版一致性：`report.site.html` 必须保留 local 版关键组件，并额外包含 `/assets/css/site.css` 与 `/assets/js/site.js`，用于 <publish-site> 发布后的站点样式/脚本集成。
 - 日志区：ERROR、deadline、latencySummary、RemotePull、BatchGetObjectRemote、URMA、>=阈值耗时字段要高亮。
 - 对比区：多个输入包按 cohort 展示 trace_count、errors、classifications、access latency 和 top workers。
 - 流程图区：`summary.json` 必须输出 `dimensions.flow_stages`，用节点/边表达 Client、EntryWorker、MetaWorker、DataWorker、UB/URMA，并为每条边标注证据覆盖状态。

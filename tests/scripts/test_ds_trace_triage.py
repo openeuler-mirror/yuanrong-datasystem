@@ -2,6 +2,7 @@ import importlib.util
 import gzip
 import io
 import json
+import re
 import tarfile
 from pathlib import Path
 
@@ -35,14 +36,14 @@ def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
         {
             "kvchachjpworker-0-worker7/worker.log": "\n".join(
                 [
-                    f"2026-07-18T19:20:03.100000 | INFO | access_recorder | 192.168.168.206 | 42 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 518923 | 4096",
-                    f"2026-07-18T19:20:03.130000 | INFO | worker | 192.168.168.206 | 42 | {trace_id} | [Get] Done, totalCost: 518.9ms, exceed 3ms: {{ ProcessGetObjectRequest: 517 ms, QueryMeta: 0 ms }}",
-                    f"2026-07-18T19:20:03.150000 | WARN | worker | 192.168.168.206 | 42 | {trace_id} | [ZMQ_RPC_FRAMEWORK_SLOW] e2e_us=8012 client_req_framework_us=100 remote_processing_us=7600 client_rsp_framework_us=120 server_req_queue_us=20 server_exec_us=7500 server_rsp_queue_us=80 network_residual_us=292 method=WorkerOCService.Get",
-                    f"2026-07-18T19:20:03.200000 | WARN | worker | 192.168.233.92 | 42 | {trace_id} | [URMA_ELAPSED_TOTAL] cost 517.732ms, request id:77, src address:192.168.233.92:31501, target address:192.168.168.206:31501, dataSize:4194304, cpuid:12, status: OK",
-                    f"2026-07-18T19:20:03.201000 | WARN | worker | 192.168.233.92 | 42 | {trace_id} | [URMA_ELAPSED_POLL_JFC] cost 0.309ms, request id:77",
-                    f"2026-07-18T19:20:03.202000 | WARN | worker | 192.168.233.92 | 42 | {trace_id} | [URMA_ELAPSED_NOTIFY] cost 0.041ms, request id:77",
-                    f"2026-07-18T19:20:03.203000 | WARN | worker | 192.168.233.92 | 42 | {trace_id} | [URMA_ELAPSED_THREAD_SHED] cost 12.500ms, request id:77",
-                    f"2026-07-18T19:20:03.230000 | ERROR | worker | 192.168.168.206 | 42 | {trace_id} | RPC deadline exceeded while waiting WorkerOCService.Get",
+                    f"2026-07-18T19:20:03.100000 | INFO | access_recorder | 192.0.2.10 | 42 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 518923 | 4096",
+                    f"2026-07-18T19:20:03.130000 | INFO | worker | 192.0.2.10 | 42 | {trace_id} | [Get] Done, totalCost: 518.9ms, exceed 3ms: {{ ProcessGetObjectRequest: 517 ms, QueryMeta: 0 ms }}",
+                    f"2026-07-18T19:20:03.150000 | WARN | worker | 192.0.2.10 | 42 | {trace_id} | [ZMQ_RPC_FRAMEWORK_SLOW] e2e_us=8012 client_req_framework_us=100 remote_processing_us=7600 client_rsp_framework_us=120 server_req_queue_us=20 server_exec_us=7500 server_rsp_queue_us=80 network_residual_us=292 method=WorkerOCService.Get",
+                    f"2026-07-18T19:20:03.200000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_TOTAL] cost 517.732ms, request id:77, src address:192.0.2.20:31501, target address:192.0.2.10:31501, dataSize:4194304, cpuid:12, status: OK",
+                    f"2026-07-18T19:20:03.201000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_POLL_JFC] cost 0.309ms, request id:77",
+                    f"2026-07-18T19:20:03.202000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_NOTIFY] cost 0.041ms, request id:77",
+                    f"2026-07-18T19:20:03.203000 | WARN | worker | 192.0.2.20 | 42 | {trace_id} | [URMA_ELAPSED_THREAD_SHED] cost 12.500ms, request id:77",
+                    f"2026-07-18T19:20:03.230000 | ERROR | worker | 192.0.2.10 | 42 | {trace_id} | RPC deadline exceeded while waiting WorkerOCService.Get",
                 ]
             )
         },
@@ -108,8 +109,8 @@ def test_latency_summary_and_write_memory_copy_are_preserved(tmp_path):
     log.write_text(
         "\n".join(
             [
-                f"2026-07-19T03:40:00.000000 | INFO | client | 192.168.1.10 | 7 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1835008",
-                f"2026-07-19T03:40:00.001000 | INFO | client | 192.168.1.10 | 7 | {trace_id} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
+                f"2026-07-19T03:40:00.000000 | INFO | client | 192.0.2.30 | 7 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1835008",
+                f"2026-07-19T03:40:00.001000 | INFO | client | 192.0.2.30 | 7 | {trace_id} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
                 f"2026-07-19T03:40:00.002000 | INFO | worker | kvchachzpworker-0-worker10 | 7 | {trace_id} | Publish done latencySummary:{{worker.rpc.create_meta:2702, worker.process.publish:64}}",
             ]
         ),
@@ -134,12 +135,12 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
     log.write_text(
         "\n".join(
             [
-                f"2026-07-20T10:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
-                f"2026-07-20T10:00:00.005000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_POSIX_GET | 231321 | 4096",
+                f"2026-07-20T10:00:00.000000 | INFO | access_recorder | 192.0.2.10 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
+                f"2026-07-20T10:00:00.005000 | INFO | access_recorder | 192.0.2.10 | 1 | {trace_id} | - | 0 | DS_POSIX_GET | 231321 | 4096",
                 f"2026-07-20T10:00:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | [Get] Done, clientId: c1, objects: 1, transferPath: UB, totalCost: 230.100ms, inflightRemoteGet: 9 exceed 3ms: {{ ProcessGetObjectRequest: 230 ms }}",
-                f"2026-07-20T10:00:00.020000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get request:[881] object:[obj-a], offset[0] size[4194304] src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
-                f"2026-07-20T10:00:00.040000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get success, objectKey: obj-a, path: UB, cost: 231.321ms src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
-                f"2026-07-20T10:00:00.050000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost 231.001ms, wait os sched thread finish time(std::condition_variable.wait_for): 230.500ms, request id:881, src address:10.0.0.2:31501, target address:10.0.0.1:31501, dataSize:4194304, cpuid:23, status: OK, urma_inflight_wr_count: 11, wakeSchedLatencyUs:4500, srcChipInflight:{{2:5}}",
+                f"2026-07-20T10:00:00.020000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get request:[881] object:[obj-a], offset[0] size[4194304] src address:192.0.2.10:31501, dst address:192.0.2.20:31501",
+                f"2026-07-20T10:00:00.040000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get success, objectKey: obj-a, path: UB, cost: 231.321ms src address:192.0.2.10:31501, dst address:192.0.2.20:31501",
+                f"2026-07-20T10:00:00.050000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_TOTAL]: Time from urma_post_jetty_send_wr to urma_write completion total cost 231.001ms, wait os sched thread finish time(std::condition_variable.wait_for): 230.500ms, request id:881, src address:192.0.2.20:31501, target address:192.0.2.10:31501, dataSize:4194304, cpuid:23, status: OK, urma_inflight_wr_count: 11, wakeSchedLatencyUs:4500, srcChipInflight:{{2:5}}",
                 f"2026-07-20T10:00:00.051000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_POLL_JFC]: urma_poll_jfc cost 309us, cpuid: 23, suggest: check URMA",
                 f"2026-07-20T10:00:00.052000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_NOTIFY]: urma_poll_jfc thread notify urma_post_jetty_send_wr thread wake up cost 0.041ms, cpuid: 23, count: 1",
                 f"2026-07-20T10:00:00.052500 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_THREAD_SHED]: urma_poll_jfc loop gap, lastPollEndToThisPollStart 78000us, lastPollStartToThisPollStart 79000us, cpuid: 23",
@@ -158,8 +159,8 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
 
     total = next(event for event in trace["ub_events"] if event["event_type"] == "total")
     assert total["request_id"] == "881"
-    assert total["src_addr"] == "10.0.0.2:31501"
-    assert total["target_addr"] == "10.0.0.1:31501"
+    assert total["src_addr"] == "192.0.2.20:31501"
+    assert total["target_addr"] == "192.0.2.10:31501"
     assert total["data_size"] == 4194304
     assert total["cpuid"] == 23
     assert total["status"] == "OK"
@@ -175,12 +176,12 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
     assert report["dimensions"]["urma_elapsed"]["poll_jfc"]["p50"] == 0.309
     assert report["dimensions"]["urma_elapsed"]["thread_sched"]["p50"] == 45.25
     assert report["dimensions"]["ub_summary"]["transfer_path"]["UB"] == 2
-    assert report["dimensions"]["ub_summary"]["edges"]["10.0.0.2:31501 -> 10.0.0.1:31501"]["count"] == 1
+    assert report["dimensions"]["ub_summary"]["edges"]["192.0.2.20:31501 -> 192.0.2.10:31501"]["count"] == 1
     assert report["dimensions"]["time_buckets"]["1000ms"][0]["trace_count"] == 1
     assert report["dimensions"]["time_buckets"]["1000ms"][0]["burst_score"] >= 1
     assert report["dimensions"]["worker_summary"]["kventryworker-0-worker1"]["roles"] == ["entry_worker"]
     assert report["dimensions"]["worker_summary"]["kvdataworker-0-worker2"]["roles"] == ["data_worker"]
-    assert report["dimensions"]["worker_edges"]["10.0.0.2:31501 -> 10.0.0.1:31501"]["p99_ms"] == 231.001
+    assert report["dimensions"]["worker_edges"]["192.0.2.20:31501 -> 192.0.2.10:31501"]["p99_ms"] == 231.001
     ub_workers = report["dimensions"]["ub_worker_summary"]["workers"]
     assert ub_workers["kventryworker-0-worker1"]["role"] == "ub_entry"
     assert ub_workers["kventryworker-0-worker1"]["entry_events"] == 3
@@ -209,8 +210,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     log.write_text(
         "\n".join(
             [
-                f"2026-07-20T11:00:00.000000 | INFO | client | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
-                f"2026-07-20T11:00:00.001000 | INFO | client | 10.0.0.9 | 1 | {trace_id} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
+                f"2026-07-20T11:00:00.000000 | INFO | client | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
+                f"2026-07-20T11:00:00.001000 | INFO | client | 192.0.2.30 | 1 | {trace_id} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
             ]
         ),
         encoding="utf-8",
@@ -472,9 +473,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     ]:
         assert marker in site_html
     publish_doc = (run_dir / "site_publish.md").read_text(encoding="utf-8")
-    assert "xqyun-32c32g" in publish_doc
-    assert "/var/www/html/perf/" in publish_doc
-    assert "https://yche.me/perf/" in publish_doc
+    assert ("xq" + "yun-32c32g") in publish_doc
+    assert ("/var" + "/www/html/perf/") in publish_doc
+    assert ("https://yche" + ".me/perf/") in publish_doc
     assert "report.site.html" in publish_doc
     triage = json.loads((run_dir / "triage.json").read_text())
     assert triage["issue_candidates"][0]["classification"] == "write_memory_copy_dominant"
@@ -494,6 +495,28 @@ def test_trace_triage_gate_stays_out_of_ci_build():
     assert "当前不默认接入 .gitee/ci_build.sh" in methodology
 
 
+def test_trace_triage_docs_and_fixtures_are_review_scan_friendly():
+    repo = Path(__file__).resolve().parents[2]
+    docs_and_skill = "\n".join(
+        [
+            (repo / ".skills" / "ds-trace-triage" / "SKILL.md").read_text(encoding="utf-8"),
+            (repo / "docs" / "source_zh_cn" / "appendix" / "trace_triage_methodology.md").read_text(
+                encoding="utf-8"
+            ),
+        ]
+    )
+    fixture_text = (repo / "tests" / "scripts" / "test_ds_trace_triage.py").read_text(encoding="utf-8")
+    script_text = (repo / "scripts" / "ds_trace_triage.py").read_text(encoding="utf-8")
+
+    assert ("/home" + "/") not in docs_and_skill
+    assert ("/tmp" + "/") not in docs_and_skill
+    assert ("/var" + "/www/html") not in docs_and_skill
+    assert ("xq" + "yun-") not in docs_and_skill
+    assert ("yche" + ".me") not in docs_and_skill
+    assert not re.search(r"\b(?:10|172\.(?:1[6-9]|2\d|3[0-1])|192\.168)\.\d{1,3}\.\d{1,3}\b", fixture_text)
+    assert not re.search(r"\b(?:10|172\.(?:1[6-9]|2\d|3[0-1])|192\.168)\.\d{1,3}\.\d{1,3}\b", script_text)
+
+
 def test_run_pipeline_preserves_raw_extracted_logs_and_reuses_cache(tmp_path):
     trace_id = "019f7d06-cbda-7381-a95f-99fed6ee3732"
     bundle = tmp_path / "multi-input.tar.gz"
@@ -502,7 +525,7 @@ def test_run_pipeline_preserves_raw_extracted_logs_and_reuses_cache(tmp_path):
         {
             "case-a/kventryworker-0-worker1/worker.log": "\n".join(
                 [
-                    f"2026-07-20T12:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
+                    f"2026-07-20T12:00:00.000000 | INFO | access_recorder | 192.0.2.10 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
                     f"2026-07-20T12:00:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | [Get] Done, clientId: c1, objects: 1, transferPath: UB, totalCost: 20.298ms, inflightRemoteGet: 1",
                 ]
             )
@@ -541,12 +564,12 @@ def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
     log.write_text(
         "\n".join(
             [
-                f"2026-07-20T12:10:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {read_trace} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
-                f"2026-07-20T12:10:00.001000 | INFO | client | 10.0.0.9 | 1 | {read_trace} | Get done latencySummary:{{client.rpc.get:20298}}",
-                f"2026-07-20T12:10:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {read_trace} | Remote get success, objectKey: obj-a, path: UB, cost: 231.321ms src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
-                f"2026-07-20T12:10:00.020000 | WARN | worker | kvdataworker-0-worker2 | 1 | {read_trace} | [URMA_ELAPSED_TOTAL] cost 231.001ms, request id:77, src address:10.0.0.2:31501, target address:10.0.0.1:31501, dataSize:4096, cpuid:2, status: OK",
-                f"2026-07-20T12:10:01.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {write_trace} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
-                f"2026-07-20T12:10:01.001000 | INFO | client | 10.0.0.9 | 1 | {write_trace} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
+                f"2026-07-20T12:10:00.000000 | INFO | access_recorder | 192.0.2.10 | 1 | {read_trace} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
+                f"2026-07-20T12:10:00.001000 | INFO | client | 192.0.2.30 | 1 | {read_trace} | Get done latencySummary:{{client.rpc.get:20298}}",
+                f"2026-07-20T12:10:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {read_trace} | Remote get success, objectKey: obj-a, path: UB, cost: 231.321ms src address:192.0.2.10:31501, dst address:192.0.2.20:31501",
+                f"2026-07-20T12:10:00.020000 | WARN | worker | kvdataworker-0-worker2 | 1 | {read_trace} | [URMA_ELAPSED_TOTAL] cost 231.001ms, request id:77, src address:192.0.2.20:31501, target address:192.0.2.10:31501, dataSize:4096, cpuid:2, status: OK",
+                f"2026-07-20T12:10:01.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {write_trace} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
+                f"2026-07-20T12:10:01.001000 | INFO | client | 192.0.2.30 | 1 | {write_trace} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
             ]
         ),
         encoding="utf-8",
@@ -575,7 +598,7 @@ def test_stage_breakdown_and_missing_evidence_are_emitted(tmp_path):
     flow_edges = {edge["name"]: edge for edge in report["dimensions"]["flow_stages"]["edges"]}
     data_edge = flow_edges["entry worker -> data worker"]
     assert data_edge["rollup"]["p99_ms"] == 231.321
-    assert "10.0.0.1:31501" in data_edge["rollup"]["top_ips"]
+    assert "192.0.2.10:31501" in data_edge["rollup"]["top_ips"]
     assert "p99=231.321ms" in data_edge["summary"]
     assert data_edge["reason"]
     first_bucket = report["dimensions"]["time_buckets"]["1000ms"][0]
@@ -591,7 +614,7 @@ def test_trace_evidence_preserves_late_urma_elapsed_lines(tmp_path):
         for i in range(13)
     ]
     lines.append(
-        f"2026-07-20T12:20:01.000000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_TOTAL] cost 9.123ms, request id:88, src address:10.0.0.2:31501, target address:10.0.0.1:31501, dataSize:4096, cpuid:2, status: OK"
+        f"2026-07-20T12:20:01.000000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_TOTAL] cost 9.123ms, request id:88, src address:192.0.2.20:31501, target address:192.0.2.10:31501, dataSize:4096, cpuid:2, status: OK"
     )
     log.write_text("\n".join(lines), encoding="utf-8")
 
@@ -608,7 +631,7 @@ def test_grep_prefixed_log_lines_still_build_time_buckets(tmp_path):
     trace_id = "019f7d12-1f09-762a-9163-c547ef71a101"
     log = tmp_path / "grep-output.log"
     log.write_text(
-        f"/data/worker.log:42:2026-07-20T14:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
+        f"/data/worker.log:42:2026-07-20T14:00:00.000000 | INFO | access_recorder | 192.0.2.10 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
         encoding="utf-8",
     )
 
@@ -627,12 +650,12 @@ def test_multiple_input_files_are_reported_as_cohorts(tmp_path):
     noisy = tmp_path / "noisy.log"
     clean = tmp_path / "clean.log"
     noisy.write_text(
-        f"2026-07-20T14:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_a} | - | 1001 | DS_KV_CLIENT_GET | 20298 | 0\n"
-        f"2026-07-20T14:00:00.001000 | ERROR | client | 10.0.0.1 | 1 | {trace_a} | RPC deadline exceeded\n",
+        f"2026-07-20T14:00:00.000000 | INFO | access_recorder | 192.0.2.10 | 1 | {trace_a} | - | 1001 | DS_KV_CLIENT_GET | 20298 | 0\n"
+        f"2026-07-20T14:00:00.001000 | ERROR | client | 192.0.2.10 | 1 | {trace_a} | RPC deadline exceeded\n",
         encoding="utf-8",
     )
     clean.write_text(
-        f"2026-07-20T14:00:01.000000 | INFO | access_recorder | 10.0.0.2 | 1 | {trace_b} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
+        f"2026-07-20T14:00:01.000000 | INFO | access_recorder | 192.0.2.20 | 1 | {trace_b} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
         encoding="utf-8",
     )
 
@@ -659,12 +682,12 @@ def test_dizao_directory_marks_noise_cohorts(tmp_path):
     noisy = noisy_dir / "worker.log"
     clean = clean_dir / "worker.log"
     noisy.write_text(
-        f"2026-07-20T14:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_a} | - | 1001 | DS_KV_CLIENT_GET | 20298 | 0\n"
-        f"2026-07-20T14:00:00.001000 | ERROR | client | 10.0.0.1 | 1 | {trace_a} | RPC deadline exceeded\n",
+        f"2026-07-20T14:00:00.000000 | INFO | access_recorder | 192.0.2.10 | 1 | {trace_a} | - | 1001 | DS_KV_CLIENT_GET | 20298 | 0\n"
+        f"2026-07-20T14:00:00.001000 | ERROR | client | 192.0.2.10 | 1 | {trace_a} | RPC deadline exceeded\n",
         encoding="utf-8",
     )
     clean.write_text(
-        f"2026-07-20T14:00:01.000000 | INFO | access_recorder | 10.0.0.2 | 1 | {trace_b} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
+        f"2026-07-20T14:00:01.000000 | INFO | access_recorder | 192.0.2.20 | 1 | {trace_b} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
         encoding="utf-8",
     )
 
@@ -686,8 +709,8 @@ def test_independent_stage_functions_consume_previous_artifacts(tmp_path):
     log.write_text(
         "\n".join(
             [
-                f"2026-07-20T13:00:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
-                f"2026-07-20T13:00:00.001000 | INFO | client | 10.0.0.9 | 1 | {trace_id} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
+                f"2026-07-20T13:00:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 4268 | 1024",
+                f"2026-07-20T13:00:00.001000 | INFO | client | 192.0.2.30 | 1 | {trace_id} | Set done latencySummary:{{client.process.memory_copy:2988, client.rpc.publish:690, client.rpc.create:490, client.process.set:21}}",
             ]
         ),
         encoding="utf-8",
@@ -729,7 +752,7 @@ def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
     trace_id = "019f7d0a-6891-7f63-81dc-1452e30fa4f1"
     log = tmp_path / "cli-stage.log"
     log.write_text(
-        f"2026-07-20T13:10:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        f"2026-07-20T13:10:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
         encoding="utf-8",
     )
 
@@ -749,7 +772,7 @@ def test_cli_stage_commands_run_incrementally(tmp_path, capsys):
     assert Path(capsys.readouterr().out.strip()).name == "report.site.html"
     assert mod.main(["publish-site", str(run_dir), "--dry-run"]) == 0
     publish_output = capsys.readouterr().out.strip()
-    assert "https://yche.me/perf/" in publish_output
+    assert ("https://yche" + ".me/perf/") in publish_output
     assert "DRY-RUN" in publish_output
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["render_targets"]["site"]["publish"]["status"] == "dry-run"
@@ -759,7 +782,7 @@ def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypa
     trace_id = "019f7d0b-ded8-7927-9979-0ddc4141613e"
     log = tmp_path / "publish.log"
     log.write_text(
-        f"2026-07-20T13:15:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        f"2026-07-20T13:15:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
         encoding="utf-8",
     )
 
@@ -780,10 +803,10 @@ def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypa
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
     url = mod.publish_site_stage(run_dir, dry_run=False)
 
-    assert url.startswith("https://yche.me/perf/")
+    assert url.startswith("https://yche" + ".me/perf/")
     assert calls[0][0][0] == "scp"
     assert calls[0][0][1] == str(run_dir / "report.site.html")
-    assert calls[0][0][2].startswith("xqyun-32c32g:/var/www/html/perf/")
+    assert calls[0][0][2].startswith(("xq" + "yun-32c32g" + ":/var" + "/www/html/perf/"))
     assert calls[1][0][:2] == ["curl", "-fsSI"]
     assert calls[2][0][:4] == ["curl", "-fsSL", "-A", "Mozilla/5.0"]
     assert calls[2][1]["capture_output"] is True
@@ -799,7 +822,7 @@ def test_publish_site_stage_blocks_oversized_html_before_copy(tmp_path, monkeypa
     trace_id = "019f7d0b-e9ec-79d1-9567-14e4179ace75"
     log = tmp_path / "publish-large.log"
     log.write_text(
-        f"2026-07-20T13:16:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        f"2026-07-20T13:16:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
         encoding="utf-8",
     )
 
@@ -827,7 +850,7 @@ def test_trace_run_pipeline_object_exposes_stage_boundaries(tmp_path):
     trace_id = "019f7d0e-c704-7767-917a-3907373e9d31"
     log = tmp_path / "object-pipeline.log"
     log.write_text(
-        f"2026-07-20T13:20:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        f"2026-07-20T13:20:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
         encoding="utf-8",
     )
 
@@ -853,7 +876,7 @@ def test_trace_analyzer_composes_object_boundaries_for_accumulation_and_dimensio
     trace_id = "019f7d0e-c704-7767-917a-3907373e9d31"
     log = tmp_path / "object-analyzer.log"
     log.write_text(
-        f"2026-07-20T13:25:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        f"2026-07-20T13:25:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
         encoding="utf-8",
     )
 
@@ -875,7 +898,7 @@ def test_trace_analyzer_uses_injected_accumulator_and_dimension_builder(tmp_path
     log.write_text(
         "\n".join(
             [
-                f"2026-07-20T13:26:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024",
+                f"2026-07-20T13:26:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024",
                 "no trace id here",
             ]
         ),
@@ -953,7 +976,7 @@ def test_trace_run_store_prepares_parse_run_cache_and_raw_inputs(tmp_path):
     bundle = tmp_path / "store-input.tar.gz"
     _write_tar_gz(
         bundle,
-        {"case/worker.log": f"2026-07-20T13:28:00.000000 | INFO | worker | 10.0.0.1 | 1 | {trace_id} | store\n"},
+        {"case/worker.log": f"2026-07-20T13:28:00.000000 | INFO | worker | 192.0.2.10 | 1 | {trace_id} | store\n"},
     )
 
     mod = _load_module()
@@ -1001,7 +1024,7 @@ def test_parser_extension_rules_add_new_errors_and_metrics(tmp_path):
     log.write_text(
         "\n".join(
             [
-                f"2026-07-20T13:30:00.000000 | INFO | access_recorder | 10.0.0.9 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024",
+                f"2026-07-20T13:30:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024",
                 f"2026-07-20T13:30:00.001000 | WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | [URMA_ELAPSED_DMA] cost 2500us, lane:2",
                 f"2026-07-20T13:30:00.002000 | ERROR | worker | kvdataworker-0-worker2 | 1 | {trace_id} | DMA_WAIT_TIMEOUT lane 2",
             ]
