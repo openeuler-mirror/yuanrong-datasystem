@@ -32,6 +32,7 @@
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/coordinator.pb.h"
+#include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
@@ -48,6 +49,12 @@ public:
      * @brief Release the proxy after callers and in-flight RPCs have stopped.
      */
     virtual ~ICoordinatorServiceProxy() = default;
+
+    /**
+     * @brief Initialize the proxy from its configured Coordinator discovery provider.
+     * @return Initialization status.
+     */
+    virtual Status Init() = 0;
 
     /**
      * @brief Put one key/value pair and optionally return the exact response CoordinatorId.
@@ -176,15 +183,11 @@ public:
 class CoordinatorServiceProxyBase : public ICoordinatorServiceProxy {
 public:
     /**
-     * @brief Construct a proxy without a configured Coordinator address.
+     * @brief Construct a proxy backed by Coordinator discovery.
+     * @param[in] coordinatorDiscovery Coordinator endpoint provider; may be null for validation by Init.
      */
-    CoordinatorServiceProxyBase() = default;
-
-    /**
-     * @brief Construct a proxy for one Coordinator endpoint.
-     * @param[in] coordinatorAddr Coordinator RPC endpoint.
-     */
-    explicit CoordinatorServiceProxyBase(HostPort coordinatorAddr) : coordinatorAddr_(std::move(coordinatorAddr))
+    explicit CoordinatorServiceProxyBase(std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery)
+        : coordinatorDiscovery_(std::move(coordinatorDiscovery))
     {
     }
 
@@ -192,6 +195,11 @@ public:
      * @brief Release proxy-local identity state after all callers stop.
      */
     ~CoordinatorServiceProxyBase() override = default;
+
+    /**
+     * @copydoc ICoordinatorServiceProxy::Init
+     */
+    Status Init() override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::Put
@@ -216,16 +224,14 @@ public:
      * @copydoc ICoordinatorServiceProxy::WatchRange
      */
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
-                      const std::string &registrationId, int64_t &watchId,
-                      std::vector<KeyValueEntry> &initialKvs, int32_t timeoutMs,
-                      std::string *coordinatorId) override;
+                      const std::string &registrationId, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs,
+                      int32_t timeoutMs, std::string *coordinatorId) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::CancelWatch
      */
     Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds,
-                       const std::string &expectedCoordinatorId,
-                       int32_t timeoutMs) override;
+                       const std::string &expectedCoordinatorId, int32_t timeoutMs) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::KeepAlive
@@ -274,8 +280,6 @@ protected:
      */
     virtual Transport GetTransport() const = 0;
 
-    HostPort coordinatorAddr_;
-
 private:
     class InFlightScope;
 
@@ -287,7 +291,7 @@ private:
     InFlightScope BeginRpc(int32_t timeoutMs);
 
     /**
-     * @brief Invoke one RPC through the configured transport without identity recursion.
+     * @brief Invoke one RPC against the Coordinator selected by Init without identity recursion.
      * @param[in,out] options RPC options.
      * @param[in] req RPC request.
      * @param[out] rsp RPC response.
@@ -334,6 +338,10 @@ private:
      * @param[in] startedCoordinatorId Identity captured before RPC dispatch.
      */
     void CompleteRpc(const std::string &startedCoordinatorId);
+
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
+    // Written only after a complete successful Init; all RPCs use this fixed address.
+    HostPort cachedLeader_;
 
     // Protects currentCoordinatorId_ and inFlightByCoordinatorId_. Non-current in-flight IDs are retired.
     mutable std::mutex identityMutex_;

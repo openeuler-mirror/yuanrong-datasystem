@@ -3,6 +3,25 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test(
+    name = "static_coordinator_discovery_test",
+    srcs = ["static_coordinator_discovery_test.cpp"],
+    deps = [
+        "//src/datasystem/common/coordinator:static_coordinator_discovery",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "coordinator_service_proxy_test",
+    srcs = ["coordinator_service_proxy_test.cpp"],
+    deps = [
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/rpc:rpc_options",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "coordinator_store_test",
     srcs = ["coordinator_store_test.cpp"],
     deps = [

@@ -22,10 +22,13 @@
 #define DATASYSTEM_DATA_WORKER_H
 
 #include <atomic>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 
+#include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/utils/embedded_config.h"
 #include "datasystem/utils/status.h"
 
@@ -40,14 +43,19 @@ class WorkerOCServer;
 struct DataWorkerOptions {
     // Absolute path to worker_config.json file.
     std::string configFilePath;
+    // Required for parameterized startup. Its presence selects the Coordinator backend and supplies its address source.
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery;
+    // Optional lifecycle callbacks. Both must be configured together or both left empty.
+    std::function<Status()> onStart;
+    std::function<Status()> onStop;
 };
 
 class DataWorker {
 public:
     ~DataWorker();
 
-    DataWorker& operator=(const DataWorker&) = delete;
-    DataWorker(const DataWorker&) = delete;
+    DataWorker &operator=(const DataWorker &) = delete;
+    DataWorker(const DataWorker &) = delete;
 
     /// @brief Get the singleton instance.
     static DataWorker *GetInstance();
@@ -60,7 +68,8 @@ public:
     Status InitAndRun(int argc, char **argv);
 
     /// @brief Process-mode startup (config file).
-    /// @details Reads and parses the JSON config file, blocks until termination signal or Stop() is called.
+    /// @details Reads and parses the JSON config file, selects the Coordinator backend through the required
+    ///          options.coordinatorDiscovery, and blocks until a termination signal or Stop() is called.
     /// @param options Startup options containing the config file path.
     /// @return K_OK on normal exit; error code otherwise.
     Status InitAndRun(const DataWorkerOptions &options);
@@ -89,6 +98,8 @@ public:
     Status UpdateConfig(const std::string &configJson);
 
 private:
+    enum class LifecycleCallbackState : uint8_t { NOT_CONFIGURED, READY, START_ATTEMPTED, STOP_INVOKED };
+
     /// @brief Initialize WorkerOCServer and start all services.
     Status InitWorker(DynamicFlagConfig &flags, bool isEmbeddedClient);
 
@@ -98,15 +109,31 @@ private:
     /// @brief Pre-shutdown (wait for async tasks to complete).
     Status PreShutDown();
 
-    /// @brief Run the blocking event loop, then perform PreShutDown and ShutDown.
-    void RunEventLoopAndShutdown(DynamicFlagConfig &flags);
+    /// @brief Run the blocking event loop, then perform lifecycle cleanup.
+    Status RunEventLoopAndShutdown(DynamicFlagConfig &flags);
+
+    /// @brief Invoke the configured start callback once.
+    /// @note Called by the owning InitAndRun lifecycle thread. callbackState_ is not independently synchronized.
+    Status InvokeOnStart();
+
+    /// @brief Invoke the configured stop callback once after any start attempt.
+    /// @note Must be serialized with InvokeOnStart. Embedded or destructor cleanup may call it only after concurrent
+    ///       lifecycle execution has stopped.
+    Status InvokeOnStop();
+
+    /// @brief Preserve the first error while executing all shutdown stages.
+    Status FinishShutdown(Status firstError);
 
     /// @brief InitWorker + Register + signal handler. Caller must hold initMutex_.
     Status DoInit(DynamicFlagConfig &flags, const char *crashReporterLabel);
 
     DataWorker() = default;
-    std::unique_ptr<worker::WorkerOCServer> worker_{nullptr};
-    std::atomic<bool> started_{false};
+    std::unique_ptr<worker::WorkerOCServer> worker_{ nullptr };
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
+    std::function<Status()> onStart_;
+    std::function<Status()> onStop_;
+    LifecycleCallbackState callbackState_{ LifecycleCallbackState::NOT_CONFIGURED };
+    std::atomic<bool> started_{ false };
     std::mutex initMutex_;
 };
 

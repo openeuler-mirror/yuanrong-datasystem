@@ -41,6 +41,7 @@ set(WORKER_SRCS
 set(WORKER_DEPEND_LIBS
         ${TBB_LIBRARY}
         common_ak_sk
+        static_coordinator_discovery
         common_encrypt
         common_etcd
         common_event_loop

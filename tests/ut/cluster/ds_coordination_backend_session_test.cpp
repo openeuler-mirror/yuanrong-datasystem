@@ -57,8 +57,13 @@ public:
 
     ~DeterministicCoordinatorProxy() override = default;
 
-    Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &version, int64_t &revision,
-               int32_t, std::string *coordinatorId, const std::string &expectedCoordinatorId) override
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
+    Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &version, int64_t &revision, int32_t,
+               std::string *coordinatorId, const std::string &expectedCoordinatorId) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         lastExpectedCoordinatorId_ = expectedCoordinatorId;
@@ -89,8 +94,8 @@ public:
         return Status(K_RUNTIME_ERROR, "unused fake DeleteRange");
     }
 
-    Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &,
-                      const std::string &, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
+    Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &, const std::string &,
+                      int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
                       std::string *coordinatorId) override
     {
         WatchStep step{ Status::OK(), COORDINATOR_A, {} };
@@ -156,8 +161,7 @@ public:
         coordinatorId = observedCoordinatorId_;
     }
 
-    void AddWatchStep(Status status, std::string coordinatorId,
-                      std::vector<KeyValueEntry> initialKvs = {})
+    void AddWatchStep(Status status, std::string coordinatorId, std::vector<KeyValueEntry> initialKvs = {})
     {
         std::lock_guard<std::mutex> lock(mutex_);
         watchSteps_.push_back({ std::move(status), std::move(coordinatorId), std::move(initialKvs) });

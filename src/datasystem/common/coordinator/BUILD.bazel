@@ -3,6 +3,21 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility=["//visibility:public"])
 
 ds_cc_library(
+    name = "static_coordinator_discovery",
+    srcs = ["static_coordinator_discovery.cpp"],
+    hdrs = ["static_coordinator_discovery.h"],
+    visibility = [
+        "//src/datasystem/client:__pkg__",
+        "//src/datasystem/client/cluster_query:__pkg__",
+        "//src/datasystem/coordinator:__pkg__",
+        "//src/datasystem/worker:__pkg__",
+        "//tests/st/worker/object_cache:__pkg__",
+        "//tests/ut/common/coordinator:__pkg__",
+    ],
+    deps = ["//include/datasystem/utils:utils_headers"],
+)
+
+ds_cc_library(
     name="coordinator_store",
     srcs=[
         "coordinator_service_proxy.cpp",

@@ -36,6 +36,11 @@ public:
     FakeCoordinatorServiceProxy() = default;
     ~FakeCoordinatorServiceProxy() override = default;
 
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
                int64_t &version, int64_t &revision, int32_t, std::string *coordinatorId,
                const std::string &expectedCoordinatorId) override
@@ -73,8 +78,8 @@ public:
         return Status::OK();
     }
 
-    Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
-                       int64_t &revision, int32_t) override
+    Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
+                       int32_t) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         deleted = 0;
@@ -91,8 +96,8 @@ public:
     }
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &watcherAddr,
-                      const std::string &, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs,
-                      int32_t, std::string *coordinatorId) override
+                      const std::string &, int64_t &watchId, std::vector<KeyValueEntry> &initialKvs, int32_t,
+                      std::string *coordinatorId) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (key == nextWatchFailureKey_ && nextWatchFailureCode_ != K_OK) {
@@ -109,16 +114,15 @@ public:
         return Status::OK();
     }
 
-    Status CancelWatch(const std::string &, const std::vector<int64_t> &watchIds,
-                       const std::string &, int32_t) override
+    Status CancelWatch(const std::string &, const std::vector<int64_t> &watchIds, const std::string &, int32_t) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         cancelledWatchIds_.insert(cancelledWatchIds_.end(), watchIds.begin(), watchIds.end());
         return Status::OK();
     }
 
-    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
-                     int32_t, std::string *coordinatorId) override
+    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t,
+                     std::string *coordinatorId) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto iter = entries_.find(key);
@@ -129,8 +133,7 @@ public:
         return Status::OK();
     }
 
-    Status CAS(const std::string &key, const CasProcessFunc &process, int64_t &version,
-               int64_t &revision) override
+    Status CAS(const std::string &key, const CasProcessFunc &process, int64_t &version, int64_t &revision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto iter = entries_.find(key);
@@ -239,14 +242,12 @@ private:
         int64_t ttlMs{ 0 };
     };
 
-    static bool MatchesRange(const std::string &candidate, const std::string &key,
-                             const std::string &rangeEnd)
+    static bool MatchesRange(const std::string &candidate, const std::string &key, const std::string &rangeEnd)
     {
         return rangeEnd.empty() ? candidate == key : candidate >= key && candidate < rangeEnd;
     }
 
-    void AppendRange(const std::string &key, const std::string &rangeEnd,
-                     std::vector<KeyValueEntry> &kvs) const
+    void AppendRange(const std::string &key, const std::string &rangeEnd, std::vector<KeyValueEntry> &kvs) const
     {
         auto iter = entries_.lower_bound(key);
         while (iter != entries_.end() && MatchesRange(iter->first, key, rangeEnd)) {

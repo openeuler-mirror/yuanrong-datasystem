@@ -109,6 +109,7 @@ yr/datasystem/include/datasystem/transfer_engine/status_helper.h
 yr/datasystem/include/datasystem/transfer_engine/transfer_engine.h
 yr/datasystem/include/datasystem/utils/BUILD.bazel
 yr/datasystem/include/datasystem/utils/connection.h
+yr/datasystem/include/datasystem/utils/coordinator_discovery.h
 yr/datasystem/include/datasystem/utils/embedded_config.h
 yr/datasystem/include/datasystem/utils/kv_client_config.h
 yr/datasystem/include/datasystem/utils/optional.h

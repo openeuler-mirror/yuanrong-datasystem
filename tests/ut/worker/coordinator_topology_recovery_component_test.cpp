@@ -102,6 +102,11 @@ class RecoveryLoopbackProxy final : public ICoordinatorServiceProxy {
 public:
     ~RecoveryLoopbackProxy() override = default;
 
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
     void SetTarget(std::string coordinatorId, coordinator::TopologyRecoveryManager &manager)
     {
         std::lock_guard<std::mutex> lock(mutex_);

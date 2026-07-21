@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <mutex>
@@ -29,6 +30,7 @@
 #include <vector>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/utils/coordinator_discovery.h"
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/flags/dynamic_flag_config.h"
 #include "datasystem/common/util/thread_pool.h"
@@ -84,14 +86,15 @@ namespace datasystem::worker {
 
 class WorkerOCServer : public CommonServer {
 public:
-
     /**
      * @brief Create a new WorkerServer object.
      * @param[in] workerAddr Worker service address.
      * @param[in] bindAddr Local bind address.
      * @param[in] masterAddr Local master service address.
+     * @param[in] coordinatorDiscovery Candidate provider. Null selects the ETCD/metastore backend.
      */
-    WorkerOCServer(HostPort workerAddr, HostPort bindAddr, HostPort masterAddr);
+    WorkerOCServer(HostPort workerAddr, HostPort bindAddr, HostPort masterAddr,
+                   std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery);
 
     ~WorkerOCServer() override;
 
@@ -710,7 +713,8 @@ private:
 
     std::shared_ptr<PersistenceApi> persistenceApi_{ nullptr };
     std::unique_ptr<object_cache::SlotRecoveryOrchestrator> slotRecoveryOrchestrator_{ nullptr };
-    std::string backendAddress_;
+    std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
+    std::string etcdOrMetastoreAddress_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorServiceProxy_;
     std::unique_ptr<cluster::ITopologyPhaseCallbacks> topologyTaskCallbacks_{ nullptr };

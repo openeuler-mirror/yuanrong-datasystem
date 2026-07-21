@@ -34,5 +34,6 @@ CoordinatorServiceDiscoveryOptions
 
     .. cpp:member:: std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery = nullptr
 
-        用户提供的 Coordinator 地址发现实现。当前实现每次查询 Worker 前调用
-        :cpp:func:`ICoordinatorDiscovery::GetCoordinators`，且要求返回且仅返回一个 Coordinator 地址。
+        用户提供的 Coordinator 地址发现实现。当前实现仅在初始化时调用一次
+        :cpp:func:`ICoordinatorDiscovery::GetCoordinators`，拒绝空候选列表，并缓存非空列表的首个
+        Coordinator 地址；后续 Worker 查询不再刷新该 Discovery。

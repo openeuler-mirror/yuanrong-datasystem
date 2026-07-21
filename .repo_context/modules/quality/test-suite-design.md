@@ -75,7 +75,7 @@
 | --- | --- | --- | --- |
 | Top-level test tree | Routes CMake into UT, ST, perf, and shared helpers | `tests/CMakeLists.txt` | Adds `ut`, `st`, `perf`, and `common`. |
 | UT CMake | Builds unit/component gtest binaries | `tests/ut/CMakeLists.txt` | Splits stream, object, slot-store, and flags tests out of the default `ds_ut` bucket. |
-| ST CMake | Builds system-test binaries and runtime helpers | `tests/st/CMakeLists.txt` | Splits stream, object, KV, embedded-client, device, and the standalone braft election test; generates runtime data and helper tools. |
+| ST CMake | Builds system-test binaries and runtime helpers | `tests/st/CMakeLists.txt` | Splits stream, object, KV, embedded-client, device, and standalone tests; `ds_st_coordinator_backend_manual` is built for explicit execution but is not registered with CTest. |
 | Perf CMake | Builds ZMQ performance helpers | `tests/perf/zmq/CMakeLists.txt` | Produces client, server, and agent binaries. |
 | Common helpers | Provides binmock support | `tests/common/binmock` | Builds `binmock` and `binmock_spec`. |
 | Test registration function | Converts gtest binaries into CTest cases | `cmake/util.cmake` | `ADD_DATASYSTEM_TEST` writes include files and invokes `GoogleTestToCTest.cmake`. |
@@ -95,11 +95,12 @@
    `CommonTest` implementation is owned by the explicit `common_test` static target and excluded from recursive source
    globs so it is compiled once.
 4. `ds_st_embedded_client` links the existing `cluster` helper library instead of recompiling `tests/st/cluster/*.cpp`.
-5. Each gtest binary calls `add_datasystem_test`.
-6. `ADD_DATASYSTEM_TEST` creates a post-build command that runs `cmake/scripts/GoogleTestToCTest.cmake`.
-7. The script executes the binary with `--gtest_list_tests`.
-8. The script writes generated CTest `add_test` and `set_tests_properties` commands.
-9. CTest includes the generated files through directory `TEST_INCLUDE_FILES`.
+5. `ds_st_coordinator_backend_manual` compiles the heavy Coordinator cluster suite as an explicit-run target and intentionally does not call `add_datasystem_test`; Bazel keeps the matching target tagged `manual`.
+6. Each default-registered gtest binary calls `add_datasystem_test`.
+7. `ADD_DATASYSTEM_TEST` creates a post-build command that runs `cmake/scripts/GoogleTestToCTest.cmake`.
+8. The script executes the binary with `--gtest_list_tests`.
+9. The script writes generated CTest `add_test` and `set_tests_properties` commands.
+10. CTest includes the generated files through directory `TEST_INCLUDE_FILES`.
 
 Failure-sensitive steps:
 

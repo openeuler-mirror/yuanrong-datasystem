@@ -3,6 +3,26 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 package(default_visibility=["//visibility:public"])
 
 ds_cc_test(
+    name="coordinator_backend_cluster_test",
+    srcs=["coordinator_backend_cluster_test.cpp"],
+    tags=["manual"],
+    deps=[
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/cluster:cluster_topology_keyspace",
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/coordinator:static_coordinator_discovery",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/rpc:rpc_stub_cache_mgr",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+        "//tests/st/cluster:st_cluster",
+    ],
+)
+
+ds_cc_test(
     name="evict_mem_test",
     srcs=["evict_mem_test.cpp"],
     tags=["manual"],

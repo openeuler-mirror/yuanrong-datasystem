@@ -37,8 +37,13 @@ public:
 
     ~FakeCoordinatorServiceProxy() override = default;
 
-    Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &, int64_t &, int32_t,
-               std::string *, const std::string &) override
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
+    Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &, int64_t &, int32_t, std::string *,
+               const std::string &) override
     {
         return Status(K_RUNTIME_ERROR, "unused fake Put");
     }
@@ -68,8 +73,8 @@ public:
         return Status::OK();
     }
 
-    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds,
-                       const std::string &, int32_t) override
+    Status CancelWatch(const std::string &watcherAddr, const std::vector<int64_t> &watchIds, const std::string &,
+                       int32_t) override
     {
         lastCancelWatcherAddr_ = watcherAddr;
         cancelledWatchIds_.insert(cancelledWatchIds_.end(), watchIds.begin(), watchIds.end());
