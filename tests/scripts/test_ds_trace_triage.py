@@ -272,7 +272,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function renderChapterGuide(summaries)" in html
     assert "function highlightSummaryText(text)" in html
     assert "function summaryPointsHtml(summary)" in html
-    assert "图 5-1/5-2/5-3/5-5" in html
+    assert "图 5-1/5-2/5-3/5-4/5-5/5-6" in html
     assert "id=\"recommendation-table\"" in html
     assert "id=\"source-appendix-common-table\"" in html
     assert "id=\"source-appendix-read-table\"" in html
@@ -291,23 +291,29 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"classification-chart\"" in html
     assert "id=\"cohort-chart\"" in html
     for title in [
-        "图 2-0 输入包 / Cohort 对比",
-        "图 2-1 分类分布",
-        "图 2-2 错误文本 / 状态分布",
-        "图 3-2a 读取 Flow 分布",
-        "图 3-3a 读取时间桶 Breakdown",
-        "图 3-2b 写入 Flow 分布",
-        "图 3-3b 写入时间桶 Breakdown",
-        "图 4-1a 读取 Worker 分布",
-        "图 4-1b 写入 Worker 分布",
+        "图 2-1 输入包 / Cohort 对比",
+        "图 2-2 分类分布",
+        "图 2-3 错误文本 / 状态分布",
+        "图 3-1 读取 Top 时延",
+        "图 3-2 读取 Flow 分布",
+        "图 3-3 读取时间桶 Breakdown",
+        "图 3-4 写入 Top 时延",
+        "图 3-5 写入 Flow 分布",
+        "图 3-6 写入时间桶 Breakdown",
+        "图 4-2 读取 Worker 分布",
+        "图 4-4 写入 Worker 分布",
         "图 5-1 UB 生命周期",
-        "图 5-1b WR / Inflight Count",
-        "图 5-3 UB 时间桶",
-        "图 5-5a 读取 UB Edge",
-        "图 5-5b 写入 UB Edge",
+        "图 5-2 WR / Inflight Count",
+        "图 5-4 UB 时间桶",
+        "图 5-5 读取 UB Edge",
+        "图 5-6 写入 UB Edge",
+        "图 6-1 选中 Trace Breakdown",
         "日志框 6-3 Trace 全量日志",
     ]:
         assert title in html
+    assert "<h3>图 " not in html
+    for old_figure in ["图 2-0", "图 3-2a", "图 3-3b", "图 4-0a", "图 5-1b", "图 5-5a", "图 5-5b"]:
+        assert old_figure not in html
     for summary_id in [
         "section-summary-s2",
         "section-summary-s3",
@@ -380,16 +386,18 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "读取流程证据块" in html
     assert "写入流程证据块" in html
     assert "flow-section" in html
-    assert "href=\"#read-flow-stage-chart\">图 4-0a 读取流程" in html
-    assert "href=\"#write-flow-stage-chart\">图 4-0b 写入流程" in html
-    assert "href=\"#read-worker-chart\">图 4-1a 读取 Worker" in html
-    assert "href=\"#write-worker-chart\">图 4-1b 写入 Worker" in html
-    assert "href=\"#ub-wr-count-chart\">图 5-1b WR / Inflight" in html
-    assert "href=\"#ub-worker-time-chart\">图 5-3 UB 时间桶" in html
+    assert "href=\"#read-flow-stage-chart\">图 4-1 读取流程" in html
+    assert "href=\"#read-worker-chart\">图 4-2 读取 Worker" in html
+    assert "href=\"#write-flow-stage-chart\">图 4-3 写入流程" in html
+    assert "href=\"#write-worker-chart\">图 4-4 写入 Worker" in html
+    assert "href=\"#ub-wr-count-chart\">图 5-2 WR / Inflight" in html
+    assert "href=\"#ub-worker-time-chart\">图 5-4 UB 时间桶" in html
+    assert "href=\"#read-ub-edge-chart\">图 5-5 读取 UB Edge" in html
+    assert "href=\"#write-ub-edge-chart\">图 5-6 写入 UB Edge" in html
     assert "href=\"#selected-trace-chart\">图 6-1 选中 Trace" in html
     assert "href=\"#selected-trace-log\">日志框 6-3 全量日志" in html
-    assert "图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
-    assert "图 4-0b 写入：区分 createbuffer、client publish、entry/meta publish。" in html
+    assert "图 4-1 读取流程证据块：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
+    assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html
     assert "edge.summary" in html
     assert "edge.reason" in html
@@ -438,8 +446,21 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "renderUbSection" in html
     assert "id=\"read-worker-table-pager\"" in html
     assert "id=\"write-worker-table-pager\"" in html
-    assert "id=\"worker-table-filter\"" in html
-    assert "workerTableFilterValue" in html
+    for worker_filter_id in [
+        "read-worker-filter",
+        "read-worker-table-filter",
+        "write-worker-filter",
+        "write-worker-table-filter",
+        "ub-worker-role-filter",
+        "ub-worker-role-table-filter",
+        "ub-worker-time-filter",
+        "ub-worker-time-table-filter",
+    ]:
+        assert f"id=\"{worker_filter_id}\"" in html
+    assert "id=\"worker-table-filter\"" not in html
+    assert "workerTableFilterValue" not in html
+    assert "workerScopedFilterIds" in html
+    assert "workerFilterValue" in html
     assert "renderWorkerDependentViews" in html
     assert "id=\"read-ub-edge-table-pager\"" in html
     assert "id=\"write-ub-edge-table-pager\"" in html

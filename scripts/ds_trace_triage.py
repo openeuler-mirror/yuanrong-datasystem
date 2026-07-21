@@ -2013,26 +2013,28 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a href="#s1">1. 结论</a>
       <a class="sub" href="#overall-guide">表 1-1 整体导读</a>
       <a href="#s2">2. 根因分布</a>
-      <a class="sub" href="#cohort-chart">图 2-0 输入包 / Cohort</a>
-      <a class="sub" href="#classification-chart">图 2-1 分类分布</a>
-      <a class="sub" href="#error-chart">图 2-2 错误分布</a>
+      <a class="sub" href="#cohort-chart">图 2-1 输入包 / Cohort</a>
+      <a class="sub" href="#classification-chart">图 2-2 分类分布</a>
+      <a class="sub" href="#error-chart">图 2-3 错误分布</a>
       <a href="#s3">3. 时延 Breakdown</a>
-      <a class="sub" href="#read-latency-chart">图 3-1a 读取时延</a>
-      <a class="sub" href="#write-latency-chart">图 3-1b 写入时延</a>
-      <a class="sub" href="#read-time-breakdown-chart">图 3-3a 读取时间桶</a>
-      <a class="sub" href="#write-time-breakdown-chart">图 3-3b 写入时间桶</a>
+      <a class="sub" href="#read-latency-chart">图 3-1 读取时延</a>
+      <a class="sub" href="#read-flow-chart">图 3-2 读取 Flow</a>
+      <a class="sub" href="#read-time-breakdown-chart">图 3-3 读取时间桶</a>
+      <a class="sub" href="#write-latency-chart">图 3-4 写入时延</a>
+      <a class="sub" href="#write-flow-chart">图 3-5 写入 Flow</a>
+      <a class="sub" href="#write-time-breakdown-chart">图 3-6 写入时间桶</a>
       <a href="#s4">4. Worker / 流程</a>
-      <a class="sub" href="#read-flow-stage-chart">图 4-0a 读取流程</a>
-      <a class="sub" href="#write-flow-stage-chart">图 4-0b 写入流程</a>
-      <a class="sub" href="#read-worker-chart">图 4-1a 读取 Worker</a>
-      <a class="sub" href="#write-worker-chart">图 4-1b 写入 Worker</a>
+      <a class="sub" href="#read-flow-stage-chart">图 4-1 读取流程</a>
+      <a class="sub" href="#read-worker-chart">图 4-2 读取 Worker</a>
+      <a class="sub" href="#write-flow-stage-chart">图 4-3 写入流程</a>
+      <a class="sub" href="#write-worker-chart">图 4-4 写入 Worker</a>
       <a href="#s5">5. UB / URMA</a>
       <a class="sub" href="#ub-lifecycle-chart">图 5-1 UB 生命周期</a>
-      <a class="sub" href="#ub-wr-count-chart">图 5-1b WR / Inflight</a>
-      <a class="sub" href="#ub-worker-role-chart">图 5-2 入口/出口 Worker</a>
-      <a class="sub" href="#ub-worker-time-chart">图 5-3 UB 时间桶</a>
-      <a class="sub" href="#read-ub-edge-chart">图 5-5a 读取 UB Edge</a>
-      <a class="sub" href="#write-ub-edge-chart">图 5-5b 写入 UB Edge</a>
+      <a class="sub" href="#ub-wr-count-chart">图 5-2 WR / Inflight</a>
+      <a class="sub" href="#ub-worker-role-chart">图 5-3 入口/出口 Worker</a>
+      <a class="sub" href="#ub-worker-time-chart">图 5-4 UB 时间桶</a>
+      <a class="sub" href="#read-ub-edge-chart">图 5-5 读取 UB Edge</a>
+      <a class="sub" href="#write-ub-edge-chart">图 5-6 写入 UB Edge</a>
       <a href="#s6">6. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 6-1 Top Trace</a>
       <a class="sub" href="#selected-trace-chart">图 6-1 选中 Trace</a>
@@ -2058,15 +2060,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s2">
         <h2>2. 错误根因与分类分布</h2>
         <div class="panel section-summary" id="section-summary-s2"></div>
-        <div class="panel"><h3>图 2-0 输入包 / Cohort 对比</h3><div id="cohort-chart" class="chart"></div><div class="caption">多个日志包独立统计，再对比分类和错误分布。</div></div>
-        <div class="panel"><h3>表 2-0 输入包/cohort 对比</h3><table id="cohort-table"></table></div>
+        <div class="panel"><div id="cohort-chart" class="chart"></div><div class="caption">图 2-1 输入包 / Cohort 对比：多个日志包独立统计，再对比分类和错误分布。</div></div>
+        <div class="panel"><h3>表 2-1 输入包 / Cohort 对比</h3><table id="cohort-table"></table></div>
         <div class="chart-grid">
-          <div class="panel"><h3>图 2-1 分类分布</h3><div id="classification-chart" class="chart"></div><div class="caption">按根因分类聚合 trace。</div></div>
-          <div class="panel"><h3>图 2-2 错误文本 / 状态分布</h3><div id="error-chart" class="chart"></div><div class="caption">按错误文本和状态码聚合。</div></div>
+          <div class="panel"><div id="classification-chart" class="chart"></div><div class="caption">图 2-2 分类分布：按根因分类聚合 trace。</div></div>
+          <div class="panel"><div id="error-chart" class="chart"></div><div class="caption">图 2-3 错误文本 / 状态分布：按错误文本和状态码聚合。</div></div>
         </div>
         <div class="compare2">
-          <div class="panel"><h3>表 2-1 分类聚合</h3><table id="classification-table"></table></div>
-          <div class="panel"><h3>Error Breakdown</h3><table id="error-table"></table></div>
+          <div class="panel"><h3>表 2-2 分类聚合</h3><table id="classification-table"></table></div>
+          <div class="panel"><h3>表 2-3 Error Breakdown</h3><table id="error-table"></table></div>
         </div>
       </section>
       <section id="s3">
@@ -2074,38 +2076,37 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel section-summary" id="section-summary-s3"></div>
         <div class="panel insight">读写分开看尾部：读关注 GET/QueryMeta/RemoteGet/UB，写关注 SET/Create/Publish/memory copy。</div>
         <div class="flow-section">
-          <div class="panel"><h3>读取时延</h3><div id="read-latency-chart" class="chart"></div><div class="caption">图 3-1a 读取 Top 时延。</div></div>
-          <div class="panel"><h3>图 3-2a 读取 Flow 分布</h3><div id="read-flow-chart" class="chart"></div><div class="caption">读取接口类型分布。</div></div>
-          <div class="panel"><h3>图 3-3a 读取时间桶 Breakdown</h3><div id="read-time-breakdown-chart" class="chart"></div><div class="caption">柱为读 RPC/UB 子阶段 p99，线为读 trace access p99。</div></div>
+          <div class="panel"><div id="read-latency-chart" class="chart"></div><div class="caption">图 3-1 读取 Top 时延。</div></div>
+          <div class="panel"><div id="read-flow-chart" class="chart"></div><div class="caption">图 3-2 读取 Flow 分布：读取接口类型分布。</div></div>
+          <div class="panel"><div id="read-time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 读取时间桶 Breakdown：柱为读 RPC/UB 子阶段 p99，线为读 trace access p99。</div></div>
         </div>
         <div class="flow-section">
-          <div class="panel"><h3>写入时延</h3><div id="write-latency-chart" class="chart"></div><div class="caption">图 3-1b 写入 Top 时延。</div></div>
-          <div class="panel"><h3>图 3-2b 写入 Flow 分布</h3><div id="write-flow-chart" class="chart"></div><div class="caption">写入接口类型分布。</div></div>
-          <div class="panel"><h3>图 3-3b 写入时间桶 Breakdown</h3><div id="write-time-breakdown-chart" class="chart"></div><div class="caption">柱为写 RPC/本地阶段 p99，线为写 trace access p99。</div></div>
+          <div class="panel"><div id="write-latency-chart" class="chart"></div><div class="caption">图 3-4 写入 Top 时延。</div></div>
+          <div class="panel"><div id="write-flow-chart" class="chart"></div><div class="caption">图 3-5 写入 Flow 分布：写入接口类型分布。</div></div>
+          <div class="panel"><div id="write-time-breakdown-chart" class="chart"></div><div class="caption">图 3-6 写入时间桶 Breakdown：柱为写 RPC/本地阶段 p99，线为写 trace access p99。</div></div>
         </div>
         <div class="compare2">
-          <div class="panel"><h3>表 3-1a 读取时延指标</h3><table id="read-latency-table"></table></div>
-          <div class="panel"><h3>表 3-1b 写入时延指标</h3><table id="write-latency-table"></table></div>
-          <div class="panel"><h3>表 3-2a 读取 Flow</h3><table id="read-flow-table"></table></div>
-          <div class="panel"><h3>表 3-2b 写入 Flow</h3><table id="write-flow-table"></table></div>
+          <div class="panel"><h3>表 3-1 读取时延指标</h3><table id="read-latency-table"></table></div>
+          <div class="panel"><h3>表 3-2 写入时延指标</h3><table id="write-latency-table"></table></div>
+          <div class="panel"><h3>表 3-3 读取 Flow</h3><table id="read-flow-table"></table></div>
+          <div class="panel"><h3>表 3-4 写入 Flow</h3><table id="write-flow-table"></table></div>
         </div>
       </section>
       <section id="s4">
         <h2>4. Worker / 流程分布</h2>
         <div class="panel section-summary" id="section-summary-s4"></div>
         <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data，写关注 CreateBuffer/Publish/Meta。</div>
-        <div class="panel controls"><label>Worker 表格筛选 <select id="worker-table-filter"><option value="">全部 Worker</option></select></label><span class="muted">影响第 4/5 章 Worker 表格和对应图，不影响 Trace 查看筛选。</span></div>
         <div id="read-flow-section" class="flow-section">
-          <div class="panel"><h3>读取流程证据块</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。</div></div>
-          <div class="panel"><h3>表 4-0a 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
-          <div class="panel"><h3>图 4-1a 读取 Worker 分布</h3><div id="read-worker-chart" class="chart"></div><div class="caption">读取链路按 worker 聚合。</div></div>
-          <div class="panel"><h3>表 4-1a 读取 Worker Breakdown</h3><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-1 读取流程证据块：看 Entry→Data RPC 与 DataWorker UB/URMA。</div></div>
+          <div class="panel"><h3>表 4-1 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
+          <div class="panel"><div class="controls"><label>Worker 筛选 <select id="read-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="read-worker-chart" class="chart"></div><div class="caption">图 4-2 读取 Worker 分布：读取链路按 worker 聚合。</div></div>
+          <div class="panel"><h3>表 4-2 读取 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="read-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
         </div>
         <div id="write-flow-section" class="flow-section">
-          <div class="panel"><h3>写入流程证据块</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">图 4-0b 写入：区分 createbuffer、client publish、entry/meta publish。</div></div>
-          <div class="panel"><h3>表 4-0b 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
-          <div class="panel"><h3>图 4-1b 写入 Worker 分布</h3><div id="write-worker-chart" class="chart"></div><div class="caption">写入链路按 worker 聚合。</div></div>
-          <div class="panel"><h3>表 4-1b 写入 Worker Breakdown</h3><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><div id="write-flow-stage-chart" class="chart"></div><div class="caption">图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。</div></div>
+          <div class="panel"><h3>表 4-3 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
+          <div class="panel"><div class="controls"><label>Worker 筛选 <select id="write-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="write-worker-chart" class="chart"></div><div class="caption">图 4-4 写入 Worker 分布：写入链路按 worker 聚合。</div></div>
+          <div class="panel"><h3>表 4-4 写入 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="write-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>
       </section>
@@ -2114,22 +2115,22 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel section-summary" id="section-summary-s5"></div>
         <div class="panel insight">UB 单独看：先看 wait/poll/notify/sched，再看入口/出口 worker，最后看 edge/IP。</div>
         <div class="chart-grid">
-          <div class="panel"><h3>图 5-1 UB 生命周期</h3><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">TOTAL、wait_for、poll/notify/sched 等耗时字段，按实际采样字段展示。</div></div>
-          <div class="panel"><h3>图 5-1b WR / Inflight Count</h3><div id="ub-wr-count-chart" class="chart"></div><div class="caption">remote get WR、URMA inflight WR、chip inflight，单位 count。</div></div>
-          <div class="panel full-row"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-2 UB worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
+          <div class="panel"><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">图 5-1 UB 生命周期：TOTAL、wait_for、poll/notify/sched 等耗时字段，按实际采样字段展示。</div></div>
+          <div class="panel"><div id="ub-wr-count-chart" class="chart"></div><div class="caption">图 5-2 WR / Inflight Count：remote get WR、URMA inflight WR、chip inflight，单位 count。</div></div>
+          <div class="panel full-row"><div class="controls"><label>Worker 筛选 <select id="ub-worker-role-filter"><option value="">全部 Worker</option></select></label></div><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-3 UB 入口/出口 Worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
         </div>
-        <div class="panel"><h3>图 5-3 UB 时间桶</h3><div id="ub-worker-time-chart" class="chart"></div><div class="caption">按秒观察入口/出口事件与尾部时延。</div></div>
+        <div class="panel"><div class="controls"><label>Worker 筛选 <select id="ub-worker-time-filter"><option value="">全部 Worker</option></select></label></div><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-4 UB 时间桶：按秒观察入口/出口事件与尾部时延。</div></div>
         <div class="flow-section ub-table-stack">
           <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><div class="table-scroll"><table id="ub-lifecycle-table" class="nowrap-table"></table></div><div id="ub-lifecycle-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table" class="adaptive-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><h3>表 5-3 UB Worker 角色</h3><table id="ub-worker-role-table" class="adaptive-table"></table><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><h3>表 5-4 UB 时间桶</h3><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-3 UB Worker 角色</h3><div class="controls"><label>Worker 筛选 <select id="ub-worker-role-table-filter"><option value="">全部 Worker</option></select></label></div><table id="ub-worker-role-table" class="adaptive-table"></table><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-4 UB 时间桶</h3><div class="controls"><label>Worker 筛选 <select id="ub-worker-time-table-filter"><option value="">全部 Worker</option></select></label></div><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="flow-section">
-          <div class="panel"><h3>图 5-5a 读取 UB Edge</h3><div id="read-ub-edge-chart" class="chart"></div><div class="caption">读取 UB 入口/出口 IP 与 worker 关联。</div></div>
-          <div class="panel"><h3>表 5-5a 读取 UB Edges</h3><table id="read-ub-edge-table"></table><div id="read-ub-edge-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><h3>图 5-5b 写入 UB Edge</h3><div id="write-ub-edge-chart" class="chart"></div><div class="caption">写入 UB 入口/出口 IP 与 worker 关联。</div></div>
-          <div class="panel"><h3>表 5-5b 写入 UB Edges</h3><table id="write-ub-edge-table"></table><div id="write-ub-edge-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><div id="read-ub-edge-chart" class="chart"></div><div class="caption">图 5-5 读取 UB Edge：读取 UB 入口/出口 IP 与 worker 关联。</div></div>
+          <div class="panel"><h3>表 5-5 读取 UB Edges</h3><table id="read-ub-edge-table"></table><div id="read-ub-edge-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><div id="write-ub-edge-chart" class="chart"></div><div class="caption">图 5-6 写入 UB Edge：写入 UB 入口/出口 IP 与 worker 关联。</div></div>
+          <div class="panel"><h3>表 5-6 写入 UB Edges</h3><table id="write-ub-edge-table"></table><div id="write-ub-edge-table-pager" class="mini-pager"></div></div>
         </div>
       </section>
       <section id="s6">
@@ -2147,7 +2148,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         </div>
         </div>
         <div class="compare2">
-          <div class="panel"><h3>图 6-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击 Trace 行联动，按阶段耗时排序，单位 ms。</div><table id="selected-stage-table"></table></div>
+          <div class="panel"><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">图 6-1 选中 Trace Breakdown：点击 Trace 行联动，按阶段耗时排序，单位 ms。</div><table id="selected-stage-table"></table></div>
           <div class="panel"><h3>表 6-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
         <div class="panel"><h3>日志框 6-3 Trace 全量日志</h3><div class="small">按组件分块，保留原始顺序；异常、慢 RPC、latencySummary、RemotePull、URMA 和大耗时会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><div id="selected-trace-log" class="trace-log-groups"></div></div>
@@ -2444,7 +2445,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const palette = ['#2563eb','#ea580c','#059669','#7c3aed','#dc2626','#0891b2','#ca8a04','#64748b'];
   function axisBase(title, extra) {
     return Object.assign({
-      title:{text:title, left:'center', top:4, textStyle:{fontSize:14}},
+      title:{show:false,text:title},
       color:palette,
       grid:{left:58,right:24,top:72,bottom:76,containLabel:true},
       legend:{top:30,type:'scroll'},
@@ -2714,8 +2715,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       return {bucket_start:bucket.bucket_start,bucket_ms:bucket.bucket_ms,p99_access_ms:(percentileFromValues(bucket.access) || {}).p99 || 0,stage_breakdown_ms:stageBreakdown};
     });
   }
-  function workerRowsForOperation(operation) {
-    const selectedWorker = workerTableFilterValue();
+  function workerFilterValue(id) {
+    const node = document.getElementById(id);
+    return node ? node.value : '';
+  }
+  function workerRowsForOperation(operation, selectedWorker='') {
     const workers = {};
     traceRowsForOperation(operation).forEach(([, item]) => {
       const errorCount = Object.values(item.errors || {}).reduce((a,b) => a + b, 0);
@@ -2767,14 +2771,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }) : noDataOption(`No ${operation} time bucket stage data`));
   }
   function renderWorkerSection(operation, title) {
-    const rows = workerRowsForOperation(operation);
-    const tableRows = rows.map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0]);
+    const chartRows = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-filter`));
+    const tableRowsForOperation = workerRowsForOperation(operation, workerFilterValue(`${operation}-worker-table-filter`));
+    const tableRows = tableRowsForOperation.map(([worker,item]) => [worker, (item.roles || []).join(','), item.line_count, item.trace_count, item.slow_trace_count || 0, item.error_count || 0]);
     renderPagedTable(`${operation}-worker-table`, `${operation}-worker-table-pager`, ['worker','roles','lines','traces','slow','errors'], tableRows,
       row => (Number(row[5]) > 0 ? 'class="hotrow"' : Number(row[4]) > 0 ? 'class="warnrow"' : ''), 5);
-    chart(`${operation}-worker-chart`, rows.length ? axisBase(`${title} Workers by Trace/Error`, {xAxis:{type:'category', data:rows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
-      {name:'traces',type:'bar',barMaxWidth:34,data:rows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
-      {name:'slow',type:'bar',barMaxWidth:34,data:rows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
-      {name:'errors',type:'bar',barMaxWidth:34,data:rows.slice(0,20).map(r => r[1].error_count || 0), itemStyle:{color:'#dc2626'}, label:{show:true, position:'top'}}
+    chart(`${operation}-worker-chart`, chartRows.length ? axisBase(`${title} Workers by Trace/Error`, {xAxis:{type:'category', data:chartRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
+      {name:'traces',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].trace_count || 0), itemStyle:{color:'#94a3b8'}},
+      {name:'slow',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].slow_trace_count || 0), itemStyle:{color:'#ea580c'}},
+      {name:'errors',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].error_count || 0), itemStyle:{color:'#dc2626'}, label:{show:true, position:'top'}}
     ]}) : noDataOption(`No ${operation} worker data`));
   }
   function renderUbSection(operation) {
@@ -2788,12 +2793,19 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     ]}) : noDataOption(operation === 'write' ? 'Write flow has no UB read edge data' : 'No read UB edge data'));
   }
   function renderUbWorkerViews() {
-    const selectedWorker = workerTableFilterValue();
-    const filteredUbWorkerRows = selectedWorker ? ubWorkerRows.filter(([worker]) => worker === selectedWorker) : ubWorkerRows;
-    const filteredUbWorkerTimeRows = selectedWorker ? ubWorkerTimeRows.filter(item =>
+    const roleChartWorker = workerFilterValue('ub-worker-role-filter');
+    const timeChartWorker = workerFilterValue('ub-worker-time-filter');
+    const roleTableWorker = workerFilterValue('ub-worker-role-table-filter');
+    const timeTableWorker = workerFilterValue('ub-worker-time-table-filter');
+    const filterUbWorkerRows = selectedWorker => selectedWorker ? ubWorkerRows.filter(([worker]) => worker === selectedWorker) : ubWorkerRows;
+    const filterUbWorkerTimeRows = selectedWorker => selectedWorker ? ubWorkerTimeRows.filter(item =>
       (item.top_entry_workers || []).includes(selectedWorker) || (item.top_exit_workers || []).includes(selectedWorker)
     ) : ubWorkerTimeRows;
-    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], filteredUbWorkerRows.map(([worker,item]) => [
+    const chartUbWorkerRows = filterUbWorkerRows(roleChartWorker);
+    const tableUbWorkerRows = filterUbWorkerRows(roleTableWorker);
+    const chartUbWorkerTimeRows = filterUbWorkerTimeRows(timeChartWorker);
+    const tableUbWorkerTimeRows = filterUbWorkerTimeRows(timeTableWorker);
+    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], tableUbWorkerRows.map(([worker,item]) => [
       worker,
       item.role || '',
       item.entry_events || 0,
@@ -2803,7 +2815,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       item.latency_ms?.max || '',
       (item.top_edges || []).join(', ')
     ]), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`, 5);
-    renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], filteredUbWorkerTimeRows.map(item => [
+    renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], tableUbWorkerTimeRows.map(item => [
       item.bucket_start || '',
       item.entry_events || 0,
       item.exit_events || 0,
@@ -2812,24 +2824,24 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       (item.top_entry_workers || []).join(', '),
       (item.top_exit_workers || []).join(', ')
     ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
-    chart('ub-worker-role-chart', filteredUbWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
+    chart('ub-worker-role-chart', chartUbWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
       tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
-      xAxis:{type:'category', data:filteredUbWorkerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
+      xAxis:{type:'category', data:chartUbWorkerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
       yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
       series:[
-        {name:'入口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:filteredUbWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
-        {name:'出口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:filteredUbWorkerRows.slice(0,20).map(r => r[1].exit_events || 0),itemStyle:{color:'#ea580c'}},
-        {name:'p99 ms',type:'line',yAxisIndex:1,data:filteredUbWorkerRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}}
+        {name:'入口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'出口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'p99 ms',type:'line',yAxisIndex:1,data:chartUbWorkerRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}}
       ]
     }) : noDataOption('No UB worker role data'));
-    chart('ub-worker-time-chart', filteredUbWorkerTimeRows.length ? axisBase('UB Entry/Exit Time Buckets', {
+    chart('ub-worker-time-chart', chartUbWorkerTimeRows.length ? axisBase('UB Entry/Exit Time Buckets', {
       tooltip:{trigger:'axis', axisPointer:{type:'cross'}, confine:true},
-      xAxis:{type:'category', data:filteredUbWorkerTimeRows.map(r => String(r.bucket_start || '').replace('T','\\n')), axisLabel:{rotate:0}},
+      xAxis:{type:'category', data:chartUbWorkerTimeRows.map(r => String(r.bucket_start || '').replace('T','\\n')), axisLabel:{rotate:0}},
       yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
       series:[
-        {name:'入口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:filteredUbWorkerTimeRows.map(r => r.entry_events || 0),itemStyle:{color:'#2563eb'}},
-        {name:'出口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:filteredUbWorkerTimeRows.map(r => r.exit_events || 0),itemStyle:{color:'#ea580c'}},
-        {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:filteredUbWorkerTimeRows.map(r => r.latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
+        {name:'入口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:chartUbWorkerTimeRows.map(r => r.entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'出口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:chartUbWorkerTimeRows.map(r => r.exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:chartUbWorkerTimeRows.map(r => r.latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
       ]
     }) : noDataOption('No UB time bucket data'));
   }
@@ -2909,10 +2921,6 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function renderOperationViews() {
     renderTracePage();
     renderSelectedTrace();
-  }
-  function workerTableFilterValue() {
-    const node = document.getElementById('worker-table-filter');
-    return node ? node.value : '';
   }
   function renderWorkerDependentViews() {
     renderWorkerSection('read', 'Read');
@@ -3058,9 +3066,23 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   document.getElementById('worker-filter').innerHTML = '<option value="">全部 Worker</option>' +
     traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   document.getElementById('worker-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
-  document.getElementById('worker-table-filter').innerHTML = '<option value="">全部 Worker</option>' +
-    traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
-  document.getElementById('worker-table-filter').addEventListener('change', renderWorkerDependentViews);
+  const workerScopedFilterIds = [
+    'read-worker-filter',
+    'read-worker-table-filter',
+    'write-worker-filter',
+    'write-worker-table-filter',
+    'ub-worker-role-filter',
+    'ub-worker-role-table-filter',
+    'ub-worker-time-filter',
+    'ub-worker-time-table-filter'
+  ];
+  workerScopedFilterIds.forEach(id => {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.innerHTML = '<option value="">全部 Worker</option>' +
+      traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+    node.addEventListener('change', renderWorkerDependentViews);
+  });
   document.getElementById('trace-page-size').addEventListener('change', event => {
     pageSize = Number(event.target.value) || 4;
     currentPage = 0;
@@ -3129,7 +3151,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }
     navLinks.forEach(link => link.classList.toggle('active', link === active));
   });
-  chart('classification-chart', classificationRows.length ? {title:{text:'Classification', left:'center'}, color:palette, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['38%','66%'], center:['50%','48%'], avoidLabelOverlap:true, data:classificationRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No classification data'));
+  chart('classification-chart', classificationRows.length ? {title:{show:false}, color:palette, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['38%','66%'], center:['50%','48%'], avoidLabelOverlap:true, data:classificationRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No classification data'));
   chart('cohort-chart', cohortRows.length ? axisBase('Input Cohort Comparison', {xAxis:{type:'category', data:cohortRows.map(r => r[0]), axisLabel:{rotate:20, width:110, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
     {name:'traces',type:'bar',barMaxWidth:42,data:cohortRows.map(r => r[1].trace_count || 0), label:{show:true, position:'top'}},
     {name:'errors',type:'bar',barMaxWidth:42,data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0)), label:{show:true, position:'top'}, itemStyle:{color:'#dc2626'}}
@@ -3137,7 +3159,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
   function renderFlowGraph(id, graph, title) {
     chart(id, {
-    title:{text:title, left:'center', top:4, textStyle:{fontSize:14}},
+    title:{show:false,text:title},
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
       : `${escapeHtml(p.data.label || p.data.name)}<br>${escapeHtml((p.data.top_ips || []).join(', '))}`},
@@ -3266,10 +3288,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }
   function renderChapterGuide(summaries) {
     const guideRows = [
-      ['#s2', '2. 根因分布', summaries.s2, '图 2-0/2-1/2-2'],
+      ['#s2', '2. 根因分布', summaries.s2, '图 2-1/2-2/2-3'],
       ['#s3', '3. 时延 Breakdown', summaries.s3, '图 3-1/3-3'],
-      ['#s4', '4. Worker / 流程', summaries.s4, '图 4-0/4-1'],
-      ['#s5', '5. UB / URMA', summaries.s5, '图 5-1/5-2/5-3/5-5'],
+      ['#s4', '4. Worker / 流程', summaries.s4, '图 4-1/4-2/4-3/4-4'],
+      ['#s5', '5. UB / URMA', summaries.s5, '图 5-1/5-2/5-3/5-4/5-5/5-6'],
       ['#s6', '6. Trace 查看', summaries.s6, '表 6-1 / 图 6-1 / 日志框 6-3'],
       ['#s7', '7. 建议与口径', summaries.s7, '表 7-1/7-2']
     ];
