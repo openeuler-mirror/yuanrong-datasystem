@@ -3385,6 +3385,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   ]}) : noDataOption('No cohort data'));
   chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
   function renderFlowGraph(id, graph, title) {
+    const flowNodeY = [130,130,70,210,210];
     chart(id, {
     title:{show:false,text:title},
     textStyle:chartTextStyle,
@@ -3408,7 +3409,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       roam:true,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true, fontSize:13},
+      label:{show:true, fontSize:13, width:118, overflow:'break', lineHeight:16},
+      labelLayout:{hideOverlap:true},
       edgeLabel:{show:true, formatter:p => p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:13, width:120, overflow:'break'},
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(graph.nodes || []).map((node, idx) => ({
@@ -3416,7 +3418,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         label:[node.label, ...(node.top_workers || []).map(workerRelationName), ...(node.top_ips || [])].slice(0, 3).join('\\n'),
         top_ips:node.top_ips || [],
         x:[80,280,480,480,680][idx] || 80,
-        y:[170,170,80,260,260][idx] || 170,
+        y:flowNodeY[idx] || 130,
         symbolSize:72,
         itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
       })),

@@ -418,6 +418,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "myAutoCenter" in html
     assert "title:'自适应居中'" in html
     assert "dataView:{readOnly:true}" in html
+    assert "labelLayout:{hideOverlap:true}" in html
+    assert "const flowNodeY = [130,130,70,210,210]" in html
     assert "id=\"flow-stage-table\"" in html
     assert "id=\"read-flow-stage-table\"" in html
     assert "id=\"write-flow-stage-table\"" in html
