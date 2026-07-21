@@ -2050,6 +2050,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   let selectedTraceId = traceRows[0]?.[0] || null;
   let pageSize = 4;
   let activeOperation = '';
+  let topTraceSort = null;
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   }
@@ -2776,24 +2777,42 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }
   function renderTracePage() {
     applyTraceFilters();
-    const totalPages = Math.max(Math.ceil(filteredTraceRows.length / pageSize), 1);
+    function topTraceDisplayRows(rows) {
+      return rows.map(([traceId,item]) => [
+        traceStartTime(item),
+        traceId,
+        item.classification,
+        traceAccessLatencyMs(item),
+        JSON.stringify(item.errors || {}),
+        pctText(item.access_latency_ms),
+        Object.keys(item.workers || {}).slice(0, 6).join(', ')
+      ]);
+    }
+    const sortedDisplayRows = sortRowsForTable(topTraceDisplayRows(filteredTraceRows), topTraceSort);
+    if (!sortedDisplayRows.some(row => row[1] === selectedTraceId)) {
+      selectedTraceId = sortedDisplayRows[0]?.[1] || null;
+    }
+    const totalPages = Math.max(Math.ceil(sortedDisplayRows.length / pageSize), 1);
     currentPage = Math.min(Math.max(currentPage, 0), totalPages - 1);
-    const pageRows = filteredTraceRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-    renderTable('top-trace-table', ['time','trace','classification','latency ms','errors','access','workers'], pageRows.map(([traceId,item]) => [
-      traceStartTime(item),
-      traceId,
-      item.classification,
-      traceAccessLatencyMs(item),
-      JSON.stringify(item.errors || {}),
-      pctText(item.access_latency_ms),
-      Object.keys(item.workers || {}).slice(0, 6).join(', ')
-    ]), row => `data-trace="${escapeHtml(row[1])}" class="${row[1] === selectedTraceId ? 'selected-row' : ''}"`);
+    const pageRows = sortedDisplayRows.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+    renderTable('top-trace-table', ['time','trace','classification','latency ms','errors','access','workers'], pageRows,
+      row => `data-trace="${escapeHtml(row[1])}" class="${row[1] === selectedTraceId ? 'selected-row' : ''}"`,
+      {
+        skipSort:true,
+        sortState:topTraceSort,
+        onSort:index => {
+          topTraceSort = nextSortState(topTraceSort, index);
+          currentPage = 0;
+          renderTracePage();
+          renderSelectedTrace();
+        }
+      });
     document.querySelectorAll('#top-trace-table tbody tr').forEach(row => row.addEventListener('click', () => {
       selectedTraceId = row.getAttribute('data-trace');
       renderTracePage();
       renderSelectedTrace();
     }));
-    document.getElementById('page-status').textContent = `第 ${currentPage + 1} / ${totalPages} 页，每页 ${pageSize} 条，共 ${filteredTraceRows.length} 条 trace`;
+    document.getElementById('page-status').textContent = `第 ${currentPage + 1} / ${totalPages} 页，每页 ${pageSize} 条，共 ${sortedDisplayRows.length} 条 trace`;
     document.getElementById('prev-page').disabled = currentPage === 0;
     document.getElementById('next-page').disabled = currentPage >= totalPages - 1;
   }

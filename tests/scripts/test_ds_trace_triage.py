@@ -291,6 +291,11 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "aria-sort" in html
     assert "renderPagedTable(id, pagerId, headers, rows, rowAttrs, pageSize=5)" in html
     assert "state.sort" in html
+    assert "let topTraceSort" in html
+    assert "function topTraceDisplayRows" in html
+    assert "const sortedDisplayRows = sortRowsForTable(topTraceDisplayRows(filteredTraceRows), topTraceSort)" in html
+    assert "onSort:index =>" in html
+    assert "topTraceSort = nextSortState(topTraceSort, index)" in html
     assert "flowLabelMap" in html
     assert "Worker GET" in html
     assert "wideHorizontalGrid" in html
