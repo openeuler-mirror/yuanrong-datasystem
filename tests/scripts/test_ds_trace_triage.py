@@ -482,21 +482,22 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "const flowNodeX = [0.11,0.36,0.70,0.70,0.89].map(r => Math.round(graphWidth * r))" in html
     assert "const flowNodeY = [260,260,118,404,404]" in html
     assert "function flowEdgeBriefText(edge)" in html
-    assert "function flowEdgeAnnotationOffset(edge)" in html
-    assert "function flowEdgeAnnotationNode(edge, nodeById, idx)" in html
+    assert "function flowEdgeLabelOffset(edge)" in html
+    assert "function flowEdgeAutoLabel(edge)" in html
     assert "function flowEdgeCurveness(edge)" in html
     assert "edge.operation === 'CreateBuffer'" in html
     assert "edge.operation === 'Client Publish'" in html
-    assert "const graphNodeData =" in html
-    assert "const graphNodeById = new Map(graphNodeData.map(item => [item.name, item]))" in html
-    assert "const graphEdgeLabelData = (graph.edges || []).map((edge, idx) => flowEdgeAnnotationNode(edge, graphNodeById, idx))" in html
+    assert "edge.operation === 'Entry→Data RPC'" in html
+    assert "edge.operation === 'Entry→Meta RPC'" in html
     assert "function flowGraphNodeSize()" in html
     assert "symbol:'roundRect'" in html
     assert "symbolSize:flowGraphNodeSize()" in html
     assert "label:{show:true, position:'inside', fontSize:15" in html
-    assert "edgeLabel:{show:false}" in html
-    assert "data:[...graphNodeData, ...graphEdgeLabelData]" in html
-    assert "distance:flowEdgeLabelDistance(edge)" not in html
+    assert "edgeLabel:{show:true, position:'middle'" in html
+    assert "data:graphNodeData" in html
+    assert "label:flowEdgeAutoLabel(edge)" in html
+    assert "offset:flowEdgeLabelOffset(edge)" in html
+    assert "edge_annotation" not in html
     assert "fontSize:14" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html
@@ -573,8 +574,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "edge.summary" in html
     assert "edge_label:flowEdgeBriefText(edge)" in html
     assert "worker " in html
-    assert "edge_summary:flowEdgeBriefText(edge)" in html
-    assert "p.data.edge_summary || ''" in html
+    assert "p.data.edge_label || p.data.status" in html
     assert "edge.reason" in html
     assert "rollup" in html
     assert "id=\"read-worker-chart\"" in html

@@ -3882,16 +3882,19 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (edge.operation === 'URMA Write') return -0.28;
     return .08;
   }
-  function flowEdgeAnnotationOffset(edge) {
-    if (edge.operation === 'CreateBuffer') return -34;
-    if (edge.operation === 'Client Publish') return 34;
-    if (edge.operation === 'URMA Write') return 30;
-    return -24;
+  function flowEdgeLabelOffset(edge) {
+    if (edge.operation === 'CreateBuffer') return [0, -26];
+    if (edge.operation === 'Client Publish') return [0, 26];
+    if (edge.operation === 'URMA Write') return [0, 24];
+    if (edge.operation === 'Entry→Data RPC') return [0, -20];
+    if (edge.operation === 'Entry→Meta RPC') return [0, -16];
+    return [0, -18];
   }
-  function flowEdgeLabelStyle(edge) {
+  function flowEdgeAutoLabel(edge) {
     return {
       show:true,
-      position:'inside',
+      position:'middle',
+      offset:flowEdgeLabelOffset(edge),
       formatter:`{${edgeLabelSeverity(edge.rollup?.max_ms)}|${flowEdgeBriefText(edge)}}`,
       fontSize:14,
       lineHeight:18,
@@ -3903,24 +3906,6 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       borderRadius:4,
       padding:[2,5],
       rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.82)',borderRadius:4,padding:[2,5]}}
-    };
-  }
-  function flowEdgeAnnotationNode(edge, nodeById, idx) {
-    const source = nodeById.get(edge.source) || {};
-    const target = nodeById.get(edge.target) || {};
-    const x = Math.round(((Number(source.x) || 0) + (Number(target.x) || 0)) / 2);
-    const y = Math.round(((Number(source.y) || 0) + (Number(target.y) || 0)) / 2 + flowEdgeAnnotationOffset(edge));
-    return {
-      name:`edge-label-${idx}`,
-      role:'edge_annotation',
-      edge_ref:edge.name,
-      edge_summary:flowEdgeBriefText(edge),
-      x,
-      y,
-      symbol:'circle',
-      symbolSize:1,
-      itemStyle:{opacity:0},
-      label:flowEdgeLabelStyle(edge)
     };
   }
   function flowGraphNodeSize() {
@@ -3947,16 +3932,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       symbolSize:flowGraphNodeSize(),
       itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
     }));
-    const graphNodeById = new Map(graphNodeData.map(item => [item.name, item]));
-    const graphEdgeLabelData = (graph.edges || []).map((edge, idx) => flowEdgeAnnotationNode(edge, graphNodeById, idx));
     chart(id, {
     title:{show:false,text:title},
     textStyle:chartTextStyle,
     toolbox:flowToolbox(),
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
-      : p.data.role === 'edge_annotation'
-        ? `${escapeHtml(p.data.edge_ref || '')}<br>${escapeHtml(p.data.edge_summary || '')}`
       : `${escapeHtml(p.data.label || p.data.name)}<br>${escapeHtml((p.data.top_ips || []).join(', '))}`},
     series:[{
       type:'graph',
@@ -3966,9 +3947,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       edgeSymbolSize:8,
       label:{show:true, position:'inside', fontSize:15, width:164, overflow:'break', lineHeight:19},
       labelLayout:{hideOverlap:false},
-      edgeLabel:{show:false},
+      edgeLabel:{show:true, position:'middle',
+        formatter:p => `{${edgeLabelSeverity(p.data.rollup?.max_ms)}|${p.data.edge_label || p.data.status || ''}}`,
+        fontSize:14,
+        lineHeight:18,
+        width:210,
+        overflow:'break',
+        backgroundColor:'rgba(255,255,255,.82)',
+        borderColor:'#dbeafe',
+        borderWidth:1,
+        borderRadius:4,
+        padding:[2,5],
+        rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.82)',borderRadius:4,padding:[2,5]}}
+      },
       lineStyle:{width:2, color:'#64748b', curveness:.08},
-      data:[...graphNodeData, ...graphEdgeLabelData],
+      data:graphNodeData,
       links:(graph.edges || []).map(edge => ({
         source:edge.source,
         target:edge.target,
@@ -3980,6 +3973,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         reason:edge.reason,
         rollup:edge.rollup,
         status:edge.status,
+        label:flowEdgeAutoLabel(edge),
         lineStyle:{color:edge.rollup?.max_ms >= 20 ? '#dc2626' : edge.rollup?.max_ms >= 5 ? '#ea580c' : edge.status === 'present' ? '#2563eb' : '#cbd5e1', width:edge.rollup?.max_ms >= 20 ? 4 : 2, type:edge.status === 'present' ? 'solid' : 'dashed', curveness:flowEdgeCurveness(edge)}
       }))
     }]
