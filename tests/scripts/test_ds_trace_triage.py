@@ -270,8 +270,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "summary-key" in html
     assert "function chapterSummaryTexts()" in html
     assert "function renderChapterGuide(summaries)" in html
+    assert "function highlightSummaryLatency(match, raw)" in html
     assert "function highlightSummaryText(text)" in html
     assert "function summaryPointsHtml(summary)" in html
+    assert r"\b(\d+(?:\.\d+)?)ms\b" in html
+    assert "value >= 20 ? 'summary-hot'" in html
+    assert "value >= 5 ? 'summary-warn'" in html
     assert "图 5-1/5-2/5-3/5-4/5-5/5-6" in html
     assert "id=\"recommendation-table\"" in html
     assert "id=\"source-appendix-common-table\"" in html

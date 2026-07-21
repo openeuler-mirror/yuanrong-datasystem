@@ -3259,9 +3259,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const missing = coverageRows.filter(([, item]) => item.status !== 'present').map(([name]) => name).slice(0, 3);
     return missing.length ? `缺失观测面：${missing.join(', ')}` : '关键观测面已采样';
   }
+  function highlightSummaryLatency(match, raw) {
+    const value = Number(raw);
+    const cls = Number.isFinite(value) && value >= 20 ? 'summary-hot' : Number.isFinite(value) && value >= 5 ? 'summary-warn' : 'summary-key';
+    return `<span class="${cls}">${match}</span>`;
+  }
   function highlightSummaryText(text) {
     return escapeHtml(text)
-      .replace(/(deadline|timeout|error|errors|失败|异常|缺失|未采样|Top error)/gi, '<span class="summary-hot">$1</span>')
+      .replace(/\\b(\\d+(?:\\.\\d+)?)ms\\b/g, highlightSummaryLatency)
+      .replace(/(deadline|timeout|error|errors|失败|异常|异常耗时|异常时延|缺失|未采样|Top error)/gi, '<span class="summary-hot">$1</span>')
       .replace(/(瓶颈|热点|集中|Top trace|Top edge|access|p99|max|slow|worker|Worker|UB|URMA)/g, '<span class="summary-warn">$1</span>')
       .replace(/(主分类|读取|写入|流程|建议|原始 JSON|证据|时间|入口\\/出口)/g, '<span class="summary-key">$1</span>');
   }
