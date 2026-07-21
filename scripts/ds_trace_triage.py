@@ -1851,14 +1851,14 @@ def _render_html(report, title, site=False, manifest=None):
     manifest_data = json.dumps(manifest or {}, ensure_ascii=False).replace("</script>", "<\\/script>")
     base_style = """<style>
 :root{--bg:#f6f8fb;--card:#fff;--text:#172033;--muted:#5f6b7a;--border:#dfe5ee;--blue:#2563eb;--orange:#ea580c;--red:#dc2626;--green:#059669;--purple:#7c3aed;--amber:#ca8a04}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:'Microsoft YaHei',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+*{box-sizing:border-box}body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--text);font-family:'Microsoft YaHei',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
 .layout{display:flex}aside{position:fixed;left:0;top:0;width:245px;height:100vh;background:#fff;border-right:1px solid var(--border);padding:18px 14px;overflow:auto}
 aside h2{font-size:16px;margin:0 0 12px}nav a{display:block;color:#324055;text-decoration:none;padding:8px 10px;border-radius:6px;font-size:13px;margin:2px 0}
 nav a.active,nav a:hover{background:#eaf2ff;color:#1d4ed8}nav a.sub{padding-left:22px;color:#64748b;font-size:12px}
 main{margin-left:245px;width:calc(100% - 245px);padding:22px 28px 50px}section{margin-bottom:20px}
 h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-size:15px;text-align:center;margin:10px 0}
 .subtitle,.note,.insight{color:var(--muted);line-height:1.65}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-.card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
+.card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{min-width:0;background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
 tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}.cell-hot,.cell-warn,.cell-ok{display:inline-block;border-radius:4px;padding:1px 5px;font-weight:700}.cell-hot{background:#fee2e2;color:#991b1b}.cell-warn{background:#ffedd5;color:#9a3412}.cell-ok{background:#dcfce7;color:#166534}
 tr.summaryrow td{background:#f8fafc}
@@ -1868,7 +1868,7 @@ tr.summaryrow td{background:#f8fafc}
 .compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:12px;margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:13px;word-break:break-word}
 th{background:#f8fafc;color:#475569}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
-.table-scroll{width:100%;overflow-x:auto}.wide-edge-table{min-width:1180px;table-layout:auto}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:34%;min-width:360px}
+.table-scroll{width:100%;max-width:100%;overflow-x:auto}.wide-edge-table{min-width:1180px;table-layout:auto}.wide-request-table{min-width:1420px;table-layout:auto}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:34%;min-width:360px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){min-width:82px;text-align:right}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
@@ -1980,12 +1980,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel insight">UB 单独看：先看 wait/poll/notify/sched，再看入口/出口 worker，最后看 edge/IP。</div>
         <div class="chart-grid">
           <div class="panel"><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">图 5-1 UB 生命周期：TOTAL、wait_for、poll_jfc、notify、poll gap、nanosleep wake。</div></div>
+          <div class="panel"><div id="ub-wr-count-chart" class="chart"></div><div class="caption">图 5-1b WR / Inflight Count：remote get WR、URMA inflight WR、chip inflight，单位 count。</div></div>
           <div class="panel"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-2 UB worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
         </div>
         <div class="panel"><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-3 UB 时间桶：按秒观察入口/出口事件与尾部时延。</div></div>
         <div class="flow-section ub-table-stack">
           <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><table id="ub-lifecycle-table"></table><div id="ub-lifecycle-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><h3>表 5-2 UB Request Top</h3><div class="table-scroll"><table id="ub-request-table" class="wide-request-table"></table></div><div id="ub-request-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-3 UB Worker 角色</h3><div class="table-scroll"><table id="ub-worker-role-table" class="wide-edge-table"></table></div><div id="ub-worker-role-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-4 UB 时间桶</h3><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
         </div>
@@ -2456,8 +2457,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const ubWorkerTimeRows = dim.ub_worker_summary?.time_buckets || [];
   const ubLifecycleMetrics = Object.entries(dim.ub_lifecycle_summary?.metrics || {})
     .sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
+  const ubCountMetricNames = new Set(['remote_get_wr_count','urma_inflight_wr_count']);
+  const ubLifecycleLatencyMetrics = ubLifecycleMetrics.filter(([name]) => !ubCountMetricNames.has(name));
   const ubChipInflightRows = Object.entries(dim.ub_lifecycle_summary?.chip_inflight || {})
     .sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
+  const ubWrCountRows = [
+    ...ubLifecycleMetrics.filter(([name]) => ubCountMetricNames.has(name)).map(([name,item]) => [lifecycleLabel(name), item]),
+    ...ubChipInflightRows.map(([chip,item]) => [`Chip ${chip} inflight`, item])
+  ].sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
   const ubRequestRows = dim.ub_lifecycle_summary?.requests || [];
   const timeBucketRows = dim.time_buckets?.['1000ms'] || [];
   function latencyRowsForOperation(operation) {
@@ -2647,19 +2654,31 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         item.src_chip_inflight || ''
       ]),
       row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0, Number(row[11]) || 0))}"`, 5);
-    chart('ub-lifecycle-chart', ubLifecycleMetrics.length ? axisBase('UB Lifecycle Breakdown', {
+    chart('ub-lifecycle-chart', ubLifecycleLatencyMetrics.length ? axisBase('UB Lifecycle Breakdown', {
       grid:wideHorizontalGrid(138,66,36),
       tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => ps.map(p => `${escapeHtml(p.seriesName)}: ${p.value} ms`).join('<br>')},
       xAxis:{type:'value', name:'ms'},
-      yAxis:{type:'category', data:ubLifecycleMetrics.map(r => lifecycleLabel(r[0])), axisLabel:{width:128, overflow:'truncate'}},
+      yAxis:{type:'category', data:ubLifecycleLatencyMetrics.map(r => lifecycleLabel(r[0])), axisLabel:{width:128, overflow:'truncate'}},
       series:['p50','p90','p99','max'].map(key => ({
         name:key,
         type:'bar',
         barMaxWidth:18,
-        data:ubLifecycleMetrics.map(([, item]) => item[key] || 0),
+        data:ubLifecycleLatencyMetrics.map(([, item]) => item[key] || 0),
         markLine:key === 'max' ? {symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{xAxis:20}]} : undefined
       }))
     }) : noDataOption('No UB lifecycle data'));
+    chart('ub-wr-count-chart', ubWrCountRows.length ? axisBase('UB WR / Inflight Count', {
+      grid:wideHorizontalGrid(160,66,36),
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => ps.map(p => `${escapeHtml(p.seriesName)}: ${p.value} count`).join('<br>')},
+      xAxis:{type:'value', name:'count'},
+      yAxis:{type:'category', data:ubWrCountRows.map(r => r[0]), axisLabel:{width:150, overflow:'truncate'}},
+      series:['p50','p90','p99','max'].map(key => ({
+        name:key,
+        type:'bar',
+        barMaxWidth:18,
+        data:ubWrCountRows.map(([, item]) => item[key] || 0)
+      }))
+    }) : noDataOption('No UB WR/inflight count data'));
   }
   function renderOperationViews() {
     renderTracePage();

@@ -319,10 +319,17 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"ub-worker-role-chart\"" in html
     assert "id=\"ub-worker-time-chart\"" in html
     assert "id=\"ub-lifecycle-chart\"" in html
+    assert "id=\"ub-wr-count-chart\"" in html
+    assert "ubLifecycleLatencyMetrics" in html
+    assert "ubWrCountRows" in html
+    assert "WR / Inflight Count" in html
     assert "id=\"ub-worker-role-table\"" in html
     assert "class=\"wide-edge-table\"" in html
+    assert "class=\"wide-request-table\"" in html
     assert "table-scroll" in html
     assert "#ub-worker-role-table" in html
+    assert "#ub-request-table" in html
+    assert "overflow-x:hidden" in html
     assert "id=\"ub-worker-time-table\"" in html
     assert "id=\"ub-lifecycle-table\"" in html
     assert "id=\"ub-request-table\"" in html
