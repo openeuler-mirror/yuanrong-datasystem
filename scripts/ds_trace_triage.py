@@ -2269,9 +2269,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><h3>表 5-4 UB 时间桶</h3><div class="controls"><label>Worker 筛选 <select id="ub-worker-time-table-filter"><option value="">全部 Worker</option></select></label></div><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="flow-section">
-          <div class="panel"><div id="read-ub-edge-chart" class="chart"></div><div class="caption">图 5-5 读取 UB Edge：读取 UB 入口/出口 IP 与 worker 关联。</div></div>
-          <div class="panel"><h3>表 5-5 读取 UB Edges</h3><table id="read-ub-edge-table"></table><div id="read-ub-edge-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><div id="write-ub-edge-chart" class="chart"></div><div class="caption">图 5-6 写入 UB Edge：写入 UB 入口/出口 IP 与 worker 关联。</div></div>
+          <div class="panel"><div id="read-ub-edge-summary" class="section-summary"></div><div id="read-ub-edge-chart" class="chart"></div><div class="caption">图 5-5 读取 UB Edge：读取 UB 入口/出口 IP 与 worker 关联。</div></div>
+          <div class="panel"><h3>表 5-5 读取 UB Edges</h3><div class="controls"><label>源端 <select id="read-ub-src-filter"><option value="">全部源端</option></select></label><label>目的端 <select id="read-ub-dst-filter"><option value="">全部目的端</option></select></label></div><table id="read-ub-edge-table"></table><div id="read-ub-edge-table-pager" class="mini-pager"></div></div>
+          <div class="panel"><div id="write-ub-edge-summary" class="section-summary"></div><div id="write-ub-edge-chart" class="chart"></div><div class="caption">图 5-6 写入 UB Edge：写入 UB 入口/出口 IP 与 worker 关联。</div></div>
           <div class="panel"><h3>表 5-6 写入 UB Edges</h3><table id="write-ub-edge-table"></table><div id="write-ub-edge-table-pager" class="mini-pager"></div></div>
         </div>
       </section>
@@ -3083,11 +3083,65 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       {name:'errors',type:'bar',barMaxWidth:34,data:chartRows.slice(0,20).map(r => r[1].error_count || 0), itemStyle:{color:'#dc2626'}, label:{show:true, position:'top'}}
     ]}) : noDataOption(`No ${operation} worker data`));
   }
+  function splitUbEdge(edge) {
+    const parts = String(edge || '').split(/\\s*->\\s*/);
+    return {src:parts[0] || '', dst:parts[1] || ''};
+  }
+  function ubEdgeDegreeSummary(rows) {
+    const srcStats = {};
+    const dstStats = {};
+    rows.forEach(([edge, item]) => {
+      const parts = splitUbEdge(edge);
+      const count = Number(item?.count || 0);
+      const tail = Math.max(Number(item?.latency_ms?.p99 || 0), Number(item?.latency_ms?.max || 0));
+      const update = (map, ip) => {
+        if (!ip) return;
+        const target = map[ip] || (map[ip] = {ip, count:0, tail_ms:0});
+        target.count += count;
+        target.tail_ms = Math.max(target.tail_ms, tail);
+      };
+      update(srcStats, parts.src);
+      update(dstStats, parts.dst);
+    });
+    const top = map => Object.values(map).sort((a,b) => b.count - a.count || b.tail_ms - a.tail_ms)[0];
+    const topSrc = top(srcStats);
+    const topDst = top(dstStats);
+    const worst = [topSrc, topDst].filter(Boolean).sort((a,b) => b.tail_ms - a.tail_ms || b.count - a.count)[0];
+    if (!worst) return '无 UB Edge 样本';
+    return `源端出度 Top ${topSrc?.ip || '无'} count=${fmtCount(topSrc?.count)}，目的端入度 Top ${topDst?.ip || '无'} count=${fmtCount(topDst?.count)}；最大问题 IP ${worst.ip} tail=${fmtMs(worst.tail_ms)}。`;
+  }
+  function renderUbEdgeFilters(operation, rows) {
+    ['src','dst'].forEach(kind => {
+      const select = document.getElementById(`${operation}-ub-${kind}-filter`);
+      if (!select) return;
+      const current = select.value;
+      const values = [...new Set(rows.map(([edge]) => splitUbEdge(edge)[kind]).filter(Boolean))].sort();
+      const label = kind === 'src' ? '全部源端' : '全部目的端';
+      select.innerHTML = `<option value="">${label}</option>` + values.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+      select.value = values.includes(current) ? current : '';
+    });
+  }
+  function ubEdgeFilterValue(operation, kind) {
+    const node = document.getElementById(`${operation}-ub-${kind}-filter`);
+    return node ? node.value : '';
+  }
   function renderUbSection(operation) {
-    const rows = operation === 'read' ? ubRows : [];
-    const tableRows = rows.map(([edge,item]) => [edge, item.count, item.latency_ms?.p99 || '', item.latency_ms?.max || '', pctText(item.latency_ms)]);
-    renderPagedTable(`${operation}-ub-edge-table`, `${operation}-ub-edge-table-pager`, ['edge','count','p99 ms','max ms','latency'], tableRows,
-      row => `class="${severityClass(Math.max(Number(row[2]) || 0, Number(row[3]) || 0))}"`, 5);
+    const allRows = operation === 'read' ? ubRows : [];
+    renderUbEdgeFilters(operation, allRows);
+    const srcFilter = ubEdgeFilterValue(operation, 'src');
+    const dstFilter = ubEdgeFilterValue(operation, 'dst');
+    const rows = allRows.filter(([edge]) => {
+      const parts = splitUbEdge(edge);
+      return (!srcFilter || parts.src === srcFilter) && (!dstFilter || parts.dst === dstFilter);
+    });
+    const summaryNode = document.getElementById(`${operation}-ub-edge-summary`);
+    if (summaryNode) summaryNode.textContent = ubEdgeDegreeSummary(rows);
+    const tableRows = rows.map(([edge,item]) => {
+      const parts = splitUbEdge(edge);
+      return [parts.src, parts.dst, item.count, item.latency_ms?.p99 || '', item.latency_ms?.max || '', pctText(item.latency_ms)];
+    });
+    renderPagedTable(`${operation}-ub-edge-table`, `${operation}-ub-edge-table-pager`, ['源端','目的端','count','p99 ms','max ms','latency'], tableRows,
+      row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
     chart(`${operation}-ub-edge-chart`, rows.length ? axisBase(`${operation === 'read' ? 'Read' : 'Write'} UB Edge Count / Tail Latency`, {xAxis:{type:'category', data:rows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:150, overflow:'truncate'}}, yAxis:[{type:'value', name:'count'}, {type:'value', name:'ms'}], series:[
       {name:'UB edges',type:'bar',barMaxWidth:34,data:rows.slice(0,20).map(r => r[1].count || 0), itemStyle:{color:'#059669'}, label:{show:true, position:'top'}},
       {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:rows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0), itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
@@ -3435,6 +3489,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     node.innerHTML = '<option value="">全部 Worker</option>' +
       workerFilterOptions().map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
     node.addEventListener('change', renderWorkerDependentViews);
+  });
+  ['read-ub-src-filter','read-ub-dst-filter'].forEach(id => {
+    const node = document.getElementById(id);
+    if (node) node.addEventListener('change', () => {
+      pagedTables['read-ub-edge-table'] = {page:0, sort:pagedTables['read-ub-edge-table']?.sort || null};
+      renderUbSection('read');
+      renderSectionSummaries();
+    });
   });
   document.getElementById('trace-page-size').addEventListener('change', event => {
     pageSize = Number(event.target.value) || 4;

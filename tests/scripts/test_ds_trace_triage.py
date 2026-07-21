@@ -489,6 +489,16 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"write-worker-chart\"" in html
     assert "id=\"read-ub-edge-chart\"" in html
     assert "id=\"write-ub-edge-chart\"" in html
+    assert "id=\"read-ub-edge-summary\"" in html
+    assert "源端出度" in html
+    assert "目的端入度" in html
+    assert "最大问题 IP" in html
+    assert "function splitUbEdge(edge)" in html
+    assert "function ubEdgeDegreeSummary(rows)" in html
+    assert "function renderUbEdgeFilters(operation, rows)" in html
+    assert "id=\"read-ub-src-filter\"" in html
+    assert "id=\"read-ub-dst-filter\"" in html
+    assert "['源端','目的端','count','p99 ms','max ms','latency']" in html
     assert "id=\"ub-worker-role-chart\"" in html
     assert "id=\"ub-worker-time-chart\"" in html
     assert "id=\"ub-lifecycle-chart\"" in html
