@@ -27,6 +27,7 @@
 
 #include <sys/syscall.h>
 
+#include <bthread/bthread.h>
 #include <bthread/mutex.h>
 #include <bthread/rwlock.h>
 
@@ -70,7 +71,7 @@ public:
     /**
      * @brief Constructor 1 creates the safe object but real object not populated yet and remains empty.
      */
-    SafeObject() : realObject_(nullptr), deleted_(false), wLocked_(false)
+    SafeObject() : realObject_(nullptr), deleted_(false), wLocked_(false), lastWriteBthread_(0)
     {
         bthread_rwlock_init(&bthread_mutex_, nullptr);
     }
@@ -81,7 +82,7 @@ public:
      * @param[in] objPtr A unique pointer of the data that this SafeObject will take control of.
      */
     explicit SafeObject(std::unique_ptr<ObjType> objPtr)
-        : realObject_(std::move(objPtr)), deleted_(false), wLocked_(false)
+        : realObject_(std::move(objPtr)), deleted_(false), wLocked_(false), lastWriteBthread_(0)
     {
         bthread_rwlock_init(&bthread_mutex_, nullptr);
     }
@@ -93,7 +94,7 @@ public:
      * @param[in] obj The object reference of the data that will be copied into this SafeObject.
      */
     explicit SafeObject(const ObjType &obj)
-        : realObject_(std::make_unique<ObjType>(obj)), deleted_(false), wLocked_(false)
+        : realObject_(std::make_unique<ObjType>(obj)), deleted_(false), wLocked_(false), lastWriteBthread_(0)
     {
         bthread_rwlock_init(&bthread_mutex_, nullptr);
     }
@@ -265,6 +266,11 @@ private:
     std::atomic<bool> deleted_;            // Flag for checking the deleted state.
     std::atomic<pid_t> lastWriteThread_;   // Last thread that has the WLock on objLock_, valid when wLocked_ is true.
     std::atomic<bool> wLocked_;            // Is there a thread holding WLock on objLock_.
+    // Under brpc the lock holder is a bthread that may migrate across pthreads, so a kernel tid is not
+    // a stable identity. We additionally record the bthread_t of the holder (INVALID_BTHREAD when the
+    // holder is a plain pthread, e.g. an OcGetThreadPool worker). IsWLockedByCurrentThread uses this to
+    // verify ownership instead of degrading to "any thread holds the lock". See issues #804/#805.
+    std::atomic<bthread_t> lastWriteBthread_;
 };
 
 template <typename ObjType>
@@ -300,6 +306,7 @@ Status SafeObject<ObjType>::WLock(bool nullable)
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
+    lastWriteBthread_ = bthread_self();
     wLocked_ = true;
     return Status::OK();
 }
@@ -325,6 +332,7 @@ Status SafeObject<ObjType>::TryWLock(bool nullable)
         RETURN_STATUS(StatusCode::K_NOT_FOUND, deleted_ ? "Object was deleted." : "realObject is null");
     }
     lastWriteThread_ = syscall(__NR_gettid);
+    lastWriteBthread_ = bthread_self();
     wLocked_ = true;
     return Status::OK();
 }
@@ -456,17 +464,29 @@ ObjType &SafeObject<ObjType>::operator*()
 template <typename ObjType>
 bool SafeObject<ObjType>::IsWLockedByCurrentThread() const
 {
-    // Under brpc, bthreads share pthreads and may migrate across yield points,
-    // so kernel tid comparison is meaningless. Fall back to checking whether
-    // ANY thread holds the WLock. Not ownership-verifying, but prevents false
-    // negatives that would break ClearObject, cleanup loops, and assertions.
+    if (!wLocked_) {
+        return false;
+    }
     if (FLAGS_use_brpc) {
-        return wLocked_;
+        // Under brpc, bthreads share pthreads and may migrate across yield points, so a kernel tid
+        // captured at WLock time may not match the tid at check time even for the same bthread. Use the
+        // bthread identity (stable across pthread migration) to verify ownership. When the holder is a
+        // plain pthread (bthread_self()==INVALID_BTHREAD at lock time, e.g. an OcGetThreadPool worker),
+        // fall back to tid comparison since pthreads do not migrate. This restores ownership
+        // verification instead of degrading to "any thread holds the lock", which let SafeTable::Erase
+        // and DeleteObject skip WLock and race realObject_.reset() with a lock-holding reader. See #804/#805.
+        bthread_t holderBt = lastWriteBthread_.load(std::memory_order_acquire);
+        bthread_t curBt = bthread_self();
+        if (holderBt != INVALID_BTHREAD) {
+            // Holder is a bthread: current context must be the same bthread.
+            return curBt != INVALID_BTHREAD && bthread_equal(holderBt, curBt) != 0;
+        }
+        // Holder is a pthread: current context must also be a pthread (bthread_self()==INVALID_BTHREAD)
+        // with the same tid.
+        return curBt == INVALID_BTHREAD
+                   && lastWriteThread_.load(std::memory_order_acquire) == syscall(__NR_gettid);
     }
-    if (wLocked_ && lastWriteThread_ == syscall(__NR_gettid)) {
-        return true;
-    }
-    return false;
+    return lastWriteThread_.load(std::memory_order_acquire) == syscall(__NR_gettid);
 }
 
 }  // namespace datasystem

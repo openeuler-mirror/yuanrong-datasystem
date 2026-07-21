@@ -439,6 +439,12 @@ Status SaveBinaryObjectToMemory(ObjectKV &objectKV, const std::vector<RpcMessage
     if (status.IsError()) {
         entry->GetShmUnit()->SetHardFreeMemory();
         entry->GetShmUnit()->FreeMemory();
+        // FreeMemory nulls the ShmUnit pointer but leaves the freed unit on the entry, mirroring the
+        // stale-shmUnit bug fixed in RetrieveRemotePayload for issue #783. Drop it so any re-entry
+        // (e.g. retry-to-primary in GetObjectFromRemoteWorkerWithoutDump, or a cross-node Get hitting
+        // the L2/disk fallback again) reallocates instead of reusing a unit whose pointer is null,
+        // which would write to a near-null address and crash the worker. See issues #783/#803.
+        entry->SetShmUnit(nullptr);
         LOG(ERROR) << "Fail to operate entry memory copy because of " << status.ToString();
         return status;
     }
