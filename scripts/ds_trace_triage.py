@@ -2358,7 +2358,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><div class="controls"><label>Worker 筛选 <select id="write-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="write-worker-chart" class="chart"></div><div class="caption">图 4-4 写入 Worker 分布：写入链路按 worker 聚合。</div></div>
           <div class="panel"><h3>表 4-4 写入 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="write-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
         </div>
-        <div class="panel"><h3>表 4-5 Worker IP / 别名映射</h3><table id="worker-ip-alias-table" class="adaptive-table"></table></div>
+        <div class="panel"><h3>表 4-5 Worker IP / 别名映射</h3><table id="worker-ip-alias-table" class="adaptive-table"></table><div id="worker-ip-alias-table-pager" class="mini-pager"></div></div>
         <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>
       </section>
       <section id="s5">
@@ -3023,7 +3023,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   renderFlowStageTable('flow-stage-table', flowStages);
   renderFlowStageTable('read-flow-stage-table', readFlowStages);
   renderFlowStageTable('write-flow-stage-table', writeFlowStages);
-  renderTable('worker-ip-alias-table', ['worker','alias','worker name','POD IP','roles','trace count','lines','UB src','UB target'], buildWorkerIpAliasRows());
+  renderPagedTable('worker-ip-alias-table', 'worker-ip-alias-table-pager', ['worker','alias','worker name','POD IP','roles','entry worker events','data worker events','trace count','lines'], buildWorkerIpAliasRows(), null, 5);
   renderTable('error-table', ['error','count'], errorRows);
   const latencyRowsForTable = [
     ['access', pctText(dim.latency_ms?.access)],
@@ -3130,8 +3130,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         roles:new Set(),
         trace_ids:new Set(),
         line_count:0,
-        ub_src:new Set(),
-        ub_dst:new Set()
+        entry_events:0,
+        data_events:0
       });
     };
     Object.entries(dim.worker_summary || {}).forEach(([worker, item]) => {
@@ -3165,16 +3165,20 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       (item.ub_events || []).forEach(event => {
         const worker = event.worker || '';
         if (!worker) return;
-        const matched = Object.values(rows).filter(row => row.worker_names.has(worker));
+        const matched = Object.values(rows).filter(row => row.worker_names.has(worker) && row.trace_ids.has(traceId));
         const targets = matched.length ? matched : [ensure(worker)];
         targets.forEach(target => {
           target.worker_names.add(worker);
           target.aliases.add(workerRelationName(worker));
           target.trace_ids.add(traceId);
-          if (event.src_addr) target.ub_src.add(event.src_addr);
-          if (event.target_addr) target.ub_dst.add(event.target_addr);
-          if (['transfer_path','remote_get_start'].includes(event.event_type)) target.roles.add('entry_worker');
-          if (['total','poll_jfc','notify','thread_sched'].includes(event.event_type)) target.roles.add('data_worker');
+          if (['transfer_path','remote_get_start'].includes(event.event_type)) {
+            target.roles.add('entry_worker');
+            target.entry_events += 1;
+          }
+          if (['total','poll_jfc','notify','thread_sched'].includes(event.event_type)) {
+            target.roles.add('data_worker');
+            target.data_events += 1;
+          }
         });
       });
     });
@@ -3186,10 +3190,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         [...item.worker_names].sort().join(', '),
         [...item.pod_ips].sort().join(', '),
         [...item.roles].sort().join(', '),
+        item.entry_events,
+        item.data_events,
         item.trace_ids.size,
-        item.line_count,
-        [...item.ub_src].sort().join(', '),
-        [...item.ub_dst].sort().join(', ')
+        item.line_count
       ]);
   }
   function workerRowsForOperation(operation, selectedWorker='') {
