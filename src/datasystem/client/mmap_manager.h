@@ -113,6 +113,12 @@ public:
     void ClearByShmId(const std::string &shmId);
 
     /**
+     * @brief Get all worker file descriptors in the mmap table.
+     * @return Worker file descriptors currently stored in the mmap table.
+     */
+    std::vector<int64_t> GetFds();
+
+    /**
      * @brief Clear mmapTable.
      */
     void Clear();
