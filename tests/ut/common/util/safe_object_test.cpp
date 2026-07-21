@@ -741,6 +741,91 @@ TEST_F(SafeObjectTest, TestIsWLockedByCurrentThread)
     fut2.get();
 }
 
+// Issues #804/#805: under brpc, IsWLockedByCurrentThread() used to degrade to checking only
+// wLocked_ (any thread holding the lock), losing ownership verification. That made SafeTable::Erase
+// and WorkerOCServiceImpl::DeleteObject believe the *current* thread held the WLock when a *different*
+// bthread actually did, so they skipped WLock and ran DeleteObject()->realObject_.reset() concurrently
+// with the lock-holding Get/Delete path -> SIGSEGV (#805 at PullObjectDataFromRemoteWorker:1393 deref,
+// #804 at ClearObject:325 deref).
+//
+// This test pins the bug: a bthread takes the WLock, then a *different* bthread (and the main pthread)
+// must observe IsWLockedByCurrentThread()==false. Pre-fix the brpc branch returned wLocked_==true for
+// both, which is the false-positive that enabled the racing reset.
+struct WLockHolderBthreadArg {
+    SafeObject<std::string> &safeObj;
+    std::atomic<bool> &started;
+    std::atomic<bool> &release;
+    std::atomic<bool> &lockFailed;
+};
+
+void *HoldWLockUntilReleased(void *raw)
+{
+    auto *arg = static_cast<WLockHolderBthreadArg *>(raw);
+    if (!arg->safeObj.WLock().IsOk()) {
+        arg->lockFailed.store(true, std::memory_order_release);
+        return nullptr;
+    }
+    arg->started.store(true, std::memory_order_release);
+    while (!arg->release.load(std::memory_order_acquire)) {
+        (void)bthread_usleep(1000);
+    }
+    arg->safeObj.WUnlock();
+    return nullptr;
+}
+
+TEST_F(SafeObjectTest, BrpcIsWLockedByCurrentThreadVerifiesOwnershipAcrossBthreads)
+{
+    using SafeString = SafeObject<std::string>;
+    auto objPtr = std::make_shared<SafeString>("abc");
+
+    // This test only makes sense under brpc; the ZMQ path already uses precise tid comparison.
+    Raii restoreBrpcFlag([old = FLAGS_use_brpc]() { FLAGS_use_brpc = old; });
+    FLAGS_use_brpc = true;
+
+    std::atomic<bool> holderStarted{ false };
+    std::atomic<bool> releaseHolder{ false };
+    std::atomic<bool> holderLockFailed{ false };
+    WLockHolderBthreadArg holderArg{ *objPtr, holderStarted, releaseHolder, holderLockFailed };
+    bthread_t holderBid;
+    int rc = bthread_start_background(&holderBid, nullptr, HoldWLockUntilReleased, &holderArg);
+    if (rc != 0) {
+        GTEST_SKIP() << "bthread runtime is unavailable, rc=" << rc;
+    }
+    // Ensure the holder bthread is released and joined on every exit path (including ASSERT failure),
+    // otherwise objPtr would be destroyed while the holder still references it and holds the WLock.
+    Raii joinHolder([&releaseHolder, &holderBid]() {
+        releaseHolder.store(true, std::memory_order_release);
+        (void)bthread_join(holderBid, nullptr);
+    });
+    ASSERT_TRUE(WaitForFlag(holderStarted))
+        << "Holder bthread did not acquire the WLock (lockFailed=" << holderLockFailed << ").";
+
+    // The holder bthread holds the WLock. A *different* bthread must NOT be told it holds the lock.
+    struct OtherBthreadArg {
+        SafeObject<std::string> &safeObj;
+        bool observed;
+    };
+    OtherBthreadArg otherArg{ *objPtr, false };
+    auto otherBthreadFn = [](void *raw) -> void * {
+        auto *arg = static_cast<OtherBthreadArg *>(raw);
+        arg->observed = arg->safeObj.IsWLockedByCurrentThread();
+        return nullptr;
+    };
+    bthread_t otherBid;
+    rc = bthread_start_background(&otherBid, nullptr, otherBthreadFn, &otherArg);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(bthread_join(otherBid, nullptr), 0);
+    EXPECT_FALSE(otherArg.observed)
+        << "A different bthread must not observe the WLock as held by itself; this false-positive is the "
+           "root cause of #804/#805 (SafeTable::Erase/DeleteObject skip-lock racing realObject_.reset).";
+
+    // The main pthread (e.g. a ThreadPool worker running DeleteObjects) also must not observe ownership.
+    EXPECT_FALSE(objPtr->IsWLockedByCurrentThread())
+        << "A pthread that did not take the WLock must not observe ownership under brpc either.";
+
+    // joinHolder Raii releases the holder and joins it on scope exit.
+}
+
 TEST_F(SafeObjectTest, GRefLockAllowsBthreadWaiterAfterPthreadUnlock)
 {
     using SafeString = SafeObject<std::string>;
