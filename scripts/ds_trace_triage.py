@@ -859,28 +859,80 @@ class TraceAccumulator:
         return worker_summary
 
 
+class TraceDimensionSections:
+    """Build derived report sections from accumulated trace rows."""
+
+    def build_coverage(self, surface_counts):
+        return {
+            "surfaces": {
+                "client_access": {"events": surface_counts["client_access"],
+                                  "status": _surface_status(surface_counts["client_access"])},
+                "rpc_slow": {"events": surface_counts["rpc_slow"],
+                             "status": _surface_status(surface_counts["rpc_slow"])},
+                "latency_summary": {"events": surface_counts["latency_summary"],
+                                    "status": _surface_status(surface_counts["latency_summary"])},
+                "urma_elapsed": {"events": surface_counts["urma_elapsed"],
+                                 "status": _surface_status(surface_counts["urma_elapsed"])},
+                "error": {"events": surface_counts["error"], "status": _surface_status(surface_counts["error"])},
+            }
+        }
+
+    def build_cohorts(self, trace_rows):
+        return _build_cohorts(trace_rows)
+
+    def build_diagnosis(self, errors, classifications, access_latencies, coverage, cohorts):
+        return _build_diagnosis(errors, classifications, access_latencies, coverage, cohorts)
+
+    def build_recommendations(self, classifications, coverage, cohorts, ub_summary):
+        return _build_recommendations(classifications, coverage, cohorts, ub_summary)
+
+    def build_source_appendix(self, coverage):
+        return _build_source_appendix(coverage)
+
+    def build_flow_stages(self, coverage, flow_counts, ub_summary, trace_rows):
+        return _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows)
+
+    def build_time_buckets(self, trace_rows):
+        return {"1000ms": _build_time_buckets(trace_rows, 1000),
+                "10000ms": _build_time_buckets(trace_rows, 10000)}
+
+    def build_ub_worker_summary(self, trace_rows):
+        return _build_ub_worker_summary(trace_rows)
+
+    def build_ub_lifecycle_summary(self, trace_rows):
+        return _build_ub_lifecycle_summary(trace_rows)
+
+
 class TraceDimensionBuilder:
     """Convert accumulated trace facts into the stable report schema."""
+
+    def __init__(self, sections=None):
+        self.sections = sections or TraceDimensionSections()
 
     def build(self, snapshot, paths, code_ref="unknown", input_failures=None):
         trace_rows = snapshot["trace_rows"]
         surface_counts = snapshot["surface_counts"]
-        coverage = self._build_coverage(surface_counts)
-        cohorts = _build_cohorts(trace_rows)
-        diagnosis = _build_diagnosis(
+        coverage = self.sections.build_coverage(surface_counts)
+        cohorts = self.sections.build_cohorts(trace_rows)
+        diagnosis = self.sections.build_diagnosis(
             errors=snapshot["errors"],
             classifications=snapshot["classifications"],
             access_latencies=snapshot["access_latencies"],
             coverage=coverage,
             cohorts=cohorts,
         )
-        recommendations = _build_recommendations(
+        recommendations = self.sections.build_recommendations(
             classifications=snapshot["classifications"],
             coverage=coverage,
             cohorts=cohorts,
             ub_summary=snapshot["ub_summary"],
         )
-        flow_stages = _build_flow_stages(coverage, snapshot["flow_counts"], snapshot["ub_summary"], trace_rows)
+        time_buckets = self.sections.build_time_buckets(trace_rows)
+        ub_worker_summary = self.sections.build_ub_worker_summary(trace_rows)
+        ub_lifecycle_summary = self.sections.build_ub_lifecycle_summary(trace_rows)
+        flow_stages = self.sections.build_flow_stages(
+            coverage, snapshot["flow_counts"], snapshot["ub_summary"], trace_rows
+        )
         return {
             "schema_version": 1,
             "code_ref": code_ref,
@@ -888,19 +940,18 @@ class TraceDimensionBuilder:
             "trace_count": len(trace_rows),
             "dimensions": {
                 "time": self._build_time_range(snapshot["all_ts"]),
-                "time_buckets": {"1000ms": _build_time_buckets(trace_rows, 1000),
-                                 "10000ms": _build_time_buckets(trace_rows, 10000)},
+                "time_buckets": time_buckets,
                 "workers": {k: {"line_count": v} for k, v in snapshot["worker_counts"].most_common()},
                 "worker_summary": snapshot["worker_summary"],
-                "ub_worker_summary": _build_ub_worker_summary(trace_rows),
-                "ub_lifecycle_summary": _build_ub_lifecycle_summary(trace_rows),
+                "ub_worker_summary": ub_worker_summary,
+                "ub_lifecycle_summary": ub_lifecycle_summary,
                 "cohorts": cohorts,
                 "input_failures": input_failures or [],
                 "worker_edges": snapshot["worker_edges"],
                 "coverage": coverage,
                 "diagnosis": diagnosis,
                 "recommendations": recommendations,
-                "source_appendix": _build_source_appendix(coverage),
+                "source_appendix": self.sections.build_source_appendix(coverage),
                 "flow_stages": flow_stages,
                 "flow": dict(snapshot["flow_counts"]),
                 "latency_ms": {"access": _percentiles(snapshot["access_latencies"])},
@@ -922,22 +973,6 @@ class TraceDimensionBuilder:
         return {
             "first_ts": min(all_ts).isoformat() if all_ts else None,
             "last_ts": max(all_ts).isoformat() if all_ts else None,
-        }
-
-    @staticmethod
-    def _build_coverage(surface_counts):
-        return {
-            "surfaces": {
-                "client_access": {"events": surface_counts["client_access"],
-                                  "status": _surface_status(surface_counts["client_access"])},
-                "rpc_slow": {"events": surface_counts["rpc_slow"],
-                             "status": _surface_status(surface_counts["rpc_slow"])},
-                "latency_summary": {"events": surface_counts["latency_summary"],
-                                    "status": _surface_status(surface_counts["latency_summary"])},
-                "urma_elapsed": {"events": surface_counts["urma_elapsed"],
-                                 "status": _surface_status(surface_counts["urma_elapsed"])},
-                "error": {"events": surface_counts["error"], "status": _surface_status(surface_counts["error"])},
-            }
         }
 
     @staticmethod

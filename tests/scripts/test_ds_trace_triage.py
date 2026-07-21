@@ -1208,6 +1208,44 @@ def test_trace_dimension_builder_emits_empty_report_contract():
     assert report["dimensions"]["ub_summary"] == {"transfer_path": {}, "edges": {}}
 
 
+def test_trace_dimension_builder_uses_injected_section_builder():
+    mod = _load_module()
+    snapshot = mod.TraceAccumulator([]).finish()
+
+    class RecordingSections(mod.TraceDimensionSections):
+        def __init__(self):
+            self.called = []
+
+        def build_coverage(self, surface_counts):
+            self.called.append("coverage")
+            return super().build_coverage(surface_counts)
+
+        def build_time_buckets(self, trace_rows):
+            self.called.append("time_buckets")
+            return {"custom": []}
+
+        def build_flow_stages(self, coverage, flow_counts, ub_summary, trace_rows):
+            self.called.append("flow_stages")
+            return [{"stage": "custom"}]
+
+        def build_ub_worker_summary(self, trace_rows):
+            self.called.append("ub_worker_summary")
+            return {"workers": {}, "time_buckets": []}
+
+        def build_ub_lifecycle_summary(self, trace_rows):
+            self.called.append("ub_lifecycle_summary")
+            return {"metrics": {}, "requests": [], "chip_inflight": {}}
+
+    sections = RecordingSections()
+    report = mod.TraceDimensionBuilder(sections=sections).build(snapshot, [], code_ref="section-ref")
+
+    assert report["dimensions"]["time_buckets"] == {"custom": []}
+    assert report["dimensions"]["flow_stages"] == [{"stage": "custom"}]
+    assert report["dimensions"]["ub_worker_summary"] == {"workers": {}, "time_buckets": []}
+    assert report["dimensions"]["ub_lifecycle_summary"] == {"metrics": {}, "requests": [], "chip_inflight": {}}
+    assert sections.called == ["coverage", "time_buckets", "ub_worker_summary", "ub_lifecycle_summary", "flow_stages"]
+
+
 def test_trace_run_store_prepares_parse_run_cache_and_raw_inputs(tmp_path):
     trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820003"
     bundle = tmp_path / "store-input.tar.gz"
