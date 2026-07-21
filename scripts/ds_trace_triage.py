@@ -2478,6 +2478,35 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (parts.kind === 'worker' && parts.left && parts.worker) return `worker ${parts.left} → worker ${parts.worker}`;
     return workerDisplayName(raw);
   }
+  function refreshControlsVisibility(select) {
+    const controls = select?.closest('.controls');
+    if (!controls) return;
+    const labels = [...controls.querySelectorAll('label')];
+    if (!labels.length) return;
+    controls.style.display = labels.every(label => label.style.display === 'none') ? 'none' : '';
+  }
+  function hideEmptyFilterLabel(select, optionCount) {
+    if (!select) return;
+    const label = select.closest('label');
+    if (label) {
+      label.style.display = optionCount ? '' : 'none';
+    } else {
+      select.style.display = optionCount ? '' : 'none';
+    }
+    refreshControlsVisibility(select);
+  }
+  function setSelectOptions(id, defaultLabel, options) {
+    const select = document.getElementById(id);
+    if (!select) return null;
+    const normalized = (options || []).map(item => Array.isArray(item) ? item : [item, item]);
+    const current = select.value;
+    select.innerHTML = `<option value="">${escapeHtml(defaultLabel)}</option>` +
+      normalized.map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
+    const values = normalized.map(([value]) => String(value));
+    select.value = values.includes(current) ? current : '';
+    hideEmptyFilterLabel(select, normalized.length);
+    return select;
+  }
   function pctText(item) {
     if (!item || !item.count) return '';
     return `count=${item.count} p50=${item.p50} p90=${item.p90} p99=${item.p99} max=${item.max}`;
@@ -3261,7 +3290,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       const current = select.value;
       const values = [...new Set(rows.map(([edge]) => splitUbEdge(edge)[kind]).filter(Boolean))].sort();
       const label = kind === 'src' ? '全部源端' : '全部目的端';
-      select.innerHTML = `<option value="">${label}</option>` + values.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`).join('');
+      setSelectOptions(`${operation}-ub-${kind}-filter`, label, values);
       select.value = values.includes(current) ? current : '';
     });
   }
@@ -3602,8 +3631,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     renderTracePage();
     renderSelectedTrace();
   });
-  document.getElementById('class-filter').innerHTML = '<option value="">全部分类</option>' +
-    classificationRows.map(([name]) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  setSelectOptions('class-filter', '全部分类', classificationRows.map(([name]) => name));
   document.getElementById('class-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   const traceWorkerNames = [...new Set(traceRows.flatMap(([, item]) => Object.keys(item.workers || {})))].sort();
   function workerFilterOptions() {
@@ -3614,8 +3642,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     });
     return [...options.entries()].sort((a,b) => a[1].localeCompare(b[1], 'zh-CN', {numeric:true}));
   }
-  document.getElementById('worker-filter').innerHTML = '<option value="">全部 Worker</option>' +
-    workerFilterOptions().map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
+  setSelectOptions('worker-filter', '全部 Worker', workerFilterOptions());
   document.getElementById('worker-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
   const workerScopedFilterIds = [
     'read-worker-filter',
@@ -3630,8 +3657,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   workerScopedFilterIds.forEach(id => {
     const node = document.getElementById(id);
     if (!node) return;
-    node.innerHTML = '<option value="">全部 Worker</option>' +
-      workerFilterOptions().map(([value, label]) => `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('');
+    setSelectOptions(id, '全部 Worker', workerFilterOptions());
     node.addEventListener('change', renderWorkerDependentViews);
   });
   ['read-ub-src-filter','read-ub-dst-filter'].forEach(id => {

@@ -583,10 +583,11 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "const aggregate = target || (out[key] =" in html
     assert "const key = workerAggregateKey(worker)" in html
     assert "seenWorkerKeys.has(key)" in html
-    assert "workerFilterOptions().map(([value, label])" in html
+    assert "setSelectOptions('worker-filter', '全部 Worker', workerFilterOptions())" in html
+    assert "setSelectOptions(id, '全部 Worker', workerFilterOptions())" in html
     assert "client ${parts.left} → worker ${parts.worker}" in html
     assert "worker ${parts.left} → worker ${parts.worker}" in html
-    assert "value=\"${escapeHtml(value)}\">${escapeHtml(label)}</option>" in html
+    assert "normalized.map(([value, label])" in html
     assert "display_worker" in html
     assert "display_top_edges" in html
     assert "href=\"#read-latency-table\">表 3-1 读取时延" not in html
@@ -624,6 +625,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"worker-filter\"" in html
     assert "id=\"request-status-filter\"" in html
     assert "id=\"operation-filter\"" in html
+    assert "function setSelectOptions(id, defaultLabel, options)" in html
+    assert "hideEmptyFilterLabel(select, normalized.length)" in html
+    assert "refreshControlsVisibility" in html
     assert "Trace 查看读写视角" in html
     assert "全部请求" in html
     assert "只看失败" in html
