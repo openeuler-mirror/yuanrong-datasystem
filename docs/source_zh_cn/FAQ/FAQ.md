@@ -16,8 +16,7 @@
 [INFO] Log directory configured at: /workspace/yuanrong-datasystem/datasystem/logs
 [INFO] Starting worker service with PID: 3757
 [ERROR] [  FAILED  ] Worker exited with code 255
- output: WARNING: Ignore register validator for flag: validator already registered
-2026-01-14T02:57:34.144815 | E | file_util.cpp:642 | efdb9297de57 | 3757:3757 | 3ebd1347-1ae2-46a4-906b-a1dcde8db79e |  |  Change mode on /workspace/yuanrong-datasystem/datasystem/uds/643b8b95 fail: 22
+ output: 2026-01-14T02:57:34.144815 | E | file_util.cpp:642 | efdb9297de57 | 3757:3757 | 3ebd1347-1ae2-46a4-906b-a1dcde8db79e |  |  Change mode on /workspace/yuanrong-datasystem/datasystem/uds/643b8b95 fail: 22
 2026-01-14T02:57:34.144822 | E | worker_oc_server.cpp:585 | efdb9297de57 | 3757:3757 | 3ebd1347-1ae2-46a4-906b-a1dcde8db79e |  |  InitWorkerService failed. Detail: code: [IO error], msg: [Thread ID 281473735008288 IO error. Change mode on /workspace/yuanrong-datasystem/datasystem/uds/643b8b95 fail: 22
 Line of code : 642
 File         : file_util.cpp
