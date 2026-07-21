@@ -313,6 +313,10 @@
       `cluster/executor/cancellation_token.h`. `data_migrator` now depends only on the narrow cooperative-cancellation
       signal instead of including `topology_phase_callbacks.h`, so object-cache migration code does not inherit the
       topology callback executor contract.
+  18. `TopologyPhaseAction` moved out of the full callback executor contract into
+      `cluster/executor/topology_phase_action.h`. `WorkerOcServiceClearDataFlow` now depends on only
+      action/filter/cancellation inputs for failure cleanup materialization, keeping callback execution interfaces out
+      of the clear-data workflow.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -631,6 +635,17 @@
     19/19 tests in 0.016s.
   - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 247s with third-party cache hit (`Compile thirdparty
     libraries success, total wall time: 0s`), source build time 151s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
+    database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_clear_data_flow_uses_narrow_topology_callback_inputs`.
+  - Initial RED: the boundary suite failed 1/20 in 0.005s because `worker_oc_service_clear_data_flow.h` still included
+    `datasystem/cluster/executor/topology_phase_callbacks.h`.
+  - GREEN: split `TopologyPhaseAction` into `cluster/executor/topology_phase_action.h` and changed clear-data flow to
+    include only `topology_phase_action.h`, `key_filter.h`, and `cancellation_token.h`.
+    `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 20/20 tests in 0.008s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 231s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), source build time 150s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
     database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
 - Build worker and tests:

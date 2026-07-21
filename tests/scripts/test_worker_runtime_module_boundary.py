@@ -115,6 +115,21 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should avoid topology callback executor coupling")
 
+    def test_clear_data_flow_uses_narrow_topology_callback_inputs(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.cpp",
+        ]
+
+        forbidden_tokens = [
+            "datasystem/cluster/executor/topology_phase_callbacks.h",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use narrow topology callback input contracts")
+
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/slot_recovery/BUILD.bazel",

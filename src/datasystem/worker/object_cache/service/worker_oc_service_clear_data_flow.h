@@ -27,7 +27,9 @@
 #include <unordered_set>
 #include <vector>
 
-#include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/executor/cancellation_token.h"
+#include "datasystem/cluster/executor/key_filter.h"
+#include "datasystem/cluster/executor/topology_phase_action.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/common/util/thread.h"
 #include "datasystem/protos/worker_object.pb.h"

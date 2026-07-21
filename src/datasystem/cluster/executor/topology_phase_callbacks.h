@@ -17,23 +17,10 @@
 #include "datasystem/cluster/executor/cancellation_token.h"
 #include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/cluster/executor/storage_scan_plan.h"
-#include "datasystem/cluster/model/topology_types.h"
+#include "datasystem/cluster/executor/topology_phase_action.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem::cluster {
-
-/**
- * @brief Algorithm-neutral callback participant facts.
- */
-struct TopologyPhaseAction {
-    std::string taskId;
-    uint64_t topologyVersion{ 0 };
-    uint64_t batchEpoch{ 0 };
-    MemberIdentity executor;
-    std::optional<MemberIdentity> source;
-    std::optional<MemberIdentity> target;
-    std::optional<MemberIdentity> failed;
-};
 
 /**
  * @brief Fully copied callback facts plus invocation-lifetime opaque scope references.
