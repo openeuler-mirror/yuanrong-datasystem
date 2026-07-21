@@ -483,6 +483,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "const flowNodeY = [260,260,118,404,404]" in html
     assert "function flowEdgeBriefText(edge)" in html
     assert "function flowEdgeLabelDistance(edge)" in html
+    assert "function flowEdgeCurveness(edge)" in html
+    assert "edge.operation === 'CreateBuffer'" in html
+    assert "edge.operation === 'Client Publish'" in html
     assert "function flowGraphNodeSize()" in html
     assert "symbol:'roundRect'" in html
     assert "symbolSize:flowGraphNodeSize()" in html
@@ -498,7 +501,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "chartRenderers.set(id, () => renderFlowGraph(id, graph, title))" in html
     assert "edgeLabelSeverity(p.data.rollup?.max_ms)" in html
     assert "rich:{hot:" in html
-    assert "curveness:edge.operation === 'URMA Write' ? -0.28 : .08" in html
+    assert "curveness:flowEdgeCurveness(edge)" in html
     assert "id=\"flow-stage-table\"" in html
     assert "id=\"read-flow-stage-table\"" in html
     assert "id=\"write-flow-stage-table\"" in html

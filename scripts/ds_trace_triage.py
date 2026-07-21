@@ -3877,7 +3877,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return [edge.operation, [latency, worker].filter(Boolean).join(' ')].filter(Boolean).join('\\n');
   }
   function flowEdgeLabelDistance(edge) {
+    if (edge.operation === 'Client Publish') return 10;
     return edge.operation === 'URMA Write' ? 8 : -8;
+  }
+  function flowEdgeCurveness(edge) {
+    if (edge.operation === 'CreateBuffer') return .24;
+    if (edge.operation === 'Client Publish') return -.16;
+    if (edge.operation === 'URMA Write') return -0.28;
+    return .08;
   }
   function flowGraphNodeSize() {
     return [180, 70];
@@ -3944,7 +3951,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         rollup:edge.rollup,
         status:edge.status,
         label:{distance:flowEdgeLabelDistance(edge), position:'middle'},
-        lineStyle:{color:edge.rollup?.max_ms >= 20 ? '#dc2626' : edge.rollup?.max_ms >= 5 ? '#ea580c' : edge.status === 'present' ? '#2563eb' : '#cbd5e1', width:edge.rollup?.max_ms >= 20 ? 4 : 2, type:edge.status === 'present' ? 'solid' : 'dashed', curveness:edge.operation === 'URMA Write' ? -0.28 : .08}
+        lineStyle:{color:edge.rollup?.max_ms >= 20 ? '#dc2626' : edge.rollup?.max_ms >= 5 ? '#ea580c' : edge.status === 'present' ? '#2563eb' : '#cbd5e1', width:edge.rollup?.max_ms >= 20 ? 4 : 2, type:edge.status === 'present' ? 'solid' : 'dashed', curveness:flowEdgeCurveness(edge)}
       }))
     }]
   });
