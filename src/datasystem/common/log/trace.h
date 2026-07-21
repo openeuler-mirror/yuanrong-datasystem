@@ -97,6 +97,15 @@ enum class LatencyTickKey : uint16_t {
 
     DATA_REMOTEGET_START,
     DATA_REMOTEGET_END,
+
+    CLIENT_DIRECT_ROUTE_START,
+    CLIENT_DIRECT_ROUTE_END,
+    CLIENT_DIRECT_QUERY_AND_GET_START,
+    CLIENT_DIRECT_QUERY_AND_GET_END,
+    CLIENT_DIRECT_GET_DATA_START,
+    CLIENT_DIRECT_GET_DATA_END,
+    CLIENT_DIRECT_MATERIALIZE_START,
+    CLIENT_DIRECT_MATERIALIZE_END,
 };
 
 struct LatencyTick {
@@ -368,6 +377,18 @@ private:
     size_t latencySummarySize_ = 0;
     DownstreamPhaseResult downstreamPhases_{};
 };
+
+/**
+ * @brief Add a latency tick when tracing is enabled for the request.
+ * @param[in] traceEnabled Whether latency trace collection is enabled.
+ * @param[in] key The tick key identifying the measurement point.
+ */
+inline void AddLatencyTickIfEnabled(bool traceEnabled, LatencyTickKey key)
+{
+    if (traceEnabled) {
+        Trace::Instance().AddLatencyTick(key);
+    }
+}
 
 enum class TraceGuardType : int {
     INVALID = -1,

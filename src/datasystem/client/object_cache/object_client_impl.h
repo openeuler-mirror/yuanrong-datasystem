@@ -941,7 +941,7 @@ private:
                                    std::vector<Status> &itemStatuses) const;
 
     Status GetFromTransportLayer(const std::vector<std::string> &objectKeys,
-                                 std::vector<std::shared_ptr<Buffer>> &buffers);
+                                 std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled);
 
     Status MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
                                     std::shared_ptr<Buffer> &buffer);

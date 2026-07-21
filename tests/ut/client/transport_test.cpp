@@ -56,6 +56,7 @@
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
@@ -2237,6 +2238,27 @@ TEST(ObjectReadFlowTest, BatchReadyItemsOnceOnCallerAndPreservesMetadataErrorPos
     EXPECT_EQ(result.items[1].status.GetCode(), K_NOT_FOUND);
     EXPECT_TRUE(result.items[2].status.IsOk());
     EXPECT_EQ(result.actualKind, AccessTransportKind::TCP);
+}
+
+TEST(ObjectReadFlowTest, RecordsDirectReadLatencyTicksWhenEnabled)
+{
+    Trace::Instance().ClearLatencyTicks();
+    Raii clearTicks([]() { Trace::Instance().ClearLatencyTicks(); });
+    ApiDeadlineGuard deadline(1000);
+    auto metadata = std::make_shared<FakeObjectMetadataClient>();
+    auto replicas = std::make_shared<FakeReplicaReader>();
+    ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
+    ObjectReadRequest request;
+    request.items = { { 0, "key", MakeAddress(41) } };
+    request.traceEnabled = true;
+    ObjectReadResult result;
+
+    ASSERT_TRUE(flow.Run(request, result).IsOk());
+    auto phases = ComputePhaseDurations(Trace::Instance().GetLatencyTicks(),
+                                        Trace::Instance().GetLatencyTickCount(),
+                                        Trace::Instance().GetLatencyTickDroppedCount());
+    EXPECT_NE(phases.Find(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET), nullptr);
+    EXPECT_NE(phases.Find(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA), nullptr);
 }
 
 TEST(ObjectReadFlowTest, InlineDataSkipsReplicaReaderWhileMissesUseSecondPhase)

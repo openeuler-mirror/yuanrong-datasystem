@@ -3430,21 +3430,27 @@ Status ObjectClientImpl::FinishTransportRead(const std::vector<Status> &itemStat
 }
 
 Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &objectKeys,
-                                               std::vector<std::shared_ptr<Buffer>> &buffers)
+                                               std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled)
 {
     CHECK_FAIL_RETURN_STATUS(transportLayer_ != nullptr, K_NOT_READY, "Object service is not ready");
     CHECK_FAIL_RETURN_STATUS(objectKeys.size() == buffers.size(), K_RUNTIME_ERROR,
                              "Failed to prepare object Get request");
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     client::ObjectReadRequest request;
+    request.traceEnabled = traceEnabled;
     std::vector<Status> itemStatuses(objectKeys.size(), Status(K_NOT_READY, "Object Get has not completed"));
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_ROUTE_START);
     BuildTransportReadRequest(objectKeys, request, itemStatuses);
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_ROUTE_END);
     client::ObjectReadResult result;
     Status transportStatus = request.items.empty() ? Status(K_NOT_READY, "No object route is available")
                                                    : transportLayer_->Get(request, result);
     AccessTransportKind actualKind = AccessTransportKind::SHM;
-    RETURN_IF_NOT_OK(ApplyTransportReadResult(objectKeys, request, result, transportStatus, buffers, itemStatuses,
-                                              actualKind));
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_START);
+    Status applyStatus =
+        ApplyTransportReadResult(objectKeys, request, result, transportStatus, buffers, itemStatuses, actualKind);
+    AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_END);
+    RETURN_IF_NOT_OK(applyStatus);
     return FinishTransportRead(itemStatuses, actualKind, transportStatus);
 }
 
@@ -3467,7 +3473,7 @@ Status ObjectClientImpl::Get(const std::vector<std::string> &objectKeys, int64_t
     if (!enableLocalCache_) {
         CHECK_FAIL_RETURN_STATUS(!isRH2DSupported, K_NOT_SUPPORTED,
                                  "Remote H2D is not supported when local cache is disabled");
-        rc = GetFromTransportLayer(objectKeys, objectBuffers);
+        rc = GetFromTransportLayer(objectKeys, objectBuffers, traceEnabled);
     } else {
         std::shared_ptr<IClientWorkerApi> workerApi;
         std::unique_ptr<Raii> raii;
