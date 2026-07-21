@@ -2039,11 +2039,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       </section>
       <section id="s2">
         <h2>2. 错误根因与分类分布</h2>
-        <div class="panel"><div id="cohort-chart" class="chart"></div><div class="caption">图 2-0 输入包/cohort 对比：多个日志包独立统计，再对比分类和错误分布</div></div>
+        <div class="panel"><h3>图 2-0 输入包 / Cohort 对比</h3><div id="cohort-chart" class="chart"></div><div class="caption">多个日志包独立统计，再对比分类和错误分布。</div></div>
         <div class="panel"><h3>表 2-0 输入包/cohort 对比</h3><table id="cohort-table"></table></div>
         <div class="chart-grid">
-          <div class="panel"><div id="classification-chart" class="chart"></div><div class="caption">图 2-1 分类分布</div></div>
-          <div class="panel"><div id="error-chart" class="chart"></div><div class="caption">图 2-2 错误文本/状态分布</div></div>
+          <div class="panel"><h3>图 2-1 分类分布</h3><div id="classification-chart" class="chart"></div><div class="caption">按根因分类聚合 trace。</div></div>
+          <div class="panel"><h3>图 2-2 错误文本 / 状态分布</h3><div id="error-chart" class="chart"></div><div class="caption">按错误文本和状态码聚合。</div></div>
         </div>
         <div class="compare2">
           <div class="panel"><h3>表 2-1 分类聚合</h3><table id="classification-table"></table></div>
@@ -2055,13 +2055,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel insight">读写分开看尾部：读关注 GET/QueryMeta/RemoteGet/UB，写关注 SET/Create/Publish/memory copy。</div>
         <div class="flow-section">
           <div class="panel"><h3>读取时延</h3><div id="read-latency-chart" class="chart"></div><div class="caption">图 3-1a 读取 Top 时延。</div></div>
-          <div class="panel"><div id="read-flow-chart" class="chart"></div><div class="caption">图 3-2a 读取 Flow 分布。</div></div>
-          <div class="panel"><div id="read-time-breakdown-chart" class="chart"></div><div class="caption">图 3-3a 读取时间桶：柱为读 RPC/UB 子阶段 p99，线为读 trace access p99。</div></div>
+          <div class="panel"><h3>图 3-2a 读取 Flow 分布</h3><div id="read-flow-chart" class="chart"></div><div class="caption">读取接口类型分布。</div></div>
+          <div class="panel"><h3>图 3-3a 读取时间桶 Breakdown</h3><div id="read-time-breakdown-chart" class="chart"></div><div class="caption">柱为读 RPC/UB 子阶段 p99，线为读 trace access p99。</div></div>
         </div>
         <div class="flow-section">
           <div class="panel"><h3>写入时延</h3><div id="write-latency-chart" class="chart"></div><div class="caption">图 3-1b 写入 Top 时延。</div></div>
-          <div class="panel"><div id="write-flow-chart" class="chart"></div><div class="caption">图 3-2b 写入 Flow 分布。</div></div>
-          <div class="panel"><div id="write-time-breakdown-chart" class="chart"></div><div class="caption">图 3-3b 写入时间桶：柱为写 RPC/本地阶段 p99，线为写 trace access p99。</div></div>
+          <div class="panel"><h3>图 3-2b 写入 Flow 分布</h3><div id="write-flow-chart" class="chart"></div><div class="caption">写入接口类型分布。</div></div>
+          <div class="panel"><h3>图 3-3b 写入时间桶 Breakdown</h3><div id="write-time-breakdown-chart" class="chart"></div><div class="caption">柱为写 RPC/本地阶段 p99，线为写 trace access p99。</div></div>
         </div>
         <div class="compare2">
           <div class="panel"><h3>表 3-1a 读取时延指标</h3><table id="read-latency-table"></table></div>
@@ -2077,13 +2077,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div id="read-flow-section" class="flow-section">
           <div class="panel"><h3>读取流程证据块</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。</div></div>
           <div class="panel"><h3>表 4-0a 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
-          <div class="panel"><div id="read-worker-chart" class="chart"></div><div class="caption">图 4-1a 读取 Worker 分布。</div></div>
+          <div class="panel"><h3>图 4-1a 读取 Worker 分布</h3><div id="read-worker-chart" class="chart"></div><div class="caption">读取链路按 worker 聚合。</div></div>
           <div class="panel"><h3>表 4-1a 读取 Worker Breakdown</h3><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
         </div>
         <div id="write-flow-section" class="flow-section">
           <div class="panel"><h3>写入流程证据块</h3><div id="write-flow-stage-chart" class="chart"></div><div class="caption">图 4-0b 写入：区分 createbuffer、client publish、entry/meta publish。</div></div>
           <div class="panel"><h3>表 4-0b 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
-          <div class="panel"><div id="write-worker-chart" class="chart"></div><div class="caption">图 4-1b 写入 Worker 分布。</div></div>
+          <div class="panel"><h3>图 4-1b 写入 Worker 分布</h3><div id="write-worker-chart" class="chart"></div><div class="caption">写入链路按 worker 聚合。</div></div>
           <div class="panel"><h3>表 4-1b 写入 Worker Breakdown</h3><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>
@@ -2092,11 +2092,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <h2>5. UB / URMA 分析</h2>
         <div class="panel insight">UB 单独看：先看 wait/poll/notify/sched，再看入口/出口 worker，最后看 edge/IP。</div>
         <div class="chart-grid">
-          <div class="panel"><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">图 5-1 UB 生命周期：TOTAL、wait_for、poll/notify/sched 等耗时字段，按实际采样字段展示。</div></div>
-          <div class="panel"><div id="ub-wr-count-chart" class="chart"></div><div class="caption">图 5-1b WR / Inflight Count：remote get WR、URMA inflight WR、chip inflight，单位 count。</div></div>
+          <div class="panel"><h3>图 5-1 UB 生命周期</h3><div id="ub-lifecycle-chart" class="chart"></div><div class="caption">TOTAL、wait_for、poll/notify/sched 等耗时字段，按实际采样字段展示。</div></div>
+          <div class="panel"><h3>图 5-1b WR / Inflight Count</h3><div id="ub-wr-count-chart" class="chart"></div><div class="caption">remote get WR、URMA inflight WR、chip inflight，单位 count。</div></div>
           <div class="panel full-row"><h3>UB 入口/出口 Worker</h3><div id="ub-worker-role-chart" class="chart"></div><div class="caption">图 5-2 UB worker：入口为 RemoteGet/transferPath，出口为 URMA_ELAPSED。</div></div>
         </div>
-        <div class="panel"><div id="ub-worker-time-chart" class="chart"></div><div class="caption">图 5-3 UB 时间桶：按秒观察入口/出口事件与尾部时延。</div></div>
+        <div class="panel"><h3>图 5-3 UB 时间桶</h3><div id="ub-worker-time-chart" class="chart"></div><div class="caption">按秒观察入口/出口事件与尾部时延。</div></div>
         <div class="flow-section ub-table-stack">
           <div class="panel"><h3>表 5-1 UB 生命周期指标</h3><div class="table-scroll"><table id="ub-lifecycle-table" class="nowrap-table"></table></div><div id="ub-lifecycle-table-pager" class="mini-pager"></div></div>
           <div class="panel"><h3>表 5-2 UB Request Top</h3><table id="ub-request-table" class="adaptive-table"></table><div id="ub-request-table-pager" class="mini-pager"></div></div>
@@ -2104,9 +2104,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><h3>表 5-4 UB 时间桶</h3><table id="ub-worker-time-table"></table><div id="ub-worker-time-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="flow-section">
-          <div class="panel"><div id="read-ub-edge-chart" class="chart"></div><div class="caption">图 5-5a 读取 UB edge。</div></div>
+          <div class="panel"><h3>图 5-5a 读取 UB Edge</h3><div id="read-ub-edge-chart" class="chart"></div><div class="caption">读取 UB 入口/出口 IP 与 worker 关联。</div></div>
           <div class="panel"><h3>表 5-5a 读取 UB Edges</h3><table id="read-ub-edge-table"></table><div id="read-ub-edge-table-pager" class="mini-pager"></div></div>
-          <div class="panel"><div id="write-ub-edge-chart" class="chart"></div><div class="caption">图 5-5b 写入 UB edge。</div></div>
+          <div class="panel"><h3>图 5-5b 写入 UB Edge</h3><div id="write-ub-edge-chart" class="chart"></div><div class="caption">写入 UB 入口/出口 IP 与 worker 关联。</div></div>
           <div class="panel"><h3>表 5-5b 写入 UB Edges</h3><table id="write-ub-edge-table"></table><div id="write-ub-edge-table-pager" class="mini-pager"></div></div>
         </div>
       </section>
@@ -2127,7 +2127,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><h3>图 6-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击 Trace 行联动，按阶段耗时排序，单位 ms。</div><table id="selected-stage-table"></table></div>
           <div class="panel"><h3>表 6-2 选中 Trace 摘要</h3><table id="selected-trace-table"></table><div class="controls"><button class="primary" id="download-selected-raw">下载当前 Trace 裸日志</button><button id="download-filtered-evidence">下载当前过滤证据</button></div></div>
         </div>
-        <div class="panel"><h3>Trace 全量日志</h3><div class="small">按组件分块，保留原始顺序；异常、慢 RPC、latencySummary、RemotePull、URMA 和大耗时会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><div id="selected-trace-log" class="trace-log-groups"></div></div>
+        <div class="panel"><h3>日志框 6-3 Trace 全量日志</h3><div class="small">按组件分块，保留原始顺序；异常、慢 RPC、latencySummary、RemotePull、URMA 和大耗时会高亮。</div><div class="log-legend" id="log-highlight-legend"></div><div id="selected-trace-log" class="trace-log-groups"></div></div>
       </section>
       <section id="s7">
         <h2>7. 建议与后续口径</h2>

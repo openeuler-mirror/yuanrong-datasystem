@@ -274,6 +274,24 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "证据边界" in html
     assert "id=\"classification-chart\"" in html
     assert "id=\"cohort-chart\"" in html
+    for title in [
+        "图 2-0 输入包 / Cohort 对比",
+        "图 2-1 分类分布",
+        "图 2-2 错误文本 / 状态分布",
+        "图 3-2a 读取 Flow 分布",
+        "图 3-3a 读取时间桶 Breakdown",
+        "图 3-2b 写入 Flow 分布",
+        "图 3-3b 写入时间桶 Breakdown",
+        "图 4-1a 读取 Worker 分布",
+        "图 4-1b 写入 Worker 分布",
+        "图 5-1 UB 生命周期",
+        "图 5-1b WR / Inflight Count",
+        "图 5-3 UB 时间桶",
+        "图 5-5a 读取 UB Edge",
+        "图 5-5b 写入 UB Edge",
+        "日志框 6-3 Trace 全量日志",
+    ]:
+        assert title in html
     assert "id=\"cohort-table\"" in html
     assert "id=\"read-latency-chart\"" in html
     assert "id=\"write-latency-chart\"" in html
