@@ -780,8 +780,8 @@ def test_run_pipeline_preserves_raw_extracted_logs_and_reuses_cache(tmp_path):
     manifest = json.loads((first / "manifest.json").read_text())
     assert manifest["cache"]["status"] == "created"
     assert manifest["inputs"][0]["members"] == ["case-a/kventryworker-0-worker1/worker.log"]
-    assert (first / "raw" / "inputs" / "multi-input.tar.gz").exists()
-    extracted = first / "raw" / "extracted" / "multi-input.tar.gz" / "case-a" / "kventryworker-0-worker1" / "worker.log"
+    assert (first / "raw" / "inputs" / "01-multi-input.tar.gz").exists()
+    extracted = first / "raw" / "extracted" / "01-multi-input.tar.gz" / "case-a" / "kventryworker-0-worker1" / "worker.log"
     assert extracted.exists()
     assert trace_id in extracted.read_text()
     input_doc = first / "inputs.md"
@@ -790,8 +790,8 @@ def test_run_pipeline_preserves_raw_extracted_logs_and_reuses_cache(tmp_path):
     assert "cache-case" in input_text
     assert "round-a" in input_text
     assert str(bundle) in input_text
-    assert "raw/inputs/multi-input.tar.gz" in input_text
-    assert "raw/extracted/multi-input.tar.gz" in input_text
+    assert "raw/inputs/01-multi-input.tar.gz" in input_text
+    assert "raw/extracted/01-multi-input.tar.gz" in input_text
     assert json.loads((second / "manifest.json").read_text())["cache"]["status"] == "created"
 
 
@@ -1347,8 +1347,8 @@ def test_trace_run_store_prepares_parse_run_cache_and_raw_inputs(tmp_path):
     prepared = store.prepare_parse_run([str(bundle)], tmp_path / "runs", "store-case", "scenario", "ref")
 
     assert prepared["cached"] is False
-    assert (prepared["run_dir"] / "raw" / "inputs" / bundle.name).exists()
-    assert (prepared["run_dir"] / "raw" / "extracted" / bundle.name / "case" / "worker.log").exists()
+    assert (prepared["run_dir"] / "raw" / "inputs" / f"01-{bundle.name}").exists()
+    assert (prepared["run_dir"] / "raw" / "extracted" / f"01-{bundle.name}" / "case" / "worker.log").exists()
     store.write_parse_outputs(
         prepared["run_dir"],
         {"dimensions": {"time": {"first_ts": None, "last_ts": None}}, "traces": {}},
@@ -1391,6 +1391,75 @@ def test_directory_cache_identity_changes_when_contents_change(tmp_path):
     assert trace_b in json.loads((second / "summary.json").read_text(encoding="utf-8"))["traces"]
 
 
+def test_directory_inputs_are_preserved_in_raw_snapshot(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820017"
+    input_dir = tmp_path / "input-dir"
+    input_dir.mkdir()
+    log = input_dir / "worker.log"
+    log.write_text(
+        f"2026-07-20T13:28:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_id} | preserved\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    run_dir = mod.run_pipeline([str(input_dir)], tmp_path / "runs", case_name="dir-preserve")
+
+    preserved = run_dir / "raw" / "inputs" / "01-input-dir" / "worker.log"
+    assert preserved.exists()
+    assert preserved.read_text(encoding="utf-8") == log.read_text(encoding="utf-8")
+    assert "raw/inputs/01-input-dir" in (run_dir / "inputs.md").read_text(encoding="utf-8")
+
+
+def test_same_basename_inputs_are_preserved_without_overwrite(tmp_path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    first = left / "same.log"
+    second = right / "same.log"
+    first.write_text("first", encoding="utf-8")
+    second.write_text("second", encoding="utf-8")
+
+    mod = _load_module()
+    prepared = mod.TraceRunStore().prepare_parse_run(
+        [str(first), str(second)], tmp_path / "runs", "same-name", "", "ref"
+    )
+
+    assert (prepared["run_dir"] / "raw" / "inputs" / "01-same.log").read_text(encoding="utf-8") == "first"
+    assert (prepared["run_dir"] / "raw" / "inputs" / "02-same.log").read_text(encoding="utf-8") == "second"
+
+
+def test_reader_tar_budget_applies_to_direct_analysis(tmp_path, monkeypatch):
+    bundle = tmp_path / "many-direct.tar.gz"
+    _write_tar_gz(bundle, {"a.log": "a", "b.log": "b"})
+
+    mod = _load_module()
+    monkeypatch.setattr(mod, "DEFAULT_MAX_TAR_MEMBERS", 1)
+
+    with pytest.raises(ValueError, match="Tar member count exceeds"):
+        mod.analyze_inputs([str(bundle)], code_ref="unit-test")
+
+
+def test_trace_analyzer_clears_reader_failures_between_runs(tmp_path):
+    valid_trace = "019f7d0f-80ec-73bc-91ce-8e84de820018"
+    invalid = tmp_path / "broken.gz"
+    invalid.write_bytes(b"not a valid gzip")
+    valid = tmp_path / "valid.log"
+    valid.write_text(
+        f"2026-07-20T13:28:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {valid_trace} | ok\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    analyzer = mod.TraceAnalyzer()
+    first = analyzer.analyze([str(invalid)], code_ref="unit-test", allow_partial_inputs=True)
+    assert first["dimensions"]["input_failures"]
+    second = analyzer.analyze([str(valid)], code_ref="unit-test")
+
+    assert second["trace_count"] == 1
+    assert second["dimensions"]["input_failures"] == []
+
+
 def test_ub_lifecycle_request_ids_are_scoped_by_trace(tmp_path):
     trace_a = "019f7d0f-80ec-73bc-91ce-8e84de820015"
     trace_b = "019f7d0f-80ec-73bc-91ce-8e84de820016"
@@ -1411,6 +1480,96 @@ def test_ub_lifecycle_request_ids_are_scoped_by_trace(tmp_path):
 
     assert len([row for row in requests if row["request_id"] == "42"]) == 2
     assert {row["trace_id"] for row in requests} == {trace_a, trace_b}
+
+
+def test_write_flow_createbuffer_and_publish_use_separate_rollups(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820019"
+    log = tmp_path / "write-rollup.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T13:29:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_SET | 250000 | 1024",
+                f"2026-07-20T13:29:00.001000 | INFO | client | 192.0.2.30 | 1 | {trace_id} | Set done latencySummary:{{client.rpc.create:10000, client.rpc.publish:200000}}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    write_edges = {edge["name"]: edge for edge in report["dimensions"]["flow_stages"]["write"]["edges"]}
+
+    assert write_edges["write: client -> entry worker createbuffer"]["rollup"]["max_ms"] == 10.0
+    assert write_edges["write: client -> entry worker publish"]["rollup"]["max_ms"] == 200.0
+
+
+def test_same_basename_inputs_keep_separate_cohort_labels(tmp_path):
+    trace_a = "019f7d0f-80ec-73bc-91ce-8e84de820020"
+    trace_b = "019f7d0f-80ec-73bc-91ce-8e84de820021"
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    (left / "same.log").write_text(
+        f"2026-07-20T13:29:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_a} | left\n",
+        encoding="utf-8",
+    )
+    (right / "same.log").write_text(
+        f"2026-07-20T13:29:00.000000 | ERROR | worker | kvworker-0-worker2 | 1 | {trace_b} | RPC deadline exceeded\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(left / "same.log"), str(right / "same.log")], code_ref="unit-test")
+
+    assert set(report["dimensions"]["cohorts"]) == {"left/same.log", "right/same.log"}
+    assert report["dimensions"]["cohorts"]["left/same.log"]["errors"] == {}
+    assert report["dimensions"]["cohorts"]["right/same.log"]["errors"]["RPC deadline exceeded"] == 1
+
+
+def test_dimension_builder_internal_typeerror_is_not_swallowed(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820022"
+    log = tmp_path / "builder.log"
+    log.write_text(
+        f"2026-07-20T13:29:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_id} | ok\n",
+        encoding="utf-8",
+    )
+
+    class ExplodingBuilder:
+        def __init__(self):
+            self.calls = 0
+
+        def build(self, *args, **kwargs):
+            self.calls += 1
+            raise TypeError("boom inside builder")
+
+    mod = _load_module()
+    builder = ExplodingBuilder()
+    analyzer = mod.TraceAnalyzer(dimension_builder=builder)
+
+    with pytest.raises(TypeError, match="boom inside builder"):
+        analyzer.analyze([str(log)], code_ref="unit-test")
+    assert builder.calls == 1
+
+
+def test_cache_key_changes_when_parser_rules_change(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820023"
+    log = tmp_path / "rule-cache.log"
+    log.write_text(
+        f"2026-07-20T13:29:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_id} | SPECIAL_METRIC cost 2.5ms\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    first = mod.run_pipeline([str(log)], tmp_path / "runs", case_name="rule-cache")
+    rules = mod.ParserRules()
+    rules.register_metric_rule("special_metric", r"SPECIAL_METRIC cost ([\d.]+)ms")
+    pipeline = mod.TraceRunPipeline(analyzer=mod.TraceAnalyzer(rules=rules))
+    second = pipeline.run([str(log)], tmp_path / "runs", case_name="rule-cache")
+
+    assert second != first
+    summary = json.loads((second / "summary.json").read_text(encoding="utf-8"))
+    assert summary["dimensions"]["custom_metrics_ms"]["special_metric"]["p50"] == 2.5
 
 
 def test_trace_site_publisher_size_guard_reports_ok_and_too_large(tmp_path):

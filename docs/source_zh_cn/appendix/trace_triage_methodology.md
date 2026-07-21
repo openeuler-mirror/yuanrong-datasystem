@@ -37,6 +37,10 @@ run 目录包含：
 - `report.site.html`：<publish-site> 站点版 HTML 草稿，供后续发布流程使用。
 - `site_publish.md`：发布准备清单，记录 `<publish-host>:<publish-root>/perf/*.html` 目标路径、<publish-site> URL、HTML 大小、复制命令和 HTTP 验证命令；生成该文件不代表已经发布成功。
 
+run 默认会复用缓存。缓存 key 包含脚本版本、parser 规则指纹、源码 ref、case、scenario、输入内容 hash、tar member 列表和输入身份；脚本或解析规则变化会生成新 run。需要同一输入重新生成一个新的时间目录时显式传 `--force`。
+
+读取输入失败默认中止，避免报告静默缺日志。确实需要先看部分日志时使用 `--allow-partial-inputs`，失败项会进入 `dimensions.input_failures`，报告结论必须说明缺失观测面。
+
 也可以显式分阶段执行，便于人工检查中间产物：
 
 ```bash
@@ -76,7 +80,7 @@ python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us->ms 转换、`exceed 3ms` breakdown、`latencySummary` 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、UB request id/src/target/dataSize/cpuid/status/inflight 字段、时间桶、worker/edge 聚合、目录化 run 产物、本地/站点 HTML、内联 JS 语法检查、yche 发布清单、dry-run manifest 状态、真实发布大小门禁、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。
 
 <publish-site> 发布默认拒绝超过 2 MiB 的 `report.site.html`，避免把临时大页面或垃圾页面发布到站点。确有必要发布大报告时，必须先人工确认报告内容和体积来源，再显式传入 `--max-site-html-mb <N>`。
-真实发布还需要显式设置 `DS_TRACE_TRIAGE_PUBLISH_HOST` 和 `DS_TRACE_TRIAGE_PUBLISH_ROOT`；`DS_TRACE_TRIAGE_PUBLISH_BASE_URL` 未设置时使用公开报告 URL 前缀。
+真实发布还需要显式设置 `DS_TRACE_TRIAGE_PUBLISH_HOST` 和 `DS_TRACE_TRIAGE_PUBLISH_ROOT`；`DS_TRACE_TRIAGE_PUBLISH_BASE_URL` 未设置时使用公开报告 URL 前缀。页面复制和 HTTP 校验通过只代表 HTML 可访问；完整发布还要在站点 `index.html` 中添加或更新唯一一条 `var P` 目录项。如果 URL 可访问但目录未注册，应标记为 copied but not catalog-registered。
 
 日志字段小步演进时，优先通过 parser 扩展点接入：
 
@@ -100,7 +104,9 @@ mod.register_metric_rule(
 | `TraceParser` | 将单行日志解析为 trace-scoped facts，不做聚合 |
 | `TraceAnalyzer` | 串联 reader/parser，并形成 trace rows 与 dimensions |
 | `TraceReportRenderer` | 生成 events、triage、Markdown、本地 HTML 和 site HTML |
-| `TraceRunPipeline` | 管理 run 目录、raw 保留、cache、manifest 和阶段状态 |
+| `TraceRunStore` | 管理 run 目录、raw 保留、cache、manifest 和 artifact 读写 |
+| `TraceSitePublisher` | 管理站点版 HTML 大小门禁、复制和 live marker 校验 |
+| `TraceRunPipeline` | 编排 parse、aggregate、triage、render-local、render-site 阶段 |
 
 兼容入口 `analyze_inputs`、`parse_stage`、`aggregate_stage`、`triage_stage`、`render-local`、`render-site`、`run_pipeline` 保持可用，但新增能力优先落到对应对象，再通过 wrapper 暴露。
 

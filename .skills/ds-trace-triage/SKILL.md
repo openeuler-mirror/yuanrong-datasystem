@@ -69,6 +69,28 @@ access_latency: p50=<...> p90=<...> p99=<...> max=<...>
 publish: local only / dry-run / published
 ```
 
+## CLI and cache contract
+
+Use `run` for normal analysis. It executes parse, aggregate, triage,
+render-local, and render-site, then returns the run directory. The legacy
+top-level form without `run` is only for quick JSON/Markdown summaries and does
+not preserve the full run-directory contract.
+
+Cache reuse is intentional. The run cache key includes the script version,
+parser-rule fingerprint, code ref, case, scenario, input identity, tar members,
+and input content hash. Use `--force` when you want a fresh timestamped run even
+though the inputs and script did not change.
+
+Input failures fail fast by default so reports do not silently miss logs. Use
+`--allow-partial-inputs` only for best-effort triage; the run records failures in
+`dimensions.input_failures`, and conclusions must call out the missing input
+surface.
+
+Real yche publishing is two-step. `publish-site` can copy and live-check the
+HTML, but the report is fully published only after the site catalog
+`index.html` has exactly one matching `var P` entry. If the URL works but the
+catalog entry is absent, report status as copied but not catalog-registered.
+
 ## Required workflow
 
 1. Pin the source:

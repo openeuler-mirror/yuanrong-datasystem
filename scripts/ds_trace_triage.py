@@ -126,6 +126,23 @@ class ParserRules:
             "unit_group": unit_group,
         })
 
+    def fingerprint(self):
+        payload = {
+            "errors": sorted(self.error_patterns),
+            "metrics": sorted([
+                {
+                    "name": rule["name"],
+                    "pattern": rule["regex"].pattern,
+                    "value_group": rule["value_group"],
+                    "unit_group": rule["unit_group"],
+                }
+                for rule in self.custom_metric_rules
+            ], key=lambda item: (item["name"], item["pattern"], item["value_group"], item["unit_group"] or "")
+            ),
+        }
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()[:16]
+
 
 DEFAULT_RULES = ParserRules()
 
@@ -231,6 +248,7 @@ class TraceInputReader:
         self.failures = []
 
     def iter_lines(self, paths):
+        self.failures.clear()
         for raw_path in paths:
             path = Path(raw_path)
             if path.is_dir():
@@ -244,9 +262,13 @@ class TraceInputReader:
         try:
             if tarfile.is_tarfile(path):
                 with tarfile.open(path, "r:*") as tar:
+                    member_count = 0
+                    total_bytes = 0
                     for member in tar.getmembers():
                         if not member.isfile():
                             continue
+                        member_count += 1
+                        total_bytes = _check_tar_budget(path, member, member_count, total_bytes)
                         stream = tar.extractfile(member)
                         if stream is None:
                             continue
@@ -383,7 +405,23 @@ def _detect_noise_cohort_mode(paths):
     return False
 
 
-def _source_cohort_label(source, member, noise_cohort_mode=False):
+def _iter_input_leaf_paths(paths):
+    for raw_path in paths:
+        path = Path(raw_path)
+        if path.is_dir():
+            for root, _, files in os.walk(path):
+                for name in files:
+                    yield Path(root) / name
+        else:
+            yield path
+
+
+def _duplicate_input_basenames(paths):
+    counts = Counter(path.name for path in _iter_input_leaf_paths(paths))
+    return {name for name, count in counts.items() if name and count > 1}
+
+
+def _source_cohort_label(source, member, noise_cohort_mode=False, duplicate_basenames=None):
     text = f"{_noise_context_for_path(source)}/{member}"
     if _is_noise_off(text):
         return NOISE_OFF_LABEL
@@ -391,7 +429,10 @@ def _source_cohort_label(source, member, noise_cohort_mode=False):
         return NOISE_ON_LABEL
     if noise_cohort_mode:
         return NOISE_OFF_LABEL
-    return Path(source).name
+    path = Path(source)
+    if path.name in (duplicate_basenames or set()):
+        return "/".join(part for part in (path.parent.name, path.name) if part)
+    return path.name or str(path)
 
 
 def _percentiles(values):
@@ -432,6 +473,17 @@ def _timestamp(line):
 def _ms(raw_value, unit):
     value = float(raw_value)
     return value / 1000.0 if (unit or "ms").lower() == "us" else value
+
+
+def _check_tar_budget(path, member, member_count, total_bytes):
+    if member_count > DEFAULT_MAX_TAR_MEMBERS:
+        raise ValueError(f"Tar member count exceeds {DEFAULT_MAX_TAR_MEMBERS}: {path}")
+    if member.size > DEFAULT_MAX_TAR_MEMBER_BYTES:
+        raise ValueError(f"Tar member too large: {member.name}")
+    total_bytes += member.size
+    if total_bytes > DEFAULT_MAX_TAR_TOTAL_BYTES:
+        raise ValueError(f"Tar extracted bytes exceed {DEFAULT_MAX_TAR_TOTAL_BYTES}: {path}")
+    return total_bytes
 
 
 def _first_match(regex, line):
@@ -645,6 +697,7 @@ class TraceAccumulator:
 
     def __init__(self, paths):
         self.noise_cohort_mode = _detect_noise_cohort_mode(paths)
+        self.duplicate_cohort_basenames = _duplicate_input_basenames(paths)
         self.traces = defaultdict(self._new_trace)
         self.all_ts = []
         self.worker_counts = Counter()
@@ -698,7 +751,9 @@ class TraceAccumulator:
         trace = self.traces[trace_id]
         trace["lines"] += 1
         evidence = parsed["evidence"]
-        source_label = _source_cohort_label(evidence["source"], evidence["member"], self.noise_cohort_mode)
+        source_label = _source_cohort_label(
+            evidence["source"], evidence["member"], self.noise_cohort_mode, self.duplicate_cohort_basenames
+        )
         trace["input_sources"][source_label] += 1
         trace["source_stats"][source_label]["line_count"] += 1
         worker = parsed["worker"]
@@ -1101,6 +1156,7 @@ class TraceAnalyzer:
         self.accumulator = None
 
     def analyze(self, paths, code_ref="unknown", allow_partial_inputs=False):
+        self.reader.failures.clear()
         self.accumulator = self.accumulator_cls(paths)
         for source, member, line_no, line in self.reader.iter_lines(paths):
             parsed = self.parser.parse_line(source, member, line_no, line)
@@ -1114,7 +1170,10 @@ class TraceAnalyzer:
             return self.dimension_builder.build(
                 snapshot, paths, code_ref=code_ref, input_failures=self.reader.failures
             )
-        except TypeError:
+        except TypeError as exc:
+            message = str(exc)
+            if "input_failures" not in message and "unexpected keyword" not in message:
+                raise
             return self.dimension_builder.build(snapshot, paths, code_ref=code_ref)
 
 
@@ -1405,6 +1464,8 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
     ub_transfer_count = ub_summary.get("transfer_path", {}).get("UB", 0)
     rollups = {
         "read_client_entry": _flow_stage_rollup(trace_rows, {"read.client_to_entry_worker"}),
+        "write_client_createbuffer": _flow_stage_rollup(trace_rows, {"write.client_to_entry_createbuffer"}),
+        "write_client_publish": _flow_stage_rollup(trace_rows, {"write.client_to_entry_publish"}),
         "write_client_entry": _flow_stage_rollup(trace_rows, {
             "write.client_to_entry_createbuffer",
             "write.client_to_entry_publish",
@@ -1500,8 +1561,8 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
             "operation": "CreateBuffer RPC",
             "evidence": f"{write_count} write flows, {surface_status('latency_summary')['events']} latencySummary events",
             "status": "present" if write_count or surface_status("latency_summary")["status"] == "present" else "missing",
-            "summary": _flow_edge_summary(rollups["write_client_entry"], "CreateBuffer/Publish client RPC evidence"),
-            "rollup": rollups["write_client_entry"],
+            "summary": _flow_edge_summary(rollups["write_client_createbuffer"], "CreateBuffer client RPC evidence"),
+            "rollup": rollups["write_client_createbuffer"],
             "reason": "写路径客户侧 createbuffer/publish 请求窗口，需要和 Entry→Meta publish 区分。",
             "report_reading": "写流程先拆 client createbuffer/publish，再看 entry/meta 发布。",
         },
@@ -1512,8 +1573,8 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
             "operation": "Publish RPC",
             "evidence": f"{write_count} write flows, {surface_status('latency_summary')['events']} latencySummary events",
             "status": "present" if write_count or surface_status("latency_summary")["status"] == "present" else "missing",
-            "summary": _flow_edge_summary(rollups["write_client_entry"], "client publish evidence"),
-            "rollup": rollups["write_client_entry"],
+            "summary": _flow_edge_summary(rollups["write_client_publish"], "client publish evidence"),
+            "rollup": rollups["write_client_publish"],
             "reason": "写路径 publish 从 Client 到 EntryWorker；慢时延需和本地 memory copy 及 meta publish 分开看。",
             "report_reading": "client publish 是写路径入口，不代表 UB 读传输。",
         },
@@ -1879,7 +1940,12 @@ def _slug(text):
     return clean or "trace-run"
 
 
-def _input_identity(path):
+def _preserved_input_name(index, path):
+    p = Path(path)
+    return f"{index:02d}-{_slug(p.name or 'input')}"
+
+
+def _input_identity(path, index=None):
     p = Path(path)
     h = hashlib.sha256()
     members = []
@@ -1890,7 +1956,13 @@ def _input_identity(path):
         if tarfile.is_tarfile(p):
             with tarfile.open(p, "r:*") as tar:
                 members = sorted(member.name for member in tar.getmembers() if member.isfile())
-        return {"path": str(p), "size": p.stat().st_size, "sha256": h.hexdigest(), "members": members}
+        return {
+            "path": str(p),
+            "size": p.stat().st_size,
+            "sha256": h.hexdigest(),
+            "members": members,
+            "preserved_name": _preserved_input_name(index or 1, p),
+        }
     if p.is_dir():
         total_size = 0
         for fp in sorted(item for item in p.rglob("*") if item.is_file()):
@@ -1903,9 +1975,16 @@ def _input_identity(path):
                 for chunk in iter(lambda: f.read(1024 * 1024), b""):
                     h.update(chunk)
             h.update(b"\0")
-        return {"path": str(p), "size": total_size, "sha256": h.hexdigest(), "members": members}
+        return {
+            "path": str(p),
+            "size": total_size,
+            "sha256": h.hexdigest(),
+            "members": members,
+            "preserved_name": _preserved_input_name(index or 1, p),
+        }
     h.update(str(p).encode("utf-8"))
-    return {"path": str(p), "size": 0, "sha256": h.hexdigest(), "members": members}
+    return {"path": str(p), "size": 0, "sha256": h.hexdigest(), "members": members,
+            "preserved_name": _preserved_input_name(index or 1, p)}
 
 
 def _script_version():
@@ -1916,14 +1995,15 @@ def _script_version():
     return h.hexdigest()[:16]
 
 
-def _cache_key(inputs, code_ref, case_name, scenario):
-    identities = sorted((_input_identity(path) for path in inputs), key=lambda item: item["path"])
+def _cache_key(inputs, code_ref, case_name, scenario, rules_fingerprint="default"):
+    identities = [_input_identity(path, index) for index, path in enumerate(inputs, 1)]
     payload = {
         "script_version": _script_version(),
+        "rules_fingerprint": rules_fingerprint,
         "code_ref": code_ref,
         "case_name": case_name,
         "scenario": scenario,
-        "inputs": identities,
+        "inputs": sorted(identities, key=lambda item: item["path"]),
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
     return hashlib.sha256(raw).hexdigest(), identities
@@ -1954,13 +2034,31 @@ def _preserve_raw_inputs(inputs, run_dir):
     raw_extracted = run_dir / "raw" / "extracted"
     raw_inputs.mkdir(parents=True, exist_ok=True)
     raw_extracted.mkdir(parents=True, exist_ok=True)
-    for raw in inputs:
+    for index, raw in enumerate(inputs, 1):
         p = Path(raw)
+        preserved_name = _preserved_input_name(index, p)
+        if p.is_dir():
+            target_root = raw_inputs / preserved_name
+            file_count = 0
+            total_bytes = 0
+            for fp in sorted(item for item in p.rglob("*") if item.is_file()):
+                file_count += 1
+                if file_count > DEFAULT_MAX_TAR_MEMBERS:
+                    raise ValueError(f"Directory file count exceeds {DEFAULT_MAX_TAR_MEMBERS}: {p}")
+                size = fp.stat().st_size
+                if size > DEFAULT_MAX_TAR_MEMBER_BYTES:
+                    raise ValueError(f"Directory file too large: {fp}")
+                total_bytes += size
+                if total_bytes > DEFAULT_MAX_TAR_TOTAL_BYTES:
+                    raise ValueError(f"Directory preserved bytes exceed {DEFAULT_MAX_TAR_TOTAL_BYTES}: {p}")
+                dest = target_root / fp.relative_to(p)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(fp, dest)
         if p.is_file():
-            copied = raw_inputs / p.name
+            copied = raw_inputs / preserved_name
             shutil.copy2(p, copied)
             if tarfile.is_tarfile(p):
-                extract_root = raw_extracted / p.name
+                extract_root = raw_extracted / preserved_name
                 member_count = 0
                 total_bytes = 0
                 with tarfile.open(p, "r:*") as tar:
@@ -1968,13 +2066,7 @@ def _preserve_raw_inputs(inputs, run_dir):
                         if not member.isfile():
                             continue
                         member_count += 1
-                        if member_count > DEFAULT_MAX_TAR_MEMBERS:
-                            raise ValueError(f"Tar member count exceeds {DEFAULT_MAX_TAR_MEMBERS}: {p}")
-                        if member.size > DEFAULT_MAX_TAR_MEMBER_BYTES:
-                            raise ValueError(f"Tar member too large: {member.name}")
-                        total_bytes += member.size
-                        if total_bytes > DEFAULT_MAX_TAR_TOTAL_BYTES:
-                            raise ValueError(f"Tar extracted bytes exceed {DEFAULT_MAX_TAR_TOTAL_BYTES}: {p}")
+                        total_bytes = _check_tar_budget(p, member, member_count, total_bytes)
                         stream = tar.extractfile(member)
                         if stream is None:
                             continue
@@ -1999,6 +2091,7 @@ def _write_inputs_doc(run_dir, manifest):
     for index, item in enumerate(manifest.get("inputs", []), 1):
         source = item.get("path", "")
         name = Path(source).name or f"input-{index}"
+        preserved_name = item.get("preserved_name") or _preserved_input_name(index, source)
         lines.extend([
             f"### {index}. `{name}`",
             "",
@@ -2006,12 +2099,12 @@ def _write_inputs_doc(run_dir, manifest):
             f"- size_bytes: {item.get('size', 0)}",
             f"- sha256: `{item.get('sha256', '')}`",
         ])
-        raw_copy = Path("raw") / "inputs" / name
+        raw_copy = Path("raw") / "inputs" / preserved_name
         if (Path(run_dir) / raw_copy).exists():
             lines.append(f"- preserved_raw: `{raw_copy.as_posix()}`")
         members = item.get("members", [])
         if members:
-            extract_root = Path("raw") / "extracted" / name
+            extract_root = Path("raw") / "extracted" / preserved_name
             lines.append(f"- extracted_root: `{extract_root.as_posix()}`")
             lines.append("- members:")
             for member in members:
@@ -3852,10 +3945,11 @@ def _new_run_dir(out_root, case_name, cache_key):
 class TraceRunStore:
     """Own run-directory cache, manifest, and artifact file operations."""
 
-    def prepare_parse_run(self, inputs, out_dir, case_name, scenario, code_ref, force=False):
+    def prepare_parse_run(self, inputs, out_dir, case_name, scenario, code_ref, force=False,
+                          rules_fingerprint="default"):
         out_root = Path(out_dir)
         out_root.mkdir(parents=True, exist_ok=True)
-        cache_key, identities = _cache_key(inputs, code_ref, case_name, scenario)
+        cache_key, identities = _cache_key(inputs, code_ref, case_name, scenario, rules_fingerprint)
         if not force:
             cached = _find_cached_run(out_root, cache_key)
             if cached:
@@ -4007,7 +4101,10 @@ class TraceRunPipeline:
 
     def parse(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False,
               allow_partial_inputs=False):
-        prepared = self.store.prepare_parse_run(inputs, out_dir, case_name, scenario, code_ref, force=force)
+        rules_fingerprint = self.analyzer.rules.fingerprint() if hasattr(self.analyzer.rules, "fingerprint") else "default"
+        prepared = self.store.prepare_parse_run(
+            inputs, out_dir, case_name, scenario, code_ref, force=force, rules_fingerprint=rules_fingerprint
+        )
         if prepared["cached"]:
             return prepared["run_dir"]
         run_dir = prepared["run_dir"]
@@ -4174,8 +4271,8 @@ def run_self_test():
         assert (run_dir / "site_publish.md").exists()
         publish_url = publish_site_stage(run_dir, dry_run=True)
         assert publish_url.startswith("https://yche.me/perf/")
-        assert (run_dir / "raw" / "inputs" / "fixture.tar.gz").exists()
-        assert (run_dir / "raw" / "extracted" / "fixture.tar.gz" / "kvchachjpworker-0-worker7" / "worker.log").exists()
+        assert (run_dir / "raw" / "inputs" / "01-fixture.tar.gz").exists()
+        assert (run_dir / "raw" / "extracted" / "01-fixture.tar.gz" / "kvchachjpworker-0-worker7" / "worker.log").exists()
         manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
         assert manifest["render_targets"]["site"]["publish_doc"] == "site_publish.md"
         assert manifest["render_targets"]["site"]["publish"]["status"] == "dry-run"
