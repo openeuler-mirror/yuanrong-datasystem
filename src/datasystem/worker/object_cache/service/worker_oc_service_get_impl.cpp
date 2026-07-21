@@ -2613,8 +2613,12 @@ Status WorkerOcServiceGetImpl::RemoveLocation(const std::string &objectKey, uint
     req.set_address(localAddress_.ToString());
     req.set_cause(master::RemoveMetaReqPb::EVICTION);
     req.set_version(version);
+    req.set_redirect(true);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(api->RemoveMeta(req, rsp),
                                      FormatString("[ObjectKey %s] Remove location failed.", objectKey));
+    if (rsp.meta_is_moving() || !rsp.info().empty() || !rsp.failed_ids().empty()) {
+        RETURN_STATUS(K_TRY_AGAIN, FormatString("[ObjectKey %s] Remove location needs retry.", objectKey));
+    }
     return Status::OK();
 }
 

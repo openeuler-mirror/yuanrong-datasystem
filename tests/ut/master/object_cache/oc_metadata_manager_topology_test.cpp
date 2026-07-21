@@ -7,11 +7,14 @@
  * Description: Test topology-fenced object metadata mutations.
  */
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
 
+#include "datasystem/cluster/algorithm/hash_algorithm.h"
+#include "datasystem/cluster/routing/placement_facade.h"
 #include "ut/common.h"
 
 #define private public
@@ -85,6 +88,48 @@ TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdi
         ASSERT_TRUE(shard.table.find(accessor, objectKey));
         EXPECT_EQ(accessor->second.meta.primary_address(), TARGET_ADDRESS);
     }
+}
+
+TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailingWhenLocalNodeIsExiting)
+{
+    cluster::TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_IN, 2 };
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), LOCAL_ADDRESS }, cluster::MemberState::LEAVING,
+                         { std::numeric_limits<uint32_t>::max() } },
+        cluster::Member{ { std::string(16, 'b'), TARGET_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, &placement, nullptr,
+                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+
+    const std::string objectKey = "topology_remove_meta_handoff";
+    InsertPrimaryWithCopy(manager, objectKey);
+
+    RemoveMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_cause(RemoveMetaReqPb::EVICTION);
+    request.set_version(UINT64_MAX);
+    request.set_redirect(true);
+    request.add_ids(objectKey);
+    auto *objectVersion = request.add_id_with_version();
+    objectVersion->set_id(objectKey);
+    objectVersion->set_version(UINT64_MAX);
+    RemoveMetaRspPb response;
+
+    DS_ASSERT_OK(manager.RemoveMetaLocation(request, LOCAL_ADDRESS, response));
+
+    EXPECT_TRUE(response.meta_is_moving());
+    EXPECT_EQ(response.failed_ids_size(), 0);
+    EXPECT_EQ(response.success_ids_size(), 0);
 }
 }  // namespace
 }  // namespace datasystem::master
