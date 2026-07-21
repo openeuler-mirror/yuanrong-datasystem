@@ -2846,17 +2846,50 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const timeChartWorker = workerFilterValue('ub-worker-time-filter');
     const roleTableWorker = workerFilterValue('ub-worker-role-table-filter');
     const timeTableWorker = workerFilterValue('ub-worker-time-table-filter');
-    const filterUbWorkerRows = selectedWorker => selectedWorker ? ubWorkerRows.filter(([worker]) => workerMatchesFilter(worker, selectedWorker)) : ubWorkerRows;
+    function aggregateUbWorkerRowsByIdentity(rows, selectedWorker='') {
+      const out = {};
+      rows.forEach(([worker, item]) => {
+        const key = workerAggregateKey(worker);
+        if (!workerMatchesFilter(worker, selectedWorker)) return;
+        const target = out[key];
+        const aggregate = target || (out[key] = {
+          display_worker: workerAggregateLabel(key),
+          entry_events: 0,
+          exit_events: 0,
+          trace_count: 0,
+          latency_ms: {p99: 0, max: 0},
+          top_edges: [],
+          roles: new Set()
+        });
+        aggregate.entry_events += item.entry_events || 0;
+        aggregate.exit_events += item.exit_events || 0;
+        aggregate.trace_count += item.trace_count || 0;
+        aggregate.latency_ms.p99 = Math.max(aggregate.latency_ms.p99 || 0, item.latency_ms?.p99 || 0);
+        aggregate.latency_ms.max = Math.max(aggregate.latency_ms.max || 0, item.latency_ms?.max || 0);
+        (item.top_edges || []).forEach(edge => aggregate.top_edges.push(edge));
+        if (item.entry_events) aggregate.roles.add('ub_entry');
+        if (item.exit_events) aggregate.roles.add('ub_exit');
+      });
+      return Object.entries(out).map(([key, item]) => {
+        const display_ub_role = item.entry_events && item.exit_events ? 'entry_and_exit' : item.entry_events ? 'entry' : 'exit';
+        item.role = display_ub_role;
+        item.top_edges = [...new Set(item.top_edges)].slice(0, 5);
+        return [key, item];
+      }).sort((a,b) =>
+        Number(b[1].latency_ms?.max || 0) - Number(a[1].latency_ms?.max || 0) ||
+        Number((b[1].entry_events || 0) + (b[1].exit_events || 0)) - Number((a[1].entry_events || 0) + (a[1].exit_events || 0))
+      );
+    }
     const filterUbWorkerTimeRows = selectedWorker => selectedWorker ? ubWorkerTimeRows.filter(item =>
       (item.top_entry_workers || []).some(worker => workerMatchesFilter(worker, selectedWorker)) ||
       (item.top_exit_workers || []).some(worker => workerMatchesFilter(worker, selectedWorker))
     ) : ubWorkerTimeRows;
-    const chartUbWorkerRows = filterUbWorkerRows(roleChartWorker);
-    const tableUbWorkerRows = filterUbWorkerRows(roleTableWorker);
+    const chartUbWorkerRows = aggregateUbWorkerRowsByIdentity(ubWorkerRows, roleChartWorker);
+    const tableUbWorkerRows = aggregateUbWorkerRowsByIdentity(ubWorkerRows, roleTableWorker);
     const chartUbWorkerTimeRows = filterUbWorkerTimeRows(timeChartWorker);
     const tableUbWorkerTimeRows = filterUbWorkerTimeRows(timeTableWorker);
     renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], tableUbWorkerRows.map(([worker,item]) => {
-      const display_worker = workerRelationName(worker);
+      const display_worker = item.display_worker || workerAggregateLabel(worker);
       const display_top_edges = (item.top_edges || []).map(edge => edge.replace(/\\s*->\\s*/g, ' → ')).join(', ');
       return [
         display_worker,
@@ -2875,12 +2908,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       item.exit_events || 0,
       item.latency_ms?.p99 || '',
       item.latency_ms?.max || '',
-      (item.top_entry_workers || []).map(workerRelationName).join(', '),
-      (item.top_exit_workers || []).map(workerRelationName).join(', ')
+      [...new Set((item.top_entry_workers || []).map(workerAggregateKey))].map(workerAggregateLabel).join(', '),
+      [...new Set((item.top_exit_workers || []).map(workerAggregateKey))].map(workerAggregateLabel).join(', ')
     ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
     chart('ub-worker-role-chart', chartUbWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
       tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
-      xAxis:{type:'category', data:chartUbWorkerRows.slice(0,20).map(r => workerRelationName(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
+      xAxis:{type:'category', data:chartUbWorkerRows.slice(0,20).map(r => r[1].display_worker || workerAggregateLabel(r[0])), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
       yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
       series:[
         {name:'入口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:chartUbWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},

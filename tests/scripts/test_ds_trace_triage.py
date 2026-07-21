@@ -471,6 +471,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "function workerAggregateKey(raw)" in html
     assert "function workerMatchesFilter(raw, selectedWorker)" in html
     assert "function workerFilterOptions()" in html
+    assert "function aggregateUbWorkerRowsByIdentity(rows, selectedWorker='')" in html
+    assert "display_ub_role" in html
+    assert "entry_and_exit" in html
+    assert "const aggregate = target || (out[key] =" in html
     assert "const key = workerAggregateKey(worker)" in html
     assert "seenWorkerKeys.has(key)" in html
     assert "workerFilterOptions().map(([value, label])" in html
