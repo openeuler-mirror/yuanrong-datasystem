@@ -232,7 +232,9 @@ LogSampler 提供统一随机哈希阈值采样，替代旧的 `log_rate_limit` 
 | `client_slow_log_process_slower_than` | uint64 | `2000` | 正整数，单位微秒 | Client 侧处理阶段慢日志门限（微秒）。默认2000μs(2ms)；设为0禁用。通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件或 `UpdateConfig` API 热更新。详见 [Client环境变量](client_env_guide.md)。 |
 | `client_slow_log_rpc_slower_than` | uint64 | `5000` | 正整数，单位微秒 | Client 侧 RPC 阶段慢日志门限（微秒）。默认5000μs(5ms)；设为0禁用。通过 `DATASYSTEM_CLIENT_CONFIG_PATH` 配置文件或 `UpdateConfig` API 热更新。详见 [Client环境变量](client_env_guide.md)。 |
 
-> **"process"含义说明**：`process` 阶段 = 总耗时 - 子 RPC 耗时，代表处理与等待时间，而非端到端整链路耗时。例如 `client.process.get` = 客户端从发起 Get 到收到响应的总耗时 - `client.rpc.get`（客户端→worker RPC耗时），即客户端排队、序列化、反序列化等处理耗时。
+> **"process"含义说明**：`process` 阶段代表本进程中的处理与等待时间，而非端到端整链路耗时。
+> `client.process.get` 是 Get 总耗时扣除已单独记录的 Get 子阶段后的剩余时间；直读模式还会扣除 route、
+> query-and-get、get-data 和 materialize 子阶段。
 
 ### latencySummary 格式
 
@@ -250,8 +252,12 @@ latencySummary:{client.process.get:200,client.rpc.get:896,worker.process.get:768
 
 | phase 名称 | 含义 |
 |------------|------|
-| `client.process.get` | 客户端 Get 处理耗时（总耗时扣除 RPC） |
+| `client.process.get` | 客户端 Get 中未被其他 Get 子阶段覆盖的处理耗时 |
 | `client.rpc.get` | 客户端→worker Get RPC 耗时 |
+| `client.process.direct_route` | 直读 Get 加载路由并按元数据 owner 分组的耗时 |
+| `client.rpc.direct_query_and_get` | 直读 Get 查询元数据阶段的父线程墙钟耗时，包含任务调度/等待、连接与锁等待、RPC 及重试 |
+| `client.rpc.direct_get_data` | 直读 Get 数据读取阶段的父线程墙钟耗时，包含连接与锁等待、数据传输、备副本尝试及重试 |
+| `client.process.direct_materialize` | 直读结果校验并转换为 SDK Buffer 的耗时 |
 | `client.process.set` | 客户端 Set/Put 处理耗时（总耗时扣除子 RPC） |
 | `client.rpc.create` | 客户端→worker Create RPC 耗时（Set/Put 的 Create 子阶段） |
 | `client.process.memory_copy` | 客户端 Set/Put 数据拷贝到共享内存耗时 |

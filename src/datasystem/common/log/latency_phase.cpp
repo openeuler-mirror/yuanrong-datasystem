@@ -70,6 +70,14 @@ constexpr TickPairMapping TICK_PAIR_TABLE[] = {
       LatencySummaryPhase::MASTER_PROCESS_UPDATE_META },
     { LatencyTickKey::DATA_REMOTEGET_START, LatencyTickKey::DATA_REMOTEGET_END,
       LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET },
+    { LatencyTickKey::CLIENT_DIRECT_ROUTE_START, LatencyTickKey::CLIENT_DIRECT_ROUTE_END,
+      LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE },
+    { LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_START, LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_END,
+      LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET },
+    { LatencyTickKey::CLIENT_DIRECT_GET_DATA_START, LatencyTickKey::CLIENT_DIRECT_GET_DATA_END,
+      LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA },
+    { LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_START, LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_END,
+      LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE },
 };
 
 constexpr size_t TICK_PAIR_TABLE_SIZE = sizeof(TICK_PAIR_TABLE) / sizeof(TICK_PAIR_TABLE[0]);
@@ -78,37 +86,55 @@ struct DerivedPhaseMapping {
     LatencyTickKey totalStartKey;
     LatencyTickKey totalEndKey;
     LatencySummaryPhase resultPhase;
-    LatencySummaryPhase subPhases[4];
+    LatencySummaryPhase subPhases[5];
     uint8_t subPhaseCount;
 };
 
 constexpr DerivedPhaseMapping DERIVED_PHASE_TABLE[] = {
-    { LatencyTickKey::CLIENT_GET_START, LatencyTickKey::CLIENT_GET_END,
+    { LatencyTickKey::CLIENT_GET_START,
+      LatencyTickKey::CLIENT_GET_END,
       LatencySummaryPhase::CLIENT_PROCESS_GET,
-      { LatencySummaryPhase::CLIENT_RPC_GET }, 1 },
-    { LatencyTickKey::CLIENT_SET_START, LatencyTickKey::CLIENT_SET_END,
+      { LatencySummaryPhase::CLIENT_RPC_GET, LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE,
+        LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET, LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA,
+        LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE },
+      5 },
+    { LatencyTickKey::CLIENT_SET_START,
+      LatencyTickKey::CLIENT_SET_END,
       LatencySummaryPhase::CLIENT_PROCESS_SET,
       { LatencySummaryPhase::CLIENT_RPC_CREATE, LatencySummaryPhase::CLIENT_PROCESS_MEMORY_COPY,
-        LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER, LatencySummaryPhase::CLIENT_RPC_PUBLISH }, 4 },
-    { LatencyTickKey::CLIENT_CREATE_START, LatencyTickKey::CLIENT_CREATE_END,
+        LatencySummaryPhase::CLIENT_URMA_UB_TRANSFER, LatencySummaryPhase::CLIENT_RPC_PUBLISH },
+      4 },
+    { LatencyTickKey::CLIENT_CREATE_START,
+      LatencyTickKey::CLIENT_CREATE_END,
       LatencySummaryPhase::CLIENT_PROCESS_CREATE,
-      { LatencySummaryPhase::CLIENT_RPC_CREATE }, 1 },
-    { LatencyTickKey::CLIENT_EXIST_START, LatencyTickKey::CLIENT_EXIST_END,
+      { LatencySummaryPhase::CLIENT_RPC_CREATE },
+      1 },
+    { LatencyTickKey::CLIENT_EXIST_START,
+      LatencyTickKey::CLIENT_EXIST_END,
       LatencySummaryPhase::CLIENT_PROCESS_EXIST,
-      { LatencySummaryPhase::CLIENT_RPC_EXIST }, 1 },
-    { LatencyTickKey::WORKER_GET_START, LatencyTickKey::WORKER_GET_END,
+      { LatencySummaryPhase::CLIENT_RPC_EXIST },
+      1 },
+    { LatencyTickKey::WORKER_GET_START,
+      LatencyTickKey::WORKER_GET_END,
       LatencySummaryPhase::WORKER_PROCESS_GET,
       { LatencySummaryPhase::WORKER_RPC_QUERY_META, LatencySummaryPhase::WORKER_RPC_REMOTE_GET,
-        LatencySummaryPhase::WORKER_URMA_URMA_TOTAL, LatencySummaryPhase::WORKER_PROCESS_L2CACHE_READ }, 4 },
-    { LatencyTickKey::WORKER_CREATE_START, LatencyTickKey::WORKER_CREATE_END,
+        LatencySummaryPhase::WORKER_URMA_URMA_TOTAL, LatencySummaryPhase::WORKER_PROCESS_L2CACHE_READ },
+      4 },
+    { LatencyTickKey::WORKER_CREATE_START,
+      LatencyTickKey::WORKER_CREATE_END,
       LatencySummaryPhase::WORKER_PROCESS_CREATE,
-      {}, 0 },
-    { LatencyTickKey::WORKER_PUBLISH_START, LatencyTickKey::WORKER_PUBLISH_END,
+      {},
+      0 },
+    { LatencyTickKey::WORKER_PUBLISH_START,
+      LatencyTickKey::WORKER_PUBLISH_END,
       LatencySummaryPhase::WORKER_PROCESS_PUBLISH,
-      { LatencySummaryPhase::WORKER_RPC_CREATE_META, LatencySummaryPhase::WORKER_RPC_UPDATE_META }, 2 },
-    { LatencyTickKey::WORKER_EXIST_START, LatencyTickKey::WORKER_EXIST_END,
+      { LatencySummaryPhase::WORKER_RPC_CREATE_META, LatencySummaryPhase::WORKER_RPC_UPDATE_META },
+      2 },
+    { LatencyTickKey::WORKER_EXIST_START,
+      LatencyTickKey::WORKER_EXIST_END,
       LatencySummaryPhase::WORKER_PROCESS_EXIST,
-      { LatencySummaryPhase::WORKER_RPC_QUERY_META }, 1 },
+      { LatencySummaryPhase::WORKER_RPC_QUERY_META },
+      1 },
 };
 
 constexpr size_t DERIVED_PHASE_TABLE_SIZE = sizeof(DERIVED_PHASE_TABLE) / sizeof(DERIVED_PHASE_TABLE[0]);
@@ -160,6 +186,10 @@ constexpr PhaseNameEntry PHASE_NAME_TABLE[] = {
     { LatencySummaryPhase::MASTER_PROCESS_CREATE_META, "master.process.create_meta" },
     { LatencySummaryPhase::MASTER_PROCESS_UPDATE_META, "master.process.update_meta" },
     { LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET, "worker.process.remote_get" },
+    { LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE, "client.process.direct_route" },
+    { LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET, "client.rpc.direct_query_and_get" },
+    { LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA, "client.rpc.direct_get_data" },
+    { LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE, "client.process.direct_materialize" },
 };
 
 constexpr size_t PHASE_NAME_TABLE_SIZE = sizeof(PHASE_NAME_TABLE) / sizeof(PHASE_NAME_TABLE[0]);
@@ -179,6 +209,8 @@ constexpr LatencySummaryPhase PROCESS_PHASES[] = {
     LatencySummaryPhase::MASTER_PROCESS_CREATE_META,
     LatencySummaryPhase::MASTER_PROCESS_UPDATE_META,
     LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET,
+    LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE,
+    LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE,
 };
 
 constexpr size_t PROCESS_PHASES_SIZE = sizeof(PROCESS_PHASES) / sizeof(PROCESS_PHASES[0]);
@@ -194,6 +226,8 @@ constexpr LatencySummaryPhase RPC_PHASES[] = {
     LatencySummaryPhase::WORKER_URMA_URMA_TOTAL,
     LatencySummaryPhase::WORKER_RPC_CREATE_META,
     LatencySummaryPhase::WORKER_RPC_UPDATE_META,
+    LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET,
+    LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA,
 };
 
 constexpr size_t RPC_PHASES_SIZE = sizeof(RPC_PHASES) / sizeof(RPC_PHASES[0]);

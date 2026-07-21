@@ -64,6 +64,44 @@ TEST_F(LatencyPhaseTest, ComputePhaseDurationsDirectAndDerived)
     EXPECT_EQ(emptyResult.count, 0u);
 }
 
+TEST_F(LatencyPhaseTest, ComputeDirectGetPhaseDurations)
+{
+    LatencyTick ticks[] = {
+        { LatencyTickKey::CLIENT_GET_START, 100000u },
+        { LatencyTickKey::CLIENT_DIRECT_ROUTE_START, 120000u },
+        { LatencyTickKey::CLIENT_DIRECT_ROUTE_END, 140000u },
+        { LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_START, 150000u },
+        { LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_END, 450000u },
+        { LatencyTickKey::CLIENT_DIRECT_GET_DATA_START, 460000u },
+        { LatencyTickKey::CLIENT_DIRECT_GET_DATA_END, 760000u },
+        { LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_START, 780000u },
+        { LatencyTickKey::CLIENT_DIRECT_MATERIALIZE_END, 850000u },
+        { LatencyTickKey::CLIENT_GET_END, 900000u },
+    };
+    auto result = ComputePhaseDurations(ticks, 10, 0);
+
+    const auto *route = result.Find(LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE);
+    ASSERT_NE(route, nullptr);
+    EXPECT_EQ(route->durationUs, 20u);
+    const auto *query = result.Find(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET);
+    ASSERT_NE(query, nullptr);
+    EXPECT_EQ(query->durationUs, 300u);
+    const auto *getData = result.Find(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA);
+    ASSERT_NE(getData, nullptr);
+    EXPECT_EQ(getData->durationUs, 300u);
+    const auto *materialize = result.Find(LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE);
+    ASSERT_NE(materialize, nullptr);
+    EXPECT_EQ(materialize->durationUs, 70u);
+    const auto *localGet = result.Find(LatencySummaryPhase::CLIENT_PROCESS_GET);
+    ASSERT_NE(localGet, nullptr);
+    EXPECT_EQ(localGet->durationUs, 110u);
+
+    EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE));
+    EXPECT_TRUE(IsProcessPhase(LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE));
+    EXPECT_TRUE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET));
+    EXPECT_TRUE(IsRpcPhase(LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA));
+}
+
 TEST_F(LatencyPhaseTest, FormatLatencySummaryNoRawTickOrTotal)
 {
     LatencyTick ticks[] = {
@@ -461,6 +499,10 @@ TEST_F(LatencyPhaseTest, FormatLatencySummaryManyPhasesWithLargeValues)
         LatencySummaryPhase::WORKER_RPC_UPDATE_META, LatencySummaryPhase::WORKER_PROCESS_EXIST,
         LatencySummaryPhase::MASTER_PROCESS_QUERY_META, LatencySummaryPhase::MASTER_PROCESS_CREATE_META,
         LatencySummaryPhase::MASTER_PROCESS_UPDATE_META, LatencySummaryPhase::WORKER_PROCESS_REMOTE_GET,
+        LatencySummaryPhase::CLIENT_PROCESS_DIRECT_ROUTE,
+        LatencySummaryPhase::CLIENT_RPC_DIRECT_QUERY_AND_GET,
+        LatencySummaryPhase::CLIENT_RPC_DIRECT_GET_DATA,
+        LatencySummaryPhase::CLIENT_PROCESS_DIRECT_MATERIALIZE,
     };
     for (auto phase : phases) {
         result.Add(phase, std::numeric_limits<uint64_t>::max());

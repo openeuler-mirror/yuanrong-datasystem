@@ -244,8 +244,12 @@ Status ObjectReadFlow::Run(const ObjectReadRequest &request, ObjectReadResult &r
     VLOG(1) << "[TransportGet][Flow] Start, key count: " << request.items.size();
     std::vector<ReadItem> items;
     RETURN_IF_NOT_OK(InitializeItems(request, items));
+    AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_START);
     QueryMetadata(*metadata_, *taskPool_, items);
+    AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_END);
+    AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_START);
     ReadObjects(*replicas_, items);
+    AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_END);
     Status status = BuildResult(items, result);
     VLOG(1) << "[TransportGet][Flow] Finish, result count: " << result.items.size();
     return status;

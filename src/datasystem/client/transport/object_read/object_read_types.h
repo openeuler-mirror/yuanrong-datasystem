@@ -39,6 +39,8 @@ struct ObjectReadItem {
 /** @brief Logical object-read request accepted by TransportLayer. */
 struct ObjectReadRequest {
     std::vector<ObjectReadItem> items;
+    /** @brief Whether this request records client latency phases. */
+    bool traceEnabled = false;
 };
 
 /** @brief Data result and independent status for one input item. */
