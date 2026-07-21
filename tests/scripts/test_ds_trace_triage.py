@@ -446,6 +446,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"flow-stage-chart\"" in html
     assert "id=\"read-flow-stage-chart\"" in html
     assert "id=\"write-flow-stage-chart\"" in html
+    assert "class=\"chart flow-graph-chart\"" in html
+    assert ".flow-graph-chart{height:460px}" in html
     assert "function autoCenterFlowGraph(chartInstance)" in html
     assert "myAutoCenter" in html
     assert "title:'自适应居中'" in html
@@ -454,7 +456,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "dataView:{readOnly:true}" not in html
     assert "restore:{}" not in html
     assert "labelLayout:{hideOverlap:true}" in html
-    assert "const flowNodeY = [130,130,70,210,210]" in html
+    assert "roam:false" in html
+    assert "const flowNodeY = [180,180,82,278,278]" in html
+    assert "x:[96,320,560,560,808][idx]" in html
+    assert "fontSize:14" in html
+    assert "label:[node.label, ...(node.top_workers || [])" not in html
+    assert "label:node.label" in html
     assert "id=\"flow-stage-table\"" in html
     assert "id=\"read-flow-stage-table\"" in html
     assert "id=\"write-flow-stage-table\"" in html

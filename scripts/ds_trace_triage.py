@@ -2230,7 +2230,7 @@ tr.summaryrow td{background:#f8fafc}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
-.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.flow-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-pair .chart{height:320px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.flow-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-pair .chart{height:320px}.chart{height:360px;width:100%}.flow-graph-chart{height:460px}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size);word-break:break-word}
 th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none}.sortable-th:hover{background:#eaf2ff}.sort-mark{color:#2563eb;font-size:11px;margin-left:4px}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 .table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
@@ -2347,13 +2347,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel section-summary" id="section-summary-s4"></div>
         <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data，写关注 CreateBuffer/Publish/Meta。</div>
         <div id="read-flow-section" class="flow-section">
-          <div class="panel"><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-1 读取流程证据块：看 Client→Entry RPC、Entry→Data RPC 与 URMA Write。</div></div>
+          <div class="panel"><div id="read-flow-stage-chart" class="chart flow-graph-chart"></div><div class="caption">图 4-1 读取流程证据块：看 Client→Entry RPC、Entry→Data RPC 与 URMA Write。</div></div>
           <div class="panel"><h3>表 4-1 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
           <div class="panel"><div class="controls"><label>Worker 筛选 <select id="read-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="read-worker-chart" class="chart"></div><div class="caption">图 4-2 读取 Worker 分布：读取链路按 worker 聚合。</div></div>
           <div class="panel"><h3>表 4-2 读取 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="read-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
         </div>
         <div id="write-flow-section" class="flow-section">
-          <div class="panel"><div id="write-flow-stage-chart" class="chart"></div><div class="caption">图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。</div></div>
+          <div class="panel"><div id="write-flow-stage-chart" class="chart flow-graph-chart"></div><div class="caption">图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。</div></div>
           <div class="panel"><h3>表 4-3 写入流程阶段证据</h3><table id="write-flow-stage-table"></table></div>
           <div class="panel"><div class="controls"><label>Worker 筛选 <select id="write-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="write-worker-chart" class="chart"></div><div class="caption">图 4-4 写入 Worker 分布：写入链路按 worker 聚合。</div></div>
           <div class="panel"><h3>表 4-4 写入 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="write-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
@@ -3751,7 +3751,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }};
   }
   function renderFlowGraph(id, graph, title) {
-    const flowNodeY = [130,130,70,210,210];
+    const flowNodeY = [180,180,82,278,278];
     chart(id, {
     title:{show:false,text:title},
     textStyle:chartTextStyle,
@@ -3762,27 +3762,33 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     series:[{
       type:'graph',
       layout:'none',
-      roam:true,
+      roam:false,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true, fontSize:13, width:118, overflow:'break', lineHeight:16},
+      label:{show:true, fontSize:14, width:128, overflow:'break', lineHeight:18},
       labelLayout:{hideOverlap:true},
       edgeLabel:{
         show:true,
         formatter:p => p.data.edge_label || p.data.status || '',
-        fontSize:13,
-        lineHeight:16,
+        fontSize:14,
+        lineHeight:18,
         width:150,
-        overflow:'break'
+        overflow:'break',
+        backgroundColor:'rgba(255,255,255,.92)',
+        borderColor:'#dbeafe',
+        borderWidth:1,
+        borderRadius:4,
+        padding:[2,5]
       },
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(graph.nodes || []).map((node, idx) => ({
         name:node.id,
-        label:[node.label, ...(node.top_workers || []).map(workerRelationName), ...(node.top_ips || [])].slice(0, 3).join('\\n'),
+        label:node.label,
         top_ips:node.top_ips || [],
-        x:[80,280,480,480,680][idx] || 80,
+        top_workers:node.top_workers || [],
+        x:[96,320,560,560,808][idx] || 96,
         y:flowNodeY[idx] || 130,
-        symbolSize:72,
+        symbolSize:84,
         itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
       })),
       links:(graph.edges || []).map(edge => ({
