@@ -178,7 +178,7 @@ TEST_F(ScaleDownNodeSelectorTest, ResourceReportReadinessFollowsRuntimeState)
     evidence.slotReady = true;
     evidence.ownershipReady = true;
     evidence.resourceReady = true;
-    ASSERT_TRUE(runtime.RuntimeState().TryMarkRunning(evidence, "test running"));
+    ASSERT_TRUE(runtime.TryCompleteRecovery(evidence, "test running"));
     EXPECT_TRUE(selector.IsLocalReadyForResourceReport());
 
     runtime.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "local isolation");
@@ -204,7 +204,7 @@ TEST_F(ScaleDownNodeSelectorTest, ResourceReportsRetryOutOfMemoryRecoveryUntilRu
     TestableNodeSelector selector;
     worker::WorkerRuntimeFacade runtime;
     worker::WorkerRunningEvidence evidence{ true, true, true, true, true, true };
-    ASSERT_TRUE(runtime.RuntimeState().TryMarkRunning(evidence, "ready"));
+    ASSERT_TRUE(runtime.TryCompleteRecovery(evidence, "ready"));
     selector.SetRuntimeFacade(&runtime);
     size_t recoveryCount = 0;
     selector.RegisterResourceRecoveredHandler([&recoveryCount] { ++recoveryCount; });
@@ -218,7 +218,7 @@ TEST_F(ScaleDownNodeSelectorTest, ResourceReportsRetryOutOfMemoryRecoveryUntilRu
                            worker::WorkerRecoveryPhase::RESOURCE);
     selector.MaybeNotifyResourceRecovered(0);
     EXPECT_EQ(recoveryCount, 2U);
-    ASSERT_TRUE(runtime.RuntimeState().TryMarkRunning(evidence, "recovered"));
+    ASSERT_TRUE(runtime.TryCompleteRecovery(evidence, "recovered"));
     selector.MaybeNotifyResourceRecovered(0);
     EXPECT_EQ(recoveryCount, 2U);
     selector.UnregisterResourceRecoveredHandler();
@@ -229,7 +229,7 @@ TEST_F(ScaleDownNodeSelectorTest, UnregisterResourceRecoveredHandlerWaitsForActi
     TestableNodeSelector selector;
     worker::WorkerRuntimeFacade runtime;
     worker::WorkerRunningEvidence evidence{ true, true, true, true, true, true };
-    ASSERT_TRUE(runtime.RuntimeState().TryMarkRunning(evidence, "ready"));
+    ASSERT_TRUE(runtime.TryCompleteRecovery(evidence, "ready"));
     runtime.MarkOutOfMemory("allocation failed");
     selector.SetRuntimeFacade(&runtime);
     std::promise<void> entered;

@@ -20,16 +20,6 @@ WorkerRuntimeStateSnapshot WorkerRuntimeFacade::GetSnapshot() const
     return state_.GetSnapshot();
 }
 
-WorkerRuntimeStateManager &WorkerRuntimeFacade::RuntimeState()
-{
-    return state_;
-}
-
-const WorkerRuntimeStateManager &WorkerRuntimeFacade::RuntimeState() const
-{
-    return state_;
-}
-
 void WorkerRuntimeFacade::MarkStarting(std::string detail)
 {
     state_.MarkStarting(std::move(detail));

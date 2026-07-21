@@ -62,8 +62,7 @@ TEST(WorkerServiceImplAdmissionTest, GetSocketPathAllowsInternalJoiningWindow)
     std::atomic<bool> localExiting{ false };
     WorkerServiceImpl service(HostPort(), HostPort(), 1.0, nullptr, nullptr, "test-worker", membership, localExiting);
     WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkJoining("joining");
+    runtime.MarkJoining("joining");
     service.SetRuntimeFacade(&runtime);
     GetSocketPathReqPb req;
     GetSocketPathRspPb rsp;
@@ -82,8 +81,7 @@ TEST(WorkerServiceImplAdmissionTest, RegisterClientAllowsInternalJoiningWindow)
     std::atomic<bool> localExiting{ false };
     WorkerServiceImpl service(HostPort(), HostPort(), 1.0, nullptr, nullptr, "test-worker", membership, localExiting);
     WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkJoining("joining");
+    runtime.MarkJoining("joining");
     service.SetRuntimeFacade(&runtime);
     RegisterClientReqPb req;
     req.set_version(DATASYSTEM_VERSION);

@@ -300,6 +300,10 @@
       stopped storing `EtcdStore`. The target keeps the narrower `etcd_constants` edge for existing metadata constants.
       `worker_isolation_coordinator` also declares its `worker_runtime_facade` Bazel dependency explicitly, matching the
       public header include used by the runtime coordinator boundary.
+  15. `WorkerRuntimeFacade` no longer exposes its internal `WorkerRuntimeStateManager` through `RuntimeState()`. Runtime
+      consumers, including object-cache and worker common-service tests, now use semantic facade methods such as
+      `MarkRecovering`, `MarkLocalIsolated`, `TryCompleteRecovery`, and `GetSnapshot`. The boundary script asserts the
+      facade does not regress to exposing the state manager by reference.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -548,6 +552,20 @@
   - GREEN: `ds_st_kv_cache --gtest_filter="KVClientEtcdDfxTest.LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering"`
     passed 1/1 test in 11.371s gtest time, 11.45s wall time, covering KV `Get` and `Set` rejection during both
     `LOCAL_ISOLATED` and `RECOVERING` and verifying the original key is readable after recovery evidence completes.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_worker_runtime_facade_does_not_expose_state_manager`.
+  - Initial RED: the new boundary test failed because `WorkerRuntimeFacade` still exposed `RuntimeState()` and
+    `WorkerRuntimeStateManager &` in its public header; 17 boundary tests ran in 0.011s with 1 failure.
+  - GREEN: removed the public `RuntimeState()` accessor and updated affected UTs to use facade semantic methods.
+    `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 17/17 tests in 0.006s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 199s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), `BUILD_WITH_URMA_MOCK` enabled, and 1154 compile database entries.
+  - GREEN: `ds_ut --gtest_filter="WorkerRuntimeFacadeTest.*:WorkerServiceImplAdmissionTest.*"` passed 6/6 tests in
+    1ms gtest time, 0.05s wall time.
+  - GREEN: `ds_ut_object --gtest_filter="WorkerOcServiceImplTest.*:ScaleDownNodeSelectorTest.ResourceReportReadinessFollowsRuntimeState:ScaleDownNodeSelectorTest.ResourceReportsRetryOutOfMemoryRecoveryUntilRunning:ScaleDownNodeSelectorTest.UnregisterResourceRecoveredHandlerWaitsForActiveCallback"`
+    passed 71/71 tests in 11.144s gtest time, 11.20s wall time.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-cpp-files>` reported no formatting
+    changes.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

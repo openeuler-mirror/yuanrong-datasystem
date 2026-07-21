@@ -116,6 +116,12 @@ bool WaitForInjectPointExecuteCount(const std::string &name, uint64_t expectedCo
     return inject::GetExecuteCount(name) >= expectedCount;
 }
 
+bool MarkRuntimeRunning(worker::WorkerRuntimeFacade &runtime, const std::string &detail = "ready")
+{
+    worker::WorkerRunningEvidence evidence{ true, true, true, true, true, true };
+    return runtime.TryCompleteRecovery(evidence, detail);
+}
+
 class FakeWorkerMasterOCApi final : public worker::WorkerLocalMasterOCApi {
 public:
     explicit FakeWorkerMasterOCApi(const HostPort &localAddr) : WorkerLocalMasterOCApi(nullptr, localAddr, nullptr)
@@ -1296,8 +1302,7 @@ TEST_F(WorkerOcServiceImplTest, ReconciliationRequiresEveryCurrentMetadataMaster
 TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateRejectsWhenRuntimeIsNotRunning)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "local isolation");
+    runtime.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "local isolation");
     impl_->SetRuntimeFacade(&runtime);
     DS_ASSERT_OK(SetHealthProbe());
     SetTopologyServingAdmission(true);
@@ -1317,20 +1322,12 @@ TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateRejectsWhenRuntimeIsNotRunnin
 TEST_F(WorkerOcServiceImplTest, ObjectCacheOutOfMemoryMarksRuntimeState)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    worker::WorkerRunningEvidence evidence;
-    evidence.membershipReady = true;
-    evidence.topologyReady = true;
-    evidence.metadataReady = true;
-    evidence.slotReady = true;
-    evidence.ownershipReady = true;
-    evidence.resourceReady = true;
-    ASSERT_TRUE(runtimeState.TryMarkRunning(evidence, "ready"));
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
     impl_->SetRuntimeFacade(&runtime);
 
     impl_->MarkOutOfMemoryIfNeeded(Status(StatusCode::K_OUT_OF_MEMORY, "allocation failed"), "Create");
 
-    auto snapshot = runtimeState.GetSnapshot();
+    auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, worker::WorkerServiceMode::OUT_OF_MEMORY);
     EXPECT_EQ(snapshot.reason, worker::WorkerIsolationReason::OUT_OF_MEMORY);
     EXPECT_NE(snapshot.detail.find("Create"), std::string::npos);
@@ -1340,9 +1337,7 @@ TEST_F(WorkerOcServiceImplTest, ObjectCacheOutOfMemoryMarksRuntimeState)
 TEST_F(WorkerOcServiceImplTest, DiskCreateOutOfMemoryRecordsDiskRecoveryRequirement)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    worker::WorkerRunningEvidence evidence{ true, true, true, true, true, true };
-    ASSERT_TRUE(runtimeState.TryMarkRunning(evidence, "ready"));
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
     impl_->SetRuntimeFacade(&runtime);
     DS_ASSERT_OK(SetHealthProbe());
     SetTopologyServingAdmission(true);
@@ -1366,9 +1361,7 @@ TEST_F(WorkerOcServiceImplTest, DiskCreateOutOfMemoryRecordsDiskRecoveryRequirem
 TEST_F(WorkerOcServiceImplTest, MigrationOutOfMemoryHandlerUsesWorkerRuntimeState)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    worker::WorkerRunningEvidence evidence{ true, true, true, true, true, true };
-    ASSERT_TRUE(runtimeState.TryMarkRunning(evidence, "ready"));
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
     impl_->SetRuntimeFacade(&runtime);
     BINEXPECT_CALL(&WorkerOcServiceMigrateImpl::CheckResource, (_, _))
         .Times(1)
@@ -1380,7 +1373,7 @@ TEST_F(WorkerOcServiceImplTest, MigrationOutOfMemoryHandlerUsesWorkerRuntimeStat
 
     EXPECT_EQ(impl_->gMigrateProc_->MigrateData(req, rsp, {}).GetCode(), StatusCode::K_OUT_OF_MEMORY);
 
-    const auto snapshot = runtimeState.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, worker::WorkerServiceMode::OUT_OF_MEMORY);
     EXPECT_NE(snapshot.detail.find("MigrateData.CheckResource"), std::string::npos);
 }
@@ -1388,8 +1381,7 @@ TEST_F(WorkerOcServiceImplTest, MigrationOutOfMemoryHandlerUsesWorkerRuntimeStat
 TEST_F(WorkerOcServiceImplTest, HealthCheckRemainsAvailableWhenOutOfMemory)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkOutOfMemory("oom");
+    runtime.MarkOutOfMemory("oom");
     impl_->SetRuntimeFacade(&runtime);
     DS_ASSERT_OK(SetHealthProbe());
     SetTopologyServingAdmission(true);
@@ -1412,8 +1404,7 @@ TEST_F(WorkerOcServiceImplTest, HealthCheckRemainsAvailableWhenOutOfMemory)
 TEST_F(WorkerOcServiceImplTest, ReferenceCleanupRemainsAvailableDuringResourceRecovery)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkOutOfMemory("oom");
+    runtime.MarkOutOfMemory("oom");
     impl_->SetRuntimeFacade(&runtime);
     ReleaseGRefsReqPb releaseReq;
     ReleaseGRefsRspPb releaseRsp;
@@ -1424,7 +1415,7 @@ TEST_F(WorkerOcServiceImplTest, ReferenceCleanupRemainsAvailableDuringResourceRe
     EXPECT_NE(impl_->ReleaseGRefs(releaseReq, releaseRsp).GetCode(), StatusCode::K_OUT_OF_MEMORY);
     EXPECT_NE(impl_->GDecreaseRef(decreaseReq, decreaseRsp).GetCode(), StatusCode::K_OUT_OF_MEMORY);
 
-    runtimeState.MarkRecovering(worker::WorkerIsolationReason::OUT_OF_MEMORY, "resource recovery");
+    runtime.MarkRecovering(worker::WorkerIsolationReason::OUT_OF_MEMORY, "resource recovery");
     EXPECT_TRUE(impl_->DecreaseMemoryRef(ClientKey::Intern("client-id"), {}).IsOk());
     EXPECT_NE(impl_->ReleaseGRefs(releaseReq, releaseRsp).GetCode(), StatusCode::K_NOT_READY);
     EXPECT_NE(impl_->GDecreaseRef(decreaseReq, decreaseRsp).GetCode(), StatusCode::K_NOT_READY);
@@ -1436,8 +1427,7 @@ TEST_F(WorkerOcServiceImplTest, LocalExistRemainsAvailableWhenOutOfMemory)
     auto service = CreateWorkerOCService(akSkManager);
     service->InitServiceImpl();
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkOutOfMemory("oom");
+    runtime.MarkOutOfMemory("oom");
     service->SetRuntimeFacade(&runtime);
     DS_ASSERT_OK(SetHealthProbe());
     SetTopologyServingAdmission(false);
@@ -1468,8 +1458,7 @@ TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoRemainsAvailableWhenOutOfMemory)
     auto service = CreateWorkerOCService(akSkManager);
     service->InitServiceImpl();
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkOutOfMemory("oom");
+    runtime.MarkOutOfMemory("oom");
     service->SetRuntimeFacade(&runtime);
     DS_ASSERT_OK(SetHealthProbe());
     SetTopologyServingAdmission(false);
@@ -1489,8 +1478,7 @@ TEST_F(WorkerOcServiceImplTest, GetObjMetaInfoRemainsAvailableWhenOutOfMemory)
 TEST_F(WorkerOcServiceImplTest, ClearObjectRemainsAvailableWhenOutOfMemory)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkOutOfMemory("oom");
+    runtime.MarkOutOfMemory("oom");
     impl_->SetRuntimeFacade(&runtime);
     impl_->clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
         objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, nullptr, metadataRoute_, *endpointPolicy_,
@@ -1505,8 +1493,7 @@ TEST_F(WorkerOcServiceImplTest, ClearObjectRemainsAvailableWhenOutOfMemory)
 TEST_F(WorkerOcServiceImplTest, EvictionManagerRemainsUsableWhenOutOfMemory)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkOutOfMemory("oom");
+    runtime.MarkOutOfMemory("oom");
     impl_->SetRuntimeFacade(&runtime);
     auto akSkManager = std::make_shared<AkSkManager>();
     DS_ASSERT_OK(evictionManager_->Init(globalRefTable_, akSkManager));
@@ -1542,17 +1529,16 @@ TEST_F(WorkerOcServiceImplTest, WorkerWorkerMigrationTargetRejectsWhenRuntimeIsN
     auto workerWorkerSvc = CreateWorkerWorkerOCService();
     for (const auto &item : cases) {
         worker::WorkerRuntimeFacade runtime;
-        auto &runtimeState = runtime.RuntimeState();
         switch (item.mode) {
             case worker::WorkerServiceMode::LOCAL_ISOLATED:
-                runtimeState.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION,
-                                               "local isolation");
+                runtime.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION,
+                                          "local isolation");
                 break;
             case worker::WorkerServiceMode::RECOVERING:
-                runtimeState.MarkRecovering(worker::WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE, "recovering");
+                runtime.MarkRecovering(worker::WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE, "recovering");
                 break;
             case worker::WorkerServiceMode::OUT_OF_MEMORY:
-                runtimeState.MarkOutOfMemory("oom");
+                runtime.MarkOutOfMemory("oom");
                 break;
             default:
                 break;
@@ -1578,8 +1564,7 @@ TEST_F(WorkerOcServiceImplTest, WorkerWorkerMigrationTargetRejectsWhenRuntimeIsN
 TEST_F(WorkerOcServiceImplTest, WorkerWorkerMigrationTargetRejectsDirectRequestsWithFailedObjects)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkOutOfMemory("oom");
+    runtime.MarkOutOfMemory("oom");
     auto workerWorkerSvc = CreateWorkerWorkerOCService();
     workerWorkerSvc.SetRuntimeFacade(&runtime);
 
@@ -1606,8 +1591,7 @@ TEST_F(WorkerOcServiceImplTest, WorkerWorkerClassifiesMigrationNotificationAndDi
     akSkManager->SetClientAkSk(clientCred, serverCred);
     akSkManager->SetServerAkSk(AkSkType::SYSTEM, clientCred, serverCred);
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkStopping(worker::WorkerIsolationReason::PROCESS_STOPPING, "stopping");
+    runtime.MarkStopping(worker::WorkerIsolationReason::PROCESS_STOPPING, "stopping");
     auto workerWorkerSvc = CreateWorkerWorkerOCService(akSkManager);
     workerWorkerSvc.SetRuntimeFacade(&runtime);
 
@@ -1640,8 +1624,7 @@ TEST_F(WorkerOcServiceImplTest, MasterWorkerClassifiesCleanupAndRecoveryRpcs)
     akSkManager->SetClientAkSk(clientCred, serverCred);
     akSkManager->SetServerAkSk(AkSkType::SYSTEM, clientCred, serverCred);
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkStopping(worker::WorkerIsolationReason::PROCESS_STOPPING, "stopping");
+    runtime.MarkStopping(worker::WorkerIsolationReason::PROCESS_STOPPING, "stopping");
     MasterWorkerOCServiceImpl masterWorkerSvc(impl_, akSkManager);
     masterWorkerSvc.SetRuntimeFacade(&runtime);
     impl_->clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
@@ -1685,8 +1668,7 @@ TEST_F(WorkerOcServiceImplTest, MasterWorkerRejectsDataAndOwnershipInputsOutside
     akSkManager->SetClientAkSk(clientCred, serverCred);
     akSkManager->SetServerAkSk(AkSkType::SYSTEM, clientCred, serverCred);
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "isolated");
+    runtime.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "isolated");
     MasterWorkerOCServiceImpl masterWorkerSvc(impl_, akSkManager);
     masterWorkerSvc.SetRuntimeFacade(&runtime);
 
@@ -1715,9 +1697,7 @@ TEST_F(WorkerOcServiceImplTest, PublishMetaRechecksAdmissionWhenQueuedWorkStarts
     akSkManager->SetClientAkSk(clientCred, serverCred);
     akSkManager->SetServerAkSk(AkSkType::SYSTEM, clientCred, serverCred);
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    worker::WorkerRunningEvidence evidence{ true, true, true, true, true, true };
-    ASSERT_TRUE(runtimeState.TryMarkRunning(evidence, "ready"));
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
     MasterWorkerOCServiceImpl masterWorkerSvc(impl_, akSkManager);
     masterWorkerSvc.SetRuntimeFacade(&runtime);
 
@@ -1737,7 +1717,7 @@ TEST_F(WorkerOcServiceImplTest, PublishMetaRechecksAdmissionWhenQueuedWorkStarts
     PublishMetaRspPb rsp;
     DS_ASSERT_OK(akSkManager->GenerateSignature(req));
     DS_ASSERT_OK(masterWorkerSvc.PublishMeta(req, rsp));
-    runtimeState.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "isolated");
+    runtime.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "isolated");
     releaseBlocker->set_value();
     impl_->threadPool_->Submit([] {}).wait();
 }
@@ -1750,8 +1730,7 @@ TEST_F(WorkerOcServiceImplTest, MasterWorkerRejectsNestedRefIncreaseOutsideRunni
     akSkManager->SetClientAkSk(clientCred, serverCred);
     akSkManager->SetServerAkSk(AkSkType::SYSTEM, clientCred, serverCred);
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkStopping(worker::WorkerIsolationReason::PROCESS_STOPPING, "stopping");
+    runtime.MarkStopping(worker::WorkerIsolationReason::PROCESS_STOPPING, "stopping");
     MasterWorkerOCServiceImpl masterWorkerSvc(impl_, akSkManager);
     masterWorkerSvc.SetRuntimeFacade(&runtime);
 
@@ -1768,9 +1747,8 @@ TEST_F(WorkerOcServiceImplTest, MasterWorkerRejectsNestedRefIncreaseOutsideRunni
 TEST_F(WorkerOcServiceImplTest, WorkerWorkerReadRejectsBeforeOwnershipEvidence)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    runtimeState.MarkRecovering(worker::WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
-                                "ownership evidence is incomplete");
+    runtime.MarkRecovering(worker::WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
+                           "ownership evidence is incomplete");
     auto workerWorkerSvc = CreateWorkerWorkerOCService();
     workerWorkerSvc.SetRuntimeFacade(&runtime);
 
@@ -1865,9 +1843,7 @@ TEST_F(WorkerOcServiceImplTest, NewRecoveryGenerationInvalidatesOldCompleteEvide
 TEST_F(WorkerOcServiceImplTest, ResourceRecoveryRequirementRemainsStickyAcrossEvidenceChecks)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
-    worker::WorkerRunningEvidence runningEvidence{ true, true, true, true, true, true };
-    ASSERT_TRUE(runtimeState.TryMarkRunning(runningEvidence, "ready"));
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
     impl_->SetRuntimeFacade(&runtime);
     impl_->metadataRecoveryManager_ = std::make_unique<MetaDataRecoveryManager>(
         localAddress_, objectTable_, MetaDataRecoveryManager::ClusterAccess{}, nullptr, metadataRoute_);
@@ -1924,9 +1900,8 @@ TEST_F(WorkerOcServiceImplTest, StaleResourceRecoveryCommitDoesNotClearNewIncide
 TEST_F(WorkerOcServiceImplTest, StaleResourceRecoveryDoesNotPublishRunningAdmission)
 {
     worker::WorkerRuntimeFacade runtime;
-    auto &runtimeState = runtime.RuntimeState();
     worker::WorkerRunningEvidence runningEvidence{ true, true, true, true, true, true };
-    ASSERT_TRUE(runtimeState.TryMarkRunning(runningEvidence, "ready"));
+    ASSERT_TRUE(runtime.TryCompleteRecovery(runningEvidence, "ready"));
     impl_->SetRuntimeFacade(&runtime);
     impl_->evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddress_,
                                                                         HostPort("127.0.0.1", 19091), metadataRoute_);
@@ -1946,7 +1921,7 @@ TEST_F(WorkerOcServiceImplTest, StaleResourceRecoveryDoesNotPublishRunningAdmiss
 
     const bool open = impl_->PublishResourceRecoveryIfCurrent(staleGeneration, [&] {
         published = true;
-        const bool running = runtimeState.TryMarkRunning(runningEvidence, "stale recovery");
+        const bool running = runtime.TryCompleteRecovery(runningEvidence, "stale recovery");
         SetTopologyServingAdmission(running);
         return running;
     });
@@ -1954,7 +1929,7 @@ TEST_F(WorkerOcServiceImplTest, StaleResourceRecoveryDoesNotPublishRunningAdmiss
     EXPECT_FALSE(open);
     EXPECT_FALSE(published);
     EXPECT_FALSE(IsHealthy());
-    EXPECT_EQ(runtimeState.GetSnapshot().mode, worker::WorkerServiceMode::OUT_OF_MEMORY);
+    EXPECT_EQ(runtime.GetSnapshot().mode, worker::WorkerServiceMode::OUT_OF_MEMORY);
 }
 
 TEST_F(WorkerOcServiceImplTest, CollectDisconnectedClientRefIdsReturnsOnlyMissingClients)

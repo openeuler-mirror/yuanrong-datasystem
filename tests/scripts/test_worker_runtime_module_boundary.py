@@ -223,6 +223,19 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use WorkerRuntimeFacade semantic methods")
 
+    def test_worker_runtime_facade_does_not_expose_state_manager(self):
+        header = REPO_ROOT / "src/datasystem/worker/runtime/worker_runtime_facade.h"
+        text = header.read_text(encoding="utf-8")
+
+        forbidden_tokens = [
+            "RuntimeState()",
+            "WorkerRuntimeStateManager &",
+            "const WorkerRuntimeStateManager &",
+        ]
+
+        for token in forbidden_tokens:
+            self.assertNotIn(token, text, "WorkerRuntimeFacade should expose semantic runtime operations only")
+
     def test_worker_isolation_coordinator_bazel_declares_runtime_facade_dependency(self):
         header = REPO_ROOT / "src/datasystem/worker/runtime/worker_isolation_coordinator.h"
         build_file = REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel"

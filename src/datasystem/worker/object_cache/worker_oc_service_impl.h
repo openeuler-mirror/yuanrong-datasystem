@@ -156,8 +156,8 @@ public:
     void InitServiceImpl();
 
     /**
-     * @brief Borrow local runtime state for ordinary object-service admission.
-     * @param[in] runtimeState Runtime state owned by WorkerOCServer.
+     * @brief Borrow local runtime facade for ordinary object-service admission.
+     * @param[in] runtime Runtime facade owned by WorkerOCServer.
      */
     void SetRuntimeFacade(worker::WorkerRuntimeFacade *runtime);
 

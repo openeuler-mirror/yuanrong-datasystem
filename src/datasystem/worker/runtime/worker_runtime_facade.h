@@ -25,8 +25,6 @@ public:
     WorkerRuntimeFacade &operator=(const WorkerRuntimeFacade &) = delete;
 
     WorkerRuntimeStateSnapshot GetSnapshot() const;
-    WorkerRuntimeStateManager &RuntimeState();
-    const WorkerRuntimeStateManager &RuntimeState() const;
 
     void MarkStarting(std::string detail = {});
     void MarkJoining(std::string detail = {});
