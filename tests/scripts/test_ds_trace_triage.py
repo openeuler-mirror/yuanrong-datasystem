@@ -264,8 +264,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"chapter-guide-list\"" in html
     assert "表 1-1 整体导读" in html
     assert "chapter-guide" in html
+    assert "summary-points" in html
+    assert "summary-hot" in html
+    assert "summary-warn" in html
+    assert "summary-key" in html
     assert "function chapterSummaryTexts()" in html
     assert "function renderChapterGuide(summaries)" in html
+    assert "function highlightSummaryText(text)" in html
+    assert "function summaryPointsHtml(summary)" in html
     assert "图 5-1/5-2/5-3/5-5" in html
     assert "id=\"recommendation-table\"" in html
     assert "id=\"source-appendix-common-table\"" in html

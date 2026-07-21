@@ -1977,7 +1977,7 @@ aside h2{font-size:16px;margin:0 0 12px}nav a{display:block;color:#324055;text-d
 nav a.active,nav a:hover{background:#eaf2ff;color:#1d4ed8}nav a.sub{padding-left:22px;color:#64748b;font-size:12px}
 main{flex:1;min-width:0;width:auto;padding:22px 28px 50px}section{margin-bottom:20px}
 h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-size:15px;text-align:center;margin:10px 0}
-.subtitle,.note,.insight{color:var(--muted);line-height:1.65}.section-summary{background:#f8fafc;border-left:4px solid var(--blue);color:#334155;font-size:13px;line-height:1.65}.section-summary b{color:#172033}.chapter-guide{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}.chapter-guide li{border:1px solid var(--border);border-radius:8px;background:#f8fafc;padding:9px 10px;line-height:1.55;font-size:13px}.chapter-guide a{color:#1d4ed8;text-decoration:none;font-weight:700}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.subtitle,.note,.insight{color:var(--muted);line-height:1.65}.section-summary{background:#f8fafc;border-left:4px solid var(--blue);color:#334155;font-size:13px;line-height:1.65}.section-summary b{color:#172033}.summary-points{margin:6px 0 0 18px;padding:0}.summary-points li{margin:3px 0}.summary-key{font-weight:700;color:#1d4ed8}.summary-hot{font-weight:700;color:#991b1b;background:#fee2e2;border-radius:4px;padding:1px 4px}.summary-warn{font-weight:700;color:#9a3412;background:#ffedd5;border-radius:4px;padding:1px 4px}.chapter-guide{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}.chapter-guide li{border:1px solid var(--border);border-radius:8px;background:#f8fafc;padding:9px 10px;line-height:1.55;font-size:13px}.chapter-guide a{color:#1d4ed8;text-decoration:none;font-weight:700}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{min-width:0;background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
 tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}.cell-hot,.cell-warn,.cell-ok{display:inline-block;border-radius:4px;padding:1px 5px;font-weight:700}.cell-hot{background:#fee2e2;color:#991b1b}.cell-warn{background:#ffedd5;color:#9a3412}.cell-ok{background:#dcfce7;color:#166534}
@@ -3237,21 +3237,31 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const missing = coverageRows.filter(([, item]) => item.status !== 'present').map(([name]) => name).slice(0, 3);
     return missing.length ? `缺失观测面：${missing.join(', ')}` : '关键观测面已采样';
   }
-  function setSectionSummary(id, text) {
+  function highlightSummaryText(text) {
+    return escapeHtml(text)
+      .replace(/(deadline|timeout|error|errors|失败|异常|缺失|未采样|Top error)/gi, '<span class="summary-hot">$1</span>')
+      .replace(/(瓶颈|热点|集中|Top trace|Top edge|access|p99|max|slow|worker|Worker|UB|URMA)/g, '<span class="summary-warn">$1</span>')
+      .replace(/(主分类|读取|写入|流程|建议|原始 JSON|证据|时间|入口\\/出口)/g, '<span class="summary-key">$1</span>');
+  }
+  function summaryPointsHtml(summary) {
+    const points = Array.isArray(summary?.points) ? summary.points : String(summary || '').split(/[；;]/).filter(Boolean);
+    return `<b>本章结论：</b><ul class="summary-points">${points.map(point => `<li>${highlightSummaryText(point.replace(/[。.]$/, ''))}</li>`).join('')}</ul>`;
+  }
+  function setSectionSummary(id, summary) {
     const node = document.getElementById(id);
-    if (node) node.innerHTML = `<b>本章结论：</b>${escapeHtml(text)}`;
+    if (node) node.innerHTML = summaryPointsHtml(summary);
   }
   function chapterSummaryTexts() {
     const topCohort = cohortRows.slice().sort((a,b) => Object.values(b[1].errors || {}).reduce((x,y)=>x+y,0) - Object.values(a[1].errors || {}).reduce((x,y)=>x+y,0))[0];
     const topCohortText = topCohort ? `${topCohort[0]} errors=${fmtCount(Object.values(topCohort[1].errors || {}).reduce((a,b)=>a+b,0))}` : '无 cohort 对比';
     return {
-      s2: `主分类 ${topClass[0]}=${fmtCount(topClass[1])}；Top error ${errorRows[0]?.[0] || '无'}=${fmtCount(errorRows[0]?.[1])}；${topCohortText}。`,
-      s3: `读取瓶颈 ${topLatencyText(latencyRowsForOperation('read'))}；写入瓶颈 ${topLatencyText(latencyRowsForOperation('write'))}；时间热点：读 ${topTimeBucketText('read')}，写 ${topTimeBucketText('write')}。`,
-      s4: `流程热点：读 ${topFlowStageText(readFlowStages)}；写 ${topFlowStageText(writeFlowStages)}。Worker 集中：读 ${topWorkerText(workerRowsForOperation('read'))}；写 ${topWorkerText(workerRowsForOperation('write'))}。`,
-      s5: `UB 耗时 ${topUbMetricText()}；入口/出口集中 ${topUbWorkerText()}；Top edge ${topUbEdgeText()}。`,
-      s6: `默认按接口 access 时延降序；Top trace ${topTraceText()}。建议先切换“失败/成功”和“读/写”筛选，再看原始日志块摘要。`,
-      s7: `${recommendations[0]?.title || '暂无自动建议'}；${missingCoverageText()}。`,
-      s8: `原始 JSON 保留 ${fmtCount(Object.keys(traces).length)} 条 trace，可用于复现 parser 聚合和人工二次确认。`
+      s2: {points:[`主分类 ${topClass[0]}=${fmtCount(topClass[1])}`, `Top error ${errorRows[0]?.[0] || '无'}=${fmtCount(errorRows[0]?.[1])}`, topCohortText]},
+      s3: {points:[`读取瓶颈 ${topLatencyText(latencyRowsForOperation('read'))}`, `写入瓶颈 ${topLatencyText(latencyRowsForOperation('write'))}`, `时间热点：读 ${topTimeBucketText('read')}，写 ${topTimeBucketText('write')}`]},
+      s4: {points:[`流程热点：读 ${topFlowStageText(readFlowStages)}；写 ${topFlowStageText(writeFlowStages)}`, `Worker 集中：读 ${topWorkerText(workerRowsForOperation('read'))}`, `Worker 集中：写 ${topWorkerText(workerRowsForOperation('write'))}`]},
+      s5: {points:[`UB 耗时 ${topUbMetricText()}`, `入口/出口集中 ${topUbWorkerText()}`, `Top edge ${topUbEdgeText()}`]},
+      s6: {points:[`默认按接口 access 时延降序`, `Top trace ${topTraceText()}`, `建议先切换“失败/成功”和“读/写”筛选，再看原始日志块摘要`]},
+      s7: {points:[recommendations[0]?.title || '暂无自动建议', missingCoverageText()]},
+      s8: {points:[`原始 JSON 保留 ${fmtCount(Object.keys(traces).length)} 条 trace`, '可用于复现 parser 聚合和人工二次确认']}
     };
   }
   function renderChapterGuide(summaries) {
@@ -3266,7 +3276,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const node = document.getElementById('chapter-guide-list');
     if (!node) return;
     node.innerHTML = guideRows.map(([href, title, text, refs]) =>
-      `<li><a href="${href}">${escapeHtml(title)}</a><div>${escapeHtml(text)}</div><div class="small">${escapeHtml(refs)}</div></li>`
+      `<li><a href="${href}">${escapeHtml(title)}</a>${summaryPointsHtml(text)}<div class="small">${escapeHtml(refs)}</div></li>`
     ).join('');
   }
   function renderSectionSummaries() {
