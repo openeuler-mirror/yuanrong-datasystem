@@ -18,6 +18,7 @@
  * Description: Mimic a remote server, prepare a local buffer and provide info
  * needed as if sent by a remote server. Tool for Ucp tests.
  */
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/rdma/ucp_worker_pool.h"
 #include "datasystem/protos/utils.pb.h"
 #include "common/rdma/mimic_remote_server.h"

@@ -21,6 +21,7 @@
 #include <gtest/gtest.h>
 
 #include "common.h"
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/encrypt/secret_manager.h"
 #include "common/stream_cache/stream_common.h"
 #include "sc_client_common.h"

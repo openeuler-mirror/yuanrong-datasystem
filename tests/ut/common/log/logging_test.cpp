@@ -17,6 +17,7 @@
 /**
  * Description: A very, very boring logging test.
  */
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/log/log.h"
 
 #include <algorithm>

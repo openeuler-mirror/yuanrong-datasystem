@@ -17,6 +17,7 @@
 /**
  * Description: Test expired object manager class.
  */
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/master/object_cache/expired_object_manager.h"
 
 #include <mutex>

@@ -164,7 +164,7 @@ DS_DEFINE_string(sdk_data_placement_policy, "PREFERRED_SAME_NODE",
                  "SDK write placement policy, read once during routing initialization: PREFERRED_SAME_NODE, "
                  "REQUIRED_SAME_NODE, or PREFERRED_META_OWNER. Use PREFERRED_META_OWNER to preserve legacy "
                  "metadata-owner placement.");
-DS_DEFINE_bool(use_brpc, GetBoolFromEnv("DATASYSTEM_USE_BRPC", false),
+DS_DEFINE_bool(use_brpc, GetBoolFromEnv("DATASYSTEM_USE_BRPC", true),
                "Use brpc instead of ZMQ for RPC communication.");
 DS_DEFINE_int32(brpc_server_num_threads, 64, "Number of brpc server worker threads.");
 DS_DEFINE_int32(brpc_max_concurrency, 128,

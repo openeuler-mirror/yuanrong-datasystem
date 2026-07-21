@@ -21,6 +21,7 @@
 #include "common/stream_cache/element_generator.h"
 #include "common/stream_cache/stream_common.h"
 #include "sc_client_common.h"
+#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/stream_client.h"
 #include "datasystem/stream/producer.h"
 #include "datasystem/stream/consumer.h"

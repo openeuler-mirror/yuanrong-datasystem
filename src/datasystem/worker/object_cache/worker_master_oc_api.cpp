@@ -302,7 +302,8 @@ Status WorkerRemoteMasterOCApi::ReportRebalanceResult(master::ReportRebalanceRes
                                      FormatString("Request timeout (%ld ms).", -remainingTime));
             opts.SetTimeout(std::min(remainingTime, RESOURCE_REPORT_RPC_TIMEOUT_MS));
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
-            return rpcSession_->ReportRebalanceResult(opts, request, response);
+            return (brpcSession_ ? brpcSession_->ReportRebalanceResult(opts, request, response)
+                                 : rpcSession_->ReportRebalanceResult(opts, request, response));
         },
         []() { return Status::OK(); },
         { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
