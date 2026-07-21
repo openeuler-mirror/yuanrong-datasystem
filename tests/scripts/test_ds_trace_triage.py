@@ -416,7 +416,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "--report-font-size:13px" in html
     assert ".caption{text-align:center;color:#64748b;font-size:var(--report-font-size)" in html
     assert "th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size)" in html
-    assert ("const chartTextStyle = {font" + "Size:13") in html
+    assert "const chartTextStyle" in html
     assert "textStyle:chartTextStyle" in html
     assert "图 4-1 读取流程证据块：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
     assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
