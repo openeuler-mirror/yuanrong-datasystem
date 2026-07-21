@@ -79,9 +79,14 @@ publish: local only / dry-run / published
 2. Build or refresh CodeGraph on a clean `main/master` worktree when source
    causality is requested:
    ```bash
-   codegraph init <clean-worktree>
-   codegraph index <clean-worktree>
+   CODEGRAPH_BIN=${CODEGRAPH_BIN:-$(command -v codegraph || true)}
+   test -n "$CODEGRAPH_BIN"
+   "$CODEGRAPH_BIN" init <clean-worktree>
+   "$CODEGRAPH_BIN" index <clean-worktree>
    ```
+   If `CODEGRAPH_BIN` cannot be found, continue with log-only triage and say
+   source causality is unverified. Do not claim code-level root cause until
+   CodeGraph discovery and direct source reads are both available.
 3. Run the deterministic parser first:
    ```bash
    python3 scripts/ds_trace_triage.py run <trace_dir_or_tar_gz> [more.gz ...] \

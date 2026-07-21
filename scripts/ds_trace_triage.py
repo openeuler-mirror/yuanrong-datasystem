@@ -31,6 +31,10 @@ IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b")
 NOISE_ON_LABEL = "有底噪(dizao)"
 NOISE_OFF_LABEL = "无底噪(wudizao)"
 DEFAULT_SITE_HTML_MAX_BYTES = 2 * 1024 * 1024
+DEFAULT_MAX_TAR_MEMBERS = 10000
+DEFAULT_MAX_TAR_TOTAL_BYTES = 1024 * 1024 * 1024
+DEFAULT_MAX_TAR_MEMBER_BYTES = 512 * 1024 * 1024
+DEFAULT_MAX_EVIDENCE_PER_TRACE = 200
 PUBLISH_HOST_ENV = "DS_TRACE_TRIAGE_PUBLISH_HOST"
 PUBLISH_ROOT_ENV = "DS_TRACE_TRIAGE_PUBLISH_ROOT"
 PUBLISH_BASE_URL_ENV = "DS_TRACE_TRIAGE_PUBLISH_BASE_URL"
@@ -106,35 +110,44 @@ DEFAULT_RULES = ParserRules()
 class TraceInputReader:
     """Read log lines from files, directories, gzip files, and tar bundles."""
 
+    def __init__(self):
+        self.failures = []
+
     def iter_lines(self, paths):
         for raw_path in paths:
             path = Path(raw_path)
             if path.is_dir():
                 for root, _, files in os.walk(path):
-                    for name in files:
+                    for name in sorted(files):
                         yield from self.iter_file(Path(root) / name)
             else:
                 yield from self.iter_file(path)
 
     def iter_file(self, path):
-        if tarfile.is_tarfile(path):
-            with tarfile.open(path, "r:*") as tar:
-                for member in tar.getmembers():
-                    if not member.isfile():
-                        continue
-                    stream = tar.extractfile(member)
-                    if stream is None:
-                        continue
-                    text = io.TextIOWrapper(stream, encoding="utf-8", errors="replace")
-                    for line_no, line in enumerate(text, 1):
-                        yield str(path), member.name, line_no, line.rstrip("\n")
-            return
-        opener = gzip.open if path.suffix == ".gz" else open
         try:
+            if tarfile.is_tarfile(path):
+                with tarfile.open(path, "r:*") as tar:
+                    for member in tar.getmembers():
+                        if not member.isfile():
+                            continue
+                        stream = tar.extractfile(member)
+                        if stream is None:
+                            continue
+                        text = io.TextIOWrapper(stream, encoding="utf-8", errors="replace")
+                        for line_no, line in enumerate(text, 1):
+                            yield str(path), member.name, line_no, line.rstrip("\n")
+                return
+            opener = gzip.open if path.suffix == ".gz" else open
             with opener(path, "rt", encoding="utf-8", errors="replace") as f:
                 for line_no, line in enumerate(f, 1):
                     yield str(path), path.name, line_no, line.rstrip("\n")
-        except (OSError, UnicodeError):
+        except (OSError, UnicodeError, tarfile.TarError) as exc:
+            self.failures.append({
+                "path": str(path),
+                "member": path.name,
+                "error": type(exc).__name__,
+                "message": str(exc),
+            })
             return
 
 
@@ -577,7 +590,14 @@ class TraceAccumulator:
             "latency_summary_raw": [],
             "errors": Counter(),
             "evidence": [],
+            "dropped_evidence": 0,
             "input_sources": Counter(),
+            "source_stats": defaultdict(lambda: {
+                "errors": Counter(),
+                "workers": Counter(),
+                "access_latency_ms": [],
+                "line_count": 0,
+            }),
         }
 
     def ingest(self, parsed, line):
@@ -585,26 +605,30 @@ class TraceAccumulator:
         trace = self.traces[trace_id]
         trace["lines"] += 1
         evidence = parsed["evidence"]
-        trace["input_sources"][
-            _source_cohort_label(evidence["source"], evidence["member"], self.noise_cohort_mode)
-        ] += 1
+        source_label = _source_cohort_label(evidence["source"], evidence["member"], self.noise_cohort_mode)
+        trace["input_sources"][source_label] += 1
+        trace["source_stats"][source_label]["line_count"] += 1
         worker = parsed["worker"]
         trace["workers"][worker] += 1
+        trace["source_stats"][source_label]["workers"][worker] += 1
         self.worker_counts[worker] += 1
         ts = parsed["timestamp"]
         if ts:
             trace["timestamps"].append(ts.isoformat())
             self.all_ts.append(ts)
-        trace["evidence"].append(evidence)
+        if len(trace["evidence"]) < DEFAULT_MAX_EVIDENCE_PER_TRACE:
+            trace["evidence"].append(evidence)
+        else:
+            trace["dropped_evidence"] += 1
         self._ingest_ub_events(trace, parsed["ub_events"])
-        self._ingest_access(trace, line)
+        self._ingest_access(trace, line, source_label)
         self._ingest_breakdown(trace, line)
         self._ingest_rpc_slow(trace, line)
         self._ingest_latency_summary(trace, line)
         self._ingest_urma_elapsed(trace, line)
         self._ingest_urma_perf(trace, line)
         self._ingest_custom_metrics(trace, parsed["custom_metrics_ms"])
-        self._ingest_errors(trace, parsed["errors"])
+        self._ingest_errors(trace, parsed["errors"], source_label)
 
     def _ingest_ub_events(self, trace, events):
         for event in events:
@@ -617,7 +641,7 @@ class TraceAccumulator:
                 if event.get("cost_ms") is not None:
                     self.ub_summary["edges"][edge]["latencies"].append(event["cost_ms"])
 
-    def _ingest_access(self, trace, line):
+    def _ingest_access(self, trace, line, source_label=None):
         access = ACCESS_RE.search(line)
         if not access:
             return
@@ -630,6 +654,8 @@ class TraceAccumulator:
             self.errors[f"status={status}"] += 1
             trace["errors"][f"status={status}"] += 1
         trace["access_latency_ms"].append(latency_ms)
+        if source_label:
+            trace["source_stats"][source_label]["access_latency_ms"].append(latency_ms)
         role = "client" if "CLIENT" in operation else "worker" if "POSIX" in operation else "unknown"
         trace["access_latency_ms_by_role"][role].append(latency_ms)
         self.access_latencies.append(latency_ms)
@@ -707,11 +733,13 @@ class TraceAccumulator:
             trace["custom_metrics_ms"][name] += val
             self.custom_metrics[name].append(val)
 
-    def _ingest_errors(self, trace, patterns):
+    def _ingest_errors(self, trace, patterns, source_label=None):
         for pattern in patterns:
             self.surface_counts["error"] += 1
             self.errors[pattern] += 1
             trace["errors"][pattern] += 1
+            if source_label:
+                trace["source_stats"][source_label]["errors"][pattern] += 1
 
     def finish(self):
         trace_rows, classifications, worker_summary = self._build_trace_rows()
@@ -793,6 +821,16 @@ class TraceAccumulator:
                 "latency_summary_raw": trace["latency_summary_raw"],
                 "errors": dict(trace["errors"]),
                 "input_sources": sorted(trace["input_sources"]),
+                "source_stats": {
+                    source: {
+                        "errors": dict(stats["errors"]),
+                        "workers": dict(stats["workers"]),
+                        "access_latency_ms": _percentiles(stats["access_latency_ms"]),
+                        "line_count": stats["line_count"],
+                    }
+                    for source, stats in sorted(trace["source_stats"].items())
+                },
+                "dropped_evidence": trace["dropped_evidence"],
                 "triage_flags": triage_flags,
                 "stage_breakdown": stage_breakdown,
                 "evidence_coverage": _evidence_coverage(trace),
@@ -824,7 +862,7 @@ class TraceAccumulator:
 class TraceDimensionBuilder:
     """Convert accumulated trace facts into the stable report schema."""
 
-    def build(self, snapshot, paths, code_ref="unknown"):
+    def build(self, snapshot, paths, code_ref="unknown", input_failures=None):
         trace_rows = snapshot["trace_rows"]
         surface_counts = snapshot["surface_counts"]
         coverage = self._build_coverage(surface_counts)
@@ -857,6 +895,7 @@ class TraceDimensionBuilder:
                 "ub_worker_summary": _build_ub_worker_summary(trace_rows),
                 "ub_lifecycle_summary": _build_ub_lifecycle_summary(trace_rows),
                 "cohorts": cohorts,
+                "input_failures": input_failures or [],
                 "worker_edges": snapshot["worker_edges"],
                 "coverage": coverage,
                 "diagnosis": diagnosis,
@@ -933,21 +972,32 @@ class TraceAnalyzer:
         self.dimension_builder = dimension_builder or TraceDimensionBuilder()
         self.accumulator = None
 
-    def analyze(self, paths, code_ref="unknown"):
+    def analyze(self, paths, code_ref="unknown", allow_partial_inputs=False):
         self.accumulator = self.accumulator_cls(paths)
         for source, member, line_no, line in self.reader.iter_lines(paths):
             parsed = self.parser.parse_line(source, member, line_no, line)
             if parsed:
                 self.accumulator.ingest(parsed, line)
-        return self.dimension_builder.build(self.accumulator.finish(), paths, code_ref=code_ref)
+        if self.reader.failures and not allow_partial_inputs:
+            failures = "; ".join(f"{item['path']}:{item['error']}" for item in self.reader.failures[:5])
+            raise SystemExit(f"Failed to read trace input(s): {failures}. Use --allow-partial-inputs for best-effort analysis.")
+        snapshot = self.accumulator.finish()
+        try:
+            return self.dimension_builder.build(
+                snapshot, paths, code_ref=code_ref, input_failures=self.reader.failures
+            )
+        except TypeError:
+            return self.dimension_builder.build(snapshot, paths, code_ref=code_ref)
 
 
-def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=None):
-    return TraceAnalyzer(reader=reader, parser=parser, rules=rules).analyze(paths, code_ref=code_ref)
+def _analyze_inputs(paths, code_ref="unknown", reader=None, parser=None, rules=None, allow_partial_inputs=False):
+    return TraceAnalyzer(reader=reader, parser=parser, rules=rules).analyze(
+        paths, code_ref=code_ref, allow_partial_inputs=allow_partial_inputs
+    )
 
 
-def analyze_inputs(paths, code_ref="unknown"):
-    return TraceAnalyzer().analyze(paths, code_ref=code_ref)
+def analyze_inputs(paths, code_ref="unknown", allow_partial_inputs=False):
+    return TraceAnalyzer().analyze(paths, code_ref=code_ref, allow_partial_inputs=allow_partial_inputs)
 
 
 def _build_cohorts(trace_rows):
@@ -961,13 +1011,20 @@ def _build_cohorts(trace_rows):
     for trace_id, trace in trace_rows.items():
         sources = trace.get("input_sources") or ["unknown"]
         for source in sources:
+            source_stats = trace.get("source_stats", {}).get(source, {})
             cohort = cohorts[source]
             cohort["trace_ids"].add(trace_id)
-            cohort["errors"].update(trace.get("errors", {}))
-            cohort["classifications"][trace.get("classification", "unknown")] += 1
-            if trace.get("access_latency_ms", {}).get("p50") is not None:
-                cohort["access_latencies"].append(trace["access_latency_ms"]["p50"])
-            cohort["workers"].update(trace.get("workers", {}))
+            source_errors = source_stats.get("errors", {})
+            cohort["errors"].update(source_errors)
+            if source_errors:
+                cohort["classifications"][trace.get("classification", "deadline_or_error")] += 1
+            elif source_stats.get("access_latency_ms", {}).get("p50", 0) >= 20:
+                cohort["classifications"]["slow_access"] += 1
+            else:
+                cohort["classifications"][trace.get("classification", "unknown")] += 1
+            if source_stats.get("access_latency_ms", {}).get("p50") is not None:
+                cohort["access_latencies"].append(source_stats["access_latency_ms"]["p50"])
+            cohort["workers"].update(source_stats.get("workers", {}))
     rows = {}
     for source, cohort in sorted(cohorts.items()):
         rows[source] = {
@@ -1527,9 +1584,12 @@ def _build_ub_lifecycle_summary(trace_rows):
 
     def request_row(trace_id, event):
         request_id = event.get("request_id")
-        key = request_id or "|".join(str(part or "") for part in (
-            trace_id, event.get("worker"), event.get("src_addr"), event.get("target_addr"), event.get("timestamp")
-        ))
+        if request_id:
+            key = "|".join(str(part or "") for part in (trace_id, request_id))
+        else:
+            key = "|".join(str(part or "") for part in (
+                trace_id, event.get("worker"), event.get("src_addr"), event.get("target_addr"), event.get("timestamp")
+            ))
         row = requests.setdefault(key, {
             "trace_id": trace_id,
             "request_id": request_id or "",
@@ -1693,6 +1753,19 @@ def _input_identity(path):
             with tarfile.open(p, "r:*") as tar:
                 members = sorted(member.name for member in tar.getmembers() if member.isfile())
         return {"path": str(p), "size": p.stat().st_size, "sha256": h.hexdigest(), "members": members}
+    if p.is_dir():
+        total_size = 0
+        for fp in sorted(item for item in p.rglob("*") if item.is_file()):
+            relative = fp.relative_to(p).as_posix()
+            members.append(relative)
+            total_size += fp.stat().st_size
+            h.update(relative.encode("utf-8"))
+            h.update(b"\0")
+            with open(fp, "rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+            h.update(b"\0")
+        return {"path": str(p), "size": total_size, "sha256": h.hexdigest(), "members": members}
     h.update(str(p).encode("utf-8"))
     return {"path": str(p), "size": 0, "sha256": h.hexdigest(), "members": members}
 
@@ -1729,10 +1802,13 @@ def _find_cached_run(out_root, cache_key):
     return None
 
 
-def _safe_member_path(member_name):
+def _safe_member_path(member_name, extract_root):
     pure = Path(member_name)
-    safe_parts = [part for part in pure.parts if part not in ("", ".", "..")]
-    return Path(*safe_parts) if safe_parts else Path("member.log")
+    if pure.is_absolute() or any(part in ("", ".", "..") for part in pure.parts):
+        raise ValueError(f"Unsafe tar member path: {member_name}")
+    target = (Path(extract_root) / pure).resolve()
+    target.relative_to(Path(extract_root).resolve())
+    return target
 
 
 def _preserve_raw_inputs(inputs, run_dir):
@@ -1747,14 +1823,24 @@ def _preserve_raw_inputs(inputs, run_dir):
             shutil.copy2(p, copied)
             if tarfile.is_tarfile(p):
                 extract_root = raw_extracted / p.name
+                member_count = 0
+                total_bytes = 0
                 with tarfile.open(p, "r:*") as tar:
                     for member in tar.getmembers():
                         if not member.isfile():
                             continue
+                        member_count += 1
+                        if member_count > DEFAULT_MAX_TAR_MEMBERS:
+                            raise ValueError(f"Tar member count exceeds {DEFAULT_MAX_TAR_MEMBERS}: {p}")
+                        if member.size > DEFAULT_MAX_TAR_MEMBER_BYTES:
+                            raise ValueError(f"Tar member too large: {member.name}")
+                        total_bytes += member.size
+                        if total_bytes > DEFAULT_MAX_TAR_TOTAL_BYTES:
+                            raise ValueError(f"Tar extracted bytes exceed {DEFAULT_MAX_TAR_TOTAL_BYTES}: {p}")
                         stream = tar.extractfile(member)
                         if stream is None:
                             continue
-                        target = extract_root / _safe_member_path(member.name)
+                        target = _safe_member_path(member.name, extract_root)
                         target.parent.mkdir(parents=True, exist_ok=True)
                         with open(target, "wb") as out:
                             shutil.copyfileobj(stream, out)
@@ -3298,12 +3384,13 @@ class TraceRunPipeline:
         self.store = store or TraceRunStore()
         self.site_publisher = site_publisher or TraceSitePublisher(self.store)
 
-    def parse(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+    def parse(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False,
+              allow_partial_inputs=False):
         prepared = self.store.prepare_parse_run(inputs, out_dir, case_name, scenario, code_ref, force=force)
         if prepared["cached"]:
             return prepared["run_dir"]
         run_dir = prepared["run_dir"]
-        report = self.analyzer.analyze(inputs, code_ref=code_ref)
+        report = self.analyzer.analyze(inputs, code_ref=code_ref, allow_partial_inputs=allow_partial_inputs)
         events = self.renderer.events(report)
         self.store.write_parse_outputs(
             run_dir, report, events, case_name, scenario, code_ref,
@@ -3355,9 +3442,10 @@ class TraceRunPipeline:
         }))
         return run_dir / "report.site.html"
 
-    def run(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+    def run(self, inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False,
+            allow_partial_inputs=False):
         run_dir = self.parse(inputs, out_dir, case_name=case_name, scenario=scenario,
-                             code_ref=code_ref, force=force)
+                             code_ref=code_ref, force=force, allow_partial_inputs=allow_partial_inputs)
         if not (run_dir / "summary.json").exists():
             self.aggregate(run_dir)
         if not (run_dir / "triage.json").exists():
@@ -3369,9 +3457,10 @@ class TraceRunPipeline:
         return run_dir
 
 
-def parse_stage(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+def parse_stage(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False,
+                allow_partial_inputs=False):
     return TraceRunPipeline().parse(inputs, out_dir, case_name=case_name, scenario=scenario,
-                                    code_ref=code_ref, force=force)
+                                    code_ref=code_ref, force=force, allow_partial_inputs=allow_partial_inputs)
 
 
 def aggregate_stage(run_dir):
@@ -3419,9 +3508,10 @@ def _verify_html_inline_script(html_path):
     return "node-check-passed"
 
 
-def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False):
+def run_pipeline(inputs, out_dir, case_name="trace-case", scenario="", code_ref="unknown", force=False,
+                 allow_partial_inputs=False):
     return TraceRunPipeline().run(inputs, out_dir, case_name=case_name, scenario=scenario,
-                                  code_ref=code_ref, force=force)
+                                  code_ref=code_ref, force=force, allow_partial_inputs=allow_partial_inputs)
 
 
 def _make_self_test_bundle(path):
@@ -3509,9 +3599,12 @@ def main(argv=None):
             parser.add_argument("--scenario", default="", help="Scenario description stored in manifest.")
             parser.add_argument("--code-ref", default="unknown", help="Source ref used for CodeGraph/source validation.")
             parser.add_argument("--force", action="store_true", help="Create a fresh run even when cache matches.")
+            parser.add_argument("--allow-partial-inputs", action="store_true",
+                                help="Continue when some inputs cannot be read; failures are recorded in the report.")
             args = parser.parse_args(argv)
             print(parse_stage(args.inputs, args.out, case_name=args.case, scenario=args.scenario,
-                              code_ref=args.code_ref, force=args.force))
+                              code_ref=args.code_ref, force=args.force,
+                              allow_partial_inputs=args.allow_partial_inputs))
             return 0
         if command in ("aggregate", "triage", "render-local", "render-site", "publish-site"):
             parser = argparse.ArgumentParser(description=f"Run trace triage {command} stage.")
@@ -3541,15 +3634,20 @@ def main(argv=None):
         parser.add_argument("--scenario", default="", help="Scenario description stored in manifest.")
         parser.add_argument("--code-ref", default="unknown", help="Source ref used for CodeGraph/source validation.")
         parser.add_argument("--force", action="store_true", help="Create a fresh run even when cache matches.")
+        parser.add_argument("--allow-partial-inputs", action="store_true",
+                            help="Continue when some inputs cannot be read; failures are recorded in the report.")
         args = parser.parse_args(argv)
         run_dir = run_pipeline(args.inputs, args.out, case_name=args.case, scenario=args.scenario,
-                               code_ref=args.code_ref, force=args.force)
+                               code_ref=args.code_ref, force=args.force,
+                               allow_partial_inputs=args.allow_partial_inputs)
         print(run_dir)
         return 0
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("inputs", nargs="*", help="Log files, directories, or gzip-wrapped tar bundles.")
     parser.add_argument("--code-ref", default="unknown", help="Source ref used for CodeGraph/source validation.")
+    parser.add_argument("--allow-partial-inputs", action="store_true",
+                        help="Continue when some inputs cannot be read; failures are recorded in the report.")
     parser.add_argument("--output-json", help="Write machine-readable summary JSON.")
     parser.add_argument("--output-md", help="Write Markdown summary.")
     parser.add_argument("--self-test", action="store_true", help="Run the built-in fixture and validate parser behavior.")
@@ -3561,7 +3659,7 @@ def main(argv=None):
     else:
         if not args.inputs:
             parser.error("inputs are required unless --self-test is used")
-        report = analyze_inputs(args.inputs, code_ref=args.code_ref)
+        report = analyze_inputs(args.inputs, code_ref=args.code_ref, allow_partial_inputs=args.allow_partial_inputs)
 
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output_json:

@@ -118,12 +118,15 @@ git log -1 --oneline main/master
 
 ```bash
 git worktree add --detach <clean-main-worktree> main/master
-codegraph init <clean-main-worktree>
-codegraph index <clean-main-worktree>
-codegraph callees WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl --path <clean-main-worktree>
+CODEGRAPH_BIN=${CODEGRAPH_BIN:-$(command -v codegraph || true)}
+test -n "$CODEGRAPH_BIN"
+"$CODEGRAPH_BIN" init <clean-main-worktree>
+"$CODEGRAPH_BIN" index <clean-main-worktree>
+"$CODEGRAPH_BIN" callees WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl --path <clean-main-worktree>
 ```
 
 CodeGraph 用于发现符号和边，结论必须回到源码验证。`.worktrees`、生成代码和动态分发会导致重复或缺边，不能把“没有边”当成“没有调用”。
+如果本机找不到 `CODEGRAPH_BIN`，本轮只能输出日志侧定位结论，并明确标记源码因果未验证；不得把日志现象直接写成源码根因。
 
 本次沉淀校准的 ref 为 `a7130ac9c3171bf3acb70601c7de99f7bc24f25a`。在该 ref 下，远端 Get 慢链路仍要关注：
 

@@ -672,6 +672,29 @@ def test_multiple_input_files_are_reported_as_cohorts(tmp_path):
     assert report["traces"][trace_a]["input_sources"] == ["noisy.log"]
 
 
+def test_shared_trace_id_keeps_cohort_errors_at_source_level(tmp_path):
+    trace_id = "019f7d10-b880-7937-b945-382161303199"
+    clean = tmp_path / "clean.log"
+    noisy = tmp_path / "noisy.log"
+    clean.write_text(
+        f"2026-07-20T14:00:00.000000 | INFO | access_recorder | 192.0.2.10 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 8000 | 0\n",
+        encoding="utf-8",
+    )
+    noisy.write_text(
+        f"2026-07-20T14:00:00.001000 | ERROR | client | 192.0.2.20 | 1 | {trace_id} | RPC deadline exceeded\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(clean), str(noisy)], code_ref="unit-test")
+    cohorts = report["dimensions"]["cohorts"]
+
+    assert cohorts["clean.log"]["trace_count"] == 1
+    assert cohorts["clean.log"]["errors"] == {}
+    assert cohorts["noisy.log"]["errors"]["RPC deadline exceeded"] == 1
+    assert report["traces"][trace_id]["errors"]["RPC deadline exceeded"] == 1
+
+
 def test_dizao_directory_marks_noise_cohorts(tmp_path):
     trace_a = "019f7d11-1f09-762a-9163-c547ef71a101"
     trace_b = "019f7d11-b880-7937-b945-382161303102"
@@ -979,6 +1002,47 @@ def test_trace_input_reader_reads_plain_gzip_and_skips_invalid_binary(tmp_path):
 
     assert rows == [(str(gz), gz.name, 1, rows[0][3])]
     assert trace_id in rows[0][3]
+    assert mod.TraceInputReader().failures == []
+
+
+def test_invalid_input_fails_by_default_and_can_be_recorded_as_partial(tmp_path):
+    valid_trace = "019f7d0f-80ec-73bc-91ce-8e84de820012"
+    valid = tmp_path / "valid.log"
+    invalid = tmp_path / "invalid.gz"
+    valid.write_text(
+        f"2026-07-20T13:27:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {valid_trace} | ok\n",
+        encoding="utf-8",
+    )
+    invalid.write_bytes(b"not-a-valid-gzip")
+
+    mod = _load_module()
+    with pytest.raises(SystemExit, match="Failed to read trace input"):
+        mod.analyze_inputs([str(valid), str(invalid)], code_ref="unit-test")
+
+    report = mod.analyze_inputs([str(valid), str(invalid)], code_ref="unit-test", allow_partial_inputs=True)
+    assert report["trace_count"] == 1
+    assert report["dimensions"]["input_failures"][0]["path"] == str(invalid)
+
+
+def test_raw_tar_preservation_rejects_absolute_member_paths(tmp_path):
+    bundle = tmp_path / "unsafe.tar.gz"
+    _write_tar_gz(bundle, {"/escape.log": "unsafe"})
+
+    mod = _load_module()
+    store = mod.TraceRunStore()
+    with pytest.raises(ValueError, match="Unsafe tar member path"):
+        store.prepare_parse_run([str(bundle)], tmp_path / "runs", "unsafe-case", "", "ref")
+    assert not (tmp_path / "escape.log").exists()
+
+
+def test_raw_tar_preservation_enforces_member_budget(tmp_path, monkeypatch):
+    bundle = tmp_path / "many.tar.gz"
+    _write_tar_gz(bundle, {"a.log": "a", "b.log": "b"})
+
+    mod = _load_module()
+    monkeypatch.setattr(mod, "DEFAULT_MAX_TAR_MEMBERS", 1)
+    with pytest.raises(ValueError, match="Tar member count exceeds"):
+        mod.TraceRunStore().prepare_parse_run([str(bundle)], tmp_path / "runs", "budget-case", "", "ref")
 
 
 def test_trace_dimension_builder_emits_empty_report_contract():
@@ -1026,6 +1090,51 @@ def test_trace_run_store_prepares_parse_run_cache_and_raw_inputs(tmp_path):
     assert cached == {"run_dir": prepared["run_dir"], "cached": True}
     manifest = json.loads((prepared["run_dir"] / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["inputs"][0]["members"] == ["case/worker.log"]
+
+
+def test_directory_cache_identity_changes_when_contents_change(tmp_path):
+    trace_a = "019f7d0f-80ec-73bc-91ce-8e84de820013"
+    trace_b = "019f7d0f-80ec-73bc-91ce-8e84de820014"
+    input_dir = tmp_path / "input-dir"
+    input_dir.mkdir()
+    log = input_dir / "worker.log"
+    log.write_text(
+        f"2026-07-20T13:28:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_a} | first\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    first = mod.run_pipeline([str(input_dir)], tmp_path / "runs", case_name="dir-cache")
+    log.write_text(
+        f"2026-07-20T13:28:00.000000 | INFO | worker | kvworker-0-worker1 | 1 | {trace_b} | second\n",
+        encoding="utf-8",
+    )
+    second = mod.run_pipeline([str(input_dir)], tmp_path / "runs", case_name="dir-cache")
+
+    assert second != first
+    assert trace_b in json.loads((second / "summary.json").read_text(encoding="utf-8"))["traces"]
+
+
+def test_ub_lifecycle_request_ids_are_scoped_by_trace(tmp_path):
+    trace_a = "019f7d0f-80ec-73bc-91ce-8e84de820015"
+    trace_b = "019f7d0f-80ec-73bc-91ce-8e84de820016"
+    log = tmp_path / "ub-requests.log"
+    log.write_text(
+        "\n".join(
+            [
+                f"2026-07-20T13:29:00.000000 | WARN | worker | kvworker-0-worker1 | 1 | {trace_a} | [URMA_ELAPSED_TOTAL] cost 7.1ms, request id:42, src address: 192.0.2.10, target address: 192.0.2.20, status: OK",
+                f"2026-07-20T13:29:00.001000 | WARN | worker | kvworker-0-worker2 | 1 | {trace_b} | [URMA_ELAPSED_TOTAL] cost 9.2ms, request id:42, src address: 192.0.2.30, target address: 192.0.2.40, status: OK",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    requests = report["dimensions"]["ub_lifecycle_summary"]["requests"]
+
+    assert len([row for row in requests if row["request_id"] == "42"]) == 2
+    assert {row["trace_id"] for row in requests} == {trace_a, trace_b}
 
 
 def test_trace_site_publisher_size_guard_reports_ok_and_too_large(tmp_path):
