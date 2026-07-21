@@ -16,6 +16,7 @@
  */
 #include "datasystem/cluster/repository/topology_key_helper.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,6 +27,10 @@
 
 namespace datasystem::cluster {
 namespace {
+
+constexpr uint64_t KEYSPACE_CONTRACT_EPOCH = 42;
+constexpr size_t ASCII_A_SOURCE_ID_SIZE = 16;
+constexpr char ASCII_A_SOURCE_ID_HEX[] = "61616161616161616161616161616161";
 
 std::string ExactPath(const std::string &table, const std::string &key)
 {
@@ -52,9 +57,11 @@ TEST(TopologyKeyHelperTest, BuildsClusterScopedKeyspaces)
     EXPECT_EQ(ExactPath(keys->NotifyTable(), key), "/datasystem/cluster_a-1.0/notify/" + address);
     DS_ASSERT_OK(TopologyKeyHelper::MembershipKey(address, key));
     EXPECT_EQ(ExactPath(keys->MembershipTable(), key), "/datasystem/cluster_a-1.0/cluster/" + address);
-    DS_ASSERT_OK(TopologyKeyHelper::ScaleInMetadataDoneKey(42, std::string(16, 'a'), taskId, key));
+    DS_ASSERT_OK(TopologyKeyHelper::ScaleInMetadataDoneKey(KEYSPACE_CONTRACT_EPOCH,
+                                                           std::string(ASCII_A_SOURCE_ID_SIZE, 'a'), taskId, key));
     EXPECT_EQ(ExactPath(keys->ScaleInMetadataDoneTable(), key),
-              "/datasystem/cluster_a-1.0/scale-in-metadata-done/e42/" + std::string(16, 'a') + "/" + taskId);
+              "/datasystem/cluster_a-1.0/scale-in-metadata-done/e" + std::to_string(KEYSPACE_CONTRACT_EPOCH) + "/"
+                  + std::string(ASCII_A_SOURCE_ID_HEX) + "/" + taskId);
 }
 
 TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
@@ -77,9 +84,11 @@ TEST(TopologyKeyHelperTest, BuildsUnscopedKeyspacesForEmptyClusterName)
     EXPECT_EQ(ExactPath(keys->NotifyTable(), key), "/datasystem/notify/" + address);
     DS_ASSERT_OK(TopologyKeyHelper::MembershipKey(address, key));
     EXPECT_EQ(ExactPath(keys->MembershipTable(), key), "/datasystem/cluster/" + address);
-    DS_ASSERT_OK(TopologyKeyHelper::ScaleInMetadataDoneKey(42, std::string(16, 'a'), taskId, key));
+    DS_ASSERT_OK(TopologyKeyHelper::ScaleInMetadataDoneKey(KEYSPACE_CONTRACT_EPOCH,
+                                                           std::string(ASCII_A_SOURCE_ID_SIZE, 'a'), taskId, key));
     EXPECT_EQ(ExactPath(keys->ScaleInMetadataDoneTable(), key),
-              "/datasystem/scale-in-metadata-done/e42/" + std::string(16, 'a') + "/" + taskId);
+              "/datasystem/scale-in-metadata-done/e" + std::to_string(KEYSPACE_CONTRACT_EPOCH) + "/"
+                  + std::string(ASCII_A_SOURCE_ID_HEX) + "/" + taskId);
 }
 
 TEST(TopologyKeyHelperTest, ClassifiesEtcdWatchKeysWithoutLogicalPhysicalAmbiguity)
