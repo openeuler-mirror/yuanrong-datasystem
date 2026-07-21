@@ -146,6 +146,11 @@ enum class KvMetricId : uint16_t {
     WORKER_KV_EVENT_PUBLISHED_EVENTS_TOTAL,
     WORKER_KV_EVENT_DROPPED_TOTAL,
     WORKER_KV_EVENT_SKIPPED_UNPARSED_KEYS_TOTAL,
+    // Shared-memory OOMs classified by extent-hook outcome:
+    // FRESH includes mmap allocation or extent commit failure; it does not prove a new contiguous extent is absent.
+    // REUSABLE means jemalloc OOM without observing either failure in this allocation attempt.
+    WORKER_SHM_FRESH_EXTENT_OOM_TOTAL,
+    WORKER_SHM_REUSABLE_EXTENT_OOM_TOTAL,
     KV_METRIC_END
 };
 

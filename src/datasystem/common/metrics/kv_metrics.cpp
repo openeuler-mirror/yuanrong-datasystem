@@ -134,6 +134,8 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 105, "worker_kv_event_published_events_total", MetricType::COUNTER, "count" },
     { 106, "worker_kv_event_dropped_total", MetricType::COUNTER, "count" },
     { 107, "worker_kv_event_skipped_unparsed_keys_total", MetricType::COUNTER, "count" },
+    { 108, "worker_shm_fresh_extent_oom_total", MetricType::COUNTER, "count" },
+    { 109, "worker_shm_reusable_extent_oom_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 
