@@ -3958,6 +3958,12 @@ void OCMetadataManager::MergeRecoveredMeta(const std::string &objectKey, const s
     if (!meta.is_recovered() || meta.primary_address() != workerAddr) {
         return;
     }
+    if (!oldPrimaryAddress.empty() && oldPrimaryAddress != workerAddr
+        && notifyWorkerManager_->CheckWorkerIsHealthy(oldPrimaryAddress).IsOk()) {
+        LOG(INFO) << FormatString("[ObjectKey %s] Keep current primary location %s after recovery by %s.", objectKey,
+                                  oldPrimaryAddress, workerAddr);
+        return;
+    }
     objectMeta.meta.set_primary_address(workerAddr);
     if (oldPrimaryAddress.empty() || oldPrimaryAddress == workerAddr) {
         return;

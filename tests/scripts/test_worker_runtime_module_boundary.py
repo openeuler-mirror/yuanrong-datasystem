@@ -88,6 +88,20 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use WorkerRuntimeFacade as the runtime boundary")
 
+    def test_worker_composition_uses_runtime_facade_methods(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp",
+        ]
+
+        forbidden_tokens = [
+            "workerRuntime_.RuntimeState()",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use WorkerRuntimeFacade semantic methods")
+
     def test_object_cache_public_headers_do_not_expose_runtime_internals(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.h",

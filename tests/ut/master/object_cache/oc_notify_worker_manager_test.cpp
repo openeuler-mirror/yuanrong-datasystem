@@ -364,6 +364,50 @@ TEST_F(OCNotifyWorkerManagerTest, LocalIsolationPromotesAcknowledgedPeerWithoutR
     RELEASE_STUBS
 }
 
+TEST_F(OCNotifyWorkerManagerTest, RecoveredOldPrimaryDoesNotOverrideMasterPrimary)
+{
+    auto metadataManager = MakeMetadataManager();
+    AttachNotifyManager(metadataManager);
+    const std::string objectKey = "recovered_old_primary_does_not_override_master_primary";
+    const std::string oldPrimary = "127.0.0.1:901";
+    const std::string candidate = "127.0.0.1:902";
+    auto &shard = metadataManager->GetShardFor(objectKey);
+    TbbMetaTable::accessor accessor;
+    ASSERT_TRUE(shard.table.insert(accessor, objectKey));
+    accessor->second.meta.set_object_key(objectKey);
+    accessor->second.meta.set_primary_address(oldPrimary);
+    accessor->second.meta.set_version(1);
+    accessor->second.locations[oldPrimary] = AckState::ACK;
+    accessor->second.locations[candidate] = AckState::ACK;
+    accessor.release();
+    std::unordered_set<std::string> promoted{ objectKey };
+    BINEXPECT_CALL(&OCNotifyWorkerManager::SendChangePrimaryCopy, (_, _, _))
+        .WillRepeatedly(DoAll(SetArgReferee<2>(promoted), Return(Status::OK())));
+    BINEXPECT_CALL(&OCNotifyWorkerManager::AsyncNotifyOpToWorker, (_, _)).WillRepeatedly(Return());
+    DS_ASSERT_OK(ReconcileLocalIsolationPromotion(metadataManager, oldPrimary));
+
+    ExpectNetworkRecoveryPushOk();
+    DS_ASSERT_OK(ReconcileNetworkRecovery(metadataManager, oldPrimary));
+    RequestMetaFromWorkerRspPb rsp;
+    rsp.set_address(oldPrimary);
+    auto *recoveredMeta = rsp.add_metas();
+    recoveredMeta->set_object_key(objectKey);
+    recoveredMeta->set_primary_address(oldPrimary);
+    recoveredMeta->set_version(1);
+    recoveredMeta->set_is_recovered(true);
+    BINEXPECT_CALL(&OCNotifyWorkerManager::RequestMetaFromWorker, (_, _, _))
+        .WillRepeatedly(DoAll(SetArgReferee<2>(rsp), Return(Status::OK())));
+    DS_ASSERT_OK(metadataManager->RequestMetaFromWorker(candidate, oldPrimary));
+
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.meta.primary_address(), candidate);
+    EXPECT_NE(accessor->second.locations.find(oldPrimary), accessor->second.locations.end());
+    EXPECT_NE(accessor->second.locations.find(candidate), accessor->second.locations.end());
+    accessor.release();
+    EXPECT_TRUE(HasMetadataNotifyOp(metadataManager, oldPrimary, objectKey, NotifyWorkerOpType::PRIMARY_COPY_INVALID));
+    RELEASE_STUBS
+}
+
 TEST_F(OCNotifyWorkerManagerTest, PrimaryFenceAndCacheInvalidOpsAreBothRetained)
 {
     auto metadataManager = MakeMetadataManager();

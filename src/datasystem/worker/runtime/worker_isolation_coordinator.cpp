@@ -22,9 +22,9 @@
 #include "datasystem/common/log/log.h"
 
 namespace datasystem::worker {
-WorkerIsolationCoordinator::WorkerIsolationCoordinator(WorkerRuntimeStateManager &runtimeState,
+WorkerIsolationCoordinator::WorkerIsolationCoordinator(WorkerRuntimeFacade &runtime,
                                                        WorkerIsolationCoordinatorHooks hooks)
-    : runtimeState_(runtimeState), hooks_(std::move(hooks))
+    : runtime_(runtime), hooks_(std::move(hooks))
 {
 }
 
@@ -32,7 +32,7 @@ void WorkerIsolationCoordinator::OnLocalIsolation(const Status &status)
 {
     LOG(WARNING) << "Close worker business admission after confirmed local control-backend isolation: "
                  << status.ToString();
-    runtimeState_.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, status.ToString());
+    runtime_.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, status.ToString());
     INJECT_POINT_NO_RETURN("WorkerIsolationCoordinator.AfterMarkLocalIsolated");
     INJECT_POINT_NO_RETURN("WorkerOCServer.AfterMarkLocalIsolated");
     SetTopologyServingAdmission(false);
@@ -44,9 +44,9 @@ void WorkerIsolationCoordinator::OnLocalIsolation(const Status &status)
 
 void WorkerIsolationCoordinator::OnLocalRecovery()
 {
-    runtimeState_.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
-                                 "control backend keepalive renewal recovered; rebuilding membership",
-                                 WorkerRecoveryPhase::MEMBERSHIP);
+    runtime_.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
+                            "control backend keepalive renewal recovered; rebuilding membership",
+                            WorkerRecoveryPhase::MEMBERSHIP);
     SetTopologyServingAdmission(false);
     if (hooks_.isTopologyRuntimeReady != nullptr && !hooks_.isTopologyRuntimeReady()) {
         LOG(WARNING) << "Control backend keepalive recovered before topology runtime was ready";
@@ -64,9 +64,9 @@ void WorkerIsolationCoordinator::OnLocalRecovery()
         return;
     }
     LOG_IF_ERROR(hooks_.requestRecoveryReconciliation([this] {
-        runtimeState_.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
-                                     "control backend keepalive renewal recovered; reconciling topology",
-                                     WorkerRecoveryPhase::TOPOLOGY);
+        runtime_.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
+                                "control backend keepalive renewal recovered; reconciling topology",
+                                WorkerRecoveryPhase::TOPOLOGY);
         SetTopologyServingAdmission(false);
     }),
                  "Queue authoritative topology reconciliation after control backend recovery");

@@ -25,7 +25,7 @@ namespace datasystem::worker {
 namespace {
 TEST(WorkerIsolationCoordinatorTest, LocalIsolationClosesAdmissionAndKeepsProcessAlive)
 {
-    WorkerRuntimeStateManager state;
+    WorkerRuntimeFacade runtime;
     bool admissionOpen = true;
     bool localOwnershipReconciled = false;
     WorkerIsolationCoordinatorHooks hooks;
@@ -34,11 +34,11 @@ TEST(WorkerIsolationCoordinatorTest, LocalIsolationClosesAdmissionAndKeepsProces
         localOwnershipReconciled = true;
         return Status::OK();
     };
-    WorkerIsolationCoordinator coordinator(state, std::move(hooks));
+    WorkerIsolationCoordinator coordinator(runtime, std::move(hooks));
 
     coordinator.OnLocalIsolation(Status(K_RUNTIME_ERROR, "keepalive timeout"));
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::LOCAL_ISOLATED);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION);
     EXPECT_FALSE(admissionOpen);
@@ -47,7 +47,7 @@ TEST(WorkerIsolationCoordinatorTest, LocalIsolationClosesAdmissionAndKeepsProces
 
 TEST(WorkerIsolationCoordinatorTest, LocalRecoveryStartsRecoveringBeforeTopologyReconciliation)
 {
-    WorkerRuntimeStateManager state;
+    WorkerRuntimeFacade runtime;
     bool admissionOpen = true;
     bool membershipPublished = false;
     bool networkOwnershipReconciled = false;
@@ -65,18 +65,18 @@ TEST(WorkerIsolationCoordinatorTest, LocalRecoveryStartsRecoveringBeforeTopology
     };
     hooks.requestRecoveryReconciliation = [&](const std::function<void()> &onReconciliationStarted) {
         topologyReconciliationRequested = true;
-        auto snapshot = state.GetSnapshot();
+        auto snapshot = runtime.GetSnapshot();
         EXPECT_EQ(snapshot.mode, WorkerServiceMode::RECOVERING);
         EXPECT_EQ(snapshot.recoveryPhase, WorkerRecoveryPhase::MEMBERSHIP);
         EXPECT_FALSE(admissionOpen);
         onReconciliationStarted();
         return Status::OK();
     };
-    WorkerIsolationCoordinator coordinator(state, std::move(hooks));
+    WorkerIsolationCoordinator coordinator(runtime, std::move(hooks));
 
     coordinator.OnLocalRecovery();
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RECOVERING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE);
     EXPECT_EQ(snapshot.recoveryPhase, WorkerRecoveryPhase::TOPOLOGY);

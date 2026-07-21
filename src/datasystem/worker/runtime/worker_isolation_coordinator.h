@@ -20,7 +20,7 @@
 #include <functional>
 
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/runtime/worker_runtime_state.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem::worker {
 struct WorkerIsolationCoordinatorHooks {
@@ -34,7 +34,7 @@ struct WorkerIsolationCoordinatorHooks {
 
 class WorkerIsolationCoordinator {
 public:
-    WorkerIsolationCoordinator(WorkerRuntimeStateManager &runtimeState, WorkerIsolationCoordinatorHooks hooks);
+    WorkerIsolationCoordinator(WorkerRuntimeFacade &runtime, WorkerIsolationCoordinatorHooks hooks);
     ~WorkerIsolationCoordinator() = default;
 
     WorkerIsolationCoordinator(const WorkerIsolationCoordinator &) = delete;
@@ -46,7 +46,7 @@ public:
 private:
     void SetTopologyServingAdmission(bool open) const;
 
-    WorkerRuntimeStateManager &runtimeState_;
+    WorkerRuntimeFacade &runtime_;
     WorkerIsolationCoordinatorHooks hooks_;
 };
 }  // namespace datasystem::worker

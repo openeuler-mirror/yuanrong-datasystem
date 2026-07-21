@@ -999,6 +999,27 @@ Status WorkerOCServer::InitCoordinationBackend()
         LOG(INFO) << "Using external etcd: " << etcdOrMetastoreAddress_;
     }
     etcdStore_ = std::make_unique<EtcdStore>(etcdOrMetastoreAddress_);
+    workerIsolationCoordinator_ = std::make_unique<WorkerIsolationCoordinator>(
+        workerRuntime_,
+        WorkerIsolationCoordinatorHooks{
+            .setTopologyServingAdmission = [this](bool open) { SetTopologyServingAdmission(open); },
+            .reconcileLocalIsolationOwnership =
+                [this] {
+                    RETURN_OK_IF_TRUE(objCacheClientWorkerSvc_ == nullptr);
+                    return objCacheClientWorkerSvc_->ReconcileLocalIsolationOwnership();
+                },
+            .isTopologyRuntimeReady = [this] { return topologyEngine_ != nullptr; },
+            .publishReadyMembership = [this] { return topologyEngine_->MarkReady(); },
+            .reconcileNetworkRecoveryOwnership =
+                [this] {
+                    RETURN_OK_IF_TRUE(objCacheClientWorkerSvc_ == nullptr);
+                    return objCacheClientWorkerSvc_->ReconcileNetworkRecoveryOwnership();
+                },
+            .requestRecoveryReconciliation =
+                [this](std::function<void()> onReconciliationStarted) {
+                    return topologyEngine_->RequestRecoveryReconciliation(std::move(onReconciliationStarted));
+                },
+        });
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
@@ -2071,6 +2092,7 @@ Status WorkerOCServer::Start()
         }
     }
     RETURN_IF_NOT_OK_APPEND_MSG(metrics::InitKvMetrics(), "\nWorker Start failed: metrics init.");
+    workerRuntime_.PublishMetrics();
     RETURN_IF_NOT_OK_APPEND_MSG(MaybeStartConnectionWarmup(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(MaybeStartWorkerMasterRpcWarmup(), "\nWorker Start failed.");
     RETURN_IF_NOT_OK_APPEND_MSG(ReadinessProbe(), "\nWorker Start failed.");

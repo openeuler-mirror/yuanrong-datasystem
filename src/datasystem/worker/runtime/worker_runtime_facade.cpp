@@ -80,4 +80,9 @@ Status WorkerRuntimeFacade::AcquireNormalReadGuard(const std::string &operation,
 {
     return admission_.AcquireNormalReadGuard(operation, guard);
 }
+
+void WorkerRuntimeFacade::PublishMetrics() const
+{
+    state_.PublishMetrics();
+}
 }  // namespace datasystem::worker

@@ -262,19 +262,50 @@
   4. the object-cache RPC adapter used to probe peer control-backend state is no longer part of the
      `worker_object_cache` aggregate library; `WorkerOCServer` links it explicitly as a small composition dependency,
      while backend-scope classification remains in the runtime module.
+  5. `WorkerOCServer` no longer reaches through `workerRuntime_.RuntimeState()` for local-isolation coordinator wiring
+     or metrics publication; both operations go through `WorkerRuntimeFacade` semantic methods. Boundary tests assert
+     the composition root does not regress to direct state access.
 - Acceptance coverage status against the worker-isolation story:
-  - Covered by current focused UT/ST: keepalive local isolation preserves process/peer data, global backend outage does
-    not self-isolate, coordination recovery enters evidence-gated recovery, recovery disconnect falls back to isolation,
-    migration targets filter isolated/recovering/draining workers, stale isolated-worker metadata cleanup allows new owner
-    rebuild, orphan local data recovery-or-cleanup, other workers recover metadata before cleanup, best-effort metadata
-    retry, local-isolation backend callback does not delete membership, global backend outage does not publish local
-    isolation or delete through the coordination backend, migration candidate selection skips unready workers, and
-    existing voluntary scale-down ST paths.
-  - Partial or follow-up: explicit HashRing self passive scale-down no-kill case, full Object/KV/Stream admission matrix,
-    old-primary downgrade after master primary changes, bounded object-table scan lock-hold performance case, and
-    scale-out/scale-in combined with local-isolation/global-outage faults.
-  - Additional case gaps to close before final story completion: direct recoverable-local-data metadata rebuild/update ST
-    and mixed-success metadata recovery under membership change.
+  - `EtcdKeepAliveIsolationTest.ConfirmedLocalIsolationPublishesDeleteAndIsolationCallbackOnce`: covered by
+    `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData`,
+    `WorkerIsolationCoordinatorTest.LocalIsolationClosesAdmissionAndKeepsProcessAlive`, and
+    `CoordinationBackendContractTest.LocalIsolationSignalsDoNotDeleteMembershipThroughBackend`.
+  - `EtcdKeepAliveIsolationTest.GlobalEtcdOutageDoesNotPublishDeleteOrCloseAdmission`: covered by
+    `EtcdStoreTest.TestKeepAliveGlobalEtcdFailureDoesNotReportLocalIsolation` and coordination-backend contract tests.
+  - `HashRingSelfPassiveScaleDownDoesNotKill`: partial. Current implementation maps role-isolated topology availability
+    to `LOCAL_ISOLATED` through runtime admission, but the explicit legacy HashRing no-kill acceptance name still needs
+    a focused test or a documented obsolete-path replacement.
+  - `VoluntaryScaleDownStillStopsAfterDrain`: covered by
+    `WorkerPushMetaTest.LEVEL1_TestVoluntaryScaleDownStillExitsControlled` and existing KV/object scale-down paths.
+  - `RecoveredOldPrimaryDoesNotOverrideMasterPrimary`: covered by
+    `OCNotifyWorkerManagerTest.RecoveredOldPrimaryDoesNotOverrideMasterPrimary`, which verifies the recovered old
+    primary keeps its acknowledged location and fence op but cannot override the master-selected primary.
+  - `OrphanLocalDataRequiresRecoveryOrClearDataWithoutMeta`: covered by
+    `MetadataRecoveryTest.OrphanLocalDataRequiresRecoveryOrClearDataWithoutMeta` and clear-data UT retry paths.
+  - `OtherWorkersRecoverMetadataBeforeClearingDataWithoutMetadata`: covered by
+    `MetadataRecoveryTest.OtherWorkersRecoverMetadataBeforeClearingDataWithoutMetadata`.
+  - `IsolatedWorkerMetaCleanupAllowsNewOwnerRebuild`: covered by
+    `WorkerStalePrimaryTest.LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerRebuild`.
+  - `RecoverableLocalDataRebuildsOrUpdatesMetadata`: partial. Worker clear-data and metadata recovery manager UTs cover
+    the mechanism, but a direct ST/UT with this acceptance name is still pending.
+  - `RecoveredCoordinationEntersRecoveringBeforeRunning`: covered by
+    `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate`,
+    `WorkerIsolationCoordinatorTest.LocalRecoveryStartsRecoveringBeforeTopologyReconciliation`, and runtime recovery UTs.
+  - `WorkerServiceAdmissionRejectsReadWriteDuringIsolation`: covered for the shared service-mode matrix by
+    `WorkerServiceAdmissionTest.AppliesServiceModeMatrix`; Object/KV paths have focused admission checks. Full Stream
+    entrypoint coverage remains follow-up.
+  - `MigrationTargetFiltersIsolatedWorker`: covered by
+    `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker` and DRAINING target tests.
+  - `RecoveringWorkerFallsBackToLocalIsolatedOnDisconnect`: covered by
+    `WorkerPushMetaTest.LEVEL1_TestRecoveringWorkerFallsBackToLocalIsolatedOnDisconnect` and
+    `WorkerRecoveryControllerTest.SecondDisconnectDuringRecoveryKeepsAdmissionClosed`.
+  - `MetadataRecoveryBestEffortRetryDoesNotBlockAvailability`: covered by
+    `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability` and clear-data best-effort UTs.
+  - `MetadataRecoveryDoesNotHoldObjectTableLockDuringFullScan`: partial. `MetadataRecoverySelectorTest` covers bounded
+    generation snapshots and lock release before match/batching; an exact acceptance-named performance/lock test remains
+    useful before final closure.
+  - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV STs have been
+    run during development, but full CI, Bazel, Stream ST, and complete Object/KV ST are not yet green in this session.
   - Follow-up scale/fault cases to add before claiming full story closure:
     1. ScaleOut while one existing worker is `LOCAL_ISOLATED`; new-owner metadata rebuild must not read from the isolated
        worker before evidence passes.

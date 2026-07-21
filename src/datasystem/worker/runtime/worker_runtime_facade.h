@@ -41,6 +41,7 @@ public:
     Status CheckAdmission(WorkerAdmissionKind kind, const std::string &operation) const;
     Status AcquireNormalReadGuard(const std::string &operation,
                                   std::optional<WorkerRuntimeStateReadGuard> &guard) const;
+    void PublishMetrics() const;
 
 private:
     WorkerRuntimeStateManager state_;
