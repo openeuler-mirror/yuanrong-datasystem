@@ -25,6 +25,8 @@ Use this directory when the question is not only "how does logging or metrics wo
   - performance investigation workflow and likely bottleneck classes
 - `runtime-health-and-runbook.md`
   - readiness, liveness, shutdown, health probes, and operator checklists
+- `docs/source_zh_cn/appendix/cluster_log_diagnosis_guide.md`
+  - user-facing cluster topology log diagnosis guide for bootstrap, restart, scale-out, scale-in, failure, backend degradation, and shutdown
 
 ## Boundaries
 
