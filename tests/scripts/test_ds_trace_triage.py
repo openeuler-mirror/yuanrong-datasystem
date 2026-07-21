@@ -630,6 +630,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "dataZoom" in html
     assert "markLine" in html
     assert "log-error" in html
+    assert r"\|\s*E\s*\|" in html
     assert "log-deadline" in html
     assert "log-urma" in html
     assert "wait os sched" in html

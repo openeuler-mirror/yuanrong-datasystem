@@ -2623,6 +2623,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function highlightLogLine(line) {
     const text = escapeHtml(line);
     return text
+      .replace(/(\\|\\s*E\\s*\\|)/g, '<span class="log-tag log-error">$1</span>')
+      .replace(/(\\|\\s*F\\s*\\|)/g, '<span class="log-tag log-error">$1</span>')
+      .replace(/(\\|\\s*W\\s*\\|)/g, '<span class="log-tag log-deadline">$1</span>')
       .replace(/\\b(ERROR|FATAL|K_RUNTIME_ERROR|K_TRY_AGAIN|status[:=]?\\s*1001)\\b/gi, '<span class="log-tag log-error">$1</span>')
       .replace(/(\\[?URMA_ELAPSED_(?:TOTAL|POLL_JFC|NOTIFY|THREAD_SHED)\\]?|URMA_WAIT_TIMEOUT|urma_[a-z_]+|wait os sched[^:,]*?(?:\\([^)]*\\))?:\\s*[\\d.]+ms|wakeSchedLatencyUs:\\s*[\\d.]+|srcChipInflight:\\s*\\{[^}]*\\}|request id[:=]?\\s*\\d+|src address:\\s*[^,\\s]+|target address:\\s*[^,\\s]+|dataSize[:=]?\\s*\\d+|cpuid[:=]?\\s*\\d+|inflight[_a-z]*[:=]?\\s*\\d+)/gi, '<span class="log-tag log-urma">$1</span>')
       .replace(/(\\[?(?:ZMQ_)?RPC_FRAMEWORK_SLOW\\]?|server_exec_us=\\d+|network_residual_us=\\d+|client_req_framework_us=\\d+|client_rsp_framework_us=\\d+|remote_processing_us=\\d+)/gi, '<span class="log-tag log-rpc">$1</span>')
