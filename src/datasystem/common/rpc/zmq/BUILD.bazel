@@ -149,6 +149,7 @@ ds_cc_library(
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:api_deadline_helpers",
         "//src/datasystem/common/rpc:mem_view",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/rpc:unix_sock_fd",

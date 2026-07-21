@@ -31,7 +31,9 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/network_latency_estimator.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/utils/sensitive_value.h"
 
@@ -67,10 +69,24 @@ inline Status ConstructErrorMsg(Status status, const std::unordered_map<StatusCo
 inline void HandleRetryTime(int32_t &retryInterval, int32_t &remainTime, uint64_t &retryCount,
                             int32_t &minOnceRpcTimeoutMs)
 {
-    retryInterval = remainTime <= retryInterval ? remainTime - minOnceRpcTimeoutMs : retryInterval;
+    // Clamp the backoff sleep so a single retry interval cannot outlive the per-request
+    // ApiDeadline budget. When ApiDeadline is uninitialized (background / fan-out threads),
+    // ApiRemainingUs() returns RPC_TIMEOUT(60s)*1000, so the apiRemainingMs clamp does not
+    // trigger and behavior is identical to the previous code path.
+    int32_t apiRemainingMs =
+        static_cast<int32_t>(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
+    if (remainTime <= retryInterval) {
+        retryInterval = remainTime - minOnceRpcTimeoutMs;
+    }
+    retryInterval = std::min({ retryInterval, remainTime - minOnceRpcTimeoutMs, apiRemainingMs });
+    if (retryInterval < 0) {
+        retryInterval = 0;
+    }
     remainTime -= retryInterval;
     ++retryCount;
-    std::this_thread::sleep_for(std::chrono::milliseconds(retryInterval));
+    if (retryInterval > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(retryInterval));
+    }
 }
 
 /**
@@ -115,6 +131,15 @@ Status RetryOnError(int32_t timeoutMs, Function &&func, Handler &&errorHandler,
         };
         int32_t rpcTimeoutMs = std::min<int32_t>(remainTimeMs, maxRpcTimeoutMs);
         rpcTimeoutMs = std::max<int32_t>(rpcTimeoutMs, 1);
+        // Check the per-request API deadline before each attempt. brpc set_timeout_ms only
+        // truncates blocking inside CallMethod; synchronous SDK-side code outside CallMethod
+        // (between this lambda's entry and DS_OC_DISPATCH) is NOT covered. A deadline already
+        // exceeded here returns K_RPC_DEADLINE_EXCEEDED. When ApiDeadline is uninitialized
+        // (background / fan-out threads), ApiRemainingUs() returns RPC_TIMEOUT (60s) and
+        // CheckApiDeadline returns OK, so background callers are unaffected. retryCode includes
+        // K_RPC_DEADLINE_EXCEEDED, but remainTimeMs<=minOnceRpcTimeoutMs breaks the loop, so
+        // a genuine expiry exits cleanly rather than spinning.
+        RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
         auto iterStartTime = std::chrono::steady_clock::now();
         status = f(rpcTimeoutMs);
         UpdateNetworkLatencyEstimate(rpcTimeoutMs, iterStartTime);

@@ -91,6 +91,26 @@ public:
         MarkServerSend(summary.serverSendTs);
     }
 
+    // Diagnostics captured from the brpc::Controller right after CallMethod returns.
+    // Used to verify whether the per-call timeout_ms / deadline was actually honored on
+    // the wire (e.g. deadline set but a large response_attachment was still received past
+    // the deadline). Non-atomic: written once in the generated stub (single thread) and
+    // read once in RecordBrpcRpcTrace before the trace is destroyed.
+    void SetCntlDiagnostics(int64_t timeoutMs, int64_t deadlineUs, int errorCode, bool failed,
+                            uint64_t respAttachmentSize)
+    {
+        cntlTimeoutMs_ = timeoutMs;
+        cntlDeadlineUs_ = deadlineUs;
+        cntlErrorCode_ = errorCode;
+        cntlFailed_ = failed;
+        respAttachmentSize_ = respAttachmentSize;
+    }
+    int64_t CntlTimeoutMs() const { return cntlTimeoutMs_; }
+    int64_t CntlDeadlineUs() const { return cntlDeadlineUs_; }
+    int CntlErrorCode() const { return cntlErrorCode_; }
+    bool CntlFailed() const { return cntlFailed_; }
+    uint64_t RespAttachmentSize() const { return respAttachmentSize_; }
+
     const std::string &TraceId() const { return traceId_; }
     const std::string &MethodName() const { return methodName_; }
     uint64_t ClientStartTs() const { return clientStartTs_.load(std::memory_order_relaxed); }
@@ -113,6 +133,12 @@ private:
     std::atomic<uint64_t> serverExecStartTs_ { 0 };
     std::atomic<uint64_t> serverExecEndTs_ { 0 };
     std::atomic<uint64_t> serverSendTs_ { 0 };
+    // Captured from brpc::Controller after CallMethod; see SetCntlDiagnostics.
+    int64_t cntlTimeoutMs_ { -1 };
+    int64_t cntlDeadlineUs_ { -1 };
+    int cntlErrorCode_ { 0 };
+    bool cntlFailed_ { false };
+    uint64_t respAttachmentSize_ { 0 };
 };
 
 inline void AppendUint32ToIOBuf(butil::IOBuf &buf, uint32_t value)
@@ -238,21 +264,10 @@ inline bool ShouldRecordBrpcTraceOnDestroy(const BrpcPerfTrace &trace)
     return trace.ClientStartTs() != 0;
 }
 
-inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
+inline void RecordBrpcTraceLatencyMetrics(uint64_t clientReqFrameworkNs, uint64_t remoteProcessingNs,
+    uint64_t clientRspFrameworkNs, uint64_t serverReqQueueNs, uint64_t serverExecNs,
+    uint64_t serverRspQueueNs, uint64_t e2eNs, uint64_t networkResidualNs)
 {
-    const uint64_t e2eNs = TraceDelta(trace.ClientEndTs(), trace.ClientStartTs());
-    const uint64_t clientReqFrameworkNs = TraceDelta(trace.ClientSendTs(), trace.ClientStartTs());
-    const uint64_t remoteProcessingNs = TraceDelta(trace.ClientRecvTs(), trace.ClientSendTs());
-    const uint64_t clientRspFrameworkNs = TraceDelta(trace.ClientEndTs(), trace.ClientRecvTs());
-    const uint64_t serverReqQueueNs = TraceDelta(trace.ServerExecStartTs(), trace.ServerRecvTs());
-    const uint64_t serverExecNs = TraceDelta(trace.ServerExecEndTs(), trace.ServerExecStartTs());
-    const uint64_t serverRspQueueNs = TraceDelta(trace.ServerSendTs(), trace.ServerExecEndTs());
-    const uint64_t serverProcessingNs = TraceDelta(trace.ServerSendTs(), trace.ServerRecvTs());
-    uint64_t networkResidualNs = 0;
-    if (remoteProcessingNs > 0 && serverProcessingNs > 0) {
-        networkResidualNs = remoteProcessingNs > serverProcessingNs ? remoteProcessingNs - serverProcessingNs : 0;
-    }
-
     if (clientReqFrameworkNs > 0) {
         RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_CLIENT_REQ_FRAMEWORK_LATENCY, clientReqFrameworkNs);
     }
@@ -277,6 +292,25 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
     if (networkResidualNs > 0) {
         RecordBrpcLatencyMetric(metrics::KvMetricId::BRPC_RPC_NETWORK_RESIDUAL_LATENCY, networkResidualNs);
     }
+}
+
+inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
+{
+    const uint64_t e2eNs = TraceDelta(trace.ClientEndTs(), trace.ClientStartTs());
+    const uint64_t clientReqFrameworkNs = TraceDelta(trace.ClientSendTs(), trace.ClientStartTs());
+    const uint64_t remoteProcessingNs = TraceDelta(trace.ClientRecvTs(), trace.ClientSendTs());
+    const uint64_t clientRspFrameworkNs = TraceDelta(trace.ClientEndTs(), trace.ClientRecvTs());
+    const uint64_t serverReqQueueNs = TraceDelta(trace.ServerExecStartTs(), trace.ServerRecvTs());
+    const uint64_t serverExecNs = TraceDelta(trace.ServerExecEndTs(), trace.ServerExecStartTs());
+    const uint64_t serverRspQueueNs = TraceDelta(trace.ServerSendTs(), trace.ServerExecEndTs());
+    const uint64_t serverProcessingNs = TraceDelta(trace.ServerSendTs(), trace.ServerRecvTs());
+    uint64_t networkResidualNs = 0;
+    if (remoteProcessingNs > 0 && serverProcessingNs > 0) {
+        networkResidualNs = remoteProcessingNs > serverProcessingNs ? remoteProcessingNs - serverProcessingNs : 0;
+    }
+    RecordBrpcTraceLatencyMetrics(clientReqFrameworkNs, remoteProcessingNs, clientRspFrameworkNs,
+                                  serverReqQueueNs, serverExecNs, serverRspQueueNs, e2eNs,
+                                  networkResidualNs);
     const uint64_t frameworkNs = e2eNs > serverExecNs ? e2eNs - serverExecNs : 0;
     const int vlogLevel =
         (frameworkNs > BRPC_RPC_FRAMEWORK_SLOW_LOG_THRESHOLD_NS || FLAGS_enable_perf_trace_log) ? 0 : 1;
@@ -288,7 +322,12 @@ inline void RecordBrpcRpcTrace(const BrpcPerfTrace &trace)
                     << " remote_processing_us=" << BrpcNsToUs(remoteProcessingNs)
                     << " server_req_queue_us=" << BrpcNsToUs(serverReqQueueNs)
                     << " server_exec_us=" << BrpcNsToUs(serverExecNs)
-                    << " network_residual_us=" << BrpcNsToUs(networkResidualNs);
+                    << " network_residual_us=" << BrpcNsToUs(networkResidualNs)
+                    << " cntl_timeout_ms=" << trace.CntlTimeoutMs()
+                    << " cntl_deadline_us=" << trace.CntlDeadlineUs()
+                    << " cntl_error_code=" << trace.CntlErrorCode()
+                    << " cntl_failed=" << (trace.CntlFailed() ? 1 : 0)
+                    << " resp_attachment_bytes=" << trace.RespAttachmentSize();
 }
 
 }  // namespace datasystem
