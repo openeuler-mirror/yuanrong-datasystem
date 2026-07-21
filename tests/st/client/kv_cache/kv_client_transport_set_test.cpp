@@ -65,7 +65,9 @@ const char *ExpectedTransport()
 #ifdef USE_URMA
     return "UB";
 #else
-    return "TCP";
+    // Same-host routed Set/Get travels over the SHM transporter (TransportHint::SHM_CANDIDATE)
+    // once the routing snapshot partitions workers by hostId and the SDK's own hostId resolves.
+    return "SHM";
 #endif
 }
 }  // namespace

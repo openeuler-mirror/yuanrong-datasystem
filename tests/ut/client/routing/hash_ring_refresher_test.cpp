@@ -198,8 +198,9 @@ TEST_F(HashRingRefresherTest, TestRingUpdateHookRunsBeforeRoutePublication)
     };
     uint64_t hookVersion = 0;
     bool routeWasUnpublished = false;
-    auto hook = [router, &hookVersion, &routeWasUnpublished](uint64_t version,
-                                                             const ::datasystem::ClusterTopologyPb &ring) {
+    auto hook = [router, &hookVersion, &routeWasUnpublished](
+        uint64_t version, const ::datasystem::ClusterTopologyPb &ring,
+        const std::unordered_map<std::string, std::string> &) {
         hookVersion = version;
         EXPECT_EQ(ring.members_size(), 1);
         HostPort selected;
@@ -237,7 +238,8 @@ TEST_F(HashRingRefresherTest, TestFailedRingUpdateHookRetainsVersionAndRetries)
         changed = true;
         return Status::OK();
     };
-    auto hook = [&mutex, &cv, &hookCount](uint64_t, const ::datasystem::ClusterTopologyPb &) {
+    auto hook = [&mutex, &cv, &hookCount](uint64_t, const ::datasystem::ClusterTopologyPb &,
+                                         const std::unordered_map<std::string, std::string> &) {
         std::lock_guard<std::mutex> lock(mutex);
         ++hookCount;
         cv.notify_all();

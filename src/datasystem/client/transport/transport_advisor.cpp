@@ -25,14 +25,33 @@
 namespace datasystem {
 namespace client {
 
-TransportHint TransportAdvisor::GetTransportHint(const HostPort & /* workerAddr */) const
+TransportHint TransportAdvisor::GetTransportHint(const HostPort &workerAddr) const
 {
+    // Same-host workers (identified by hostId from routing topology) use shm fd-passing.
+    // Use unordered_set<HostPort> directly so the hot path does not allocate a ToString() key.
+    if (!workerAddr.Empty()) {
+        std::shared_lock<std::shared_mutex> lk(mtx_);
+        if (sameHostWorkers_.count(workerAddr) > 0) {
+            return TransportHint::SHM_CANDIDATE;
+        }
+    }
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         return TransportHint::UB_CANDIDATE;
     }
 #endif
     return TransportHint::TCP_ONLY;
+}
+
+void TransportAdvisor::SetSameHostWorkers(const std::vector<HostPort> &workers)
+{
+    std::unordered_set<HostPort> updated;
+    updated.reserve(workers.size());
+    for (const auto &w : workers) {
+        updated.insert(w);
+    }
+    std::unique_lock<std::shared_mutex> lk(mtx_);
+    sameHostWorkers_ = std::move(updated);
 }
 }  // namespace client
 }  // namespace datasystem

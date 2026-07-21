@@ -109,7 +109,7 @@ Status HashRingRefresher::DoRefresh()
                 continue;
             }
             if (ringUpdateHook_) {
-                RETURN_IF_NOT_OK(ringUpdateHook_(newVersion, ring));
+                RETURN_IF_NOT_OK(ringUpdateHook_(newVersion, ring, hostIdMap));
             }
             currentVersion_.store(newVersion, std::memory_order_release);
             UpdateWorkerList(ring);

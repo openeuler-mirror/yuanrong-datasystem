@@ -1534,7 +1534,8 @@ TEST(WorkerSnapshotTest, BuildsFromEveryTopologyMembershipState)
     }
 
     WorkerSnapshot snapshot;
-    ASSERT_TRUE(BuildWorkerSnapshot(42, ring, snapshot).IsOk());
+    std::unordered_map<std::string, std::string> emptyHostIdMap;
+    ASSERT_TRUE(BuildWorkerSnapshot(42, ring, emptyHostIdMap, "", snapshot).IsOk());
     EXPECT_EQ(snapshot.ringVersion, 42u);
     EXPECT_TRUE(snapshot.sameHostAddrs.empty());
     EXPECT_EQ(snapshot.otherAddrs.size(), states.size());
@@ -1548,7 +1549,9 @@ TEST(WorkerSnapshotTest, RejectsMalformedTopologyWithoutChangingOutput)
     snapshot.ringVersion = 7;
     snapshot.sameHostAddrs.push_back(MakeAddress(110));
 
-    EXPECT_EQ(BuildWorkerSnapshot(8, ring, snapshot).GetCode(), K_INVALID);
+    EXPECT_EQ(
+        BuildWorkerSnapshot(8, ring, std::unordered_map<std::string, std::string>{}, "", snapshot).GetCode(),
+        K_INVALID);
     EXPECT_EQ(snapshot.ringVersion, 7u);
     ASSERT_EQ(snapshot.sameHostAddrs.size(), 1u);
     EXPECT_EQ(snapshot.sameHostAddrs.front(), MakeAddress(110));
@@ -1560,7 +1563,8 @@ TEST(WorkerSnapshotTest, AcceptsEmptyTopologyAsCleanupAll)
     WorkerSnapshot snapshot;
     snapshot.otherAddrs.push_back(MakeAddress(111));
 
-    ASSERT_TRUE(BuildWorkerSnapshot(9, ring, snapshot).IsOk());
+    ASSERT_TRUE(
+        BuildWorkerSnapshot(9, ring, std::unordered_map<std::string, std::string>{}, "", snapshot).IsOk());
     EXPECT_EQ(snapshot.ringVersion, 9u);
     EXPECT_TRUE(snapshot.Empty());
 }
@@ -3447,11 +3451,11 @@ TEST(UbTransporterTest, BatchGetAggregateCloseWaitsForRpcAndResultSetup)
     EXPECT_NE(results[1].data.externalOwner, nullptr);
 }
 
-TEST(ShmTransporterTest, RemainsExplicitPlaceholder)
+TEST(ShmTransporterTest, RejectsGetWhenRpcClientAbsent)
 {
-    ShmTransporter transporter;
+    ShmTransporter transporter(std::shared_ptr<WorkerRpcClient>{});
     DataGetResult result;
-    EXPECT_EQ(transporter.Get({ "key", 1 }, result).GetCode(), K_NOT_SUPPORTED);
+    EXPECT_EQ(transporter.Get({ "key", 1 }, result).GetCode(), K_RUNTIME_ERROR);
 }
 
 TEST(DataPlaneExecutorTest, UrmaReconnectResetsOnlyDataPlaneAndRetriesOnce)

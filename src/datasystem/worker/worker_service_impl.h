@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <set>
 #include <shared_mutex>
 #include <unordered_map>
 
@@ -101,6 +102,16 @@ public:
      * @return Status of the call.
      */
     Status Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &rsp) override;
+
+    /**
+     * @brief Get the expired shm fds for a specific client (intersection of all expired fds and
+     * the fds mmap'd by this client). Previously only called from Heartbeat; now extracted as a
+     * reusable method so any RPC handler can attach expired fds to its response (design §4.3.3
+     * path-one: RPC response attachment carries expired fds, replacing heartbeat delivery).
+     * @param[in] clientId The client to query.
+     * @return The set of expired fds belonging to this client.
+     */
+    std::set<int> GetExpiredFdsForClient(const ClientKey &clientId);
 
     /**
      * @brief Check the version that client sent from RegisterClientReqPb.

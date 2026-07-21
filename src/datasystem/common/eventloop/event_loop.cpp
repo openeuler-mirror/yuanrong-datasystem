@@ -109,8 +109,17 @@ Status EventLoop::AddFdEvent(int fd, uint32_t tEvents, std::function<void()> rea
 Status EventLoop::DelFdEvent(int fd)
 {
     std::lock_guard<std::mutex> lock(eventsLock_);
-    RETURN_IF_NOT_OK(UpdateFdEventUnlock(EPOLL_CTL_DEL, fd, 0));
-    CHECK_FAIL_RETURN_STATUS(eventMap_.erase(fd) > 0, K_RUNTIME_ERROR, "Failed to erase fd from map.");
+    auto iter = eventMap_.find(fd);
+    if (iter == eventMap_.end()) {
+        return Status::OK();
+    }
+    // For EPOLL_CTL_DEL, ENOENT/EBADF means the fd is no longer registered with epoll (already
+    // removed or closed) — treat as success and proceed to erase from the local map so callers
+    // can re-add later without hitting spurious K_NOT_FOUND.
+    if (epoll_ctl(efd_, EPOLL_CTL_DEL, fd, nullptr) != 0 && errno != ENOENT && errno != EBADF) {
+        RETURN_STATUS(K_RUNTIME_ERROR, FormatString("epoll_ctl DEL failed for fd %d: errno=%d", fd, errno));
+    }
+    (void)eventMap_.erase(iter);
     return Status::OK();
 }
 
@@ -166,28 +175,41 @@ void SockEventLoop::HandleEvent(const struct epoll_event *tEvents, int nevent)
 {
     for (int i = 0; i < nevent; i++) {
         auto *tev = reinterpret_cast<EventData *>(tEvents[i].data.ptr);
+        // The lost-handle callback (tev->readCallBack) may call RemoveClient -> DelFdEvent, which
+        // erases the EventData from eventMap_ and drops the last shared_ptr, leaving `tev` dangling.
+        // Snapshot fd and hold a keepAlive shared_ptr across the callback so subsequent reads of fd
+        // (and DelFdEvent) do not dereference a freed EventData (UAF fix).
+        const int fd = tev->fd;
+        std::shared_ptr<EventData> keepAlive;
+        {
+            std::lock_guard<std::mutex> lock(eventsLock_);
+            auto it = eventMap_.find(fd);
+            if (it != eventMap_.end()) {
+                keepAlive = it->second;
+            }
+        }
         // EPOLLHUP/EPOLLERR (with or without EPOLLIN) means the peer closed/crashed. When a crash
         // produces HUP/ERR without IN (e.g. RST with no pending readable data), the old code fell
         // through to the else branch and only logged, so the lost-handle callback never fired. Handle
         // these first and treat them as a disconnect before any read attempt.
         if (tEvents[i].events & (EPOLLHUP | EPOLLERR)) {
             if (tev->readCallBack) {
-                LOG(INFO) << FormatString("Socket fd(%d) peer closed (events=0x%x), run all callback.", tev->fd,
+                LOG(INFO) << FormatString("Socket fd(%d) peer closed (events=0x%x), run all callback.", fd,
                     tEvents[i].events);
                 tev->readCallBack();
             }
-            Status delStatus = DelFdEvent(tev->fd);
+            Status delStatus = DelFdEvent(fd);
             if (delStatus.IsError()) {
                 // DelFdEvent can fail if the fd was already removed (e.g. the lost-handle callback
                 // itself removed it). Worst case is epoll re-firing this handled HUP once; the callback
                 // is idempotent, so this is a state-consistency warning, not a crash (review fix #16).
-                LOG(ERROR) << FormatString("DelFdEvent failed after HUP/ERR on fd(%d): %s", tev->fd,
+                LOG(ERROR) << FormatString("DelFdEvent failed after HUP/ERR on fd(%d): %s", fd,
                     delStatus.GetMsg());
             }
             continue;
         }
         if (tEvents[i].events & EPOLLIN) {
-            ReadSockAndCallBack(tev);
+            ReadSockAndCallBack(tev, fd);
         } else if (tEvents[i].events & EPOLLOUT) {
             if (tev->writeCallBack) {
                 tev->writeCallBack();
@@ -198,11 +220,11 @@ void SockEventLoop::HandleEvent(const struct epoll_event *tEvents, int nevent)
     }
 }
 
-void SockEventLoop::ReadSockAndCallBack(const EventLoop::EventData *tev)
+void SockEventLoop::ReadSockAndCallBack(const EventLoop::EventData *tev, int fd)
 {
     uint64_t count;
     while (true) {
-        ssize_t ret = read(tev->fd, &count, sizeof(uint64_t));
+        ssize_t ret = read(fd, &count, sizeof(uint64_t));
         int err = errno;
         if (ret == -1) {
             if (err == EAGAIN) {
@@ -217,15 +239,16 @@ void SockEventLoop::ReadSockAndCallBack(const EventLoop::EventData *tev)
             // EINVAL here, so ECONNRESET/EPIPE fell through without invoking the callback, leaving the
             // crash undetected.
             if (tev->readCallBack) {
-                LOG(INFO) << FormatString("Socket fd(%d) disconnection (errno=%d), run all callback.", tev->fd, err);
+                LOG(INFO) << FormatString("Socket fd(%d) disconnection (errno=%d), run all callback.", fd, err);
                 tev->readCallBack();
             }
         } else if (ret == 0 && tev->readCallBack) {
-            LOG(INFO) << FormatString("Socket fd(%d) disconnection, run all callback.", tev->fd);
+            LOG(INFO) << FormatString("Socket fd(%d) disconnection, run all callback.", fd);
             tev->readCallBack();
         }
         break;
     }
-    (void)DelFdEvent(tev->fd);
+    // tev may be dangling after the callback erased the EventData; use the snapshotted fd.
+    (void)DelFdEvent(fd);
 }
 }  // namespace datasystem

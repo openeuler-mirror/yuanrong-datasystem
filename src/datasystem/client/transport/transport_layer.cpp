@@ -18,8 +18,10 @@
 
 #include "datasystem/client/transport/transport_layer.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <exception>
+#include <thread>
 #include <utility>
 
 #include "datasystem/client/transport/common/deadline_retry.h"
@@ -295,7 +297,7 @@ Status TransportLayer::Release(ObjectBuffer &buffer, const TransportRequestConte
     const ShmKey shmId = ObjectBufferInternal::GetInfo(buffer).shmId;
     std::shared_ptr<IDataTransporter> transporter;
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, advisor_->GetTransportHint(workerAddr), transporter));
-    return transporter->Release(shmId, context);
+    return InvokeReleaseWithRetry(workerAddr, shmId, context, transporter);
 }
 
 void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId,
@@ -308,7 +310,7 @@ void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &s
         std::shared_ptr<IDataTransporter> transporter;
         Status rc = manager_->GetOrCreate(workerAddr, advisor_->GetTransportHint(workerAddr), transporter);
         if (rc.IsOk()) {
-            rc = transporter->Release(shmId, context);
+            rc = InvokeReleaseWithRetry(workerAddr, shmId, context, transporter);
         }
         LOG_IF_ERROR(rc, "Release routed Set allocation failed");
         return;
@@ -319,10 +321,62 @@ void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &s
         std::shared_ptr<IDataTransporter> transporter;
         Status rc = manager->GetOrCreate(workerAddr, advisor->GetTransportHint(workerAddr), transporter);
         if (rc.IsOk()) {
-            rc = transporter->Release(shmId, context);
+            rc = TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(workerAddr, shmId, context, transporter,
+                                                                          manager, advisor);
         }
         LOG_IF_ERROR(rc, "Async release of routed Set allocation failed");
     });
+}
+
+Status TransportLayer::InvokeReleaseWithRetry(const HostPort &workerAddr, const ShmKey &shmId,
+                                              const TransportRequestContext &context,
+                                              std::shared_ptr<IDataTransporter> &transporter)
+{
+    return InvokeReleaseWithRetryOnAliveTransporter(workerAddr, shmId, context, transporter, manager_, advisor_);
+}
+
+Status TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(
+    const HostPort &workerAddr, const ShmKey &shmId, const TransportRequestContext &context,
+    std::shared_ptr<IDataTransporter> &transporter, const std::shared_ptr<DataPlaneManager> &manager,
+    const std::shared_ptr<TransportAdvisor> &advisor)
+{
+    // Retry InvokeDecreaseReference up to 3 times with exponential backoff. On a persistent RPC
+    // failure, rebuild the transporter once before the final retry so a torn-down connection does
+    // not cause a permanent leak (worker-side shm ref would never be decremented).
+    constexpr int kMaxAttempts = 3;
+    constexpr int kBackoffMs[] = { 0, 100, 400 };
+    Status rc;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt) {
+        if (attempt == 0) {
+            rc = transporter->Release(shmId, context);
+            if (rc.IsOk() || rc.GetCode() == K_NOT_FOUND) {
+                return rc;
+            }
+            LOG(WARNING) << "InvokeDecreaseReference attempt " << (attempt + 1) << "/" << kMaxAttempts
+                         << " failed for worker " << workerAddr.ToString() << ", shmId=" << shmId.ToString()
+                         << ": " << rc.ToString();
+            continue;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kBackoffMs[attempt]));
+        // Re-fetch transporter if it died (e.g. after Teardown); otherwise reuse cached one.
+        if (transporter == nullptr || !transporter->IsAlive()) {
+            Status rebuildRc = manager->GetOrCreate(workerAddr, advisor->GetTransportHint(workerAddr), transporter);
+            if (rebuildRc.IsError() && attempt == kMaxAttempts - 1) {
+                return rebuildRc;
+            }
+            if (rebuildRc.IsError()) {
+                continue;
+            }
+        }
+        rc = transporter->Release(shmId, context);
+        if (rc.IsOk() || rc.GetCode() == K_NOT_FOUND) {
+            return rc;
+        }
+        LOG(WARNING) << "InvokeDecreaseReference attempt " << (attempt + 1) << "/" << kMaxAttempts
+                     << " failed for worker " << workerAddr.ToString() << ", shmId=" << shmId.ToString()
+                     << ": " << rc.ToString();
+    }
+    return rc;
 }
 
 void TransportLayer::ScheduleReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
@@ -337,12 +391,28 @@ void TransportLayer::ScheduleReleases(const std::vector<std::shared_ptr<ObjectBu
 Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
-    std::lock_guard<std::mutex> lock(reconcileMutex_);
-    CHECK_FAIL_RETURN_STATUS(reconcileStarted_, K_NOT_READY, "Transport reconcile thread is not initialized");
-    CHECK_FAIL_RETURN_STATUS(!reconcileStopping_, K_SHUTTING_DOWN, "TransportLayer is shutting down");
-    RETURN_IF_NOT_OK(manager_->UpdateWorkerSnapshot(snapshot));
-    pendingSnapshot_ = std::move(snapshot);
-    reconcileCv_.notify_one();
+    // Copy the same-host list before the snapshot is moved below. SetSameHostWorkers takes the
+    // advisor's shared_mutex write lock; keep it out of the reconcileMutex_ critical section so the
+    // reconcile thread (which touches entries_ under reconcileMutex_) never blocks on the advisor
+    // write lock.
+    std::vector<HostPort> sameHostAddrs = snapshot.sameHostAddrs;
+    {
+        std::lock_guard<std::mutex> lock(reconcileMutex_);
+        CHECK_FAIL_RETURN_STATUS(reconcileStarted_, K_NOT_READY, "Transport reconcile thread is not initialized");
+        CHECK_FAIL_RETURN_STATUS(!reconcileStopping_, K_SHUTTING_DOWN, "TransportLayer is shutting down");
+        // Publish the live-worker snapshot to the manager FIRST. The advisor's same-host set is
+        // updated AFTER releasing reconcileMutex_ below; updating the advisor first would open a
+        // window where GetTransportHint returns SHM_CANDIDATE for a worker the manager does not yet
+        // know is live, so GetOrCreate returns K_NOT_FOUND and the release-retry path can leak a
+        // shm ref. With manager-first, the advisor only marks as same-host workers the manager can
+        // already hand out a transporter for.
+        RETURN_IF_NOT_OK(manager_->UpdateWorkerSnapshot(snapshot));
+        pendingSnapshot_ = std::move(snapshot);
+        reconcileCv_.notify_one();
+    }
+    if (advisor_ != nullptr) {
+        advisor_->SetSameHostWorkers(sameHostAddrs);
+    }
     return Status::OK();
 }
 

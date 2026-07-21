@@ -83,7 +83,7 @@ public:
     virtual Status AddClient(const ClientKey &clientId, bool shmEnabled, int32_t socketFd, const std::string &tenantId,
                              bool enableCrossNode, const std::string &podName, bool supportMultiShmRefCount,
                              std::string deviceId, const CompatibilityVersion &compatibilityVersion, uint32_t &lockId,
-                             uint32_t *pipelineQueueId = nullptr) = 0;
+                             uint32_t *pipelineQueueId = nullptr, bool socketHeartbeat = false) = 0;
 
     /**
      * @brief After restart crashed server, we need to do some recovery job according to the message from the client.

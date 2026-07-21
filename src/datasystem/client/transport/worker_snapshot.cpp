@@ -24,18 +24,29 @@ namespace datasystem {
 namespace client {
 
 Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
-                           WorkerSnapshot &snapshot)
+                           const std::unordered_map<std::string, std::string> &hostIdMap,
+                           const std::string &sdkHostId, WorkerSnapshot &snapshot)
 {
     WorkerSnapshot updated;
     updated.ringVersion = ringVersion;
     updated.otherAddrs.reserve(ring.members_size());
+    const bool canPartition = !sdkHostId.empty() && !hostIdMap.empty();
     for (const auto &member : ring.members()) {
         HostPort worker;
         Status rc = worker.ParseString(member.first);
         if (rc.IsError()) {
             return Status(K_INVALID, "Invalid worker endpoint in cluster topology: " + member.first);
         }
-        updated.otherAddrs.emplace_back(std::move(worker));
+        bool sameHost = false;
+        if (canPartition) {
+            auto it = hostIdMap.find(member.first);
+            sameHost = it != hostIdMap.end() && it->second == sdkHostId;
+        }
+        if (sameHost) {
+            updated.sameHostAddrs.emplace_back(std::move(worker));
+        } else {
+            updated.otherAddrs.emplace_back(std::move(worker));
+        }
     }
     snapshot = std::move(updated);
     return Status::OK();

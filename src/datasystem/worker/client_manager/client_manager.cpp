@@ -54,6 +54,12 @@ void ClientManager::Shutdown()
         healthThread_->join();
     }
     healthThread_.reset();
+    // Stop the epoll heartbeat event loop (SOCKET_HEARTBEAT path). Must stop after healthThread_
+    // joins to avoid a race where the health thread calls CheckClientHealth → IsClientLost which
+    // reads ClientInfo state while the event loop is being torn down (review fix #1).
+    if (heartbeatEventLoop_ != nullptr) {
+        heartbeatEventLoop_->Finish();
+    }
 }
 
 Status ClientManager::Init()
@@ -168,9 +174,27 @@ Status ClientManager::RegisterLostHandler(const ClientKey &clientId, std::functi
 {
     RETURN_IF_NOT_OK(CheckClientId(clientId));
     auto clientInfo = GetClientInfo(clientId);
+    CHECK_FAIL_RETURN_STATUS(clientInfo != nullptr, K_RUNTIME_ERROR,
+                             FormatString("Client info not found for %s in RegisterLostHandler", clientId));
     if (type == HeartbeatType::SOCKET_HEARTBEAT) {
-        Status status = heartbeatEventLoop_->AddFdEvent(clientInfo->GetSocketFd(), EPOLLIN | EPOLLHUP,
-                                                        std::move(lostHandle), nullptr);
+        CHECK_FAIL_RETURN_STATUS(heartbeatEventLoop_ != nullptr, K_NOT_READY,
+                                 "Heartbeat event loop is not initialized");
+        // Store the lost handler and set heartbeatType_=SOCKET_HEARTBEAT so the time-based fallback
+        // in IsClientLost (threshold*4) is reachable AND CheckClientHealth can fire LostHandler()
+        // when it trips. The epoll read-callback also routes through LostHandler() so both the
+        // event-driven path and the time-based fallback path invoke the same cleanup.
+        clientInfo->SetLostHandler(lostHandle, type);
+        // Reset the last-heartbeat timer so the time-based fallback (IsClientLost threshold*4)
+        // only fires after the socketFd has been silent for that long since registration, not
+        // since ClientInfo construction (which predates the fd-passing channel).
+        clientInfo->UpdateLastHeartbeat();
+        // Idempotent guard: if this fd is already registered with epoll (e.g. reconnect before
+        // RemoveClient), remove the old registration first to avoid EEXIST from epoll_ctl ADD.
+        // DelFdEvent returns OK for ENOENT/EBADF so this is harmless when the fd is not registered.
+        (void)heartbeatEventLoop_->DelFdEvent(clientInfo->GetSocketFd());
+        Status status = heartbeatEventLoop_->AddFdEvent(
+            clientInfo->GetSocketFd(), EPOLLIN | EPOLLHUP,
+            [clientInfo]() { clientInfo->LostHandler(); }, nullptr);
         CHECK_FAIL_RETURN_STATUS(status.IsOk(), K_RUNTIME_ERROR,
                                  FormatString("Register client %s failed: %s", clientId, status.GetMsg()));
     } else {

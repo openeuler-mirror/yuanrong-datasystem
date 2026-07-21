@@ -287,6 +287,7 @@ Status ClientWorkerLocalCommonApi::Connect(RegisterClientReqPb &req, int32_t tim
     req.set_version(DATASYSTEM_VERSION);
     req.set_git_hash(GetGitHash());
     req.set_heartbeat_enabled(heartbeatType_ != HeartbeatType::NO_HEARTBEAT);
+    req.set_socket_heartbeat(newFlowShm_);
     req.set_shm_enabled(IsShmEnable());
     req.set_tenant_id("");
     req.set_enable_cross_node(enableCrossNodeConnection_);
@@ -772,6 +773,7 @@ Status ClientWorkerRemoteCommonApi::RegisterClient(RegisterClientReqPb &req, int
     req.set_version(DATASYSTEM_VERSION);
     req.set_git_hash(GetGitHash());
     req.set_heartbeat_enabled(heartbeatType_ != HeartbeatType::NO_HEARTBEAT);
+    req.set_socket_heartbeat(newFlowShm_);
     req.set_shm_enabled(IsShmEnable());
     req.set_tenant_id(tenantId_);
     req.set_enable_cross_node(enableCrossNodeConnection_);

@@ -34,9 +34,10 @@ Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> sig
       refreshIntervalMs_(refreshIntervalMs)
 {
     auto applyRingUpdate = [this, ringUpdateHook = std::move(ringUpdateHook)](
-                               uint64_t newVersion, const ::datasystem::ClusterTopologyPb &ring) {
+                               uint64_t newVersion, const ::datasystem::ClusterTopologyPb &ring,
+                               const std::unordered_map<std::string, std::string> &hostIdMap) {
         if (ringUpdateHook) {
-            RETURN_IF_NOT_OK(ringUpdateHook(newVersion, ring));
+            RETURN_IF_NOT_OK(ringUpdateHook(newVersion, ring, hostIdMap));
         }
         rpcClient_->PruneConnections(ring);
         return Status::OK();
@@ -92,11 +93,15 @@ Status Routing::FetchHashRing(const HostPort &workerAddr, uint64_t currentVersio
     newVersion = response.version();
     changed = response.hash_ring_changed();
     masterAddress = response.master_address();
-    const bool resolveInitialHostId =
-        initialWorkerIsLocal_ && !hostIdResolutionAttempted_.exchange(true, std::memory_order_acq_rel);
     if (!changed) {
         return Status::OK();
     }
+    // Only consume the one-shot hostId resolution flag when the ring actually changed. If the
+    // coordinator reports changed==false on the first fetch (ring already stable at SDK startup),
+    // consuming the flag here would mean hostId never resolves for the SDK's lifetime, leaving
+    // sameNodeWorkers empty and disabling same-host SHM partitioning. Move it past the early return.
+    const bool resolveInitialHostId =
+        initialWorkerIsLocal_ && !hostIdResolutionAttempted_.exchange(true, std::memory_order_acq_rel);
     CHECK_FAIL_RETURN_STATUS(response.has_hash_ring(), K_RUNTIME_ERROR,
                              "GetHashRing response is missing the changed hash ring");
     ring = response.hash_ring();
@@ -109,8 +114,15 @@ Status Routing::FetchHashRing(const HostPort &workerAddr, uint64_t currentVersio
         if (iter != hostIdMap.end() && !iter->second.empty()) {
             router_->SetHostId(iter->second);
         } else {
+            // The initial worker reported an empty host_id (worker started without --host_id_env_name),
+            // so the SDK's own host_id stays empty and same-node worker partitioning is disabled.
+            // With sdk_data_placement_policy=PREFERRED_SAME_NODE, every key degrades to the hash ring
+            // (cross-node routing), which can time out for large payloads. Check the worker's startup
+            // log for the matching "host_id_env_name is not set" warning.
             LOG(WARNING) << "[Routing] Initial worker host ID is absent from GetHashRing response, endpoint="
-                         << initialWorkerAddr_.ToString();
+                         << initialWorkerAddr_.ToString()
+                         << "; same-node worker affinity is disabled, routing degrades to the hash ring"
+                            " (cross-node). Verify --host_id_env_name is set on workers.";
         }
     }
     return Status::OK();
