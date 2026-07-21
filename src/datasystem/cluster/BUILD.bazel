@@ -27,6 +27,7 @@ ds_cc_library(
         "executor/key_filter.h",
         "executor/storage_scan_plan.h",
         "executor/storage_scan_plan_access.h",
+        "executor/topology_cleanup_effect.h",
         "executor/topology_phase_action.h",
         "executor/topology_phase_callbacks.h",
         "model/topology_types.h",

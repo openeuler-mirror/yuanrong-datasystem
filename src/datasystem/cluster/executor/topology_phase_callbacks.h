@@ -10,13 +10,13 @@
 #define DATASYSTEM_CLUSTER_EXECUTOR_TOPOLOGY_PHASE_CALLBACKS_H
 
 #include <chrono>
-#include <functional>
 #include <memory>
 #include <utility>
 
 #include "datasystem/cluster/executor/cancellation_token.h"
 #include "datasystem/cluster/executor/key_filter.h"
 #include "datasystem/cluster/executor/storage_scan_plan.h"
+#include "datasystem/cluster/executor/topology_cleanup_effect.h"
 #include "datasystem/cluster/executor/topology_phase_action.h"
 #include "datasystem/utils/status.h"
 
@@ -33,12 +33,6 @@ struct TopologyCallbackContext {
     const IKeyFilter &keyFilter;
     const StorageScanPlan &storageScanPlan;
 };
-
-/**
- * @brief Bounded cleanup effect executed on the callback pool after Snapshot-gated authorization.
- */
-using TopologyCleanupEffect =
-    std::function<Status(std::chrono::steady_clock::time_point, const CancellationToken &)>;
 
 /**
  * @brief Move-only prepared cleanup authorized behind a fence gate and applied outside it.
