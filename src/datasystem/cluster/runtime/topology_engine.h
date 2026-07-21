@@ -536,6 +536,10 @@ private:
     std::atomic<TopologyAvailabilityLevel> publishedAvailability_{ TopologyAvailabilityLevel::NOT_READY };
     // Permanently fences this Engine lifetime after authoritative rollback or same-version content conflict.
     std::atomic<bool> authorityIsolated_{ false };
+    // Records whether the immediately previous processed Snapshot contained the local Worker.
+    std::atomic<bool> localMemberExistedInPreviousSnapshot_{ false };
+    // Records whether that local member was leaving voluntarily in the previous Snapshot.
+    std::atomic<bool> localMemberWasLeavingInPreviousSnapshot_{ false };
     std::string isolationReason_;
     std::string lastError_;
     ControlBackendObservation backendObservation_;

@@ -12,6 +12,8 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
+#include <cstdlib>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -32,6 +34,10 @@ namespace {
 
 constexpr char LOCAL_ADDRESS[] = "127.0.0.1:10001";
 constexpr char LOCAL_ID[] = "aaaaaaaaaaaaaaaa";
+constexpr int BUILD_ENGINE_FAILED_EXIT = 1;
+constexpr int START_FAILED_EXIT = 2;
+constexpr int START_RETURNED_EXIT = 3;
+constexpr int EMIT_EVENT_FAILED_EXIT = 4;
 constexpr auto TEST_WAIT = std::chrono::seconds(3);
 
 class NoopTopologyCallbacks final : public ITopologyPhaseCallbacks {
@@ -177,6 +183,17 @@ TopologyState MakeTopologyWithPeer(uint64_t version = 1)
     auto state = MakeTopology(version);
     state.members.emplace_back(
         Member{ { std::string(16, 'b'), "127.0.0.1:10002" }, MemberState::ACTIVE, { 500'000'000 } });
+    return state;
+}
+
+TopologyState MakeTopologyWithoutLocal(uint64_t version = 1)
+{
+    TopologyState state;
+    state.clusterHasInit = true;
+    state.version = version;
+    state.members = {
+        Member{ { std::string(16, 'b'), "127.0.0.1:10002" }, MemberState::ACTIVE, { 0, 1'000'000'000 } }
+    };
     return state;
 }
 
@@ -351,6 +368,47 @@ TEST(TopologyEngineTest, StartPublishesCapabilitiesAndShutdownDrainsOwnedRoles)
     EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
     EXPECT_FALSE(ingress.IsBound());
     EXPECT_GT(proxy.CancelledWatchCount(), 0U);
+}
+
+TEST(TopologyEngineTest, InitialSnapshotWithoutLocalMemberRemainsNotReady)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    PutTopology(proxy, "missing-local", MakeTopologyWithoutLocal());
+    auto engine = BuildEngine(proxy, ingress, callbacks, "missing-local");
+
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_EQ(engine->GetState(), TopologyEngineState::RUNNING);
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::NOT_READY);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineDeathTest, LocalMemberRemovedFromSnapshotTriggersSigkill)
+{
+    ASSERT_EXIT(
+        {
+            testing::FakeCoordinatorServiceProxy proxy;
+            TestWatchIngress ingress;
+            NoopTopologyCallbacks callbacks;
+            const std::string clusterName = "removed-local";
+            auto keys = MakeKeys(clusterName);
+            PutTopology(proxy, clusterName, MakeTopology());
+            auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+            if (engine == nullptr) {
+                std::exit(BUILD_ENGINE_FAILED_EXIT);
+            }
+            if (engine->Start().IsError()) {
+                std::exit(START_FAILED_EXIT);
+            }
+            PutTopology(proxy, clusterName, MakeTopologyWithoutLocal(2));
+            if (EmitTopologyEvent(proxy, ingress, *keys, 2).IsError()) {
+                std::exit(EMIT_EVENT_FAILED_EXIT);
+            }
+            std::this_thread::sleep_for(TEST_WAIT);
+            std::exit(START_RETURNED_EXIT);
+        },
+        ::testing::KilledBySignal(SIGKILL), "");
 }
 
 TEST(TopologyEngineTest, SnapshotPublicationCallbackRunsOnlyAfterStartPublishes)
