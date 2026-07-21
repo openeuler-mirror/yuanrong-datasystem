@@ -398,6 +398,10 @@
     `TopologyFailureClassifierTest.ScaleOutMembersSurviveGlobalBackendOutagePause`, which verifies a transient global
     membership-read outage during ScaleOut does not accumulate missing time or remove/fail present ACTIVE/JOINING
     members after the backend becomes readable again.
+  - `ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`: covered by
+    `TopologyTaskExecutorTest.ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`, which verifies a ScaleOut task
+    progress CAS that commits before returning `K_RPC_UNAVAILABLE` is treated as already finished, and duplicate notify
+    plus retry tick does not rerun the migration callback.
   - `ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`: covered by
     `TopologyTaskExecutorTest.ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`, which verifies
     a ScaleIn metadata marker CAS that commits before returning `K_RPC_UNAVAILABLE` is resolved through exact-write
@@ -416,10 +420,11 @@
        `ScaleInSourceStaysLeavingWhenPeerFails`; migration-target filtering for the same combined path remains covered
        indirectly by active-target admission and needs a dedicated ST if we want end-to-end evidence.
     3. ScaleOut plus transient global backend outage is now covered at failure-classifier level by
-       `ScaleOutMembersSurviveGlobalBackendOutagePause`; ScaleIn task-overlap marker post-commit outage idempotency is
-       covered at executor contract level by
-       `ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`; full ScaleOut task-overlap and
-       end-to-end outage ST remain broader follow-ups.
+       `ScaleOutMembersSurviveGlobalBackendOutagePause`; ScaleOut progress post-commit outage idempotency is covered by
+       `ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`; ScaleIn task-overlap marker post-commit outage
+       idempotency is covered at executor contract level by
+       `ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`; full end-to-end outage ST remains a
+       broader follow-up.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
        deferred retry payload; broader ST-level membership churn around the same path remains pending.
     5. ST-level KV/Object/Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; unit coverage now
@@ -429,6 +434,14 @@
 ## Fast Verification
 
 - Recent focused verification for scale/fault overlap coverage:
+  - Added 1 UT case:
+    `TopologyTaskExecutorTest.ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 86s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 1s`), URMA Mock enabled, and 1154 compile database entries.
+  - GREEN: `cluster_topology_contract_ut --gtest_filter="TopologyTaskExecutorTest.ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback"`
+    passed 1/1 test in 1ms gtest time, 0.03s wall time.
+  - GREEN: `cluster_topology_contract_ut --gtest_filter="TopologyTaskExecutorTest.*"` passed 28/28 tests in 80ms
+    gtest time, 0.12s wall time.
   - Added 1 UT case:
     `TopologyTaskExecutorTest.ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`.
   - Initial RED: 3-case focused suite failed in 0.04s because the new test asserted single-threaded metadata callback

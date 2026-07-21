@@ -277,6 +277,32 @@ TEST(TopologyTaskExecutorTest, ExecutesOneTaskCallbackAndCommitsWholeScopeProgre
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
+TEST(TopologyTaskExecutorTest, ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    const auto &notify = scenario.expected.notifiesByAddress.at(task.executorAddress);
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+    DS_ASSERT_OK(executor.Start());
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+
+    scenario.backend.FailNextCasAfterCommit();
+    DS_ASSERT_OK(executor.HandleCompletion(WaitCompletion(scenario.dispatcher)));
+    TopologyTask observed;
+    DS_ASSERT_OK(
+        scenario.repository->ReadTask(TopologyTaskKind::MIGRATE, task.taskId, task.type, task.epoch, observed));
+    EXPECT_TRUE(std::all_of(std::get<TopologyMigrateTask>(observed).sourceRanges.begin(),
+                            std::get<TopologyMigrateTask>(observed).sourceRanges.end(),
+                            [](const auto &range) { return range.finished; }));
+
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    DS_ASSERT_OK(executor.HandleTick(std::chrono::steady_clock::now() + RETRY_TICK_ADVANCE));
+    EXPECT_EQ(scenario.callbacks.scaleOutCalls.load(), 1);
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyTaskExecutorTest, RejectsLateCompletionAfterEpochChanges)
 {
     ExecutorScenario scenario;
