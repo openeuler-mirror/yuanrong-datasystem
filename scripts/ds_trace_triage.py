@@ -3877,7 +3877,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     return [edge.operation, latency, worker].filter(Boolean).join('\\n');
   }
   function flowGraphNodeSize() {
-    return [150, 58];
+    return [180, 70];
   }
   function edgeLabelSeverity(value) {
     const n = Number(value || 0);
@@ -3886,9 +3886,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function renderFlowGraph(id, graph, title) {
     chartRenderers.set(id, () => renderFlowGraph(id, graph, title));
     const node = document.getElementById(id);
-    const graphWidth = Math.max(620, node?.clientWidth || 0);
-    const flowNodeX = [0.10,0.33,0.56,0.56,0.86].map(r => Math.round(graphWidth * r));
-    const flowNodeY = [240,240,108,372,372];
+    const graphWidth = Math.max(760, node?.clientWidth || 0);
+    const flowNodeX = [0.11,0.36,0.70,0.70,0.89].map(r => Math.round(graphWidth * r));
+    const flowNodeY = [260,260,118,404,404];
     chart(id, {
     title:{show:false,text:title},
     textStyle:chartTextStyle,
@@ -3902,13 +3902,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       roam:false,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true, position:'inside', fontSize:13, width:136, overflow:'break', lineHeight:17},
-      labelLayout:{hideOverlap:true},
+      label:{show:true, position:'inside', fontSize:15, width:164, overflow:'break', lineHeight:19},
+      labelLayout:{hideOverlap:false},
       edgeLabel:{show:true, position:'middle',
         formatter:p => `{${edgeLabelSeverity(p.data.rollup?.max_ms)}|${p.data.edge_label || p.data.status || ''}}`,
-        fontSize:12,
-        lineHeight:16,
-        width:168,
+        fontSize:14,
+        lineHeight:18,
+        width:210,
         overflow:'break',
         backgroundColor:'rgba(255,255,255,.92)',
         borderColor:'#dbeafe',
