@@ -417,7 +417,8 @@ def _extract_ub_events(source, member, line_no, line, ts, worker):
 
 
 def _classify(trace):
-    max_access = max(trace["access_latency_ms"] or [0])
+    access_for_deadline = trace.get("access_latency_ms_by_role", {}).get("client") or trace["access_latency_ms"]
+    max_access = max(access_for_deadline or [0])
     max_urma = max(trace["urma_total_ms"] or [0])
     memory_copy_us = trace["latency_summary_us"].get("client.process.memory_copy", 0)
     set_total_us = trace["latency_summary_us"].get("client.process.set", 0)
@@ -557,6 +558,7 @@ class TraceAccumulator:
             "timestamps": [],
             "flows": Counter(),
             "access_latency_ms": [],
+            "access_latency_ms_by_role": defaultdict(list),
             "breakdown_ms": Counter(),
             "rpc_slow": Counter(),
             "rpc_slow_fields_us": defaultdict(list),
@@ -624,6 +626,8 @@ class TraceAccumulator:
             self.errors[f"status={status}"] += 1
             trace["errors"][f"status={status}"] += 1
         trace["access_latency_ms"].append(latency_ms)
+        role = "client" if "CLIENT" in operation else "worker" if "POSIX" in operation else "unknown"
+        trace["access_latency_ms_by_role"][role].append(latency_ms)
         self.access_latencies.append(latency_ms)
 
     def _ingest_breakdown(self, trace, line):
@@ -742,7 +746,8 @@ class TraceAccumulator:
             trace["classification"] = _classify(trace)
             classifications[trace["classification"]] += 1
             triage_flags = []
-            if trace["errors"] and max(trace["urma_total_ms"] or [0]) > max(trace["access_latency_ms"] or [0]):
+            access_for_deadline = trace.get("access_latency_ms_by_role", {}).get("client") or trace["access_latency_ms"]
+            if trace["errors"] and max(trace["urma_total_ms"] or [0]) > max(access_for_deadline or [0]):
                 triage_flags.append("late_worker_completion")
             for worker in trace["workers"]:
                 worker_trace_ids[worker].add(trace_id)
@@ -764,6 +769,10 @@ class TraceAccumulator:
                 "last_ts": max(trace["timestamps"]) if trace["timestamps"] else None,
                 "flows": dict(trace["flows"]),
                 "access_latency_ms": _percentiles(trace["access_latency_ms"]),
+                "access_latency_ms_by_role": {
+                    role: _percentiles(values)
+                    for role, values in sorted(trace["access_latency_ms_by_role"].items())
+                },
                 "breakdown_ms": {k: round(v, 3) for k, v in trace["breakdown_ms"].items()},
                 "rpc_slow": dict(trace["rpc_slow"]),
                 "rpc_slow_fields_us": {k: _percentiles(v) for k, v in sorted(trace["rpc_slow_fields_us"].items())},
@@ -1497,8 +1506,19 @@ def _add_lifecycle_metric(metrics, name, value):
         return
 
 
+def _parse_chip_inflight(raw):
+    chips = {}
+    if not raw:
+        return chips
+    for chip, value in re.findall(r"(\d+)\s*:\s*(\d+)", raw):
+        chips[chip] = int(value)
+    return chips
+
+
 def _build_ub_lifecycle_summary(trace_rows):
     metrics = defaultdict(list)
+    chip_inflight = defaultdict(list)
+    trace_remote_get_wr_counts = defaultdict(list)
     requests = {}
 
     def request_row(trace_id, event):
@@ -1519,6 +1539,7 @@ def _build_ub_lifecycle_summary(trace_rows):
             "status": event.get("status") or "",
             "src_chip_inflight": event.get("src_chip_inflight") or "",
             "urma_inflight_wr_count": event.get("urma_inflight_wr_count"),
+            "remote_get_wr_count": event.get("inflight_remote_get"),
             "total_ms": None,
             "wait_os_sched_ms": None,
             "wake_sched_latency_ms": None,
@@ -1534,9 +1555,9 @@ def _build_ub_lifecycle_summary(trace_rows):
         for field in ("worker", "src_addr", "target_addr", "status", "src_chip_inflight"):
             if event.get(field):
                 row[field] = event[field]
-        for field in ("data_size", "cpuid", "urma_inflight_wr_count"):
+        for field in ("data_size", "cpuid", "urma_inflight_wr_count", "inflight_remote_get"):
             if event.get(field) is not None:
-                row[field] = event[field]
+                row["remote_get_wr_count" if field == "inflight_remote_get" else field] = event[field]
         return row
 
     def update_max(row, field, value):
@@ -1548,14 +1569,22 @@ def _build_ub_lifecycle_summary(trace_rows):
     for trace_id, trace in trace_rows.items():
         for event in trace.get("ub_events", []):
             event_type = event.get("event_type")
+            if event.get("inflight_remote_get") is not None:
+                _add_lifecycle_metric(metrics, "remote_get_wr_count", event.get("inflight_remote_get"))
+                trace_remote_get_wr_counts[trace_id].append(event.get("inflight_remote_get"))
+                update_max(request_row(trace_id, event), "remote_get_wr_count", event.get("inflight_remote_get"))
             if event_type == "total":
                 _add_lifecycle_metric(metrics, "total_ms", event.get("cost_ms"))
                 _add_lifecycle_metric(metrics, "wait_os_sched_ms", event.get("wait_os_sched_ms"))
+                _add_lifecycle_metric(metrics, "urma_inflight_wr_count", event.get("urma_inflight_wr_count"))
+                for chip, value in _parse_chip_inflight(event.get("src_chip_inflight")).items():
+                    chip_inflight[chip].append(value)
                 if event.get("wake_sched_latency_us") is not None:
                     _add_lifecycle_metric(metrics, "wake_sched_latency_ms", event["wake_sched_latency_us"] / 1000.0)
                 row = request_row(trace_id, event)
                 update_max(row, "total_ms", event.get("cost_ms"))
                 update_max(row, "wait_os_sched_ms", event.get("wait_os_sched_ms"))
+                update_max(row, "urma_inflight_wr_count", event.get("urma_inflight_wr_count"))
                 if event.get("wake_sched_latency_us") is not None:
                     update_max(row, "wake_sched_latency_ms", event["wake_sched_latency_us"] / 1000.0)
                 continue
@@ -1582,18 +1611,22 @@ def _build_ub_lifecycle_summary(trace_rows):
 
     request_rows = list(requests.values())
     for row in request_rows:
+        if row.get("remote_get_wr_count") is None and trace_remote_get_wr_counts.get(row["trace_id"]):
+            row["remote_get_wr_count"] = max(trace_remote_get_wr_counts[row["trace_id"]])
         row["score_ms"] = max(float(row.get(field) or 0) for field in (
             "total_ms", "wait_os_sched_ms", "poll_loop_gap_ms", "nanosleep_wake_ms", "poll_jfc_ms", "notify_ms"
         ))
         for field in (
             "total_ms", "wait_os_sched_ms", "wake_sched_latency_ms", "poll_jfc_ms", "notify_ms",
-            "thread_sched_ms", "poll_loop_gap_ms", "nanosleep_wake_ms", "score_ms",
+            "thread_sched_ms", "poll_loop_gap_ms", "nanosleep_wake_ms", "remote_get_wr_count",
+            "urma_inflight_wr_count", "score_ms",
         ):
             if row.get(field) is not None:
                 row[field] = round(float(row[field]), 3)
     request_rows.sort(key=lambda item: (-item["score_ms"], item["trace_id"], item["request_id"]))
     return {
         "metrics": {name: _percentiles(values) for name, values in sorted(metrics.items())},
+        "chip_inflight": {chip: _percentiles(values) for chip, values in sorted(chip_inflight.items())},
         "requests": request_rows[:80],
     }
 
@@ -1828,6 +1861,7 @@ h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-siz
 .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
 tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}.cell-hot,.cell-warn,.cell-ok{display:inline-block;border-radius:4px;padding:1px 5px;font-weight:700}.cell-hot{background:#fee2e2;color:#991b1b}.cell-warn{background:#ffedd5;color:#9a3412}.cell-ok{background:#dcfce7;color:#166534}
+tr.summaryrow td{background:#f8fafc}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
@@ -2421,6 +2455,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   const ubWorkerTimeRows = dim.ub_worker_summary?.time_buckets || [];
   const ubLifecycleMetrics = Object.entries(dim.ub_lifecycle_summary?.metrics || {})
     .sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
+  const ubChipInflightRows = Object.entries(dim.ub_lifecycle_summary?.chip_inflight || {})
+    .sort((a,b) => (b[1].max || 0) - (a[1].max || 0));
   const ubRequestRows = dim.ub_lifecycle_summary?.requests || [];
   const timeBucketRows = dim.time_buckets?.['1000ms'] || [];
   function latencyRowsForOperation(operation) {
@@ -2575,23 +2611,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       'notify_ms':'notify',
       'thread_sched_ms':'thread sched',
       'poll_loop_gap_ms':'poll loop gap',
-      'nanosleep_wake_ms':'nanosleep wake'
+      'nanosleep_wake_ms':'nanosleep wake',
+      'remote_get_wr_count':'RemoteGet WR count',
+      'urma_inflight_wr_count':'URMA inflight WR count'
     };
     return labels[name] || metricLabel(name);
   }
   function renderUbLifecycleViews() {
-    const metricRows = ubLifecycleMetrics.map(([name,item]) => [
-      lifecycleLabel(name),
-      item.count || 0,
-      item.p50 ?? '',
-      item.p90 ?? '',
-      item.p99 ?? '',
-      item.max ?? ''
-    ]);
-    renderPagedTable('ub-lifecycle-table', 'ub-lifecycle-table-pager', ['metric','count','p50 ms','p90 ms','p99 ms','max ms'], metricRows,
+    const metricRows = [
+      ...ubLifecycleMetrics.map(([name,item]) => [lifecycleLabel(name), item.count || 0, item.p50 ?? '', item.p90 ?? '', item.p99 ?? '', item.max ?? '']),
+      ...ubChipInflightRows.map(([chip,item]) => [`Chip ${chip} inflight`, item.count || 0, item.p50 ?? '', item.p90 ?? '', item.p99 ?? '', item.max ?? ''])
+    ];
+    renderPagedTable('ub-lifecycle-table', 'ub-lifecycle-table-pager', ['metric','count','p50','p90','p99','max'], metricRows,
       row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0))}"`, 5);
     renderPagedTable('ub-request-table', 'ub-request-table-pager',
-      ['time','trace','request','worker','total ms','wait ms','wake ms','poll ms','notify ms','sched ms','edge','cpuid','data size','status','chip inflight'],
+      ['time','trace','request','worker','total ms','wait ms','wake ms','remote wr','urma wr','poll ms','notify ms','sched ms','edge','cpuid','data size','status','chip inflight'],
       ubRequestRows.map(item => [
         item.first_ts || '',
         item.trace_id || '',
@@ -2600,6 +2634,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         item.total_ms ?? '',
         item.wait_os_sched_ms ?? '',
         item.wake_sched_latency_ms ?? '',
+        item.remote_get_wr_count ?? '',
+        item.urma_inflight_wr_count ?? '',
         item.poll_jfc_ms ?? '',
         item.notify_ms ?? '',
         Math.max(Number(item.poll_loop_gap_ms || 0), Number(item.nanosleep_wake_ms || 0), Number(item.thread_sched_ms || 0)) || '',
@@ -2609,7 +2645,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         item.status || '',
         item.src_chip_inflight || ''
       ]),
-      row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0, Number(row[9]) || 0))}"`, 5);
+      row => `class="${severityClass(Math.max(Number(row[4]) || 0, Number(row[5]) || 0, Number(row[11]) || 0))}"`, 5);
     chart('ub-lifecycle-chart', ubLifecycleMetrics.length ? axisBase('UB Lifecycle Breakdown', {
       grid:wideHorizontalGrid(138,66,36),
       tooltip:{trigger:'axis',axisPointer:{type:'shadow'},confine:true,formatter:ps => ps.map(p => `${escapeHtml(p.seriesName)}: ${p.value} ms`).join('<br>')},
@@ -2676,14 +2712,26 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }
   function renderSelectedTrace() {
     const item = traces[selectedTraceId] || {};
-    renderTable('selected-trace-table', ['field','value'], [
+    function compactLatencySummary(summary) {
+      return Object.entries(summary || {})
+        .sort((a,b) => Number(b[1] || 0) - Number(a[1] || 0))
+        .slice(0, 6)
+        .map(([key, value]) => `${metricLabel(`latencySummary.${key}`)}=${Number(value / 1000).toFixed(3)}ms`)
+        .join('; ');
+    }
+    const selectedTraceSummaryRows = [
       ['trace', selectedTraceId || ''],
       ['classification', item.classification || ''],
       ['errors', JSON.stringify(item.errors || {})],
-      ['access', pctText(item.access_latency_ms)],
+      ['client access', pctText(item.access_latency_ms_by_role?.client)],
+      ['worker access', pctText(item.access_latency_ms_by_role?.worker)],
+      ['access all', pctText(item.access_latency_ms)],
+      ['key latencySummary', compactLatencySummary(item.latency_summary_us)],
       ['coverage', JSON.stringify(item.evidence_coverage || {})],
       ['missing_evidence', JSON.stringify(item.missing_evidence || [])]
-    ]);
+    ].filter(row => row[1]);
+    renderTable('selected-trace-table', ['field','value'], selectedTraceSummaryRows,
+      row => row[0] === 'key latencySummary' || /access/.test(row[0]) ? 'class="summaryrow"' : '');
     const visibleStageRows = (item.stage_breakdown || [])
       .filter(s => stageMatchesOperation(s.stage))
       .slice()

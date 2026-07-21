@@ -222,7 +222,9 @@ Always cover:
   poll-loop gap (`lastPollEndToThisPollStart` /
   `lastPollStartToThisPollStart`), and nanosleep wake
   (`nanosleep(1us) cost`). Render both metric percentiles and Top request rows
-  with worker/IP/request/cpuid/data-size/status fields.
+  with worker/IP/request/cpuid/data-size/status fields. Also track
+  `inflightRemoteGet` as remote-get WR pressure, `urma_inflight_wr_count` as
+  send-side URMA WR pressure, and `srcChipInflight` per chip.
 - flow: Get/Set/Create/Publish/RemotePull/GetObjMetaInfo/RPC methods
 - latency: access latency percentiles and top slow traces
 - breakdown: `ProcessGetObjectRequest`, QueryMeta/CreateMeta, SafeObject locks,
@@ -245,6 +247,10 @@ For customer-facing reports, write like a diagnosis note:
 - Every chart needs a caption explaining what question it answers.
 - Keep trace drilldown usable: search, filters, pagination, selected trace
   breakdown, and full logs.
+- In selected trace summaries, split client access and worker access. Client
+  access is the user-visible deadline/symptom side; worker access is
+  server-side completion evidence and can legitimately exceed or lag the client
+  window.
 - For UB/URMA, describe the post/write wait timeline and compare total,
   `condition_variable.wait_for`, wake scheduling, poll JFC, notify, poll-loop
   gap, nanosleep wake, data size, CPU, inflight, source chip, and edge.
@@ -275,7 +281,8 @@ them:
 - `dimensions.ub_summary`: transfer path and `src -> target` UB edges
 - `dimensions.ub_lifecycle_summary`: lifecycle metric percentiles plus Top
   request rows for total/wait/wake/poll/notify/thread scheduling, worker, edge,
-  CPU, data size, status, and source-chip inflight.
+  CPU, data size, status, remote-get WR count, URMA inflight WR count, and
+  source-chip inflight.
 - `dimensions.cohorts`: per-input-package trace/error/classification/latency
   comparison for multi-package and noisy-vs-clean analysis
 - `dimensions.diagnosis`: customer-facing diagnosis lines for symptom,

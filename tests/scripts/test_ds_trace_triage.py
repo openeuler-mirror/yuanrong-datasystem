@@ -135,6 +135,7 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
         "\n".join(
             [
                 f"2026-07-20T10:00:00.000000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 4096",
+                f"2026-07-20T10:00:00.005000 | INFO | access_recorder | 10.0.0.1 | 1 | {trace_id} | - | 0 | DS_POSIX_GET | 231321 | 4096",
                 f"2026-07-20T10:00:00.010000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | [Get] Done, clientId: c1, objects: 1, transferPath: UB, totalCost: 230.100ms, inflightRemoteGet: 9 exceed 3ms: {{ ProcessGetObjectRequest: 230 ms }}",
                 f"2026-07-20T10:00:00.020000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get request:[881] object:[obj-a], offset[0] size[4194304] src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
                 f"2026-07-20T10:00:00.040000 | INFO | worker | kventryworker-0-worker1 | 1 | {trace_id} | Remote get success, objectKey: obj-a, path: UB, cost: 231.321ms src address:10.0.0.1:31501, dst address:10.0.0.2:31501",
@@ -152,6 +153,8 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
     mod = _load_module()
     report = mod.analyze_inputs([str(log)], code_ref="unit-test")
     trace = report["traces"][trace_id]
+    assert trace["access_latency_ms_by_role"]["client"]["p50"] == 20.298
+    assert trace["access_latency_ms_by_role"]["worker"]["p50"] == 231.321
 
     total = next(event for event in trace["ub_events"] if event["event_type"] == "total")
     assert total["request_id"] == "881"
@@ -190,8 +193,13 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
     assert lifecycle["metrics"]["wake_sched_latency_ms"]["p99"] == 4.5
     assert lifecycle["metrics"]["poll_loop_gap_ms"]["p99"] == 78.0
     assert lifecycle["metrics"]["nanosleep_wake_ms"]["p99"] == 12.5
+    assert lifecycle["metrics"]["remote_get_wr_count"]["p99"] == 9
+    assert lifecycle["metrics"]["urma_inflight_wr_count"]["p99"] == 11
+    assert lifecycle["chip_inflight"]["2"]["p99"] == 5
     assert lifecycle["requests"][0]["request_id"] == "881"
     assert lifecycle["requests"][0]["src_chip_inflight"] == "{2:5}"
+    assert lifecycle["requests"][0]["remote_get_wr_count"] == 9
+    assert lifecycle["requests"][0]["urma_inflight_wr_count"] == 11
     assert "late_worker_completion" in trace["triage_flags"]
 
 
@@ -377,6 +385,11 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "let pageSize = 4" in html
     assert "download-selected-raw" in html
     assert "download-filtered-evidence" in html
+    assert "selectedTraceSummaryRows" in html
+    assert "client access" in html
+    assert "worker access" in html
+    assert "key latencySummary" in html
+    assert "summaryrow" in html
     assert "id=\"selected-stage-table\"" in html
     assert "id=\"selected-stage-legend\"" in html
     assert "stage-pill" in html
