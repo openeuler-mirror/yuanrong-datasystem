@@ -322,6 +322,10 @@
   - `ScaleInSourceStaysLeavingWhenPeerFails`: covered by
     `TopologyPlanBuilderTest.ScaleInSourceStaysLeavingWhenPeerFails`, which verifies a voluntary ScaleIn source remains
     `LEAVING` while a concurrent peer failure is replanned as `FAILED`.
+  - `ScaleOutMembersSurviveGlobalBackendOutagePause`: covered by
+    `TopologyFailureClassifierTest.ScaleOutMembersSurviveGlobalBackendOutagePause`, which verifies a transient global
+    membership-read outage during ScaleOut does not accumulate missing time or remove/fail present ACTIVE/JOINING
+    members after the backend becomes readable again.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV STs have been
     run during development, but full CI, Bazel, Stream ST, and complete Object/KV ST are not yet green in this session.
   - Follow-up scale/fault cases to add before claiming full story closure:
@@ -330,8 +334,9 @@
     2. ScaleIn voluntary source plus concurrent peer local-isolation is now covered at topology replan level by
        `ScaleInSourceStaysLeavingWhenPeerFails`; migration-target filtering for the same combined path remains covered
        indirectly by active-target admission and needs a dedicated ST if we want end-to-end evidence.
-    3. ScaleIn/ScaleOut task overlap plus transient global backend outage; workers must not self-isolate from global
-       outage evidence and topology callbacks must remain idempotent.
+    3. ScaleOut plus transient global backend outage is now covered at failure-classifier level by
+       `ScaleOutMembersSurviveGlobalBackendOutagePause`; full ScaleIn/ScaleOut task-overlap callback idempotency under
+       the same outage remains a broader ST/contract follow-up.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
        deferred retry payload; broader ST-level membership churn around the same path remains pending.
     5. ST-level KV/Object/Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; unit coverage now

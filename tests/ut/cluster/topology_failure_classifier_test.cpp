@@ -93,5 +93,34 @@ TEST(TopologyFailureClassifierTest, ExcludesUnreadableIntervalsFromMissingBudget
     EXPECT_EQ(classification.confirmedFailure.front().address, "127.0.0.1:1");
 }
 
+TEST(TopologyFailureClassifierTest, ScaleOutMembersSurviveGlobalBackendOutagePause)
+{
+    TopologyState state;
+    state.version = 2;
+    state.clusterHasInit = true;
+    state.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 2 };
+    state.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                      Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::JOINING, { 2 } } };
+    std::shared_ptr<const TopologySnapshot> topology;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), topology));
+    TopologyFailureClassifier classifier(std::chrono::seconds(5));
+    FailureClassification classification;
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    const std::vector<MembershipRecord> firstRead{ { "127.0.0.1:1", MemberLifecycleState::READY, 0, "" },
+                                                   { "127.0.0.1:2", MemberLifecycleState::READY, 0, "" } };
+    DS_ASSERT_OK(classifier.Observe(*topology, firstRead, start, classification));
+    classifier.Pause(start + std::chrono::seconds(1));
+
+    const auto recoveredReadTime = start + std::chrono::seconds(60);
+    DS_ASSERT_OK(classifier.Observe(*topology, firstRead, recoveredReadTime, classification));
+
+    EXPECT_TRUE(classification.removeInitial.empty());
+    EXPECT_TRUE(classification.removeJoining.empty());
+    EXPECT_TRUE(classification.confirmedFailure.empty());
+    EXPECT_TRUE(classification.newlyMissing.empty());
+    EXPECT_TRUE(classification.confirmedMissing.empty());
+}
+
 }  // namespace
 }  // namespace datasystem::cluster
