@@ -37,6 +37,7 @@
   - `.repo_context/modules/quality/tests-and-reproduction.md`
 - Related user-facing or internal docs:
   - `docs/source_zh_cn/design_document/cluster_management.md`
+  - `docs/source_zh_cn/appendix/cluster_log_diagnosis_guide.md`
 
 ## Purpose
 
@@ -44,6 +45,8 @@
   - provide a cross-module reference for how to localize functionality, performance, and operations problems using the signals already exposed by runtime, logging, metrics, and topology code.
 - What problem this module solves:
   - reduce time-to-localization by mapping symptoms to the right logs, metrics, configs, runtime files, and source entrypoints instead of treating diagnosis as an ad hoc code search.
+- Cluster topology incidents:
+  - use `docs/source_zh_cn/appendix/cluster_log_diagnosis_guide.md` as the operator-facing entry for `CLUSTER_` bootstrap, restart, scale-out, scale-in, failure, backend degradation, and shutdown logs.
 - Who or what depends on this module:
   - on-call engineers, developers debugging runtime behavior, reviewers reasoning about DFX changes, and future playbooks that standardize incident and performance workflows.
 
