@@ -2767,7 +2767,6 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       textStyle:chartTextStyle,
       grid:{left:58,right:24,top:72,bottom:76,containLabel:true},
       legend:{top:30,type:'scroll'},
-      toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}},
       tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
       dataZoom:[{type:'inside'},{type:'slider', height:18, bottom:18}]
     }, extra || {});
@@ -2790,7 +2789,6 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   }
   function autoCenterFlowGraph(chartInstance) {
     if (!chartInstance) return;
-    if (chartInstance.dispatchAction) chartInstance.dispatchAction({type:'restore'});
     if (chartInstance.resize) chartInstance.resize();
   }
   function downloadText(filename, text) {
@@ -3736,28 +3734,28 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     }
     navLinks.forEach(link => link.classList.toggle('active', link === active));
   });
-  chart('classification-chart', classificationRows.length ? {title:{show:false}, color:palette, textStyle:chartTextStyle, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, toolbox:{right:10,feature:{saveAsImage:{},dataView:{readOnly:true},restore:{}}}, series:[{type:'pie', radius:['38%','66%'], center:['50%','48%'], avoidLabelOverlap:true, data:classificationRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No classification data'));
+  chart('classification-chart', classificationRows.length ? {title:{show:false}, color:palette, textStyle:chartTextStyle, tooltip:{trigger:'item', confine:true}, legend:{type:'scroll', bottom:0}, series:[{type:'pie', radius:['38%','66%'], center:['50%','48%'], avoidLabelOverlap:true, data:classificationRows.map(([name,value]) => ({name,value}))}]} : noDataOption('No classification data'));
   chart('cohort-chart', cohortRows.length ? axisBase('Input Cohort Comparison', {xAxis:{type:'category', data:cohortRows.map(r => r[0]), axisLabel:{rotate:20, width:110, overflow:'truncate'}}, yAxis:{type:'value'}, series:[
     {name:'traces',type:'bar',barMaxWidth:42,data:cohortRows.map(r => r[1].trace_count || 0), label:{show:true, position:'top'}},
     {name:'errors',type:'bar',barMaxWidth:42,data:cohortRows.map(r => Object.values(r[1].errors || {}).reduce((a,b) => a+b, 0)), label:{show:true, position:'top'}, itemStyle:{color:'#dc2626'}}
   ]}) : noDataOption('No cohort data'));
   chart('error-chart', errorRows.length ? axisBase('Errors', {xAxis:{type:'category', data:errorRows.map(r => r[0]), axisLabel:{rotate:25, width:130, overflow:'truncate'}}, yAxis:{type:'value'}, series:[{type:'bar', barMaxWidth:46, data:errorRows.map(r => ({value:r[1], itemStyle:{color:'#dc2626'}})), label:{show:true, position:'top'}}]}) : noDataOption('No error data'));
-  function renderFlowGraph(id, graph, title) {
-    const flowNodeY = [130,130,70,210,210];
-    chart(id, {
-    title:{show:false,text:title},
-    textStyle:chartTextStyle,
-    toolbox:{right:10,feature:{
-      saveAsImage:{},
-      dataView:{readOnly:true},
-      restore:{},
+  function flowToolbox() {
+    return {right:10,feature:{
       myAutoCenter:{
         show:true,
         title:'自适应居中',
         icon:'path://M512 128l96 96-48 48-16-16v160h160l-16-16 48-48 96 96-96 96-48-48 16-16H544v160l16-16 48 48-96 96-96-96 48-48 16 16V608H320l16 16-48 48-96-96 96-96 48 48-16 16h160V384H320l16 16-48 48-96-96 96-96 48 48-16 16h160V256l-16 16-48-48 96-96z',
         onclick:(ecModel, api) => autoCenterFlowGraph(api)
       }
-    }},
+    }};
+  }
+  function renderFlowGraph(id, graph, title) {
+    const flowNodeY = [130,130,70,210,210];
+    chart(id, {
+    title:{show:false,text:title},
+    textStyle:chartTextStyle,
+    toolbox:flowToolbox(),
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
       : `${escapeHtml(p.data.label || p.data.name)}<br>${escapeHtml((p.data.top_ips || []).join(', '))}`},
@@ -3771,7 +3769,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       labelLayout:{hideOverlap:true},
       edgeLabel:{
         show:true,
-        formatter:p => p.data.edge_label || p.data.operation || (p.data.status === 'present' ? 'present' : 'missing'),
+        formatter:p => p.data.edge_label || p.data.status || '',
         fontSize:13,
         lineHeight:16,
         width:150,
@@ -3794,7 +3792,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         operation:edge.operation,
         evidence:edge.evidence,
         summary:edge.summary,
-        edge_label:[edge.operation, edge.summary].filter(Boolean).join('\\n'),
+        edge_label:edge.operation,
         reason:edge.reason,
         rollup:edge.rollup,
         status:edge.status,
