@@ -98,6 +98,24 @@ public:
         DS_ASSERT_OK(DeleteObject("id3"));
     }
 
+    void TestEvictionRemoveMetaRequestEnablesRedirect()
+    {
+        WorkerOcEvictionManager::EvictDeletedObjects objectKeyVersions{ { "id1", 11 }, { "id2", 12 } };
+        std::vector<std::string> objectKeys{ "id1", "id2" };
+        auto req = WorkerOcEvictionManager::BuildEvictionRemoveMetaReq(
+            objectKeys, objectKeyVersions, HostPort("127.0.0.1", 31501), true);
+
+        EXPECT_TRUE(req.redirect());
+        EXPECT_EQ(req.address(), "127.0.0.1:31501");
+        EXPECT_EQ(req.cause(), master::RemoveMetaReqPb::EVICTION);
+        EXPECT_EQ(req.version(), UINT64_MAX);
+        ASSERT_EQ(req.id_with_version_size(), 2);
+        EXPECT_EQ(req.id_with_version(0).id(), "id1");
+        EXPECT_EQ(req.id_with_version(0).version(), 11U);
+        EXPECT_EQ(req.id_with_version(1).id(), "id2");
+        EXPECT_EQ(req.id_with_version(1).version(), 12U);
+    }
+
     static constexpr uint64_t TEST_DATA_SIZE = 10 * 1024 * 1024;
     std::shared_ptr<AkSkManager> akSkManager_;
 };
@@ -187,6 +205,11 @@ TEST_F(EvictionManagerTest, TestEvictionManagerInit)
     EvictionList::Node oldest;
     DS_EXPECT_OK(evictionManager.GetAllObjectsInfo(objsInList, oldest));
     ASSERT_EQ(objsInList.size(), size_t(0));
+}
+
+TEST_F(EvictionManagerTest, EvictionRemoveMetaRequestEnablesRedirect)
+{
+    TestEvictionRemoveMetaRequestEnablesRedirect();
 }
 
 TEST_F(EvictionManagerTest, AddTracksObjectTableAndEvictionCounters)
