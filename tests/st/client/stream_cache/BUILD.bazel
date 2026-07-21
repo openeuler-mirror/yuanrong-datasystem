@@ -250,6 +250,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "stream_admission_test",
+    srcs = ["stream_admission_test.cpp"],
+    tags = ["manual"],
+    deps = SC_COMMON_DEPS + [
+        "//src/datasystem/common/util:raii",
+    ],
+)
+
+ds_cc_test(
     name = "stream_data_encryption_test",
     srcs = ["stream_data_encryption_test.cpp"],
     tags = ["manual"],

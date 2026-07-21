@@ -390,11 +390,13 @@
     `LOCAL_ISOLATED` and `RECOVERING` is covered by
     `MigrationTargetIsolationTest.LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering`; KV protocol
     `Get/Set` rejection during `LOCAL_ISOLATED` and `RECOVERING` is covered by
-    `KVClientEtcdDfxTest.LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering`. Stream client-facing read/write
-    entrypoints are covered by
+    `KVClientEtcdDfxTest.LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering`. Stream protocol
+    create/subscribe/receive rejection during `LOCAL_ISOLATED` and `RECOVERING` is covered by
+    `StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering`, and the recovered
+    path verifies create/subscribe/send/receive succeeds again. The Stream ST observes the public health-gated
+    `K_NOT_READY` status, while mode/reason details remain covered by
     `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringIsolation` and
-    `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringRecovering`; full Stream ST
-    remains follow-up.
+    `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringRecovering`.
   - `MigrationTargetFiltersIsolatedWorker`: covered by
     `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker`,
     `MigrationTargetOomTest.LEVEL1_MigrationTargetFiltersOutOfMemoryWorker`, and
@@ -433,8 +435,9 @@
   - `ScaleOutDoesNotUseFailedWorkerAsMigrationSource`: covered by
     `HashAlgorithmTest.ScaleOutDoesNotUseFailedWorkerAsMigrationSource`, which verifies ScaleOut owner-change
     materialization does not use a failed member as the migration/rebuild source for the joining target.
-  - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV STs have been
-    run during development, but full CI, Bazel, Stream ST, and complete Object/KV ST are not yet green in this session.
+  - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV/Stream STs have
+    been run during development, but full CI, Bazel, and complete Object/KV/Stream ST suites are not yet green in this
+    session.
   - Follow-up scale/fault cases to add before claiming full story closure:
     1. ScaleOut while one existing worker is isolated is now covered at topology planning level by
        `ScaleOutDoesNotUseFailedWorkerAsMigrationSource`; full worker metadata-rebuild ST with an actual
@@ -450,9 +453,8 @@
        broader follow-up.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
        deferred retry payload; broader ST-level membership churn around the same path remains pending.
-    5. ST-level Stream ordinary request coverage during `LOCAL_ISOLATED` and `RECOVERING`; Object and KV protocol STs
-       now cover ordinary read/write admission for both modes, and unit coverage verifies Stream client-facing admission
-       for both modes through the same facade semantics. Full Stream protocol ST remains pending.
+    5. Broader Stream scale/fault data-retention ST remains pending if we want end-to-end evidence beyond the current
+       ordinary create/subscribe/receive admission ST.
 
 ## Fast Verification
 
@@ -566,6 +568,19 @@
     passed 71/71 tests in 11.144s gtest time, 11.20s wall time.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-cpp-files>` reported no formatting
     changes.
+  - Added 1 ST case:
+    `StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering`.
+  - Initial compile RED: the new Stream ST used `std::vector<DataElement>` while the public `Consumer::Receive` API
+    expects `std::vector<Element>`.
+  - Initial runtime RED: the focused Stream ST failed 1/1 in 11.692s gtest time, 11.76s wall time because the first
+    assertion expected runtime mode text; Stream admission reaches the public health gate first and reports
+    `K_NOT_READY`/`Worker not ready`. The test now asserts protocol-layer rejection, while UTs cover mode/reason detail.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 66s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), source build time 5s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
+    database entries.
+  - GREEN: `ds_st_stream_cache --gtest_filter="StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering"`
+    passed 1/1 test in 11.085s gtest time, 11.15s wall time, covering Stream create/subscribe/receive rejection during
+    both `LOCAL_ISOLATED` and `RECOVERING`, then verifying recovered create/subscribe/send/receive succeeds.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
