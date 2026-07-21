@@ -49,7 +49,6 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_constants.h"
-#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_helper.h"
@@ -275,22 +274,18 @@ static constexpr uint32_t SHM_QUEUE_SLOT_NUM = 32;
 static const std::string WORKER_OC_SERVICE_IMPL = "WorkerOCServiceImpl";
 constexpr size_t GET_MATCH_OBJECT_BATCH = 500;  // batch number is 500.
 
-WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr,
-                                         std::shared_ptr<ObjectTable> objectTable, std::shared_ptr<AkSkManager> manager,
-                                         std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                                         std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
-                                         cluster::ICoordinationBackend *coordinationBackend,
-                                         MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
-                                         const worker::MetadataRouteResolver &metadataRoute,
-                                         const cluster::MembershipEndpointView &membership,
-                                         const std::atomic<bool> *exitRequested, bool isRestart,
-                                         bool controlBackendAvailableAtStartup)
+WorkerOCServiceImpl::WorkerOCServiceImpl(
+    HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
+    std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
+    std::shared_ptr<PersistenceApi> persistApi, cluster::ICoordinationBackend *coordinationBackend,
+    MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
+    const worker::MetadataRouteResolver &metadataRoute, const cluster::MembershipEndpointView &membership,
+    const std::atomic<bool> *exitRequested, bool isRestart, bool controlBackendAvailableAtStartup)
     : WorkerOCService(std::move(serverAddr)),
       localMasterAddress_(std::move(masterAddr)),
       persistenceApi_(persistApi),
       objectTable_(std::move(objectTable)),
       evictionManager_(std::move(evictionManager)),
-      etcdStore_(etcdStore),
       coordinationBackend_(coordinationBackend),
       topologyEngine_(topologyEngine),
       metadataRoute_(metadataRoute),

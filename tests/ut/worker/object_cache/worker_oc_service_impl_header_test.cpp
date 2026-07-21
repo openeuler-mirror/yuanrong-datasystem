@@ -75,11 +75,11 @@ public:
     {
         objectTable_ = std::make_shared<object_cache::ObjectTable>();
         HostPort hostPort("127.0.0.1:18481");
-        auto evictionManager = std::make_shared<WorkerOcEvictionManager>(
-            objectTable_, hostPort, hostPort, GetTestMetadataRoute(), nullptr);
-        impl_ = std::make_shared<WorkerOCServiceImpl>(
-            hostPort, hostPort, objectTable_, nullptr, evictionManager, nullptr, nullptr, nullptr, nullptr, nullptr,
-            GetTestMetadataRoute(), membership_, &exitRequested_, false, false);
+        auto evictionManager = std::make_shared<WorkerOcEvictionManager>(objectTable_, hostPort, hostPort,
+                                                                         GetTestMetadataRoute(), nullptr);
+        impl_ = std::make_shared<WorkerOCServiceImpl>(hostPort, hostPort, objectTable_, nullptr, evictionManager,
+                                                      nullptr, nullptr, nullptr, nullptr, GetTestMetadataRoute(),
+                                                      membership_, &exitRequested_, false, false);
         impl_->InitMetaSize();
         impl_->InitServiceImpl();
     }
@@ -162,7 +162,7 @@ TEST_F(WorkerOcMetadataHeaderUTTest, TestConcurrentGetMetadataSize)
     Init();
 
     std::vector<std::thread> threads;
-    std::atomic<int> completedThreads{0};
+    std::atomic<int> completedThreads{ 0 };
 
     for (int i = 0; i < 20; i++) {
         threads.emplace_back([this, &completedThreads]() {

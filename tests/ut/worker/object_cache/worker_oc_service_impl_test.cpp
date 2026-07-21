@@ -465,7 +465,7 @@ public:
         gRefProc_ =
             std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_, nullptr, localAddress_);
         impl_ = std::make_shared<WorkerOCServiceImpl>(
-            localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr, nullptr,
+            localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
             topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
             topologyRuntime_.Engine()->IsRestart(), false);
         dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
@@ -524,8 +524,8 @@ public:
     {
         return std::make_shared<WorkerOCServiceImpl>(
             localAddress_, localAddress_, objectTable_, akSkManager, evictionManager_, nullptr, nullptr, nullptr,
-            nullptr, topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(),
-            &exitRequested_, topologyRuntime_.Engine()->IsRestart(), false);
+            topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
+            topologyRuntime_.Engine()->IsRestart(), false);
     }
 
     WorkerWorkerOCServiceImpl CreateWorkerWorkerOCService(std::shared_ptr<AkSkManager> akSkManager = nullptr)

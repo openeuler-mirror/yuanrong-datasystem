@@ -88,6 +88,23 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use WorkerRuntimeFacade as the runtime boundary")
 
+    def test_object_cache_service_does_not_keep_etcd_store(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp",
+        ]
+
+        forbidden_tokens = [
+            "EtcdStore *etcdStore",
+            "etcdStore_",
+            "datasystem/common/kvstore/etcd/etcd_store.h",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use injected coordination/metadata capabilities")
+
     def test_worker_composition_uses_runtime_facade_methods(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp",

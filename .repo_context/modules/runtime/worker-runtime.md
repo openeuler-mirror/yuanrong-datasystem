@@ -265,6 +265,8 @@
   5. `WorkerOCServer` no longer reaches through `workerRuntime_.RuntimeState()` for local-isolation coordinator wiring
      or metrics publication; both operations go through `WorkerRuntimeFacade` semantic methods. Boundary tests assert
      the composition root does not regress to direct state access.
+  6. `WorkerOCServiceImpl` no longer accepts, stores, or includes `EtcdStore`; object-cache business service code keeps
+     the injected coordination/metadata capabilities and leaves concrete backend ownership in `WorkerOCServer`.
 - Acceptance coverage status against the worker-isolation story:
   - `EtcdKeepAliveIsolationTest.ConfirmedLocalIsolationPublishesDeleteAndIsolationCallbackOnce`: covered by
     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData`,

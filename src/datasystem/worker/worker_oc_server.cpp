@@ -829,9 +829,11 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
 {
     // create WorkerOCServices
     objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
-        hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
-        objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
-        &topologyExitRequested_, topologyEngine_->IsRestart(), true);
+        hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_,
+        metadataCoordinationBackend_.get(), objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_,
+        topologyEngine_->Membership(), &topologyExitRequested_, topologyEngine_->IsRestart(), true);
+    objCacheClientWorkerSvc_->SetRuntimeFacade(&workerRuntime_);
+    object_cache::NodeSelector::Instance().SetRuntimeFacade(&workerRuntime_);
     CreateRebalanceExecutor(objectTable, evictionManager);
     objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &,
                                                                    std::chrono::steady_clock::time_point deadline,

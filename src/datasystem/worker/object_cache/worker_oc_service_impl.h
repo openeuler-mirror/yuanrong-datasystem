@@ -125,7 +125,6 @@ public:
      * @param[in] manager Used to do AK/SK authenticate.
      * @param[in] evictionManager The eviction manager.
      * @param[in] persistApi Persistence service client.
-     * @param[in] etcdStore Pointer to EtcdStore owned by WorkerOcServer.
      * @param[in] masterOCService The master service.
      * @param[in] topologyEngine Borrowed topology lifecycle and query service.
      * @param[in] metadataRoute Metadata owner resolver that outlives this service.
@@ -136,8 +135,7 @@ public:
      */
     WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
                         std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                        std::shared_ptr<PersistenceApi> persistApi, EtcdStore *etcdStore,
-                        cluster::ICoordinationBackend *coordinationBackend,
+                        std::shared_ptr<PersistenceApi> persistApi, cluster::ICoordinationBackend *coordinationBackend,
                         master::MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
                         const worker::MetadataRouteResolver &metadataRoute,
                         const cluster::MembershipEndpointView &membership, const std::atomic<bool> *exitRequested,
@@ -1371,7 +1369,6 @@ private:
     std::shared_ptr<SlotRecoveryManager> slotRecoveryManager_{ nullptr };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
-    EtcdStore *etcdStore_;                                // pointer to EtcdStore in WorkerOcServer
     cluster::ICoordinationBackend *coordinationBackend_;  // pointer to backend adapter in WorkerOcServer
     cluster::TopologyEngine *topologyEngine_{ nullptr };  // Non-owning lifecycle service owned by Worker Host.
     const worker::MetadataRouteResolver &metadataRoute_;
