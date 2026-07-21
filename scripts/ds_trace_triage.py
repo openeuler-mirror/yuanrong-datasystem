@@ -3907,6 +3907,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       x:flowNodeX[idx] || flowNodeX[0],
       y:flowNodeY[idx] || 130,
       symbolSize:flowGraphNodeSize(),
+      fixed:true,
       itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
     }));
     chart(id, {
@@ -3918,7 +3919,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     series:[{
       type:'graph',
       layout:'none',
-      roam:true,
+      roam:false,
+      draggable:false,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
       label:{show:true, fontSize:FLOW_GRAPH_LABEL_FONT_SIZE},

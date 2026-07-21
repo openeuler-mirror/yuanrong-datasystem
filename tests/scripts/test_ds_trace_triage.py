@@ -477,7 +477,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "restore:{}" not in html
     assert "labelLayout:{hideOverlap:true}" not in html
     assert "labelLayout:{hideOverlap:false}" in html
-    assert "roam:true" in html
+    assert "roam:false" in html
+    assert "draggable:false" in html
     assert "const graphWidth = Math.max(720, node?.clientWidth || 0)" in html
     assert "const flowNodeX = [0.12,0.34,0.58,0.58,0.82].map(r => Math.round(graphWidth * r))" in html
     assert "const flowNodeY = [170,170,82,258,258]" in html
@@ -512,6 +513,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "return node.label" in html
     assert "workerRelationName" in html
     assert "label:flowNodeLabel(node)" in html
+    assert "fixed:true" in html
     assert "chartRenderers.set(id, () => renderFlowGraph(id, graph, title))" in html
     assert "edgeLabelSeverity(edge.rollup?.max_ms)" not in html
     assert "rich:{hot:" not in html
