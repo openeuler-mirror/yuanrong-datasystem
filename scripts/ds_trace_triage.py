@@ -2250,7 +2250,7 @@ nav a.active,nav a:hover{background:#eaf2ff;color:#1d4ed8}nav a.sub{padding-left
 main{flex:1;min-width:0;width:auto;padding:22px 28px 50px}section{margin-bottom:20px}
 h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-size:15px;text-align:center;margin:10px 0}
 .subtitle,.note,.insight{color:var(--muted);line-height:1.65}.section-summary{background:#f8fafc;border-left:4px solid var(--blue);color:#334155;font-size:13px;line-height:1.65}.section-summary b{color:#172033}.summary-points{margin:6px 0 0 18px;padding:0}.summary-points li{margin:3px 0}.summary-key{font-weight:700;color:#1d4ed8}.summary-hot{font-weight:700;color:#991b1b;background:#fee2e2;border-radius:4px;padding:1px 4px}.summary-warn{font-weight:700;color:#9a3412;background:#ffedd5;border-radius:4px;padding:1px 4px}.chapter-guide{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}.chapter-guide li{border:1px solid var(--border);border-radius:8px;background:#f8fafc;padding:9px 10px;line-height:1.55;font-size:13px}.chapter-guide a{color:#1d4ed8;text-decoration:none;font-weight:700}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-.card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{min-width:0;background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
+.card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px;min-width:0}.panel{min-width:0;background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
 tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}.cell-hot,.cell-warn,.cell-ok{display:inline-block;border-radius:4px;padding:1px 5px;font-weight:700}.cell-hot{background:#fee2e2;color:#991b1b}.cell-warn{background:#ffedd5;color:#9a3412}.cell-ok{background:#dcfce7;color:#166534}
 tr.summaryrow td{background:#f8fafc}
@@ -2260,7 +2260,7 @@ tr.summaryrow td{background:#f8fafc}
 .compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.flow-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-pair .chart{height:320px}.chart{height:360px;width:100%}.flow-graph-chart{height:520px}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size);word-break:break-word}
 th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none}.sortable-th:hover{background:#eaf2ff}.sort-mark{color:#2563eb;font-size:11px;margin-left:4px}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
-.table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
+.table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}.code-ref-value{font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.45;overflow-wrap:anywhere;word-break:break-all}.code-ref-card .v{font-family:'Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.35;overflow-wrap:anywhere}.code-ref-card .n{overflow-wrap:anywhere}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
@@ -2472,6 +2472,16 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   let topTraceSort = null;
   function escapeHtml(value) {
     return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  }
+  function shortCodeRef(value) {
+    const text = String(value || '');
+    return text.length > 16 ? `${text.slice(0, 12)}...${text.slice(-7)}` : text;
+  }
+  function formatMetadataValue(field, value) {
+    if (field === 'code_ref') {
+      return `<span class="code-ref-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span>`;
+    }
+    return formatCell('value', value);
   }
   function workerNameParts(raw) {
     const text = String(raw || '');
@@ -3068,16 +3078,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     ['errors', totalErrors, 'total error markers'],
     ['access p99 ms', access.p99 ?? '', 'client/access latency'],
     ['code_ref', report.code_ref, 'source reference']
-  ].map(([k,v,hint]) => `<div class="card"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div><div class="n">${escapeHtml(hint)}</div></div>`).join('');
+  ].map(([k,v,hint]) => k === 'code_ref'
+    ? `<div class="card code-ref-card"><div class="k">${escapeHtml(k)}</div><div class="v" title="${escapeHtml(v)}">${escapeHtml(shortCodeRef(report.code_ref))}</div><div class="n">${escapeHtml(hint)}</div></div>`
+    : `<div class="card"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div><div class="n">${escapeHtml(hint)}</div></div>`).join('');
   renderTable('run-metadata-table', ['field','value'], [
     ['case_name', manifest.case_name || ''],
     ['scenario', manifest.scenario || ''],
     ['analysis_created_at', manifest.analysis_created_at || ''],
+    ['code_ref', report.code_ref || manifest.code_ref || ''],
     ['input_document', manifest.input_document || 'inputs.md'],
     ['raw_inputs', 'raw/inputs'],
     ['raw_extracted', 'raw/extracted'],
     ['inputs', (manifest.inputs || []).map(item => `${item.path} (${item.size || 0} bytes)`).join('\\n')]
-  ].filter(row => row[1]));
+  ].filter(row => row[1]), null, {
+    formatCell:(header, cell, row) => header === 'value' ? formatMetadataValue(row[0], cell) : formatCell(header, cell)
+  });
   const classificationRows = Object.entries(dim.classifications || {}).sort((a,b) => b[1]-a[1]);
   const errorRows = Object.entries(dim.errors || {}).sort((a,b) => b[1]-a[1]);
   const cohortRows = Object.entries(dim.cohorts || {}).sort((a,b) => b[1].trace_count - a[1].trace_count);

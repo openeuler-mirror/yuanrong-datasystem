@@ -316,6 +316,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "class=\"subtitle\"" in html
     assert "id=\"run-metadata-table\"" in html
     assert "class=\"metadata-table\"" in html
+    assert "code-ref-value" in html
+    assert "shortCodeRef(report.code_ref)" in html
+    assert "formatMetadataValue(row[0], cell)" in html
+    assert "['code_ref', report.code_ref || manifest.code_ref || '']" in html
     assert "#run-metadata-table th:first-child" in html
     assert "set-case" in html
     assert "memory-copy" in html
