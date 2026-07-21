@@ -103,8 +103,9 @@ publish: local only / dry-run / published
    python3 scripts/ds_trace_triage.py render-local "$run_dir"
    python3 scripts/ds_trace_triage.py render-site "$run_dir"
    python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
-   # After reviewing site_publish.md, omit --dry-run to pass the HTML size gate,
-   # scp, curl HEAD, and verify live HTML markers.
+   # After reviewing site_publish.md, set DS_TRACE_TRIAGE_PUBLISH_HOST and
+   # DS_TRACE_TRIAGE_PUBLISH_ROOT, then omit --dry-run to pass the HTML size
+   # gate, scp, curl HEAD, and verify live HTML markers.
    ```
 4. Read the timestamped run directory:
    - `manifest.json`: case/scenario/ref/time range and render targets
@@ -157,6 +158,9 @@ python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 Real <publish-site> publish has a default 2 MiB `report.site.html` size gate to avoid
 publishing oversized throw-away pages. If a large page is intentional, review
 the report first and pass `--max-site-html-mb <N>` explicitly.
+Real publish also requires `DS_TRACE_TRIAGE_PUBLISH_HOST` and
+`DS_TRACE_TRIAGE_PUBLISH_ROOT`; `DS_TRACE_TRIAGE_PUBLISH_BASE_URL` defaults to
+the public report base URL when it is not set.
 
 Run pytest locally when changing parser behavior:
 

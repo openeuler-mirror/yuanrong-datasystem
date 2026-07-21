@@ -50,7 +50,8 @@ python3 scripts/ds_trace_triage.py triage "$run_dir"
 python3 scripts/ds_trace_triage.py render-local "$run_dir"
 python3 scripts/ds_trace_triage.py render-site "$run_dir"
 python3 scripts/ds_trace_triage.py publish-site "$run_dir" --dry-run
-# 确认 site_publish.md 后，不带 --dry-run 会先做 HTML 大小门禁，再执行 scp、curl HEAD，并校验线上 HTML 关键组件。
+# 确认 site_publish.md 后，设置 DS_TRACE_TRIAGE_PUBLISH_HOST 和 DS_TRACE_TRIAGE_PUBLISH_ROOT。
+# 不带 --dry-run 会先做 HTML 大小门禁，再执行 scp、curl HEAD，并校验线上 HTML 关键组件。
 ```
 
 旧的直接摘要入口仍可用于快速检查：
@@ -70,11 +71,12 @@ python3 scripts/ds_trace_triage.py --self-test
 python3 -m pytest -s tests/scripts/test_ds_trace_triage.py -q
 ```
 
-这两个命令应接入 CI，作为日志格式和 parser contract 的低成本回归门禁。
+这些命令先作为人工验证和独立 job 候选，不接入 `.gitee/ci_build.sh` 主路径，避免影响主工程构建耗时。
 
 当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us->ms 转换、`exceed 3ms` breakdown、`latencySummary` 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、UB request id/src/target/dataSize/cpuid/status/inflight 字段、时间桶、worker/edge 聚合、目录化 run 产物、本地/站点 HTML、内联 JS 语法检查、yche 发布清单、dry-run manifest 状态、真实发布大小门禁、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。
 
 <publish-site> 发布默认拒绝超过 2 MiB 的 `report.site.html`，避免把临时大页面或垃圾页面发布到站点。确有必要发布大报告时，必须先人工确认报告内容和体积来源，再显式传入 `--max-site-html-mb <N>`。
+真实发布还需要显式设置 `DS_TRACE_TRIAGE_PUBLISH_HOST` 和 `DS_TRACE_TRIAGE_PUBLISH_ROOT`；`DS_TRACE_TRIAGE_PUBLISH_BASE_URL` 未设置时使用公开报告 URL 前缀。
 
 日志字段小步演进时，优先通过 parser 扩展点接入：
 

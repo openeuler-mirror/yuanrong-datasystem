@@ -172,6 +172,12 @@ def _normalize_patch_payload(file_info: dict[str, Any]) -> tuple[str, dict[str, 
     return "", {}
 
 
+def filter_sensitive_matches(matches: list[Any], allow_unscannable: bool = False) -> list[Any]:
+    if not allow_unscannable:
+        return matches
+    return [match for match in matches if match.category != "unscannable changed file"]
+
+
 def prepare(args: argparse.Namespace) -> int:
     settings = load_settings()
     pr_number = parse_pr_ref(args.pr_ref)
@@ -222,8 +228,12 @@ def prepare(args: argparse.Namespace) -> int:
             }
         )
 
-    if sensitive_matches:
-        raise ReviewError(format_sensitive_scan_failure(sensitive_matches))
+    blocking_sensitive_matches = filter_sensitive_matches(
+        sensitive_matches,
+        allow_unscannable=getattr(args, "allow_unscannable_files", False),
+    )
+    if blocking_sensitive_matches:
+        raise ReviewError(format_sensitive_scan_failure(blocking_sensitive_matches))
 
     for prepared_file in prepared_files:
         file_info = prepared_file["file_info"]
@@ -491,6 +501,11 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     prepare_parser = subparsers.add_parser("prepare", help="Fetch PR data and build a review bundle.")
+    prepare_parser.add_argument(
+        "--allow-unscannable-files",
+        action="store_true",
+        help="Allow only unscannable changed-file scan results; concrete sensitive matches still block.",
+    )
     prepare_parser.add_argument("pr_ref", help="PR number or GitCode PR URL.")
     prepare_parser.set_defaults(func=prepare)
 

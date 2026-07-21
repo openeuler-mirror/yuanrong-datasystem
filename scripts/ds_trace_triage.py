@@ -31,6 +31,10 @@ IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b")
 NOISE_ON_LABEL = "有底噪(dizao)"
 NOISE_OFF_LABEL = "无底噪(wudizao)"
 DEFAULT_SITE_HTML_MAX_BYTES = 2 * 1024 * 1024
+PUBLISH_HOST_ENV = "DS_TRACE_TRIAGE_PUBLISH_HOST"
+PUBLISH_ROOT_ENV = "DS_TRACE_TRIAGE_PUBLISH_ROOT"
+PUBLISH_BASE_URL_ENV = "DS_TRACE_TRIAGE_PUBLISH_BASE_URL"
+DEFAULT_SITE_PUBLIC_BASE_URL = "https://yche.me/perf"
 ACCESS_RE = re.compile(r"\|\s*(-?\d+)\s*\|\s*([A-Z0-9_]+)\s*\|\s*(\d+)\s*\|\s*(\d+)")
 BREAKDOWN_BLOCK_RE = re.compile(r"exceed\s+3ms:\s*\{([^}]*)\}", re.I)
 BREAKDOWN_ITEM_RE = re.compile(r"([A-Za-z][A-Za-z0-9_ /.-]*?)\s*:\s*([\d.]+)\s*ms")
@@ -1794,11 +1798,29 @@ def _write_inputs_doc(run_dir, manifest):
     (Path(run_dir) / "inputs.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def _site_publish_config(require_target=False):
+    host = os.environ.get(PUBLISH_HOST_ENV, "").strip()
+    root = os.environ.get(PUBLISH_ROOT_ENV, "").strip().rstrip("/")
+    base_url = os.environ.get(PUBLISH_BASE_URL_ENV, DEFAULT_SITE_PUBLIC_BASE_URL).strip().rstrip("/")
+    if require_target and (not host or not root):
+        raise SystemExit(
+            f"Set {PUBLISH_HOST_ENV} and {PUBLISH_ROOT_ENV} before real publish; "
+            f"{PUBLISH_BASE_URL_ENV} is optional."
+        )
+    return {
+        "host": host or "<publish-host>",
+        "root": root or "<publish-root>/perf",
+        "base_url": base_url,
+        "is_configured": bool(host and root),
+    }
+
+
 def _write_site_publish_doc(run_dir, manifest):
     run_dir = Path(run_dir)
     filename = f"{run_dir.name}.html"
-    remote_path = f"/var/www/html/perf/{filename}"
-    url = f"https://yche.me/perf/{filename}"
+    publish_config = _site_publish_config()
+    remote_path = f"{publish_config['root']}/{filename}"
+    url = f"{publish_config['base_url']}/{filename}"
     source_html = run_dir / "report.site.html"
     source_size = source_html.stat().st_size if source_html.exists() else 0
     lines = [
@@ -1809,14 +1831,18 @@ def _write_site_publish_doc(run_dir, manifest):
         f"- source_html: `report.site.html`",
         f"- source_size_bytes: `{source_size}`",
         f"- default_publish_limit_bytes: `{DEFAULT_SITE_HTML_MAX_BYTES}`",
-        f"- target_host: `xqyun-32c32g`",
+        f"- target_host: `{publish_config['host']}`",
         f"- target_path: `{remote_path}`",
         f"- url: `{url}`",
+        f"- configured: `{publish_config['is_configured']}`",
         "",
         "## Commands",
         "",
         "```bash",
-        f"scp report.site.html xqyun-32c32g:{remote_path}",
+        f"export {PUBLISH_HOST_ENV}=<publish-host>",
+        f"export {PUBLISH_ROOT_ENV}=<publish-root>/perf",
+        f"export {PUBLISH_BASE_URL_ENV}={publish_config['base_url']}",
+        f"scp report.site.html ${{{PUBLISH_HOST_ENV}}}:${{{PUBLISH_ROOT_ENV}}}/{filename}",
         f"curl -fsSI {url}",
         "```",
         "",
@@ -3230,9 +3256,13 @@ class TraceSitePublisher:
         return site_target.get("url", "")
 
     def _copy_and_verify(self, source_html, site_target):
+        publish_config = _site_publish_config(require_target=True)
         target_path = site_target.get("target_path", "")
         url = site_target.get("url", "")
-        subprocess.run(["scp", str(source_html), f"xqyun-32c32g:{target_path}"], check=True)
+        if target_path.startswith("<publish-root>"):
+            filename = Path(target_path).name
+            target_path = f"{publish_config['root']}/{filename}"
+        subprocess.run(["scp", str(source_html), f"{publish_config['host']}:{target_path}"], check=True)
         subprocess.run(["curl", "-fsSI", url], check=True)
         result = subprocess.run(["curl", "-fsSL", "-A", "Mozilla/5.0", url],
                                 check=True, capture_output=True, text=True)

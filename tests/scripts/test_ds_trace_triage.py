@@ -473,8 +473,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     ]:
         assert marker in site_html
     publish_doc = (run_dir / "site_publish.md").read_text(encoding="utf-8")
-    assert ("xq" + "yun-32c32g") in publish_doc
-    assert ("/var" + "/www/html/perf/") in publish_doc
+    assert "target_host: `<publish-host>`" in publish_doc
+    assert "target_path: `<publish-root>/perf/" in publish_doc
     assert ("https://yche" + ".me/perf/") in publish_doc
     assert "report.site.html" in publish_doc
     triage = json.loads((run_dir / "triage.json").read_text())
@@ -801,12 +801,14 @@ def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypa
         return Result()
 
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    monkeypatch.setenv(mod.PUBLISH_HOST_ENV, "publish-host.example")
+    monkeypatch.setenv(mod.PUBLISH_ROOT_ENV, "/srv/site/perf")
     url = mod.publish_site_stage(run_dir, dry_run=False)
 
     assert url.startswith("https://yche" + ".me/perf/")
     assert calls[0][0][0] == "scp"
     assert calls[0][0][1] == str(run_dir / "report.site.html")
-    assert calls[0][0][2].startswith(("xq" + "yun-32c32g" + ":/var" + "/www/html/perf/"))
+    assert calls[0][0][2].startswith("publish-host.example:/srv/site/perf/")
     assert calls[1][0][:2] == ["curl", "-fsSI"]
     assert calls[2][0][:4] == ["curl", "-fsSL", "-A", "Mozilla/5.0"]
     assert calls[2][1]["capture_output"] is True
@@ -816,6 +818,27 @@ def test_publish_site_stage_executes_copy_and_verify_commands(tmp_path, monkeypa
     assert manifest["render_targets"]["site"]["publish"]["live_markers"] == "verified"
     assert manifest["render_targets"]["site"]["publish"]["source_size_bytes"] > 0
     assert manifest["render_targets"]["site"]["publish"]["max_site_html_bytes"] == mod.DEFAULT_SITE_HTML_MAX_BYTES
+
+
+def test_publish_site_stage_requires_target_env_for_real_publish(tmp_path, monkeypatch):
+    trace_id = "019f7d0b-e4e2-7764-8cf9-fab58e4cbfbb"
+    log = tmp_path / "publish-env.log"
+    log.write_text(
+        f"2026-07-20T13:15:00.000000 | INFO | access_recorder | 192.0.2.30 | 1 | {trace_id} | - | 0 | DS_KV_CLIENT_GET | 20298 | 1024\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    run_dir = mod.run_pipeline([str(log)], tmp_path / "runs", case_name="publish-env-case", code_ref="unit-test")
+    calls = []
+
+    monkeypatch.delenv(mod.PUBLISH_HOST_ENV, raising=False)
+    monkeypatch.delenv(mod.PUBLISH_ROOT_ENV, raising=False)
+    monkeypatch.setattr(mod.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    with pytest.raises(SystemExit, match=mod.PUBLISH_HOST_ENV):
+        mod.publish_site_stage(run_dir, dry_run=False)
+    assert calls == []
 
 
 def test_publish_site_stage_blocks_oversized_html_before_copy(tmp_path, monkeypatch):
