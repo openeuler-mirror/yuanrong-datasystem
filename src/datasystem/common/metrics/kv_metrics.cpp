@@ -130,6 +130,8 @@ constexpr MetricDesc KV_METRIC_DESCS[] = {
     { 101, "client_create_error_total", MetricType::COUNTER, "count" },
     { 102, "client_create_allocated_bytes", MetricType::COUNTER, "bytes" },
     { 103, "worker_create_allocated_bytes", MetricType::COUNTER, "bytes" },
+    { 104, "worker_shm_fresh_extent_oom_total", MetricType::COUNTER, "count" },
+    { 105, "worker_shm_reusable_extent_oom_total", MetricType::COUNTER, "count" },
 };
 static_assert(sizeof(KV_METRIC_DESCS) / sizeof(KV_METRIC_DESCS[0]) == static_cast<size_t>(KvMetricId::KV_METRIC_END));
 

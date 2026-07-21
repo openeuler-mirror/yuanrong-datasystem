@@ -309,7 +309,11 @@ Status Allocator::AllocateMemory(const std::string &tenantId, uint64_t needSize,
         }
     }
 
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(IncrementMemoryUsage(needSize, serviceType, cacheType), "ADD failed");
+    Status incrementRc = IncrementMemoryUsage(needSize, serviceType, cacheType);
+    if (incrementRc.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
+        incrementRc.AppendMsg("reason=logical_size_limit_reached");
+    }
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(incrementRc, "ADD failed");
     std::shared_ptr<ArenaGroup> arenaGroup;
     Status rc = arenaManager_->GetOrCreateArenaGroup({ tenantId, cacheType }, GetMaxMemoryLimit(cacheType), arenaGroup);
     uint64_t realSize;

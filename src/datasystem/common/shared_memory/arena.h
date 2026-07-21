@@ -46,6 +46,19 @@ namespace memory {
 constexpr uint32_t TENANT_RESOURCE_RELEASE_DELAY_MS = 600'000;  // 10min
 class Arena;
 
+// Tracks extent provision failures while Jemalloc serves one allocation request.
+class ScopedExtentAllocationDiagnostic {
+public:
+    ScopedExtentAllocationDiagnostic();
+    ~ScopedExtentAllocationDiagnostic();
+
+    bool FreshExtentUnavailable() const;
+
+private:
+    bool previousActive_;
+    bool previousFreshExtentUnavailable_;
+};
+
 class ArenaGroup {
 public:
     ArenaGroup(std::vector<std::shared_ptr<Arena>> arenas, uint64_t maxSize, CacheType cacheType);
@@ -142,7 +155,10 @@ private:
      * @param[out] pointer Allocated memory pointer.
      * @return Status of this call.
      */
-    Status AllocateMemoryImpl(bool retry, bool populate, uint64_t &size, size_t &index, void *&pointer);
+    Status AllocateMemoryImpl(bool retry, bool populate, uint64_t &size, size_t &index, void *&pointer,
+                              bool &freshExtentUnavailable);
+
+    Status BuildExtentOomStatus(uint32_t arenaId, bool freshExtentUnavailable) const;
 
     // The arena in this group. Not modified after creation, so no lock protection required.
     std::vector<std::shared_ptr<Arena>> arenas_;
