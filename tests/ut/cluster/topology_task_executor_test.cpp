@@ -531,6 +531,49 @@ TEST(TopologyTaskExecutorTest, ScaleInMetadataGateWaitsForAllAdmittedSourceTasks
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
+TEST(TopologyTaskExecutorTest, ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp(TopologyChangeType::SCALE_IN));
+    const auto &firstTask = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    auto siblingPlan = scenario.plan;
+    ASSERT_FALSE(siblingPlan.ownerChanges.empty());
+    siblingPlan.ownerChanges.front().ranges = { { SIBLING_SCALE_IN_RANGE_FROM, SIBLING_SCALE_IN_RANGE_END } };
+    ExpectedDerivedState siblingExpected;
+    TopologyTaskMaterializer materializer;
+    DS_ASSERT_OK(materializer.BuildExpected(*scenario.snapshot, siblingPlan, siblingExpected));
+    ASSERT_EQ(siblingExpected.tasks.size(), 1);
+    ASSERT_TRUE(std::holds_alternative<TopologyMigrateTask>(siblingExpected.tasks.front()));
+    auto secondTask = std::get<TopologyMigrateTask>(siblingExpected.tasks.front());
+    ASSERT_NE(firstTask.taskId, secondTask.taskId);
+    DS_ASSERT_OK(scenario.repository->CreateTaskIfAbsent(TopologyTask{ secondTask }));
+    auto notify = scenario.expected.notifiesByAddress.at(firstTask.executorAddress);
+    notify.taskIds.push_back(secondTask.taskId);
+    TopologyTaskExecutor executor(firstTask.executorAddress, *scenario.repository, scenario.snapshots,
+                                  scenario.callbacks, scenario.dispatcher, {});
+    DS_ASSERT_OK(executor.Start());
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+
+    scenario.backend.FailNextCasAfterCommit();
+    DS_ASSERT_OK(executor.HandleCompletion(WaitCompletion(scenario.dispatcher)));
+    EXPECT_EQ(scenario.callbacks.scaleInCalls.load(), 2);
+    EXPECT_EQ(scenario.callbacks.scaleInDataDrainCalls.load(), 0);
+    DS_ASSERT_OK(executor.HandleTick(std::chrono::steady_clock::now() + RETRY_TICK_ADVANCE));
+    EXPECT_EQ(scenario.callbacks.scaleInCalls.load(), 2);
+    EXPECT_EQ(scenario.callbacks.scaleInDataDrainCalls.load(), 0);
+    EXPECT_EQ(scenario.callbacks.cleanupEffects.load(), 0);
+
+    DS_ASSERT_OK(executor.HandleCompletion(WaitCompletion(scenario.dispatcher)));
+    DS_ASSERT_OK(executor.HandleTick(std::chrono::steady_clock::now() + RETRY_TICK_ADVANCE));
+    for (size_t i = 0; i < 4; ++i) {
+        DS_ASSERT_OK(executor.HandleCompletion(WaitCompletion(scenario.dispatcher)));
+    }
+    EXPECT_EQ(scenario.callbacks.scaleInCalls.load(), 2);
+    EXPECT_EQ(scenario.callbacks.scaleInDataDrainCalls.load(), 2);
+    EXPECT_EQ(scenario.callbacks.cleanupEffects.load(), 2);
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyTaskExecutorTest, ScaleInMetadataGateIgnoresNotifyTasksThatWereNotAdmitted)
 {
     ExecutorScenario scenario;
