@@ -19,6 +19,8 @@
  */
 #include "datasystem/worker/object_cache/object_kv.h"
 
+#include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 
@@ -123,19 +125,60 @@ Status TryLockWithRetry(const std::string &objectKey, const std::shared_ptr<Safe
     int totalRetryMs = 0;
     int retryCount = 0;
     for (auto t : delayMs) {
-        totalRetryMs += t;
+        // Honor the per-request ApiDeadline: stop retrying once the budget is gone. When
+        // ApiDeadline is uninitialized (background threads), ApiRemainingUs returns
+        // RPC_TIMEOUT(60s)*1000 and CheckApiDeadline returns OK, so behavior is unchanged.
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+            ApiDeadline::Instance().CheckApiDeadline(),
+            FormatString("TryLockWithRetry deadline exceeded for object key %s after %d retries", objectKey,
+                         retryCount));
+        // Cap this sleep to the remaining request budget so a single retry cannot outlive
+        // the deadline.
+        int32_t apiRemainingMs =
+            static_cast<int32_t>(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()));
+        int sleepMs = std::min<int>(t, std::max<int>(0, apiRemainingMs));
+        if (sleepMs > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
+            totalRetryMs += sleepMs;
+        }
         retryCount++;
-        std::this_thread::sleep_for(std::chrono::milliseconds(t));
         rc = entry->TryWLock(nullable);
         if (rc.GetCode() != K_TRY_AGAIN) {
+            // Re-check the deadline even on success: the sleep above may have already
+            // crossed the per-request budget by the time the lock was acquired. Proceeding
+            // on an exhausted budget would let this leg of the call chain outlive the
+            // request-level deadline. When ApiDeadline is uninitialized (background
+            // threads), CheckApiDeadline returns OK, so background callers are unaffected.
+            //
+            // Contract: a non-OK return means the lock was NOT acquired. The lock WAS
+            // acquired here, so on deadline-miss we must release it before returning an
+            // error; otherwise every caller (which skips WUnlock on the error path, e.g.
+            // `if (rc.IsError()) { continue; }` in batch_get / `RETURN_IF_NOT_OK` in
+            // delete_impl) would leak the write lock and deadlock the object key.
+            Status deadlineStatus = ApiDeadline::Instance().CheckApiDeadline();
+            if (deadlineStatus.IsError()) {
+                entry->WUnlock();
+                LOG(INFO) << FormatString(
+                    "TryWLock succeeded after %d retries for object key %s, cost %dms, but request deadline exceeded",
+                    retryCount, objectKey, totalRetryMs);
+                return deadlineStatus;
+            }
             LOG(INFO) << FormatString("TryWLock succeeded after %d retries for object key %s, cost %dms", retryCount,
                                       objectKey, totalRetryMs);
             return rc;
         }
+        if (apiRemainingMs <= 0) {
+            break;  // budget exhausted
+        }
     }
+    // When budget was exhausted (path 2), prefer K_RPC_DEADLINE_EXCEEDED over
+    // K_WORKER_TIMEOUT for consistency with the loop-top CheckApiDeadline exit
+    // (path 1). When ApiDeadline is uninitialized (background threads),
+    // CheckApiDeadline returns OK and we fall back to K_WORKER_TIMEOUT.
+    Status deadlineStatus = ApiDeadline::Instance().CheckApiDeadline();
     LOG(INFO) << FormatString("TryWLock timeout after %d retries for object key %s, cost %dms", retryCount, objectKey,
                               totalRetryMs);
-    return { K_WORKER_TIMEOUT, "Worker timeout" };
+    return deadlineStatus.IsError() ? deadlineStatus : Status(K_WORKER_TIMEOUT, "Worker timeout");
 }
 }  // namespace object_cache
 }  // namespace datasystem

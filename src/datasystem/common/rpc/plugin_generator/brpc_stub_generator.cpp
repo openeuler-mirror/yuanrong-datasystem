@@ -72,6 +72,7 @@ void RpcGenerator::GenerateBrpcStubPrologue(io::Printer &printer,
         "#include <brpc/channel.h>\n"
         "#include <google/protobuf/descriptor.h>\n"
         "#include \"datasystem/common/log/trace.h\"\n"
+        "#include \"datasystem/common/rpc/api_deadline.h\"\n"
         "#include \"datasystem/common/rpc/brpc_async_context.h\"\n"
         "#include \"datasystem/common/rpc/brpc_perf_trace.h\"\n"
         "#include \"datasystem/common/rpc/brpc_client_unary_writer_reader.h\"\n"
@@ -370,7 +371,17 @@ std::string RpcGenerator::BuildBrpcStubNoStreamImpl(const google::protobuf::Meth
     if (HasPayloadSendOption(method)) {
         impl += BuildSendPayloadFramingSnippet();
     }
-    impl +=
+    impl += BuildCallMethodAndDiagnosticsSnippet();
+    if (HasPayloadRecvOption(method)) {
+        impl += BuildRecvPayloadFramingSnippet();
+    }
+    impl += BuildPostCallDeadlineCheckSnippet();
+    return impl;
+}
+
+std::string RpcGenerator::BuildCallMethodAndDiagnosticsSnippet()
+{
+    return
         "    ::datasystem::BrpcPerfTrace rpcTrace(::datasystem::Trace::Instance().GetTraceID(),\n"
         "        svcDesc_->method($methodIndex$)->full_name());\n"
         "    rpcTrace.MarkClientStart();\n"
@@ -378,11 +389,19 @@ std::string RpcGenerator::BuildBrpcStubNoStreamImpl(const google::protobuf::Meth
         "    channel_->CallMethod(svcDesc_->method($methodIndex$),\n"
         "                         &cntl, &rq, &reply, nullptr);\n"
         "    rpcTrace.MarkClientRecv();\n"
+        "    // Capture brpc controller diagnostics immediately after CallMethod returns so\n"
+        "    // the framework-slow log can show whether timeout_ms/deadline were actually set\n"
+        "    // and whether the RPC returned timed-out vs OK (issue: 20ms timeout not honored\n"
+        "    // on large response_attachment paths).\n"
+        "    rpcTrace.SetCntlDiagnostics(cntl.timeout_ms(), cntl.deadline_us(),\n"
+        "                               cntl.ErrorCode(), cntl.Failed(),\n"
+        "                               static_cast<uint64_t>(cntl.response_attachment().size()));\n"
         "    ::datasystem::MergeBrpcServerTraceTrailer(cntl.response_attachment(), rpcTrace);\n";
-    if (HasPayloadRecvOption(method)) {
-        impl += BuildRecvPayloadFramingSnippet();
-    }
-    impl +=
+}
+
+std::string RpcGenerator::BuildPostCallDeadlineCheckSnippet()
+{
+    return
         "    rpcTrace.MarkClientEnd();\n"
         "    ::datasystem::RecordBrpcRpcTrace(rpcTrace);\n"
         "    if (cntl.Failed()) {\n"
@@ -394,9 +413,21 @@ std::string RpcGenerator::BuildBrpcStubNoStreamImpl(const google::protobuf::Meth
         "        // error codes are in the text as \\x01DS_ERR:N\\x02 sentinel.\n"
         "        return ::datasystem::TryExtractStatusFromControllerError(cntl.ErrorText(), cntl.ErrorCode());\n"
         "    }\n"
+        "    // Even when brpc did not SetFailed (RPC succeeded), a successful-but-slow RPC\n"
+        "    // whose duration exceeded the per-request ApiDeadline must be treated as a\n"
+        "    // deadline miss. brpc set_timeout_ms only SetFailed()s on actual RPC failure;\n"
+        "    // a slow success leaves cntl.Failed()=0, and without this check the stub would\n"
+        "    // return OK while the request-level deadline (e.g. 20ms) was already exceeded\n"
+        "    // (root cause of the 144ms issue: e2e=144ms >> 20ms with cntl_failed=0).\n"
+        "    // ApiDeadline is uninitialized on background/fan-out threads; in that case\n"
+        "    // ApiRemainingUs() returns RPC_TIMEOUT(60s) and CheckApiDeadline() returns OK,\n"
+        "    // so background callers are unaffected.\n"
+        "    ::datasystem::Status deadlineStatus = ::datasystem::ApiDeadline::Instance().CheckApiDeadline();\n"
+        "    if (deadlineStatus.IsError()) {\n"
+        "        return deadlineStatus;\n"
+        "    }\n"
         "    return ::datasystem::Status::OK();\n"
         "}\n";
-    return impl;
 }
 
 std::string RpcGenerator::BuildTraceIDAttachSnippet()
@@ -616,24 +647,13 @@ std::string RpcGenerator::BuildAsyncReadImpl(const google::protobuf::MethodDescr
 {
     // AsyncRead: look up tag, wait for RPC completion via cv, copy response, clean up.
     // If flags contains DONTWAIT, returns K_TRY_AGAIN if the RPC hasn't completed yet.
+    (void)method;
     std::string impl =
         "::datasystem::Status $stub$::$methodName$AsyncRead(int64_t tagId, $outputTypeName$ &reply"
         "$optRecvPayload1$,\n"
-        "    ::datasystem::RpcRecvFlags flags) {\n"
-        "    // For DONTWAIT: peek first without removing from map.\n"
-        "    if (flags == ::datasystem::RpcRecvFlags::DONTWAIT) {\n"
-        "        auto call = asyncCtx_.GetCall(tagId);\n"
-        "        if (call == nullptr) {\n"
-        "            return ::datasystem::Status(::datasystem::StatusCode::K_INVALID,\n"
-        "                __LINE__, __FILE__,\n"
-        "                \"Tag \" + std::to_string(tagId) + \" not found\");\n"
-        "        }\n"
-        "        std::lock_guard<bthread::Mutex> lock(call->mtx);\n"
-        "        if (!call->completed) {\n"
-        "            return ::datasystem::Status(::datasystem::StatusCode::K_TRY_AGAIN,\n"
-        "                __LINE__, __FILE__, \"Async RPC not yet completed\");\n"
-        "        }\n"
-        "    }\n"
+        "    ::datasystem::RpcRecvFlags flags) {\n";
+    impl += BuildAsyncReadDontWaitSnippet();
+    impl +=
         "    // Remove from map. After this the tag is consumed regardless of outcome.\n"
         "    auto call = asyncCtx_.TakeCall(tagId);\n"
         "    if (call == nullptr) {\n"
@@ -643,13 +663,9 @@ std::string RpcGenerator::BuildAsyncReadImpl(const google::protobuf::MethodDescr
         "    }\n"
         "    // Transfer response ownership from call->response unique_ptr.\n"
         "    auto respGuard = std::move(call->response);\n"
-        "    auto *typedResp = static_cast<$outputTypeName$*>(respGuard.get());\n"
-        "    {\n"
-        "        std::unique_lock<bthread::Mutex> lock(call->mtx);\n"
-        "        while (!call->completed) {\n"
-        "            call->cv.wait(lock);\n"
-        "        }\n"
-        "    }\n"
+        "    auto *typedResp = static_cast<$outputTypeName$*>(respGuard.get());\n";
+    impl += BuildAsyncReadWaitForSnippet();
+    impl +=
         "    if (call->failed) {\n"
         "        ::datasystem::Status embedded = ::datasystem::TryExtractStatusFromResponse(*typedResp);\n"
         "        if (embedded.IsError()) {\n"
@@ -665,6 +681,59 @@ std::string RpcGenerator::BuildAsyncReadImpl(const google::protobuf::MethodDescr
         "    return ::datasystem::Status::OK();\n"
         "}\n";
     return impl;
+}
+
+std::string RpcGenerator::BuildAsyncReadDontWaitSnippet()
+{
+    return
+        "    // For DONTWAIT: peek first without removing from map.\n"
+        "    if (flags == ::datasystem::RpcRecvFlags::DONTWAIT) {\n"
+        "        auto call = asyncCtx_.GetCall(tagId);\n"
+        "        if (call == nullptr) {\n"
+        "            return ::datasystem::Status(::datasystem::StatusCode::K_INVALID,\n"
+        "                __LINE__, __FILE__,\n"
+        "                \"Tag \" + std::to_string(tagId) + \" not found\");\n"
+        "        }\n"
+        "        std::lock_guard<bthread::Mutex> lock(call->mtx);\n"
+        "        if (!call->completed) {\n"
+        "            return ::datasystem::Status(::datasystem::StatusCode::K_TRY_AGAIN,\n"
+        "                __LINE__, __FILE__, \"Async RPC not yet completed\");\n"
+        "        }\n"
+        "    }\n";
+}
+
+std::string RpcGenerator::BuildAsyncReadWaitForSnippet()
+{
+    return
+        "    {\n"
+        "        // Wait for OnRpcDone with a deadline-bounded timeout. A bare cv.wait() here\n"
+        "        // could block the bthread forever if the brpc Done callback is never invoked\n"
+        "        // (peer crash / network partition / internal bug); brpc set_timeout_ms only\n"
+        "        // SetFailed()s the controller, it cannot force this wait to return. Bound the\n"
+        "        // wait to the per-request API deadline so the call chain fails fast\n"
+        "        // when ApiDeadline is initialized (request path). On background / fan-out\n"
+        "        // threads where ApiDeadline is uninitialized, ApiRemainingUs() returns the\n"
+        "        // 60s default and wait_for degrades to a bounded-but-long timeout.\n"
+        "        int64_t remainingUs = ::datasystem::ApiDeadline::Instance().ApiRemainingUs();\n"
+        "        if (remainingUs <= 0) {\n"
+        "            return ::datasystem::Status(::datasystem::StatusCode::K_RPC_DEADLINE_EXCEEDED,\n"
+        "                __LINE__, __FILE__, \"Async RPC deadline already exceeded before wait\");\n"
+        "        }\n"
+        "        std::unique_lock<bthread::Mutex> lock(call->mtx);\n"
+        "        while (!call->completed) {\n"
+        "            int rc = call->cv.wait_for(lock, remainingUs);\n"
+        "            if (rc == ETIMEDOUT && !call->completed) {\n"
+        "                return ::datasystem::Status(::datasystem::StatusCode::K_RPC_DEADLINE_EXCEEDED,\n"
+        "                    __LINE__, __FILE__, \"Async RPC wait timed out\");\n"
+        "            }\n"
+        "            // Spurious wake-up: recompute remaining budget and keep waiting.\n"
+        "            remainingUs = ::datasystem::ApiDeadline::Instance().ApiRemainingUs();\n"
+        "            if (remainingUs <= 0 && !call->completed) {\n"
+        "                return ::datasystem::Status(::datasystem::StatusCode::K_RPC_DEADLINE_EXCEEDED,\n"
+        "                    __LINE__, __FILE__, \"Async RPC wait timed out\");\n"
+        "            }\n"
+        "        }\n"
+        "    }\n";
 }
 
 std::string RpcGenerator::BuildAsyncRecvPayloadFramingSnippet()
