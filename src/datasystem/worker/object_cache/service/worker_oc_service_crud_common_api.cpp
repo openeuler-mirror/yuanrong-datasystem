@@ -36,6 +36,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 
 DS_DECLARE_bool(ipc_through_shared_memory);
@@ -163,6 +164,7 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       evictionManager_(initParam.evictionManager),
       workerDevOcManager_(initParam.workerDevOcManager),
       asyncSendManager_(initParam.asyncSendManager),
+      kvEventPublisher_(initParam.kvEventPublisher),
       metadataSize_(initParam.metadataSize),
       metadataRouteResolver_(initParam.metadataRouteResolver),
       endpointPolicy_(initParam.endpointPolicy),
@@ -318,6 +320,7 @@ Status WorkerOcServiceCrudCommonApi::ClearObject(ObjectKV &objectKV)
     CHECK_FAIL_RETURN_STATUS(entry.IsWLockedByCurrentThread(), K_RUNTIME_ERROR,
                              "Clearing a locked object that was not locked first!");
     uint64_t dataSize = 0;
+    const bool hadCpuCopy = entry.Get() != nullptr && !entry->stateInfo.IsCacheInvalid();
     if (entry.Get() != nullptr) {
         dataSize = entry->GetDataSize();
         VLOG(1) << FormatString("ClearObject %s, size:%zu.", objectKey, dataSize);
@@ -335,6 +338,9 @@ Status WorkerOcServiceCrudCommonApi::ClearObject(ObjectKV &objectKV)
                                 FormatString("Failed to erase object %s from object table", objectKey));
     METRIC_INC(metrics::KvMetricId::WORKER_OBJECT_ERASE_TOTAL);
     evictionManager_->Erase(objectKey);
+    if (hadCpuCopy) {
+        PublishKvRemovedEvent(kvEventPublisher_, objectKey, kKvEventMediumCpu);
+    }
     return Status::OK();
 }
 

@@ -111,6 +111,30 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "kv_event_publisher",
+    srcs = [
+        "kv_event/kv_event_publisher.cpp",
+        "kv_event/zmq_lite.cpp",
+    ],
+    hdrs = [
+        "kv_event/kv_event_config.h",
+        "kv_event/kv_event_publisher.h",
+        "kv_event/zmq_lite.h",
+    ],
+    deps = [
+        "//src/datasystem/common/iam:common_iam",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/metrics:common_metrics",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread",
+        "@com_github_apache_brpc//:brpc",
+        "@nlohmann_json//:json",
+        "@zmq",
+    ],
+)
+
+ds_cc_library(
     name = "worker_request_manager_header",
     hdrs = [
         "worker_request_manager.h",
@@ -307,6 +331,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:async_rpc_request_manager",
         "//src/datasystem/worker/object_cache:async_send_manager",
         "//src/datasystem/worker/object_cache:async_update_location_manager",
+        "//src/datasystem/worker/object_cache:kv_event_publisher",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
         "//src/datasystem/worker/object_cache:object_kv",
@@ -396,6 +421,7 @@ ds_cc_library(
         "//include/datasystem/object:object_headers",
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker/object_cache:eviction_list",
+        "//src/datasystem/worker/object_cache:kv_event_publisher",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
@@ -538,6 +564,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache/device:device_obj_cache",
         "//src/datasystem/worker/object_cache:eviction_list",
         "//src/datasystem/worker/object_cache:object_cache_worker_flags",
+        "//src/datasystem/worker/object_cache:kv_event_publisher",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         #"//src/datasystem/worker/object_cache:worker_master_oc_api",
         #"//src/datasystem/worker/object_cache:worker_oc_service_impl",

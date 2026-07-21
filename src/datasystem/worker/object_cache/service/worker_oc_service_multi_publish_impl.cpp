@@ -526,6 +526,7 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
             LOG_IF_ERROR(DeleteObjectFromDisk(objectKV),
                          FormatString("Multiple set fails to delete spilled object %s from disk.", keys[i]));
         }
+        PublishKvStoredEvent(kvEventPublisher_, keys[i], kKvEventMediumCpu);
     }
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_ASYNC_NOTIFY);
     auto traceId = Trace::Instance().GetTraceID();

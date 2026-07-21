@@ -144,6 +144,7 @@ DS_DEFINE_bool(cache_rpc_session, true, "Deprecated: This flag is deprecated and
 DS_DEFINE_string(etcd_address, "", "Address of ETCD server");
 DS_DEFINE_string(coordinator_address, "",
                  "Address of datasystem coordinator service. Empty means coordinator mode is disabled.");
+DS_DEFINE_string(kv_events_config, "", "KV event publisher JSON config. Empty means disabled.");
 DS_DEFINE_int32(oc_worker_worker_direct_port, 0,
                 "Direct tcp/ip port for WorkerWorkerOCService. 0 -- disable this direction connection");
 DS_DEFINE_int32(sc_worker_worker_direct_port, 0,

@@ -371,6 +371,25 @@ ds_cc_test(
     ],
 )
 
+# KV event publisher 测试
+ds_cc_test(
+    name = "kv_event_publisher_test",
+    srcs = ["object_cache/kv_event_publisher_test.cpp"],
+    deps = [
+        "//src/datasystem/common/util:raii",
+        "//src/datasystem/worker/object_cache:kv_event_publisher",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_oc_eviction_manager",
+        "//src/datasystem/worker/object_cache:worker_request_manager",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_multi_publish_impl",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:test_metadata_route",
+        "@nlohmann_json//:json",
+        "@zmq",
+    ],
+)
+
 # Lock Map 测试
 ds_cc_test(
     name = "lock_map_test",
@@ -517,6 +536,7 @@ test_suite(
         "client_manager_test",
         "coordinator_watch_service_test",
         "topology_recovery_reporter_test",
+        "kv_event_publisher_test",
         "lock_map_test",
         "metadata_route_resolver_test",
         "metadata_recovery_manager_test",

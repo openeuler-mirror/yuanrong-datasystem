@@ -126,7 +126,7 @@ function(GENERATE_ZMQ_CPP ZMQ_PROTO_LIB_DEPEND source_files header_files target_
                  --cpp_out ${target_directory}
                  --plugin=protoc-gen-zmq=$<TARGET_FILE:zmq_plugin> 
                  ${abs_file}
-            DEPENDS ${abs_file} "${CMAKE_SOURCE_DIR}/src/datasystem/common/rpc/plugin_generator/zmq_plugin.cpp"
+            DEPENDS ${abs_file} zmq_plugin
             COMMENT "Running c++ ZMQ compiler on ${file}" VERBATIM)
         add_custom_target(ZMQ_PROTO_LIB_DEPEND_${file_name} DEPENDS
                 "${_OUTPUT_PREFIX}/${file_name}.pb.cc"

@@ -71,6 +71,10 @@
         "value": "",
         "description": "Cluster namespace used to distinguish metadata prefixes when needed."
     },
+    "kv_events_config": {
+        "value": "",
+        "description": "KV event publisher JSON config. Empty means disabled. Example: {\"bind_endpoint\":\"tcp://0.0.0.0:5557\",\"backend_id\":\"worker-0\"}"
+    },
     "host_id_env_name": {
         "value": "",
         "description": "Environment variable name used to obtain the current host_id. Worker reports this host_id to ETCD for same-node worker affinity."

@@ -59,6 +59,15 @@ public:
     Status MultiPublish(const MultiPublishReqPb &req, MultiPublishRspPb &resp, std::vector<RpcMessage> &payloads,
                         const ClientKey &clientId);
 
+#ifdef WITH_TESTS
+    void UpdateObjectAfterCreatingMetaForTest(const std::vector<std::string> &objectKeys,
+                                              const std::vector<std::shared_ptr<SafeObjType>> &objectEntries,
+                                              const std::vector<uint64_t> &versions, uint32_t ttlSecond)
+    {
+        UpdateObjectAfterCreatingMeta(objectKeys, objectEntries, versions, ttlSecond);
+    }
+#endif
+
 private:
     using ObjGroupMap = std::unordered_map<HostPort, std::vector<std::pair<std::string, size_t>>>;
 
