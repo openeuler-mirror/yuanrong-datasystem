@@ -1101,8 +1101,8 @@ Status ClientWorkerRemoteCommonApi::TryFastTransportAfterHeartbeat()
               << " ver=" << ctx.workerVersion << " shm=" << IsShmEnable() << " ft=" << ctx.rsp.fast_transport_mode();
     auto rc = FastTransportHandshake(ctx.timeoutMs, ctx.workerVersion, ctx.rsp);
     if (rc.IsError()) {
-        FLAGS_enable_urma = false;
-        LOG(ERROR) << "Fast transport handshake failed, fall back to TCP/IP communication. Detail: " << rc.ToString();
+        LOG(ERROR) << "Fast transport handshake failed for worker " << hostPort_.ToString()
+                   << ". Detail: " << rc.ToString();
         return rc;
     }
     return Status::OK();
@@ -1119,9 +1119,8 @@ Status ClientWorkerRemoteCommonApi::FastTransportHandshake(int32_t timeoutMs, ui
     SetClientFastTransportMode(rsp.fast_transport_mode(), fastTransportMemSize_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(InitializeFastTransportManager(), "Fast transport init failed");
 
-    // Enable UB fast transport if client cannot use share memory while worker supports UB.
+    // This endpoint already uses SHM. Keep the process URMA capability for transport-layer access to other workers.
     if (IsShmEnable()) {
-        FLAGS_enable_urma = false;
         return Status::OK();
     }
 

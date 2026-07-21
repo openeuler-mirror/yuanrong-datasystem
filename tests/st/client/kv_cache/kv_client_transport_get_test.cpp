@@ -260,6 +260,47 @@ protected:
     bool previousUseBrpc_ = false;
 };
 
+#ifdef USE_URMA
+class KVClientTransportGetWithShmTest : public KVClientTransportGetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportGetTest::SetClusterSetupOptions(opts);
+        constexpr char DISABLED_SHM_OPTION[] = "-ipc_through_shared_memory=false";
+        const auto pos = opts.workerGflagParams.find(DISABLED_SHM_OPTION);
+        ASSERT_NE(pos, std::string::npos);
+        opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
+    }
+};
+
+TEST_F(KVClientTransportGetWithShmTest, LocalShmClientDoesNotDisableDirectUbTransport)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string value(LARGE_VALUE_SIZE, 'u');
+    DS_ASSERT_OK(writer_->Set(keys.front(), value));
+
+    Optional<Buffer> localBuffer;
+    DS_ASSERT_OK(writer_->Get(keys.front(), localBuffer));
+    ASSERT_TRUE(localBuffer);
+    AssertBufferEqual(*localBuffer, value);
+
+    TransportRpcCounts before;
+    GetRpcCounts(before);
+    Optional<Buffer> buffer;
+    DS_ASSERT_OK(reader_->Get(keys.front(), buffer));
+    TransportRpcCounts after;
+    GetRpcCounts(after);
+
+    ASSERT_TRUE(buffer);
+    AssertBufferEqual(*buffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
+    ASSERT_EQ(after.queryAndGet, before.queryAndGet + 1);
+    ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 1);
+}
+#endif
+
 TEST_F(KVClientTransportGetTest, InlineHitSkipsSecondPhase)
 {
     std::vector<std::string> keys;
