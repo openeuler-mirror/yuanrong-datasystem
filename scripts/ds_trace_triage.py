@@ -1455,9 +1455,47 @@ def _flow_edge_summary(rollup, fallback):
     if not rollup.get("trace_count"):
         return fallback
     parts = [f"p99={rollup.get('p99_ms', '')}ms", f"max={rollup.get('max_ms', '')}ms"]
+    if rollup.get("top_workers"):
+        parts.append("worker " + ", ".join(rollup["top_workers"][:2]))
     if rollup.get("top_ips"):
         parts.append("IP " + ", ".join(rollup["top_ips"][:2]))
     return " / ".join(parts)
+
+
+def _flow_candidate_edges(read_count, write_count, ub_summary):
+    observed_transfer_paths = sorted(ub_summary.get("transfer_path", {}).keys())
+    return [
+        {
+            "name": "client -> entry worker",
+            "operation": "Client→Entry RPC/UB",
+            "source": "client",
+            "target": "entry",
+            "transports": ["RPC", "UB"],
+            "status": "observed" if read_count or write_count else "not_observed",
+            "observed_transfer_paths": observed_transfer_paths,
+            "report_reading": "当前报告把 Client→Entry 作为入口窗口；传输可能随实现演进从 RPC/TCP/SHM 扩展到 UB。",
+        },
+        {
+            "name": "client -> data worker",
+            "operation": "Client→Data UB",
+            "source": "client",
+            "target": "data",
+            "transports": ["UB"],
+            "status": "future_candidate",
+            "observed_transfer_paths": [],
+            "report_reading": "后续若客户端可直接访问 DataWorker，需要解析 client-side UB source/target 并独立成边。",
+        },
+        {
+            "name": "client -> meta worker",
+            "operation": "Client→Meta Direct",
+            "source": "client",
+            "target": "meta",
+            "transports": ["RPC", "UB"],
+            "status": "future_candidate",
+            "observed_transfer_paths": [],
+            "report_reading": "后续若客户端可直接访问 MetaWorker，需要从 method、dst/src 和 access path 识别直连元数据边。",
+        },
+    ]
 
 
 def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
@@ -1476,6 +1514,7 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
                       if any(op in name for op in ("SET", "CREATE", "PUBLISH")))
     ub_edges = ub_summary.get("edges", {})
     ub_transfer_count = ub_summary.get("transfer_path", {}).get("UB", 0)
+    candidate_edges = _flow_candidate_edges(read_count, write_count, ub_summary)
     rollups = {
         "read_client_entry": _flow_stage_rollup(trace_rows, {"read.client_to_entry_worker"}),
         "write_client_createbuffer": _flow_stage_rollup(trace_rows, {"write.client_to_entry_createbuffer"}),
@@ -1509,7 +1548,7 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
             "name": "read: client -> entry worker",
             "source": "client",
             "target": "entry",
-            "operation": "Client→Entry RPC",
+            "operation": "Client→Entry RPC/UB",
             "evidence": f"{surface_status('client_access')['events']} access events, {read_count} read flows",
             "status": surface_status("client_access")["status"],
             "summary": _flow_edge_summary(rollups["read_client_entry"], "client read access upper bound"),
@@ -1600,6 +1639,7 @@ def _build_flow_stages(coverage, flow_counts, ub_summary, trace_rows=None):
     return {
         "nodes": nodes,
         "edges": compat_edges,
+        "candidate_edges": candidate_edges,
         "read": {"nodes": nodes, "edges": read_edges},
         "write": {"nodes": nodes[:3], "edges": write_edges},
     }
@@ -2334,7 +2374,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel section-summary" id="section-summary-s4"></div>
         <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data，写关注 CreateBuffer/Publish/Meta。</div>
         <div id="read-flow-section" class="flow-section">
-          <div class="panel"><div id="read-flow-stage-chart" class="chart flow-graph-chart"></div><div class="caption">图 4-1 读取流程证据块：看 Client→Entry RPC、Entry→Data RPC 与 URMA Write。</div></div>
+          <div class="panel"><div id="read-flow-stage-chart" class="chart flow-graph-chart"></div><div class="caption">图 4-1 读取流程证据块：看 Client→Entry RPC/UB、Entry→Data RPC 与 URMA Write。</div></div>
           <div class="panel"><h3>表 4-1 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
           <div class="panel"><div class="controls"><label>Worker 筛选 <select id="read-worker-filter"><option value="">全部 Worker</option></select></label></div><div id="read-worker-chart" class="chart"></div><div class="caption">图 4-2 读取 Worker 分布：读取链路按 worker 聚合。</div></div>
           <div class="panel"><h3>表 4-2 读取 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="read-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="read-worker-table"></table><div id="read-worker-table-pager" class="mini-pager"></div></div>
@@ -2346,6 +2386,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
           <div class="panel"><h3>表 4-4 写入 Worker Breakdown</h3><div class="controls"><label>Worker 筛选 <select id="write-worker-table-filter"><option value="">全部 Worker</option></select></label></div><table id="write-worker-table"></table><div id="write-worker-table-pager" class="mini-pager"></div></div>
         </div>
         <div class="panel"><h3>表 4-5 Worker IP / 别名映射</h3><table id="worker-ip-alias-table" class="adaptive-table"></table><div id="worker-ip-alias-table-pager" class="mini-pager"></div></div>
+        <div class="panel"><h3>表 4-6 候选链路 / 拓扑扩展</h3><div class="small">主图只画已观测边；候选链路用于记录后续 Client→Entry UB、Client→Data UB、Client→Meta Direct 等拓扑演进。</div><table id="flow-candidate-edge-table" class="adaptive-table"></table></div>
         <div class="panel" style="display:none"><table id="flow-stage-table"></table></div>
       </section>
       <section id="s5">
@@ -3068,9 +3109,21 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       edge.status
     ]));
   }
+  function renderFlowCandidateEdgeTable() {
+    const rows = (flowStages.candidate_edges || []).map(edge => [
+      edge.operation,
+      `${edge.source} -> ${edge.target}`,
+      (edge.transports || []).join('/'),
+      edge.status,
+      (edge.observed_transfer_paths || []).join('/') || '未观测',
+      edge.report_reading || ''
+    ]);
+    renderTable('flow-candidate-edge-table', ['candidate','direction','transport','status','observed path','reading'], rows);
+  }
   renderFlowStageTable('flow-stage-table', flowStages);
   renderFlowStageTable('read-flow-stage-table', readFlowStages);
   renderFlowStageTable('write-flow-stage-table', writeFlowStages);
+  renderFlowCandidateEdgeTable();
   renderPagedTable('worker-ip-alias-table', 'worker-ip-alias-table-pager', ['worker full name','worker short name','POD IP'], buildWorkerIpAliasRows(), null, 5);
   renderTable('error-table', ['error','count'], errorRows);
   const latencyRowsForTable = [
@@ -3782,7 +3835,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function flowEdgeLabel(edge) {
     return [edge.operation, edge.summary].filter(Boolean).join('\\n');
   }
+  function edgeLabelSeverity(value) {
+    const n = Number(value || 0);
+    return n >= 20 ? 'hot' : n >= 5 ? 'warn' : 'normal';
+  }
   function renderFlowGraph(id, graph, title) {
+    const node = document.getElementById(id);
+    const graphWidth = Math.max(620, node?.clientWidth || 0);
+    const flowNodeX = [0.10,0.33,0.56,0.56,0.86].map(r => Math.round(graphWidth * r));
     const flowNodeY = [240,240,108,372,372];
     chart(id, {
     title:{show:false,text:title},
@@ -3801,7 +3861,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       labelLayout:{hideOverlap:true},
       edgeLabel:{
         show:true,
-        formatter:p => p.data.edge_label || p.data.status || '',
+        formatter:p => `{${edgeLabelSeverity(p.data.rollup?.max_ms)}|${p.data.edge_label || p.data.status || ''}}`,
         fontSize:15,
         lineHeight:19,
         width:190,
@@ -3810,7 +3870,8 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         borderColor:'#dbeafe',
         borderWidth:1,
         borderRadius:4,
-        padding:[2,5]
+        padding:[2,5],
+        rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.92)',borderRadius:4,padding:[2,5]}}
       },
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:(graph.nodes || []).map((node, idx) => ({
@@ -3818,7 +3879,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         label:flowNodeLabel(node),
         top_ips:node.top_ips || [],
         top_workers:node.top_workers || [],
-        x:[70,220,370,370,560][idx] || 70,
+        x:flowNodeX[idx] || flowNodeX[0],
         y:flowNodeY[idx] || 130,
         symbolSize:90,
         itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}

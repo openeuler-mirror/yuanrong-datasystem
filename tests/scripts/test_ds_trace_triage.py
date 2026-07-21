@@ -101,6 +101,13 @@ def test_tar_gz_trace_bundle_is_parsed_by_trace_and_key_dimensions(tmp_path):
     assert "ub" not in {node["id"] for node in flow_stages["read"]["nodes"]}
     assert all(edge["operation"] != "URMA Completion"
                for edge in flow_stages["read"]["edges"])
+    candidate_edges = {edge["name"]: edge for edge in flow_stages["candidate_edges"]}
+    assert candidate_edges["client -> entry worker"]["transports"] == ["RPC", "UB"]
+    assert candidate_edges["client -> entry worker"]["status"] == "observed"
+    assert candidate_edges["client -> data worker"]["transports"] == ["UB"]
+    assert candidate_edges["client -> data worker"]["status"] == "future_candidate"
+    assert candidate_edges["client -> meta worker"]["transports"] == ["RPC", "UB"]
+    assert candidate_edges["client -> meta worker"]["status"] == "future_candidate"
     assert any(edge["name"] == "write: entry worker -> meta worker publish"
                for edge in flow_stages["write"]["edges"])
     edge_names = {edge["name"] for edge in flow_stages["edges"]}
@@ -466,14 +473,16 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "restore:{}" not in html
     assert "labelLayout:{hideOverlap:true}" in html
     assert "roam:false" in html
-    assert "const flowNodeY = [240,240,108,372,372]" in html
-    assert "x:[70,220,370,370,560][idx]" in html
+    assert "const graphWidth = Math.max(620, node?.clientWidth || 0)" in html
+    assert "const flowNodeX = [0.10,0.33,0.56,0.56,0.86].map(r => Math.round(graphWidth * r))" in html
     assert "fontSize:15" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html
     assert "function flowEdgeLabel(edge)" in html
     assert "workerRelationName" in html
     assert "label:flowNodeLabel(node)" in html
+    assert "edgeLabelSeverity(p.data.rollup?.max_ms)" in html
+    assert "rich:{hot:" in html
     assert "curveness:edge.operation === 'URMA Write' ? -0.28 : .08" in html
     assert "id=\"flow-stage-table\"" in html
     assert "id=\"read-flow-stage-table\"" in html
@@ -482,6 +491,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"write-flow-section\"" in html
     assert "id=\"worker-ip-alias-table\"" in html
     assert "id=\"worker-ip-alias-table-pager\"" in html
+    assert "id=\"flow-candidate-edge-table\"" in html
+    assert "表 4-6 候选链路 / 拓扑扩展" in html
+    assert "candidate_edges" in html
+    assert "renderFlowCandidateEdgeTable()" in html
+    assert "future_candidate" in html
+    assert "Client→Data UB" in html
+    assert "Client→Meta Direct" in html
     assert "表 4-5 Worker IP / 别名映射" in html
     assert "function buildWorkerIpAliasRows()" in html
     assert "workerPodIpKey(worker, podIp)" in html
@@ -520,11 +536,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "font-size:var(--report-font-size)" in html
     assert "const chartTextStyle" in html
     assert "textStyle:chartTextStyle" in html
-    assert "图 4-1 读取流程证据块：看 Client→Entry RPC、Entry→Data RPC 与 URMA Write。" in html
+    assert "图 4-1 读取流程证据块：看 Client→Entry RPC/UB、Entry→Data RPC 与 URMA Write。" in html
     assert "图 4-3 写入流程证据块：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html
     assert "edge.summary" in html
     assert "edge_label:flowEdgeLabel(edge)" in html
+    assert "worker " in html
     assert "p.data.edge_label || p.data.status" in html
     assert "edge.reason" in html
     assert "rollup" in html
