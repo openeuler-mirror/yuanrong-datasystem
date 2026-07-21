@@ -66,7 +66,6 @@ set(WORKER_DEPEND_LIBS
         posix_protos
         share_memory_protos
         common_log_proto
-        worker_control_backend_probe
         worker_object_cache
         worker_stream_cache
         rpc_stub_cache_mgr
@@ -74,6 +73,7 @@ set(WORKER_DEPEND_LIBS
         worker_update_flag_check
         worker_health_check
         metadata_route_resolver
+        worker_control_backend_probe
         worker_runtime_core
         worker_topology_phase_callbacks
         coordinator_watch_service_impl

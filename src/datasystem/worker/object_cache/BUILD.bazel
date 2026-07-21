@@ -95,26 +95,6 @@ ds_cc_library(
     ],
 )
 
-ds_cc_library(
-    name = "worker_control_backend_probe",
-    srcs = [
-        "worker_control_backend_probe.cpp",
-    ],
-    hdrs = [
-        "worker_control_backend_probe.h",
-    ],
-    deps = [
-        ":worker_worker_oc_api",
-        ":worker_worker_peer_state_codec",
-        "//src/datasystem/cluster:cluster_control_backend_state",
-        "//src/datasystem/common/ak_sk:ak_sk_manager",
-        "//src/datasystem/common/log:common_log",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/protos:worker_object_zmq_cc_proto",
-    ],
-)
-
 # success
 ds_cc_library(
     name = "cache_hit_info",

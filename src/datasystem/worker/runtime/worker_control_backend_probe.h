@@ -4,10 +4,10 @@
  */
 
 /**
- * Description: Probe worker control-backend state through object-cache worker RPC.
+ * Description: Probe worker control-backend state through worker RPC.
  */
-#ifndef DATASYSTEM_OBJECT_CACHE_WORKER_CONTROL_BACKEND_PROBE_H
-#define DATASYSTEM_OBJECT_CACHE_WORKER_CONTROL_BACKEND_PROBE_H
+#ifndef DATASYSTEM_WORKER_RUNTIME_WORKER_CONTROL_BACKEND_PROBE_H
+#define DATASYSTEM_WORKER_RUNTIME_WORKER_CONTROL_BACKEND_PROBE_H
 
 #include <chrono>
 #include <memory>
@@ -17,10 +17,10 @@
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/util/net_util.h"
 
-namespace datasystem::object_cache {
+namespace datasystem::worker {
 std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
     const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
     const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline);
-}  // namespace datasystem::object_cache
+}  // namespace datasystem::worker
 
-#endif  // DATASYSTEM_OBJECT_CACHE_WORKER_CONTROL_BACKEND_PROBE_H
+#endif  // DATASYSTEM_WORKER_RUNTIME_WORKER_CONTROL_BACKEND_PROBE_H

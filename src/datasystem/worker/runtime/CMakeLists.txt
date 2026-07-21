@@ -38,6 +38,10 @@ target_link_libraries(worker_runtime_facade PUBLIC worker_admission_facade worke
 add_library(worker_control_backend_scope_classification STATIC worker_control_backend_scope_classification.cpp)
 target_include_directories(worker_control_backend_scope_classification PUBLIC ${PROJECT_SOURCE_DIR}/src)
 
+add_library(worker_control_backend_probe STATIC worker_control_backend_probe.cpp)
+target_include_directories(worker_control_backend_probe PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(worker_control_backend_probe PRIVATE worker_object_cache)
+
 add_library(worker_runtime_core INTERFACE)
 target_link_libraries(worker_runtime_core INTERFACE
         worker_admission_facade

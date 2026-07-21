@@ -113,10 +113,6 @@ add_dependencies(worker_transport_api worker_object_protos)
 add_library(worker_object_cache STATIC ${WORKER_OC_SRCS} ${WORKER_TRANSPORT_API_SRCS})
 target_link_libraries(worker_object_cache PRIVATE ${WORKER_OBJECT_CACHE_DEPEND_LIBS})
 
-add_library(worker_control_backend_probe STATIC worker_control_backend_probe.cpp)
-target_include_directories(worker_control_backend_probe PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(worker_control_backend_probe PRIVATE worker_object_cache)
-
 # Reduce optimization for protobuf-heavy source files to prevent cc1plus OOM during parallel builds.
 # Each of these files transitively includes multiple .pb.h headers; with -O2 each cc1plus process
 # can consume 2-3 GB RSS.  Lowering to -O1 cuts per-process memory while preserving _FORTIFY_SOURCE compatibility.

@@ -195,7 +195,7 @@ ds_cc_library(
         "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:rebalance_executor",
-        "//src/datasystem/worker/object_cache:worker_control_backend_probe",
+        "//src/datasystem/worker/runtime:worker_control_backend_probe",
         "//src/datasystem/worker/runtime:worker_runtime_core",
         "//src/datasystem/worker/runtime:worker_topology_phase_callbacks",
         "//src/datasystem/common/log:common_log",

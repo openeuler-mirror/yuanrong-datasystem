@@ -85,15 +85,16 @@
 #include "datasystem/worker/client_manager/client_manager.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
-#include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/worker_liveness_check.h"
+#include "datasystem/worker/runtime/worker_topology_availability_admission.h"
+#include "datasystem/worker/runtime/worker_control_backend_probe.h"
 #include "datasystem/worker/rebalance_executor.h"
-#include "datasystem/worker/worker_topology_phase_callbacks.h"
+#include "datasystem/worker/runtime/worker_topology_phase_callbacks.h"
 
 DS_DECLARE_bool(use_brpc);
 DS_DECLARE_string(coordinator_address);
@@ -238,71 +239,6 @@ Status CheckLocalTopologyServingReady(cluster::TopologyEngine &engine, const std
     CHECK_FAIL_RETURN_STATUS(committed, K_NOT_READY, "local topology member is not committed");
     cluster::PlacementDecision decision;
     return engine.Placement().Locate(TOPOLOGY_READINESS_PROBE_KEY, decision);
-}
-
-struct PendingControlBackendProbe {
-    cluster::MemberIdentity peer;
-    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
-    int64_t tag{ -1 };
-};
-
-Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
-                                const cluster::MemberIdentity &peer, std::chrono::steady_clock::time_point deadline,
-                                PendingControlBackendProbe &pending)
-{
-    const auto now = std::chrono::steady_clock::now();
-    CHECK_FAIL_RETURN_STATUS(now < deadline, K_RPC_DEADLINE_EXCEEDED, "cluster-state probe deadline exceeded");
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
-    const auto timeout =
-        static_cast<int32_t>(std::min<int64_t>(std::numeric_limits<int32_t>::max(), std::max<int64_t>(remaining, 1)));
-    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
-    RETURN_IF_NOT_OK(object_cache::CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
-    GetClusterStateReqPb request;
-    int64_t tag = -1;
-    RETURN_IF_NOT_OK(api->GetClusterStateAsyncWrite(request, timeout, tag));
-    pending = { peer, std::move(api), tag };
-    return Status::OK();
-}
-
-Status FinishControlBackendProbe(const PendingControlBackendProbe &pending,
-                                 std::chrono::steady_clock::time_point deadline,
-                                 cluster::ControlBackendObservation &observation)
-{
-    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
-                             "cluster-state probe deadline exceeded");
-    GetClusterStateRspPb response;
-    RETURN_IF_NOT_OK(pending.api->GetClusterStateAsyncRead(pending.tag, response));
-    return object_cache::FillControlBackendObservationFromGetClusterStateRspPb(pending.peer.address, response,
-                                                                               observation);
-}
-
-std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
-    const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
-    const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline)
-{
-    std::vector<PendingControlBackendProbe> pending;
-    pending.reserve(peers.size());
-    for (const auto &peer : peers) {
-        PendingControlBackendProbe probe;
-        auto rc = StartControlBackendProbe(localAddress, akSkManager, peer, deadline, probe);
-        if (rc.IsError()) {
-            VLOG(1) << "Cluster-state probe start failed for " << peer.address << ": " << rc.ToString();
-            return {};
-        }
-        pending.push_back(std::move(probe));
-    }
-    std::vector<cluster::ControlBackendObservation> observations;
-    observations.reserve(pending.size());
-    for (const auto &probe : pending) {
-        cluster::ControlBackendObservation observation;
-        auto rc = FinishControlBackendProbe(probe, deadline, observation);
-        if (rc.IsError()) {
-            VLOG(1) << "Cluster-state probe read failed for " << probe.peer.address << ": " << rc.ToString();
-            return {};
-        }
-        observations.push_back(std::move(observation));
-    }
-    return observations;
 }
 
 bool IsWorkerScopedSlotStoreEnabled()
@@ -1083,13 +1019,18 @@ cluster::CoordinatorWatchIngress WorkerOCServer::BuildCoordinatorWatchIngress()
     return ingress;
 }
 
-Status WorkerOCServer::ConstructTopologyRuntime()
+void WorkerOCServer::ConfigureTopologyBuilder(cluster::TopologyEngine::Builder &builder)
 {
-    RETURN_IF_NOT_OK(ConstructTopologyCallbacks());
-    if (coordinatorDiscovery_ != nullptr) {
-        coordinatorWatchSvc_ = std::make_unique<coordinator::CoordinatorWatchServiceImpl>(hostPort_);
-    }
-    cluster::TopologyEngine::Builder builder;
+    auto controlBackendProbe = [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers,
+                                                                                      auto deadline) {
+        return ProbeControlBackendPeers(localAddress, akSkManager, peers, deadline);
+    };
+    auto availabilityHandler = [this](cluster::TopologyAvailabilityLevel level) {
+        RefreshTopologyServingAdmission(level);
+    };
+    auto localIsolationHandler = [this](const Status &status) {
+        workerIsolationCoordinator_->OnLocalIsolation(status);
+    };
     builder.SetClusterName(FLAGS_cluster_name)
         .SetLocalAddress(hostPort_.ToString())
         .SetPhaseCallbacks(*topologyTaskCallbacks_)
@@ -1097,18 +1038,26 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         .SetMembershipRestartHandler([this](const std::string &address, int64_t timestamp) {
             return HandleMembershipRestart(address, timestamp);
         })
+        .SetMembershipRecoveryHandler([this](const std::string &address, int64_t timestamp) {
+            return HandleMembershipRecovery(address, timestamp);
+        })
+        .SetLocalIsolationHandler(std::move(localIsolationHandler))
+        .SetLocalRecoveryHandler([this] { workerIsolationCoordinator_->OnLocalRecovery(); })
         .SetSnapshotPublishedHandler([this](std::shared_ptr<const cluster::TopologySnapshot> snapshot) {
             ScheduleTopologySnapshotWarmup(std::move(snapshot));
         })
-        .SetControlBackendProbe(
-            [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers, auto deadline) {
-                return ProbeControlBackendPeers(localAddress, akSkManager, peers, deadline);
-            })
-        .SetAvailabilityHandler([](cluster::TopologyAvailabilityLevel level) {
-            const bool allowBusiness = level == cluster::TopologyAvailabilityLevel::NORMAL
-                                       || level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED;
-            SetTopologyServingAdmission(allowBusiness);
-        });
+        .SetControlBackendProbe(std::move(controlBackendProbe))
+        .SetAvailabilityHandler(std::move(availabilityHandler));
+}
+
+Status WorkerOCServer::ConstructTopologyRuntime()
+{
+    RETURN_IF_NOT_OK(ConstructTopologyCallbacks());
+    if (coordinatorDiscovery_ != nullptr) {
+        coordinatorWatchSvc_ = std::make_unique<coordinator::CoordinatorWatchServiceImpl>(hostPort_);
+    }
+    cluster::TopologyEngine::Builder builder;
+    ConfigureTopologyBuilder(builder);
     if (coordinatorServiceProxy_ != nullptr) {
         builder.UseCoordinator(*coordinatorServiceProxy_, BuildCoordinatorWatchIngress());
     } else {

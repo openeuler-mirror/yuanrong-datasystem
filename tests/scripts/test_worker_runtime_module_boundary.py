@@ -7,10 +7,10 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
     def test_control_backend_scope_does_not_depend_on_object_cache_transport(self):
-        build_files = [
+        build_files = {
             REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel",
             REPO_ROOT / "src/datasystem/worker/runtime/CMakeLists.txt",
-        ]
+        }
 
         forbidden_tokens = [
             "worker_object_cache",
@@ -20,14 +20,32 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
 
         for build_file in build_files:
             text = build_file.read_text(encoding="utf-8")
+            if build_file.name == "BUILD.bazel":
+                text = text.split('name = "worker_control_backend_scope_classification"', 1)[1]
+                text = text.split("ds_cc_library(", 1)[0]
+            else:
+                text = text.split("add_library(worker_control_backend_scope_classification", 1)[1]
+                text = text.split("add_library(", 1)[0]
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{build_file} should not expose object_cache dependencies")
 
-    def test_control_backend_probe_is_not_in_object_cache_aggregate_library(self):
+    def test_control_backend_probe_is_owned_by_runtime_not_object_cache(self):
+        self.assertTrue((REPO_ROOT / "src/datasystem/worker/runtime/worker_control_backend_probe.cpp").exists())
+        self.assertTrue((REPO_ROOT / "src/datasystem/worker/runtime/worker_control_backend_probe.h").exists())
+        self.assertFalse((REPO_ROOT / "src/datasystem/worker/object_cache/worker_control_backend_probe.cpp").exists())
+        self.assertFalse((REPO_ROOT / "src/datasystem/worker/object_cache/worker_control_backend_probe.h").exists())
+
         cmake_file = REPO_ROOT / "src/datasystem/worker/object_cache/CMakeLists.txt"
         text = cmake_file.read_text(encoding="utf-8")
         aggregate_sources = text.split("set(WORKER_OC_SRCS", 1)[1].split(")", 1)[0]
         self.assertNotIn("worker_control_backend_probe.cpp", aggregate_sources)
+        self.assertNotIn("worker_control_backend_probe", text)
+
+        object_cache_bazel = REPO_ROOT / "src/datasystem/worker/object_cache/BUILD.bazel"
+        self.assertNotIn("worker_control_backend_probe", object_cache_bazel.read_text(encoding="utf-8"))
+
+        runtime_bazel = REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel"
+        self.assertIn('name = "worker_control_backend_probe"', runtime_bazel.read_text(encoding="utf-8"))
 
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [

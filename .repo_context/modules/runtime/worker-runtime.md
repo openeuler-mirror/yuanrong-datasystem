@@ -270,6 +270,21 @@
   7. Stream client-worker admission now goes through `WorkerRuntimeFacade` via the existing `ValidateWorkerState()`
      entrypoint; public stream headers forward-declare the facade and boundary tests prevent direct exposure of runtime
      admission/state internals.
+  8. the worker control-backend probe implementation moved from `worker/object_cache` to `worker/runtime`. Object-cache
+     still owns the concrete worker-worker RPC API used by the probe, but the control-plane probing adapter is now a
+     runtime composition dependency and no longer appears in the object-cache aggregate library or Bazel package.
+     Boundary tests assert the file stays out of `worker/object_cache`, while the scope-classification target remains
+     independent of object-cache transport details.
+- Recent focused verification:
+  - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
+    before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
+    in 124s with third-party cache hit in 0s, `worker_control_backend_probe`, `datasystem_worker_static`,
+    `datasystem_worker_shared`, and `datasystem_worker_bin` all green.
+  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 10 tests, 0.011s.
+  - `ds_ut --gtest_filter=WorkerControlBackendScopeTest.*:WorkerRuntimeFacadeTest.*:WorkerTopologyAvailabilityAdmissionTest.*`:
+    19 tests, 0.05s.
+  - `cluster_topology_contract_ut --gtest_filter=TopologyEngineTest.*:TopologyFailureClassifierTest.*:HashAlgorithmTest.ScaleOutDoesNotUseFailedWorkerAsMigrationSource`:
+    27 tests, 1.95s.
 - Acceptance coverage status against the worker-isolation story:
   - `EtcdKeepAliveIsolationTest.ConfirmedLocalIsolationPublishesDeleteAndIsolationCallbackOnce`: covered by
     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData`,

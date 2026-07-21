@@ -4,9 +4,9 @@
  */
 
 /**
- * Description: Probe worker control-backend state through object-cache worker RPC.
+ * Description: Probe worker control-backend state through worker RPC.
  */
-#include "datasystem/worker/object_cache/worker_control_backend_probe.h"
+#include "datasystem/worker/runtime/worker_control_backend_probe.h"
 
 #include <algorithm>
 #include <limits>
@@ -17,11 +17,11 @@
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 
-namespace datasystem::object_cache {
+namespace datasystem::worker {
 namespace {
 struct PendingControlBackendProbe {
     cluster::MemberIdentity peer;
-    std::shared_ptr<WorkerRemoteWorkerOCApi> api;
+    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
     int64_t tag{ -1 };
 };
 
@@ -34,8 +34,8 @@ Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
     const auto timeout =
         static_cast<int32_t>(std::min<int64_t>(std::numeric_limits<int32_t>::max(), std::max<int64_t>(remaining, 1)));
-    std::shared_ptr<WorkerRemoteWorkerOCApi> api;
-    RETURN_IF_NOT_OK(CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
+    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
+    RETURN_IF_NOT_OK(object_cache::CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
     GetClusterStateReqPb request;
     int64_t tag = -1;
     RETURN_IF_NOT_OK(api->GetClusterStateAsyncWrite(request, timeout, tag));
@@ -51,7 +51,8 @@ Status FinishControlBackendProbe(const PendingControlBackendProbe &pending,
                              "cluster-state probe deadline exceeded");
     GetClusterStateRspPb response;
     RETURN_IF_NOT_OK(pending.api->GetClusterStateAsyncRead(pending.tag, response));
-    return FillControlBackendObservationFromGetClusterStateRspPb(pending.peer.address, response, observation);
+    return object_cache::FillControlBackendObservationFromGetClusterStateRspPb(pending.peer.address, response,
+                                                                               observation);
 }
 }  // namespace
 
@@ -84,4 +85,4 @@ std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
     }
     return observations;
 }
-}  // namespace datasystem::object_cache
+}  // namespace datasystem::worker
