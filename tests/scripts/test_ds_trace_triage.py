@@ -380,6 +380,9 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "renderUbSection" in html
     assert "id=\"read-worker-table-pager\"" in html
     assert "id=\"write-worker-table-pager\"" in html
+    assert "id=\"worker-table-filter\"" in html
+    assert "workerTableFilterValue" in html
+    assert "renderWorkerDependentViews" in html
     assert "id=\"read-ub-edge-table-pager\"" in html
     assert "id=\"write-ub-edge-table-pager\"" in html
     assert "renderPagedTable" in html
@@ -461,6 +464,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"read-worker-table\"" in html
     assert "id=\"write-worker-table\"" in html
     assert "id=\"top-trace-table\"" in html
+    assert "表 6-1 Top Trace" in html
+    assert html.index("<table id=\"top-trace-table\"") < html.index("id=\"trace-pager\"")
     assert "Error Breakdown" in html
     for marker in [
         "/assets/css/site.css",

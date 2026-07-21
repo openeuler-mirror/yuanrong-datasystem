@@ -2073,6 +2073,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <section id="s4">
         <h2>4. Worker / 流程分布</h2>
         <div id="flow-stage-chart" class="panel insight">读写链路分开看：读关注 Entry→Data，写关注 CreateBuffer/Publish/Meta。</div>
+        <div class="panel controls"><label>Worker 表格筛选 <select id="worker-table-filter"><option value="">全部 Worker</option></select></label><span class="muted">影响第 4/5 章 Worker 表格和对应图，不影响 Trace 查看筛选。</span></div>
         <div id="read-flow-section" class="flow-section">
           <div class="panel"><h3>读取流程证据块</h3><div id="read-flow-stage-chart" class="chart"></div><div class="caption">图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。</div></div>
           <div class="panel"><h3>表 4-0a 读取流程阶段证据</h3><table id="read-flow-stage-table"></table></div>
@@ -2113,13 +2114,14 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <h2>6. Trace 查看</h2>
         <div class="panel">
         <div class="controls"><label>Trace 查看读写视角 <select id="operation-filter"><option value="">全部读写</option><option value="read">只看读取</option><option value="write">只看写入</option></select></label><label>请求状态 <select id="request-status-filter"><option value="">全部请求</option><option value="failed">只看失败</option><option value="success">只看成功</option></select></label><input id="trace-search" placeholder="搜索 trace / worker / 关键词" style="min-width:300px"><select id="class-filter"><option value="">全部分类</option></select><select id="worker-filter"><option value="">全部 Worker</option></select><span class="muted">按 access max 降序；联动 Trace 列表与选中 Trace Breakdown。</span><button id="reset-filter">清空</button></div>
-        <div class="controls pager">
+        <h3>表 6-1 Top Trace</h3>
+        <table id="top-trace-table"></table>
+        <div id="trace-pager" class="controls pager">
           <label>每页 <select id="trace-page-size"><option value="4" selected>4</option><option value="8">8</option><option value="16">16</option><option value="32">32</option><option value="9999">全部</option></select> 条</label>
           <button class="primary" id="prev-page">上一页</button>
           <span id="page-status" class="muted"></span>
           <button class="primary" id="next-page">下一页</button>
         </div>
-        <table id="top-trace-table"></table>
         </div>
         <div class="compare2">
           <div class="panel"><h3>图 6-1 选中 Trace Breakdown</h3><div id="selected-trace-chart" class="chart"></div><div id="selected-stage-legend" class="stage-legend"></div><div class="caption">点击 Trace 行联动，按阶段耗时排序，单位 ms。</div><table id="selected-stage-table"></table></div>
@@ -2688,11 +2690,13 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     });
   }
   function workerRowsForOperation(operation) {
+    const selectedWorker = workerTableFilterValue();
     const workers = {};
     traceRowsForOperation(operation).forEach(([, item]) => {
       const errorCount = Object.values(item.errors || {}).reduce((a,b) => a + b, 0);
       const isSlow = Number(item.access_latency_ms?.max || 0) >= 20;
       Object.keys(item.workers || {}).forEach(worker => {
+        if (selectedWorker && worker !== selectedWorker) return;
         const source = dim.worker_summary?.[worker] || {};
         const target = workers[worker] || (workers[worker] = {roles:source.roles || [],line_count:source.line_count || 0,trace_count:0,slow_trace_count:0,error_count:0});
         target.trace_count += 1;
@@ -2759,7 +2763,12 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     ]}) : noDataOption(operation === 'write' ? 'Write flow has no UB read edge data' : 'No read UB edge data'));
   }
   function renderUbWorkerViews() {
-    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], ubWorkerRows.map(([worker,item]) => [
+    const selectedWorker = workerTableFilterValue();
+    const filteredUbWorkerRows = selectedWorker ? ubWorkerRows.filter(([worker]) => worker === selectedWorker) : ubWorkerRows;
+    const filteredUbWorkerTimeRows = selectedWorker ? ubWorkerTimeRows.filter(item =>
+      (item.top_entry_workers || []).includes(selectedWorker) || (item.top_exit_workers || []).includes(selectedWorker)
+    ) : ubWorkerTimeRows;
+    renderPagedTable('ub-worker-role-table', 'ub-worker-role-table-pager', ['worker','role','entry events','exit events','trace count','p99 ms','max ms','top edges'], filteredUbWorkerRows.map(([worker,item]) => [
       worker,
       item.role || '',
       item.entry_events || 0,
@@ -2769,7 +2778,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       item.latency_ms?.max || '',
       (item.top_edges || []).join(', ')
     ]), row => `class="${severityClass(Math.max(Number(row[5]) || 0, Number(row[6]) || 0))}"`, 5);
-    renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], ubWorkerTimeRows.map(item => [
+    renderPagedTable('ub-worker-time-table', 'ub-worker-time-table-pager', ['time','entry events','exit events','p99 ms','max ms','entry workers','exit workers'], filteredUbWorkerTimeRows.map(item => [
       item.bucket_start || '',
       item.entry_events || 0,
       item.exit_events || 0,
@@ -2778,24 +2787,24 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       (item.top_entry_workers || []).join(', '),
       (item.top_exit_workers || []).join(', ')
     ]), row => `class="${severityClass(Math.max(Number(row[3]) || 0, Number(row[4]) || 0))}"`, 5);
-    chart('ub-worker-role-chart', ubWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
+    chart('ub-worker-role-chart', filteredUbWorkerRows.length ? axisBase('UB Entry/Exit Workers', {
       tooltip:{trigger:'axis', axisPointer:{type:'shadow'}, confine:true},
-      xAxis:{type:'category', data:ubWorkerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
+      xAxis:{type:'category', data:filteredUbWorkerRows.slice(0,20).map(r => r[0]), axisLabel:{rotate:35, width:120, overflow:'truncate'}},
       yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
       series:[
-        {name:'入口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:ubWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
-        {name:'出口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:ubWorkerRows.slice(0,20).map(r => r[1].exit_events || 0),itemStyle:{color:'#ea580c'}},
-        {name:'p99 ms',type:'line',yAxisIndex:1,data:ubWorkerRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}}
+        {name:'入口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:filteredUbWorkerRows.slice(0,20).map(r => r[1].entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'出口 UB events',type:'bar',stack:'ub-role',barMaxWidth:34,data:filteredUbWorkerRows.slice(0,20).map(r => r[1].exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'p99 ms',type:'line',yAxisIndex:1,data:filteredUbWorkerRows.slice(0,20).map(r => r[1].latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}}
       ]
     }) : noDataOption('No UB worker role data'));
-    chart('ub-worker-time-chart', ubWorkerTimeRows.length ? axisBase('UB Entry/Exit Time Buckets', {
+    chart('ub-worker-time-chart', filteredUbWorkerTimeRows.length ? axisBase('UB Entry/Exit Time Buckets', {
       tooltip:{trigger:'axis', axisPointer:{type:'cross'}, confine:true},
-      xAxis:{type:'category', data:ubWorkerTimeRows.map(r => String(r.bucket_start || '').replace('T','\\n')), axisLabel:{rotate:0}},
+      xAxis:{type:'category', data:filteredUbWorkerTimeRows.map(r => String(r.bucket_start || '').replace('T','\\n')), axisLabel:{rotate:0}},
       yAxis:[{type:'value', name:'events'}, {type:'value', name:'ms'}],
       series:[
-        {name:'入口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:ubWorkerTimeRows.map(r => r.entry_events || 0),itemStyle:{color:'#2563eb'}},
-        {name:'出口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:ubWorkerTimeRows.map(r => r.exit_events || 0),itemStyle:{color:'#ea580c'}},
-        {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:ubWorkerTimeRows.map(r => r.latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
+        {name:'入口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:filteredUbWorkerTimeRows.map(r => r.entry_events || 0),itemStyle:{color:'#2563eb'}},
+        {name:'出口 UB events',type:'bar',stack:'ub-time',barMaxWidth:34,data:filteredUbWorkerTimeRows.map(r => r.exit_events || 0),itemStyle:{color:'#ea580c'}},
+        {name:'p99 ms',type:'line',yAxisIndex:1,smooth:true,data:filteredUbWorkerTimeRows.map(r => r.latency_ms?.p99 || 0),itemStyle:{color:'#dc2626'}, markLine:{symbol:'none', lineStyle:{color:'#dc2626',type:'dashed'}, label:{formatter:'20ms'}, data:[{yAxis:20}]}}
       ]
     }) : noDataOption('No UB time bucket data'));
   }
@@ -2875,6 +2884,15 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function renderOperationViews() {
     renderTracePage();
     renderSelectedTrace();
+  }
+  function workerTableFilterValue() {
+    const node = document.getElementById('worker-table-filter');
+    return node ? node.value : '';
+  }
+  function renderWorkerDependentViews() {
+    renderWorkerSection('read', 'Read');
+    renderWorkerSection('write', 'Write');
+    renderUbWorkerViews();
   }
   function applyTraceFilters() {
     const query = document.getElementById('trace-search').value.trim().toLowerCase();
@@ -3014,6 +3032,9 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   document.getElementById('worker-filter').innerHTML = '<option value="">全部 Worker</option>' +
     traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
   document.getElementById('worker-filter').addEventListener('change', () => { currentPage = 0; renderTracePage(); renderSelectedTrace(); });
+  document.getElementById('worker-table-filter').innerHTML = '<option value="">全部 Worker</option>' +
+    traceWorkerNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+  document.getElementById('worker-table-filter').addEventListener('change', renderWorkerDependentViews);
   document.getElementById('trace-page-size').addEventListener('change', event => {
     pageSize = Number(event.target.value) || 4;
     currentPage = 0;
