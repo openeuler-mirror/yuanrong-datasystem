@@ -1977,7 +1977,7 @@ aside h2{font-size:16px;margin:0 0 12px}nav a{display:block;color:#324055;text-d
 nav a.active,nav a:hover{background:#eaf2ff;color:#1d4ed8}nav a.sub{padding-left:22px;color:#64748b;font-size:12px}
 main{flex:1;min-width:0;width:auto;padding:22px 28px 50px}section{margin-bottom:20px}
 h1{font-size:26px;margin:0 0 8px}h2{font-size:21px;margin:8px 0 12px}h3{font-size:15px;text-align:center;margin:10px 0}
-.subtitle,.note,.insight{color:var(--muted);line-height:1.65}.section-summary{background:#f8fafc;border-left:4px solid var(--blue);color:#334155;font-size:13px;line-height:1.65}.section-summary b{color:#172033}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.subtitle,.note,.insight{color:var(--muted);line-height:1.65}.section-summary{background:#f8fafc;border-left:4px solid var(--blue);color:#334155;font-size:13px;line-height:1.65}.section-summary b{color:#172033}.chapter-guide{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0;padding:0;list-style:none}.chapter-guide li{border:1px solid var(--border);border-radius:8px;background:#f8fafc;padding:9px 10px;line-height:1.55;font-size:13px}.chapter-guide a{color:#1d4ed8;text-decoration:none;font-weight:700}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
 .card{background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px}.panel{min-width:0;background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;margin:12px 0;box-shadow:0 2px 10px rgba(20,35,60,.04)}
 .k{color:#64748b;font-size:12px}.v,.metric{font-size:24px;font-weight:700;margin:4px 0}.n,.muted,.small{color:#64748b;font-size:12px}.bad{color:var(--red)!important;font-weight:700}.warn{color:#b45309!important;font-weight:700}.ok{color:var(--green)!important;font-weight:700}
 tr.hotrow td{background:#fff1f2}tr.warnrow td{background:#fffbeb}.cell-hot,.cell-warn,.cell-ok{display:inline-block;border-radius:4px;padding:1px 5px;font-weight:700}.cell-hot{background:#fee2e2;color:#991b1b}.cell-warn{background:#ffedd5;color:#9a3412}.cell-ok{background:#dcfce7;color:#166534}
@@ -1994,7 +1994,7 @@ button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-co
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
 .trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
 code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
-@media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards{grid-template-columns:1fr}}
+@media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards,.chapter-guide{grid-template-columns:1fr}}
 </style>"""
     stylesheet = ('<link rel="stylesheet" href="/assets/css/site.css">' if site else "") + base_style
     script_ref = '<script src="/assets/js/site.js"></script>' if site else ""
@@ -2011,28 +2011,37 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   <div class="layout">
     <aside><h2>Trace 分析报告</h2><nav id="nav">
       <a href="#s1">1. 结论</a>
+      <a class="sub" href="#overall-guide">表 1-1 整体导读</a>
       <a href="#s2">2. 根因分布</a>
-      <a class="sub" href="#cohort-chart">图 2-0 输入对比</a>
-      <a class="sub" href="#classification-chart">图 2-1 分类</a>
-      <a class="sub" href="#error-chart">图 2-2 错误</a>
+      <a class="sub" href="#cohort-chart">图 2-0 输入包 / Cohort</a>
+      <a class="sub" href="#classification-chart">图 2-1 分类分布</a>
+      <a class="sub" href="#error-chart">图 2-2 错误分布</a>
       <a href="#s3">3. 时延 Breakdown</a>
-      <a class="sub" href="#read-latency-chart">读取时延</a>
-      <a class="sub" href="#write-latency-chart">写入时延</a>
+      <a class="sub" href="#read-latency-chart">图 3-1a 读取时延</a>
+      <a class="sub" href="#write-latency-chart">图 3-1b 写入时延</a>
+      <a class="sub" href="#read-time-breakdown-chart">图 3-3a 读取时间桶</a>
+      <a class="sub" href="#write-time-breakdown-chart">图 3-3b 写入时间桶</a>
       <a href="#s4">4. Worker / 流程</a>
-      <a class="sub" href="#flow-stage-chart">读写视角</a>
-      <a class="sub" href="#read-flow-section">读取流程</a>
-      <a class="sub" href="#write-flow-section">写入流程</a>
-      <a class="sub" href="#read-worker-chart">读取 Worker</a>
-      <a class="sub" href="#write-worker-chart">写入 Worker</a>
+      <a class="sub" href="#read-flow-stage-chart">图 4-0a 读取流程</a>
+      <a class="sub" href="#write-flow-stage-chart">图 4-0b 写入流程</a>
+      <a class="sub" href="#read-worker-chart">图 4-1a 读取 Worker</a>
+      <a class="sub" href="#write-worker-chart">图 4-1b 写入 Worker</a>
       <a href="#s5">5. UB / URMA</a>
-      <a class="sub" href="#ub-lifecycle-chart">UB 生命周期</a>
-      <a class="sub" href="#ub-worker-role-chart">入口/出口 Worker</a>
-      <a class="sub" href="#read-ub-edge-chart">读取 UB Edge</a>
+      <a class="sub" href="#ub-lifecycle-chart">图 5-1 UB 生命周期</a>
+      <a class="sub" href="#ub-wr-count-chart">图 5-1b WR / Inflight</a>
+      <a class="sub" href="#ub-worker-role-chart">图 5-2 入口/出口 Worker</a>
+      <a class="sub" href="#ub-worker-time-chart">图 5-3 UB 时间桶</a>
+      <a class="sub" href="#read-ub-edge-chart">图 5-5a 读取 UB Edge</a>
+      <a class="sub" href="#write-ub-edge-chart">图 5-5b 写入 UB Edge</a>
       <a href="#s6">6. Trace 查看</a>
       <a class="sub" href="#top-trace-table">表 6-1 Top Trace</a>
+      <a class="sub" href="#selected-trace-chart">图 6-1 选中 Trace</a>
+      <a class="sub" href="#selected-trace-log">日志框 6-3 全量日志</a>
       <a href="#s7">7. 建议与口径</a>
+      <a class="sub" href="#recommendation-table">表 7-1 建议</a>
       <a class="sub" href="#source-appendix-common-table">表 7-2 代码映射</a>
       <a href="#s8">8. 原始 JSON</a>
+      <a class="sub" href="#trace-data">表 8-1 原始 Trace JSON</a>
     </nav>
     </aside>
     <main>
@@ -2042,6 +2051,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div id="summary" class="cards"></div>
         <div class="panel"><h3>运行与输入来源</h3><table id="run-metadata-table" class="metadata-table"></table></div>
         <div class="panel insight" id="report-insight"></div>
+        <div class="panel" id="overall-guide"><h3>表 1-1 整体导读</h3><ul class="chapter-guide" id="chapter-guide-list"></ul></div>
         <div class="panel"><h3>客户化诊断口径</h3><ul id="diagnosis-list"></ul><div class="controls"><button class="primary" id="download-report-summary">下载分析摘要</button></div></div>
         <div class="panel"><h3>日志覆盖与缺失观测面</h3><table id="coverage-table"></table></div>
       </section>
@@ -3231,16 +3241,44 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const node = document.getElementById(id);
     if (node) node.innerHTML = `<b>本章结论：</b>${escapeHtml(text)}`;
   }
-  function renderSectionSummaries() {
+  function chapterSummaryTexts() {
     const topCohort = cohortRows.slice().sort((a,b) => Object.values(b[1].errors || {}).reduce((x,y)=>x+y,0) - Object.values(a[1].errors || {}).reduce((x,y)=>x+y,0))[0];
     const topCohortText = topCohort ? `${topCohort[0]} errors=${fmtCount(Object.values(topCohort[1].errors || {}).reduce((a,b)=>a+b,0))}` : '无 cohort 对比';
-    setSectionSummary('section-summary-s2', `主分类 ${topClass[0]}=${fmtCount(topClass[1])}；Top error ${errorRows[0]?.[0] || '无'}=${fmtCount(errorRows[0]?.[1])}；${topCohortText}。`);
-    setSectionSummary('section-summary-s3', `读取瓶颈 ${topLatencyText(latencyRowsForOperation('read'))}；写入瓶颈 ${topLatencyText(latencyRowsForOperation('write'))}；时间热点：读 ${topTimeBucketText('read')}，写 ${topTimeBucketText('write')}。`);
-    setSectionSummary('section-summary-s4', `流程热点：读 ${topFlowStageText(readFlowStages)}；写 ${topFlowStageText(writeFlowStages)}。Worker 集中：读 ${topWorkerText(workerRowsForOperation('read'))}；写 ${topWorkerText(workerRowsForOperation('write'))}。`);
-    setSectionSummary('section-summary-s5', `UB 耗时 ${topUbMetricText()}；入口/出口集中 ${topUbWorkerText()}；Top edge ${topUbEdgeText()}。`);
-    setSectionSummary('section-summary-s6', `默认按接口 access 时延降序；Top trace ${topTraceText()}。建议先切换“失败/成功”和“读/写”筛选，再看原始日志块摘要。`);
-    setSectionSummary('section-summary-s7', `${recommendations[0]?.title || '暂无自动建议'}；${missingCoverageText()}。`);
-    setSectionSummary('section-summary-s8', `原始 JSON 保留 ${fmtCount(Object.keys(traces).length)} 条 trace，可用于复现 parser 聚合和人工二次确认。`);
+    return {
+      s2: `主分类 ${topClass[0]}=${fmtCount(topClass[1])}；Top error ${errorRows[0]?.[0] || '无'}=${fmtCount(errorRows[0]?.[1])}；${topCohortText}。`,
+      s3: `读取瓶颈 ${topLatencyText(latencyRowsForOperation('read'))}；写入瓶颈 ${topLatencyText(latencyRowsForOperation('write'))}；时间热点：读 ${topTimeBucketText('read')}，写 ${topTimeBucketText('write')}。`,
+      s4: `流程热点：读 ${topFlowStageText(readFlowStages)}；写 ${topFlowStageText(writeFlowStages)}。Worker 集中：读 ${topWorkerText(workerRowsForOperation('read'))}；写 ${topWorkerText(workerRowsForOperation('write'))}。`,
+      s5: `UB 耗时 ${topUbMetricText()}；入口/出口集中 ${topUbWorkerText()}；Top edge ${topUbEdgeText()}。`,
+      s6: `默认按接口 access 时延降序；Top trace ${topTraceText()}。建议先切换“失败/成功”和“读/写”筛选，再看原始日志块摘要。`,
+      s7: `${recommendations[0]?.title || '暂无自动建议'}；${missingCoverageText()}。`,
+      s8: `原始 JSON 保留 ${fmtCount(Object.keys(traces).length)} 条 trace，可用于复现 parser 聚合和人工二次确认。`
+    };
+  }
+  function renderChapterGuide(summaries) {
+    const guideRows = [
+      ['#s2', '2. 根因分布', summaries.s2, '图 2-0/2-1/2-2'],
+      ['#s3', '3. 时延 Breakdown', summaries.s3, '图 3-1/3-3'],
+      ['#s4', '4. Worker / 流程', summaries.s4, '图 4-0/4-1'],
+      ['#s5', '5. UB / URMA', summaries.s5, '图 5-1/5-2/5-3/5-5'],
+      ['#s6', '6. Trace 查看', summaries.s6, '表 6-1 / 图 6-1 / 日志框 6-3'],
+      ['#s7', '7. 建议与口径', summaries.s7, '表 7-1/7-2']
+    ];
+    const node = document.getElementById('chapter-guide-list');
+    if (!node) return;
+    node.innerHTML = guideRows.map(([href, title, text, refs]) =>
+      `<li><a href="${href}">${escapeHtml(title)}</a><div>${escapeHtml(text)}</div><div class="small">${escapeHtml(refs)}</div></li>`
+    ).join('');
+  }
+  function renderSectionSummaries() {
+    const summaries = chapterSummaryTexts();
+    setSectionSummary('section-summary-s2', summaries.s2);
+    setSectionSummary('section-summary-s3', summaries.s3);
+    setSectionSummary('section-summary-s4', summaries.s4);
+    setSectionSummary('section-summary-s5', summaries.s5);
+    setSectionSummary('section-summary-s6', summaries.s6);
+    setSectionSummary('section-summary-s7', summaries.s7);
+    setSectionSummary('section-summary-s8', summaries.s8);
+    renderChapterGuide(summaries);
   }
   renderSectionSummaries();
   renderLatencySection('read', 'Read');

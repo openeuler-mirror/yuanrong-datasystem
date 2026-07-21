@@ -260,6 +260,13 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"download-report-summary\"" in html
     assert "下载分析摘要" in html
     assert "trace-report-summary.md" in html
+    assert "id=\"overall-guide\"" in html
+    assert "id=\"chapter-guide-list\"" in html
+    assert "表 1-1 整体导读" in html
+    assert "chapter-guide" in html
+    assert "function chapterSummaryTexts()" in html
+    assert "function renderChapterGuide(summaries)" in html
+    assert "图 5-1/5-2/5-3/5-5" in html
     assert "id=\"recommendation-table\"" in html
     assert "id=\"source-appendix-common-table\"" in html
     assert "id=\"source-appendix-read-table\"" in html
@@ -367,11 +374,14 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "读取流程证据块" in html
     assert "写入流程证据块" in html
     assert "flow-section" in html
-    assert "href=\"#flow-stage-chart\">读写视角" in html
-    assert "href=\"#read-flow-section\">读取流程" in html
-    assert "href=\"#write-flow-section\">写入流程" in html
-    assert "href=\"#read-worker-chart\">读取 Worker" in html
-    assert "href=\"#write-worker-chart\">写入 Worker" in html
+    assert "href=\"#read-flow-stage-chart\">图 4-0a 读取流程" in html
+    assert "href=\"#write-flow-stage-chart\">图 4-0b 写入流程" in html
+    assert "href=\"#read-worker-chart\">图 4-1a 读取 Worker" in html
+    assert "href=\"#write-worker-chart\">图 4-1b 写入 Worker" in html
+    assert "href=\"#ub-wr-count-chart\">图 5-1b WR / Inflight" in html
+    assert "href=\"#ub-worker-time-chart\">图 5-3 UB 时间桶" in html
+    assert "href=\"#selected-trace-chart\">图 6-1 选中 Trace" in html
+    assert "href=\"#selected-trace-log\">日志框 6-3 全量日志" in html
     assert "图 4-0a 读取：看 Entry→Data RPC 与 DataWorker UB/URMA。" in html
     assert "图 4-0b 写入：区分 createbuffer、client publish、entry/meta publish。" in html
     assert "读写链路分开看" in html
