@@ -10,17 +10,32 @@
 #define DATASYSTEM_WORKER_RUNTIME_WORKER_CONTROL_BACKEND_PROBE_H
 
 #include <chrono>
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
 #include "datasystem/cluster/runtime/control_backend_state.h"
-#include "datasystem/common/ak_sk/ak_sk_manager.h"
-#include "datasystem/common/util/net_util.h"
+#include "datasystem/utils/status.h"
 
 namespace datasystem::worker {
+
+class IControlBackendPeerProbeClient {
+public:
+    virtual ~IControlBackendPeerProbeClient() = default;
+
+    virtual Status Start(int32_t timeoutMs, int64_t &tag) = 0;
+
+    virtual Status Finish(const cluster::MemberIdentity &peer, int64_t tag,
+                          cluster::ControlBackendObservation &observation) = 0;
+};
+
+using ControlBackendPeerProbeClientFactory =
+    std::function<Status(const cluster::MemberIdentity &, std::unique_ptr<IControlBackendPeerProbeClient> &)>;
+
 std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
-    const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
-    const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline);
+    const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline,
+    const ControlBackendPeerProbeClientFactory &clientFactory);
 }  // namespace datasystem::worker
 
 #endif  // DATASYSTEM_WORKER_RUNTIME_WORKER_CONTROL_BACKEND_PROBE_H

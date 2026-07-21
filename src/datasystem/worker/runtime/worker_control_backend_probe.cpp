@@ -13,19 +13,16 @@
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/protos/worker_object.service.rpc.pb.h"
-#include "datasystem/worker/object_cache/worker_worker_oc_api.h"
-#include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 
 namespace datasystem::worker {
 namespace {
 struct PendingControlBackendProbe {
     cluster::MemberIdentity peer;
-    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
+    std::unique_ptr<IControlBackendPeerProbeClient> client;
     int64_t tag{ -1 };
 };
 
-Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
+Status StartControlBackendProbe(const ControlBackendPeerProbeClientFactory &clientFactory,
                                 const cluster::MemberIdentity &peer, std::chrono::steady_clock::time_point deadline,
                                 PendingControlBackendProbe &pending)
 {
@@ -34,12 +31,12 @@ Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
     const auto timeout =
         static_cast<int32_t>(std::min<int64_t>(std::numeric_limits<int32_t>::max(), std::max<int64_t>(remaining, 1)));
-    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
-    RETURN_IF_NOT_OK(object_cache::CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
-    GetClusterStateReqPb request;
+    std::unique_ptr<IControlBackendPeerProbeClient> client;
+    RETURN_IF_NOT_OK(clientFactory(peer, client));
+    CHECK_FAIL_RETURN_STATUS(client != nullptr, K_RUNTIME_ERROR, "cluster-state probe client is null");
     int64_t tag = -1;
-    RETURN_IF_NOT_OK(api->GetClusterStateAsyncWrite(request, timeout, tag));
-    pending = { peer, std::move(api), tag };
+    RETURN_IF_NOT_OK(client->Start(timeout, tag));
+    pending = { peer, std::move(client), tag };
     return Status::OK();
 }
 
@@ -49,22 +46,19 @@ Status FinishControlBackendProbe(const PendingControlBackendProbe &pending,
 {
     CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                              "cluster-state probe deadline exceeded");
-    GetClusterStateRspPb response;
-    RETURN_IF_NOT_OK(pending.api->GetClusterStateAsyncRead(pending.tag, response));
-    return object_cache::FillControlBackendObservationFromGetClusterStateRspPb(pending.peer.address, response,
-                                                                               observation);
+    return pending.client->Finish(pending.peer, pending.tag, observation);
 }
 }  // namespace
 
 std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
-    const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
-    const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline)
+    const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline,
+    const ControlBackendPeerProbeClientFactory &clientFactory)
 {
     std::vector<PendingControlBackendProbe> pending;
     pending.reserve(peers.size());
     for (const auto &peer : peers) {
         PendingControlBackendProbe probe;
-        auto rc = StartControlBackendProbe(localAddress, akSkManager, peer, deadline, probe);
+        auto rc = StartControlBackendProbe(clientFactory, peer, deadline, probe);
         if (rc.IsError()) {
             VLOG(1) << "Cluster-state probe start failed for " << peer.address << ": " << rc.ToString();
             return {};

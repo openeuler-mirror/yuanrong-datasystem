@@ -304,6 +304,11 @@
       consumers, including object-cache and worker common-service tests, now use semantic facade methods such as
       `MarkRecovering`, `MarkLocalIsolated`, `TryCompleteRecovery`, and `GetSnapshot`. The boundary script asserts the
       facade does not regress to exposing the state manager by reference.
+  16. `worker_control_backend_probe` now owns only the runtime peer-probe orchestration contract. The concrete
+      Worker-Worker object-cache RPC adapter is injected by `WorkerOCServer` through `IControlBackendPeerProbeClient`,
+      so the runtime target no longer links or includes object-cache transport/codec implementation details. Boundary
+      tests assert the runtime target/source stays free of `worker_object_cache`, `worker_worker_oc_api`, and
+      `worker_worker_peer_state_codec` dependencies.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -581,6 +586,25 @@
   - GREEN: `ds_st_stream_cache --gtest_filter="StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering"`
     passed 1/1 test in 11.085s gtest time, 11.15s wall time, covering Stream create/subscribe/receive rejection during
     both `LOCAL_ISOLATED` and `RECOVERING`, then verifying recovered create/subscribe/send/receive succeeds.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_control_backend_probe_runtime_target_does_not_depend_on_object_cache`.
+  - Initial RED: the new boundary test failed because the `worker_control_backend_probe` Bazel target still depended on
+    `worker_worker_oc_api` and `worker_worker_peer_state_codec`, and the runtime implementation directly included the
+    object-cache RPC/codec headers.
+  - GREEN: `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py` passed 18/18 tests in 0.006s
+    after changing runtime probe orchestration to use injected `IControlBackendPeerProbeClient` instances and moving the
+    concrete Worker-Worker OC RPC adapter into `WorkerOCServer`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 125s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), source build time 51s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
+    database entries.
+  - GREEN: `ds_st_stream_cache --gtest_filter="StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering"`
+    passed 1/1 test in 11.088s gtest time, 11.16s wall time after the peer-probe injection refactor.
+  - RED follow-up observed during validation:
+    `ds_st_object_cache --gtest_filter="WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate"`
+    failed twice in about 20s wall time. The direct peer probe still reported
+    `Keepalive backend failure scope is local, probeTargets: 1, observations: 1`, but the test timed out waiting for
+    `create admission blocks locally isolated worker before object allocation` and needs separate stabilization or
+    contract review before using it as a gating signal for this refactor.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

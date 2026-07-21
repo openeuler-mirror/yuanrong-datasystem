@@ -86,6 +86,7 @@
 #include "datasystem/worker/object_cache/central_metadata_address_resolver.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
 #include "datasystem/worker/object_cache/worker_topology_object_cache_actions.h"
+#include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
@@ -280,6 +281,31 @@ std::string BuildWarmupKey(const std::string &workerAddr)
     std::replace_if(encoded.begin(), encoded.end(), [](unsigned char c) { return !IsWarmupKeyChar(c); }, '_');
     return URMA_WARMUP_KEY_PREFIX + encoded;
 }
+
+class WorkerRpcControlBackendProbeClient : public IControlBackendPeerProbeClient {
+public:
+    explicit WorkerRpcControlBackendProbeClient(std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api)
+        : api_(std::move(api))
+    {
+    }
+
+    Status Start(int32_t timeoutMs, int64_t &tag) override
+    {
+        GetClusterStateReqPb request;
+        return api_->GetClusterStateAsyncWrite(request, timeoutMs, tag);
+    }
+
+    Status Finish(const cluster::MemberIdentity &peer, int64_t tag,
+                  cluster::ControlBackendObservation &observation) override
+    {
+        GetClusterStateRspPb response;
+        RETURN_IF_NOT_OK(api_->GetClusterStateAsyncRead(tag, response));
+        return object_cache::FillControlBackendObservationFromGetClusterStateRspPb(peer.address, response, observation);
+    }
+
+private:
+    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api_;
+};
 
 void SleepForWarmupScanInterval(const std::atomic<bool> &exitFlag, std::condition_variable &exitCv,
                                 std::mutex &exitMutex)
@@ -1026,7 +1052,15 @@ void WorkerOCServer::ConfigureTopologyBuilder(cluster::TopologyEngine::Builder &
 {
     auto controlBackendProbe = [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers,
                                                                                       auto deadline) {
-        return ProbeControlBackendPeers(localAddress, akSkManager, peers, deadline);
+        ControlBackendPeerProbeClientFactory clientFactory =
+            [localAddress, akSkManager](const cluster::MemberIdentity &peer,
+                                        std::unique_ptr<IControlBackendPeerProbeClient> &client) {
+                std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
+                RETURN_IF_NOT_OK(object_cache::CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
+                client = std::make_unique<WorkerRpcControlBackendProbeClient>(std::move(api));
+                return Status::OK();
+            };
+        return ProbeControlBackendPeers(peers, deadline, clientFactory);
     };
     auto availabilityHandler = [this](cluster::TopologyAvailabilityLevel level) {
         RefreshTopologyServingAdmission(level);

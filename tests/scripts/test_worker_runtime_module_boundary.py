@@ -47,6 +47,34 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         runtime_bazel = REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel"
         self.assertIn('name = "worker_control_backend_probe"', runtime_bazel.read_text(encoding="utf-8"))
 
+    def test_control_backend_probe_runtime_target_does_not_depend_on_object_cache(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel",
+            REPO_ROOT / "src/datasystem/worker/runtime/CMakeLists.txt",
+            REPO_ROOT / "src/datasystem/worker/runtime/worker_control_backend_probe.cpp",
+            REPO_ROOT / "src/datasystem/worker/runtime/worker_control_backend_probe.h",
+        ]
+
+        forbidden_tokens = [
+            "worker_object_cache",
+            "//src/datasystem/worker/object_cache:worker_worker_oc_api",
+            "//src/datasystem/worker/object_cache:worker_worker_peer_state_codec",
+            "datasystem/worker/object_cache/worker_worker_oc_api.h",
+            "datasystem/worker/object_cache/worker_worker_peer_state_codec.h",
+            "object_cache::",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            if file_path.name == "BUILD.bazel":
+                text = text.split('name = "worker_control_backend_probe"', 1)[1]
+                text = text.split("ds_cc_library(", 1)[0]
+            elif file_path.name == "CMakeLists.txt":
+                text = text.split("add_library(worker_control_backend_probe", 1)[1]
+                text = text.split("add_library(worker_runtime_core", 1)[0]
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use injected peer probe clients")
+
     def test_topology_phase_callbacks_do_not_depend_on_object_cache_service_impl(self):
         runtime_files = [
             REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel",

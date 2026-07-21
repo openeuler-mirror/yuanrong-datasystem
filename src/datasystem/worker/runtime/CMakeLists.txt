@@ -40,7 +40,7 @@ target_include_directories(worker_control_backend_scope_classification PUBLIC ${
 
 add_library(worker_control_backend_probe STATIC worker_control_backend_probe.cpp)
 target_include_directories(worker_control_backend_probe PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(worker_control_backend_probe PRIVATE worker_object_cache)
+target_link_libraries(worker_control_backend_probe PRIVATE common_log common_util)
 
 add_library(worker_runtime_core INTERFACE)
 target_link_libraries(worker_runtime_core INTERFACE
