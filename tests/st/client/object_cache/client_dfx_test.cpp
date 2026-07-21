@@ -2841,26 +2841,34 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvid
 {
     std::shared_ptr<ObjectClient> client0;
     InitTestClient(0, client0);
-    HostPort workerAddr0;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
-    RpcCredential cred;
-    RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, cred);
-    auto channel = std::make_shared<RpcChannel>(workerAddr0, cred);
-    WorkerOCService_Stub worker0Stub(channel);
-    AkSkManager akSk;
-    DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
     auto db = InitTestEtcdInstance();
     ASSERT_NE(db, nullptr);
     std::vector<std::string> worker0Keys;
-    GetObjectKeysHashToWorker(db.get(), 0, 3, worker0Keys);
+    GetObjectKeysHashToWorker(db.get(), 0, 4, worker0Keys);
     const auto &preservedObjectKey = worker0Keys[0];
     const auto &isolatedRejectKey = worker0Keys[1];
-    const auto &recoveredObjectKey = worker0Keys[2];
+    const auto &recoveringRejectKey = worker0Keys[2];
+    const auto &recoveredObjectKey = worker0Keys[3];
+    constexpr const char *localIsolatedInject = "WorkerOCServer.AfterMarkLocalIsolated";
 
     std::string preservedData = GenRandomString(1024);
     CreateAndSealObject(client0, preservedObjectKey, preservedData);
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.beforeValidate", "call()"));
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.begin", "call()"));
+    std::shared_ptr<Buffer> isolatedRejectBuffer;
+    DS_ASSERT_OK(client0->Create(isolatedRejectKey, 1, CreateParam{}, isolatedRejectBuffer));
+    uint8_t isolatedRejectData = 1;
+    DS_ASSERT_OK(isolatedRejectBuffer->MemoryCopy(&isolatedRejectData, sizeof(isolatedRejectData)));
+    std::shared_ptr<Buffer> recoveringRejectBuffer;
+    DS_ASSERT_OK(client0->Create(recoveringRejectKey, 1, CreateParam{}, recoveringRejectBuffer));
+    uint8_t recoveringRejectData = 2;
+    DS_ASSERT_OK(recoveringRejectBuffer->MemoryCopy(&recoveringRejectData, sizeof(recoveringRejectData)));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, localIsolatedInject, "call()"));
+    bool localIsolationInjectActive = true;
+    Raii clearLocalIsolationInject([&]() {
+        if (localIsolationInjectActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, localIsolatedInject),
+                         "clear local-isolation evidence barrier");
+        }
+    });
 
     const auto isolatedWorkerPid = cluster_->GetWorkerPid(0);
     ASSERT_GT(isolatedWorkerPid, 0);
@@ -2869,35 +2877,22 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvid
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "GetLeaseExpiredMs", "call(1000)"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
 
-    auto verifyCreateBlockedBeforeAllocation = [&]() {
-        uint64_t beforeValidateBefore = 0;
-        uint64_t createBeginBefore = 0;
-        uint64_t beforeValidateAfter = 0;
-        uint64_t createBeginAfter = 0;
-        RETURN_IF_NOT_OK(
-            cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateBefore));
-        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginBefore));
-        CreateReqPb req;
-        CreateRspPb rsp;
-        req.set_object_key(isolatedRejectKey);
-        req.set_client_id("self-healing-recovery-client");
-        req.set_data_size(1);
-        req.set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
-        req.set_request_timeout(1000);
-        req.set_is_routed(true);
-        RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
-        RpcOptions opts;
-        opts.SetTimeout(1000);
-        (void)worker0Stub.Create(opts, req, rsp);
-        RETURN_IF_NOT_OK(
-            cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateAfter));
-        RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginAfter));
-        CHECK_FAIL_RETURN_STATUS(beforeValidateAfter > beforeValidateBefore && createBeginAfter == createBeginBefore,
-                                 K_NOT_READY, "create request has not been blocked by worker admission");
+    auto verifyPublishRejected = [](const std::shared_ptr<Buffer> &buffer) {
+        const auto rc = buffer->Publish();
+        CHECK_FAIL_RETURN_STATUS(rc.GetCode() == K_NOT_READY, K_NOT_READY,
+                                 "publish request has not been rejected by worker admission");
         return Status::OK();
     };
-    AssertEventuallyOk(verifyCreateBlockedBeforeAllocation,
-                       "create admission blocks locally isolated worker before object allocation");
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, localIsolatedInject, executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY, "worker has not entered local isolation");
+            return Status::OK();
+        },
+        "worker enters local isolation before probing object publish admission");
+    AssertEventuallyOk([&]() { return verifyPublishRejected(isolatedRejectBuffer); },
+                       "publish admission blocks locally isolated worker before object publication");
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", "1*pause"));
     bool recoveryPauseActive = true;
@@ -2920,7 +2915,7 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvid
             return Status::OK();
         },
         "recovery reaches the evidence gate after keepalive reconnects");
-    DS_ASSERT_OK(verifyCreateBlockedBeforeAllocation());
+    DS_ASSERT_OK(verifyPublishRejected(recoveringRejectBuffer));
     std::vector<Optional<Buffer>> isolatedBuffers;
     ASSERT_EQ(client0->Get({ preservedObjectKey }, 0, isolatedBuffers).GetCode(), K_NOT_READY);
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning"));
@@ -2942,6 +2937,10 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvid
     DS_ASSERT_OK(client0->Get({ preservedObjectKey }, 0, preservedBuffers));
     ASSERT_TRUE(NotExistsNone(preservedBuffers));
     AssertBufferEqual(*preservedBuffers[0], preservedData);
+    std::vector<Optional<Buffer>> rejectedBuffers;
+    ASSERT_EQ(client0->Get({ isolatedRejectKey, recoveringRejectKey }, 1'000, rejectedBuffers).GetCode(), K_NOT_FOUND);
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, localIsolatedInject));
+    localIsolationInjectActive = false;
 }
 
 TEST_F(WorkerPushMetaTest, LEVEL1_TestRecoveringWorkerFallsBackToLocalIsolatedOnDisconnect)

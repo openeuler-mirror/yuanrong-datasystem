@@ -599,12 +599,24 @@
     database entries.
   - GREEN: `ds_st_stream_cache --gtest_filter="StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering"`
     passed 1/1 test in 11.088s gtest time, 11.16s wall time after the peer-probe injection refactor.
-  - RED follow-up observed during validation:
-    `ds_st_object_cache --gtest_filter="WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate"`
-    failed twice in about 20s wall time. The direct peer probe still reported
-    `Keepalive backend failure scope is local, probeTargets: 1, observations: 1`, but the test timed out waiting for
-    `create admission blocks locally isolated worker before object allocation` and needs separate stabilization or
-    contract review before using it as a gating signal for this refactor.
+  - Stabilized 1 existing Object ST:
+    `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate`.
+  - RED: after the peer-probe injection refactor this ST failed twice around 20s wall time, then failed in 14.44s/14.35s
+    while waiting for the old direct `Create` inject-count probe. Logs showed local peer probing still worked
+    (`Keepalive backend failure scope is local, probeTargets: 1, observations: 1`) and `AfterMarkLocalIsolated` executed,
+    but closed worker admission prevented the direct stub request from reaching the internal `worker.Create.beforeValidate`
+    injection point.
+  - RED: switching the probe to public `ObjectClient::Create` showed repeated fast successful client-side creates instead
+    of `K_NOT_READY`; this confirmed that Object `Create` prepares a local buffer and `Publish` is the operation that should
+    be gated by worker admission.
+  - GREEN: the ST now pre-creates unpublished buffers before the fault, asserts `Publish` is rejected with `K_NOT_READY`
+    in both `LOCAL_ISOLATED` and `RECOVERING`, verifies the preserved object survives recovery, and checks the rejected
+    unpublished keys remain `K_NOT_FOUND`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 127s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), source build time 44s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
+    database entries.
+  - GREEN: `ds_st_object_cache --gtest_filter="WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate"`
+    passed 1/1 test in 11.87s wall time.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
