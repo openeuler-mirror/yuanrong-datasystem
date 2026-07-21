@@ -161,6 +161,22 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should depend on metadata recovery input contracts only")
 
+    def test_full_topology_callback_contract_is_owned_by_executor_and_runtime_adapter_only(self):
+        allowed_files = {
+            REPO_ROOT / "src/datasystem/cluster/executor/topology_task_executor.h",
+            REPO_ROOT / "src/datasystem/worker/runtime/worker_topology_phase_callbacks.h",
+        }
+
+        include_token = "datasystem/cluster/executor/topology_phase_callbacks.h"
+        matched_files = {
+            path
+            for path in (REPO_ROOT / "src/datasystem").rglob("*")
+            if path.suffix in {".h", ".cpp", ".cc"}
+            and include_token in path.read_text(encoding="utf-8", errors="ignore")
+        }
+
+        self.assertEqual(allowed_files, matched_files)
+
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/slot_recovery/BUILD.bazel",

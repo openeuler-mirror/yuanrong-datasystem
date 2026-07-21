@@ -34,7 +34,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
+#include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/encrypt/secret_manager.h"

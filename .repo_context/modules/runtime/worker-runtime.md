@@ -676,6 +676,17 @@
     libraries success, total wall time: 0s`), source build time 120s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
     database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_full_topology_callback_contract_is_owned_by_executor_and_runtime_adapter_only`.
+  - Initial RED: the boundary suite failed 1/23 in 0.077s because `worker_oc_server.cpp` directly included the full
+    `datasystem/cluster/executor/topology_phase_callbacks.h` contract instead of relying on the worker runtime adapter.
+  - GREEN: removed the unnecessary direct include from `worker_oc_server.cpp`; only the topology executor and
+    `WorkerTopologyPhaseCallbacks` adapter include the full callback contract. `python3 -m unittest
+    tests/scripts/test_worker_runtime_module_boundary.py` passed 23/23 tests in 0.077s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 148s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), source build time 51s, `BUILD_WITH_URMA_MOCK` enabled, and 1155 compile
+    database entries. The script emitted known repeated-strip `debuglink section already exists` diagnostics but exited 0.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- <changed-files>` reported no formatting changes.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
