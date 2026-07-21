@@ -23,6 +23,8 @@ set(WORKER_OC_SRCS
         object_kv.cpp
         eviction_list.cpp
         cache_hit_info.cpp
+        kv_event/kv_event_publisher.cpp
+        kv_event/zmq_lite.cpp
         device/device_obj_cache.cpp
         device/worker_device_oc_manager.cpp
         device/worker_dev_req_manager.cpp
@@ -93,6 +95,9 @@ set(WORKER_OBJECT_CACHE_DEPEND_LIBS
         metadata_route_resolver
         worker_client_manager
         worker_health_check
+        nlohmann_json::nlohmann_json
+        ${BRPC_LIBRARIES}
+        ${ZeroMQ_LIBRARY}
         )
 
 list(APPEND WORKER_OBJECT_CACHE_DEPEND_LIBS common_rdma)

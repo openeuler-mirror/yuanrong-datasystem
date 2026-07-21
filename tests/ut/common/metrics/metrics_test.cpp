@@ -798,6 +798,22 @@ TEST_F(MetricsTest, kv_metric_id_mapping_test)
     EXPECT_NE(summary.find(ScalarMetricJson("worker_allocated_memory_size", 10, 10)), std::string::npos);
 }
 
+TEST_F(MetricsTest, kv_event_metrics_counter_test)
+{
+    InitKvMetricsForTest();
+    METRIC_ADD(metrics::KvMetricId::WORKER_KV_EVENT_PUBLISHED_BATCHES_TOTAL, 2);
+    METRIC_ADD(metrics::KvMetricId::WORKER_KV_EVENT_PUBLISHED_EVENTS_TOTAL, 3);
+    METRIC_ADD(metrics::KvMetricId::WORKER_KV_EVENT_DROPPED_TOTAL, 4);
+    METRIC_ADD(metrics::KvMetricId::WORKER_KV_EVENT_SKIPPED_UNPARSED_KEYS_TOTAL, 5);
+
+    auto summary = metrics::DumpSummaryForTest();
+    EXPECT_NE(summary.find(ScalarMetricJson("worker_kv_event_published_batches_total", 2, 2)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("worker_kv_event_published_events_total", 3, 3)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("worker_kv_event_dropped_total", 4, 4)), std::string::npos);
+    EXPECT_NE(summary.find(ScalarMetricJson("worker_kv_event_skipped_unparsed_keys_total", 5, 5)),
+              std::string::npos);
+}
+
 TEST_F(MetricsTest, kv_metric_urma_id_layout_test)
 {
     size_t count = 0;

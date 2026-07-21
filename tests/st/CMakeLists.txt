@@ -309,6 +309,8 @@ if (NOT BUILD_HETERO_GPU)
     list(FILTER DS_DEVICE_TEST_SRCS EXCLUDE REGEX ".*/hetero_d2h_test_gpu\\.cpp$")
 endif()
 add_executable(ds_device_llt ${DS_DEVICE_TEST_SRCS} $<TARGET_OBJECTS:_ds_st_main_obj>)
+target_sources(ds_device_llt PRIVATE
+        ${PROJECT_DIR}/src/datasystem/worker/object_cache/kv_event/zmq_lite.cpp)
 
 if (BUILD_HETERO)
     if (BUILD_HETERO_NPU)
@@ -317,11 +319,17 @@ if (BUILD_HETERO)
                 ${ASCEND_LIBRARY}
                 ${HCCL_LIBRARY}
                 common_acl_device
+                ${ZeroMQ_LIBRARY}
+                nlohmann_json::nlohmann_json
+                common_rpc_zmq
                 binmock)
     else()
         set(DS_DEVICE_LLT_DEPEND_LIB
                 cluster
                 common_acl_device
+                ${ZeroMQ_LIBRARY}
+                nlohmann_json::nlohmann_json
+                common_rpc_zmq
                 binmock)
     endif()
     if (BUILD_HETERO_GPU)
@@ -349,6 +357,9 @@ else()
     set(DS_DEVICE_LLT_DEPEND_LIB
             cluster
             common_acl_device
+            ${ZeroMQ_LIBRARY}
+            nlohmann_json::nlohmann_json
+            common_rpc_zmq
             binmock)
 endif()
 

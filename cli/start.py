@@ -59,6 +59,7 @@ class Command(BaseCommand):
     _READY_CONNECT_TIMEOUT_SECONDS = 1.0
     _CLEANUP_WAIT_SECONDS = 2.0
     _CLEANUP_CHECK_INTERVAL_SECONDS = 0.1
+    _KV_EVENTS_CONFIG_PARAM = "kv_events_config"
 
     def __init__(self):
         """Initialize command instance."""
@@ -742,6 +743,8 @@ class Command(BaseCommand):
         cmd.append(worker_bin)
 
         for k, v in self.process_params(params):
+            if k == self._KV_EVENTS_CONFIG_PARAM:
+                v = self.validate_worker_param_value(k, v)
             cmd.append(f"--{k}={v}")
         cmd_str = " ".join(cmd)
         if use_numactl:
@@ -757,3 +760,17 @@ class Command(BaseCommand):
         for k, v in self.process_params(params, self._COORDINATOR_FILTERED_PARAMS):
             cmd.append(f"--{k}={v}")
         return cmd
+
+    def validate_worker_param_value(self, key: str, value: str) -> str:
+        if key != self._KV_EVENTS_CONFIG_PARAM:
+            return util.validate_no_injection(value)
+        try:
+            config = json.loads(value)
+        except json.JSONDecodeError as e:
+            raise ValueError("kv_events_config must be a valid JSON object string") from e
+        if not isinstance(config, dict):
+            raise ValueError("kv_events_config must be a JSON object")
+        for item in config.values():
+            if isinstance(item, str):
+                util.validate_no_injection(item)
+        return value

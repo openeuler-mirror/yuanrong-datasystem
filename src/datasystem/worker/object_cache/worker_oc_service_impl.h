@@ -70,6 +70,7 @@
 #include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/worker/object_cache/async_rpc_request_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
+#include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
@@ -1355,6 +1356,8 @@ private:
     std::shared_ptr<AsyncSendManager> asyncSendManager_{ nullptr };
 
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager_{ nullptr };
+
+    std::shared_ptr<KvEventPublisher> kvEventPublisher_{ nullptr };
 
     std::shared_ptr<WorkerOcServiceCreateImpl> createProc_{ nullptr };
 

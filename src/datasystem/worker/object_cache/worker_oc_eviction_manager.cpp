@@ -49,6 +49,7 @@
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
+#include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
@@ -450,6 +451,7 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
         VLOG(1) << FormatString("[ObjectKey %s] Object will be end of life, accepted: %d", objectKey, accepted);
         return Status::OK();
     }
+    const bool hadCpuCopy = entry.Get() != nullptr && !entry->stateInfo.IsCacheInvalid();
     (void)memEvictionList_.Erase(objectKey);
     if (nextAction == Action::DELETE) {
         PerfPoint point(PerfKey::WORKER_EVICT_DELETE);
@@ -464,11 +466,17 @@ Status WorkerOcEvictionManager::EvictObject(ObjectKV &objectKV, Action nextActio
         }
         point.Record();
         VLOG(1) << FormatString("[ObjectKey %s] Object delete success", objectKey);
+        if (hadCpuCopy) {
+            PublishKvRemovedEvent(kvEventPublisher_, objectKey, kKvEventMediumCpu);
+        }
     } else if (nextAction == Action::FREE_MEMORY) {
         PerfPoint point(PerfKey::WORKER_EVICT_FREE);
         RETURN_IF_NOT_OK(entry->FreeResources());
         point.Record();
         VLOG(1) << FormatString("[ObjectKey %s] Object free success", objectKey);
+        if (hadCpuCopy) {
+            PublishKvRemovedEvent(kvEventPublisher_, objectKey, kKvEventMediumCpu);
+        }
     } else if (nextAction == Action::SPILL) {
         VLOG(1) << FormatString("[ObjectKey %s] Object will be spill", objectKey);
     } else {
@@ -1229,6 +1237,7 @@ Status WorkerOcEvictionManager::DeletePrimaryEndLifeLocal(const PrimaryEndLifeCa
 {
     const auto &objectKey = candidate.task.objectKey;
     auto &entry = *candidate.entry;
+    const bool hadCpuCopy = entry.Get() != nullptr && !entry->stateInfo.IsCacheInvalid();
     if (entry->IsSpilled()) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(WorkerOcSpill::Instance()->Delete(objectKey, true),
                                          FormatString("[ObjectKey %s] Delete from disk failed", objectKey));
@@ -1236,8 +1245,20 @@ Status WorkerOcEvictionManager::DeletePrimaryEndLifeLocal(const PrimaryEndLifeCa
     entry->stateInfo.SetSpillState(false);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectTable_->Erase(objectKey, entry),
                                      FormatString("Failed to erase object %s from object table", objectKey));
+    if (hadCpuCopy) {
+        PublishKvRemovedEvent(kvEventPublisher_, objectKey, kKvEventMediumCpu);
+    }
     return Status::OK();
 }
+
+#ifdef WITH_TESTS
+Status WorkerOcEvictionManager::DeletePrimaryEndLifeLocalForTest(const std::string &objectKey,
+                                                                 const std::shared_ptr<SafeObjType> &entry)
+{
+    PrimaryEndLifeTask task{ objectKey, 0, CacheType::MEMORY };
+    return DeletePrimaryEndLifeLocal(PrimaryEndLifeCandidate{ std::move(task), entry });
+}
+#endif
 
 uint64_t WorkerOcEvictionManager::GetPrimaryEndLifeReleaseSize(const SafeObjType &entry)
 {
