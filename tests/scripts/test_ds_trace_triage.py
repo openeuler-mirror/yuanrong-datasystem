@@ -467,20 +467,20 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "id=\"read-flow-stage-chart\"" in html
     assert "id=\"write-flow-stage-chart\"" in html
     assert "class=\"chart flow-graph-chart\"" in html
-    assert ".flow-graph-chart{height:520px}" in html
+    assert ".flow-graph-chart{height:360px}" in html
     assert "function autoCenterFlowGraph(chartInstance)" in html
     assert "myAutoCenter" in html
     assert "title:'自适应居中'" in html
-    assert "flowToolbox()" in html
+    assert "toolbox:flowToolbox()" not in html
     assert "saveAsImage" not in html
     assert "dataView:{readOnly:true}" not in html
     assert "restore:{}" not in html
     assert "labelLayout:{hideOverlap:true}" not in html
     assert "labelLayout:{hideOverlap:false}" in html
-    assert "roam:false" in html
-    assert "const graphWidth = Math.max(760, node?.clientWidth || 0)" in html
-    assert "const flowNodeX = [0.11,0.36,0.63,0.63,0.89].map(r => Math.round(graphWidth * r))" in html
-    assert "const flowNodeY = [250,250,118,374,374]" in html
+    assert "roam:true" in html
+    assert "const graphWidth = Math.max(720, node?.clientWidth || 0)" in html
+    assert "const flowNodeX = [0.12,0.34,0.58,0.58,0.82].map(r => Math.round(graphWidth * r))" in html
+    assert "const flowNodeY = [170,170,82,258,258]" in html
     assert "function flowEdgeBriefText(edge)" in html
     assert "Number(rollup.trace_count || 0) > 0" in html
     assert "return [edge.operation, latency || '未采样'" in html
@@ -489,46 +489,32 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "const abnormalIp = flowEdgeAbnormalIps(edge).split(', ')[0]" in html
     assert "abnormalIp ? `异常IP ${abnormalIp}` : worker" in html
     assert "异常 IP" in html
-    assert "function flowEdgeLabelOffset(edge)" in html
-    assert "function flowEdgeAutoLabel(edge)" in html
     assert "function flowEdgeCurveness(edge)" in html
     assert "edge.operation === 'CreateBuffer'" in html
-    assert "return [0, -32]" in html
     assert "edge.operation === 'Client Publish'" in html
-    assert "return [0, 32]" in html
     assert "edge.operation === 'Client→Entry RPC/UB'" in html
-    assert "return [-42, -48]" in html
     assert "edge.operation === 'Entry→Data RPC'" in html
-    assert "return [-28, 54]" in html
     assert "edge.operation === 'Entry→Meta RPC'" in html
-    assert "return [34, -46]" in html
     assert "edge.operation === 'URMA Write'" in html
-    assert "return [76, 72]" in html
     assert "function flowGraphNodeSize()" in html
-    assert "symbol:'roundRect'" in html
     assert "symbolSize:flowGraphNodeSize()" in html
-    assert "return [128, 54]" in html
-    assert "label:{show:true, position:'inside', fontSize:16" in html
-    assert "edgeLabel:{show:true, position:'middle'" in html
-    assert "rotate:0" in html
-    assert "align:'center'" in html
-    assert "verticalAlign:'middle'" in html
-    assert "backgroundColor:'rgba(255,255,255,.68)'" in html
+    assert "return 72" in html
+    assert "label:{show:true}" in html
+    assert "edgeLabel:{show:true, formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:12, width:130, overflow:'break'}" in html
     assert "data:graphNodeData" in html
-    assert "label:flowEdgeAutoLabel(edge)" in html
-    assert "offset:flowEdgeLabelOffset(edge)" in html
+    assert "label:flowEdgeAutoLabel(edge)" not in html
+    assert "offset:flowEdgeLabelOffset(edge)" not in html
     assert "edge_annotation" not in html
-    assert "fontSize:14" in html
-    assert "width:150" in html
+    assert "fontSize:12" in html
+    assert "width:130" in html
     assert "label:[node.label, ...(node.top_workers || [])" not in html
     assert "function flowNodeLabel(node)" in html
     assert "return node.label" in html
-    assert "function flowEdgeLabel(edge)" in html
     assert "workerRelationName" in html
     assert "label:flowNodeLabel(node)" in html
     assert "chartRenderers.set(id, () => renderFlowGraph(id, graph, title))" in html
-    assert "edgeLabelSeverity(edge.rollup?.max_ms)" in html
-    assert "rich:{hot:" in html
+    assert "edgeLabelSeverity(edge.rollup?.max_ms)" not in html
+    assert "rich:{hot:" not in html
     assert "curveness:flowEdgeCurveness(edge)" in html
     assert "id=\"flow-stage-table\"" in html
     assert "id=\"read-flow-stage-table\"" in html
@@ -596,7 +582,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "edge.summary" in html
     assert "edge_label:flowEdgeBriefText(edge)" in html
     assert "worker " in html
-    assert "p.data.edge_label || p.data.status" in html
+    assert "p.data.edge_label || p.data.summary" in html
     assert "edge.reason" in html
     assert "abnormal_ips:flowEdgeAbnormalIps(edge)" in html
     assert "p.data.abnormal_ips || ''" in html

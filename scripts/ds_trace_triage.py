@@ -2257,7 +2257,7 @@ tr.summaryrow td{background:#f8fafc}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
-.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.flow-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-pair .chart{height:320px}.chart{height:360px;width:100%}.flow-graph-chart{height:520px}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.flow-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-pair .chart{height:320px}.chart{height:360px;width:100%}.flow-graph-chart{height:360px}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size);word-break:break-word}
 th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none}.sortable-th:hover{background:#eaf2ff}.sort-mark{color:#2563eb;font-size:11px;margin-left:4px}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 .table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}.code-ref-value{font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.45;overflow-wrap:anywhere;word-break:break-all}.code-ref-card .v{font-family:'Cascadia Code',Consolas,monospace;font-size:13px;line-height:1.35;overflow-wrap:anywhere}.code-ref-card .n{overflow-wrap:anywhere}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
@@ -3863,9 +3863,6 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function flowNodeLabel(node) {
     return node.label;
   }
-  function flowEdgeLabel(edge) {
-    return [edge.operation, edge.summary].filter(Boolean).join('\\n');
-  }
   function flowEdgeBriefText(edge) {
     const rollup = edge.rollup || {};
     const hasSamples = Number(rollup.trace_count || 0) > 0;
@@ -3886,55 +3883,23 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
   function flowEdgeCurveness(edge) {
     if (edge.operation === 'CreateBuffer') return .24;
     if (edge.operation === 'Client Publish') return -.16;
+    if (edge.operation === 'Client→Entry RPC/UB') return .04;
+    if (edge.operation === 'Entry→Meta RPC') return .08;
+    if (edge.operation === 'Entry→Data RPC') return .08;
     if (edge.operation === 'URMA Write') return -0.28;
     return .08;
   }
-  function flowEdgeLabelOffset(edge) {
-    if (edge.operation === 'CreateBuffer') return [0, -32];
-    if (edge.operation === 'Client Publish') return [0, 32];
-    if (edge.operation === 'Client→Entry RPC/UB') return [-42, -48];
-    if (edge.operation === 'URMA Write') return [76, 72];
-    if (edge.operation === 'Entry→Data RPC') return [-28, 54];
-    if (edge.operation === 'Entry→Meta RPC') return [34, -46];
-    return [0, -32];
-  }
-  function flowEdgeAutoLabel(edge) {
-    return {
-      show:true,
-      position:'middle',
-      offset:flowEdgeLabelOffset(edge),
-      formatter:`{${edgeLabelSeverity(edge.rollup?.max_ms)}|${flowEdgeBriefText(edge)}}`,
-      rotate:0,
-      align:'center',
-      verticalAlign:'middle',
-      fontSize:14,
-      lineHeight:18,
-      width:150,
-      overflow:'break',
-      backgroundColor:'rgba(255,255,255,.68)',
-      borderColor:'#dbeafe',
-      borderWidth:1,
-      borderRadius:4,
-      padding:[2,5],
-      rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.68)',borderRadius:4,padding:[2,5]}}
-    };
-  }
   function flowGraphNodeSize() {
-    return [128, 54];
-  }
-  function edgeLabelSeverity(value) {
-    const n = Number(value || 0);
-    return n >= 20 ? 'hot' : n >= 5 ? 'warn' : 'normal';
+    return 72;
   }
   function renderFlowGraph(id, graph, title) {
     chartRenderers.set(id, () => renderFlowGraph(id, graph, title));
     const node = document.getElementById(id);
-    const graphWidth = Math.max(760, node?.clientWidth || 0);
-    const flowNodeX = [0.11,0.36,0.63,0.63,0.89].map(r => Math.round(graphWidth * r));
-    const flowNodeY = [250,250,118,374,374];
+    const graphWidth = Math.max(720, node?.clientWidth || 0);
+    const flowNodeX = [0.12,0.34,0.58,0.58,0.82].map(r => Math.round(graphWidth * r));
+    const flowNodeY = [170,170,82,258,258];
     const graphNodeData = (graph.nodes || []).map((node, idx) => ({
       name:node.id,
-      symbol:'roundRect',
       label:flowNodeLabel(node),
       top_ips:node.top_ips || [],
       top_workers:node.top_workers || [],
@@ -3944,36 +3909,20 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       itemStyle:{color:{client:'#2563eb',entry_worker:'#059669',meta_worker:'#7c3aed',data_worker:'#ea580c',transport:'#64748b'}[node.role] || '#94a3b8'}
     }));
     chart(id, {
-    title:{show:false,text:title},
+    title:{text:title, left:'center', top:4, textStyle:{fontSize:14}},
     textStyle:chartTextStyle,
-    toolbox:flowToolbox(),
     tooltip:{trigger:'item', formatter:p => p.dataType === 'edge'
       ? `${escapeHtml(p.data.name)}<br>${escapeHtml(p.data.summary || '')}<br>${escapeHtml(p.data.operation)}<br>异常 IP: ${escapeHtml(p.data.abnormal_ips || '')}<br>${escapeHtml(p.data.reason || '')}<br>${escapeHtml(p.data.evidence || '')}`
       : `${escapeHtml(p.data.label || p.data.name)}<br>${escapeHtml((p.data.top_ips || []).join(', '))}`},
     series:[{
       type:'graph',
       layout:'none',
-      roam:false,
+      roam:true,
       edgeSymbol:['none','arrow'],
       edgeSymbolSize:8,
-      label:{show:true, position:'inside', fontSize:16, width:112, overflow:'break', lineHeight:19},
+      label:{show:true},
       labelLayout:{hideOverlap:false},
-      edgeLabel:{show:true, position:'middle',
-        formatter:p => `{${edgeLabelSeverity(p.data.rollup?.max_ms)}|${p.data.edge_label || p.data.status || ''}}`,
-        rotate:0,
-        align:'center',
-        verticalAlign:'middle',
-        fontSize:14,
-        lineHeight:18,
-        width:150,
-        overflow:'break',
-        backgroundColor:'rgba(255,255,255,.68)',
-        borderColor:'#dbeafe',
-        borderWidth:1,
-        borderRadius:4,
-        padding:[2,5],
-        rich:{hot:{color:'#991b1b',fontWeight:700,backgroundColor:'#fee2e2',borderRadius:4,padding:[2,5]},warn:{color:'#9a3412',fontWeight:700,backgroundColor:'#ffedd5',borderRadius:4,padding:[2,5]},normal:{color:'#334155',fontWeight:600,backgroundColor:'rgba(255,255,255,.68)',borderRadius:4,padding:[2,5]}}
-      },
+      edgeLabel:{show:true, formatter:p => p.data.edge_label || p.data.summary || (p.data.status === 'present' ? 'present' : 'missing'), fontSize:12, width:130, overflow:'break'},
       lineStyle:{width:2, color:'#64748b', curveness:.08},
       data:graphNodeData,
       links:(graph.edges || []).map(edge => ({
@@ -3988,7 +3937,6 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         reason:edge.reason,
         rollup:edge.rollup,
         status:edge.status,
-        label:flowEdgeAutoLabel(edge),
         lineStyle:{color:edge.rollup?.max_ms >= 20 ? '#dc2626' : edge.rollup?.max_ms >= 5 ? '#ea580c' : edge.status === 'present' ? '#2563eb' : '#cbd5e1', width:edge.rollup?.max_ms >= 20 ? 4 : 2, type:edge.status === 'present' ? 'solid' : 'dashed', curveness:flowEdgeCurveness(edge)}
       }))
     }]
