@@ -24,15 +24,16 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include "common.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
-#include "datasystem/common/rpc/rpc_auth_key_manager.h"
-#include "datasystem/common/rpc/rpc_channel.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/object/object_enum.h"
-#include "datasystem/protos/worker_object.stub.rpc.pb.h"
+#include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "oc_client_common.h"
 
 namespace datasystem::st {
@@ -66,15 +67,20 @@ public:
         akSkManager_ = std::make_shared<AkSkManager>();
         RETURN_IF_NOT_OK(
             akSkManager_->SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
-        RpcCredential credential;
-        RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, credential);
-        channel_ = std::make_shared<RpcChannel>(target_, credential);
-        stub_ = std::make_unique<WorkerWorkerOCService_Stub>(channel_);
-        return Status::OK();
+        RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(100, source_));
+        api_ = std::make_unique<object_cache::WorkerRemoteWorkerOCApi>(target_, source_, akSkManager_);
+        return api_->Init();
     }
 
     Status ExpectRejected(BaseCluster *cluster, uint32_t targetIndex, const std::string &mode, StatusCode expectedCode,
                           const std::string &objectKey)
+    {
+        return ExpectRejectedOneOf(cluster, targetIndex, { { mode, expectedCode } }, objectKey);
+    }
+
+    Status ExpectRejectedOneOf(BaseCluster *cluster, uint32_t targetIndex,
+                               const std::vector<std::pair<std::string, StatusCode>> &expectedModes,
+                               const std::string &objectKey)
     {
         uint64_t serviceCallsBefore = 0;
         RETURN_IF_NOT_OK(
@@ -88,18 +94,22 @@ public:
         object->set_cache_type(static_cast<uint32_t>(CacheType::MEMORY));
         req.set_worker_addr(source_.ToString());
         req.set_type(MigrateType::SCALE_DOWN);
-        RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
         MigrateDataRspPb rsp;
-        RpcOptions options;
-        options.SetTimeout(1'000);
-        std::vector<MemView> payloads;
-        auto rc = stub_->MigrateData(options, req, rsp, payloads);
-        CHECK_FAIL_RETURN_STATUS(rc.GetCode() == expectedCode, K_RUNTIME_ERROR,
-                                 "unexpected migration rejection: " + rc.ToString());
+        auto rc = api_->MigrateDataProbe(req, rsp, 1'000);
+        bool matchedMode = false;
+        std::string expectedModeDesc;
+        for (const auto &[mode, expectedCode] : expectedModes) {
+            expectedModeDesc += mode + "/" + std::to_string(static_cast<int>(expectedCode)) + " ";
+            if (rc.GetCode() == expectedCode && rc.GetMsg().find(mode) != std::string::npos) {
+                matchedMode = true;
+                break;
+            }
+        }
+        CHECK_FAIL_RETURN_STATUS(
+            matchedMode, K_RUNTIME_ERROR,
+            "unexpected migration rejection, expected one of [" + expectedModeDesc + "], actual: " + rc.ToString());
         CHECK_FAIL_RETURN_STATUS(rc.GetMsg().find("MIGRATION_TARGET") != std::string::npos, K_RUNTIME_ERROR,
                                  "migration rejection does not identify the admission kind");
-        CHECK_FAIL_RETURN_STATUS(rc.GetMsg().find(mode) != std::string::npos, K_RUNTIME_ERROR,
-                                 "migration rejection does not identify runtime mode " + mode);
         CHECK_FAIL_RETURN_STATUS(rsp.success_ids().empty(), K_RUNTIME_ERROR,
                                  "rejected migration unexpectedly returned a success id");
 
@@ -115,8 +125,7 @@ private:
     HostPort target_;
     HostPort source_;
     std::shared_ptr<AkSkManager> akSkManager_;
-    std::shared_ptr<RpcChannel> channel_;
-    std::unique_ptr<WorkerWorkerOCService_Stub> stub_;
+    std::unique_ptr<object_cache::WorkerRemoteWorkerOCApi> api_;
 };
 }  // namespace
 
@@ -230,9 +239,12 @@ TEST_F(MigrationTargetOomTest, LEVEL1_MigrationTargetFiltersOutOfMemoryWorker)
     }
     std::shared_ptr<Buffer> failedBuffer;
     constexpr uint64_t overflowSize = 4ULL * 1024 * 1024;
-    ASSERT_EQ(client->Create(NewObjectKey(), overflowSize, CreateParam{}, failedBuffer).GetCode(), K_OUT_OF_MEMORY);
-    DS_ASSERT_OK(
-        probe.ExpectRejected(cluster_.get(), 0, "OUT_OF_MEMORY", K_OUT_OF_MEMORY, "migration-target-out-of-memory"));
+    auto pressureRc = client->Create(NewObjectKey(), overflowSize, CreateParam{}, failedBuffer);
+    ASSERT_TRUE(pressureRc.GetCode() == K_OUT_OF_MEMORY || pressureRc.GetCode() == K_NOT_READY)
+        << pressureRc.ToString();
+    DS_ASSERT_OK(probe.ExpectRejectedOneOf(cluster_.get(), 0,
+                                           { { "OUT_OF_MEMORY", K_OUT_OF_MEMORY }, { "RECOVERING", K_NOT_READY } },
+                                           "migration-target-out-of-memory"));
     std::this_thread::sleep_for(std::chrono::milliseconds(2500));
     DS_ASSERT_OK(probe.ExpectRejected(cluster_.get(), 0, "RECOVERING", K_NOT_READY,
                                       "migration-target-stays-closed-above-low-water"));

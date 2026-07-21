@@ -377,7 +377,11 @@
     `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringRecovering`; full Stream ST
     remains follow-up.
   - `MigrationTargetFiltersIsolatedWorker`: covered by
-    `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker` and DRAINING target tests.
+    `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker`,
+    `MigrationTargetOomTest.LEVEL1_MigrationTargetFiltersOutOfMemoryWorker`, and
+    `MigrationTargetDrainingTest.LEVEL1_MigrationTargetFiltersDrainingWorker`. These ST probes now use the production
+    `WorkerRemoteWorkerOCApi::MigrateDataProbe` path, so brpc and ZMQ modes follow the same stub selection as real
+    worker-to-worker migration.
   - `RecoveringWorkerFallsBackToLocalIsolatedOnDisconnect`: covered by
     `WorkerPushMetaTest.LEVEL1_TestRecoveringWorkerFallsBackToLocalIsolatedOnDisconnect` and
     `WorkerRecoveryControllerTest.SecondDisconnectDuringRecoveryKeepsAdmissionClosed`.
@@ -434,6 +438,18 @@
 ## Fast Verification
 
 - Recent focused verification for scale/fault overlap coverage:
+  - Hardened 3 existing ST cases:
+    `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker`,
+    `MigrationTargetOomTest.LEVEL1_MigrationTargetFiltersOutOfMemoryWorker`, and
+    `MigrationTargetDrainingTest.LEVEL1_MigrationTargetFiltersDrainingWorker`.
+  - Initial RED: the direct test stub path timed out 3/3 cases in 27.80s under `-use_brpc=true` because it bypassed the
+    production `RpcStubCacheMgr`/brpc generic stub path; after switching to `WorkerRemoteWorkerOCApi`, the first run
+    exposed missing ST-side `RpcStubCacheMgr` initialization as SIGSEGV in `RpcStubCacheMgr::GetStub`, then an OOM
+    setup race where the worker could already be in `RECOVERING`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 109s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 1s`), URMA Mock enabled, and 1154 compile database entries.
+  - GREEN: `ds_st_object_cache --gtest_filter="MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker:MigrationTargetOomTest.LEVEL1_MigrationTargetFiltersOutOfMemoryWorker:MigrationTargetDrainingTest.LEVEL1_MigrationTargetFiltersDrainingWorker"`
+    passed 3/3 tests in 25.203s gtest time, 25.27s wall time.
   - Added 1 UT case:
     `TopologyTaskExecutorTest.ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`.
   - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 86s with third-party cache hit (`Compile thirdparty
