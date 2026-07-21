@@ -326,6 +326,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker:metadata_route_resolver",
+        "//src/datasystem/worker/runtime:worker_runtime_facade",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         # "//src/datasystem/common/iam:tenant_auth_manager",
         "//src/datasystem/common/inject:common_inject",
@@ -377,6 +378,7 @@ ds_cc_library(
         "//src/datasystem/master/stream_cache:master_sc_service_impl",
         "//src/datasystem/worker:cluster_event_type",
         "//src/datasystem/worker:worker_health_check",
+        "//src/datasystem/worker/runtime:worker_runtime_facade",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker/stream_cache:remote_worker_manager",
         "//src/datasystem/worker/stream_cache:stream_manager",

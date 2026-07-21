@@ -44,6 +44,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/cluster_event_type.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 #include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/metrics/sc_metrics_monitor.h"
@@ -128,7 +129,15 @@ Status ClientWorkerSCServiceImpl::ValidateWorkerState()
     if (!IsHealthy()) {
         RETURN_STATUS(K_NOT_READY, "Worker not ready");
     }
+    if (runtime_ != nullptr) {
+        RETURN_IF_NOT_OK(runtime_->CheckAdmission(worker::WorkerAdmissionKind::NORMAL_WRITE, "StreamCacheService"));
+    }
     return Status::OK();
+}
+
+void ClientWorkerSCServiceImpl::SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime)
+{
+    runtime_ = runtime;
 }
 
 Status ClientWorkerSCServiceImpl::CreateProducer(

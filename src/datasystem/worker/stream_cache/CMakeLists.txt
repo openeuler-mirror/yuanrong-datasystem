@@ -37,6 +37,7 @@ set(WORKER_SC_DEPEND_LIBS
         cluster_topology
         httpclient
         metadata_route_resolver
+        worker_runtime_facade
         worker_health_check
         )
 

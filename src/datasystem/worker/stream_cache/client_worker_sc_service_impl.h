@@ -47,6 +47,7 @@
 
 namespace datasystem {
 namespace worker {
+class WorkerRuntimeFacade;
 namespace stream_cache {
 class MasterWorkerSCServiceImpl;
 class WorkerWorkerSCServiceImpl;
@@ -533,6 +534,12 @@ public:
      * @param[in] streamNo The stream number to remove.
      */
     void RemoveStreamNo(uint64_t streamNo);
+
+    /**
+     * @brief Assign borrowed Worker runtime dependency.
+     * @param[in] runtime Runtime facade owned by WorkerOCServer.
+     */
+    void SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime);
 
 private:
 
@@ -1086,6 +1093,7 @@ private:
     std::future<void> autoAck_;
     const worker::MetadataRouteResolver &metadataRoute_;       // Immutable owner-routing dependency.
     const cluster::MembershipEndpointView &membership_;        // Immutable topology plus local endpoint evidence.
+    const worker::WorkerRuntimeFacade *runtime_{ nullptr };
 };
 
 template <>

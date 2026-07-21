@@ -267,6 +267,9 @@
      the composition root does not regress to direct state access.
   6. `WorkerOCServiceImpl` no longer accepts, stores, or includes `EtcdStore`; object-cache business service code keeps
      the injected coordination/metadata capabilities and leaves concrete backend ownership in `WorkerOCServer`.
+  7. Stream client-worker admission now goes through `WorkerRuntimeFacade` via the existing `ValidateWorkerState()`
+     entrypoint; public stream headers forward-declare the facade and boundary tests prevent direct exposure of runtime
+     admission/state internals.
 - Acceptance coverage status against the worker-isolation story:
   - `EtcdKeepAliveIsolationTest.ConfirmedLocalIsolationPublishesDeleteAndIsolationCallbackOnce`: covered by
     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData`,
@@ -294,8 +297,10 @@
     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate`,
     `WorkerIsolationCoordinatorTest.LocalRecoveryStartsRecoveringBeforeTopologyReconciliation`, and runtime recovery UTs.
   - `WorkerServiceAdmissionRejectsReadWriteDuringIsolation`: covered for the shared service-mode matrix by
-    `WorkerServiceAdmissionTest.AppliesServiceModeMatrix`; Object/KV paths have focused admission checks. Full Stream
-    entrypoint coverage remains follow-up.
+    `WorkerServiceAdmissionTest.AppliesServiceModeMatrix`; Object/KV paths have focused admission checks. Stream
+    client-facing read/write entrypoints are covered by
+    `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringIsolation`; full Stream ST
+    remains follow-up.
   - `MigrationTargetFiltersIsolatedWorker`: covered by
     `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker` and DRAINING target tests.
   - `RecoveringWorkerFallsBackToLocalIsolatedOnDisconnect`: covered by
@@ -317,8 +322,9 @@
        outage evidence and topology callbacks must remain idempotent.
     4. Recovery metadata batch with mixed success/failure while membership changes; successful entries remain recovered,
        failed entries stay invisible or enter cleanup without blocking other workers.
-    5. KV/Object/Stream ordinary requests during `LOCAL_ISOLATED` and `RECOVERING`; all must fail fast through the same
-       facade semantics, while recovery/cleanup RPCs stay allowed.
+    5. KV/Object/Stream ordinary requests during `RECOVERING`; all must fail fast through the same facade semantics,
+       while recovery/cleanup RPCs stay allowed. `LOCAL_ISOLATED` Stream client-facing admission is now covered by UT;
+       ST-level Stream protocol coverage remains pending.
 
 ## Fast Verification
 

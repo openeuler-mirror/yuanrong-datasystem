@@ -814,6 +814,7 @@ void WorkerOCServer::CreateWorkerServices()
         streamCacheClientWorkerSvc_ = std::make_shared<stream_cache::ClientWorkerSCServiceImpl>(
             hostPort_, masterAddr_, streamCacheMasterSvc_.get(), akSkManager_, scAllocateManager,
             *metadataRouteResolver_, topologyEngine_->Membership());
+        streamCacheClientWorkerSvc_->SetRuntimeFacade(&workerRuntime_);
         // create MasterWorkerSCServiceImpl
         streamCacheMasterWorkerSvc_ = std::make_shared<stream_cache::MasterWorkerSCServiceImpl>(
             hostPort_, masterAddr_, streamCacheClientWorkerSvc_.get(), akSkManager_);
