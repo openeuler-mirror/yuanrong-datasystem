@@ -355,11 +355,10 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
         "图 2-2 分类分布",
         "图 2-3 错误文本 / 状态分布",
         "图 3-1 读取 Top 时延",
-        "图 3-2 读取 Flow 分布",
+        "图 3-2 读写 Flow",
         "图 3-3 读取时间桶 Breakdown",
         "图 3-4 写入 Top 时延",
-        "图 3-5 写入 Flow 分布",
-        "图 3-6 写入时间桶 Breakdown",
+        "图 3-5 写入时间桶 Breakdown",
         "图 4-2 读取 Worker 分布",
         "图 4-4 写入 Worker 分布",
         "图 5-1 UB 生命周期",
@@ -372,7 +371,7 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     ]:
         assert title in html
     assert "<h3>图 " not in html
-    for old_figure in ["图 2-0", "图 3-2a", "图 3-3b", "图 4-0a", "图 5-1b", "图 5-5a", "图 5-5b"]:
+    for old_figure in ["图 2-0", "图 3-2 读取 Flow", "图 3-5 写入 Flow", "图 3-2a", "图 3-3b", "图 4-0a", "图 5-1b", "图 5-5a", "图 5-5b"]:
         assert old_figure not in html
     for summary_id in [
         "section-summary-s2",

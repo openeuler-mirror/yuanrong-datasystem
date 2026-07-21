@@ -2106,7 +2106,7 @@ tr.summaryrow td{background:#f8fafc}
 .log-tag{display:inline-block;border-radius:4px;padding:0 4px;margin:0 1px;font-weight:700}.log-error{background:#fee2e2;color:#991b1b}.log-deadline{background:#ffedd5;color:#9a3412}.log-urma{background:#ede9fe;color:#5b21b6}.log-rpc{background:#dbeafe;color:#1e40af}.log-latency{background:#dcfce7;color:#166534}.log-slow{background:#fef3c7;color:#92400e}.log-field{background:#e2e8f0;color:#334155}
 .log-legend,.stage-legend{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.log-legend span,.stage-legend span{font-size:12px}
 .stage-pill{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:999px;padding:2px 8px;background:#fff;color:#475569}.stage-dot{width:10px;height:10px;border-radius:2px;display:inline-block}
-.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
+.compare2{display:grid;grid-template-columns:1fr 1fr;gap:12px}.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.full-row{grid-column:1/-1}.flow-section{display:grid;grid-template-columns:1fr;gap:12px;margin-top:12px}.flow-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.flow-pair .chart{height:320px}.chart{height:360px;width:100%}.caption{text-align:center;color:#64748b;font-size:var(--report-font-size);margin-top:6px}
 table{width:100%;border-collapse:collapse;table-layout:fixed;background:#fff}th,td{border-bottom:1px solid var(--border);padding:8px 9px;text-align:left;vertical-align:top;font-size:var(--report-font-size);word-break:break-word}
 th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none}.sortable-th:hover{background:#eaf2ff}.sort-mark{color:#2563eb;font-size:11px;margin-left:4px}.num{text-align:right;font-variant-numeric:tabular-nums}.trace-id{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 .table-scroll{width:100%;max-width:100%;overflow-x:auto}.adaptive-table{table-layout:fixed}.nowrap-table{min-width:720px;table-layout:auto}.metadata-table{table-layout:auto}#run-metadata-table th:first-child,#run-metadata-table td:first-child{width:1%;white-space:nowrap;min-width:120px}#run-metadata-table th:last-child,#run-metadata-table td:last-child{width:auto}#ub-lifecycle-table th,#ub-lifecycle-table td{white-space:nowrap}#ub-worker-role-table th:last-child,#ub-worker-role-table td:last-child{width:30%}#ub-request-table th,#ub-request-table td{padding:7px 6px}#ub-request-table th:nth-child(10),#ub-request-table td:nth-child(10),#ub-request-table th:nth-child(11),#ub-request-table td:nth-child(11),#ub-request-table th:nth-child(12),#ub-request-table td:nth-child(12){text-align:right}
@@ -2115,7 +2115,7 @@ button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-co
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
 .trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-details{padding:8px 12px;background:#fff7ed;border-top:1px solid #fed7aa;color:#7c2d12;font-size:12px;line-height:1.55}.trace-log-details div+div{margin-top:3px}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
 code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
-@media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards,.chapter-guide{grid-template-columns:1fr}}
+@media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards,.chapter-guide,.flow-pair{grid-template-columns:1fr}}
 </style>"""
     stylesheet = ('<link rel="stylesheet" href="/assets/css/site.css">' if site else "") + base_style
     script_ref = '<script src="/assets/js/site.js"></script>' if site else ""
@@ -2139,11 +2139,10 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
       <a class="sub" href="#error-chart">图 2-3 错误分布</a>
       <a href="#s3">3. 时延 Breakdown</a>
       <a class="sub" href="#read-latency-chart">图 3-1 读取时延</a>
-      <a class="sub" href="#read-flow-chart">图 3-2 读取 Flow</a>
+      <a class="sub" href="#rw-flow-chart">图 3-2 读写 Flow</a>
       <a class="sub" href="#read-time-breakdown-chart">图 3-3 读取时间桶</a>
       <a class="sub" href="#write-latency-chart">图 3-4 写入时延</a>
-      <a class="sub" href="#write-flow-chart">图 3-5 写入 Flow</a>
-      <a class="sub" href="#write-time-breakdown-chart">图 3-6 写入时间桶</a>
+      <a class="sub" href="#write-time-breakdown-chart">图 3-5 写入时间桶</a>
       <a href="#s4">4. Worker / 流程</a>
       <a class="sub" href="#read-flow-stage-chart">图 4-1 读取流程</a>
       <a class="sub" href="#read-worker-chart">图 4-2 读取 Worker</a>
@@ -2198,13 +2197,18 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
         <div class="panel insight">读写分开看尾部：读关注 GET/QueryMeta/RemoteGet/UB，写关注 SET/Create/Publish/memory copy。</div>
         <div class="flow-section">
           <div class="panel"><div id="read-latency-chart" class="chart"></div><div class="caption">图 3-1 读取 Top 时延。</div></div>
-          <div class="panel"><div id="read-flow-chart" class="chart"></div><div class="caption">图 3-2 读取 Flow 分布：读取接口类型分布。</div></div>
+          <div id="rw-flow-chart" class="panel">
+            <div class="flow-pair">
+              <div><div id="read-flow-chart" class="chart"></div></div>
+              <div><div id="write-flow-chart" class="chart"></div></div>
+            </div>
+            <div class="caption">图 3-2 读写 Flow：左侧为读取接口分布，右侧为写入接口分布。</div>
+          </div>
           <div class="panel"><div id="read-time-breakdown-chart" class="chart"></div><div class="caption">图 3-3 读取时间桶 Breakdown：柱为读 RPC/UB 子阶段 p99，线为读 trace access p99。</div></div>
         </div>
         <div class="flow-section">
           <div class="panel"><div id="write-latency-chart" class="chart"></div><div class="caption">图 3-4 写入 Top 时延。</div></div>
-          <div class="panel"><div id="write-flow-chart" class="chart"></div><div class="caption">图 3-5 写入 Flow 分布：写入接口类型分布。</div></div>
-          <div class="panel"><div id="write-time-breakdown-chart" class="chart"></div><div class="caption">图 3-6 写入时间桶 Breakdown：柱为写 RPC/本地阶段 p99，线为写 trace access p99。</div></div>
+          <div class="panel"><div id="write-time-breakdown-chart" class="chart"></div><div class="caption">图 3-5 写入时间桶 Breakdown：柱为写 RPC/本地阶段 p99，线为写 trace access p99。</div></div>
         </div>
         <div class="compare2">
           <div class="panel"><h3>表 3-1 读取时延指标</h3><table id="read-latency-table"></table></div>
