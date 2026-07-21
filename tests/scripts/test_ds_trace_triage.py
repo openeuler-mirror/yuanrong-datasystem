@@ -204,6 +204,38 @@ def test_ub_current_log_fields_time_buckets_and_worker_edges_are_structured(tmp_
     assert "late_worker_completion" in trace["triage_flags"]
 
 
+def test_urma_total_parser_accepts_evolved_field_aliases(tmp_path):
+    trace_id = "019f7d0f-80ec-73bc-91ce-8e84de820020"
+    log = tmp_path / "urma-alias.log"
+    log.write_text(
+        f"WARN | worker | kvdataworker-0-worker2 | 1 | {trace_id} | "
+        "[URMA_ELAPSED_TOTAL] total cost 0.194ms, osSchedWaitMs: 0.168ms, reqId=489060, "
+        "source address:src-worker-address, dst address:dst-worker-address, payloadSize=4194304, "
+        "cpuId=6, statusCode=OK, inflightWrCount=4, wake_sched_latency_us=6, chipInflight:{2:4}\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module()
+    report = mod.analyze_inputs([str(log)], code_ref="unit-test")
+    event = report["traces"][trace_id]["ub_events"][0]
+
+    assert event["event_type"] == "total"
+    assert event["request_id"] == "489060"
+    assert event["src_addr"] == "src-worker-address"
+    assert event["target_addr"] == "dst-worker-address"
+    assert event["data_size"] == 4194304
+    assert event["cpuid"] == 6
+    assert event["status"] == "OK"
+    assert event["wait_os_sched_ms"] == 0.168
+    assert event["urma_inflight_wr_count"] == 4
+    assert event["wake_sched_latency_us"] == 6
+    assert event["src_chip_inflight"] == "{2:4}"
+    lifecycle = report["dimensions"]["ub_lifecycle_summary"]
+    assert lifecycle["metrics"]["wait_os_sched_ms"]["p99"] == 0.168
+    assert lifecycle["metrics"]["wake_sched_latency_ms"]["p99"] == 0.006
+    assert lifecycle["chip_inflight"]["2"]["p99"] == 4
+
+
 def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     trace_id = "019f7c62-9e9f-7792-a5d8-f4d30275bafe"
     log = tmp_path / "client.log"

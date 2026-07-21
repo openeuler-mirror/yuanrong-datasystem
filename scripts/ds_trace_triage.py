@@ -49,7 +49,7 @@ RPC_SLOW_FIELD_RE = re.compile(
 )
 LATENCY_SUMMARY_RE = re.compile(r"latencySummary:\{([^}]*)\}")
 SUMMARY_ITEM_RE = re.compile(r"([A-Za-z][A-Za-z0-9_.-]*)\s*:\s*(\d+)")
-URMA_TOTAL_RE = re.compile(r"\[URMA_ELAPSED_TOTAL\].*?cost\s+([\d.]+)ms", re.I)
+URMA_TOTAL_RE = re.compile(r"\[URMA_ELAPSED_TOTAL\].*?(?:total\s+)?cost\s+([\d.]+)ms", re.I)
 URMA_POLL_RE = re.compile(r"\[URMA_ELAPSED_POLL_JFC\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
 URMA_NOTIFY_RE = re.compile(r"\[URMA_ELAPSED_NOTIFY\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
 URMA_THREAD_RE = re.compile(r"\[URMA_ELAPSED_THREAD_SHED\].*?cost\s+([\d.]+)\s*(us|ms)", re.I)
@@ -105,6 +105,100 @@ class ParserRules:
 
 
 DEFAULT_RULES = ParserRules()
+
+
+class UrmaFieldParser:
+    """Extract canonical URMA fields from evolving log field names."""
+
+    STRING_FIELDS = {
+        "request_id": [
+            REQUEST_ID_RE,
+            re.compile(r"\breq(?:uest)?Id[:=]\s*([A-Za-z0-9_-]+)", re.I),
+        ],
+        "src_addr": [
+            SRC_ADDR_RE,
+            re.compile(r"\b(?:source|src) address:\s*([^\s,]+)", re.I),
+        ],
+        "target_addr": [
+            DST_ADDR_RE,
+            re.compile(r"\b(?:target|dst|destination) address:\s*([^\s,]+)", re.I),
+        ],
+        "status": [
+            STATUS_RE,
+            re.compile(r"\bstatusCode[:=]\s*([^,\s]+)", re.I),
+        ],
+        "src_chip_inflight": [
+            SRC_CHIP_INFLIGHT_RE,
+            re.compile(r"\b(?:src)?chipInflight:\s*(\{[^}]*\})", re.I),
+        ],
+    }
+    INT_FIELDS = {
+        "data_size": [
+            DATA_SIZE_RE,
+            re.compile(r"\b(?:dataSize|payloadSize|data_size)[:=]\s*(\d+)", re.I),
+        ],
+        "cpuid": [
+            CPUID_RE,
+            re.compile(r"\b(?:cpuId|cpu_id|cpuid)[:=]\s*(\d+)", re.I),
+        ],
+        "urma_inflight_wr_count": [
+            INFLIGHT_WR_RE,
+            re.compile(r"\b(?:urma_inflight_wr_count|inflightWrCount|wrInflightCount)[:=]\s*(\d+)", re.I),
+        ],
+    }
+    FLOAT_FIELDS = {
+        "wait_os_sched_ms": [
+            WAIT_OS_RE,
+            re.compile(r"\b(?:osSchedWaitMs|waitForMs|wait_for_ms)[:=]\s*([\d.]+)\s*ms?", re.I),
+        ],
+        "wake_sched_latency_us": [
+            WAKE_SCHED_RE,
+            re.compile(r"\b(?:wakeSchedLatencyUs|wake_sched_latency_us|wakeLatencyUs)[:=]\s*([\d.]+)", re.I),
+        ],
+    }
+
+    def enrich_base_event(self, event, line):
+        for field, regexes in self.STRING_FIELDS.items():
+            value = self._first(regexes, line)
+            if value:
+                event[field] = value
+        for field, regexes in self.INT_FIELDS.items():
+            value = self._int(regexes, line)
+            if value is not None:
+                event[field] = value
+        return event
+
+    def enrich_total_event(self, event, line):
+        self.enrich_base_event(event, line)
+        for field, regexes in self.FLOAT_FIELDS.items():
+            value = self._float(regexes, line)
+            if value is not None:
+                event[field] = value
+        return event
+
+    @staticmethod
+    def _first(regexes, line):
+        for regex in regexes:
+            match = regex.search(line)
+            if not match:
+                continue
+            for group in match.groups():
+                if group:
+                    return group.strip()
+        return None
+
+    @staticmethod
+    def _int(regexes, line):
+        raw = UrmaFieldParser._first(regexes, line)
+        return int(raw) if raw is not None else None
+
+    @staticmethod
+    def _float(regexes, line):
+        raw = UrmaFieldParser._first(regexes, line)
+        return float(raw) if raw is not None else None
+
+
+URMA_FIELDS = UrmaFieldParser()
 
 
 class TraceInputReader:
@@ -339,25 +433,7 @@ def _ub_base_event(event_type, source, member, line_no, line, ts, worker):
         "line": line_no,
         "raw": line,
     }
-    request_id = _first_match(REQUEST_ID_RE, line)
-    if request_id:
-        event["request_id"] = request_id
-    src_addr = _first_match(SRC_ADDR_RE, line)
-    if src_addr:
-        event["src_addr"] = src_addr
-    dst_addr = _first_match(DST_ADDR_RE, line)
-    if dst_addr:
-        event["target_addr"] = dst_addr
-    data_size = _int_match(DATA_SIZE_RE, line)
-    if data_size is not None:
-        event["data_size"] = data_size
-    cpuid = _int_match(CPUID_RE, line)
-    if cpuid is not None:
-        event["cpuid"] = cpuid
-    status = _first_match(STATUS_RE, line)
-    if status:
-        event["status"] = status
-    return event
+    return URMA_FIELDS.enrich_base_event(event, line)
 
 
 def _extract_ub_events(source, member, line_no, line, ts, worker):
@@ -390,18 +466,7 @@ def _extract_ub_events(source, member, line_no, line, ts, worker):
     if total:
         event = _ub_base_event("total", source, member, line_no, line, ts, worker)
         event["cost_ms"] = float(total.group(1))
-        wait_os = _first_match(WAIT_OS_RE, line)
-        if wait_os:
-            event["wait_os_sched_ms"] = float(wait_os)
-        inflight_wr = _int_match(INFLIGHT_WR_RE, line)
-        if inflight_wr is not None:
-            event["urma_inflight_wr_count"] = inflight_wr
-        wake_sched = _first_match(WAKE_SCHED_RE, line)
-        if wake_sched:
-            event["wake_sched_latency_us"] = float(wake_sched)
-        src_chip_inflight = _first_match(SRC_CHIP_INFLIGHT_RE, line)
-        if src_chip_inflight:
-            event["src_chip_inflight"] = src_chip_inflight
+        URMA_FIELDS.enrich_total_event(event, line)
         events.append(event)
 
     loop_gap = URMA_THREAD_LOOP_GAP_RE.search(line)
