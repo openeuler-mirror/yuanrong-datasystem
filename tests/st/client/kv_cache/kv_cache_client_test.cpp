@@ -2553,6 +2553,28 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeVoluntaryScaleDown)
     ASSERT_EQ(val, data);
 }
 
+TEST_F(KVClientWriteRocksdbTest, TestVoluntaryScaleDownWaitsForCopyMetaConfirmation)
+{
+    StartWorkerAndWaitReady({ 0, 1 },
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-rocksdb_write_mode=none");
+    SetWorkerHashInjection();
+    const std::string key = GetObjectKeyHashToWorker(etcd_.get(), 0);
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client);
+    const std::string data = GenRandomString(128);
+    DS_ASSERT_OK(client->Set(key, data));
+
+    // Old async copy-meta lets the leaving worker remove its location during this delay.
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "master.CreateMultiCopyMeta.beforePersist", "1*sleep(2000)"));
+    VoluntaryScaleDownInject(0);
+    sleep(5);
+
+    std::string value;
+    DS_ASSERT_OK(client->Get(key, value));
+    EXPECT_EQ(value, data);
+}
+
 TEST_F(KVClientWriteRocksdbTest, TestNoneModeScaleUp)
 {
     StartWorkerAndWaitReady({ 0 }, "-rocksdb_write_mode=none");

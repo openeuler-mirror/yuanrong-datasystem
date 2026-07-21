@@ -1120,21 +1120,27 @@ Status OCMetadataManager::CreateMultiCopyMeta(const CreateMultiCopyMetaReqPb &re
                                             accessor, isExpired);
             if (rc.IsError()) {
                 response.add_failed_object_keys(elem.object_key());
+                continue;
             }
-            if (!isExpired) {
-                updateKeyLocations.emplace(elem.object_key(), request.address());
+            if (isExpired) {
+                continue;
             }
+            updateKeyLocations.emplace(elem.object_key(), request.address());
         }
     }
 
-    RETURN_OK_IF_TRUE(updateKeyLocations.empty());
-    // store updateKeyLocations to rocks db
-    Status status = objectStore_->AddObjectLocations(updateKeyLocations, "");
-    if (status.IsError()) {
-        response.clear_failed_object_keys();  // reset the failed object keys
-        for (const auto &elem : request.multi_copy_meta_req_elems()) {
-            response.add_failed_object_keys(elem.object_key());
+    if (!updateKeyLocations.empty()) {
+        Status status = objectStore_->AddObjectLocations(updateKeyLocations, "");
+        if (status.IsError()) {
+            response.clear_failed_object_keys();  // reset the failed object keys
+            for (const auto &elem : request.multi_copy_meta_req_elems()) {
+                response.add_failed_object_keys(elem.object_key());
+            }
+            return Status::OK();
         }
+    }
+    for (const auto &keyLocation : updateKeyLocations) {
+        response.add_confirmed_object_keys(keyLocation.first);
     }
     return Status::OK();
 }

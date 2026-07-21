@@ -3095,7 +3095,9 @@ void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
     const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
     std::vector<std::vector<std::string>> &tempSuccessIds, std::vector<std::vector<ReadKey>> &tempNeedRetryIds,
     std::vector<std::unordered_set<std::string>> &tempFailedIds, std::set<ReadKey> &objectsNeedGetRemote,
-    Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas, uint64_t &migratedBytes)
+    Status &lastRc, NotifyRemoteGetRspPb &rsp, const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
+    std::map<std::string, uint64_t> &unconfirmedObjectVersions,
+    std::unordered_set<std::string> &failedConfirmationOwners)
 {
     std::vector<std::string> successIds;
     successIds.reserve(lockedEntries.size());
@@ -3119,14 +3121,109 @@ void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
                    << VectorToString(successIds) << "], meta data num: " << lockedEntries.size()
                    << " lastRc: " << lastRc.ToString();
     }
+    const auto dataSuccessIds = successIds;
+    std::unordered_set<std::string> unconfirmedIds;
+    std::vector<std::string> confirmedIds;
+    ConfirmCopyMetaForNotifyRemoteGet(dataSuccessIds, queryMetas, confirmedIds, unconfirmedIds,
+                                      failedConfirmationOwners);
+    rsp.mutable_failed_object_keys()->Add(unconfirmedIds.begin(), unconfirmedIds.end());
+    for (const auto &objectKey : unconfirmedIds) {
+        auto entryIt = lockedEntries.find(ReadKey(objectKey));
+        if (entryIt != lockedEntries.end() && entryIt->second.insert && entryIt->second.safeObj != nullptr
+            && entryIt->second.safeObj->Get() != nullptr) {
+            unconfirmedObjectVersions.emplace(objectKey, entryIt->second.safeObj->Get()->GetCreateTime());
+        }
+    }
+    successIds = std::move(confirmedIds);
     ClearNeedDeleteForMigratedObjects(successIds, lockedEntries);
-    BatchUpdateLocationHelper(successIds, queryMetas, lockedEntries);
-    for (const auto &objectKey : successIds) {
+    for (const auto &objectKey : dataSuccessIds) {
         auto metaIt = queryMetas.find(objectKey);
         if (metaIt != queryMetas.end()) {
             migratedBytes += metaIt->second.meta().data_size();
         }
     }
+}
+
+void WorkerOcServiceGetImpl::ConfirmCopyMetaForNotifyRemoteGet(
+    const std::vector<std::string> &dataSuccessIds, const QueryMetaMap &queryMetas,
+    std::vector<std::string> &confirmedIds, std::unordered_set<std::string> &failedIds,
+    std::unordered_set<std::string> &failedConfirmationOwners)
+{
+    constexpr int64_t confirmationTimeoutMs = 1000;
+    if (!FLAGS_enable_data_replication) {
+        confirmedIds = dataSuccessIds;
+        return;
+    }
+    auto grouped = metadataRouteResolver_->GroupOwners(dataSuccessIds);
+    AppendRouteFailures(grouped);
+    for (const auto &[masterAddr, objectKeys] : grouped.groups) {
+        const auto masterKey = masterAddr.ToString();
+        if (failedConfirmationOwners.count(masterKey) != 0) {
+            failedIds.insert(objectKeys.begin(), objectKeys.end());
+            continue;
+        }
+        std::shared_ptr<WorkerMasterOCApi> api;
+        if (workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api).IsError() || api == nullptr) {
+            failedIds.insert(objectKeys.begin(), objectKeys.end());
+            failedConfirmationOwners.emplace(masterKey);
+            continue;
+        }
+        master::CreateMultiCopyMetaReqPb req;
+        master::CreateMultiCopyMetaRspPb rsp;
+        req.set_address(localAddress_.ToString());
+        req.set_redirect(true);
+        for (const auto &objectKey : objectKeys) {
+            const auto &meta = queryMetas.at(objectKey).meta();
+            auto *elem = req.add_multi_copy_meta_req_elems();
+            elem->set_object_key(objectKey);
+            elem->set_version(meta.version());
+            elem->set_data_format(meta.config().data_format());
+        }
+        std::function<Status(master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &)> func =
+            [&api](master::CreateMultiCopyMetaReqPb &request, master::CreateMultiCopyMetaRspPb &response) {
+                return api->CreateMultiCopyMeta(request, response);
+            };
+        const auto remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+        ScopedRequestContext confirmationContext;
+        GetRequestContext()->reqTimeoutDuration.Init(std::min(confirmationTimeoutMs, remainingMs));
+        Status status = WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(req, rsp, func);
+        if (!ClassifyCopyMetaConfirmationResult(rsp, status, objectKeys, confirmedIds, failedIds)) {
+            failedConfirmationOwners.emplace(masterKey);
+        }
+    }
+}
+
+bool WorkerOcServiceGetImpl::ClassifyCopyMetaConfirmationResult(
+    const master::CreateMultiCopyMetaRspPb &rsp, const Status &status, const std::vector<std::string> &objectKeys,
+    std::vector<std::string> &confirmedIds, std::unordered_set<std::string> &failedIds)
+{
+    if (status.IsError() || !rsp.info().empty() || rsp.meta_is_moving()) {
+        failedIds.insert(objectKeys.begin(), objectKeys.end());
+        return false;
+    }
+    std::unordered_set<std::string> confirmed(rsp.confirmed_object_keys().begin(), rsp.confirmed_object_keys().end());
+    for (const auto &objectKey : objectKeys) {
+        if (confirmed.count(objectKey) != 0) {
+            confirmedIds.emplace_back(objectKey);
+        } else {
+            failedIds.emplace(objectKey);
+        }
+    }
+    return true;
+}
+
+void WorkerOcServiceGetImpl::FreeAndUnlockUnconfirmedNotifyRemoteGetObjects(
+    const std::map<std::string, uint64_t> &objectVersions, std::map<ReadKey, LockedEntity> &lockedEntries)
+{
+    for (const auto &[objectKey, version] : objectVersions) {
+        auto it = lockedEntries.find(ReadKey(objectKey));
+        if (it != lockedEntries.end() && it->second.safeObj != nullptr && it->second.safeObj->Get() != nullptr
+            && it->second.safeObj->Get()->GetCreateTime() == version) {
+            LOG_IF_ERROR(it->second.safeObj->Get()->FreeResources(),
+                         FormatString("[NotifyRemoteGet] Free unconfirmed object %s failed", objectKey));
+        }
+    }
+    BatchUnlockForGet(objectVersions, lockedEntries);
 }
 
 void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
@@ -3148,7 +3245,9 @@ void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
     std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
     std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp, std::set<ReadKey> &objectsNeedGetRemote,
-    const QueryMetaMap &queryMetas, uint64_t &migratedBytes)
+    const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
+    std::map<std::string, uint64_t> &unconfirmedObjectVersions,
+    std::unordered_set<std::string> &failedConfirmationOwners)
 {
     Status lastRc;
     std::vector<std::future<Status>> futures;
@@ -3201,7 +3300,8 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
         }
     }
     PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
-                                           tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas, migratedBytes);
+                                           tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas, migratedBytes,
+                                           unconfirmedObjectVersions, failedConfirmationOwners);
     return lastRc;
 }
 
@@ -3211,15 +3311,20 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
                                                               uint64_t &migratedBytes)
 {
     Status lastRc;
+    std::unordered_set<std::string> failedConfirmationOwners;
     do {
         std::unordered_set<std::string> lockfailedIds;
         std::map<ReadKey, LockedEntity> lockedEntries;
+        std::map<std::string, uint64_t> unconfirmedObjectVersions;
         auto lockRc = BatchLockForGet(objectsNeedGetRemote, lockedEntries, lockfailedIds);
         if (lockRc.IsError()) {
             lastRc = std::move(lockRc);
         }
         rsp.mutable_failed_object_keys()->Add(lockfailedIds.begin(), lockfailedIds.end());
-        Raii unlockRaii([this, &lockfailedIds, &lockedEntries]() { BatchUnlockForGet(lockfailedIds, lockedEntries); });
+        Raii unlockRaii([this, &lockfailedIds, &unconfirmedObjectVersions, &lockedEntries]() {
+            FreeAndUnlockUnconfirmedNotifyRemoteGetObjects(unconfirmedObjectVersions, lockedEntries);
+            BatchUnlockForGet(lockfailedIds, lockedEntries);
+        });
 
         std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> groupedQueryMetas;
         for (const auto &obj : objectsNeedGetRemote) {
@@ -3239,7 +3344,8 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
             SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj);
         }
         auto remoteGetRc = ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lockedEntries, rsp,
-                                                              objectsNeedGetRemote, queryMetas, migratedBytes);
+                                                              objectsNeedGetRemote, queryMetas, migratedBytes,
+                                                              unconfirmedObjectVersions, failedConfirmationOwners);
         if (remoteGetRc.IsError()) {
             LOG(WARNING) << "ProcessRemoteGetInNotificationImpl failed, rc: " << remoteGetRc.ToString();
             lastRc = std::move(remoteGetRc);
