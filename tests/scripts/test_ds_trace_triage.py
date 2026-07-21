@@ -645,8 +645,12 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "方向:" in html
     assert "耗时明细:" in html
     assert "traceLatencyClass" in html
+    assert "renderTraceLatencyValue" in html
     assert "trace-latency-hot" in html
     assert "trace-latency-warn" in html
+    assert ".trace-log-details{padding:8px 12px;background:#f8fafc" in html
+    assert "${escapeHtml(item.label)}=${renderTraceLatencyValue(item)}" in html
+    assert '<span class="${traceLatencyClass(item)}">${escapeHtml(item.label)}=' not in html
     assert "class=\"trace-log-details\"" in html
     assert "trace-log-summary" in html
     assert "trace-log-focus" in html

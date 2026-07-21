@@ -2130,7 +2130,7 @@ th{background:#f8fafc;color:#475569}.sortable-th{cursor:pointer;user-select:none
 .controls{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 12px;align-items:center}input,select,button{border:1px solid var(--border);background:#fff;border-radius:6px;padding:7px 9px;font-size:13px}
 button{cursor:pointer}button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}button:disabled{opacity:.45;cursor:not-allowed}.pager{background:#fff;border:1px solid var(--border);border-radius:8px;padding:10px}.mini-pager{display:flex;justify-content:center;gap:8px;align-items:center;margin-top:8px;color:#64748b;font-size:12px}
 .selected-row{background:#fff7e6}.logbox,pre{white-space:pre-wrap;background:#0f172a;color:#dbeafe;padding:12px;border-radius:8px;max-height:520px;overflow:auto;font-family:'Cascadia Code',Consolas,monospace;font-size:12px;line-height:1.5}
-.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-details{padding:8px 12px;background:#fff7ed;border-top:1px solid #fed7aa;color:#7c2d12;font-size:12px;line-height:1.55}.trace-log-details div+div{margin-top:3px}.trace-latency-hot{font-weight:700;color:#991b1b;background:#fee2e2;border-radius:4px;padding:1px 4px}.trace-latency-warn{font-weight:700;color:#9a3412;background:#ffedd5;border-radius:4px;padding:1px 4px}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
+.trace-log-groups{display:flex;flex-direction:column;gap:10px;margin-top:10px}.trace-log-block{border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#fff}.trace-log-block h4{margin:0;padding:8px 12px;background:#f8fafc;color:#0f172a;font-size:13px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.trace-log-block pre{border-radius:0;margin:0;max-height:none}.trace-log-count{color:#64748b;font-weight:500;white-space:nowrap}.trace-log-heading{display:flex;flex-direction:column;gap:4px;min-width:0}.trace-log-summary{display:flex;flex-wrap:wrap;gap:4px;font-size:12px;color:#64748b;font-weight:500}.trace-log-details{padding:8px 12px;background:#f8fafc;border-top:1px solid #e2e8f0;color:#475569;font-size:12px;line-height:1.55}.trace-log-details div+div{margin-top:3px}.trace-latency-hot{font-weight:700;color:#991b1b;background:#fee2e2;border-radius:4px;padding:1px 4px}.trace-latency-warn{font-weight:700;color:#9a3412;background:#ffedd5;border-radius:4px;padding:1px 4px}.trace-log-focus{border:1px solid #e2e8f0;border-radius:999px;padding:1px 7px;background:#fff;color:#475569}.trace-log-focus.hot{border-color:#fecaca;background:#fef2f2;color:#991b1b}.trace-log-focus.warn{border-color:#fed7aa;background:#fff7ed;color:#9a3412}
 code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
 @media(max-width:900px){.layout{display:block}aside{position:relative;width:auto;height:auto}main{margin-left:0;width:100%;padding:16px}.chart-grid,.compare2,.cards,.chapter-guide,.flow-pair{grid-template-columns:1fr}}
 </style>"""
@@ -2757,6 +2757,11 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     if (!Number.isFinite(value)) return '';
     return value >= 20 ? 'trace-latency-hot' : value >= 5 ? 'trace-latency-warn' : '';
   }
+  function renderTraceLatencyValue(item) {
+    const value = `${Number(item.ms).toFixed(3)}ms`;
+    const cls = traceLatencyClass(item);
+    return cls ? `<span class="${cls}">${escapeHtml(value)}</span>` : escapeHtml(value);
+  }
   function extractDirectionDetails(text) {
     const out = [];
     const patterns = [
@@ -2791,7 +2796,7 @@ code{font-family:'Cascadia Code',Consolas,monospace;font-size:12px}
     const directions = extractDirectionDetails(text);
     if (directions.length) rows.push(`<div><b>方向:</b> ${directions.map(escapeHtml).join('；')}</div>`);
     const latencies = extractLatencyDetails(text);
-    if (latencies.length) rows.push(`<div><b>耗时明细:</b> ${latencies.map(item => `<span class="${traceLatencyClass(item)}">${escapeHtml(item.label)}=${item.ms.toFixed(3)}ms</span>`).join('；')}</div>`);
+    if (latencies.length) rows.push(`<div><b>耗时明细:</b> ${latencies.map(item => `${escapeHtml(item.label)}=${renderTraceLatencyValue(item)}`).join('；')}</div>`);
     return rows.length ? `<div class="trace-log-details">${rows.join('')}</div>` : '';
   }
   function renderTraceLogBlocks(evidence) {
