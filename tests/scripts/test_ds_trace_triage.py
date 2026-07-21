@@ -239,6 +239,8 @@ def test_run_pipeline_writes_intermediate_outputs_and_html_targets(tmp_path):
     assert "<aside><h2>Trace 分析报告</h2><nav id=\"nav\">" in html
     assert "class=\"subtitle\"" in html
     assert "id=\"run-metadata-table\"" in html
+    assert "class=\"metadata-table\"" in html
+    assert "#run-metadata-table th:first-child" in html
     assert "set-case" in html
     assert "memory-copy" in html
     assert "inputs.md" in html
