@@ -5169,6 +5169,8 @@ Status ObjectClientImpl::GenerateKey(std::string &key, const std::string &prefix
 
 Status ObjectClientImpl::GetPrefix(const std::string &key, std::string &prefix)
 {
+    CHECK_FAIL_RETURN_STATUS(!key.empty(), K_INVALID, "The key is empty");
+    RETURN_IF_NOT_OK(CheckValidObjectKey(key));
     prefix = key;
     return Status::OK();
 }

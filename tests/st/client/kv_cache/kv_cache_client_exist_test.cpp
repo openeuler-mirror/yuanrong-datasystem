@@ -102,6 +102,12 @@ TEST_F(KVCacheClientExistTest, TestSpecialKeys)
     ASSERT_EQ(client_->Exist({ "" }, exists).GetCode(), StatusCode::K_INVALID);
 }
 
+TEST_F(KVCacheClientExistTest, ExistRejectsInvalidKeyAfterValidKey)
+{
+    std::vector<bool> exists;
+    EXPECT_EQ(client_->Exist({ "valid_key", "   " }, exists).GetCode(), StatusCode::K_INVALID);
+}
+
 TEST_F(KVCacheClientExistTest, TestEmptyKeys)
 {
     std::vector<bool> exists;

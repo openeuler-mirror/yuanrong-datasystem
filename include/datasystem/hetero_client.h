@@ -203,9 +203,11 @@ public:
     Status HealthCheck(ServerState &state);
 
     /// \brief Check whether the keys exist in the data system.
-    /// \param[in] keys The keys to be checked. Constraint: The number of keys cannot exceed 100000.
+    /// \param[in] keys The non-empty keys to be checked. Each key must have a valid object-key format, and the number
+    /// of keys cannot exceed 100000.
     /// \param[in] exists The existence of the corresponding key.
-    /// \return K_OK if at least one key is successfully processed; the error code otherwise.
+    /// \return K_OK if at least one key is successfully processed; K_INVALID when keys are empty or contain an invalid
+    /// key; the error code otherwise.
     Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists);
 
     /// \brief Get device meta info of the keys.
