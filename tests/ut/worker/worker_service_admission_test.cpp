@@ -227,6 +227,37 @@ TEST(WorkerServiceAdmissionTest, AppliesServiceModeMatrix)
     }
 }
 
+TEST(WorkerServiceAdmissionTest, ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow)
+{
+    WorkerRuntimeStateManager scaleInSource;
+    ASSERT_TRUE(scaleInSource.TryMarkRunning(CompleteEvidence(), "ready"));
+    scaleInSource.MarkDraining("voluntary scale-down drain started");
+    const WorkerServiceAdmission scaleInAdmission(scaleInSource);
+
+    auto rc = scaleInAdmission.Check(WorkerAdmissionKind::MIGRATION_TARGET, "MigrateData");
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+    EXPECT_NE(rc.GetMsg().find("mode=DRAINING"), std::string::npos);
+    EXPECT_NE(rc.GetMsg().find("kind=MIGRATION_TARGET"), std::string::npos);
+    EXPECT_TRUE(scaleInAdmission.Check(WorkerAdmissionKind::NORMAL_READ, "GetObjectRemote").IsOk());
+
+    WorkerRuntimeStateManager isolatedPeer;
+    ASSERT_TRUE(isolatedPeer.TryMarkRunning(CompleteEvidence(), "ready"));
+    isolatedPeer.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "peer keepalive failed");
+    const WorkerServiceAdmission isolatedAdmission(isolatedPeer);
+
+    rc = isolatedAdmission.Check(WorkerAdmissionKind::MIGRATION_TARGET, "MigrateData");
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+    EXPECT_NE(rc.GetMsg().find("mode=LOCAL_ISOLATED"), std::string::npos);
+    EXPECT_TRUE(isolatedAdmission.Check(WorkerAdmissionKind::CLEANUP_RPC, "CleanupFailedMigration").IsOk());
+
+    isolatedPeer.MarkRecovering(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION,
+                                "topology available; waiting for metadata evidence");
+    rc = isolatedAdmission.Check(WorkerAdmissionKind::MIGRATION_TARGET, "MigrateData");
+    EXPECT_EQ(rc.GetCode(), K_NOT_READY);
+    EXPECT_NE(rc.GetMsg().find("mode=RECOVERING"), std::string::npos);
+    EXPECT_TRUE(isolatedAdmission.Check(WorkerAdmissionKind::RECOVERY_RPC, "RecoverMetadata").IsOk());
+}
+
 TEST(WorkerServiceAdmissionTest, StableRecoveringModeAllowsCleanupRpc)
 {
     WorkerRuntimeStateManager state;

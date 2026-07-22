@@ -474,6 +474,11 @@
     `TopologyPlanBuilderTest.FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives`, which verifies a Failure batch
     that interrupts ScaleIn removes the failed peer and resumes the original ScaleIn batch when a voluntary `LEAVING`
     member survives.
+  - `ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow`: covered by
+    `WorkerServiceAdmissionTest.ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow`, which locks the
+    shared admission contract for a voluntary ScaleIn source (`DRAINING`) and a faulted peer
+    (`LOCAL_ISOLATED`/`RECOVERING`): both reject `MIGRATION_TARGET`, while the conservative read/recovery/cleanup paths
+    allowed by the runtime matrix remain open.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV/Stream STs have
     been run during development, but full CI, Bazel, and complete Object/KV/Stream ST suites are not yet green in this
     session.
@@ -486,7 +491,9 @@
     2. ScaleIn voluntary source plus concurrent peer local-isolation is now covered at topology replan level by
        `ScaleInSourceStaysLeavingWhenPeerFails`; Failure final resuming an interrupted ScaleIn batch is covered by
        `FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives`. Migration-target filtering for the same combined path
-       remains covered indirectly by active-target admission and needs a dedicated ST if we want end-to-end evidence.
+       is now locked at the shared runtime admission-contract level by
+       `ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow`; a dedicated ST remains optional if we want
+       end-to-end evidence across real worker RPCs.
     3. ScaleOut plus transient global backend outage is now covered at failure-classifier level by
        `ScaleOutMembersSurviveGlobalBackendOutagePause`; ScaleOut progress post-commit outage idempotency is covered by
        `ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`; ScaleIn task-overlap marker post-commit outage
@@ -802,6 +809,16 @@
   - GREEN: remote
     `ds_ut --gtest_filter="WorkerTopologyAvailabilityAdmissionTest.*"` from the CLion build tree passed 12/12 tests in
     0ms gtest time, about 1.21s wall time.
+  - Added 1 UT case:
+    `WorkerServiceAdmissionTest.ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 113s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), `BUILD_WITH_URMA_MOCK` enabled, source build time 28s, and 1156 compile
+    database entries.
+  - GREEN: remote
+    `ds_ut --gtest_filter="WorkerServiceAdmissionTest.ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow"`
+    passed 1/1 test in 0ms gtest time, about 1.36s wall time.
+  - GREEN: remote `ds_ut --gtest_filter="WorkerServiceAdmissionTest.*:WorkerAdmissionFacadeTest.*"` passed 11/11 tests
+    in 51ms gtest time, about 1.42s wall time.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
