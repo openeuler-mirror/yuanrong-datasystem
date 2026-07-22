@@ -954,7 +954,7 @@ Status WorkerOCServer::InitCoordinationBackend()
                     return objCacheClientWorkerSvc_->ReconcileLocalIsolationOwnership();
                 },
             .isTopologyRuntimeReady = [this] { return topologyEngine_ != nullptr; },
-            .publishReadyMembership = [this] { return topologyEngine_->MarkReady(); },
+            .publishRecoveringMembership = [this] { return topologyEngine_->MarkRecovering(); },
             .reconcileNetworkRecoveryOwnership =
                 [this] {
                     RETURN_OK_IF_TRUE(objCacheClientWorkerSvc_ == nullptr);

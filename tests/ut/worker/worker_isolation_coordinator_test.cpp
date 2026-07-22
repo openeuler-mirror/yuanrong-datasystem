@@ -49,14 +49,15 @@ TEST(WorkerIsolationCoordinatorTest, LocalRecoveryStartsRecoveringBeforeTopology
 {
     WorkerRuntimeFacade runtime;
     bool admissionOpen = true;
-    bool membershipPublished = false;
+    bool recoveringMembershipPublished = false;
+    bool readyMembershipPublished = false;
     bool networkOwnershipReconciled = false;
     bool topologyReconciliationRequested = false;
     WorkerIsolationCoordinatorHooks hooks;
     hooks.setTopologyServingAdmission = [&](bool open) { admissionOpen = open; };
     hooks.isTopologyRuntimeReady = [] { return true; };
-    hooks.publishReadyMembership = [&] {
-        membershipPublished = true;
+    hooks.publishRecoveringMembership = [&] {
+        recoveringMembershipPublished = true;
         return Status::OK();
     };
     hooks.reconcileNetworkRecoveryOwnership = [&] {
@@ -81,7 +82,8 @@ TEST(WorkerIsolationCoordinatorTest, LocalRecoveryStartsRecoveringBeforeTopology
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE);
     EXPECT_EQ(snapshot.recoveryPhase, WorkerRecoveryPhase::TOPOLOGY);
     EXPECT_FALSE(admissionOpen);
-    EXPECT_TRUE(membershipPublished);
+    EXPECT_TRUE(recoveringMembershipPublished);
+    EXPECT_FALSE(readyMembershipPublished);
     EXPECT_TRUE(networkOwnershipReconciled);
     EXPECT_TRUE(topologyReconciliationRequested);
 }

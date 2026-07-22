@@ -522,8 +522,7 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
     LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
         << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName
         << " role=worker ingress=coordinator owner_role=" << (memberOwns ? "member" : "controller")
-        << " watch_id=" << watchId
-        << " coordinator_id_prefix=" << TopologyDiagnosticPrefix(coordinatorId)
+        << " watch_id=" << watchId << " coordinator_id_prefix=" << TopologyDiagnosticPrefix(coordinatorId)
         << " event=" << event.ToString();
     owner->HandleWatchEvent(coordinatorId, watchId, std::move(event));
     return Status::OK();
@@ -817,8 +816,19 @@ Status TopologyEngine::MarkReady()
                              "cluster topology member lease is not established");
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::READY);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
-              << " role=worker action=mark_ready address=" << options_.localAddress
-              << " status=" << rc.ToString();
+              << " role=worker action=mark_ready address=" << options_.localAddress << " status=" << rc.ToString();
+    return rc;
+}
+
+Status TopologyEngine::MarkRecovering()
+{
+    CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
+                             "cluster topology Engine is not running");
+    CHECK_FAIL_RETURN_STATUS(HasEstablishedMemberLease(), K_NOT_READY,
+                             "cluster topology member lease is not established");
+    auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::RECOVERING);
+    LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
+              << " role=worker action=mark_recovering address=" << options_.localAddress << " status=" << rc.ToString();
     return rc;
 }
 
@@ -828,8 +838,7 @@ Status TopologyEngine::MarkExiting()
                              "cluster topology Engine is not running");
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::EXITING);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
-              << " role=worker action=mark_exiting address=" << options_.localAddress
-              << " status=" << rc.ToString();
+              << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
     return rc;
 }
 
@@ -978,9 +987,10 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     RETURN_IF_NOT_OK(rc);
     std::shared_ptr<const TopologySnapshot> published;
     RETURN_IF_NOT_OK(snapshots_.Load(published));
-    VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
-        << "CLUSTER_RING cluster=" << options_.clusterName << " version=" << published->Version()
-        << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest()) << " status=published";
+    VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL) << "CLUSTER_RING cluster=" << options_.clusterName
+                                     << " version=" << published->Version()
+                                     << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest())
+                                     << " status=published";
     RETURN_IF_NOT_OK(PublishBackendEvidence(*published));
     if (newlyPublished) {
         LogAndNotifyPublishedSnapshot(std::move(published));
@@ -998,14 +1008,12 @@ void TopologyEngine::LogAndNotifyPublishedSnapshot(std::shared_ptr<const Topolog
     const Member *local = nullptr;
     const auto localStatus = published->FindMemberByAddress(options_.localAddress, local);
     LOG(INFO) << "CLUSTER_RING cluster=" << options_.clusterName << " role=worker status=published"
-              << " version=" << published->Version()
-              << " authority_revision=" << published->AuthorityRevision()
+              << " version=" << published->Version() << " authority_revision=" << published->AuthorityRevision()
               << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest())
               << " batch_type=" << batchType << " batch_epoch=" << batchEpoch
               << " member_count=" << published->Members().size()
               << " active_count=" << published->ActiveMembers().size()
-              << " failed_count=" << published->FailedMembers().size()
-              << " local_member_found=" << localStatus.IsOk()
+              << " failed_count=" << published->FailedMembers().size() << " local_member_found=" << localStatus.IsOk()
               << " local_state=" << (localStatus.IsOk() ? MemberStateName(local->state) : "missing")
               << " local_member_id_prefix=" << (localStatus.IsOk() ? MemberIdForLog(local->identity.id) : "");
     NotifySnapshotPublished(std::move(published));
@@ -1364,8 +1372,7 @@ void TopologyEngine::Run()
         }
         if (dispatcher_.ConsumeResyncRequired()) {
             LOG(WARNING) << "CLUSTER_WATCH cluster=" << options_.clusterName
-                         << " role=worker scope=all status=resync queued_events="
-                         << dispatcher_.GetStats().queueDepth;
+                         << " role=worker scope=all status=resync queued_events=" << dispatcher_.GetStats().queueDepth;
             auto rebuild = ReloadTopologyForRuntime(false);
             if (rebuild.IsError()) {
                 RecordError(rebuild);

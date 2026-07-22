@@ -52,8 +52,9 @@ void WorkerIsolationCoordinator::OnLocalRecovery()
         LOG(WARNING) << "Control backend keepalive recovered before topology runtime was ready";
         return;
     }
-    if (hooks_.publishReadyMembership != nullptr) {
-        LOG_IF_ERROR(hooks_.publishReadyMembership(), "Publish READY membership after control backend recovery");
+    if (hooks_.publishRecoveringMembership != nullptr) {
+        LOG_IF_ERROR(hooks_.publishRecoveringMembership(),
+                     "Publish RECOVERING membership after control backend recovery");
     }
     if (hooks_.reconcileNetworkRecoveryOwnership != nullptr) {
         LOG_IF_ERROR(hooks_.reconcileNetworkRecoveryOwnership(),

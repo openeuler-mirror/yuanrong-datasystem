@@ -40,8 +40,7 @@ class TopologyRecoveryReporter;
  * @brief Bind and safely drain the Worker RPC ingress used by Coordinator-backed watches.
  */
 struct CoordinatorWatchIngress {
-    using Handler =
-        std::function<Status(const std::string &, int64_t, CoordinationEvent &&)>;
+    using Handler = std::function<Status(const std::string &, int64_t, CoordinationEvent &&)>;
 
     std::function<Status(Handler)> bind;
     std::function<Status(std::chrono::steady_clock::time_point)> unbindAndDrain;
@@ -134,8 +133,7 @@ public:
          * @param[in] handler Restart sink to consume.
          * @return This Builder.
          */
-        Builder &SetMembershipRestartHandler(
-            std::function<Status(const std::string &, int64_t)> handler);
+        Builder &SetMembershipRestartHandler(std::function<Status(const std::string &, int64_t)> handler);
 
         /**
          * @brief Register the existing member-recovery cleanup sink.
@@ -163,8 +161,7 @@ public:
          * @param[in] handler Callback that may only enqueue bounded work.
          * @return This Builder.
          */
-        Builder &SetSnapshotPublishedHandler(
-            std::function<void(std::shared_ptr<const TopologySnapshot>)> handler);
+        Builder &SetSnapshotPublishedHandler(std::function<void(std::shared_ptr<const TopologySnapshot>)> handler);
 
         /**
          * @brief Bind the configured confirmed-failure timeout.
@@ -242,6 +239,12 @@ public:
      * @return K_OK on update; lifecycle or backend status otherwise.
      */
     Status MarkReady();
+
+    /**
+     * @brief Publish the local membership as RECOVERING while recovery evidence is incomplete.
+     * @return K_OK on update; lifecycle or backend status otherwise.
+     */
+    Status MarkRecovering();
 
     /**
      * @brief Publish the local membership as EXITING for graceful ScaleIn.
@@ -387,8 +390,7 @@ private:
      * @param[in] event Event to consume.
      * @return K_OK on delivery or identity/lifecycle status otherwise.
      */
-    Status RouteCoordinatorWatchEvent(const std::string &coordinatorId, int64_t watchId,
-                                      CoordinationEvent &&event);
+    Status RouteCoordinatorWatchEvent(const std::string &coordinatorId, int64_t watchId, CoordinationEvent &&event);
 
     /**
      * @brief Route one unified ETCD watch event to Worker and/or Controller consumers.

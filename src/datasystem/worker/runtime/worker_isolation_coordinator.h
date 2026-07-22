@@ -27,7 +27,7 @@ struct WorkerIsolationCoordinatorHooks {
     std::function<void(bool)> setTopologyServingAdmission;
     std::function<Status()> reconcileLocalIsolationOwnership;
     std::function<bool()> isTopologyRuntimeReady;
-    std::function<Status()> publishReadyMembership;
+    std::function<Status()> publishRecoveringMembership;
     std::function<Status()> reconcileNetworkRecoveryOwnership;
     std::function<Status(std::function<void()>)> requestRecoveryReconciliation;
 };

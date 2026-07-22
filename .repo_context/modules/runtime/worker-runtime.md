@@ -1093,6 +1093,24 @@
     CMake-only `ut/cluster/testing/fake_coordination_backend.h` include path. The fix changed that cpp to include its
     same-directory header directly. After syncing the changed files to the remote worktree, the same Bazel command
     passed in 21.570s with 29 actions, using the existing `.bazel-cache/distdir` and `--config=urma_mock`.
+  - RED: changed
+    `WorkerIsolationCoordinatorTest.LocalRecoveryStartsRecoveringBeforeTopologyReconciliation` to assert local recovery
+    does not publish READY before topology/ownership evidence. The test failed in 0ms because
+    `readyMembershipPublished` was true.
+  - GREEN: added `TopologyEngine::MarkRecovering()` and changed local recovery wiring to publish RECOVERING membership
+    through the topology facade instead of READY. Existing backends already promote `RECOVERING`/`RESTARTING` to READY
+    in `InformReconciliationDone`, so READY remains tied to reconciliation completion. The worker recovery focused
+    filter passed 7/7 tests in 0ms.
+  - RED/GREEN: added `TopologyEngineTest.MarkRecoveringPublishesRecoveringMembershipState`; it first failed in 2ms
+    because the test fake did not record `UpdateNodeState`, then passed in 2ms after the fake recorded lifecycle state
+    mutations. A broader topology/coordination focused filter passed 14/14 tests in 859ms.
+  - GREEN: local boundary script passed 28/28 in 0.070s; `git diff --check` was clean; clang-format on the touched
+    topology/worker runtime files and tests reported no remaining formatting changes.
+  - GREEN: remote Bazel 7.4.1 focused build with existing `.bazel-cache/distdir` and `--config=urma_mock` passed for
+    `//src/datasystem/cluster:cluster_topology`, `//src/datasystem/worker/runtime:worker_runtime_core`, and
+    `//tests/ut/cluster/testing:fake_coordination_backend` in 17.622s with 18 actions. A first attempt used a wrong
+    non-existent label `//src/datasystem/worker/runtime:worker_runtime` and failed during target-pattern parsing in
+    0.128s; this was command selection, not a compile failure.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

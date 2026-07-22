@@ -21,7 +21,30 @@
 namespace datasystem::cluster {
 namespace {
 constexpr size_t SINGLE_NOT_READY_GET_ATTEMPT = 1;
+
+std::string LifecycleStateName(MemberLifecycleState state)
+{
+    switch (state) {
+        case MemberLifecycleState::STARTING:
+            return "STARTING";
+        case MemberLifecycleState::RESTARTING:
+            return "RESTARTING";
+        case MemberLifecycleState::RECOVERING:
+            return "RECOVERING";
+        case MemberLifecycleState::READY:
+            return "READY";
+        case MemberLifecycleState::EXITING:
+            return "EXITING";
+        case MemberLifecycleState::DOWNGRADE_RESTARTING:
+            return "DOWNGRADE_RESTARTING";
+        case MemberLifecycleState::FAILED:
+            return "FAILED";
+        case MemberLifecycleState::UNKNOWN:
+            break;
+    }
+    return "UNKNOWN";
 }
+}  // namespace
 
 std::string FakeCoordinationBackend::FullKey(const std::string &table, const std::string &key) const
 {
@@ -207,8 +230,10 @@ Status FakeCoordinationBackend::Shutdown()
     return Status::OK();
 }
 
-Status FakeCoordinationBackend::UpdateNodeState(MemberLifecycleState)
+Status FakeCoordinationBackend::UpdateNodeState(MemberLifecycleState state)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
+    lifecycleCalls_.push_back(LifecycleStateName(state));
     return Status::OK();
 }
 
