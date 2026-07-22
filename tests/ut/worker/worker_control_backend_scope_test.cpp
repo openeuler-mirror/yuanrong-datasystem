@@ -104,6 +104,20 @@ TEST(WorkerControlBackendScopeTest, MismatchedTopologyStampRejectsGlobalBackendO
               ControlBackendFailureScope::INCONCLUSIVE);
 }
 
+TEST(WorkerControlBackendScopeTest, AvailablePeerWithMismatchedTopologyStampConfirmsLocalIsolation)
+{
+    const auto local = LocalUnavailableObservation();
+    const auto peer = Peer("worker1");
+    auto mismatched = PeerObservation(peer, cluster::ControlBackendState::AVAILABLE);
+    mismatched.topologyVersion = local.topologyVersion + 1;
+    mismatched.topologyRevision = local.topologyRevision + 1;
+    mismatched.topologyDigest = "newer-digest";
+
+    EXPECT_FALSE(ConfirmsGlobalBackendOutage(local, { peer }, { mismatched }));
+    EXPECT_EQ(ClassifyControlBackendFailureScope(local, { peer }, { mismatched }),
+              ControlBackendFailureScope::LOCAL_ISOLATION);
+}
+
 TEST(WorkerControlBackendScopeTest, DuplicatePeerEvidenceRejectsGlobalBackendOutage)
 {
     const auto local = LocalUnavailableObservation();

@@ -315,8 +315,8 @@ void WorkerRuntimeStateManager::MarkDraining(std::string detail)
         if (IsServingTransitionTerminalLocked()) {
             return;
         }
-        modeChanged = UpdateLocked(WorkerServiceMode::DRAINING, WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN,
-                                   snapshot_.evidence, WorkerRecoveryPhase::NONE, std::move(detail));
+        modeChanged = UpdateLocked(WorkerServiceMode::DRAINING, WorkerIsolationReason::NONE, snapshot_.evidence,
+                                   WorkerRecoveryPhase::NONE, std::move(detail));
     }
     if (modeChanged) {
         RecordTransitionLatency(start);

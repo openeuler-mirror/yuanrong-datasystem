@@ -355,7 +355,7 @@ TEST(WorkerRuntimeStateTest, DrainingIsTerminalForServingTransitions)
 
     const auto snapshot = state.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::DRAINING);
-    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN);
+    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
     EXPECT_EQ(snapshot.detail, "voluntary scale-down drain started");
 }
 

@@ -63,18 +63,24 @@ ControlBackendFailureScope ClassifyControlBackendFailureScope(
     accepted.reserve(targets.size());
     const auto now = std::chrono::steady_clock::now();
     bool peerAvailable = false;
+    bool authorityMismatch = false;
     for (const auto &observation : observations) {
         auto target = expected.find(observation.reporter.address);
         if (target == expected.end() || !(target->second == observation.reporter)
             || !accepted.insert(observation.reporter.address).second
             || observation.state == cluster::ControlBackendState::UNKNOWN
-            || !SameControlBackendAuthorityStamp(local, observation)
             || !IsFreshControlBackendObservation(observation, now)) {
             return ControlBackendFailureScope::INCONCLUSIVE;
+        }
+        if (!SameControlBackendAuthorityStamp(local, observation)) {
+            authorityMismatch = true;
         }
         peerAvailable = peerAvailable || observation.state == cluster::ControlBackendState::AVAILABLE;
     }
     if (accepted.size() != targets.size()) {
+        return ControlBackendFailureScope::INCONCLUSIVE;
+    }
+    if (!peerAvailable && authorityMismatch) {
         return ControlBackendFailureScope::INCONCLUSIVE;
     }
     return peerAvailable ? ControlBackendFailureScope::LOCAL_ISOLATION : ControlBackendFailureScope::GLOBAL_OUTAGE;

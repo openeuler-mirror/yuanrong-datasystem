@@ -345,7 +345,26 @@
   24. `WorkerRecoveryEvidenceAdapter` no longer includes slot-recovery manager implementation headers. The adapter owns
       only the slot-incident terminal predicate it needs for recovery evidence, avoiding a Bazel dependency cycle between
       object-cache recovery evidence and the slot-recovery manager implementation.
+  25. control-backend failure scope classification no longer rejects local-isolation evidence solely because peer
+      topology authority stamp is newer than the isolated local worker's stale stamp. Fresh `AVAILABLE` peer evidence
+      confirms local isolation; mismatched stamps still prevent proving a global outage when no peer reports available.
+  26. voluntary ScaleIn `DRAINING` runtime state now uses `WorkerIsolationReason::NONE`, keeping the fault/isolation
+      reason separate from voluntary drain state. Passive topology removal still uses `TOPOLOGY_PASSIVE_SCALE_DOWN`
+      through topology availability admission.
 - Recent focused verification:
+  - Post review-fix verification for stamp mismatch and draining reason: CLion remote `scripts/clion_remote_build.sh
+    tests-index` rebuilt with URMA Mock enabled in 138s, generated 1156 compile-command entries, and reused the
+    third-party cache in 0s.
+  - Added 2 UT cases/expectations:
+    `WorkerControlBackendScopeTest.AvailablePeerWithMismatchedTopologyStampConfirmsLocalIsolation` and the updated
+    `WorkerRuntimeStateTest.DrainingIsTerminalForServingTransitions`.
+  - `ds_ut --gtest_filter="WorkerControlBackendScopeTest.*:WorkerRuntimeStateTest.*:WorkerRuntimeFacadeTest.*:WorkerServiceAdmissionTest.*:WorkerAdmissionFacadeTest.*"`:
+    34/34 tests passed in 0.32s.
+  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 26/26 tests passed in 0.075s; `git
+    diff --check` and `git clang-format --diff HEAD --` on the changed runtime/test files were clean.
+  - Remote Bazel 7.4.1 focused build with shared `.bazel-cache/distdir`,
+    `--config=release --config=test --config=urma_mock`, and cache-owner execution passed for the five runtime/admission
+    UT targets in 4.19s. The identical cached rerun passed in 0.45s with one internal action.
   - Post adapter-boundary refactor verification: CLion remote `scripts/clion_remote_build.sh tests-index` rebuilt the
     UT/ST index with URMA Mock enabled in 170s, generated 1156 compile-command entries, and reused the third-party cache
     without rebuilding it.
