@@ -1851,7 +1851,7 @@ TEST_F(WorkerOcServiceImplTest, BuildObjectCacheRecoveryEvidenceRequiresMetadata
     EXPECT_TRUE(report.evidence.slotReady);
     EXPECT_TRUE(report.evidence.ownershipReady);
     EXPECT_NE(report.detail.find("metadata_recovered=0/0"), std::string::npos);
-    EXPECT_NE(report.detail.find("slot_incidents_ready=0/0"), std::string::npos);
+    EXPECT_NE(report.detail.find("slot_recovery_disabled"), std::string::npos);
 }
 
 TEST_F(WorkerOcServiceImplTest, BuildObjectCacheRecoveryEvidenceTreatsNoMetadataWorkAsReady)
@@ -1864,7 +1864,7 @@ TEST_F(WorkerOcServiceImplTest, BuildObjectCacheRecoveryEvidenceTreatsNoMetadata
     EXPECT_TRUE(report.evidence.slotReady);
     EXPECT_TRUE(report.evidence.ownershipReady);
     EXPECT_NE(report.detail.find("metadata_recovered=0/0"), std::string::npos);
-    EXPECT_NE(report.detail.find("slot_incidents_ready=0/0"), std::string::npos);
+    EXPECT_NE(report.detail.find("slot_recovery_disabled"), std::string::npos);
 }
 
 TEST_F(WorkerOcServiceImplTest, NewRecoveryGenerationInvalidatesOldCompleteEvidence)

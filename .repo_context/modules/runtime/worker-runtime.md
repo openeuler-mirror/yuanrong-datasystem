@@ -887,6 +887,29 @@
     `WorkerOcServiceImplTest.MasterWorkerClassifiesCleanupAndRecoveryRpcs` in 5ms total. Re-ran
     `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability`, which passed in 15.300s after the
     fix; stale failed-run worker/etcd processes from earlier debugging were cleaned from the remote worktree.
+  - RED: the focused object-cache evidence regression filter failed 2/45 after the slot-recovery backend-store fix
+    because `WorkerOcServiceImplTest.BuildObjectCacheRecoveryEvidenceRequiresMetadataAndSlotReadiness` and
+    `WorkerOcServiceImplTest.BuildObjectCacheRecoveryEvidenceTreatsNoMetadataWorkAsReady` still expected the old
+    `slot_incidents_ready=0/0` detail even when slot recovery was disabled.
+  - GREEN: updated those two expectations to the current `slot_recovery_disabled` evidence detail and re-ran the focused
+    pair: 2/2 passed in 0.05s. Re-ran the broader object-cache evidence/admission filter: 45/45 passed in 0.08s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed with third-party cache hit
+    (`Compile thirdparty libraries success, total wall time: 0s`), `BUILD_WITH_URMA_MOCK` enabled, source build time
+    30s, total build time 146s, and 1156 compile database entries; local CompDB validation reported 1156 entries and
+    0 missing sources.
+  - GREEN: local boundary/index scripts passed 29/29 in 0.322s:
+    `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py tests/scripts/test_ensure_clion_compdb_project.py`.
+  - GREEN: focused UT regression after the slot evidence update passed 154 tests:
+    runtime/admission/object-read 56/56 in 1.33s, object-cache evidence/recovery/admission 45/45 in 0.08s, cluster
+    topology/coordination contracts 51/51 in 1.96s, and stream admission UT 2/2 in 0.05s.
+  - GREEN: focused ST regression passed 18 tests:
+    KV isolation/scale-down/fallback 3/3 in 40.07s, object isolation/recovery/combined scale-fault 6/6 in 129.57s,
+    legacy object reference/coordinator compatibility 8/8 in 63.69s, and stream local-isolation data retention 1/1 in
+    10.94s. The stream ST filter must use
+    `StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering`; the old
+    `StreamAdmissionTest.*` filter matches 0 tests and must not be counted as coverage.
+  - GREEN: `git diff --check` was clean; `git clang-format --diff HEAD -- tests/ut/worker/object_cache/worker_oc_service_impl_test.cpp`
+    reported no formatting changes.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
