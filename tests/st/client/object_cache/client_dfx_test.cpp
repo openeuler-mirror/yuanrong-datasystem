@@ -2247,6 +2247,159 @@ protected:
     int nodeDeadTimeout_ = 3;
 };
 
+class WorkerPushMetaScaleOutFaultTest : public OCClientCommon {
+public:
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+        DS_ASSERT_OK(Init());
+        ASSERT_TRUE(cluster_ != nullptr);
+        DS_ASSERT_OK(cluster_->StartEtcdCluster());
+        externalCluster_ = dynamic_cast<ExternalCluster *>(cluster_.get());
+        ASSERT_NE(externalCluster_, nullptr);
+    }
+
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.workerGflagParams =
+            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=2 "
+            "-node_dead_timeout_s=3 -heartbeat_interval_ms=1000 -auto_del_dead_node=false";
+        opts.numWorkers = kWorkerCount;
+        opts.enableDistributedMaster = "true";
+        opts.numEtcd = 1;
+        opts.waitWorkerReady = false;
+        for (size_t i = 0; i < opts.numWorkers; ++i) {
+            opts.workerConfigs.emplace_back(kHostIp, GetFreePort());
+            workerAddresses_.emplace_back(opts.workerConfigs.back().ToString());
+        }
+    }
+
+protected:
+    void StartWorkerAndWaitReady(std::initializer_list<uint32_t> indexes, uint32_t masterIdx = 0,
+                                 uint32_t maxWaitTimeSec = 20)
+    {
+        HostPort master;
+        ASSERT_LT(masterIdx, workerAddresses_.size());
+        DS_ASSERT_OK(master.ParseString(workerAddresses_[masterIdx]));
+        for (auto index : indexes) {
+            DS_ASSERT_OK(externalCluster_->StartWorker(index, master));
+        }
+        for (auto index : indexes) {
+            DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, index, maxWaitTimeSec));
+        }
+    }
+
+    ExternalCluster *externalCluster_{ nullptr };
+    std::vector<std::string> workerAddresses_;
+
+private:
+    static constexpr uint32_t kWorkerCount = 3;
+    static constexpr const char *kHostIp = "127.0.0.1";
+};
+
+TEST_F(WorkerPushMetaScaleOutFaultTest, LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated)
+{
+    StartWorkerAndWaitReady({ 0, 1 }, 0);
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    std::shared_ptr<ObjectClient> client0;
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(0, client0);
+    InitTestClient(1, client1);
+
+    std::vector<std::string> worker0Keys;
+    std::vector<std::string> worker1Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 3, worker0Keys);
+    GetObjectKeysHashToWorker(db.get(), 1, 2, worker1Keys);
+    std::string localData = GenRandomString(1024);
+    std::string peerData = GenRandomString(1024);
+    CreateAndSealObject(client0, worker0Keys[0], localData);
+    CreateAndSealObject(client1, worker1Keys[0], peerData);
+
+    ServerProcess *isolatedProcess = nullptr;
+    DS_ASSERT_OK(cluster_->GetProcess(WORKER, 0, isolatedProcess));
+    ASSERT_NE(isolatedProcess, nullptr);
+    ASSERT_TRUE(isolatedProcess->IsProcessAlive());
+    const auto isolatedPid = isolatedProcess->Pid();
+    constexpr const char *localIsolatedInject = "WorkerOCServer.AfterMarkLocalIsolated";
+    constexpr const char *keepAliveInject = "EtcdKeepAlive.SendKeepAliveMessage";
+    constexpr const char *leaseInject = "GetLeaseExpiredMs";
+    constexpr const char *quickLoopInject = "EtcdStore.LaunchKeepAliveThreads.loopQuickly";
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, localIsolatedInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, keepAliveInject, "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, leaseInject, "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, quickLoopInject, "call(0)"));
+    bool keepAliveFailureActive = true;
+    Raii clearKeepAliveFailure([&]() {
+        if (keepAliveFailureActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, keepAliveInject), "clear scaleout keepalive failure");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, leaseInject), "clear scaleout lease override");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, quickLoopInject), "clear scaleout quick loop");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, localIsolatedInject), "clear scaleout isolation hook");
+        }
+    });
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t executeCount = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, localIsolatedInject, executeCount));
+            CHECK_FAIL_RETURN_STATUS(executeCount > 0, K_NOT_READY,
+                                     "worker 0 has not entered confirmed local isolation");
+            return Status::OK();
+        },
+        "worker 0 enters local isolation before scaleout");
+    ASSERT_EQ(kill(isolatedPid, 0), 0);
+
+    StartWorkerAndWaitReady({ 2 }, 0, 30);
+    std::shared_ptr<ObjectClient> client2;
+    InitTestClient(2, client2);
+    AssertEventuallyOk(
+        [&]() {
+            std::string topologyBytes;
+            RETURN_IF_NOT_OK(db->Get(GetTopologyTableName(), "", topologyBytes));
+            ClusterTopologyPb topology;
+            CHECK_FAIL_RETURN_STATUS(topology.ParseFromString(topologyBytes), K_RUNTIME_ERROR,
+                                     "failed to parse topology after scaleout");
+            CHECK_FAIL_RETURN_STATUS(topology.members_size() == 3, K_NOT_READY,
+                                     "scaleout has not published all members yet");
+            for (const auto &member : topology.members()) {
+                CHECK_FAIL_RETURN_STATUS(member.second.state() == MembershipPb::ACTIVE, K_NOT_READY,
+                                         "scaleout member is not ACTIVE yet");
+            }
+            return Status::OK();
+        },
+        "scaleout completes while worker 0 stays locally isolated");
+
+    std::vector<Optional<Buffer>> peerBuffers;
+    DS_ASSERT_OK(client2->Get({ worker1Keys[0] }, 0, peerBuffers));
+    ASSERT_TRUE(NotExistsNone(peerBuffers));
+    AssertBufferEqual(*peerBuffers[0], peerData);
+    ASSERT_EQ(kill(isolatedPid, 0), 0);
+    ASSERT_TRUE(isolatedProcess->IsProcessAlive());
+
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, keepAliveInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, leaseInject));
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, quickLoopInject));
+    keepAliveFailureActive = false;
+    AssertEventuallyOk(
+        [&]() {
+            std::shared_ptr<Buffer> buffer;
+            RETURN_IF_NOT_OK(client0->Create(worker0Keys[1], 1, CreateParam{}, buffer));
+            uint8_t data = 1;
+            RETURN_IF_NOT_OK(buffer->MemoryCopy(&data, sizeof(data)));
+            return buffer->Publish();
+        },
+        "worker 0 reopens normal service after scaleout and local recovery");
+
+    std::vector<Optional<Buffer>> localBuffers;
+    DS_ASSERT_OK(client2->Get({ worker0Keys[0] }, 0, localBuffers));
+    ASSERT_TRUE(NotExistsNone(localBuffers));
+    AssertBufferEqual(*localBuffers[0], localData);
+    ASSERT_EQ(kill(isolatedPid, 0), 0);
+    ASSERT_TRUE(isolatedProcess->IsProcessAlive());
+    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, localIsolatedInject));
+}
+
 class WorkerPushMetaTransportTest : public WorkerPushMetaTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

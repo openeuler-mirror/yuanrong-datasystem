@@ -493,6 +493,11 @@
     three-worker cluster, pauses one worker in voluntary ScaleIn `DRAINING`, drives another worker into
     `LOCAL_ISOLATED`, and verifies a healthy source worker's real worker-to-worker migration probe is rejected by both
     targets before the migration allocation service is reached.
+  - `ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`: covered by
+    `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`, which starts a
+    two-worker object-cache cluster, drives worker 0 into actual keepalive-confirmed `LOCAL_ISOLATED`, then starts worker
+    2 as a ScaleOut member. The ST verifies worker 0 stays alive, peer data remains readable during ScaleOut, and worker
+    0 local data remains readable after local recovery.
   - Regression suite: focused local/remote validation is green after rebasing to `main/master@0180554bf`; full PR CI and
     codecheck still need to be triggered and inspected before claiming merge readiness. Fresh focused evidence:
     - CMake build targets `ds_ut_object`, `ds_ut`, `ds_st_object_cache`, `ds_st_kv_cache`, `ds_st_stream_cache`, and
@@ -510,12 +515,19 @@
       legacy style warnings, so this is not a repository-wide zero-warning claim.
     - Remote Bazel 7.4.1 focused build with `--config=release --config=test --config=urma_mock` passed once in 6:15.93
       using the branch `.bazel-cache/distdir`, and the identical cached rerun passed in 1.17s.
+    - Added ScaleOut/local-isolation ST:
+      `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated` passed 1/1 in 12.27s.
+    - Scale/fault ST pair regression:
+      `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated` plus
+      `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether` passed 2/2
+      in 27.33s.
   - Follow-up scale/fault cases to add before claiming full story closure:
-    1. ScaleOut while one existing worker is isolated is now covered at topology planning level by
+    1. ScaleOut while one existing worker is isolated is now covered at ST level by
+       `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`; topology planning is
+       covered by
        `ScaleOutDoesNotUseFailedWorkerAsMigrationSource`; active ScaleOut replan after a joining-member failure is
        covered by `ScaleOutReplanDropsFailedJoiningAndKeepsRemainingJoiningBatch`; Failure final resuming an interrupted
-       ScaleOut batch is covered by `FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives`. Full worker
-       metadata-rebuild ST with an actual `LOCAL_ISOLATED` process remains a broader follow-up.
+       ScaleOut batch is covered by `FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives`.
     2. ScaleIn voluntary source plus concurrent peer local-isolation is now covered at topology replan level by
        `ScaleInSourceStaysLeavingWhenPeerFails`; Failure final resuming an interrupted ScaleIn batch is covered by
        `FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives`. Migration-target filtering for the same combined path
