@@ -447,8 +447,18 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         server = REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp"
 
         self.assertIn("SetRuntimeFacade", header.read_text(encoding="utf-8"))
-        self.assertIn("runtime_->CheckAdmission", impl.read_text(encoding="utf-8"))
+        self.assertIn("AcquireStreamAdmissionGuard", impl.read_text(encoding="utf-8"))
+        self.assertIn("runtime->AcquireAdmissionGuard", impl.read_text(encoding="utf-8"))
+        self.assertNotIn("runtime_->CheckAdmission", impl.read_text(encoding="utf-8"))
         self.assertIn("streamCacheClientWorkerSvc_->SetRuntimeFacade(&workerRuntime_)", server.read_text(encoding="utf-8"))
+
+    def test_object_cache_service_uses_runtime_guard_for_admission(self):
+        impl = REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp"
+        text = impl.read_text(encoding="utf-8")
+
+        self.assertIn("AcquireObjectCacheAdmissionGuard", text)
+        self.assertIn("runtime->AcquireAdmissionGuard", text)
+        self.assertNotIn('runtime_->CheckAdmission(kind, "ObjectCacheService")', text)
 
     def test_stream_public_headers_do_not_expose_runtime_internals(self):
         files = [

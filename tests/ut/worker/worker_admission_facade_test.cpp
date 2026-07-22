@@ -16,6 +16,9 @@
  */
 #include "datasystem/worker/runtime/worker_admission_facade.h"
 
+#include <chrono>
+#include <future>
+
 #include "gtest/gtest.h"
 
 namespace datasystem::worker {
@@ -76,6 +79,27 @@ TEST(WorkerAdmissionFacadeTest, NormalReadGuardUsesFacadeBoundary)
     auto rc = facade.AcquireNormalReadGuard("GetObjectRemote", blocked);
     EXPECT_FALSE(rc.IsOk());
     EXPECT_FALSE(blocked.has_value());
+}
+
+TEST(WorkerAdmissionFacadeTest, AdmissionGuardHoldsRuntimeReadWindowForWrites)
+{
+    WorkerRuntimeStateManager state;
+    ASSERT_TRUE(state.TryMarkRunning(CompleteEvidence(), "ready"));
+    WorkerAdmissionFacade facade(state);
+
+    std::optional<WorkerRuntimeStateReadGuard> guard;
+    ASSERT_TRUE(facade.AcquireGuard(WorkerAdmissionKind::NORMAL_WRITE, "Create", guard).IsOk());
+    ASSERT_TRUE(guard.has_value());
+    EXPECT_EQ(guard->GetSnapshot().mode, WorkerServiceMode::RUNNING);
+
+    auto transition = std::async(std::launch::async, [&state]() {
+        state.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "local");
+    });
+    EXPECT_EQ(transition.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+    guard.reset();
+
+    EXPECT_EQ(transition.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+    EXPECT_EQ(state.GetSnapshot().mode, WorkerServiceMode::LOCAL_ISOLATED);
 }
 }  // namespace
 }  // namespace datasystem::worker

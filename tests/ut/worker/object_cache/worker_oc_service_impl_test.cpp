@@ -1316,7 +1316,7 @@ TEST_F(WorkerOcServiceImplTest, RestartReconciliationMarksMetadataEvidenceReadyW
     EXPECT_NE(report.detail.find("restart_reconciliation"), std::string::npos);
 }
 
-TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateRejectsWhenRuntimeIsNotRunning)
+TEST_F(WorkerOcServiceImplTest, RuntimeAdmissionGuardRejectsWhenRuntimeIsNotRunning)
 {
     worker::WorkerRuntimeFacade runtime;
     runtime.MarkLocalIsolated(worker::WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "local isolation");
@@ -1328,12 +1328,17 @@ TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateRejectsWhenRuntimeIsNotRunnin
         SetUnhealthy();
     });
 
-    ReadLock noRecon;
-    auto rc = impl_->ValidateWorkerState(noRecon, 100);
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    auto rc =
+        runtime.AcquireAdmissionGuard(worker::WorkerAdmissionKind::NORMAL_WRITE, "ObjectCacheService", admissionGuard);
 
     ASSERT_NE(rc.GetCode(), StatusCode::K_OK);
     EXPECT_EQ(rc.GetCode(), StatusCode::K_NOT_READY);
     EXPECT_NE(rc.GetMsg().find("LOCAL_ISOLATED"), std::string::npos);
+    EXPECT_FALSE(admissionGuard.has_value());
+
+    ReadLock noRecon;
+    DS_ASSERT_OK(impl_->ValidateWorkerState(noRecon, 100));
 }
 
 TEST_F(WorkerOcServiceImplTest, ObjectCacheOutOfMemoryMarksRuntimeState)

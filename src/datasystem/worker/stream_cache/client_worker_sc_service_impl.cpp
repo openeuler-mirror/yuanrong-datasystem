@@ -62,6 +62,24 @@ DS_DECLARE_uint32(sc_shared_page_size_mb);
 namespace datasystem {
 namespace worker {
 namespace stream_cache {
+namespace {
+Status AcquireStreamAdmissionGuard(const worker::WorkerRuntimeFacade *runtime,
+                                   std::optional<worker::WorkerRuntimeStateReadGuard> &guard)
+{
+    if (runtime == nullptr) {
+        return Status::OK();
+    }
+    return runtime->AcquireAdmissionGuard(worker::WorkerAdmissionKind::NORMAL_WRITE, "StreamCacheService", guard);
+}
+
+Status AcquireStreamAsyncAdmissionGuard(const worker::WorkerRuntimeFacade *runtime,
+                                        std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> &guard)
+{
+    guard = std::make_shared<std::optional<worker::WorkerRuntimeStateReadGuard>>();
+    return AcquireStreamAdmissionGuard(runtime, *guard);
+}
+}  // namespace
+
 static const std::string CLIENT_WORKER_SC_SERVICE_IMPL = "ClientWorkerSCServiceImpl";
 template class BlockedCreateRequest<CreateShmPageRspPb, CreateShmPageReqPb>;
 template class MemAllocRequestList<CreateShmPageRspPb, CreateShmPageReqPb>;
@@ -129,9 +147,6 @@ Status ClientWorkerSCServiceImpl::ValidateWorkerState()
     if (!IsHealthy()) {
         RETURN_STATUS(K_NOT_READY, "Worker not ready");
     }
-    if (runtime_ != nullptr) {
-        RETURN_IF_NOT_OK(runtime_->CheckAdmission(worker::WorkerAdmissionKind::NORMAL_WRITE, "StreamCacheService"));
-    }
     return Status::OK();
 }
 
@@ -143,6 +158,9 @@ void ClientWorkerSCServiceImpl::SetRuntimeFacade(const worker::WorkerRuntimeFaca
 Status ClientWorkerSCServiceImpl::CreateProducer(
     std::shared_ptr<ServerUnaryWriterReader<CreateProducerRspPb, CreateProducerReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     CreateProducerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
@@ -180,7 +198,11 @@ Status ClientWorkerSCServiceImpl::CreateProducerInternal(
     // The real work of the close will be driven in another thread. Launch it now and then release this current thread
     // so that it does not hold up the rpc threads.
     auto traceId = Trace::Instance().GetTraceID();
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAsyncAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     threadPool_->Execute([=]() mutable {
+        (void)admissionGuard;
         GetRequestContext()->scTimeoutDuration = parentDuration;
         Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
@@ -403,6 +425,9 @@ Status ClientWorkerSCServiceImpl::CreateProducerImpl(const std::string &namespac
 Status ClientWorkerSCServiceImpl::CloseProducer(
     std::shared_ptr<ServerUnaryWriterReader<CloseProducerRspPb, CloseProducerReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     CloseProducerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
@@ -432,7 +457,11 @@ Status ClientWorkerSCServiceImpl::CloseProducerInternal(
     // The real work of the close will be driven in another thread. Launch it now and then release this current thread
     // so that it does not hold up the rpc threads.
     auto traceId = Trace::Instance().GetTraceID();
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAsyncAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     threadPool_->Execute([=]() mutable {
+        (void)admissionGuard;
         GetRequestContext()->scTimeoutDuration = parentDuration;
         Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
@@ -700,6 +729,9 @@ Status ClientWorkerSCServiceImpl::CloseProducerImplForceClose(uint32_t lockId, s
 Status ClientWorkerSCServiceImpl::Subscribe(
     std::shared_ptr<ServerUnaryWriterReader<SubscribeRspPb, SubscribeReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     SubscribeReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
@@ -728,7 +760,11 @@ Status ClientWorkerSCServiceImpl::SubscribeInternal(
     // The real work of the close will be driven in another thread. Launch it now and then release this current thread
     // so that it does not hold up the rpc threads.
     auto traceId = Trace::Instance().GetTraceID();
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAsyncAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     threadPool_->Execute([=]() mutable {
+        (void)admissionGuard;
         GetRequestContext()->scTimeoutDuration = parentDuration;
         Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
@@ -893,6 +929,9 @@ Status ClientWorkerSCServiceImpl::SubscribeImpl(const std::string &namespaceUri,
 Status ClientWorkerSCServiceImpl::CloseConsumer(
     std::shared_ptr<ServerUnaryWriterReader<CloseConsumerRspPb, CloseConsumerReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     CloseConsumerReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
@@ -924,7 +963,11 @@ Status ClientWorkerSCServiceImpl::CloseConsumerInternal(
     // The real work of the close will be driven in another thread. Launch it now and then release this current thread
     // so that it does not hold up the rpc threads.
     auto traceId = Trace::Instance().GetTraceID();
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAsyncAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     threadPool_->Execute([=]() mutable {
+        (void)admissionGuard;
         GetRequestContext()->scTimeoutDuration = parentDuration;
         Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
@@ -1003,6 +1046,9 @@ Status ClientWorkerSCServiceImpl::CloseConsumerImpl(const std::string &consumerI
 Status ClientWorkerSCServiceImpl::GetDataPage(
     std::shared_ptr<ServerUnaryWriterReader<GetDataPageRspPb, GetDataPageReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     GetDataPageReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
@@ -1023,6 +1069,9 @@ Status ClientWorkerSCServiceImpl::GetDataPage(
 
 Status ClientWorkerSCServiceImpl::GetLastAppendCursor(const LastAppendCursorReqPb &req, LastAppendCursorRspPb &rsp)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
@@ -1052,6 +1101,9 @@ void ClientWorkerSCServiceImpl::AsyncSendMemReq(const std::string &namespaceUri)
 Status ClientWorkerSCServiceImpl::CreateShmPage(
     std::shared_ptr<ServerUnaryWriterReader<CreateShmPageRspPb, CreateShmPageReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     PerfPoint point(PerfKey::WORKER_CREATE_WRITE_PAGE_ALL);
     CreateShmPageReqPb req;
@@ -1113,6 +1165,9 @@ Status ClientWorkerSCServiceImpl::HandleBlockedRequestImpl(const std::string &st
 Status ClientWorkerSCServiceImpl::AllocBigShmMemory(
     std::shared_ptr<ServerUnaryWriterReader<CreateLobPageRspPb, CreateLobPageReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     CreateLobPageReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
@@ -1139,6 +1194,9 @@ Status ClientWorkerSCServiceImpl::AllocBigShmMemory(
 Status ClientWorkerSCServiceImpl::ReleaseBigShmMemory(
     std::shared_ptr<ServerUnaryWriterReader<ReleaseLobPageRspPb, ReleaseLobPageReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     ReleaseLobPageReqPb req;
     RETURN_IF_NOT_OK(serverApi->Read(req));
@@ -1179,6 +1237,9 @@ Status ClientWorkerSCServiceImpl::DeleteStream(const DeleteStreamReqPb &req, Del
 
 Status ClientWorkerSCServiceImpl::DeleteStreamImpl(const DeleteStreamReqPb &req, DeleteStreamRspPb &rsp)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     (void)rsp;
     Raii outerResetDuration([]() { GetRequestContext()->scTimeoutDuration.Reset(); });
@@ -1280,6 +1341,9 @@ Status ClientWorkerSCServiceImpl::QueryGlobalProducersNum(const QueryGlobalNumRe
 
 Status ClientWorkerSCServiceImpl::QueryGlobalProducersNumImpl(const QueryGlobalNumReqPb &req, QueryGlobalNumRsqPb &rsp)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
@@ -1321,6 +1385,9 @@ Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNum(const QueryGlobalNumRe
 
 Status ClientWorkerSCServiceImpl::QueryGlobalConsumersNumImpl(const QueryGlobalNumReqPb &req, QueryGlobalNumRsqPb &rsp)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(Authenticate(akSkManager_, req, tenantId, ClientKey::Intern(req.client_id())),
@@ -1848,6 +1915,9 @@ Status ClientWorkerSCServiceImpl::GetWorkerStub(const HostPort &workerHostPort,
 Status ClientWorkerSCServiceImpl::ResetStreams(
     std::shared_ptr<ServerUnaryWriterReader<ResetOrResumeStreamsRspPb, ResetOrResumeStreamsReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     ResetOrResumeStreamsReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");
@@ -1937,6 +2007,9 @@ Status ClientWorkerSCServiceImpl::ResetStreamsReply(
 Status ClientWorkerSCServiceImpl::ResumeStreams(
     std::shared_ptr<ServerUnaryWriterReader<ResetOrResumeStreamsRspPb, ResetOrResumeStreamsReqPb>> serverApi)
 {
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AcquireStreamAdmissionGuard(runtime_, admissionGuard),
+                                     "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ValidateWorkerState(), "validate worker state failed");
     ResetOrResumeStreamsReqPb req;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "serverApi read request failed");

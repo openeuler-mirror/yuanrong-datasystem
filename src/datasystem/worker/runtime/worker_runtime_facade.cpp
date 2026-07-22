@@ -65,6 +65,12 @@ Status WorkerRuntimeFacade::CheckAdmission(WorkerAdmissionKind kind, const std::
     return admission_.Check(kind, operation);
 }
 
+Status WorkerRuntimeFacade::AcquireAdmissionGuard(WorkerAdmissionKind kind, const std::string &operation,
+                                                  std::optional<WorkerRuntimeStateReadGuard> &guard) const
+{
+    return admission_.AcquireGuard(kind, operation, guard);
+}
+
 Status WorkerRuntimeFacade::AcquireNormalReadGuard(const std::string &operation,
                                                    std::optional<WorkerRuntimeStateReadGuard> &guard) const
 {

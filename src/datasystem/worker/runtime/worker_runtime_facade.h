@@ -37,6 +37,8 @@ public:
 
     bool TryCompleteRecovery(const WorkerRunningEvidence &evidence, const std::string &detail);
     Status CheckAdmission(WorkerAdmissionKind kind, const std::string &operation) const;
+    Status AcquireAdmissionGuard(WorkerAdmissionKind kind, const std::string &operation,
+                                 std::optional<WorkerRuntimeStateReadGuard> &guard) const;
     Status AcquireNormalReadGuard(const std::string &operation,
                                   std::optional<WorkerRuntimeStateReadGuard> &guard) const;
     void PublishMetrics() const;

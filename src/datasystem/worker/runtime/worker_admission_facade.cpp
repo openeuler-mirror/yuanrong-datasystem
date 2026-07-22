@@ -58,27 +58,40 @@ Status WorkerAdmissionFacade::Check(WorkerAdmissionKind kind, const std::string 
     return admission_.Check(kind, operation);
 }
 
-Status WorkerAdmissionFacade::AcquireNormalReadGuard(const std::string &operation,
-                                                     std::optional<WorkerRuntimeStateReadGuard> &guard) const
+Status WorkerAdmissionFacade::AcquireGuard(WorkerAdmissionKind kind, const std::string &operation,
+                                           std::optional<WorkerRuntimeStateReadGuard> &guard) const
 {
     auto candidate = runtimeState_.TryAcquireReadGuard();
     if (!candidate.has_value()) {
-        return Status(K_NOT_READY,
-                      "Worker is not accepting " + operation + ", kind=NORMAL_READ, runtime transition pending");
+        return Status(K_NOT_READY, "Worker is not accepting " + operation + ", kind=" + std::string(ToString(kind))
+                                       + ", runtime transition pending");
     }
-    RETURN_IF_NOT_OK(admission_.Check(candidate->GetSnapshot(), WorkerAdmissionKind::NORMAL_READ, operation));
+    if (kind == WorkerAdmissionKind::RECOVERY_RPC) {
+        const auto &snapshot = candidate->GetSnapshot();
+        if (snapshot.mode != WorkerServiceMode::RUNNING && snapshot.mode != WorkerServiceMode::RECOVERING) {
+            return Status(K_NOT_READY, "Worker is not accepting " + operation
+                                           + ", kind=RECOVERY_RPC, mode=" + std::string(ToString(snapshot.mode))
+                                           + ", reason=" + std::string(ToString(snapshot.reason))
+                                           + ", phase=" + std::string(ToString(snapshot.recoveryPhase))
+                                           + ", rejection=MODE_NOT_SERVING");
+        }
+    }
+    RETURN_IF_NOT_OK(admission_.Check(candidate->GetSnapshot(), kind, operation));
     guard.emplace(std::move(*candidate));
     return Status::OK();
+}
+
+Status WorkerAdmissionFacade::AcquireNormalReadGuard(const std::string &operation,
+                                                     std::optional<WorkerRuntimeStateReadGuard> &guard) const
+{
+    return AcquireGuard(WorkerAdmissionKind::NORMAL_READ, operation, guard);
 }
 
 std::optional<WorkerRuntimeStateReadGuard> WorkerAdmissionFacade::TryAcquireNormalGuard(
     const std::string &operation) const
 {
-    auto guard = runtimeState_.TryAcquireReadGuard();
-    if (!guard.has_value()) {
-        return std::nullopt;
-    }
-    auto rc = admission_.Check(guard->GetSnapshot(), WorkerAdmissionKind::NORMAL_WRITE, operation);
+    std::optional<WorkerRuntimeStateReadGuard> guard;
+    auto rc = AcquireGuard(WorkerAdmissionKind::NORMAL_WRITE, operation, guard);
     if (rc.IsError()) {
         return std::nullopt;
     }

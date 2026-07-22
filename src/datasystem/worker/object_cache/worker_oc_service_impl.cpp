@@ -286,6 +286,23 @@ void RecordMultiPublishTransportMetrics(const MultiPublishReqPb &req, uint64_t p
     METRIC_ADD(metrics::KvMetricId::WORKER_FROM_CLIENT_URMA_TOTAL_BYTES, urmaBytes);
 }
 
+Status AcquireObjectCacheAdmissionGuard(const worker::WorkerRuntimeFacade *runtime, worker::WorkerAdmissionKind kind,
+                                        std::optional<worker::WorkerRuntimeStateReadGuard> &guard)
+{
+    if (runtime == nullptr) {
+        return Status::OK();
+    }
+    return runtime->AcquireAdmissionGuard(kind, "ObjectCacheService", guard);
+}
+
+Status AcquireObjectCacheAsyncAdmissionGuard(const worker::WorkerRuntimeFacade *runtime,
+                                             worker::WorkerAdmissionKind kind,
+                                             std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> &guard)
+{
+    guard = std::make_shared<std::optional<worker::WorkerRuntimeStateReadGuard>>();
+    return AcquireObjectCacheAdmissionGuard(runtime, kind, *guard);
+}
+
 static constexpr int OLD_VERSION_DEL_THREAD_MIN_NUM = 0;
 static constexpr int OLD_VERSION_DEL_THREAD_MAX_NUM = 1;
 static constexpr uint32_t SHM_QUEUE_SLOT_NUM = 32;
@@ -578,6 +595,9 @@ Status WorkerOCServiceImpl::HealthCheck(const HealthCheckRequestPb &req, HealthC
 {
     INJECT_POINT("worker.HealthCheck.begin");
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::DIAGNOSTIC_RPC, admissionGuard));
     auto rc = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
                                   worker::WorkerAdmissionKind::DIAGNOSTIC_RPC);
     if (rc.IsError()) {
@@ -643,6 +663,10 @@ Status WorkerOCServiceImpl::Publish(const PublishReqPb &req, PublishRspPb &resp,
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::VerifyLeavingState(exitRequested_, FLAGS_enable_leaving_intercept),
                                      "verify leaving state failed");
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -679,6 +703,10 @@ Status WorkerOCServiceImpl::MultiPublish(const MultiPublishReqPb &req, MultiPubl
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::VerifyLeavingState(exitRequested_, FLAGS_enable_leaving_intercept),
                                      "verify leaving state failed");
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -1325,12 +1353,9 @@ Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs, worker::WorkerAdmissionKind kind)
+Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs, worker::WorkerAdmissionKind)
 {
     Timer timer;
-    if (runtime_ != nullptr) {
-        RETURN_IF_NOT_OK(runtime_->CheckAdmission(kind, "ObjectCacheService"));
-    }
     if (!IsHealthy()) {
         const bool runtimeAdmissionOverridesLegacyGate =
             runtime_ != nullptr && runtime_->GetSnapshot().mode != worker::WorkerServiceMode::RUNNING;
@@ -1384,6 +1409,10 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
                                      "verify leaving state failed");
     ReadLock noRecon;
     INJECT_POINT("worker.Create.beforeValidate");
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -1411,6 +1440,13 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
         return returnStatus;
     }
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    returnStatus =
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard);
+    if (returnStatus.IsError()) {
+        LOG(ERROR) << "acquire admission guard failed:" << returnStatus.ToString();
+        return returnStatus;
+    }
     returnStatus = ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime());
     if (returnStatus.IsError()) {
         LOG(ERROR) << "validate worker state failed:" << returnStatus.ToString();
@@ -1615,6 +1651,10 @@ Status WorkerOCServiceImpl::Get(std::shared_ptr<::datasystem::ServerUnaryWriterR
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_READ, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
                             worker::WorkerAdmissionKind::NORMAL_READ),
@@ -1991,6 +2031,10 @@ Status WorkerOCServiceImpl::DecreaseMemoryRef(const ClientKey &clientId, const s
     ScopedRequestContext ctx;
     Timer timer;
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::CLEANUP_RPC, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
                             worker::WorkerAdmissionKind::CLEANUP_RPC),
@@ -2048,6 +2092,10 @@ Status WorkerOCServiceImpl::ReconcileShmRef(const ReconcileShmRefReqPb &req, Rec
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
                                      "Authenticate failed");
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::CLEANUP_RPC, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
                             worker::WorkerAdmissionKind::CLEANUP_RPC),
@@ -2070,6 +2118,10 @@ Status WorkerOCServiceImpl::ReleaseGRefs(const ReleaseGRefsReqPb &req, ReleaseGR
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::CLEANUP_RPC, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
                             worker::WorkerAdmissionKind::CLEANUP_RPC),
@@ -2082,6 +2134,10 @@ Status WorkerOCServiceImpl::GIncreaseRef(const GIncreaseReqPb &req, GIncreaseRsp
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2093,6 +2149,10 @@ Status WorkerOCServiceImpl::GDecreaseRef(const GDecreaseReqPb &req, GDecreaseRsp
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::CLEANUP_RPC, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
                             worker::WorkerAdmissionKind::CLEANUP_RPC),
@@ -2140,6 +2200,10 @@ Status WorkerOCServiceImpl::DeleteAllCopy(const DeleteAllCopyReqPb &req, DeleteA
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2168,6 +2232,10 @@ Status WorkerOCServiceImpl::InvalidateBuffer(const InvalidateBufferReqPb &req, I
     ScopedRequestContext ctx;
     Timer timer;
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2201,6 +2269,10 @@ Status WorkerOCServiceImpl::QueryGlobalRefNum(const QueryGlobalRefNumReqPb &req,
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2713,6 +2785,10 @@ Status WorkerOCServiceImpl::PublishDeviceObject(const PublishDeviceObjectReqPb &
         WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, clientId, shmUnits, memoryRefTable_));
     PerfPoint point(PerfKey::WORKER_SEAL_OBJECT);
     ReadLock noRecon;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2730,6 +2806,10 @@ Status WorkerOCServiceImpl::GetDeviceObject(
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAsyncAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2753,19 +2833,20 @@ Status WorkerOCServiceImpl::GetDeviceObject(
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
-    threadPool_->Execute(
-        [objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this, traceID]() mutable {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-            LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
-            auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
-            if (initRc.IsError()) {
-                LOG(ERROR) << initRc.GetMsg();
-                LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
-                return;
-            }
-            workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
-            LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
-        });
+    threadPool_->Execute([objectKeys, serverApi, subTimeout, clientId, remainingUs, dispatchTime, this, traceID,
+                          admissionGuard]() mutable {
+        (void)admissionGuard;
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        LOG(INFO) << "Processing GetDeviceObject, threads Statistics: " << threadPool_->GetStatistics();
+        auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+        if (initRc.IsError()) {
+            LOG(ERROR) << initRc.GetMsg();
+            LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
+            return;
+        }
+        workerDevOcManager_->ProcessGetDeviceObjectRequest(objectKeys, serverApi, subTimeout, clientId);
+        LOG(INFO) << "Process GetDeviceObject done, threads Statistics: " << threadPool_->GetStatistics();
+    });
     return Status::OK();
 }
 
@@ -2799,6 +2880,10 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
     ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_SUBSCRIBE_EVENT);
     ReadLock noRecon;
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAsyncAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2815,6 +2900,7 @@ Status WorkerOCServiceImpl::SubscribeReceiveEvent(
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
     devThreadPool_->Execute([=]() mutable {
+        (void)admissionGuard;
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         LOG(INFO) << "Worker processes SubscribeReceiveEvent from srcClientId: " << req.src_client_id()
                   << ", src_device_id: " << req.src_device_id()
@@ -2839,6 +2925,10 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     ScopedRequestContext ctx;
     PerfPoint point(PerfKey::WORKER_GET_P2PMEATA);
     ReadLock noRecon;
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAsyncAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2857,6 +2947,7 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
     devThreadPool_->Execute([=]() mutable {
+        (void)admissionGuard;
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         std::stringstream allKeys;
         bool first = true;
@@ -2905,6 +2996,10 @@ Status WorkerOCServiceImpl::RecvRootInfo(
 {
     ScopedRequestContext ctx;
     ReadLock noRecon;
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAsyncAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2921,6 +3016,7 @@ Status WorkerOCServiceImpl::RecvRootInfo(
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
     devThreadPool_->Execute([=]() mutable {
+        (void)admissionGuard;
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         LOG(INFO) << "Worker processes RecvRootInfo from srcClientId: " << req.src_device_id()
                   << ", src_device_id: " << req.src_device_id()
@@ -2964,6 +3060,10 @@ Status WorkerOCServiceImpl::GetDataInfo(
 {
     ScopedRequestContext ctx;
     ReadLock noReconciliation;
+    std::shared_ptr<std::optional<worker::WorkerRuntimeStateReadGuard>> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAsyncAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -2982,6 +3082,7 @@ Status WorkerOCServiceImpl::GetDataInfo(
     std::string traceID = Trace::Instance().GetTraceID();
     auto dispatchTime = std::chrono::steady_clock::now();
     devThreadPool_->Execute([=]() mutable {
+        (void)admissionGuard;
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
         LOG(INFO) << "Worker processes GetDataInfo from object: " << objectKey
                   << ", threads Statistics: " << devThreadPool_->GetStatistics();
@@ -3006,6 +3107,10 @@ Status WorkerOCServiceImpl::WaitInit()
 Status WorkerOCServiceImpl::GetObjMetaInfo(const GetObjMetaInfoReqPb &req, GetObjMetaInfoRspPb &resp)
 {
     ReadLock noReconciliation;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_READ, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
                             worker::WorkerAdmissionKind::NORMAL_READ),
@@ -3017,6 +3122,10 @@ Status WorkerOCServiceImpl::QuerySize(const QuerySizeReqPb &req, QuerySizeRspPb 
 {
     ScopedRequestContext ctx;
     ReadLock noReconciliation;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3027,6 +3136,10 @@ Status WorkerOCServiceImpl::Exist(const ExistReqPb &req, ExistRspPb &rsp)
 {
     ScopedRequestContext ctx;
     ReadLock noReconciliation;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_READ, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(),
                             worker::WorkerAdmissionKind::NORMAL_READ),
@@ -3039,6 +3152,10 @@ Status WorkerOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 {
     ScopedRequestContext ctx;
     ReadLock noReconciliation;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
@@ -3048,6 +3165,10 @@ Status WorkerOCServiceImpl::Expire(const ExpireReqPb &req, ExpireRspPb &rsp)
 Status WorkerOCServiceImpl::GetMetaInfo(const GetMetaInfoReqPb &req, GetMetaInfoRspPb &rsp)
 {
     ReadLock noReconciliation;
+    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
+        AcquireObjectCacheAdmissionGuard(runtime_, worker::WorkerAdmissionKind::NORMAL_WRITE, admissionGuard),
+        "acquire admission guard failed");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(
         ValidateWorkerState(noReconciliation, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");

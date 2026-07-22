@@ -36,6 +36,8 @@ public:
     Status CheckMigrationTarget(const std::string &operation) const;
     Status CheckRecoveryRpc(const std::string &operation) const;
     Status Check(WorkerAdmissionKind kind, const std::string &operation) const;
+    Status AcquireGuard(WorkerAdmissionKind kind, const std::string &operation,
+                        std::optional<WorkerRuntimeStateReadGuard> &guard) const;
     Status AcquireNormalReadGuard(const std::string &operation,
                                   std::optional<WorkerRuntimeStateReadGuard> &guard) const;
     std::optional<WorkerRuntimeStateReadGuard> TryAcquireNormalGuard(const std::string &operation) const;
