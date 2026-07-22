@@ -204,6 +204,7 @@ WorkerRuntimeStateManager::WorkerRuntimeStateManager()
 
 WorkerRuntimeStateSnapshot WorkerRuntimeStateManager::GetSnapshot() const
 {
+    INJECT_POINT_NO_RETURN("WorkerRuntimeState.GetSnapshot");
     std::lock_guard<std::mutex> lock(mutex_);
     return snapshot_;
 }
@@ -219,6 +220,15 @@ void WorkerRuntimeStateManager::PublishMetrics() const
 bool WorkerRuntimeStateManager::IsTransitionPending() const
 {
     return pendingTransitions_.load(std::memory_order_acquire) != 0;
+}
+
+bool WorkerRuntimeStateManager::IsFastRunningForAdmission() const
+{
+    if (IsTransitionPending()) {
+        return false;
+    }
+    const bool running = fastMode_.load(std::memory_order_acquire) == WorkerServiceMode::RUNNING;
+    return running && !IsTransitionPending();
 }
 
 std::optional<WorkerRuntimeStateReadGuard> WorkerRuntimeStateManager::TryAcquireReadGuard() const
@@ -406,6 +416,7 @@ bool WorkerRuntimeStateManager::UpdateLocked(WorkerServiceMode mode, WorkerIsola
     snapshot_.evidence = evidence;
     snapshot_.detail = std::move(detail);
     snapshot_.changedAt = now;
+    fastMode_.store(mode, std::memory_order_release);
     PublishSnapshotMetrics(snapshot_);
     return modeChanged;
 }

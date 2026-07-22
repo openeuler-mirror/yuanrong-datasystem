@@ -137,6 +137,7 @@ public:
     WorkerRuntimeStateSnapshot GetSnapshot() const;
     void PublishMetrics() const;
     bool IsTransitionPending() const;
+    bool IsFastRunningForAdmission() const;
     std::optional<WorkerRuntimeStateReadGuard> TryAcquireReadGuard() const;
 
     void MarkStarting(std::string detail = {});
@@ -157,6 +158,7 @@ private:
 
     mutable std::shared_mutex admissionMutex_;
     mutable std::atomic<uint32_t> pendingTransitions_{ 0 };
+    std::atomic<WorkerServiceMode> fastMode_{ WorkerServiceMode::STARTING };
     mutable std::mutex mutex_;
     WorkerRuntimeStateSnapshot snapshot_;
 };

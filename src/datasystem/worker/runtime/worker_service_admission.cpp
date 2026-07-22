@@ -159,6 +159,9 @@ WorkerServiceAdmission::WorkerServiceAdmission(const WorkerRuntimeStateManager &
 
 Status WorkerServiceAdmission::Check(WorkerAdmissionKind kind, const std::string &operation) const
 {
+    if (runtimeState_.IsFastRunningForAdmission()) {
+        return Status::OK();
+    }
     const auto start = std::chrono::steady_clock::now();
     const bool transitionWasPending = runtimeState_.IsTransitionPending();
     auto snapshot = runtimeState_.GetSnapshot();

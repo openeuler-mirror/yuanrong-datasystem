@@ -20,10 +20,12 @@
 #include <optional>
 
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/worker/metadata_route_resolver.h"
 #include "gtest/gtest.h"
+#include "ut/common.h"
 
 DS_DECLARE_string(log_dir);
 
@@ -126,6 +128,25 @@ TEST(WorkerServiceAdmissionTest, RejectPublishesFixedModeCounter)
     EXPECT_NE(summary.find("{\"name\":\"worker_admission_reject_local_isolated_total\",\"total\":1,\"delta\":1}"),
               std::string::npos);
     EXPECT_NE(summary.find("\"name\":\"worker_admission_reject_latency\""), std::string::npos);
+}
+
+TEST(WorkerServiceAdmissionTest, RunningSuccessPathDoesNotCopyFullSnapshotDetail)
+{
+    WorkerRuntimeStateManager state;
+    ASSERT_TRUE(state.TryMarkRunning(CompleteEvidence(), std::string(4096, 'x')));
+    WorkerServiceAdmission admission(state);
+
+    Raii resetInject([] { inject::Clear("WorkerRuntimeState.GetSnapshot"); });
+    DS_ASSERT_OK(inject::Set("WorkerRuntimeState.GetSnapshot", "call()"));
+
+    EXPECT_TRUE(admission.Check(WorkerAdmissionKind::NORMAL_WRITE, "Create").IsOk());
+    EXPECT_TRUE(admission.Check(WorkerAdmissionKind::NORMAL_READ, "Get").IsOk());
+    EXPECT_TRUE(admission.Check(WorkerAdmissionKind::MIGRATION_TARGET, "MigrateData").IsOk());
+    EXPECT_EQ(inject::GetExecuteCount("WorkerRuntimeState.GetSnapshot"), 0ul);
+
+    state.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "isolated");
+    EXPECT_EQ(admission.Check(WorkerAdmissionKind::NORMAL_WRITE, "Create").GetCode(), K_NOT_READY);
+    EXPECT_EQ(inject::GetExecuteCount("WorkerRuntimeState.GetSnapshot"), 1ul);
 }
 
 TEST(WorkerServiceAdmissionTest, RejectsOrdinaryTrafficWhileRuntimeTransitionIsPending)

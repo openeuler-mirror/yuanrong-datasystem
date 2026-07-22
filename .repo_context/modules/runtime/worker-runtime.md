@@ -371,7 +371,18 @@
       `BeginRecoveryEvidenceGeneration()` resets ownership to pending until Master metadata-owner reconciliation or an
       equivalent confirmed no-work path publishes ownership evidence. This keeps the Master primary/local-copy/L2
       ownership decision inside object-cache hooks while exposing only evidence to worker runtime.
+  32. worker admission has a RUNNING-mode fast path for successful hot-path checks. `WorkerRuntimeStateManager` publishes a
+      small atomic service mode for admission and `WorkerServiceAdmission::Check()` returns OK without taking the full
+      snapshot/detail-copy path only when no runtime transition is pending and the mode is `RUNNING`; all reject and
+      transition paths still read the full snapshot for deterministic diagnostics and metrics.
 - Recent focused verification:
+  - Admission hot-path performance slice: initial RED focused test
+    `WorkerServiceAdmissionTest.RunningSuccessPathDoesNotCopyFullSnapshotDetail` failed because three successful RUNNING
+    checks called `WorkerRuntimeStateManager::GetSnapshot()` three times and copied the 4 KiB detail string. GREEN
+    implementation passed the single new test 1/1 in 0.05s, and the focused runtime/admission regression
+    `WorkerServiceAdmissionTest.*:WorkerAdmissionFacadeTest.*:WorkerRuntimeStateTest.*:WorkerRuntimeFacadeTest.*:WorkerTopologyAvailabilityAdmissionTest.*`
+    passed 41/41 in 0.33s. `git diff --check` and `git clang-format --diff main/master --` on the touched runtime/test
+    files are clean.
   - Ownership evidence boundary slice: initial RED syntax check for
     `WorkerRecoveryEvidenceAdapterTest.OwnershipEvidenceUsesExplicitMasterReconciliationResult` failed in 7.65s because
     the adapter still accepted `metadataReady, slotReady` and auto-derived ownership. GREEN implementation passed
