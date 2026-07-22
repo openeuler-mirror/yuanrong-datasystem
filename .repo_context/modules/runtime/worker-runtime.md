@@ -463,14 +463,19 @@
     `TopologyPlanBuilderTest.ScaleOutReplanDropsFailedJoiningAndKeepsRemainingJoiningBatch`, which verifies a failed
     `JOINING` member is removed from an active ScaleOut batch while the remaining `JOINING` member stays in the
     ScaleOut batch and receives owner-change work from the healthy committed source.
+  - `FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives`: covered by
+    `TopologyPlanBuilderTest.FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives`, which verifies a Failure batch
+    that interrupts ScaleOut removes the failed committed member and resumes the original ScaleOut batch when at least
+    one `JOINING` member survives.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV/Stream STs have
     been run during development, but full CI, Bazel, and complete Object/KV/Stream ST suites are not yet green in this
     session.
   - Follow-up scale/fault cases to add before claiming full story closure:
     1. ScaleOut while one existing worker is isolated is now covered at topology planning level by
        `ScaleOutDoesNotUseFailedWorkerAsMigrationSource`; active ScaleOut replan after a joining-member failure is
-       covered by `ScaleOutReplanDropsFailedJoiningAndKeepsRemainingJoiningBatch`. Full worker metadata-rebuild ST with
-       an actual `LOCAL_ISOLATED` process remains a broader follow-up.
+       covered by `ScaleOutReplanDropsFailedJoiningAndKeepsRemainingJoiningBatch`; Failure final resuming an interrupted
+       ScaleOut batch is covered by `FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives`. Full worker
+       metadata-rebuild ST with an actual `LOCAL_ISOLATED` process remains a broader follow-up.
     2. ScaleIn voluntary source plus concurrent peer local-isolation is now covered at topology replan level by
        `ScaleInSourceStaysLeavingWhenPeerFails`; migration-target filtering for the same combined path remains covered
        indirectly by active-target admission and needs a dedicated ST if we want end-to-end evidence.
@@ -743,6 +748,18 @@
   - GREEN: remote
     `cluster_topology_contract_ut --gtest_filter="TopologyPlanBuilderTest.*:HashAlgorithmTest.ScaleOutDoesNotUseFailedWorkerAsMigrationSource:TopologyFailureClassifierTest.ScaleOutMembersSurviveGlobalBackendOutagePause"`
     passed 10/10 tests in 0ms gtest time, about 1.20s wall time.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- tests/ut/cluster/topology_plan_builder_test.cpp`
+    reported no formatting changes.
+  - Added 1 UT case:
+    `TopologyPlanBuilderTest.FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 73s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 1s`), source build time 8s, `BUILD_WITH_URMA_MOCK` enabled, and 1156 compile
+    database entries.
+  - GREEN: remote
+    `cluster_topology_contract_ut --gtest_filter="TopologyPlanBuilderTest.FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives"`
+    passed 1/1 test in 0ms gtest time, about 1.21s wall time.
+  - GREEN: remote `cluster_topology_contract_ut --gtest_filter="TopologyPlanBuilderTest.*"` passed 9/9 tests in 0ms
+    gtest time, about 1.20s wall time.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- tests/ut/cluster/topology_plan_builder_test.cpp`
     reported no formatting changes.
 - Build worker and tests:

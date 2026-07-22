@@ -113,6 +113,32 @@ TEST(TopologyPlanBuilderTest, FailurePreemptsOrdinaryBatchWithoutRollingBackJoin
     EXPECT_EQ(failure.next.members.back().tokens, latest.members.back().tokens);
 }
 
+TEST(TopologyPlanBuilderTest, FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives)
+{
+    HashAlgorithm algorithm;
+    TopologyPlanBuilder builder(algorithm);
+    TopologyState latest;
+    latest.version = 5;
+    latest.clusterHasInit = true;
+    latest.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 5 };
+    latest.members = { MakeControlMember('a', "127.0.0.1:1", MemberState::FAILED, { 10, 100 }),
+                       MakeControlMember('b', "127.0.0.1:2", MemberState::ACTIVE, { 50, 150 }),
+                       MakeControlMember('c', "127.0.0.1:3", MemberState::JOINING, { 75, 175 }) };
+
+    TopologyState final;
+    DS_ASSERT_OK(builder.BuildFailureFinal(latest, final));
+
+    EXPECT_EQ(final.version, 6);
+    ASSERT_TRUE(final.activeBatch.has_value());
+    EXPECT_EQ(final.activeBatch->type, TopologyChangeType::SCALE_OUT);
+    EXPECT_EQ(final.activeBatch->epoch, 6);
+    ASSERT_EQ(final.members.size(), 2);
+    EXPECT_EQ(final.members[0].identity.address, "127.0.0.1:2");
+    EXPECT_EQ(final.members[0].state, MemberState::ACTIVE);
+    EXPECT_EQ(final.members[1].identity.address, "127.0.0.1:3");
+    EXPECT_EQ(final.members[1].state, MemberState::JOINING);
+}
+
 TEST(TopologyPlanBuilderTest, FailureMarksSelectedLeavingMemberAndPreservesOnlyUnaffectedLeavingFacts)
 {
     HashAlgorithm algorithm;
