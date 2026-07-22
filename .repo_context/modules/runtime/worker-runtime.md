@@ -507,7 +507,12 @@
        `ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`; full end-to-end outage ST remains a
        broader follow-up.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
-       deferred retry payload; broader ST-level membership churn around the same path remains pending.
+       deferred retry payload; broader ST-level membership churn around the same path remains pending. A direct attempt
+       to extend `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability` with dynamic ScaleOut
+       during `BeforeRetryFailedMetadataRecovery` was rejected because the existing brpc restart window can fail before
+       the new churn step (`WaitNodeReady(WORKER, 1)` returned `K_NOT_READY`/`Subprocess is abnormal` with
+       `PushMetaToWorker` rejected as `NOT_RECOVERING`), so this needs a dedicated stable fixture rather than enlarging
+       that restart ST.
     5. Stream local-isolation data retention is now covered by the current admission ST; broader Stream scale/fault
        data-retention ST remains pending if we want end-to-end evidence beyond the local-isolation recovery path.
 
@@ -845,6 +850,14 @@
     `ds_st_object_cache --gtest_filter="MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether"`
     passed 1/1 test in 14.980s gtest time, covering the combined voluntary ScaleIn `DRAINING` source plus concurrent
     `LOCAL_ISOLATED` peer worker-to-worker migration-target rejection path.
+  - RED, not committed: tried extending
+    `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability` to add a third worker while retry
+    was paused at `WorkerOcServiceClearDataFlow.BeforeRetryFailedMetadataRecovery`. `scripts/clion_remote_build.sh
+    tests-index` passed in 109s with third-party cache hit (`Compile thirdparty libraries success, total wall time: 0s`),
+    source build time 25s, `BUILD_WITH_URMA_MOCK` enabled, and 1156 compile database entries. The focused ST failed
+    before the new churn assertion at the existing restart readiness step (`WaitNodeReady(WORKER, 1)`), returning
+    `K_NOT_READY`/`Subprocess is abnormal`; logs showed `PushMetaToWorker` rejected as `NOT_RECOVERING`. The experiment
+    was reverted and the remaining ST-level membership-churn item should use a dedicated stable fixture.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
