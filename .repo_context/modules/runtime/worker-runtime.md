@@ -342,7 +342,24 @@
   23. object-cache recovery evidence aggregation now lives behind `ObjectCacheRecoveryState` hooks. `WorkerOCServiceImpl`
       injects only the slot evidence provider and resource-readiness probe, while metadata evidence, resource recovery
       generation, and object-cache recovery report aggregation stay in the object-cache recovery-state helper.
+  24. `WorkerRecoveryEvidenceAdapter` no longer includes slot-recovery manager implementation headers. The adapter owns
+      only the slot-incident terminal predicate it needs for recovery evidence, avoiding a Bazel dependency cycle between
+      object-cache recovery evidence and the slot-recovery manager implementation.
 - Recent focused verification:
+  - Post adapter-boundary refactor verification: CLion remote `scripts/clion_remote_build.sh tests-index` rebuilt the
+    UT/ST index with URMA Mock enabled in 170s, generated 1156 compile-command entries, and reused the third-party cache
+    without rebuilding it.
+  - `ds_ut_object --gtest_filter="ObjectCacheRecoveryStateTest.*"`: 4/4 tests passed in 0.05s after the hook injection
+    split.
+  - `ds_ut_object --gtest_filter="WorkerOcServiceImplTest.*Evidence*:WorkerOcServiceImplTest.*Recovery*:WorkerOcServiceImplTest.*Admission*:WorkerOcServiceImplTest.RestartReconciliationMarksRuntimeRecoveringBeforeFanout:WorkerOcServiceImplTest.MasterWorkerClassifiesCleanupAndRecoveryRpcs:WorkerRecoveryEvidenceAdapterTest.*:ObjectCacheRecoveryStateTest.*:SlotRecoveryTest.*:MetadataRecoveryManagerTest.*:CentralMetadataAddressResolverTest.*:TopologyPhaseCallbacksTest.*"`:
+    62/62 tests passed in 0.30s.
+  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 26/26 tests passed in 0.082s; `git
+    diff --check` and `git clang-format --diff HEAD -- src/datasystem/worker/object_cache/worker_recovery_evidence_adapter.cpp tests/ut/worker/BUILD.bazel`
+    were clean.
+  - Remote Bazel 7.4.1 focused build with shared `.bazel-cache/distdir`,
+    `--config=release --config=test --config=urma_mock`, and cache-owner execution passed for
+    `//tests/ut/worker:object_cache_recovery_state_test //tests/ut/worker:worker_oc_service_impl_test` in 50.72s. The
+    identical cached rerun passed in 0.38s with no package reload and one internal action, confirming Bazel cache reuse.
   - After rebasing to `main/master@52433afc2`, `scripts/clion_remote_build.sh tests-index` rebuilt the CLion remote
     UT/ST index with URMA Mock enabled, 1156 compile-command entries, third-party cache hit in 1s, and total script
     time 103s.
