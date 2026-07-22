@@ -45,62 +45,6 @@ WorkerRecoveryEvidenceReport TopologyAvailableEvidenceReport(const WorkerRecover
 }
 }  // namespace
 
-void ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel level,
-                                             WorkerRuntimeStateManager &runtimeState,
-                                             WorkerRecoveryController *recoveryController,
-                                             const WorkerRecoveryEvidenceReport *recoveryReport)
-{
-    switch (level) {
-        case cluster::TopologyAvailabilityLevel::NORMAL:
-        case cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED:
-            if (recoveryController != nullptr) {
-                const auto mode = runtimeState.GetSnapshot().mode;
-                if (mode == WorkerServiceMode::LOCAL_ISOLATED) {
-                    runtimeState.MarkRecovering(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION,
-                                                "topology available; validating recovery evidence",
-                                                WorkerRecoveryPhase::TOPOLOGY);
-                } else if (mode == WorkerServiceMode::OUT_OF_MEMORY) {
-                    runtimeState.MarkRecovering(WorkerIsolationReason::OUT_OF_MEMORY,
-                                                "topology available; validating resource recovery evidence",
-                                                WorkerRecoveryPhase::RESOURCE);
-                } else if (mode == WorkerServiceMode::RUNNING
-                           && (recoveryReport == nullptr || !IsComplete(recoveryReport->evidence))) {
-                    break;
-                }
-                const auto report = TopologyAvailableEvidenceReport(recoveryReport);
-                (void)recoveryController->TryCompleteRecovery(report.evidence, report.detail);
-            } else {
-                runtimeState.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
-                                            "topology available; waiting for recovery evidence",
-                                            WorkerRecoveryPhase::METADATA);
-            }
-            break;
-        case cluster::TopologyAvailabilityLevel::ROLE_ISOLATED:
-            runtimeState.MarkLocalIsolated(WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN,
-                                           "topology availability is role-isolated");
-            break;
-        case cluster::TopologyAvailabilityLevel::NOT_READY:
-            runtimeState.MarkJoining("topology availability is not ready");
-            break;
-        case cluster::TopologyAvailabilityLevel::SHUTTING_DOWN:
-            runtimeState.MarkStopping(WorkerIsolationReason::PROCESS_STOPPING, "topology runtime is shutting down");
-            break;
-        default:
-            runtimeState.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
-                                        "unknown topology availability", WorkerRecoveryPhase::TOPOLOGY);
-            break;
-    }
-}
-
-bool RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel level,
-                                          WorkerRuntimeStateManager &runtimeState,
-                                          WorkerRecoveryController &recoveryController,
-                                          const WorkerRecoveryEvidenceReport &recoveryReport)
-{
-    ApplyTopologyAvailabilityToRuntimeState(level, runtimeState, &recoveryController, &recoveryReport);
-    return ShouldOpenTopologyServingAdmission(level, runtimeState.GetSnapshot());
-}
-
 void ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel level, WorkerRuntimeFacade &runtime,
                                              const WorkerRecoveryEvidenceReport *recoveryReport)
 {

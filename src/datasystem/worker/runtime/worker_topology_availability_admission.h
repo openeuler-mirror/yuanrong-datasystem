@@ -18,19 +18,9 @@
 #define DATASYSTEM_WORKER_WORKER_TOPOLOGY_AVAILABILITY_ADMISSION_H
 
 #include "datasystem/cluster/runtime/topology_runtime_types.h"
-#include "datasystem/worker/runtime/worker_recovery_controller.h"
 #include "datasystem/worker/runtime/worker_runtime_facade.h"
-#include "datasystem/worker/runtime/worker_runtime_state.h"
 
 namespace datasystem::worker {
-void ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel level,
-                                             WorkerRuntimeStateManager &runtimeState,
-                                             WorkerRecoveryController *recoveryController = nullptr,
-                                             const WorkerRecoveryEvidenceReport *recoveryReport = nullptr);
-bool RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel level,
-                                          WorkerRuntimeStateManager &runtimeState,
-                                          WorkerRecoveryController &recoveryController,
-                                          const WorkerRecoveryEvidenceReport &recoveryReport);
 void ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel level, WorkerRuntimeFacade &runtime,
                                              const WorkerRecoveryEvidenceReport *recoveryReport = nullptr);
 bool RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel level, WorkerRuntimeFacade &runtime,

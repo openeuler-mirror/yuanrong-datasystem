@@ -16,8 +16,6 @@
  */
 #include "datasystem/worker/runtime/worker_topology_availability_admission.h"
 
-#include "datasystem/worker/runtime/worker_recovery_controller.h"
-
 #include "gtest/gtest.h"
 
 namespace datasystem::worker {
@@ -46,12 +44,11 @@ WorkerRecoveryEvidenceReport IncompleteObjectCacheRecoveryReport()
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyAvailableOpensRuntimeWhenEvidenceCompletes)
 {
-    WorkerRuntimeStateManager state;
-    WorkerRecoveryController recovery(state);
+    WorkerRuntimeFacade runtime;
     auto report = CompleteTopologyRecoveryReport();
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state, &recovery, &report);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &report);
 
-    auto snapshot = state.GetSnapshot();
+    auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
     EXPECT_TRUE(snapshot.evidence.membershipReady);
@@ -62,22 +59,20 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyAvailableOpensRuntimeWhenE
     EXPECT_TRUE(snapshot.evidence.resourceReady);
     EXPECT_NE(snapshot.detail.find("ready=membership,topology,metadata,slot,ownership,resource"), std::string::npos);
 
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED, state, &recovery,
-                                            &report);
-    snapshot = state.GetSnapshot();
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED, runtime, &report);
+    snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
 }
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyAvailableWaitsForObjectCacheRecoveryEvidence)
 {
-    WorkerRuntimeStateManager state;
-    WorkerRecoveryController recovery(state);
+    WorkerRuntimeFacade runtime;
     auto report = IncompleteObjectCacheRecoveryReport();
 
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state, &recovery, &report);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &report);
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RECOVERING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE);
     EXPECT_TRUE(snapshot.evidence.metadataReady);
@@ -86,30 +81,29 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyAvailableWaitsForObjectCac
     EXPECT_FALSE(ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::NORMAL, snapshot));
 }
 
-TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyAvailableWithoutControllerReportsMetadataPhase)
+TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyAvailableWithoutEvidenceReportsMetadataPhase)
 {
-    WorkerRuntimeStateManager state;
+    WorkerRuntimeFacade runtime;
 
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime);
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RECOVERING);
     EXPECT_EQ(snapshot.recoveryPhase, WorkerRecoveryPhase::METADATA);
 }
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, RefreshTopologyAdmissionOpensAfterRecoveryEvidenceCompletes)
 {
-    WorkerRuntimeStateManager state;
-    WorkerRecoveryController recovery(state);
+    WorkerRuntimeFacade runtime;
     auto incompleteReport = IncompleteObjectCacheRecoveryReport();
-    EXPECT_FALSE(RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel::NORMAL, state, recovery,
-                                                      incompleteReport));
+    EXPECT_FALSE(
+        RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel::NORMAL, runtime, incompleteReport));
 
     auto completeReport = CompleteTopologyRecoveryReport();
-    EXPECT_TRUE(RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel::NORMAL, state, recovery,
-                                                     completeReport));
+    EXPECT_TRUE(
+        RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel::NORMAL, runtime, completeReport));
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
     EXPECT_TRUE(snapshot.evidence.metadataReady);
     EXPECT_TRUE(snapshot.evidence.slotReady);
@@ -118,15 +112,13 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, RefreshTopologyAdmissionOpensAfter
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyRecoveryCanReopenLocalIsolationWithFreshEvidence)
 {
-    WorkerRuntimeStateManager state;
-    WorkerRecoveryController recovery(state);
-    state.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "keepalive failed");
+    WorkerRuntimeFacade runtime;
+    runtime.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "keepalive failed");
 
     auto completeReport = CompleteTopologyRecoveryReport();
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state, &recovery,
-                                            &completeReport);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &completeReport);
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
     EXPECT_TRUE(snapshot.evidence.metadataReady);
@@ -136,15 +128,13 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyRecoveryCanReopenLocalIsol
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, StaleIncompleteTopologyRecoveryCannotDemoteRunningWorker)
 {
-    WorkerRuntimeStateManager state;
-    WorkerRecoveryController recovery(state);
-    ASSERT_TRUE(state.TryMarkRunning(CompleteTopologyRecoveryReport().evidence, "recovered"));
+    WorkerRuntimeFacade runtime;
+    ASSERT_TRUE(runtime.TryCompleteRecovery(CompleteTopologyRecoveryReport().evidence, "recovered"));
 
     auto incompleteReport = IncompleteObjectCacheRecoveryReport();
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state, &recovery,
-                                            &incompleteReport);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &incompleteReport);
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
     EXPECT_TRUE(ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::NORMAL, snapshot));
@@ -152,16 +142,14 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, StaleIncompleteTopologyRecoveryCan
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyRecoveryCanReopenOutOfMemoryWithFreshEvidence)
 {
-    WorkerRuntimeStateManager state;
-    WorkerRecoveryController recovery(state);
-    ASSERT_TRUE(state.TryMarkRunning(CompleteTopologyRecoveryReport().evidence, "steady"));
-    state.MarkOutOfMemory("allocation failed");
+    WorkerRuntimeFacade runtime;
+    ASSERT_TRUE(runtime.TryCompleteRecovery(CompleteTopologyRecoveryReport().evidence, "steady"));
+    runtime.MarkOutOfMemory("allocation failed");
 
     auto completeReport = CompleteTopologyRecoveryReport();
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state, &recovery,
-                                            &completeReport);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &completeReport);
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
     EXPECT_TRUE(snapshot.evidence.resourceReady);
@@ -169,16 +157,15 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyRecoveryCanReopenOutOfMemo
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyCannotReopenOutOfMemoryWithoutAllocatorResourceEvidence)
 {
-    WorkerRuntimeStateManager state;
-    WorkerRecoveryController recovery(state);
-    ASSERT_TRUE(state.TryMarkRunning(CompleteTopologyRecoveryReport().evidence, "steady"));
-    state.MarkOutOfMemory("allocation failed");
+    WorkerRuntimeFacade runtime;
+    ASSERT_TRUE(runtime.TryCompleteRecovery(CompleteTopologyRecoveryReport().evidence, "steady"));
+    runtime.MarkOutOfMemory("allocation failed");
     auto report = CompleteTopologyRecoveryReport();
     report.evidence.resourceReady = false;
 
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state, &recovery, &report);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &report);
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::RECOVERING);
     EXPECT_EQ(snapshot.recoveryPhase, WorkerRecoveryPhase::RESOURCE);
     EXPECT_FALSE(snapshot.evidence.resourceReady);
@@ -186,29 +173,28 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyCannotReopenOutOfMemoryWit
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, LegacyServingGateRequiresRunningRuntimeState)
 {
-    WorkerRuntimeStateManager state;
-    WorkerRecoveryController recovery(state);
+    WorkerRuntimeFacade runtime;
     auto report = CompleteTopologyRecoveryReport();
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state, &recovery, &report);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &report);
 
-    EXPECT_TRUE(ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::NORMAL, state.GetSnapshot()));
-    EXPECT_TRUE(
-        ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED, state.GetSnapshot()));
+    EXPECT_TRUE(ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::NORMAL, runtime.GetSnapshot()));
+    EXPECT_TRUE(ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED,
+                                                   runtime.GetSnapshot()));
     EXPECT_FALSE(
-        ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::ROLE_ISOLATED, state.GetSnapshot()));
+        ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::ROLE_ISOLATED, runtime.GetSnapshot()));
 }
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, IsolatedAndNotReadyLevelsCloseRuntimeState)
 {
-    WorkerRuntimeStateManager state;
+    WorkerRuntimeFacade runtime;
 
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NOT_READY, state);
-    auto snapshot = state.GetSnapshot();
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NOT_READY, runtime);
+    auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::JOINING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::STARTUP_NOT_READY);
 
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::ROLE_ISOLATED, state);
-    snapshot = state.GetSnapshot();
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::ROLE_ISOLATED, runtime);
+    snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::LOCAL_ISOLATED);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN);
 }
@@ -239,11 +225,11 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, HashRingSelfPassiveScaleDownDoesNo
 
 TEST(WorkerTopologyAvailabilityAdmissionTest, ShuttingDownIsTerminal)
 {
-    WorkerRuntimeStateManager state;
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::SHUTTING_DOWN, state);
-    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, state);
+    WorkerRuntimeFacade runtime;
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::SHUTTING_DOWN, runtime);
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime);
 
-    const auto snapshot = state.GetSnapshot();
+    const auto snapshot = runtime.GetSnapshot();
     EXPECT_EQ(snapshot.mode, WorkerServiceMode::STOPPING);
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::PROCESS_STOPPING);
 }

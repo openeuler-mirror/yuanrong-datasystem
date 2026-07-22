@@ -384,6 +384,20 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         for token in forbidden_tokens:
             self.assertNotIn(token, text, "WorkerRuntimeFacade should expose semantic runtime operations only")
 
+    def test_topology_availability_public_header_uses_runtime_facade_only(self):
+        header = REPO_ROOT / "src/datasystem/worker/runtime/worker_topology_availability_admission.h"
+        text = header.read_text(encoding="utf-8")
+
+        forbidden_tokens = [
+            "worker_recovery_controller.h",
+            "worker_runtime_state.h",
+            "WorkerRuntimeStateManager",
+            "WorkerRecoveryController",
+        ]
+
+        for token in forbidden_tokens:
+            self.assertNotIn(token, text, "Topology availability admission should expose WorkerRuntimeFacade only")
+
     def test_worker_isolation_coordinator_bazel_declares_runtime_facade_dependency(self):
         header = REPO_ROOT / "src/datasystem/worker/runtime/worker_isolation_coordinator.h"
         build_file = REPO_ROOT / "src/datasystem/worker/runtime/BUILD.bazel"

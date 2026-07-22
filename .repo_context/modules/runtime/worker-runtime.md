@@ -328,6 +328,9 @@
       `WorkerTopologyMetadataActions` adapter that calls OC/SC metadata migration, recovery, cleanup, and device-meta
       cleanup managers. Boundary tests assert `worker_topology_phase_callbacks` stays free of `MetadataManagerHolder`
       and concrete OC/SC metadata manager dependencies.
+  22. topology availability admission now exposes only the `WorkerRuntimeFacade` public entrypoints. The older
+      `WorkerRuntimeStateManager` / `WorkerRecoveryController` overloads were removed from the public header and
+      implementation, so topology-to-runtime admission cannot bypass the facade boundary.
 - Recent focused verification:
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
@@ -788,6 +791,17 @@
     61.912s with 80 actions.
   - GREEN: the same remote Bazel 7.4.1 command rerun against the same cache passed in 0.295s with 1 internal action,
     confirming cache reuse for this focused target.
+  - RED: added
+    `WorkerRuntimeModuleBoundaryTest.test_topology_availability_public_header_uses_runtime_facade_only`; it failed
+    because `worker_topology_availability_admission.h` still included `worker_runtime_state.h` and
+    `worker_recovery_controller.h` and exposed StateManager/RecoveryController overloads.
+  - GREEN: removed those public overloads, changed topology-availability UTs to drive behavior through
+    `WorkerRuntimeFacade`, and reran `tests/scripts/test_worker_runtime_module_boundary.py`: 26/26 tests in 0.116s.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 186s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 0s`), `BUILD_WITH_URMA_MOCK` enabled, and 1156 compile database entries.
+  - GREEN: remote
+    `ds_ut --gtest_filter="WorkerTopologyAvailabilityAdmissionTest.*"` from the CLion build tree passed 12/12 tests in
+    0ms gtest time, about 1.21s wall time.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
