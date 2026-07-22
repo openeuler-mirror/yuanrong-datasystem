@@ -587,6 +587,9 @@ private:
      */
     Status ConstructTopologyCallbacks();
 
+    void CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot);
+    std::set<std::string> knownFailedAddresses_;
+
     /**
      * @brief Build the Coordinator watch RPC bind/drain capability for the Engine.
      * @return Complete ingress capability bound to coordinatorWatchSvc_.
