@@ -59,6 +59,7 @@
 #endif
 
 DS_DECLARE_bool(use_brpc);
+DS_DECLARE_bool(enable_urma);
 
 namespace datasystem {
 namespace st {
@@ -2251,24 +2252,28 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         WorkerPushMetaTest::SetClusterSetupOptions(opts);
-        opts.workerGflagParams += " -use_brpc=true";
+        opts.workerGflagParams += " -use_brpc=true -enable_urma=false";
     }
 
     void SetUp() override
     {
         previousUseBrpc_ = FLAGS_use_brpc;
+        previousEnableUrma_ = FLAGS_enable_urma;
         FLAGS_use_brpc = true;
+        FLAGS_enable_urma = false;
         ExternalClusterTest::SetUp();
     }
 
     void TearDown() override
     {
         ExternalClusterTest::TearDown();
+        FLAGS_enable_urma = previousEnableUrma_;
         FLAGS_use_brpc = previousUseBrpc_;
     }
 
 private:
     bool previousUseBrpc_{ false };
+    bool previousEnableUrma_{ false };
 };
 
 class WorkerStalePrimaryTest : public WorkerPushMetaTest {
@@ -3162,12 +3167,14 @@ TEST_F(WorkerPushMetaTransportTest, LEVEL1_TestTransportReadInvisibleUntilOwners
 {
     std::shared_ptr<ObjectClient> writer;
     InitTestClient(0, writer);
+    FLAGS_enable_urma = false;
     ConnectOptions transportOptions;
-    InitConnectOpt(0, transportOptions);
+    InitConnectOpt(1, transportOptions);
     transportOptions.enableLocalCache = false;
     transportOptions.requestTimeoutMs = 20000;
     auto reader = std::make_shared<ObjectClient>(transportOptions);
     DS_ASSERT_OK(reader->Init());
+    FLAGS_enable_urma = false;
 
     auto db = InitTestEtcdInstance();
     ASSERT_NE(db, nullptr);

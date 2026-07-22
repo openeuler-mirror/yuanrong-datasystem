@@ -799,6 +799,8 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
         metadataCoordinationBackend_.get(), objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_,
         topologyEngine_->Membership(), &topologyExitRequested_, topologyEngine_->IsRestart(), true);
     objCacheClientWorkerSvc_->SetRuntimeFacade(&workerRuntime_);
+    objCacheClientWorkerSvc_->RegisterRecoveryEvidenceReadyHandler(
+        [this] { RefreshTopologyAdmissionFromObjectCacheRecovery(); });
     object_cache::NodeSelector::Instance().SetRuntimeFacade(&workerRuntime_);
     CreateRebalanceExecutor(objectTable, evictionManager);
     objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &,

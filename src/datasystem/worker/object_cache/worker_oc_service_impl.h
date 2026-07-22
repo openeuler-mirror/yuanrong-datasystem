@@ -757,6 +757,14 @@ public:
 
     bool PublishResourceRecoveryIfCurrent(uint64_t resourceRecoveryGeneration, const std::function<bool()> &publish);
 
+    void RegisterRecoveryEvidenceReadyHandler(std::function<void()> handler);
+
+    /**
+     * @brief Mark restart reconciliation metadata evidence ready after all metadata owners replied.
+     * @param[in] detail Evidence detail.
+     */
+    void MarkRestartReconciliationEvidenceReady(const std::string &detail);
+
     /**
      * @brief Recover metadata associated with a restarted worker.
      * @param[in] workerAddr Restarted worker address.
@@ -1356,6 +1364,7 @@ private:
     std::unique_ptr<MetaDataRecoveryManager> metadataRecoveryManager_{ nullptr };
     std::unique_ptr<ObjectCacheRecoveryState> recoveryState_{ nullptr };
     std::unique_ptr<WorkerOcServiceClearDataFlow> clearDataFlow_{ nullptr };
+    std::function<void()> recoveryEvidenceReadyHandler_;
 
     WorkerRequestManager workerRequestManager_;
 

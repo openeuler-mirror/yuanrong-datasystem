@@ -1299,6 +1299,23 @@ TEST_F(WorkerOcServiceImplTest, ReconciliationRequiresEveryCurrentMetadataMaster
     EXPECT_TRUE(HasCompleteReconciliationSet(expected, { "127.0.0.1:900", "127.0.0.1:901", "127.0.0.1:902" }));
 }
 
+TEST_F(WorkerOcServiceImplTest, RestartReconciliationMarksMetadataEvidenceReadyWhenComplete)
+{
+    worker::WorkerRuntimeFacade runtime;
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
+    impl_->SetRuntimeFacade(&runtime);
+    bool handlerCalled = false;
+    impl_->RegisterRecoveryEvidenceReadyHandler([&handlerCalled] { handlerCalled = true; });
+
+    impl_->MarkRestartReconciliationEvidenceReady("restart_reconciliation metadata owners completed");
+
+    const auto report = impl_->BuildObjectCacheRecoveryEvidenceReport();
+    EXPECT_TRUE(handlerCalled);
+    EXPECT_TRUE(report.evidence.metadataReady);
+    EXPECT_TRUE(report.evidence.ownershipReady);
+    EXPECT_NE(report.detail.find("restart_reconciliation"), std::string::npos);
+}
+
 TEST_F(WorkerOcServiceImplTest, ValidateWorkerStateRejectsWhenRuntimeIsNotRunning)
 {
     worker::WorkerRuntimeFacade runtime;

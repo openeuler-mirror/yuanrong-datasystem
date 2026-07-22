@@ -412,6 +412,21 @@ bool WorkerOCServiceImpl::PublishResourceRecoveryIfCurrent(uint64_t resourceReco
     return recoveryState_->PublishResourceRecoveryIfCurrent(resourceRecoveryGeneration, publish);
 }
 
+void WorkerOCServiceImpl::RegisterRecoveryEvidenceReadyHandler(std::function<void()> handler)
+{
+    recoveryEvidenceReadyHandler_ = std::move(handler);
+}
+
+void WorkerOCServiceImpl::MarkRestartReconciliationEvidenceReady(const std::string &detail)
+{
+    worker::WorkerRecoveryEvidenceBuilder builder;
+    builder.MarkMetadataReady(detail);
+    recoveryState_->SetMetadataRecoveryEvidenceReport(builder.BuildReport(detail));
+    if (recoveryEvidenceReadyHandler_ != nullptr) {
+        recoveryEvidenceReadyHandler_();
+    }
+}
+
 Status WorkerOCServiceImpl::InitL2Cache()
 {
     supportL2Storage_ = GetCurrentStorageType();
@@ -1512,6 +1527,7 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
             }
             setHealthFile_.store(true);
             RETURN_IF_NOT_OK(SetHealthProbe());
+            MarkRestartReconciliationEvidenceReady("restart_reconciliation metadata owners completed");
         }
         if (exitRequested_ != nullptr && exitRequested_->load()) {
             INJECT_POINT("recover.toexiting.delay");
