@@ -477,7 +477,7 @@ Status SlotRecoveryManager::ScheduleLocalPendingTasksFromStore()
 worker::WorkerRecoveryEvidenceReport SlotRecoveryManager::BuildSlotRecoveryEvidenceReportFromStore()
 {
     worker::WorkerRecoveryEvidenceBuilder builder;
-    if (store_ == nullptr) {
+    if (!IsFeatureEnabled()) {
         return builder.MarkSlotReady("slot_recovery_disabled").BuildReport("slot_recovery_disabled");
     }
     std::vector<std::pair<std::string, SlotRecoveryInfoPb>> incidents;

@@ -780,6 +780,20 @@ TEST_F(SlotRecoveryTest, SlotRecoveryEvidenceIsReadyWhenFeatureDisabled)
     EXPECT_NE(report.detail.find("slot_recovery_disabled"), std::string::npos);
 }
 
+TEST_F(SlotRecoveryTest, SlotRecoveryEvidenceIsReadyWhenFeatureDisabledWithBackendStore)
+{
+    FLAGS_l2_cache_type = "obs";
+    auto store = std::make_shared<FakeSlotRecoveryStore>();
+    store->SetListIncidentsStatus(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "store should not be queried"));
+    SlotRecoveryManagerTestHelper manager(HostPort("127.0.0.1", 4002), store);
+    DS_ASSERT_OK(manager.InitForTest());
+
+    auto report = manager.BuildSlotRecoveryEvidenceReportFromStore();
+
+    EXPECT_TRUE(report.evidence.slotReady);
+    EXPECT_NE(report.detail.find("slot_recovery_disabled"), std::string::npos);
+}
+
 TEST_F(SlotRecoveryTest, SlotRecoveryEvidenceIsReadyWhenIncidentTableIsAbsent)
 {
     auto store = std::make_shared<FakeSlotRecoveryStore>();

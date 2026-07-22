@@ -3712,6 +3712,36 @@ TEST(ReplicaReaderTest, BatchEndpointFailureDoesNotDiscardPeerSuccess)
     EXPECT_TRUE(results[3].status.IsOk());
 }
 
+TEST(ReplicaReaderTest, BatchEndpointErrorKeepsPerItemStatusWhenResultsArePresent)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &, FakeTransporter &transporter) {
+        transporter.getHandler = [](const DataGetRequest &, DataGetResult &) {
+            return Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "first input missing");
+        };
+        transporter.batchGetHandler = [](const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) {
+            outputs.resize(inputs.size());
+            outputs[0].status = Status(K_WORKER_PULL_OBJECT_NOT_FOUND, "first input missing");
+            outputs[1].status = Status(K_RUNTIME_ERROR, "second input failed");
+            return outputs[1].status;
+        };
+    };
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    ReplicaReader reader(executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1));
+    std::vector<master::ObjectLocationInfoPb> locations = { MakeReplicaLocation("key3", 1, { MakeAddress(45) }),
+                                                            MakeReplicaLocation("key2", 1, { MakeAddress(45) }) };
+    std::vector<ObjectReadItemResult> results(locations.size());
+    ReplicaReadBatch requests;
+    for (size_t i = 0; i < locations.size(); ++i) {
+        requests.push_back({ &locations[i], &results[i] });
+    }
+
+    EXPECT_EQ(reader.ReadBatch(requests).GetCode(), K_WORKER_PULL_OBJECT_NOT_FOUND);
+    EXPECT_EQ(results[0].status.GetCode(), K_WORKER_PULL_OBJECT_NOT_FOUND);
+    EXPECT_EQ(results[1].status.GetCode(), K_RUNTIME_ERROR);
+}
+
 TEST(ReplicaReaderTest, BatchRetryableItemsRegroupAtNextReplicaAndSuccessfulPeerLeaves)
 {
     InitBatchGetMetrics();

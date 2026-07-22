@@ -44,10 +44,13 @@ TEST(WorkerAdmissionFacadeTest, NormalGuardRejectsPendingTransition)
     EXPECT_FALSE(facade.CheckRecoveryRpc("RecoverMetadata").IsOk());
 }
 
-TEST(WorkerAdmissionFacadeTest, RecoveryRpcAllowedOnlyInRecovering)
+TEST(WorkerAdmissionFacadeTest, RecoveryRpcAllowedInRunningAndRecovering)
 {
     WorkerRuntimeStateManager state;
     WorkerAdmissionFacade facade(state);
+
+    ASSERT_TRUE(state.TryMarkRunning(CompleteEvidence(), "ready"));
+    EXPECT_TRUE(facade.CheckRecoveryRpc("PushMetaToWorker").IsOk());
 
     state.MarkRecovering(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "recovering");
 

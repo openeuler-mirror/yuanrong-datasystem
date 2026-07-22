@@ -1703,7 +1703,7 @@ TEST_F(WorkerOcServiceImplTest, MasterWorkerClassifiesCleanupAndRecoveryRpcs)
     DS_ASSERT_OK(akSkManager->GenerateSignature(queryRefReq));
     const auto queryRefRc = masterWorkerSvc.QueryGlobalRefNumOnWorker(queryRefReq, queryRefRsp);
     EXPECT_EQ(queryRefRc.GetCode(), StatusCode::K_NOT_READY);
-    EXPECT_NE(queryRefRc.GetMsg().find("RECOVERY_RPC"), std::string::npos);
+    EXPECT_NE(queryRefRc.GetMsg().find("NORMAL_READ"), std::string::npos);
 }
 
 TEST_F(WorkerOcServiceImplTest, MasterWorkerRejectsDataAndOwnershipInputsOutsideRunning)

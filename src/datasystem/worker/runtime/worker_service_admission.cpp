@@ -91,7 +91,8 @@ Status Evaluate(const WorkerRuntimeStateSnapshot &snapshot, WorkerAdmissionKind 
             }
             return Reject(snapshot, kind, operation, K_OUT_OF_MEMORY, "MODE_NOT_SERVING");
         case WorkerServiceMode::DRAINING:
-            if (kind == WorkerAdmissionKind::NORMAL_READ || IsAlwaysAllowed(kind)) {
+            if (kind == WorkerAdmissionKind::NORMAL_READ || kind == WorkerAdmissionKind::RESOURCE_RECOVERY_RPC
+                || IsAlwaysAllowed(kind)) {
                 return Status::OK();
             }
             break;

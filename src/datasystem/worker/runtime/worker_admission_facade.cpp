@@ -40,11 +40,12 @@ Status WorkerAdmissionFacade::CheckMigrationTarget(const std::string &operation)
 Status WorkerAdmissionFacade::CheckRecoveryRpc(const std::string &operation) const
 {
     const auto snapshot = runtimeState_.GetSnapshot();
-    if (snapshot.mode != WorkerServiceMode::RECOVERING) {
+    if (snapshot.mode != WorkerServiceMode::RUNNING && snapshot.mode != WorkerServiceMode::RECOVERING) {
         return Status(K_NOT_READY, "Worker is not accepting " + operation
                                        + ", kind=RECOVERY_RPC, mode=" + std::string(ToString(snapshot.mode))
-                                       + ", reason=" + std::string(ToString(snapshot.reason)) + ", phase="
-                                       + std::string(ToString(snapshot.recoveryPhase)) + ", rejection=NOT_RECOVERING");
+                                       + ", reason=" + std::string(ToString(snapshot.reason))
+                                       + ", phase=" + std::string(ToString(snapshot.recoveryPhase))
+                                       + ", rejection=MODE_NOT_SERVING");
     }
     return admission_.Check(snapshot, WorkerAdmissionKind::RECOVERY_RPC, operation);
 }

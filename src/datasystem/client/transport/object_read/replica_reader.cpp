@@ -331,8 +331,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
         bool dispatchExpired = false;
         for (auto &work : endpointWorks) {
             for (auto &chunk : work.chunks) {
-                const bool validResults = chunk.endpointStatus.IsError()
-                                          || chunk.results.size() == chunk.stateIndexes.size();
+                const bool hasItemResults = chunk.results.size() == chunk.stateIndexes.size();
                 for (size_t i = 0; i < chunk.stateIndexes.size(); ++i) {
                     auto &state = states[chunk.stateIndexes[i]];
                     if (!chunk.attempted) {
@@ -342,13 +341,11 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                     state.hasAttempt = true;
                     Status itemStatus = chunk.endpointStatus;
                     DataGetResult *data = nullptr;
-                    if (chunk.endpointStatus.IsOk()) {
-                        if (!validResults) {
-                            itemStatus = Status(K_RUNTIME_ERROR, "Batch Get response count does not match request");
-                        } else {
-                            itemStatus = chunk.results[i].status;
-                            data = &chunk.results[i].data;
-                        }
+                    if (hasItemResults) {
+                        itemStatus = chunk.results[i].status;
+                        data = &chunk.results[i].data;
+                    } else if (chunk.endpointStatus.IsOk()) {
+                        itemStatus = Status(K_RUNTIME_ERROR, "Batch Get response count does not match request");
                     }
                     if (itemStatus.IsOk()) {
                         state.result->status = Status::OK();

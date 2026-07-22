@@ -3604,15 +3604,18 @@ Status ObjectClientImpl::ExecuteShmGroup(const std::shared_ptr<IClientWorkerApi>
 void ObjectClientImpl::ExecuteTransportFallback(const std::vector<std::pair<std::string, size_t>> &remoteIdx,
     bool traceEnabled, std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc)
 {
+    auto orderedRemoteIdx = remoteIdx;
+    std::sort(orderedRemoteIdx.begin(), orderedRemoteIdx.end(),
+              [](const auto &lhs, const auto &rhs) { return lhs.second < rhs.second; });
     std::vector<std::string> remoteKeys;
-    remoteKeys.reserve(remoteIdx.size());
-    for (const auto &p : remoteIdx) {
+    remoteKeys.reserve(orderedRemoteIdx.size());
+    for (const auto &p : orderedRemoteIdx) {
         remoteKeys.push_back(p.first);
     }
     std::vector<std::shared_ptr<Buffer>> remoteBuffers(remoteKeys.size());
     auto transportRc = GetFromTransportLayer(remoteKeys, remoteBuffers, traceEnabled);
-    for (size_t i = 0; i < remoteIdx.size(); i++) {
-        objectBuffers[remoteIdx[i].second] = std::move(remoteBuffers[i]);
+    for (size_t i = 0; i < orderedRemoteIdx.size(); i++) {
+        objectBuffers[orderedRemoteIdx[i].second] = std::move(remoteBuffers[i]);
     }
     // Prefer the transport status (last attempt); keep the shm error if transport is OK so a
     // partial shm failure still surfaces.

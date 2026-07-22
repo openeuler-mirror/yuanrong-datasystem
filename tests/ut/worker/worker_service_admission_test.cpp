@@ -178,6 +178,7 @@ TEST(WorkerServiceAdmissionTest, AppliesServiceModeMatrix)
         { WorkerServiceMode::RECOVERING, WorkerAdmissionKind::INTERNAL_JOINING_RPC, true, K_OK },
         { WorkerServiceMode::RECOVERING, WorkerAdmissionKind::RESOURCE_RECOVERY_RPC, true, K_OK },
         { WorkerServiceMode::DRAINING, WorkerAdmissionKind::NORMAL_READ, true, K_OK },
+        { WorkerServiceMode::DRAINING, WorkerAdmissionKind::RESOURCE_RECOVERY_RPC, true, K_OK },
         { WorkerServiceMode::DRAINING, WorkerAdmissionKind::MIGRATION_TARGET, false, K_NOT_READY },
         { WorkerServiceMode::DRAINING, WorkerAdmissionKind::NORMAL_WRITE, false, K_NOT_READY },
         { WorkerServiceMode::DRAINING, WorkerAdmissionKind::CLEANUP_RPC, true, K_OK },
