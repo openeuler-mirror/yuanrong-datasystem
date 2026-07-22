@@ -22,7 +22,7 @@
 #include <optional>
 #include <string>
 
-#include "datasystem/worker/runtime/worker_recovery_controller.h"
+#include "datasystem/worker/runtime/worker_recovery_evidence.h"
 
 namespace datasystem::worker {
 class WorkerRecoveryEvidenceTracker {

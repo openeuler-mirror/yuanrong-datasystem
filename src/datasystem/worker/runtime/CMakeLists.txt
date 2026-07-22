@@ -2,13 +2,17 @@ add_library(worker_runtime_state STATIC worker_runtime_state.cpp)
 target_include_directories(worker_runtime_state PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(worker_runtime_state PUBLIC common_metrics)
 
+add_library(worker_recovery_evidence STATIC worker_recovery_evidence.cpp)
+target_include_directories(worker_recovery_evidence PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(worker_recovery_evidence PUBLIC worker_runtime_state)
+
 add_library(worker_recovery_controller STATIC worker_recovery_controller.cpp)
 target_include_directories(worker_recovery_controller PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(worker_recovery_controller PUBLIC worker_runtime_state)
+target_link_libraries(worker_recovery_controller PUBLIC worker_runtime_state worker_recovery_evidence)
 
 add_library(worker_recovery_evidence_tracker STATIC worker_recovery_evidence_tracker.cpp)
 target_include_directories(worker_recovery_evidence_tracker PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(worker_recovery_evidence_tracker PUBLIC worker_recovery_controller)
+target_link_libraries(worker_recovery_evidence_tracker PUBLIC worker_recovery_evidence)
 
 add_library(worker_isolation_coordinator STATIC worker_isolation_coordinator.cpp)
 target_include_directories(worker_isolation_coordinator PUBLIC ${PROJECT_SOURCE_DIR}/src)
@@ -48,6 +52,7 @@ target_link_libraries(worker_runtime_core INTERFACE
         worker_control_backend_scope_classification
         worker_isolation_coordinator
         worker_recovery_controller
+        worker_recovery_evidence
         worker_recovery_evidence_tracker
         worker_runtime_facade
         worker_runtime_state

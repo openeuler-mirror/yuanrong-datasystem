@@ -36,7 +36,7 @@
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/worker_master_api_manager_base.h"
-#include "datasystem/worker/runtime/worker_recovery_controller.h"
+#include "datasystem/worker/runtime/worker_recovery_evidence.h"
 
 namespace datasystem {
 namespace object_cache {

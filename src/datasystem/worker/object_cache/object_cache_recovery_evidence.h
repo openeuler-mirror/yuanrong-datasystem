@@ -23,7 +23,7 @@
 
 #include "datasystem/protos/slot_recovery.pb.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
-#include "datasystem/worker/runtime/worker_recovery_controller.h"
+#include "datasystem/worker/runtime/worker_recovery_evidence.h"
 
 namespace datasystem {
 namespace object_cache {

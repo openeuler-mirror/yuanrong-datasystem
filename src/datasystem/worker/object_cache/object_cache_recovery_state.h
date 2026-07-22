@@ -18,7 +18,7 @@
 #include "datasystem/common/shared_memory/arena_group_key.h"
 #include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
-#include "datasystem/worker/runtime/worker_recovery_controller.h"
+#include "datasystem/worker/runtime/worker_recovery_evidence.h"
 
 namespace datasystem {
 namespace worker {

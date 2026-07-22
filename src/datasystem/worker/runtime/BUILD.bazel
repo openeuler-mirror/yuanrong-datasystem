@@ -17,6 +17,19 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "worker_recovery_evidence",
+    srcs = [
+        "worker_recovery_evidence.cpp",
+    ],
+    hdrs = [
+        "worker_recovery_evidence.h",
+    ],
+    deps = [
+        ":worker_runtime_state",
+    ],
+)
+
+ds_cc_library(
     name = "worker_service_admission",
     srcs = [
         "worker_service_admission.cpp",
@@ -82,6 +95,7 @@ ds_cc_library(
         "worker_recovery_controller.h",
     ],
     deps = [
+        ":worker_recovery_evidence",
         ":worker_runtime_state",
         "//src/datasystem/common/inject:common_inject",
     ],
@@ -96,7 +110,7 @@ ds_cc_library(
         "worker_recovery_evidence_tracker.h",
     ],
     deps = [
-        ":worker_recovery_controller",
+        ":worker_recovery_evidence",
     ],
 )
 
@@ -154,6 +168,7 @@ ds_cc_library(
         ":worker_control_backend_scope_classification",
         ":worker_isolation_coordinator",
         ":worker_recovery_controller",
+        ":worker_recovery_evidence",
         ":worker_recovery_evidence_tracker",
         ":worker_runtime_facade",
         ":worker_runtime_state",
