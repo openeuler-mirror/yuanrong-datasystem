@@ -283,6 +283,28 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text)
 
+    def test_object_cache_module_does_not_use_concrete_coordination_backends(self):
+        object_cache_root = REPO_ROOT / "src/datasystem/worker/object_cache"
+        files = [
+            path
+            for path in object_cache_root.rglob("*")
+            if path.suffix in {".h", ".cpp", ".cc"}
+        ]
+
+        forbidden_tokens = [
+            "datasystem/common/kvstore/etcd/etcd_store.h",
+            "datasystem/cluster/coordination_backend/ds_coordination_backend.h",
+            "datasystem/cluster/coordination_backend/etcd_coordination_backend.h",
+            "EtcdStore",
+            "DsCoordinationBackend",
+            "EtcdCoordinationBackend",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use ICoordinationBackend injected abstractions")
+
     def test_node_selector_uses_runtime_facade_not_runtime_state_manager(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/data_migrator/strategy/node_selector.h",
