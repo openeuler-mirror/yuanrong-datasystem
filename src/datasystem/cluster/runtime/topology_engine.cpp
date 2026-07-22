@@ -1185,12 +1185,14 @@ bool TopologyEngine::IsControlBackendReachableFromPeers()
     }
     const auto deadline = std::chrono::steady_clock::now() + options_.scopeProbeDeadline;
     size_t observationCount = 0;
-    bool peerReachable = false;
     do {
         bool globalOutage = false;
         bool probeFailed = false;
         if (ProbePeerBackendReachabilityOnce(local, targets, deadline, observationCount, globalOutage, probeFailed)) {
-            peerReachable = true;
+            LOG(INFO) << "Keepalive backend failure scope is local, probeTargets: " << targets.size()
+                      << ", observations: " << observationCount;
+            INJECT_POINT_NO_RETURN("WorkerOCServer.LocalBackendIsolationCandidate");
+            return true;
         }
         if (probeFailed) {
             return false;
@@ -1204,12 +1206,6 @@ bool TopologyEngine::IsControlBackendReachableFromPeers()
         const auto nextProbe = std::min(deadline, std::chrono::steady_clock::now() + BACKEND_SCOPE_POLL_INTERVAL);
         std::this_thread::sleep_until(nextProbe);
     } while (std::chrono::steady_clock::now() < deadline);
-    if (peerReachable) {
-        LOG(INFO) << "Keepalive backend failure scope is local, probeTargets: " << targets.size()
-                  << ", observations: " << observationCount;
-        INJECT_POINT_NO_RETURN("WorkerOCServer.LocalBackendIsolationCandidate");
-        return true;
-    }
     LOG(INFO) << "Keepalive backend failure scope is inconclusive, probeTargets: " << targets.size()
               << ", observations: " << observationCount;
     return false;

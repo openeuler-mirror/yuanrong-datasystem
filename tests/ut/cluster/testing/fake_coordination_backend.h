@@ -56,6 +56,7 @@ public:
     void SetLocalIsolationHandler(LocalIsolationHandler handler) override;
     void SetLocalRecoveryHandler(LocalRecoveryHandler handler) override;
     void SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler) override;
+    bool CheckStoreStateWhenNetworkFailed();
 
     void PutBytes(const std::string &table, const std::string &key, std::string value);
     void PutRaw(const std::string &table, const std::string &key, const TopologyState &state);
@@ -89,6 +90,7 @@ private:
     EventHandler handler_;
     LocalIsolationHandler localIsolationHandler_;
     LocalRecoveryHandler localRecoveryHandler_;
+    std::function<bool()> checkStoreStateWhenNetworkFailedHandler_;
     std::vector<WatchKey> watchKeys_;
     std::vector<std::string> lifecycleCalls_;
     bool failNextCasAfterCommit_{ false };

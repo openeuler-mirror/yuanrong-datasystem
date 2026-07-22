@@ -1071,6 +1071,28 @@
     completed successfully in 1.17s with 1 internal action, confirming the target reuses the Bazel cache. The earlier
     0.01s failure was an execution-user/cache-owner mismatch: the remote SSH session ran as `root` while the worktree and
     `.bazel-cache` are owned by `tianti`.
+  - RED: added
+    `TopologyEngineTest.KeepAliveScopeCheckReturnsAfterFirstReachablePeerEvidence` to cover keepalive local-isolation
+    confirmation when a peer already reports the control backend as AVAILABLE. The first run failed in 2004ms: the
+    handler returned true but `probeCalls` was 20 instead of 1, proving the keepalive path still polled until the
+    2-second scope budget even after local-isolation evidence was sufficient.
+  - GREEN: changed `TopologyEngine::IsControlBackendReachableFromPeers` to return immediately after
+    `ProbePeerBackendReachabilityOnce` confirms reachable peer evidence. The same focused case passed in 2ms during the
+    first GREEN run and 1ms in the broader filter, with `probeCalls == 1`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed with third-party cache hit
+    (`Compile thirdparty libraries success, total wall time: 0s`), `BUILD_WITH_URMA_MOCK` enabled, 1157 compile database
+    entries, and Ready CompDB output. The GREEN rebuild used 160s total wall time; source build remained incremental.
+  - GREEN: local boundary script passed 28/28 in 0.088s; `git diff --check` was clean; `git clang-format --diff HEAD --`
+    for `topology_engine.cpp`, `topology_engine_test.cpp`, and `fake_coordination_backend.*` reported no formatting
+    changes.
+  - GREEN: remote focused CMake UT filter passed 24/24 in 864ms, covering coordination backend contracts, DS
+    coordination sessions, topology composition, global outage, asymmetric outage, missing quorum, and the new
+    keepalive short-circuit case.
+  - Bazel RED/GREEN: remote Bazel 7.4.1 focused build for `//src/datasystem/cluster:cluster_topology` plus
+    `//tests/ut/cluster/testing:fake_coordination_backend` first failed in 4.645s because the test fake cpp used the
+    CMake-only `ut/cluster/testing/fake_coordination_backend.h` include path. The fix changed that cpp to include its
+    same-directory header directly. After syncing the changed files to the remote worktree, the same Bazel command
+    passed in 21.570s with 29 actions, using the existing `.bazel-cache/distdir` and `--config=urma_mock`.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

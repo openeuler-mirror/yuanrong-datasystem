@@ -24,6 +24,7 @@
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "gtest/gtest.h"
+#include "ut/cluster/testing/fake_coordination_backend.h"
 #include "ut/cluster/testing/fake_coordinator_service_proxy.h"
 #include "ut/common.h"
 
@@ -668,6 +669,40 @@ TEST(TopologyEngineTest, MissingPeerQuorumIsolatesBackendOutage)
     proxy.FailRangeForKeyTimes(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE, 2);
     DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
     ASSERT_TRUE(WaitFor([&] { return engine->GetAvailability() == TopologyAvailabilityLevel::ROLE_ISOLATED; }));
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, KeepAliveScopeCheckReturnsAfterFirstReachablePeerEvidence)
+{
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "keepalive-scope-short";
+    const auto keys = MakeKeys(clusterName);
+    auto memberBackend = std::make_unique<FakeCoordinationBackend>();
+    auto controllerBackend = std::make_unique<FakeCoordinationBackend>();
+    auto *member = memberBackend.get();
+    member->PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTopologyWithPeer());
+
+    std::atomic<size_t> probeCalls{ 0 };
+    TopologyEngine::Builder builder;
+    builder.SetClusterName(clusterName)
+        .SetLocalAddress(LOCAL_ADDRESS)
+        .UseUnifiedCoordinationBackends(std::move(memberBackend), std::move(controllerBackend))
+        .SetPhaseCallbacks(callbacks)
+        .SetNodeDeadTimeout(std::chrono::seconds(60))
+        .SetControlBackendProbe([&probeCalls](const ControlBackendObservation &local, const auto &peers, auto) {
+            probeCalls.fetch_add(1);
+            auto peer = local;
+            peer.reporter = peers.front();
+            peer.state = ControlBackendState::AVAILABLE;
+            peer.observedAt = std::chrono::steady_clock::now();
+            return std::vector<ControlBackendObservation>{ peer };
+        });
+
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_TRUE(member->CheckStoreStateWhenNetworkFailed());
+    EXPECT_EQ(probeCalls.load(), 1U);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

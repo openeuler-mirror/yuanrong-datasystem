@@ -11,7 +11,7 @@
 /**
  * Description: In-memory single-key coordination backend for cluster module tests.
  */
-#include "ut/cluster/testing/fake_coordination_backend.h"
+#include "fake_coordination_backend.h"
 
 #include <utility>
 
@@ -251,8 +251,20 @@ void FakeCoordinationBackend::SetLocalRecoveryHandler(LocalRecoveryHandler handl
     localRecoveryHandler_ = std::move(handler);
 }
 
-void FakeCoordinationBackend::SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()>)
+void FakeCoordinationBackend::SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
+    checkStoreStateWhenNetworkFailedHandler_ = std::move(handler);
+}
+
+bool FakeCoordinationBackend::CheckStoreStateWhenNetworkFailed()
+{
+    std::function<bool()> handler;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        handler = checkStoreStateWhenNetworkFailedHandler_;
+    }
+    return handler != nullptr && handler();
 }
 
 void FakeCoordinationBackend::PutBytes(const std::string &table, const std::string &key, std::string value)
