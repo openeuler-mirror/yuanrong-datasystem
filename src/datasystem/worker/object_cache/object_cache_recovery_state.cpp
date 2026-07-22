@@ -69,6 +69,25 @@ bool ObjectCacheRecoveryState::PublishResourceRecoveryIfCurrent(uint64_t generat
     return open;
 }
 
+worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::BuildObjectCacheRecoveryEvidenceReport(
+    const SlotRecoveryEvidenceProvider &slotEvidenceProvider, const ResourceRecoveredProvider &resourceRecovered,
+    uint64_t *resourceRecoveryGeneration) const
+{
+    const auto metadataReport = GetLastMetadataRecoveryEvidenceReport();
+    worker::WorkerRecoveryEvidenceBuilder builder;
+    const auto slotReport =
+        slotEvidenceProvider == nullptr ? builder.BuildReport("slot_manager_unavailable") : slotEvidenceProvider();
+    const auto resourceSnapshot = GetResourceRecoverySnapshot();
+    if (resourceRecoveryGeneration != nullptr) {
+        *resourceRecoveryGeneration = resourceSnapshot.generation;
+    }
+    const bool memoryReady =
+        !resourceSnapshot.memoryRequired || (resourceRecovered != nullptr && resourceRecovered(CacheType::MEMORY));
+    const bool diskReady =
+        !resourceSnapshot.diskRequired || (resourceRecovered != nullptr && resourceRecovered(CacheType::DISK));
+    return object_cache::BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, memoryReady && diskReady);
+}
+
 worker::WorkerRecoveryGeneration ObjectCacheRecoveryState::BeginRecoveryEvidenceGeneration(std::string detail)
 {
     return recoveryEvidenceTracker_.BeginRecovery(std::move(detail));

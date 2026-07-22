@@ -68,6 +68,34 @@ TEST(ObjectCacheRecoveryStateTest, EvidenceGenerationInvalidatesOldReport)
     EXPECT_TRUE(state.TrackEvidenceForGeneration(newGeneration, CompleteObjectCacheReport()).evidence.ownershipReady);
 }
 
+TEST(ObjectCacheRecoveryStateTest, BuildsObjectCacheEvidenceFromInjectedReadinessCallbacks)
+{
+    ObjectCacheRecoveryState state;
+    state.MarkResourceRecoveryRequired(memory::CacheType::MEMORY);
+    const auto diskGeneration = state.MarkResourceRecoveryRequired(memory::CacheType::DISK);
+
+    worker::WorkerRecoveryEvidenceBuilder slotBuilder;
+    auto slotProvider = [&slotBuilder] { return slotBuilder.MarkSlotReady("slots complete").BuildReport("slots"); };
+
+    std::vector<CacheType> resourceChecks;
+    auto resourceRecovered = [&resourceChecks](CacheType cacheType) {
+        resourceChecks.emplace_back(cacheType);
+        return cacheType == CacheType::MEMORY;
+    };
+
+    uint64_t evidenceGeneration = 0;
+    auto report = state.BuildObjectCacheRecoveryEvidenceReport(slotProvider, resourceRecovered, &evidenceGeneration);
+
+    EXPECT_EQ(evidenceGeneration, diskGeneration);
+    EXPECT_TRUE(report.evidence.metadataReady);
+    EXPECT_TRUE(report.evidence.slotReady);
+    EXPECT_FALSE(report.evidence.resourceReady);
+    EXPECT_TRUE(report.evidence.ownershipReady);
+    ASSERT_EQ(resourceChecks.size(), 2);
+    EXPECT_EQ(resourceChecks[0], CacheType::MEMORY);
+    EXPECT_EQ(resourceChecks[1], CacheType::DISK);
+}
+
 }  // namespace
 }  // namespace object_cache
 }  // namespace datasystem

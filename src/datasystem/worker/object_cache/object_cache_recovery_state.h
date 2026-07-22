@@ -15,6 +15,7 @@
 #include <string>
 
 #include "datasystem/common/shared_memory/arena_group_key.h"
+#include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/runtime/worker_recovery_controller.h"
 #include "datasystem/worker/runtime/worker_recovery_evidence_tracker.h"
@@ -24,6 +25,9 @@ namespace object_cache {
 
 class ObjectCacheRecoveryState {
 public:
+    using SlotRecoveryEvidenceProvider = std::function<worker::WorkerRecoveryEvidenceReport()>;
+    using ResourceRecoveredProvider = std::function<bool(CacheType)>;
+
     struct ResourceRecoverySnapshot {
         bool memoryRequired{ false };
         bool diskRequired{ false };
@@ -43,6 +47,9 @@ public:
     uint64_t MarkResourceRecoveryRequired(memory::CacheType cacheType);
     ResourceRecoverySnapshot GetResourceRecoverySnapshot() const;
     bool PublishResourceRecoveryIfCurrent(uint64_t generation, const std::function<bool()> &publish);
+    worker::WorkerRecoveryEvidenceReport BuildObjectCacheRecoveryEvidenceReport(
+        const SlotRecoveryEvidenceProvider &slotEvidenceProvider, const ResourceRecoveredProvider &resourceRecovered,
+        uint64_t *resourceRecoveryGeneration = nullptr) const;
 
     worker::WorkerRecoveryGeneration BeginRecoveryEvidenceGeneration(std::string detail);
     worker::WorkerRecoveryEvidenceReport TrackEvidenceForGeneration(worker::WorkerRecoveryGeneration generation,

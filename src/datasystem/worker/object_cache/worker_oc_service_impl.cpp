@@ -376,23 +376,19 @@ worker::WorkerRecoveryEvidenceReport WorkerOCServiceImpl::GetLastMetadataRecover
 worker::WorkerRecoveryEvidenceReport WorkerOCServiceImpl::BuildObjectCacheRecoveryEvidenceReport(
     uint64_t *resourceRecoveryGeneration) const
 {
-    auto metadataReport = recoveryState_->GetLastMetadataRecoveryEvidenceReport();
-    worker::WorkerRecoveryEvidenceBuilder builder;
-    const auto slotReport = slotRecoveryManager_ == nullptr
-                                ? builder.BuildReport("slot_manager_unavailable")
-                                : slotRecoveryManager_->BuildSlotRecoveryEvidenceReportFromStore();
-    const auto resourceSnapshot = recoveryState_->GetResourceRecoverySnapshot();
-    if (resourceRecoveryGeneration != nullptr) {
-        *resourceRecoveryGeneration = resourceSnapshot.generation;
-    }
-    const bool memoryReady =
-        !resourceSnapshot.memoryRequired
-        || (evictionManager_ != nullptr && evictionManager_->IsResourceRecovered(CacheType::MEMORY));
-    const bool diskReady = !resourceSnapshot.diskRequired
-                           || (memory::Allocator::Instance()->IsDiskAvailable() && evictionManager_ != nullptr
-                               && evictionManager_->IsResourceRecovered(CacheType::DISK));
-    const bool resourceReady = memoryReady && diskReady;
-    return object_cache::BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, resourceReady);
+    return recoveryState_->BuildObjectCacheRecoveryEvidenceReport(
+        [this] {
+            worker::WorkerRecoveryEvidenceBuilder builder;
+            return slotRecoveryManager_ == nullptr ? builder.BuildReport("slot_manager_unavailable")
+                                                   : slotRecoveryManager_->BuildSlotRecoveryEvidenceReportFromStore();
+        },
+        [this](CacheType cacheType) {
+            if (cacheType == CacheType::DISK && !memory::Allocator::Instance()->IsDiskAvailable()) {
+                return false;
+            }
+            return evictionManager_ != nullptr && evictionManager_->IsResourceRecovered(cacheType);
+        },
+        resourceRecoveryGeneration);
 }
 
 worker::WorkerRecoveryGeneration WorkerOCServiceImpl::BeginRecoveryEvidenceGeneration(std::string detail)
