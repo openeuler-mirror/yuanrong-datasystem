@@ -339,7 +339,22 @@
   22. topology availability admission now exposes only the `WorkerRuntimeFacade` public entrypoints. The older
       `WorkerRuntimeStateManager` / `WorkerRecoveryController` overloads were removed from the public header and
       implementation, so topology-to-runtime admission cannot bypass the facade boundary.
+  23. object-cache recovery evidence aggregation now lives behind `ObjectCacheRecoveryState` hooks. `WorkerOCServiceImpl`
+      injects only the slot evidence provider and resource-readiness probe, while metadata evidence, resource recovery
+      generation, and object-cache recovery report aggregation stay in the object-cache recovery-state helper.
 - Recent focused verification:
+  - After rebasing to `main/master@52433afc2`, `scripts/clion_remote_build.sh tests-index` rebuilt the CLion remote
+    UT/ST index with URMA Mock enabled, 1156 compile-command entries, third-party cache hit in 1s, and total script
+    time 103s.
+  - `ds_ut_object --gtest_filter="ObjectCacheRecoveryStateTest.*"`: 4/4 tests passed in 0.05s after adding the injected
+    recovery evidence hook case.
+  - `ds_ut_object --gtest_filter="WorkerOcServiceImplTest.*Evidence*:WorkerOcServiceImplTest.*Recovery*:WorkerOcServiceImplTest.*Admission*:WorkerOcServiceImplTest.RestartReconciliationMarksRuntimeRecoveringBeforeFanout:WorkerOcServiceImplTest.MasterWorkerClassifiesCleanupAndRecoveryRpcs:WorkerRecoveryEvidenceAdapterTest.*:ObjectCacheRecoveryStateTest.*:SlotRecoveryTest.*:MetadataRecoveryManagerTest.*:CentralMetadataAddressResolverTest.*:TopologyPhaseCallbacksTest.*"`:
+    62/62 tests passed in 0.31s.
+  - `python3 -m unittest tests/scripts/test_worker_runtime_module_boundary.py`: 26/26 tests passed in 0.063s after
+    hiding `WorkerRuntimeStateReadGuard` from object-cache public headers and keeping object-cache recovery aggregation
+    behind hook injection.
+  - `git diff --check` clean; `git clang-format --diff HEAD --` on the modified object-cache recovery files reported
+    no formatting changes.
   - `scripts/clion_remote_build.sh tests-index` with `BUILD_WITH_URMA_MOCK` path generated 1149 compile-command entries
     before this slice and built UT/ST targets; after the probe move, `scripts/clion_remote_build.sh index` rebuilt source
     in 124s with third-party cache hit in 0s, `worker_control_backend_probe`, `datasystem_worker_static`,
