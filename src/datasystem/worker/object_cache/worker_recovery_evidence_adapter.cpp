@@ -19,7 +19,6 @@
 #include <sstream>
 
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -42,6 +41,12 @@ std::string SlotSummaryDetail(size_t readyCount, size_t totalCount, size_t faile
     oss << "; slot_incidents_failed=" << failedCount;
     return oss.str();
 }
+
+bool IsSlotIncidentFullyTerminal(const SlotRecoveryInfoPb &incident)
+{
+    return incident.total_slots() != 0
+           && incident.completed_slots() + incident.failed_slots() == incident.total_slots();
+}
 }  // namespace
 
 worker::WorkerRecoveryEvidenceReport BuildMetadataRecoveryEvidenceReport(
@@ -61,7 +66,7 @@ worker::WorkerRecoveryEvidenceReport BuildSlotRecoveryEvidenceReport(const std::
     size_t readyCount = 0;
     size_t failedCount = 0;
     for (const auto &incident : incidents) {
-        if (SlotRecoveryIncidentState::IsFullyTerminal(incident) && incident.failed_slots() == 0) {
+        if (IsSlotIncidentFullyTerminal(incident) && incident.failed_slots() == 0) {
             ++readyCount;
         }
         if (incident.failed_slots() != 0) {

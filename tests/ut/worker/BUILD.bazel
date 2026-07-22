@@ -61,6 +61,7 @@ ds_cc_test(
     name = "object_cache_recovery_state_test",
     srcs = ["object_cache/object_cache_recovery_state_test.cpp"],
     deps = [
+        "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:object_cache_recovery_state",
         "//tests/ut:ut_common",
     ],
