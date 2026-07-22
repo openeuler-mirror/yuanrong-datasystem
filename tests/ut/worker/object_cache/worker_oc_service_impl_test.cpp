@@ -1358,6 +1358,35 @@ TEST_F(WorkerOcServiceImplTest, DiskCreateOutOfMemoryRecordsDiskRecoveryRequirem
     EXPECT_FALSE(recoverySnapshot.memoryRequired);
 }
 
+TEST_F(WorkerOcServiceImplTest, RestartReconciliationMarksRuntimeRecoveringBeforeFanout)
+{
+    auto restartService =
+        std::make_shared<WorkerOCServiceImpl>(localAddress_, localAddress_, objectTable_, nullptr, evictionManager_,
+                                              nullptr, nullptr, nullptr, topologyRuntime_.Engine(), metadataRoute_,
+                                              topologyRuntime_.Engine()->Membership(), &exitRequested_, true, true);
+    restartService->InitServiceImpl();
+    worker::WorkerRuntimeFacade runtime;
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
+
+    restartService->SetRuntimeFacade(&runtime);
+
+    const auto snapshotAfterAttach = runtime.GetSnapshot();
+    EXPECT_EQ(snapshotAfterAttach.mode, worker::WorkerServiceMode::RECOVERING);
+    EXPECT_EQ(snapshotAfterAttach.recoveryPhase, worker::WorkerRecoveryPhase::METADATA);
+    EXPECT_FALSE(restartService->BuildObjectCacheRecoveryEvidenceReport().evidence.metadataReady);
+    EXPECT_FALSE(restartService->BuildObjectCacheRecoveryEvidenceReport().evidence.ownershipReady);
+
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
+    restartService->SetRuntimeFacade(&runtime);
+
+    const auto rc = restartService->WhetherNonRestart();
+
+    EXPECT_EQ(rc.GetCode(), StatusCode::K_NOT_READY);
+    const auto snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, worker::WorkerServiceMode::RECOVERING);
+    EXPECT_EQ(snapshot.recoveryPhase, worker::WorkerRecoveryPhase::METADATA);
+}
+
 TEST_F(WorkerOcServiceImplTest, MigrationOutOfMemoryHandlerUsesWorkerRuntimeState)
 {
     worker::WorkerRuntimeFacade runtime;

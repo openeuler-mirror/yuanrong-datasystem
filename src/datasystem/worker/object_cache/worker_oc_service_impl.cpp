@@ -196,6 +196,23 @@ Status BuildClusterTopologyPb(const cluster::TopologySnapshot &snapshot, ::datas
     return Status::OK();
 }
 
+void MarkRestartReconciliationPending(worker::WorkerRuntimeFacade *runtime, ObjectCacheRecoveryState *recoveryState,
+                                      bool isRestart, bool controlBackendAvailableAtStartup)
+{
+    if (!isRestart || !controlBackendAvailableAtStartup || !FLAGS_enable_reconciliation) {
+        return;
+    }
+    worker::WorkerRecoveryEvidenceBuilder builder;
+    if (recoveryState != nullptr) {
+        recoveryState->SetMetadataRecoveryEvidenceReport(builder.BuildReport("restart reconciliation pending"));
+    }
+    if (runtime == nullptr) {
+        return;
+    }
+    runtime->MarkRecovering(worker::WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
+                            "restart reconciliation pending", worker::WorkerRecoveryPhase::METADATA);
+}
+
 }  // namespace
 
 Status BuildGetHashRingResponse(const cluster::TopologySnapshot &snapshot, uint64_t requestedVersion,
@@ -348,6 +365,7 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
 void WorkerOCServiceImpl::SetRuntimeFacade(worker::WorkerRuntimeFacade *runtime)
 {
     runtime_ = runtime;
+    MarkRestartReconciliationPending(runtime_, recoveryState_.get(), isRestart_, controlBackendAvailableAtStartup_);
 }
 
 worker::WorkerRecoveryEvidenceReport WorkerOCServiceImpl::GetLastMetadataRecoveryEvidenceReport() const
@@ -2505,6 +2523,7 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
         }
     } else {
         LOG(INFO) << "Local node restarted. Need reconciliation.";
+        MarkRestartReconciliationPending(runtime_, recoveryState_.get(), isRestart_, controlBackendAvailableAtStartup_);
         RETURN_IF_NOT_OK(ReconcileMembershipChange());
     }
     LOG_IF_ERROR(slotRecoveryManager_->ScheduleLocalPendingTasksFromStore(), "Recover slot failed");

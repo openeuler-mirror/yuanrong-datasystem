@@ -858,6 +858,13 @@
     before the new churn assertion at the existing restart readiness step (`WaitNodeReady(WORKER, 1)`), returning
     `K_NOT_READY`/`Subprocess is abnormal`; logs showed `PushMetaToWorker` rejected as `NOT_RECOVERING`. The experiment
     was reverted and the remaining ST-level membership-churn item should use a dedicated stable fixture.
+  - GREEN: fixed the restart reconciliation admission race by marking restart reconciliation as pending in both worker
+    runtime state and object-cache recovery evidence before fanout. Added
+    `WorkerOcServiceImplTest.RestartReconciliationMarksRuntimeRecoveringBeforeFanout`, which first failed in 4ms when
+    runtime/evidence stayed `RUNNING`/ready, then passed with
+    `WorkerOcServiceImplTest.MasterWorkerClassifiesCleanupAndRecoveryRpcs` in 5ms total. Re-ran
+    `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability`, which passed in 15.300s after the
+    fix; stale failed-run worker/etcd processes from earlier debugging were cleaned from the remote worktree.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
