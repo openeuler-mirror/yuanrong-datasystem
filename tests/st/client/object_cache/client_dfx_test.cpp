@@ -53,6 +53,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"  // kBrpcPortOffset
 #ifdef WITH_TESTS
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/protos/master_object.brpc.stub.pb.h"
 #include "datasystem/protos/object_posix.brpc.stub.pb.h"
 #include "datasystem/protos/ut_object.brpc.stub.pb.h"
 #endif
@@ -215,6 +216,71 @@ Status DirectWorkerGetObjMetaInfo(const HostPort &workerAddr, const RpcCredentia
     auto channel = std::make_shared<RpcChannel>(workerAddr, credential);
     WorkerOCService_Stub stub(channel);
     return stub.GetObjMetaInfo(opts, req, rsp);
+}
+
+Status DirectMasterQueryMeta(const HostPort &workerAddr, const RpcCredential &credential,
+                             const master::QueryMetaReqPb &req, master::QueryMetaRspPb &rsp,
+                             std::vector<RpcMessage> &payloads, int32_t timeoutMs)
+{
+    RpcOptions opts;
+    opts.SetTimeout(timeoutMs);
+    if (FLAGS_use_brpc) {
+#ifdef WITH_TESTS
+        BrpcChannelConfig cfg;
+        cfg.endpoint = HostPort(workerAddr.Host(), workerAddr.Port() + kBrpcPortOffset).ToString();
+        cfg.timeout_ms = timeoutMs;
+        cfg.connect_timeout_ms = timeoutMs;
+        cfg.enable_circuit_breaker = false;
+        cfg.max_retry = 0;
+        std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
+        CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
+                                 "Failed to create brpc MasterOCService channel to " + cfg.endpoint);
+        master::MasterOCService_BrpcGenericStub stub(channel.get(), timeoutMs);
+        return stub.QueryMeta(opts, req, rsp, payloads);
+#else
+        (void)workerAddr;
+        (void)credential;
+        (void)req;
+        (void)rsp;
+        (void)payloads;
+        RETURN_STATUS(K_RUNTIME_ERROR, "brpc direct MasterOCService ST helper requires WITH_TESTS");
+#endif
+    }
+    auto channel = std::make_shared<RpcChannel>(workerAddr, credential);
+    master::MasterOCService_Stub stub(channel);
+    return stub.QueryMeta(opts, req, rsp, payloads);
+}
+
+Status DirectMasterCheckObjectDataLocation(const HostPort &workerAddr, const RpcCredential &credential,
+                                           const master::CheckObjectDataLocationReqPb &req,
+                                           master::CheckObjectDataLocationRspPb &rsp, int32_t timeoutMs)
+{
+    RpcOptions opts;
+    opts.SetTimeout(timeoutMs);
+    if (FLAGS_use_brpc) {
+#ifdef WITH_TESTS
+        BrpcChannelConfig cfg;
+        cfg.endpoint = HostPort(workerAddr.Host(), workerAddr.Port() + kBrpcPortOffset).ToString();
+        cfg.timeout_ms = timeoutMs;
+        cfg.connect_timeout_ms = timeoutMs;
+        cfg.enable_circuit_breaker = false;
+        cfg.max_retry = 0;
+        std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
+        CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
+                                 "Failed to create brpc MasterOCService channel to " + cfg.endpoint);
+        master::MasterOCService_BrpcGenericStub stub(channel.get(), timeoutMs);
+        return stub.CheckObjectDataLocation(opts, req, rsp);
+#else
+        (void)workerAddr;
+        (void)credential;
+        (void)req;
+        (void)rsp;
+        RETURN_STATUS(K_RUNTIME_ERROR, "brpc direct MasterOCService ST helper requires WITH_TESTS");
+#endif
+    }
+    auto channel = std::make_shared<RpcChannel>(workerAddr, credential);
+    master::MasterOCService_Stub stub(channel);
+    return stub.CheckObjectDataLocation(opts, req, rsp);
 }
 }  // namespace
 
@@ -2417,8 +2483,6 @@ TEST_F(WorkerStalePrimaryTest, LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerReb
     DS_ASSERT_OK(cluster_->GetWorkerAddr(1, workerAddr1));
     RpcCredential cred;
     RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, cred);
-    auto masterChannel = std::make_shared<RpcChannel>(workerAddr1, cred);
-    master::MasterOCService_Stub master1Stub(masterChannel);
     AkSkManager akSk;
     DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
     auto db = InitTestEtcdInstance();
@@ -2443,9 +2507,7 @@ TEST_F(WorkerStalePrimaryTest, LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerReb
             req.add_ids(key);
             req.set_address(workerAddr1.ToString());
             RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
-            RpcOptions opts;
-            opts.SetTimeout(1'000);
-            RETURN_IF_NOT_OK(master1Stub.QueryMeta(opts, req, rsp, payloads));
+            RETURN_IF_NOT_OK(DirectMasterQueryMeta(workerAddr1, cred, req, rsp, payloads, 1'000));
             CHECK_FAIL_RETURN_STATUS(rsp.query_metas_size() == 1, K_NOT_READY,
                                      "object metadata is not queryable before fault injection");
             master::CheckObjectDataLocationReqPb locationReq;
@@ -2455,7 +2517,7 @@ TEST_F(WorkerStalePrimaryTest, LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerReb
             objectVersion->set_version(rsp.query_metas(0).meta().version());
             locationReq.set_address(workerAddr1.ToString());
             RETURN_IF_NOT_OK(akSk.GenerateSignature(locationReq));
-            RETURN_IF_NOT_OK(master1Stub.CheckObjectDataLocation(opts, locationReq, locationRsp));
+            RETURN_IF_NOT_OK(DirectMasterCheckObjectDataLocation(workerAddr1, cred, locationReq, locationRsp, 1'000));
             CHECK_FAIL_RETURN_STATUS(locationRsp.no_need_clear_object_keys_size() == 1, K_NOT_READY,
                                      "peer copy location has not been acknowledged by the metadata master");
             return Status::OK();
@@ -2517,9 +2579,7 @@ TEST_F(WorkerStalePrimaryTest, LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerReb
             req.add_ids(key);
             req.set_address(workerAddr1.ToString());
             RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
-            RpcOptions opts;
-            opts.SetTimeout(1'000);
-            RETURN_IF_NOT_OK(master1Stub.QueryMeta(opts, req, rsp, payloads));
+            RETURN_IF_NOT_OK(DirectMasterQueryMeta(workerAddr1, cred, req, rsp, payloads, 1'000));
             CHECK_FAIL_RETURN_STATUS(rsp.query_metas_size() == 1, K_NOT_READY,
                                      "rebuilt object metadata is not queryable on the new owner");
             CHECK_FAIL_RETURN_STATUS(rsp.query_metas(0).meta().primary_address() == workerAddr1.ToString(), K_NOT_READY,
