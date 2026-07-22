@@ -540,6 +540,16 @@
       `LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage:LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`
       passed in 27.95s; Bazel 7.4.1 `//tests/st/client/object_cache:client_dfx_test` passed in 24.15s and cached rerun
       passed in 0.34s.
+    - Added metadata recovery membership-churn UT:
+      `SlotRecoveryTest.DeferredRecoveryMetadataRetryIgnoresNewMembersAfterMembershipChange` passed 1/1 in 0.06s; the
+      pair
+      `RecoveryMetadataBatchRetriesOnlyFailedIdsAfterMembershipChange:DeferredRecoveryMetadataRetryIgnoresNewMembersAfterMembershipChange`
+      passed 2/2 in 0.08s after a CLion remote `tests-index` rebuild with URMA Mock in 106s.
+    - Added missing Bazel 7.4.1 coverage target
+      `//tests/ut/worker:slot_recovery_manager_test`; build passed in 23.79s and cached rerun passed in 0.31s. The
+      Bazel-built binary also ran
+      `SlotRecoveryTest.DeferredRecoveryMetadataRetryIgnoresNewMembersAfterMembershipChange` successfully in 1.37s wall
+      time.
   - Follow-up scale/fault cases to add before claiming full story closure:
     1. ScaleOut while one existing worker is isolated is now covered at ST level by
        `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`; topology planning is
@@ -561,13 +571,16 @@
        `ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`; ScaleIn task-overlap marker post-commit outage
        idempotency is covered at executor contract level by
        `ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`.
-    4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
-       deferred retry payload; broader ST-level membership churn around the same path remains pending. A direct attempt
-       to extend `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability` with dynamic ScaleOut
-       during `BeforeRetryFailedMetadataRecovery` was rejected because the existing brpc restart window can fail before
-       the new churn step (`WaitNodeReady(WORKER, 1)` returned `K_NOT_READY`/`Subprocess is abnormal` with
-       `PushMetaToWorker` rejected as `NOT_RECOVERING`), so this needs a dedicated stable fixture rather than enlarging
-       that restart ST.
+    4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level by
+       `RecoveryMetadataBatchRetriesOnlyFailedIdsAfterMembershipChange` and
+       `DeferredRecoveryMetadataRetryIgnoresNewMembersAfterMembershipChange`. The second test changes membership between
+       the first failed metadata push and the deferred retry, then verifies the retry keeps the original recovered-meta
+       payload and sends only the failed object id. Broader ST-level membership churn around the same path remains a
+       separate hardening follow-up. A direct attempt to extend
+       `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability` with dynamic ScaleOut during
+       `BeforeRetryFailedMetadataRecovery` was rejected because the existing brpc restart window can fail before the new
+       churn step (`WaitNodeReady(WORKER, 1)` returned `K_NOT_READY`/`Subprocess is abnormal` with `PushMetaToWorker`
+       rejected as `NOT_RECOVERING`), so this needs a dedicated stable fixture rather than enlarging that restart ST.
     5. Stream local-isolation data retention is now covered by the current admission ST; broader Stream scale/fault
        data-retention ST remains pending if we want end-to-end evidence beyond the local-isolation recovery path.
 

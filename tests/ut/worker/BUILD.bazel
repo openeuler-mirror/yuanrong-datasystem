@@ -204,6 +204,25 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "slot_recovery_manager_test",
+    srcs = ["object_cache/slot_recovery_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/l2cache:persistence_api_header",
+        "//src/datasystem/common/l2cache:slot_client",
+        "//src/datasystem/common/shared_memory:common_shared_memory",
+        "//src/datasystem/protos:slot_recovery_cc_proto",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:metadata_recovery_manager",
+        "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
+        "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_store",
+        "//tests/common/binmock",
+        "//tests/ut:ut_common",
+        "//tests/ut/worker:test_metadata_route",
+    ],
+)
+
 # Worker OC 服务实现 metadata header 测试
 ds_cc_test(
     name = "worker_oc_service_impl_header_test",
@@ -654,6 +673,7 @@ test_suite(
         "rebalance_worker_test",
         "shared_page_queue_group_test",
         "shared_page_queue_test",
+        "slot_recovery_manager_test",
         "stream_bufferpool_test",
         "stream_cursor_test",
         "stream_data_page_test",
