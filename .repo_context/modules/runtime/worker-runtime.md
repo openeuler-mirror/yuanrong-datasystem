@@ -381,23 +381,23 @@
   - Post ownership-slice object-cache focused regression:
     `ds_ut_object --gtest_filter="ObjectCacheRecoveryStateTest.*:WorkerRecoveryEvidenceAdapterTest.*:WorkerOcServiceImplTest.*Recovery*:WorkerOcServiceImplTest.*OutOfMemory*:WorkerOcServiceImplTest.*ResourceRecovery*:WorkerOcServiceImplTest.*BuildObjectCacheRecoveryEvidence*:WorkerOcServiceImplTest.*ClearMatchedObjectsRecovers*:WorkerOcServiceImplTest.*NotifyRemoteGet*:MigrateDataServiceTest.*Drain*:MigrateDataServiceTest.*MigrateDataDirectResponse*"`
     passed 44/44 in 10.49s.
-  - After rebasing to `main/master@11805014d`, `scripts/clion_remote_build.sh tests-index` rebuilt the CLion remote
-    UT/ST index with URMA Mock enabled, generated 1157 compile-command entries, reused `/home/ds-thirdparty-cache`
-    without rebuilding third-party dependencies, and completed in 139s.
+  - After rebasing to upstream `main/master@9562ef77d`, `scripts/clion_remote_build.sh tests-index` rebuilt the
+    CLion remote UT/ST index with URMA Mock enabled, generated 1157 compile-command entries, reused
+    `/home/ds-thirdparty-cache` without rebuilding third-party dependencies, and completed in 520s.
   - Added/updated 1 coordination-backend contract method and 2 topology-controller lifecycle expectations:
     `ICoordinationBackend::ShutdownWatchEventSources()` is required by the contract, and controller Start rollback/Stop
     assert watch-only shutdown rather than full event-source shutdown. Initial RED single-file syntax check failed in
     22.1s because the interface method did not exist; GREEN syntax check passed in 8.6s.
-  - `cluster_topology_contract_ut --gtest_filter="TopologyControllerRuntimeTest.*:CoordinationBackendContractTest.*"`:
-    19/19 tests passed in 2.07s.
+  - Post-upstream-rebase `cluster_topology_contract_ut
+    --gtest_filter="TopologyControllerRuntimeTest.*:CoordinationBackendContractTest.*"`: 19/19 tests passed in 2.06s.
   - `ds_ut --gtest_filter="WorkerAdmissionFacadeTest.*:WorkerIsolationCoordinatorTest.*:WorkerRecoveryControllerTest.*:WorkerRecoveryEvidenceBuilderTest.*:WorkerRecoveryEvidenceTrackerTest.*:WorkerRuntimeFacadeTest.*:WorkerRuntimeStateTest.*:WorkerTopologyAvailabilityAdmissionTest.*"`:
-    43/43 tests passed in 0.30s.
+    43/43 tests passed in 0.29s.
   - `ds_ut_object --gtest_filter="ObjectCacheRecoveryStateTest.*:WorkerRecoveryEvidenceAdapterTest.*:WorkerOcServiceImplTest.*Recovery*:WorkerOcServiceImplTest.*OutOfMemory*:WorkerOcServiceImplTest.*ResourceRecovery*:WorkerOcServiceImplTest.*BuildObjectCacheRecoveryEvidence*:WorkerOcServiceImplTest.*ClearMatchedObjectsRecovers*:WorkerOcServiceImplTest.*NotifyRemoteGet*:MigrateDataServiceTest.*Drain*:MigrateDataServiceTest.*MigrateDataDirectResponse*"`:
-    43/43 tests passed in 10.49s. During this slice,
+    44/44 tests passed in 10.49s. During this slice,
     `WorkerOcServiceImplTest.DiskCreateOutOfMemoryRecordsDiskRecoveryRequirement` was narrowed from an over-broad
     mocked Create RPC path that timed out at 60s to a direct `MarkOutOfMemoryIfNeeded(..., DISK)` assertion that passes
     in 0.05s while preserving the disk-resource recovery requirement coverage.
-  - Current focused UT total for this slice: 105/105 passed. `git diff --check` is clean, and
+  - Current focused UT total for this slice: 106/106 passed. `git diff --check` is clean, and
     `git clang-format --diff HEAD --` on the touched source/test files reports no changes.
   - Post hot-path guard refactor and rebase to latest `main/master`: `scripts/clion_remote_build.sh tests-index`
     rebuilt the CLion remote UT/ST index with URMA Mock enabled in 601s, generated 1157 compile-command entries, and
