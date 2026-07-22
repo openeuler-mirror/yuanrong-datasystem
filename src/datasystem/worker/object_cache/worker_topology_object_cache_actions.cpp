@@ -41,8 +41,8 @@ Status WorkerTopologyObjectCacheActions::PrepareScaleInCleanup(
     std::function<Status()> authorize;
     cluster::TopologyCleanupEffect apply;
     RETURN_IF_NOT_OK(service->PrepareTopologyScaleInCleanup(context.action, context.keyFilter,
-                                                           context.businessOperationId, context.deadline,
-                                                           context.cancellation, authorize, apply));
+                                                            context.businessOperationId, context.deadline,
+                                                            context.cancellation, authorize, apply));
     prepared = std::make_unique<cluster::TopologyPreparedCleanup>(std::move(authorize), std::move(apply));
     return Status::OK();
 }

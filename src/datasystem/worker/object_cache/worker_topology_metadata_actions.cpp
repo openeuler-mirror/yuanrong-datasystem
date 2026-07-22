@@ -27,8 +27,7 @@ WorkerTopologyMetadataActions::WorkerTopologyMetadataActions(bool centralizedMet
 {
 }
 
-void WorkerTopologyMetadataActions::RecordStep(const std::string &step, const Status &status,
-                                               Status &firstError) const
+void WorkerTopologyMetadataActions::RecordStep(const std::string &step, const Status &status, Status &firstError) const
 {
     if (status.IsOk()) {
         return;
@@ -74,11 +73,10 @@ Status WorkerTopologyMetadataActions::RecoverFailureMetadata(const cluster::Topo
             firstError);
     }
     if (!centralizedMetadata_ && streamMetadataEnabled_ && scMetadata != nullptr) {
-        RecordStep(
-            "recover-stream",
-            scMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.businessOperationId,
-                                               context.deadline, context.cancellation),
-            firstError);
+        RecordStep("recover-stream",
+                   scMetadata->RecoverTopologyFailure(context.action, context.keyFilter, context.businessOperationId,
+                                                      context.deadline, context.cancellation),
+                   firstError);
     }
     return firstError;
 }
