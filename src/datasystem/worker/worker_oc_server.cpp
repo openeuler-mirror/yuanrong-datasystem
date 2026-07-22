@@ -94,6 +94,7 @@
 #include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/worker_liveness_check.h"
 #include "datasystem/worker/worker_coordination_backend_factory.h"
+#include "datasystem/worker/runtime/worker_isolation_coordinator.h"
 #include "datasystem/worker/runtime/worker_topology_availability_admission.h"
 #include "datasystem/worker/runtime/worker_control_backend_probe.h"
 #include "datasystem/worker/rebalance_executor.h"

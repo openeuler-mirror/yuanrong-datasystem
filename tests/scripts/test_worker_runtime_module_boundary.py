@@ -168,6 +168,19 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should avoid the full topology callback executor contract")
 
+    def test_worker_oc_server_header_does_not_expose_runtime_internals(self):
+        header = REPO_ROOT / "src/datasystem/worker/worker_oc_server.h"
+        text = header.read_text(encoding="utf-8")
+        self.assertIn("class WorkerIsolationCoordinator;", text)
+        forbidden_tokens = [
+            "datasystem/worker/runtime/worker_isolation_coordinator.h",
+            "datasystem/worker/runtime/worker_topology_availability_admission.h",
+            "datasystem/worker/runtime/worker_control_backend_probe.h",
+            "datasystem/worker/runtime/worker_topology_phase_callbacks.h",
+        ]
+        for token in forbidden_tokens:
+            self.assertNotIn(token, text, f"{header} should not expose runtime implementation headers")
+
     def test_master_metadata_managers_use_narrow_topology_callback_inputs(self):
         files = [
             REPO_ROOT / "src/datasystem/master/object_cache/oc_metadata_manager.h",
