@@ -397,6 +397,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:worker_master_oc_api_header",
         "//src/datasystem/worker/object_cache/limiter:data_limiter",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_crud_common_api_header",
+        "//src/datasystem/worker/runtime:worker_runtime_facade",
         "@com_google_protobuf//:protobuf",
     ],
 )
