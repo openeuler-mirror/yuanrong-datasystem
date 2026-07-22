@@ -181,6 +181,32 @@ TEST(TopologyPlanBuilderTest, ScaleInSourceStaysLeavingWhenPeerFails)
     EXPECT_EQ(failure.next.members[2].state, MemberState::ACTIVE);
 }
 
+TEST(TopologyPlanBuilderTest, FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives)
+{
+    HashAlgorithm algorithm;
+    TopologyPlanBuilder builder(algorithm);
+    TopologyState latest;
+    latest.version = 5;
+    latest.clusterHasInit = true;
+    latest.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 5 };
+    latest.members = { MakeControlMember('a', "127.0.0.1:1", MemberState::LEAVING, { 10, 100 }),
+                       MakeControlMember('b', "127.0.0.1:2", MemberState::FAILED, { 50, 150 }),
+                       MakeControlMember('c', "127.0.0.1:3", MemberState::ACTIVE, { 75, 175 }) };
+
+    TopologyState final;
+    DS_ASSERT_OK(builder.BuildFailureFinal(latest, final));
+
+    EXPECT_EQ(final.version, 6);
+    ASSERT_TRUE(final.activeBatch.has_value());
+    EXPECT_EQ(final.activeBatch->type, TopologyChangeType::SCALE_IN);
+    EXPECT_EQ(final.activeBatch->epoch, 6);
+    ASSERT_EQ(final.members.size(), 2);
+    EXPECT_EQ(final.members[0].identity.address, "127.0.0.1:1");
+    EXPECT_EQ(final.members[0].state, MemberState::LEAVING);
+    EXPECT_EQ(final.members[1].identity.address, "127.0.0.1:3");
+    EXPECT_EQ(final.members[1].state, MemberState::ACTIVE);
+}
+
 TEST(TopologyPlanBuilderTest, ClusterShutdownClearsTopologyWithoutTasks)
 {
     HashAlgorithm algorithm;

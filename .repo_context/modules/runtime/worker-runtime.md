@@ -467,6 +467,10 @@
     `TopologyPlanBuilderTest.FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives`, which verifies a Failure batch
     that interrupts ScaleOut removes the failed committed member and resumes the original ScaleOut batch when at least
     one `JOINING` member survives.
+  - `FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives`: covered by
+    `TopologyPlanBuilderTest.FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives`, which verifies a Failure batch
+    that interrupts ScaleIn removes the failed peer and resumes the original ScaleIn batch when a voluntary `LEAVING`
+    member survives.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV/Stream STs have
     been run during development, but full CI, Bazel, and complete Object/KV/Stream ST suites are not yet green in this
     session.
@@ -477,8 +481,9 @@
        ScaleOut batch is covered by `FailureFinalResumesScaleOutBatchWhenJoiningMemberSurvives`. Full worker
        metadata-rebuild ST with an actual `LOCAL_ISOLATED` process remains a broader follow-up.
     2. ScaleIn voluntary source plus concurrent peer local-isolation is now covered at topology replan level by
-       `ScaleInSourceStaysLeavingWhenPeerFails`; migration-target filtering for the same combined path remains covered
-       indirectly by active-target admission and needs a dedicated ST if we want end-to-end evidence.
+       `ScaleInSourceStaysLeavingWhenPeerFails`; Failure final resuming an interrupted ScaleIn batch is covered by
+       `FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives`. Migration-target filtering for the same combined path
+       remains covered indirectly by active-target admission and needs a dedicated ST if we want end-to-end evidence.
     3. ScaleOut plus transient global backend outage is now covered at failure-classifier level by
        `ScaleOutMembersSurviveGlobalBackendOutagePause`; ScaleOut progress post-commit outage idempotency is covered by
        `ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`; ScaleIn task-overlap marker post-commit outage
@@ -760,6 +765,18 @@
     passed 1/1 test in 0ms gtest time, about 1.21s wall time.
   - GREEN: remote `cluster_topology_contract_ut --gtest_filter="TopologyPlanBuilderTest.*"` passed 9/9 tests in 0ms
     gtest time, about 1.20s wall time.
+  - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- tests/ut/cluster/topology_plan_builder_test.cpp`
+    reported no formatting changes.
+  - Added 1 UT case:
+    `TopologyPlanBuilderTest.FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives`.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` passed in 83s with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 1s`), source build time 8s, `BUILD_WITH_URMA_MOCK` enabled, and 1156 compile
+    database entries.
+  - GREEN: remote
+    `cluster_topology_contract_ut --gtest_filter="TopologyPlanBuilderTest.FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives"`
+    passed 1/1 test in 0ms gtest time, about 1.29s wall time.
+  - GREEN: remote `cluster_topology_contract_ut --gtest_filter="TopologyPlanBuilderTest.*"` passed 10/10 tests in 0ms
+    gtest time, about 1.24s wall time.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- tests/ut/cluster/topology_plan_builder_test.cpp`
     reported no formatting changes.
 - Build worker and tests:
