@@ -139,6 +139,16 @@ Status EtcdCoordinationBackend::ShutdownEventSources()
     return rc;
 }
 
+Status EtcdCoordinationBackend::ShutdownWatchEventSources()
+{
+    if (etcdStore_ == nullptr) {
+        return Status::OK();
+    }
+    Status rc = etcdStore_->ShutdownWatchEventSources();
+    etcdStore_->SetEventHandler({});
+    return rc;
+}
+
 Status EtcdCoordinationBackend::Shutdown()
 {
     return etcdStore_ == nullptr ? Status::OK() : etcdStore_->Shutdown();

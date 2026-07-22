@@ -189,7 +189,7 @@ Status TopologyController::Start()
         auto rc = backend_.WatchEvents(watches);
         if (rc.IsError()) {
             dispatcher_.ShutdownIngress();
-            LOG_IF_ERROR(backend_.ShutdownEventSources(),
+            LOG_IF_ERROR(backend_.ShutdownWatchEventSources(),
                          "Shut down topology Controller event sources after Start failure");
             backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
             return rc;
@@ -211,7 +211,7 @@ Status TopologyController::Start()
         diagnostics_.running = false;
         dispatcher_.ShutdownIngress();
         if (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED) {
-            LOG_IF_ERROR(backend_.ShutdownEventSources(),
+            LOG_IF_ERROR(backend_.ShutdownWatchEventSources(),
                          "Shut down topology Controller event sources after thread Start failure");
             backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
         }
@@ -232,7 +232,7 @@ Status TopologyController::Stop(std::chrono::steady_clock::time_point deadline)
     dispatcher_.ShutdownIngress();
     Status eventSourceStatus;
     if (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED) {
-        eventSourceStatus = backend_.ShutdownEventSources();
+        eventSourceStatus = backend_.ShutdownWatchEventSources();
         backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
     }
     if (!stoppedCv_.wait_until(lock, deadline, [this] { return threadExited_; })) {

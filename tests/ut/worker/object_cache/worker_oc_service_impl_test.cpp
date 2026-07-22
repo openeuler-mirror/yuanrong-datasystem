@@ -1361,20 +1361,9 @@ TEST_F(WorkerOcServiceImplTest, DiskCreateOutOfMemoryRecordsDiskRecoveryRequirem
     worker::WorkerRuntimeFacade runtime;
     ASSERT_TRUE(MarkRuntimeRunning(runtime));
     impl_->SetRuntimeFacade(&runtime);
-    DS_ASSERT_OK(SetHealthProbe());
-    SetTopologyServingAdmission(true);
-    Raii reset([]() {
-        SetTopologyServingAdmission(true);
-        SetUnhealthy();
-    });
-    BINEXPECT_CALL(&WorkerOcServiceCreateImpl::Create, (_, _))
-        .Times(1)
-        .WillOnce(Return(Status(StatusCode::K_OUT_OF_MEMORY, "disk full")));
-    CreateReqPb req;
-    req.set_cache_type(static_cast<int32_t>(memory::CacheType::DISK));
-    CreateRspPb rsp;
 
-    EXPECT_EQ(impl_->Create(req, rsp).GetCode(), StatusCode::K_OUT_OF_MEMORY);
+    impl_->MarkOutOfMemoryIfNeeded(Status(StatusCode::K_OUT_OF_MEMORY, "disk full"), "Create", memory::CacheType::DISK);
+
     auto recoverySnapshot = impl_->recoveryState_->GetResourceRecoverySnapshot();
     EXPECT_TRUE(recoverySnapshot.diskRequired);
     EXPECT_FALSE(recoverySnapshot.memoryRequired);

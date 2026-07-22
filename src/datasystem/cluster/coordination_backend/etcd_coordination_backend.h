@@ -172,6 +172,12 @@ public:
     Status ShutdownEventSources() override;
 
     /**
+     * @brief Stop ETCD watch event sources without touching membership keepalive.
+     * @return Backend operation status.
+     */
+    Status ShutdownWatchEventSources() override;
+
+    /**
      * @brief Shut down all runtime resources of the non-owning ETCD store binding.
      * @return Backend operation status.
      */

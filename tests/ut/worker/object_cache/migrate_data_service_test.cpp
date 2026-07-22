@@ -185,6 +185,11 @@ public:
         return Status::OK();
     }
 
+    Status ShutdownWatchEventSources() override
+    {
+        return Status::OK();
+    }
+
     Status Shutdown() override
     {
         return Status::OK();

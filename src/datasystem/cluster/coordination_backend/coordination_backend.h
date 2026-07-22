@@ -221,6 +221,12 @@ public:
     virtual Status ShutdownEventSources() = 0;
 
     /**
+     * @brief Idempotently stop watch event sources without stopping the membership keepalive.
+     * @return Backend operation status.
+     */
+    virtual Status ShutdownWatchEventSources() = 0;
+
+    /**
      * @brief Shut down all runtime resources owned by this backend instance.
      * @return Backend operation status.
      */

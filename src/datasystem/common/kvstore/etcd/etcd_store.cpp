@@ -257,9 +257,13 @@ Status EtcdStore::ShutdownEventSources()
     keepAlivePool_.reset();  // waits for child threads to quit
     leaseKeepAlive_.reset();
 
+    return ShutdownWatchEventSources();
+}
+
+Status EtcdStore::ShutdownWatchEventSources()
+{
     watchExit_ = true;
     LOG_IF_ERROR(WatchShutdown(), "EtcdStore WatchShutdown failed");
-
     return Status::OK();
 }
 

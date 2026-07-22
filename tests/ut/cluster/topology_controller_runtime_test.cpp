@@ -33,6 +33,7 @@ constexpr auto TEST_JANITOR_INTERVAL = std::chrono::seconds(1);
 constexpr auto INVALID_JANITOR_INTERVAL = std::chrono::seconds(0);
 constexpr uint64_t TEST_TOPOLOGY_VERSION = 1;
 constexpr size_t EXPECTED_EVENT_SOURCE_SHUTDOWN_CALLS = 1;
+constexpr size_t EXPECTED_WATCH_EVENT_SOURCE_SHUTDOWN_CALLS = 1;
 constexpr size_t EXPECTED_FULL_SHUTDOWN_CALLS = 0;
 constexpr size_t EXPECTED_NO_GET_ATTEMPTS = 0;
 constexpr size_t EXPECTED_INITIAL_COMPONENT_GET_ATTEMPTS = 2;
@@ -130,6 +131,26 @@ public:
         return Status::OK();
     }
 
+    Status ShutdownWatchEventSources() override
+    {
+        bool failShutdown = false;
+        {
+            std::lock_guard<std::mutex> lock(callMutex_);
+            ++shutdownWatchEventSourceCalls_;
+            failShutdown = failNextEventSourceShutdown_;
+            failNextEventSourceShutdown_ = false;
+        }
+        callCv_.notify_all();
+        const auto status = backend_.ShutdownWatchEventSources();
+        if (status.IsError()) {
+            return status;
+        }
+        if (failShutdown) {
+            return Status(K_RPC_UNAVAILABLE, "injected event-source shutdown failure");
+        }
+        return Status::OK();
+    }
+
     Status Shutdown() override
     {
         std::lock_guard<std::mutex> lock(callMutex_);
@@ -199,10 +220,18 @@ public:
         return fullShutdownCalls_;
     }
 
+    size_t ShutdownWatchEventSourceCalls() const
+    {
+        std::lock_guard<std::mutex> lock(callMutex_);
+        return shutdownWatchEventSourceCalls_;
+    }
+
     bool WaitForShutdownEventSourceCalls(size_t expected, std::chrono::steady_clock::time_point deadline)
     {
         std::unique_lock<std::mutex> lock(callMutex_);
-        return callCv_.wait_until(lock, deadline, [this, expected] { return shutdownEventSourceCalls_ >= expected; });
+        return callCv_.wait_until(lock, deadline, [this, expected] {
+            return shutdownEventSourceCalls_ + shutdownWatchEventSourceCalls_ >= expected;
+        });
     }
 
     void FailNextShutdownEventSources()
@@ -217,6 +246,7 @@ private:
     mutable std::mutex callMutex_;
     std::condition_variable callCv_;
     size_t shutdownEventSourceCalls_{ 0 };
+    size_t shutdownWatchEventSourceCalls_{ 0 };
     size_t fullShutdownCalls_{ 0 };
     bool failNextEventSourceShutdown_{ false };
 };
@@ -298,7 +328,8 @@ TEST(TopologyControllerRuntimeTest, DefaultsJanitorOffAndSupportsExplicitJanitor
     DS_ASSERT_OK(defaultRuntime->Start());
     EXPECT_EQ(defaultRuntime->Start().GetCode(), K_INVALID);
     DS_ASSERT_OK(defaultRuntime->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
-    EXPECT_EQ(defaultBackend.ShutdownEventSourceCalls(), EXPECTED_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(defaultBackend.ShutdownWatchEventSourceCalls(), EXPECTED_WATCH_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(defaultBackend.ShutdownEventSourceCalls(), 0U);
     EXPECT_EQ(defaultBackend.FullShutdownCalls(), EXPECTED_FULL_SHUTDOWN_CALLS);
 
     auto janitorOptions = MakeOptions("explicit-janitor");
@@ -310,7 +341,8 @@ TEST(TopologyControllerRuntimeTest, DefaultsJanitorOffAndSupportsExplicitJanitor
         TopologyControllerRuntime::Create(std::move(janitorOptions), janitorBackend, algorithm, janitorRuntime));
     DS_ASSERT_OK(janitorRuntime->Start());
     DS_ASSERT_OK(janitorRuntime->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
-    EXPECT_EQ(janitorBackend.ShutdownEventSourceCalls(), EXPECTED_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(janitorBackend.ShutdownWatchEventSourceCalls(), EXPECTED_WATCH_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(janitorBackend.ShutdownEventSourceCalls(), 0U);
     EXPECT_EQ(janitorBackend.FullShutdownCalls(), EXPECTED_FULL_SHUTDOWN_CALLS);
 }
 
@@ -352,7 +384,8 @@ TEST(TopologyControllerRuntimeTest, ControllerStartFailureDoesNotStartJanitorOrF
     EXPECT_EQ(runtime->Start().GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_EQ(backend.Backend().GetAttemptCount(), EXPECTED_NO_GET_ATTEMPTS);
     EXPECT_FALSE(backend.Backend().HasEventHandler());
-    EXPECT_EQ(backend.ShutdownEventSourceCalls(), EXPECTED_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(backend.ShutdownWatchEventSourceCalls(), EXPECTED_WATCH_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(backend.ShutdownEventSourceCalls(), 0U);
     EXPECT_EQ(backend.FullShutdownCalls(), EXPECTED_FULL_SHUTDOWN_CALLS);
     DS_ASSERT_OK(runtime->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
@@ -386,7 +419,8 @@ TEST(TopologyControllerRuntimeTest, StopTimeoutRetainsDependenciesAndSecondStopC
     ASSERT_TRUE(WaitForBlockedGetOrRelease(backend.Backend(), std::chrono::steady_clock::now() + TEST_WAIT));
 
     EXPECT_EQ(runtime->Stop(std::chrono::steady_clock::now()).GetCode(), K_RPC_DEADLINE_EXCEEDED);
-    EXPECT_EQ(backend.ShutdownEventSourceCalls(), EXPECTED_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(backend.ShutdownWatchEventSourceCalls(), EXPECTED_WATCH_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(backend.ShutdownEventSourceCalls(), 0U);
     EXPECT_EQ(backend.FullShutdownCalls(), EXPECTED_FULL_SHUTDOWN_CALLS);
     backend.Backend().ReleaseBlockedGet();
     DS_ASSERT_OK(runtime->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
@@ -417,7 +451,8 @@ TEST(TopologyControllerRuntimeTest, StopContinuesAfterJanitorTimeoutAndPreserves
     backend.FailNextShutdownEventSources();
 
     EXPECT_EQ(runtime->Stop(std::chrono::steady_clock::now()).GetCode(), K_RPC_DEADLINE_EXCEEDED);
-    EXPECT_EQ(backend.ShutdownEventSourceCalls(), EXPECTED_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(backend.ShutdownWatchEventSourceCalls(), EXPECTED_WATCH_EVENT_SOURCE_SHUTDOWN_CALLS);
+    EXPECT_EQ(backend.ShutdownEventSourceCalls(), 0U);
     backend.Backend().ReleaseBlockedGet();
     DS_ASSERT_OK(runtime->Stop(std::chrono::steady_clock::now() + TEST_WAIT));
     EXPECT_EQ(backend.FullShutdownCalls(), EXPECTED_FULL_SHUTDOWN_CALLS);

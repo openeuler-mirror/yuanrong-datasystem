@@ -174,6 +174,12 @@ public:
     Status ShutdownEventSources() override;
 
     /**
+     * @brief Stop watches without touching membership keepalive.
+     * @return Status of the call.
+     */
+    Status ShutdownWatchEventSources() override;
+
+    /**
      * @brief Shut down this backend idempotently.
      * @return Status of the call.
      */

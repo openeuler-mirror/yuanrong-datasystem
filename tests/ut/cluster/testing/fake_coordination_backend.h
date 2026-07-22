@@ -46,6 +46,7 @@ public:
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override;
     Status InitKeepAlive(const std::string &, const std::string &, bool, bool) override;
     Status ShutdownEventSources() override;
+    Status ShutdownWatchEventSources() override;
     Status Shutdown() override;
     Status UpdateNodeState(MemberLifecycleState) override;
     Status GetStorePrefix(const std::string &table, std::string &prefix) override;

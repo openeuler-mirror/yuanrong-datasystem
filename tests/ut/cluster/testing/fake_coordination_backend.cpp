@@ -225,6 +225,11 @@ Status FakeCoordinationBackend::ShutdownEventSources()
     return Status::OK();
 }
 
+Status FakeCoordinationBackend::ShutdownWatchEventSources()
+{
+    return Status::OK();
+}
+
 Status FakeCoordinationBackend::Shutdown()
 {
     return Status::OK();

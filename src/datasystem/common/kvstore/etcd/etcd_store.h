@@ -114,6 +114,12 @@ public:
     Status ShutdownEventSources();
 
     /**
+     * @brief Idempotently stop watch event sources while preserving keepalive.
+     * @return Status of the call.
+     */
+    Status ShutdownWatchEventSources();
+
+    /**
      * @brief Create a new table (aka column family in RocksDB's term).
      * @param[in] tableName The table name to create.
      * @param[in] tablePrefix The table prefix.

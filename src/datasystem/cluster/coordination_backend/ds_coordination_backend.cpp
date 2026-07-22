@@ -648,6 +648,13 @@ void DsCoordinationBackend::ShutdownKeepAliveThread()
 
 Status DsCoordinationBackend::ShutdownEventSources()
 {
+    RETURN_IF_NOT_OK(ShutdownWatchEventSources());
+    ShutdownKeepAliveThread();
+    return Status::OK();
+}
+
+Status DsCoordinationBackend::ShutdownWatchEventSources()
+{
     {
         std::lock_guard<std::mutex> lock(eventHandlerMutex_);
         eventHandler_ = {};
@@ -658,7 +665,6 @@ Status DsCoordinationBackend::ShutdownEventSources()
         std::lock_guard<std::mutex> lock(watchMutex_);
         watchStopping_ = true;
     }
-    ShutdownKeepAliveThread();
     CancelWatches();
     std::unique_lock<std::mutex> lock(eventHandlerMutex_);
     eventHandlerCv_.wait(lock, [this] { return activeEventHandlers_ == 0; });

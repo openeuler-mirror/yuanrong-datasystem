@@ -123,6 +123,8 @@ static_assert(std::is_abstract_v<ICoordinationBackend>);
 static_assert(std::has_virtual_destructor_v<ICoordinationBackend>);
 static_assert(
     std::is_same_v<decltype(&ICoordinationBackend::ShutdownEventSources), Status (ICoordinationBackend::*)()>);
+static_assert(
+    std::is_same_v<decltype(&ICoordinationBackend::ShutdownWatchEventSources), Status (ICoordinationBackend::*)()>);
 static_assert(std::is_same_v<decltype(&ICoordinationBackend::Shutdown), Status (ICoordinationBackend::*)()>);
 static_assert(std::is_same_v<decltype(&ICoordinationBackend::SetLocalIsolationHandler),
                              void (ICoordinationBackend::*)(ICoordinationBackend::LocalIsolationHandler)>);
