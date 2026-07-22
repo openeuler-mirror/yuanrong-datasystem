@@ -79,7 +79,7 @@ std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
         auto rc = StartControlBackendProbe(clientFactory, peer, deadline, probe);
         if (rc.IsError()) {
             VLOG(1) << "Cluster-state probe start failed for " << peer.address << ": " << rc.ToString();
-            return {};
+            continue;
         }
         pending.push_back(std::move(probe));
     }
@@ -91,7 +91,7 @@ std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
         auto rc = FinishControlBackendProbe(probe, deadline, observation);
         if (rc.IsError()) {
             VLOG(1) << "Cluster-state probe read failed for " << probe.peer.address << ": " << rc.ToString();
-            return {};
+            continue;
         }
         observations.push_back(std::move(observation));
     }

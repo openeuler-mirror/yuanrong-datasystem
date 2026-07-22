@@ -118,6 +118,18 @@ TEST(WorkerControlBackendScopeTest, AvailablePeerWithMismatchedTopologyStampConf
               ControlBackendFailureScope::LOCAL_ISOLATION);
 }
 
+TEST(WorkerControlBackendScopeTest, PartialAvailablePeerEvidenceConfirmsLocalIsolation)
+{
+    const auto local = LocalUnavailableObservation();
+    const auto availablePeer = Peer("worker1");
+    const auto failedProbePeer = Peer("worker2");
+
+    EXPECT_EQ(
+        ClassifyControlBackendFailureScope(local, { availablePeer, failedProbePeer },
+                                           { PeerObservation(availablePeer, cluster::ControlBackendState::AVAILABLE) }),
+        ControlBackendFailureScope::LOCAL_ISOLATION);
+}
+
 TEST(WorkerControlBackendScopeTest, DuplicatePeerEvidenceRejectsGlobalBackendOutage)
 {
     const auto local = LocalUnavailableObservation();

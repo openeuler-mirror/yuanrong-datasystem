@@ -351,7 +351,20 @@
   26. voluntary ScaleIn `DRAINING` runtime state now uses `WorkerIsolationReason::NONE`, keeping the fault/isolation
       reason separate from voluntary drain state. Passive topology removal still uses `TOPOLOGY_PASSIVE_SCALE_DOWN`
       through topology availability admission.
+  27. peer control-backend probes keep partial successful observations instead of discarding all evidence when one peer
+      probe fails. The scope classifier can use a fresh partial `AVAILABLE` peer observation to close local admission,
+      while global outage still requires full peer evidence.
 - Recent focused verification:
+  - Post peer-probe partial-evidence fix: CLion remote `scripts/clion_remote_build.sh tests-index` rebuilt with URMA Mock
+    enabled in 101s, generated 1157 compile-command entries, and reused the third-party cache in 0s.
+  - Added 2 UT cases:
+    `WorkerControlBackendProbeTest.KeepsSuccessfulObservationsWhenOnePeerProbeFails` and
+    `WorkerControlBackendScopeTest.PartialAvailablePeerEvidenceConfirmsLocalIsolation`.
+  - `ds_ut --gtest_filter="WorkerControlBackendProbeTest.*:WorkerControlBackendScopeTest.*"`: 9/9 tests passed in
+    0.06s.
+  - Remote Bazel 7.4.1 focused build for
+    `//tests/ut/worker:worker_control_backend_probe_test //tests/ut/worker:worker_control_backend_scope_test` passed in
+    2.59s; identical cached rerun passed in 0.37s.
   - Post review-fix verification for stamp mismatch and draining reason: CLion remote `scripts/clion_remote_build.sh
     tests-index` rebuilt with URMA Mock enabled in 138s, generated 1156 compile-command entries, and reused the
     third-party cache in 0s.

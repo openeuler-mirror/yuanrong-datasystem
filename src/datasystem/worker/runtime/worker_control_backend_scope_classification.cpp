@@ -51,7 +51,7 @@ ControlBackendFailureScope ClassifyControlBackendFailureScope(
     const cluster::ControlBackendObservation &local, const std::vector<cluster::MemberIdentity> &targets,
     const std::vector<cluster::ControlBackendObservation> &observations)
 {
-    if (targets.empty() || observations.size() != targets.size()) {
+    if (targets.empty() || observations.empty()) {
         return ControlBackendFailureScope::INCONCLUSIVE;
     }
     std::unordered_map<std::string, cluster::MemberIdentity> expected;
@@ -77,12 +77,15 @@ ControlBackendFailureScope ClassifyControlBackendFailureScope(
         }
         peerAvailable = peerAvailable || observation.state == cluster::ControlBackendState::AVAILABLE;
     }
+    if (peerAvailable) {
+        return ControlBackendFailureScope::LOCAL_ISOLATION;
+    }
     if (accepted.size() != targets.size()) {
         return ControlBackendFailureScope::INCONCLUSIVE;
     }
     if (!peerAvailable && authorityMismatch) {
         return ControlBackendFailureScope::INCONCLUSIVE;
     }
-    return peerAvailable ? ControlBackendFailureScope::LOCAL_ISOLATION : ControlBackendFailureScope::GLOBAL_OUTAGE;
+    return ControlBackendFailureScope::GLOBAL_OUTAGE;
 }
 }  // namespace datasystem::worker
