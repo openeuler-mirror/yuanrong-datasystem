@@ -1111,6 +1111,24 @@
     `//tests/ut/cluster/testing:fake_coordination_backend` in 17.622s with 18 actions. A first attempt used a wrong
     non-existent label `//src/datasystem/worker/runtime:worker_runtime` and failed during target-pattern parsing in
     0.128s; this was command selection, not a compile failure.
+  - RED: extended
+    `WorkerOcServiceImplTest.NewRecoveryGenerationInvalidatesOldCompleteEvidence` so a new recovery generation must
+    make the normal object-cache evidence report metadata/ownership not-ready before the new master reconciliation
+    completes. The first run failed in 2ms because `pendingReport` still reused old `metadataReady=true` and
+    `ownershipReady=true`.
+  - GREEN: `ObjectCacheRecoveryState::BeginRecoveryEvidenceGeneration` now clears the latest metadata evidence, and
+    `ReconcileLocalIsolationOwnership`/`ReconcileNetworkRecoveryOwnership` begin a new evidence generation before
+    scheduling master ownership reconciliation. The adjusted single case passed in 2ms.
+  - GREEN: object-cache focused evidence/resource regression passed 9/9 tests in 6ms, including
+    `ObjectCacheRecoveryStateTest.*`, the new stale-generation check, metadata/slot readiness checks, and stale resource
+    recovery publication checks. Two legacy expectations were updated from `slot_incidents_ready=0/0` to the current
+    `slot_recovery_disabled` evidence detail.
+  - GREEN: `git diff --check` was clean; `git clang-format --diff HEAD --` on the touched object-cache implementation
+    and test files reported no formatting changes; boundary script passed 28/28 in 0.082s.
+  - GREEN: remote Bazel 7.4.1 `//tests/ut/worker:worker_oc_service_impl_test` with
+    `--test_filter=WorkerOcServiceImplTest.NewRecoveryGenerationInvalidatesOldCompleteEvidence` passed. Total Bazel
+    elapsed time was 227.400s with 1539 actions and test runtime 1.5s; the run warned that `--cxxopt` changed and
+    discarded analysis cache, so this was cache churn rather than third-party distdir download.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

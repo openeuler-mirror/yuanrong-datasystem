@@ -1856,7 +1856,7 @@ TEST_F(WorkerOcServiceImplTest, BuildObjectCacheRecoveryEvidenceRequiresMetadata
     EXPECT_TRUE(report.evidence.slotReady);
     EXPECT_TRUE(report.evidence.ownershipReady);
     EXPECT_NE(report.detail.find("metadata_recovered=0/0"), std::string::npos);
-    EXPECT_NE(report.detail.find("slot_incidents_ready=0/0"), std::string::npos);
+    EXPECT_NE(report.detail.find("slot_recovery_disabled"), std::string::npos);
 }
 
 TEST_F(WorkerOcServiceImplTest, BuildObjectCacheRecoveryEvidenceTreatsNoMetadataWorkAsReady)
@@ -1869,25 +1869,30 @@ TEST_F(WorkerOcServiceImplTest, BuildObjectCacheRecoveryEvidenceTreatsNoMetadata
     EXPECT_TRUE(report.evidence.slotReady);
     EXPECT_TRUE(report.evidence.ownershipReady);
     EXPECT_NE(report.detail.find("metadata_recovered=0/0"), std::string::npos);
-    EXPECT_NE(report.detail.find("slot_incidents_ready=0/0"), std::string::npos);
+    EXPECT_NE(report.detail.find("slot_recovery_disabled"), std::string::npos);
 }
 
 TEST_F(WorkerOcServiceImplTest, NewRecoveryGenerationInvalidatesOldCompleteEvidence)
 {
     impl_->slotRecoveryManager_ = std::make_shared<TestSlotRecoveryManager>(std::make_shared<EmptySlotRecoveryStore>());
     auto oldGeneration = impl_->BeginRecoveryEvidenceGeneration("old");
+    impl_->MarkRestartReconciliationEvidenceReady("old metadata reconciliation complete");
     auto oldReport = impl_->BuildObjectCacheRecoveryEvidenceReport(oldGeneration);
     EXPECT_TRUE(oldReport.evidence.metadataReady);
     EXPECT_TRUE(oldReport.evidence.slotReady);
 
     auto newGeneration = impl_->BeginRecoveryEvidenceGeneration("new");
     EXPECT_NE(oldGeneration, newGeneration);
+    auto pendingReport = impl_->BuildObjectCacheRecoveryEvidenceReport();
+    EXPECT_FALSE(pendingReport.evidence.metadataReady);
+    EXPECT_FALSE(pendingReport.evidence.ownershipReady);
+
     auto staleReport = impl_->BuildObjectCacheRecoveryEvidenceReport(oldGeneration);
     EXPECT_FALSE(staleReport.evidence.membershipReady);
     EXPECT_FALSE(staleReport.evidence.metadataReady);
 
     auto currentReport = impl_->BuildObjectCacheRecoveryEvidenceReport(newGeneration);
-    EXPECT_TRUE(currentReport.evidence.metadataReady);
+    EXPECT_FALSE(currentReport.evidence.metadataReady);
     EXPECT_TRUE(currentReport.evidence.slotReady);
 }
 

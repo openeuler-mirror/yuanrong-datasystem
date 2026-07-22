@@ -90,7 +90,10 @@ worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::BuildObjectCacheR
 
 worker::WorkerRecoveryGeneration ObjectCacheRecoveryState::BeginRecoveryEvidenceGeneration(std::string detail)
 {
-    return recoveryEvidenceTracker_.BeginRecovery(std::move(detail));
+    auto generation = recoveryEvidenceTracker_.BeginRecovery(detail);
+    worker::WorkerRecoveryEvidenceBuilder builder;
+    SetMetadataRecoveryEvidenceReport(builder.BuildReport(std::move(detail)));
+    return generation;
 }
 
 worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::TrackEvidenceForGeneration(

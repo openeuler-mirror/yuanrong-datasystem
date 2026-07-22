@@ -2493,6 +2493,7 @@ Status WorkerOCServiceImpl::ReconcileMembershipChange()
 
 Status WorkerOCServiceImpl::ReconcileLocalIsolationOwnership()
 {
+    (void)BeginRecoveryEvidenceGeneration("local isolation ownership reconciliation pending");
     std::set<std::string> masterAddresses;
     if (centralizedMetadata_) {
         masterAddresses.emplace(localMasterAddress_.ToString());
@@ -2515,6 +2516,7 @@ Status WorkerOCServiceImpl::ReconcileLocalIsolationOwnership()
 
 Status WorkerOCServiceImpl::ReconcileNetworkRecoveryOwnership()
 {
+    (void)BeginRecoveryEvidenceGeneration("network recovery ownership reconciliation pending");
     std::set<std::string> masterAddresses;
     if (centralizedMetadata_) {
         masterAddresses.emplace(localMasterAddress_.ToString());
