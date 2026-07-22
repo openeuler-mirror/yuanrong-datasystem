@@ -480,6 +480,11 @@
     shared admission contract for a voluntary ScaleIn source (`DRAINING`) and a faulted peer
     (`LOCAL_ISOLATED`/`RECOVERING`): both reject `MIGRATION_TARGET`, while the conservative read/recovery/cleanup paths
     allowed by the runtime matrix remain open.
+  - `ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindowSt`: covered by
+    `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether`, which starts a
+    three-worker cluster, pauses one worker in voluntary ScaleIn `DRAINING`, drives another worker into
+    `LOCAL_ISOLATED`, and verifies a healthy source worker's real worker-to-worker migration probe is rejected by both
+    targets before the migration allocation service is reached.
   - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV/Stream STs have
     been run during development, but full CI, Bazel, and complete Object/KV/Stream ST suites are not yet green in this
     session.
@@ -492,9 +497,9 @@
     2. ScaleIn voluntary source plus concurrent peer local-isolation is now covered at topology replan level by
        `ScaleInSourceStaysLeavingWhenPeerFails`; Failure final resuming an interrupted ScaleIn batch is covered by
        `FailureFinalResumesScaleInBatchWhenLeavingMemberSurvives`. Migration-target filtering for the same combined path
-       is now locked at the shared runtime admission-contract level by
-       `ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow`; a dedicated ST remains optional if we want
-       end-to-end evidence across real worker RPCs.
+       is now locked both at the shared runtime admission-contract level by
+       `ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow` and at the real worker RPC level by
+       `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether`.
     3. ScaleOut plus transient global backend outage is now covered at failure-classifier level by
        `ScaleOutMembersSurviveGlobalBackendOutagePause`; ScaleOut progress post-commit outage idempotency is covered by
        `ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`; ScaleIn task-overlap marker post-commit outage
@@ -830,6 +835,16 @@
     `ds_st_stream_cache --gtest_filter="StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering"`
     passed 1/1 test in 10.890s gtest time, covering Stream read/write admission during isolation/recovery plus
     pre-isolation data retention after recovery.
+  - Added 1 ST case:
+    `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether`.
+  - GREEN with remote connection caveat: `scripts/clion_remote_build.sh tests-index` reused third-party cache
+    (`Compile thirdparty libraries success, total wall time: 0s`), built source in 25s with `BUILD_WITH_URMA_MOCK`
+    enabled, and linked `ds_st_object_cache`; the SSH session then closed during install/strip, so the script returned
+    255 after the focused binary had already been produced.
+  - GREEN: remote
+    `ds_st_object_cache --gtest_filter="MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether"`
+    passed 1/1 test in 14.980s gtest time, covering the combined voluntary ScaleIn `DRAINING` source plus concurrent
+    `LOCAL_ISOLATED` peer worker-to-worker migration-target rejection path.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

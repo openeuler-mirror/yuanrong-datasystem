@@ -70,6 +70,47 @@ void ExpectAdmissionRejected(const Status &rc, const std::string &mode, StatusCo
     EXPECT_NE(rc.GetMsg().find(mode), std::string::npos) << operation << " status: " << rc.ToString();
 }
 
+void ExpectDrainingWorkerExits(BaseCluster *cluster, EtcdStore *db, uint32_t workerIndex, const HostPort &workerAddress,
+                               ServerProcess *process, const std::string &statusPath)
+{
+    DS_ASSERT_OK(cluster->ClearInjectAction(WORKER, workerIndex, "WorkerOCServer.AfterMarkDraining"));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    int processStatus = 0;
+    bool topologyRemoved = false;
+    bool shutdownMarkerSeen = false;
+    bool processExited = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::string topologyBytes;
+        if (db->Get(GetTopologyTableName(), "", topologyBytes).IsOk()) {
+            ClusterTopologyPb topology;
+            ASSERT_TRUE(topology.ParseFromString(topologyBytes));
+            topologyRemoved = topology.members().find(workerAddress.ToString()) == topology.members().end();
+        }
+        std::ifstream status(statusPath);
+        std::string marker{ std::istreambuf_iterator<char>(status), std::istreambuf_iterator<char>() };
+        shutdownMarkerSeen = shutdownMarkerSeen || marker == "worker_stop_status:ready";
+        const auto waitResult = waitpid(process->Pid(), &processStatus, WNOHANG);
+        if (waitResult == process->Pid()) {
+            processExited = true;
+        } else if (waitResult < 0 && errno != EINTR) {
+            ADD_FAILURE() << "waitpid failed while observing migration-target drain, errno=" << errno;
+            break;
+        }
+        if (topologyRemoved && shutdownMarkerSeen && processExited) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+    }
+    if (!processExited) {
+        LOG_IF_ERROR(process->Kill(SIGKILL), "force cleanup of migration-target drain worker");
+    }
+    EXPECT_TRUE(topologyRemoved);
+    EXPECT_TRUE(shutdownMarkerSeen);
+    ASSERT_TRUE(processExited);
+    ASSERT_TRUE(WIFEXITED(processStatus));
+    EXPECT_EQ(WEXITSTATUS(processStatus), 0);
+}
+
 class MigrationTargetProbe {
 public:
     Status Init(BaseCluster *cluster, uint32_t targetIndex, uint32_t sourceIndex)
@@ -401,42 +442,94 @@ TEST_F(MigrationTargetDrainingTest, LEVEL1_MigrationTargetFiltersDrainingWorker)
     ASSERT_TRUE(process->IsProcessAlive());
     DS_ASSERT_OK(probe.ExpectRejected(cluster_.get(), 0, "DRAINING", K_NOT_READY, "migration-target-draining"));
 
-    DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, "WorkerOCServer.AfterMarkDraining"));
     drainPauseActive = false;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
-    int processStatus = 0;
-    bool topologyRemoved = false;
-    bool shutdownMarkerSeen = false;
-    bool processExited = false;
-    while (std::chrono::steady_clock::now() < deadline) {
-        std::string topologyBytes;
-        if (db->Get(GetTopologyTableName(), "", topologyBytes).IsOk()) {
-            ClusterTopologyPb topology;
-            ASSERT_TRUE(topology.ParseFromString(topologyBytes));
-            topologyRemoved = topology.members().find(workerAddress.ToString()) == topology.members().end();
-        }
-        std::ifstream status(statusPath);
-        std::string marker{ std::istreambuf_iterator<char>(status), std::istreambuf_iterator<char>() };
-        shutdownMarkerSeen = shutdownMarkerSeen || marker == "worker_stop_status:ready";
-        const auto waitResult = waitpid(process->Pid(), &processStatus, WNOHANG);
-        if (waitResult == process->Pid()) {
-            processExited = true;
-        } else if (waitResult < 0 && errno != EINTR) {
-            ADD_FAILURE() << "waitpid failed while observing migration-target drain, errno=" << errno;
-            break;
-        }
-        if (topologyRemoved && shutdownMarkerSeen && processExited) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(kEventuallyPollIntervalMs));
+    ExpectDrainingWorkerExits(cluster_.get(), db.get(), 0, workerAddress, process, statusPath);
+}
+
+class MigrationTargetCombinedFaultTest : public OCClientCommon {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        opts.workerGflagParams =
+            "-client_reconnect_wait_s=1 -ipc_through_shared_memory=true -node_timeout_s=2 "
+            "-node_dead_timeout_s=3 -heartbeat_interval_ms=1000 -auto_del_dead_node=false";
+        opts.numWorkers = 3;
+        opts.enableDistributedMaster = "true";
+        opts.numEtcd = 1;
     }
-    if (!processExited) {
-        LOG_IF_ERROR(process->Kill(SIGKILL), "force cleanup of migration-target drain worker");
+};
+
+TEST_F(MigrationTargetCombinedFaultTest, LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether)
+{
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    HostPort drainingWorkerAddress;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, drainingWorkerAddress));
+    MigrationTargetProbe drainingProbe;
+    DS_ASSERT_OK(drainingProbe.Init(cluster_.get(), 0, 2));
+    MigrationTargetProbe isolatedProbe;
+    DS_ASSERT_OK(isolatedProbe.Init(cluster_.get(), 1, 2));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kMigrationServiceInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, kMigrationServiceInject, "call()"));
+
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, kLocalIsolatedInject, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, kKeepAliveFailureInject, "return(K_RPC_UNAVAILABLE)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, kLeaseExpiredInject, "call(1000)"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, kKeepAliveQuickLoopInject, "call(0)"));
+    bool keepAliveFailureActive = true;
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerOCServer.AfterMarkDraining", "pause()"));
+    bool drainPauseActive = true;
+    Raii clearFaults([&]() {
+        if (drainPauseActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "WorkerOCServer.AfterMarkDraining"),
+                         "clear combined-fault drain pause");
+        }
+        if (keepAliveFailureActive) {
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 1, kKeepAliveFailureInject),
+                         "clear combined-fault keepalive failure");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 1, kLeaseExpiredInject),
+                         "clear combined-fault lease override");
+            LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 1, kKeepAliveQuickLoopInject),
+                         "clear combined-fault quick keepalive loop");
+        }
+    });
+
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t count = 0;
+            RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 1, kLocalIsolatedInject, count));
+            CHECK_FAIL_RETURN_STATUS(count > 0, K_NOT_READY, "peer worker has not entered local isolation");
+            return Status::OK();
+        },
+        "combined-fault peer enters local isolation");
+
+    ServerProcess *drainingProcess = nullptr;
+    DS_ASSERT_OK(cluster_->GetProcess(WORKER, 0, drainingProcess));
+    ASSERT_NE(drainingProcess, nullptr);
+    ASSERT_TRUE(drainingProcess->IsProcessAlive());
+    const std::string statusPath = cluster_->GetRootDir() + "/worker0/log/worker-status";
+    {
+        std::ofstream status(statusPath, std::ios::trunc);
+        ASSERT_TRUE(status.is_open());
+        status << "voluntary scale in\n";
     }
-    EXPECT_TRUE(topologyRemoved);
-    EXPECT_TRUE(shutdownMarkerSeen);
-    ASSERT_TRUE(processExited);
-    ASSERT_TRUE(WIFEXITED(processStatus));
-    EXPECT_EQ(WEXITSTATUS(processStatus), 0);
+    DS_ASSERT_OK(drainingProcess->Kill(SIGTERM));
+    AssertEventuallyOk(
+        [&]() {
+            uint64_t count = 0;
+            RETURN_IF_NOT_OK(
+                cluster_->GetInjectActionExecuteCount(WORKER, 0, "WorkerOCServer.AfterMarkDraining", count));
+            CHECK_FAIL_RETURN_STATUS(count > 0, K_NOT_READY, "scale-in source has not published draining mode");
+            return Status::OK();
+        },
+        "combined-fault scale-in source enters draining mode");
+
+    DS_ASSERT_OK(
+        drainingProbe.ExpectRejected(cluster_.get(), 0, "DRAINING", K_NOT_READY, "combined-fault-draining-target"));
+    DS_ASSERT_OK(isolatedProbe.ExpectRejected(cluster_.get(), 1, "LOCAL_ISOLATED", K_NOT_READY,
+                                              "combined-fault-isolated-target"));
+
+    drainPauseActive = false;
+    ExpectDrainingWorkerExits(cluster_.get(), db.get(), 0, drainingWorkerAddress, drainingProcess, statusPath);
 }
 }  // namespace datasystem::st
