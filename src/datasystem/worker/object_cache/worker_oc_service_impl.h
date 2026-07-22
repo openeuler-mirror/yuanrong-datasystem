@@ -915,6 +915,8 @@ private:
      * @param[out] migrateIds Object ids requiring data migration.
      * @param[out] waitIds Object ids whose migration completion must be awaited.
      * @param[out] l2Ids Object ids requiring L2 cleanup.
+     * @param[in] deadline Original callback attempt deadline.
+     * @param[in] cancellation Executor-owned cooperative cancellation signal.
      * @return Status of the preparation pass.
      */
     Status PrepareTopologyScaleInData(const std::vector<std::string> &copies,
@@ -922,7 +924,9 @@ private:
                                       std::vector<std::string> &migrateIds,
                                       std::vector<std::string> &waitIds,
                                       std::vector<std::string> &l2Ids,
-                                      const std::string &businessOperationId);
+                                      const std::string &businessOperationId,
+                                      std::chrono::steady_clock::time_point deadline,
+                                      const cluster::CancellationToken &cancellation);
 
     /**
      * @brief Authorize one operation-keyed cleanup state without external work.
