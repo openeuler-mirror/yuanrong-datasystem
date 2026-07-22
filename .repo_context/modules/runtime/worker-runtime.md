@@ -910,6 +910,12 @@
     `StreamAdmissionTest.*` filter matches 0 tests and must not be counted as coverage.
   - GREEN: `git diff --check` was clean; `git clang-format --diff HEAD -- tests/ut/worker/object_cache/worker_oc_service_impl_test.cpp`
     reported no formatting changes.
+  - GREEN: remote Bazel 7.4.1 focused build used the existing `.bazel-cache/distdir` and
+    `--config=release --config=test --config=urma_mock` for `//tests/ut/worker:worker_oc_service_impl_test`.
+    The first run as the cache owner `tianti` completed successfully in 5:56.81 with 4407 actions; the immediate rerun
+    completed successfully in 1.17s with 1 internal action, confirming the target reuses the Bazel cache. The earlier
+    0.01s failure was an execution-user/cache-owner mismatch: the remote SSH session ran as `root` while the worktree and
+    `.bazel-cache` are owned by `tianti`.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
