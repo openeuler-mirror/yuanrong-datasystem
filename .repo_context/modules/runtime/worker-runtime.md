@@ -429,7 +429,24 @@
   34. `ObjectCacheRecoveryState` no longer exposes `WorkerRecoveryEvidenceTracker` from its public header. The object-cache
       helper keeps only the recovery evidence report/generation contract in its interface and owns the concrete tracker
       behind a private implementation pointer, keeping runtime tracking internals out of object-cache public headers.
+  35. object-cache metadata ownership reconciliation completion now uses an injected recovery-evidence ready callback
+      owned by `ObjectCacheRecoveryState`. `WorkerOCServiceImpl` no longer stores the callback or duplicates the
+      metadata/ownership evidence update; restart retry/clear success, restart reconciliation, and network recovery
+      reconciliation all publish ready evidence through the same object-cache recovery-state hook.
 - Recent focused verification:
+  - Object-cache recovery notification hook refactor:
+    RED `WorkerOcServiceImplTest.RestartRecoveryRetriesInitialFailureAndMarksMetadataEvidenceReadyWhenResolved`
+    failed in 0.05s because the retry/clear success path updated evidence but did not call the injected ready handler.
+    GREEN added 2 focused assertions/cases:
+    `ObjectCacheRecoveryStateTest.OwnershipReconciliationReadyUsesInjectedCallback` and the extended
+    `WorkerOcServiceImplTest.RestartRecoveryRetriesInitialFailureAndMarksMetadataEvidenceReadyWhenResolved`.
+    The focused object-cache recovery set passed 17/17 in 0.06s, and the runtime boundary script passed 31/31 in
+    0.039s. CLion remote `tests-index` rebuilt with URMA Mock and refreshed 1161 compile-command entries in 236.91s.
+    Remote Bazel 7.4.1 focused build for
+    `//src/datasystem/worker/object_cache:object_cache_recovery_state`,
+    `//src/datasystem/worker/object_cache:worker_oc_service_impl`, and
+    `//src/datasystem/worker:datasystem_worker` passed in 374.07s with 3486 actions; the immediate cached rerun passed
+    in 0.62s with 1 internal action.
   - Metrics cardinality/performance slice: initial RED for
     `WorkerRuntimeStateTest.SelfHealingMetricsUseFixedLowCardinalityDescriptors` and
     `WorkerServiceAdmissionTest.RejectPublishesFixedModeCounter` failed because 14 worker self-healing descriptors were
