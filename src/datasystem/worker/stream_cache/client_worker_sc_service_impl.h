@@ -44,10 +44,10 @@
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/metadata_route_resolver.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem {
 namespace worker {
-class WorkerRuntimeFacade;
 namespace stream_cache {
 class MasterWorkerSCServiceImpl;
 class WorkerWorkerSCServiceImpl;

@@ -17,6 +17,7 @@
 #include "datasystem/worker/runtime/worker_topology_phase_callbacks.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 #include "datasystem/cluster/model/topology_diagnostics.h"
@@ -63,8 +64,9 @@ Status EraseFailedWorkerWorkerStub(const cluster::TopologyPhaseAction &action)
     if (rc.IsError() || failedAddr.Empty()) {
         return Status(K_INVALID, "failed member address is invalid: " + action.failed->address);
     }
-    for (auto type :
-         { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC }) {
+    const std::array<StubType, 3> stubTypes{ StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC,
+                                             StubType::WORKER_WORKER_TRANS_SVC };
+    for (auto type : stubTypes) {
         auto removeRc = RpcStubCacheMgr::Instance().Remove(failedAddr, type);
         // K_NOT_FOUND: no cached stub for this worker<->worker direction; not an error.
         if (removeRc.IsError() && removeRc.GetCode() != StatusCode::K_NOT_FOUND) {

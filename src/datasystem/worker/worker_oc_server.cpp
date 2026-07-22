@@ -284,12 +284,14 @@ std::string BuildWarmupKey(const std::string &workerAddr)
     return URMA_WARMUP_KEY_PREFIX + encoded;
 }
 
-class WorkerRpcControlBackendProbeClient : public WorkerControlBackendProbeClient {
+class WorkerOcServerControlBackendProbe : public WorkerControlBackendProbe {
 public:
-    explicit WorkerRpcControlBackendProbeClient(std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api)
+    explicit WorkerOcServerControlBackendProbe(std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api)
         : api_(std::move(api))
     {
     }
+
+    ~WorkerOcServerControlBackendProbe() override = default;
 
     Status Start(int32_t timeoutMs, int64_t &tag) override
     {
@@ -1058,14 +1060,14 @@ void WorkerOCServer::ConfigureTopologyBuilder(cluster::TopologyEngine::Builder &
 {
     auto controlBackendProbe = [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers,
                                                                                       auto deadline) {
-        WorkerControlBackendProbeClientFactory clientFactory =
-            [localAddress, akSkManager](const cluster::MemberIdentity &peer,
-                                        std::unique_ptr<WorkerControlBackendProbeClient> &client) {
-                std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
-                RETURN_IF_NOT_OK(object_cache::CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
-                client = std::make_unique<WorkerRpcControlBackendProbeClient>(std::move(api));
-                return Status::OK();
-            };
+        WorkerControlBackendProbeFactory clientFactory = [localAddress, akSkManager](
+                                                             const cluster::MemberIdentity &peer,
+                                                             std::unique_ptr<WorkerControlBackendProbe> &client) {
+            std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
+            RETURN_IF_NOT_OK(object_cache::CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
+            client = std::make_unique<WorkerOcServerControlBackendProbe>(std::move(api));
+            return Status::OK();
+        };
         return ProbeControlBackendPeers(peers, deadline, clientFactory);
     };
     auto availabilityHandler = [this](cluster::TopologyAvailabilityLevel level) {

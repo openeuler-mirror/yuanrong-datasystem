@@ -488,9 +488,7 @@ Status WorkerServiceImpl::operator()()
             CloseExpiredUnixSockFd();
             checkCacheFdTimer.Reset();
         }
-        struct pollfd pfd {
-            .fd = listenFd_, .events = POLLIN, .revents = 0
-        };
+        pollfd pfd{ .fd = listenFd_, .events = POLLIN, .revents = 0 };
         int n = poll(&pfd, 1, RPC_POLL_TIME);
         if (n <= 0) {
             continue;

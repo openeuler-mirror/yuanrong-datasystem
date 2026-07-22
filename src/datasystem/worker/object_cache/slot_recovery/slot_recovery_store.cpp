@@ -36,6 +36,25 @@ Status ParseIncidentValue(const std::string &value, SlotRecoveryInfoPb &info)
                                          "Parse SlotRecoveryInfoPb failed");
     return Status::OK();
 }
+
+Status MutateIncidentValue(const SlotRecoveryStore::IncidentMutator &mutator, const std::string &oldValue,
+                           std::unique_ptr<std::string> &newValue, bool &retry)
+{
+    SlotRecoveryInfoPb info;
+    bool existed = !oldValue.empty();
+    if (existed) {
+        RETURN_IF_NOT_OK(ParseIncidentValue(oldValue, info));
+    }
+    bool writeBack = false;
+    RETURN_IF_NOT_OK(mutator(info, existed, writeBack));
+    if (!writeBack) {
+        newValue = nullptr;
+        return Status::OK();
+    }
+    newValue = std::make_unique<std::string>(info.SerializeAsString());
+    retry = true;
+    return Status::OK();
+}
 }  // namespace
 
 Status SlotRecoveryStore::Init()
@@ -123,20 +142,7 @@ Status CoordinationSlotRecoveryStore::CASIncident(const std::string &failedWorke
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(mutator != nullptr, K_INVALID, "incident mutator is null");
     return backend_->CAS(ETCD_SLOT_RECOVERY_TABLE, failedWorker,
                          [&mutator](const std::string &oldValue, std::unique_ptr<std::string> &newValue, bool &retry) {
-                             SlotRecoveryInfoPb info;
-                             bool existed = !oldValue.empty();
-                             if (existed) {
-                                 RETURN_IF_NOT_OK(ParseIncidentValue(oldValue, info));
-                             }
-                             bool writeBack = false;
-                             RETURN_IF_NOT_OK(mutator(info, existed, writeBack));
-                             if (!writeBack) {
-                                 newValue = nullptr;
-                                 return Status::OK();
-                             }
-                             newValue = std::make_unique<std::string>(info.SerializeAsString());
-                             retry = true;
-                             return Status::OK();
+                             return MutateIncidentValue(mutator, oldValue, newValue, retry);
                          });
 }
 

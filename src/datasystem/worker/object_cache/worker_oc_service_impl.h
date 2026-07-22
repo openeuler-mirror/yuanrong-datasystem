@@ -79,6 +79,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
+#include "datasystem/worker/object_cache/object_cache_recovery_state.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_create_impl.h"
@@ -111,7 +112,6 @@ class MasterWorkerOCServiceImpl;
 class WorkerWorkerOCServiceImpl;
 class WorkerDeviceOcManager;
 class WorkerRemoteWorkerOCApi;
-class ObjectCacheRecoveryState;
 
 enum LockMode { Read = 0, Write = 1 };
 
