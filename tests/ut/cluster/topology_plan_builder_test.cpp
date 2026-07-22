@@ -61,6 +61,37 @@ TEST(TopologyPlanBuilderTest, StartsAndFinalizesOneMultiMemberScaleOutBatch)
                             [](const auto &member) { return member.state == MemberState::ACTIVE; }));
 }
 
+TEST(TopologyPlanBuilderTest, ScaleOutReplanDropsFailedJoiningAndKeepsRemainingJoiningBatch)
+{
+    HashAlgorithm algorithm;
+    TopologyPlanBuilder builder(algorithm);
+    TopologyState latest;
+    latest.version = 4;
+    latest.clusterHasInit = true;
+    latest.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 4 };
+    latest.members = { MakeControlMember('a', "127.0.0.1:1", MemberState::ACTIVE, { 10, 100 }),
+                       MakeControlMember('b', "127.0.0.1:2", MemberState::JOINING, { 50, 150 }),
+                       MakeControlMember('c', "127.0.0.1:3", MemberState::JOINING, { 75, 175 }) };
+
+    TopologyPlan replan;
+    DS_ASSERT_OK(builder.BuildScaleOutReplan(latest, { latest.members[1].identity }, replan));
+
+    EXPECT_EQ(replan.next.version, 5);
+    ASSERT_TRUE(replan.next.activeBatch.has_value());
+    EXPECT_EQ(replan.next.activeBatch->type, TopologyChangeType::SCALE_OUT);
+    ASSERT_EQ(replan.next.members.size(), 2);
+    EXPECT_EQ(replan.next.members[0].identity.address, "127.0.0.1:1");
+    EXPECT_EQ(replan.next.members[0].state, MemberState::ACTIVE);
+    EXPECT_EQ(replan.next.members[1].identity.address, "127.0.0.1:3");
+    EXPECT_EQ(replan.next.members[1].state, MemberState::JOINING);
+    EXPECT_FALSE(replan.ownerChanges.empty());
+    for (const auto &change : replan.ownerChanges) {
+        ASSERT_TRUE(change.source.has_value());
+        EXPECT_EQ(change.source->address, "127.0.0.1:1");
+        EXPECT_EQ(change.target.address, "127.0.0.1:3");
+    }
+}
+
 TEST(TopologyPlanBuilderTest, FailurePreemptsOrdinaryBatchWithoutRollingBackJoiningFacts)
 {
     HashAlgorithm algorithm;
