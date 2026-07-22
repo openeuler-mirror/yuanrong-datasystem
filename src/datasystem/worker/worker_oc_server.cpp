@@ -26,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -1001,6 +1002,20 @@ Status WorkerOCServer::InitCoordinationBackend()
     return Status::OK();
 }
 
+
+void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot)
+{
+    for (const auto &member : snapshot.FailedMembers())
+        knownFailedAddresses_.insert(member->identity.address);
+    for (const auto &member : snapshot.ActiveMembers())
+        knownFailedAddresses_.erase(member->identity.address);
+    for (const auto &addrStr : knownFailedAddresses_) {
+        HostPort addr;
+        if (addr.ParseString(addrStr).IsError() || addr.Empty()) continue;
+        for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC })
+            RpcStubCacheMgr::Instance().Remove(addr, type);
+    }
+}
 
 Status WorkerOCServer::ConstructTopologyCallbacks()
 {
