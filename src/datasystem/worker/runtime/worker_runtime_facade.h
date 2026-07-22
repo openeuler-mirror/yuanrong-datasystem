@@ -44,6 +44,7 @@ public:
     void PublishMetrics() const;
 
 private:
+    // Keep state_ before members that store references to it; C++ destroys members in reverse declaration order.
     WorkerRuntimeStateManager state_;
     WorkerAdmissionFacade admission_;
     WorkerRecoveryController recovery_;
