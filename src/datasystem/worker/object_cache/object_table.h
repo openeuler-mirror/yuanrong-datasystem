@@ -30,6 +30,8 @@
 namespace datasystem {
 namespace object_cache {
 
+// ObjectTable keeps the existing SafeTable storage path and adds a private generation index so metadata recovery can
+// scan a bounded, stable snapshot without exposing the index to normal object-cache callers.
 class ObjectTable final {
 public:
     using Table = SafeTable<ImmutableString, ObjectInterface>;
@@ -66,8 +68,8 @@ public:
 
     class RecoverySnapshotCursor {
     public:
-        RecoverySnapshotCursor() = default;
-        ~RecoverySnapshotCursor() = default;
+        RecoverySnapshotCursor();
+        ~RecoverySnapshotCursor();
 
     private:
         uint64_t generation_{ 0 };

@@ -39,6 +39,7 @@ class ObjectTable::Impl {
 public:
     ~Impl() = default;
 
+    // Recovery keeps only key generations here; the object payload and lifetime still belong to SafeTable.
     struct IndexShard {
         using EntriesByKey = std::map<std::string, uint64_t>;
         using EntriesByGeneration = std::map<uint64_t, EntriesByKey::iterator>;
@@ -118,6 +119,8 @@ public:
     }
 
     Table table_;
+    // Existing begin()/end() callers expect whole-table traversal to be stable. Recovery snapshots use the sharded
+    // index below and do not take this write lock while scanning.
     WriterPrefRWLock iteratorCoordination_;
     std::array<IndexShard, RECOVERY_INDEX_SHARD_COUNT> shards_;
     std::atomic<uint64_t> insertionGeneration_{ 0 };
@@ -148,6 +151,10 @@ ObjectTable::Iterator::Iterator(Iterator &&other) noexcept = default;
 ObjectTable::Iterator &ObjectTable::Iterator::operator=(Iterator &&other) noexcept = default;
 
 ObjectTable::Iterator::~Iterator() = default;
+
+ObjectTable::RecoverySnapshotCursor::RecoverySnapshotCursor() = default;
+
+ObjectTable::RecoverySnapshotCursor::~RecoverySnapshotCursor() = default;
 
 ObjectTable::Iterator::reference ObjectTable::Iterator::operator*() const
 {
