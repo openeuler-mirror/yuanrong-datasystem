@@ -431,7 +431,7 @@ bool WorkerOCServiceImpl::PublishResourceRecoveryIfCurrent(uint64_t resourceReco
 
 void WorkerOCServiceImpl::RegisterRecoveryEvidenceReadyHandler(std::function<void()> handler)
 {
-    recoveryEvidenceReadyHandler_ = std::move(handler);
+    recoveryState_->RegisterRecoveryEvidenceReadyHandler(std::move(handler));
 }
 
 void WorkerOCServiceImpl::MarkRestartReconciliationEvidenceReady(const std::string &detail)
@@ -441,14 +441,7 @@ void WorkerOCServiceImpl::MarkRestartReconciliationEvidenceReady(const std::stri
 
 void WorkerOCServiceImpl::MarkReconciliationEvidenceReady(const std::string &detail)
 {
-    worker::WorkerRecoveryEvidenceBuilder builder;
-    builder.MarkMetadataReady(detail);
-    recoveryState_->SetMetadataRecoveryEvidenceReport(builder.BuildReport(detail));
-    recoveryState_->SetOwnershipRecoveryEvidenceReport(
-        object_cache::BuildOwnershipRecoveryEvidenceReport(true, detail));
-    if (recoveryEvidenceReadyHandler_ != nullptr) {
-        recoveryEvidenceReadyHandler_();
-    }
+    recoveryState_->MarkOwnershipReconciliationReady(detail);
 }
 
 Status WorkerOCServiceImpl::InitL2Cache()
@@ -1303,11 +1296,7 @@ Status WorkerOCServiceImpl::FinishRestartMetadataRecovery(const std::string &wor
     LOG(INFO) << "Restart metadata ownership reconciliation finished, restart worker: " << workerAddr << ", "
               << detail.str();
     if (result.unresolvedCount == 0 && result.status.IsOk() && resolvedCount == matchObjIds.size()) {
-        worker::WorkerRecoveryEvidenceBuilder builder;
-        builder.MarkMetadataReady(detail.str());
-        recoveryState_->SetMetadataRecoveryEvidenceReport(builder.BuildReport(detail.str()));
-        recoveryState_->SetOwnershipRecoveryEvidenceReport(
-            object_cache::BuildOwnershipRecoveryEvidenceReport(true, detail.str()));
+        MarkReconciliationEvidenceReady(detail.str());
         return Status::OK();
     }
     if (result.unresolvedCount == 0) {

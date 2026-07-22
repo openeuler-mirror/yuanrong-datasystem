@@ -59,6 +59,29 @@ void ObjectCacheRecoveryState::SetOwnershipRecoveryEvidenceReport(worker::Worker
     lastOwnershipRecoveryEvidence_ = std::move(report);
 }
 
+void ObjectCacheRecoveryState::MarkOwnershipReconciliationReady(const std::string &detail)
+{
+    worker::WorkerRecoveryEvidenceBuilder builder;
+    builder.MarkMetadataReady(detail);
+    SetMetadataRecoveryEvidenceReport(builder.BuildReport(detail));
+    SetOwnershipRecoveryEvidenceReport(BuildOwnershipRecoveryEvidenceReport(true, detail));
+
+    std::function<void()> handler;
+    {
+        std::lock_guard<std::mutex> lock(recoveryEvidenceReadyHandlerMutex_);
+        handler = recoveryEvidenceReadyHandler_;
+    }
+    if (handler != nullptr) {
+        handler();
+    }
+}
+
+void ObjectCacheRecoveryState::RegisterRecoveryEvidenceReadyHandler(std::function<void()> handler)
+{
+    std::lock_guard<std::mutex> lock(recoveryEvidenceReadyHandlerMutex_);
+    recoveryEvidenceReadyHandler_ = std::move(handler);
+}
+
 uint64_t ObjectCacheRecoveryState::MarkResourceRecoveryRequired(memory::CacheType cacheType)
 {
     std::lock_guard<std::mutex> lock(resourceRecoveryMutex_);

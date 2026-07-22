@@ -50,6 +50,8 @@ public:
     void SetMetadataRecoveryEvidenceReport(worker::WorkerRecoveryEvidenceReport report);
     worker::WorkerRecoveryEvidenceReport GetLastOwnershipRecoveryEvidenceReport() const;
     void SetOwnershipRecoveryEvidenceReport(worker::WorkerRecoveryEvidenceReport report);
+    void MarkOwnershipReconciliationReady(const std::string &detail);
+    void RegisterRecoveryEvidenceReadyHandler(std::function<void()> handler);
 
     uint64_t MarkResourceRecoveryRequired(memory::CacheType cacheType);
     ResourceRecoverySnapshot GetResourceRecoverySnapshot() const;
@@ -75,6 +77,9 @@ private:
     uint64_t resourceRecoveryGeneration_{ 0 };
 
     std::unique_ptr<worker::WorkerRecoveryEvidenceTracker> recoveryEvidenceTracker_;
+
+    mutable std::mutex recoveryEvidenceReadyHandlerMutex_;
+    std::function<void()> recoveryEvidenceReadyHandler_;
 };
 
 }  // namespace object_cache

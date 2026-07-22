@@ -1236,6 +1236,8 @@ TEST_F(WorkerOcServiceImplTest, RestartRecoveryRetriesInitialFailureAndMarksMeta
     const std::string objectKey = "restart-retry-resolved";
     placement_.SetOwner(objectKey, restartedWorker);
     AddObject(objectKey);
+    bool handlerCalled = false;
+    impl_->RegisterRecoveryEvidenceReadyHandler([&handlerCalled] { handlerCalled = true; });
     impl_->metadataRecoveryManager_ = std::make_unique<MetaDataRecoveryManager>(
         localAddress_, objectTable_, MetaDataRecoveryManager::ClusterAccess{}, nullptr, metadataRoute_);
     impl_->clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
@@ -1262,6 +1264,7 @@ TEST_F(WorkerOcServiceImplTest, RestartRecoveryRetriesInitialFailureAndMarksMeta
 
     EXPECT_TRUE(rc.IsOk());
     auto report = impl_->GetLastMetadataRecoveryEvidenceReport();
+    EXPECT_TRUE(handlerCalled);
     EXPECT_TRUE(report.evidence.metadataReady);
     EXPECT_NE(report.detail.find("metadata_recovered=1/1"), std::string::npos);
     EXPECT_NE(report.detail.find("unresolved=0"), std::string::npos);

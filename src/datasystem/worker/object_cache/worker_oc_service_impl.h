@@ -1365,7 +1365,6 @@ private:
     std::unique_ptr<MetaDataRecoveryManager> metadataRecoveryManager_{ nullptr };
     std::unique_ptr<ObjectCacheRecoveryState> recoveryState_{ nullptr };
     std::unique_ptr<WorkerOcServiceClearDataFlow> clearDataFlow_{ nullptr };
-    std::function<void()> recoveryEvidenceReadyHandler_;
 
     WorkerRequestManager workerRequestManager_;
 

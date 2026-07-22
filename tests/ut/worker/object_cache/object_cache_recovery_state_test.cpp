@@ -128,6 +128,21 @@ TEST(ObjectCacheRecoveryStateTest, NewRecoveryGenerationClearsOwnershipUntilMast
     EXPECT_NE(complete.detail.find("master ownership reconciliation complete"), std::string::npos);
 }
 
+TEST(ObjectCacheRecoveryStateTest, OwnershipReconciliationReadyUsesInjectedCallback)
+{
+    ObjectCacheRecoveryState state;
+    int callbackCount = 0;
+    state.RegisterRecoveryEvidenceReadyHandler([&callbackCount] { ++callbackCount; });
+
+    state.MarkOwnershipReconciliationReady("metadata owners complete");
+
+    EXPECT_EQ(callbackCount, 1);
+    EXPECT_TRUE(state.GetLastMetadataRecoveryEvidenceReport().evidence.metadataReady);
+    EXPECT_TRUE(state.GetLastOwnershipRecoveryEvidenceReport().evidence.ownershipReady);
+    EXPECT_NE(state.GetLastOwnershipRecoveryEvidenceReport().detail.find("metadata owners complete"),
+              std::string::npos);
+}
+
 }  // namespace
 }  // namespace object_cache
 }  // namespace datasystem
