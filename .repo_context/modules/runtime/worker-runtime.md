@@ -420,7 +420,8 @@
     `KVClientEtcdDfxTest.LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering`. Stream protocol
     create/subscribe/receive rejection during `LOCAL_ISOLATED` and `RECOVERING` is covered by
     `StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering`, and the recovered
-    path verifies create/subscribe/send/receive succeeds again. The Stream ST observes the public health-gated
+    path verifies data sent before local isolation remains readable after recovery before validating new
+    create/subscribe/send/receive operations. The Stream ST observes the public health-gated
     `K_NOT_READY` status, while mode/reason details remain covered by
     `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringIsolation` and
     `ClientWorkerSCServiceAdmissionTest.WorkerServiceAdmissionRejectsStreamReadWriteDuringRecovering`.
@@ -502,8 +503,8 @@
        broader follow-up.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
        deferred retry payload; broader ST-level membership churn around the same path remains pending.
-    5. Broader Stream scale/fault data-retention ST remains pending if we want end-to-end evidence beyond the current
-       ordinary create/subscribe/receive admission ST.
+    5. Stream local-isolation data retention is now covered by the current admission ST; broader Stream scale/fault
+       data-retention ST remains pending if we want end-to-end evidence beyond the local-isolation recovery path.
 
 ## Fast Verification
 
@@ -819,6 +820,16 @@
     passed 1/1 test in 0ms gtest time, about 1.36s wall time.
   - GREEN: remote `ds_ut --gtest_filter="WorkerServiceAdmissionTest.*:WorkerAdmissionFacadeTest.*"` passed 11/11 tests
     in 51ms gtest time, about 1.42s wall time.
+  - Extended 1 existing ST case:
+    `StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering` now sends one Stream
+    element before local isolation and verifies the same payload is readable after recovery.
+  - GREEN: `scripts/clion_remote_build.sh tests-index` completed with third-party cache hit (`Compile thirdparty
+    libraries success, total wall time: 1s`), source build time 20s, `BUILD_WITH_URMA_MOCK` enabled, and 1156 compile
+    database entries.
+  - GREEN: remote
+    `ds_st_stream_cache --gtest_filter="StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering"`
+    passed 1/1 test in 10.890s gtest time, covering Stream read/write admission during isolation/recovery plus
+    pre-isolation data retention after recovery.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:

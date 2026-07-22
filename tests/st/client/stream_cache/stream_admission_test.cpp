@@ -98,6 +98,9 @@ TEST_F(StreamClientAdmissionTest, LEVEL1_StreamClientRejectsReadWriteDuringIsola
     std::shared_ptr<Consumer> readyConsumer;
     DS_ASSERT_OK(
         client_->Subscribe(readyStream, SubscriptionConfig("sub_ready", SubscriptionType::STREAM), readyConsumer));
+    const std::string retainedPayload = "stream-retained-before-isolation";
+    DS_ASSERT_OK(readyProducer->Send(
+        Element(reinterpret_cast<uint8_t *>(const_cast<char *>(retainedPayload.data())), retainedPayload.size())));
 
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kLocalIsolatedInject, "call()"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kKeepAliveFailureInject, "return(K_RPC_UNAVAILABLE)"));
@@ -170,6 +173,18 @@ TEST_F(StreamClientAdmissionTest, LEVEL1_StreamClientRejectsReadWriteDuringIsola
 
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kBeforeMarkRunningInject));
     recoveryPauseActive = false;
+    AssertEventuallyOk(
+        [&]() {
+            std::vector<Element> retainedElements;
+            RETURN_IF_NOT_OK(readyConsumer->Receive(1, 5'000, retainedElements));
+            CHECK_FAIL_RETURN_STATUS(retainedElements.size() == 1, K_NOT_READY,
+                                     "retained stream receive returned no element after recovery");
+            const std::string actual(reinterpret_cast<char *>(retainedElements[0].ptr), retainedElements[0].size);
+            CHECK_FAIL_RETURN_STATUS(actual == retainedPayload, K_NOT_READY,
+                                     "retained stream payload changed after isolation recovery");
+            return Status::OK();
+        },
+        "stream data sent before local isolation remains readable after recovery");
     AssertEventuallyOk(
         [&]() {
             const std::string recoveredStream = NewStreamName("stream_admission_recovered");
