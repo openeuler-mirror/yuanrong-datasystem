@@ -116,7 +116,7 @@ TEST(WorkerServiceAdmissionTest, RejectPublishesFixedModeCounter)
     for (const auto &part : metrics::DumpSummariesForTest()) {
         allowedSummary += part;
     }
-    EXPECT_EQ(allowedSummary.find("\"name\":\"worker_admission_reject_latency\""), std::string::npos);
+    EXPECT_EQ(allowedSummary.find("\"name\":\"worker_admission_reject_total\""), std::string::npos);
 
     state.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "keepalive failed");
     EXPECT_EQ(admission.Check(WorkerAdmissionKind::NORMAL_WRITE, "Create").GetCode(), K_NOT_READY);
@@ -125,9 +125,8 @@ TEST(WorkerServiceAdmissionTest, RejectPublishesFixedModeCounter)
     for (const auto &part : metrics::DumpSummariesForTest()) {
         summary += part;
     }
-    EXPECT_NE(summary.find("{\"name\":\"worker_admission_reject_local_isolated_total\",\"total\":1,\"delta\":1}"),
-              std::string::npos);
-    EXPECT_NE(summary.find("\"name\":\"worker_admission_reject_latency\""), std::string::npos);
+    EXPECT_NE(summary.find("{\"name\":\"worker_admission_reject_total\",\"total\":1,\"delta\":1}"), std::string::npos);
+    EXPECT_EQ(summary.find("\"name\":\"worker_admission_reject_local_isolated_total\""), std::string::npos);
 }
 
 TEST(WorkerServiceAdmissionTest, RunningSuccessPathDoesNotCopyFullSnapshotDetail)

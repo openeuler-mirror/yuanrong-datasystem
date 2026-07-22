@@ -15,6 +15,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -22,11 +23,16 @@
 
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
+#include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/util/raii.h"
 #include "gtest/gtest.h"
 #include "ut/cluster/testing/fake_coordination_backend.h"
 #include "ut/cluster/testing/fake_coordinator_service_proxy.h"
 #include "ut/common.h"
+
+DS_DECLARE_string(log_dir);
 
 namespace datasystem::cluster {
 namespace {
@@ -199,6 +205,22 @@ std::unique_ptr<TopologyKeyHelper> MakeKeys(const std::string &clusterName)
     std::unique_ptr<TopologyKeyHelper> keys;
     EXPECT_TRUE(TopologyKeyHelper::Create(clusterName, keys).IsOk());
     return keys;
+}
+
+void InitKvMetricsForTopologyEngineTest()
+{
+    FLAGS_log_dir = "/tmp";
+    metrics::ResetKvMetricsForTest();
+    ASSERT_TRUE(metrics::InitKvMetrics().IsOk());
+}
+
+std::string DumpMetricSummary()
+{
+    std::string summary;
+    for (const auto &part : metrics::DumpSummariesForTest()) {
+        summary += part;
+    }
+    return summary;
 }
 
 std::string TopologyStorageKey(const TopologyKeyHelper &keys)
@@ -670,6 +692,12 @@ TEST(TopologyEngineTest, MissingPeerQuorumIsolatesBackendOutage)
 
 TEST(TopologyEngineTest, KeepAliveScopeCheckReturnsAfterFirstReachablePeerEvidence)
 {
+    Raii restoreMetrics([] {
+        FLAGS_log_dir = "/tmp";
+        metrics::ResetKvMetricsForTest();
+        (void)metrics::InitKvMetrics();
+    });
+    InitKvMetricsForTopologyEngineTest();
     NoopTopologyCallbacks callbacks;
     const std::string clusterName = "keepalive-scope-short";
     const auto keys = MakeKeys(clusterName);
@@ -699,6 +727,85 @@ TEST(TopologyEngineTest, KeepAliveScopeCheckReturnsAfterFirstReachablePeerEviden
     DS_ASSERT_OK(engine->Start());
     EXPECT_TRUE(member->CheckStoreStateWhenNetworkFailed());
     EXPECT_EQ(probeCalls.load(), 1U);
+    EXPECT_NE(
+        DumpMetricSummary().find("{\"name\":\"worker_control_backend_scope_local_total\",\"total\":1,\"delta\":1}"),
+        std::string::npos);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, KeepAliveScopeCheckCountsGlobalBackendOutage)
+{
+    Raii restoreMetrics([] {
+        FLAGS_log_dir = "/tmp";
+        metrics::ResetKvMetricsForTest();
+        (void)metrics::InitKvMetrics();
+    });
+    InitKvMetricsForTopologyEngineTest();
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "keepalive-scope-global";
+    const auto keys = MakeKeys(clusterName);
+    auto memberBackend = std::make_unique<FakeCoordinationBackend>();
+    auto controllerBackend = std::make_unique<FakeCoordinationBackend>();
+    auto *member = memberBackend.get();
+    member->PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTopologyWithPeer());
+
+    TopologyEngine::Builder builder;
+    builder.SetClusterName(clusterName)
+        .SetLocalAddress(LOCAL_ADDRESS)
+        .UseUnifiedCoordinationBackends(std::move(memberBackend), std::move(controllerBackend))
+        .SetPhaseCallbacks(callbacks)
+        .SetNodeDeadTimeout(std::chrono::seconds(60))
+        .SetControlBackendProbe([](const ControlBackendObservation &local, const auto &peers, auto) {
+            auto peer = local;
+            peer.reporter = peers.front();
+            peer.state = ControlBackendState::UNAVAILABLE;
+            peer.observedAt = std::chrono::steady_clock::now();
+            return std::vector<ControlBackendObservation>{ peer };
+        });
+
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_FALSE(member->CheckStoreStateWhenNetworkFailed());
+    EXPECT_NE(
+        DumpMetricSummary().find("{\"name\":\"worker_control_backend_scope_global_total\",\"total\":1,\"delta\":1}"),
+        std::string::npos);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, KeepAliveScopeCheckCountsInconclusiveProbeFailure)
+{
+    Raii restoreMetrics([] {
+        FLAGS_log_dir = "/tmp";
+        metrics::ResetKvMetricsForTest();
+        (void)metrics::InitKvMetrics();
+    });
+    InitKvMetricsForTopologyEngineTest();
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "keepalive-scope-inconclusive";
+    const auto keys = MakeKeys(clusterName);
+    auto memberBackend = std::make_unique<FakeCoordinationBackend>();
+    auto controllerBackend = std::make_unique<FakeCoordinationBackend>();
+    auto *member = memberBackend.get();
+    member->PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTopologyWithPeer());
+
+    TopologyEngine::Builder builder;
+    builder.SetClusterName(clusterName)
+        .SetLocalAddress(LOCAL_ADDRESS)
+        .UseUnifiedCoordinationBackends(std::move(memberBackend), std::move(controllerBackend))
+        .SetPhaseCallbacks(callbacks)
+        .SetNodeDeadTimeout(std::chrono::seconds(60))
+        .SetControlBackendProbe([](const auto &, const auto &, auto) -> std::vector<ControlBackendObservation> {
+            throw std::runtime_error("injected probe failure");
+        });
+
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_FALSE(member->CheckStoreStateWhenNetworkFailed());
+    EXPECT_NE(DumpMetricSummary().find(
+                  "{\"name\":\"worker_control_backend_scope_inconclusive_total\",\"total\":1,\"delta\":1}"),
+              std::string::npos);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

@@ -31,7 +31,6 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/safe_object.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -437,7 +436,6 @@ WorkerOcServiceClearDataFlow::ClearObjectSummary WorkerOcServiceClearDataFlow::C
     const std::vector<std::string> &objectKeys, bool logObjectKeys,
     const std::unordered_map<std::string, uint64_t> *expectedVersions)
 {
-    METRIC_TIMER(metrics::KvMetricId::WORKER_CLEANUP_BATCH_LATENCY);
     ClearObjectSummary summary;
     for (const auto &objectKey : objectKeys) {
         std::shared_ptr<SafeObjType> entry;

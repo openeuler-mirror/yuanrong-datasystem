@@ -22,7 +22,6 @@
 
 #include "datasystem/common/util/hash_algorithm.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/timer.h"
@@ -140,8 +139,6 @@ void MetadataRecoverySelector::Select(const MatchFunc &matchFunc, bool includeL2
             batchYield_();
         }
     }
-    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_RECOVERY_CANDIDATE_COUNT))
-        .Observe(objectKeys.size());
     LOG(INFO) << "MetadataRecoverySelector.Select finish, objectKeys size: " << objectKeys.size()
               << ", includeL2CacheIds: " << includeL2CacheIds << ", snapshot object size: " << visitedObjectCount
               << ", elapsed ms: " << timer.ElapsedMilliSecond();

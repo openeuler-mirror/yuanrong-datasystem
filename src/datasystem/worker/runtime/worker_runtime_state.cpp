@@ -31,14 +31,6 @@ constexpr uint32_t SLOT_READY_BIT = 3U;
 constexpr uint32_t OWNERSHIP_READY_BIT = 4U;
 constexpr uint32_t RESOURCE_READY_BIT = 5U;
 
-void RecordTransitionLatency(const std::chrono::steady_clock::time_point &start)
-{
-    const auto elapsed =
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start);
-    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_MODE_TRANSITION_LATENCY))
-        .Observe(static_cast<uint64_t>(elapsed.count()));
-}
-
 void PublishSnapshotMetrics(const WorkerRuntimeStateSnapshot &snapshot)
 {
     metrics::GetGauge(static_cast<uint16_t>(metrics::KvMetricId::WORKER_SERVICE_MODE))
@@ -251,157 +243,99 @@ WorkerRuntimeStateTransitionGuard WorkerRuntimeStateManager::AcquireTransitionGu
 
 void WorkerRuntimeStateManager::MarkStarting(std::string detail)
 {
-    const auto start = std::chrono::steady_clock::now();
-    bool modeChanged = false;
-    {
-        auto admissionLock = AcquireTransitionGuard();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (IsServingTransitionTerminalLocked()) {
-            return;
-        }
-        modeChanged = UpdateLocked(WorkerServiceMode::STARTING, WorkerIsolationReason::STARTUP_NOT_READY, {},
-                                   WorkerRecoveryPhase::NONE, std::move(detail));
+    auto admissionLock = AcquireTransitionGuard();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (IsServingTransitionTerminalLocked()) {
+        return;
     }
-    if (modeChanged) {
-        RecordTransitionLatency(start);
-    }
+    (void)UpdateLocked(WorkerServiceMode::STARTING, WorkerIsolationReason::STARTUP_NOT_READY, {},
+                       WorkerRecoveryPhase::NONE, std::move(detail));
 }
 
 void WorkerRuntimeStateManager::MarkJoining(std::string detail)
 {
-    const auto start = std::chrono::steady_clock::now();
-    bool modeChanged = false;
-    {
-        auto admissionLock = AcquireTransitionGuard();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (IsServingTransitionTerminalLocked()) {
-            return;
-        }
-        modeChanged = UpdateLocked(WorkerServiceMode::JOINING, WorkerIsolationReason::STARTUP_NOT_READY, {},
-                                   WorkerRecoveryPhase::NONE, std::move(detail));
+    auto admissionLock = AcquireTransitionGuard();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (IsServingTransitionTerminalLocked()) {
+        return;
     }
-    if (modeChanged) {
-        RecordTransitionLatency(start);
-    }
+    (void)UpdateLocked(WorkerServiceMode::JOINING, WorkerIsolationReason::STARTUP_NOT_READY, {},
+                       WorkerRecoveryPhase::NONE, std::move(detail));
 }
 
 bool WorkerRuntimeStateManager::TryMarkRunning(const WorkerRunningEvidence &evidence, std::string detail)
 {
-    const auto start = std::chrono::steady_clock::now();
     bool running = false;
-    bool modeChanged = false;
-    {
-        auto admissionLock = AcquireTransitionGuard();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (IsServingTransitionTerminalLocked()) {
-            return false;
-        }
-        if (snapshot_.mode == WorkerServiceMode::LOCAL_ISOLATED || snapshot_.mode == WorkerServiceMode::OUT_OF_MEMORY) {
-            return false;
-        }
-        if (!IsComplete(evidence)) {
-            modeChanged =
-                UpdateLocked(WorkerServiceMode::RECOVERING, WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
-                             evidence, FirstMissingRecoveryPhase(evidence), std::move(detail));
-        } else {
-            modeChanged = UpdateLocked(WorkerServiceMode::RUNNING, WorkerIsolationReason::NONE, evidence,
-                                       WorkerRecoveryPhase::COMPLETE, std::move(detail));
-            running = true;
-        }
+    auto admissionLock = AcquireTransitionGuard();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (IsServingTransitionTerminalLocked()) {
+        return false;
     }
-    if (modeChanged) {
-        RecordTransitionLatency(start);
+    if (snapshot_.mode == WorkerServiceMode::LOCAL_ISOLATED || snapshot_.mode == WorkerServiceMode::OUT_OF_MEMORY) {
+        return false;
+    }
+    if (!IsComplete(evidence)) {
+        (void)UpdateLocked(WorkerServiceMode::RECOVERING, WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE, evidence,
+                           FirstMissingRecoveryPhase(evidence), std::move(detail));
+    } else {
+        (void)UpdateLocked(WorkerServiceMode::RUNNING, WorkerIsolationReason::NONE, evidence,
+                           WorkerRecoveryPhase::COMPLETE, std::move(detail));
+        running = true;
     }
     return running;
 }
 
 void WorkerRuntimeStateManager::MarkDraining(std::string detail)
 {
-    const auto start = std::chrono::steady_clock::now();
-    bool modeChanged = false;
-    {
-        auto admissionLock = AcquireTransitionGuard();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (IsServingTransitionTerminalLocked()) {
-            return;
-        }
-        modeChanged = UpdateLocked(WorkerServiceMode::DRAINING, WorkerIsolationReason::NONE, snapshot_.evidence,
-                                   WorkerRecoveryPhase::NONE, std::move(detail));
+    auto admissionLock = AcquireTransitionGuard();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (IsServingTransitionTerminalLocked()) {
+        return;
     }
-    if (modeChanged) {
-        RecordTransitionLatency(start);
-    }
+    (void)UpdateLocked(WorkerServiceMode::DRAINING, WorkerIsolationReason::NONE, snapshot_.evidence,
+                       WorkerRecoveryPhase::NONE, std::move(detail));
 }
 
 void WorkerRuntimeStateManager::MarkLocalIsolated(WorkerIsolationReason reason, std::string detail)
 {
-    const auto start = std::chrono::steady_clock::now();
-    bool modeChanged = false;
-    {
-        auto admissionLock = AcquireTransitionGuard();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (IsServingTransitionTerminalLocked()) {
-            return;
-        }
-        modeChanged =
-            UpdateLocked(WorkerServiceMode::LOCAL_ISOLATED, reason, {}, WorkerRecoveryPhase::NONE, std::move(detail));
+    auto admissionLock = AcquireTransitionGuard();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (IsServingTransitionTerminalLocked()) {
+        return;
     }
-    if (modeChanged) {
-        RecordTransitionLatency(start);
-    }
+    (void)UpdateLocked(WorkerServiceMode::LOCAL_ISOLATED, reason, {}, WorkerRecoveryPhase::NONE, std::move(detail));
 }
 
 void WorkerRuntimeStateManager::MarkOutOfMemory(std::string detail)
 {
-    const auto start = std::chrono::steady_clock::now();
-    bool modeChanged = false;
-    {
-        auto admissionLock = AcquireTransitionGuard();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (IsServingTransitionTerminalLocked()) {
-            return;
-        }
-        auto evidence = snapshot_.evidence;
-        evidence.resourceReady = false;
-        modeChanged = UpdateLocked(WorkerServiceMode::OUT_OF_MEMORY, WorkerIsolationReason::OUT_OF_MEMORY, evidence,
-                                   WorkerRecoveryPhase::RESOURCE, std::move(detail));
+    auto admissionLock = AcquireTransitionGuard();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (IsServingTransitionTerminalLocked()) {
+        return;
     }
-    if (modeChanged) {
-        RecordTransitionLatency(start);
-    }
+    auto evidence = snapshot_.evidence;
+    evidence.resourceReady = false;
+    (void)UpdateLocked(WorkerServiceMode::OUT_OF_MEMORY, WorkerIsolationReason::OUT_OF_MEMORY, evidence,
+                       WorkerRecoveryPhase::RESOURCE, std::move(detail));
 }
 
 void WorkerRuntimeStateManager::MarkRecovering(WorkerIsolationReason reason, std::string detail,
                                                WorkerRecoveryPhase phase)
 {
-    const auto start = std::chrono::steady_clock::now();
-    bool modeChanged = false;
-    {
-        auto admissionLock = AcquireTransitionGuard();
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (IsServingTransitionTerminalLocked()) {
-            return;
-        }
-        modeChanged = UpdateLocked(WorkerServiceMode::RECOVERING, reason, snapshot_.evidence, phase, std::move(detail));
+    auto admissionLock = AcquireTransitionGuard();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (IsServingTransitionTerminalLocked()) {
+        return;
     }
-    if (modeChanged) {
-        RecordTransitionLatency(start);
-    }
+    (void)UpdateLocked(WorkerServiceMode::RECOVERING, reason, snapshot_.evidence, phase, std::move(detail));
 }
 
 void WorkerRuntimeStateManager::MarkStopping(WorkerIsolationReason reason, std::string detail)
 {
-    const auto start = std::chrono::steady_clock::now();
-    bool modeChanged = false;
-    {
-        auto admissionLock = AcquireTransitionGuard();
-        std::lock_guard<std::mutex> lock(mutex_);
-        modeChanged = UpdateLocked(WorkerServiceMode::STOPPING, reason, snapshot_.evidence, WorkerRecoveryPhase::NONE,
-                                   std::move(detail));
-    }
-    if (modeChanged) {
-        RecordTransitionLatency(start);
-    }
+    auto admissionLock = AcquireTransitionGuard();
+    std::lock_guard<std::mutex> lock(mutex_);
+    (void)UpdateLocked(WorkerServiceMode::STOPPING, reason, snapshot_.evidence, WorkerRecoveryPhase::NONE,
+                       std::move(detail));
 }
 
 bool WorkerRuntimeStateManager::UpdateLocked(WorkerServiceMode mode, WorkerIsolationReason reason,

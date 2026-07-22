@@ -23,6 +23,7 @@
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -1197,15 +1198,18 @@ bool TopologyEngine::IsControlBackendReachableFromPeers()
         bool globalOutage = false;
         bool probeFailed = false;
         if (ProbePeerBackendReachabilityOnce(local, targets, deadline, observationCount, globalOutage, probeFailed)) {
+            METRIC_INC(metrics::KvMetricId::WORKER_CONTROL_BACKEND_SCOPE_LOCAL_TOTAL);
             LOG(INFO) << "Keepalive backend failure scope is local, probeTargets: " << targets.size()
                       << ", observations: " << observationCount;
             INJECT_POINT_NO_RETURN("WorkerOCServer.LocalBackendIsolationCandidate");
             return true;
         }
         if (probeFailed) {
+            METRIC_INC(metrics::KvMetricId::WORKER_CONTROL_BACKEND_SCOPE_INCONCLUSIVE_TOTAL);
             return false;
         }
         if (globalOutage) {
+            METRIC_INC(metrics::KvMetricId::WORKER_CONTROL_BACKEND_SCOPE_GLOBAL_TOTAL);
             LOG(INFO) << "Keepalive backend failure scope is global, probeTargets: " << targets.size()
                       << ", observations: " << observationCount;
             INJECT_POINT_NO_RETURN("WorkerOCServer.GlobalBackendOutage");
@@ -1216,6 +1220,7 @@ bool TopologyEngine::IsControlBackendReachableFromPeers()
     } while (std::chrono::steady_clock::now() < deadline);
     LOG(INFO) << "Keepalive backend failure scope is inconclusive, probeTargets: " << targets.size()
               << ", observations: " << observationCount;
+    METRIC_INC(metrics::KvMetricId::WORKER_CONTROL_BACKEND_SCOPE_INCONCLUSIVE_TOTAL);
     return false;
 }
 

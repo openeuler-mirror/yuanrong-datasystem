@@ -1055,7 +1055,7 @@ TEST_F(WorkerOcServiceImplTest, AuthoritativeClearDeletesExactL2VersionBeforeRem
     for (const auto &part : metrics::DumpSummariesForTest()) {
         summary += part;
     }
-    EXPECT_NE(summary.find("\"name\":\"worker_cleanup_batch_latency\""), std::string::npos);
+    EXPECT_EQ(summary.find("\"name\":\"worker_cleanup_batch_latency\""), std::string::npos);
     std::shared_ptr<SafeObjType> entry;
     EXPECT_EQ(objectTable_->Get(objectKey, entry).GetCode(), K_NOT_FOUND);
 }

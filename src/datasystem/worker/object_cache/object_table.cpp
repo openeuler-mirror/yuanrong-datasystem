@@ -25,7 +25,6 @@
 #include <utility>
 
 #include "datasystem/common/inject/inject_point.h"
-#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/locks.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
@@ -361,10 +360,8 @@ Status ObjectTable::NextRecoverySnapshotBatch(RecoverySnapshotCursor &cursor, si
     size_t visited = 0;
     while (cursor.shardIndex_ < impl_->shards_.size() && visited < visitBudget) {
         auto &shard = impl_->shards_[cursor.shardIndex_];
-        uint64_t lockHoldUs = 0;
         {
             ReadLock shardGuard(&shard.lock);
-            const auto lockStart = std::chrono::steady_clock::now();
             auto iter = shard.entriesByGeneration.upper_bound(cursor.lastVisitedGeneration_);
             while (iter != shard.entriesByGeneration.end() && iter->first <= cursor.generation_
                    && visited < visitBudget) {
@@ -377,12 +374,7 @@ Status ObjectTable::NextRecoverySnapshotBatch(RecoverySnapshotCursor &cursor, si
                 ++cursor.shardIndex_;
                 cursor.lastVisitedGeneration_ = 0;
             }
-            lockHoldUs = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - lockStart)
-                    .count());
         }
-        metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_OBJECT_TABLE_LOCK_HOLD_LATENCY))
-            .Observe(lockHoldUs);
     }
     done = cursor.shardIndex_ == impl_->shards_.size();
     return Status::OK();

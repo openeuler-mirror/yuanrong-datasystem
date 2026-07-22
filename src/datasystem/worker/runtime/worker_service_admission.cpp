@@ -16,7 +16,6 @@
  */
 #include "datasystem/worker/runtime/worker_service_admission.h"
 
-#include <chrono>
 #include <sstream>
 
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -40,34 +39,10 @@ bool IsOomAllowed(WorkerAdmissionKind kind)
            || kind == WorkerAdmissionKind::RESOURCE_RECOVERY_RPC || IsAlwaysAllowed(kind);
 }
 
-metrics::KvMetricId RejectMetric(WorkerServiceMode mode)
-{
-    switch (mode) {
-        case WorkerServiceMode::STARTING:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_STARTING_TOTAL;
-        case WorkerServiceMode::JOINING:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_JOINING_TOTAL;
-        case WorkerServiceMode::RUNNING:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_RUNNING_TOTAL;
-        case WorkerServiceMode::DRAINING:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_DRAINING_TOTAL;
-        case WorkerServiceMode::LOCAL_ISOLATED:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_LOCAL_ISOLATED_TOTAL;
-        case WorkerServiceMode::OUT_OF_MEMORY:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_OUT_OF_MEMORY_TOTAL;
-        case WorkerServiceMode::RECOVERING:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_RECOVERING_TOTAL;
-        case WorkerServiceMode::STOPPING:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_STOPPING_TOTAL;
-        default:
-            return metrics::KvMetricId::WORKER_ADMISSION_REJECT_STARTING_TOTAL;
-    }
-}
-
 Status Reject(const WorkerRuntimeStateSnapshot &snapshot, WorkerAdmissionKind kind, const std::string &operation,
               StatusCode code, const char *rejection)
 {
-    METRIC_INC(RejectMetric(snapshot.mode));
+    METRIC_INC(metrics::KvMetricId::WORKER_ADMISSION_REJECT_TOTAL);
     std::ostringstream oss;
     oss << "Worker is not accepting " << operation << ", kind=" << ToString(kind)
         << ", mode=" << ToString(snapshot.mode) << ", reason=" << ToString(snapshot.reason)
@@ -116,16 +91,6 @@ Status Evaluate(const WorkerRuntimeStateSnapshot &snapshot, WorkerAdmissionKind 
     return Reject(snapshot, kind, operation, K_NOT_READY, "MODE_NOT_SERVING");
 }
 
-void RecordRejectLatency(const std::chrono::steady_clock::time_point &start, const Status &status)
-{
-    if (status.IsOk()) {
-        return;
-    }
-    const auto elapsed =
-        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start);
-    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::WORKER_ADMISSION_REJECT_LATENCY))
-        .Observe(static_cast<uint64_t>(elapsed.count()));
-}
 }  // namespace
 
 const char *ToString(WorkerAdmissionKind kind)
@@ -162,26 +127,18 @@ Status WorkerServiceAdmission::Check(WorkerAdmissionKind kind, const std::string
     if (runtimeState_.IsFastRunningForAdmission()) {
         return Status::OK();
     }
-    const auto start = std::chrono::steady_clock::now();
     const bool transitionWasPending = runtimeState_.IsTransitionPending();
     auto snapshot = runtimeState_.GetSnapshot();
     if ((transitionWasPending || runtimeState_.IsTransitionPending()) && !IsTransitionAllowed(kind)) {
-        auto status = Reject(snapshot, kind, operation, K_NOT_READY, "TRANSITION_PENDING");
-        RecordRejectLatency(start, status);
-        return status;
+        return Reject(snapshot, kind, operation, K_NOT_READY, "TRANSITION_PENDING");
     }
-    auto status = Evaluate(snapshot, kind, operation);
-    RecordRejectLatency(start, status);
-    return status;
+    return Evaluate(snapshot, kind, operation);
 }
 
 Status WorkerServiceAdmission::Check(const WorkerRuntimeStateSnapshot &snapshot, WorkerAdmissionKind kind,
                                      const std::string &operation) const
 {
-    const auto start = std::chrono::steady_clock::now();
-    auto status = Evaluate(snapshot, kind, operation);
-    RecordRejectLatency(start, status);
-    return status;
+    return Evaluate(snapshot, kind, operation);
 }
 
 Status WorkerServiceAdmission::CheckServing(const std::string &operation) const

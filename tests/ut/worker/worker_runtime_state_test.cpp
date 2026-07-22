@@ -109,11 +109,18 @@ TEST(WorkerRuntimeStateTest, SelfHealingMetricsUseFixedLowCardinalityDescriptors
         names.emplace_back(descs[i].name);
     }
 
-    for (const auto *expected : { "worker_service_mode", "worker_service_reason", "worker_recovery_phase",
-                                  "worker_recovery_evidence_mask", "worker_mode_transition_latency",
-                                  "worker_admission_reject_latency", "worker_admission_reject_local_isolated_total",
-                                  "worker_object_table_lock_hold_latency", "worker_recovery_candidate_count",
-                                  "worker_metadata_recovery_batch_latency", "worker_cleanup_batch_latency" }) {
+    std::vector<std::string> workerSelfHealingNames;
+    for (const auto &name : names) {
+        if (name.find("worker_service_") == 0 || name.find("worker_recovery_") == 0
+            || name.find("worker_admission_reject") == 0 || name.find("worker_control_backend_scope_") == 0) {
+            workerSelfHealingNames.emplace_back(name);
+        }
+    }
+    EXPECT_EQ(workerSelfHealingNames.size(), 8ul);
+    for (const auto *expected :
+         { "worker_service_mode", "worker_service_reason", "worker_recovery_phase", "worker_recovery_evidence_mask",
+           "worker_admission_reject_total", "worker_control_backend_scope_local_total",
+           "worker_control_backend_scope_global_total", "worker_control_backend_scope_inconclusive_total" }) {
         EXPECT_NE(std::find(names.begin(), names.end(), expected), names.end()) << expected;
     }
 }
@@ -135,12 +142,8 @@ TEST(WorkerRuntimeStateTest, TransitionLatencyDoesNotMeasureStateResidenceTime)
     for (const auto &part : metrics::DumpSummariesForTest()) {
         summary += part;
     }
-    const auto metric = summary.find("\"name\":\"worker_mode_transition_latency\"");
-    ASSERT_NE(metric, std::string::npos);
-    const auto maxField = summary.find("\"max_us\":", metric);
-    ASSERT_NE(maxField, std::string::npos);
-    const auto maxUs = std::stoull(summary.substr(maxField + std::string("\"max_us\":").size()));
-    EXPECT_LT(maxUs, 25'000U);
+    EXPECT_EQ(summary.find("\"name\":\"worker_mode_transition_latency\""), std::string::npos);
+    EXPECT_NE(summary.find("{\"name\":\"worker_service_mode\",\"total\":5,\"delta\":5}"), std::string::npos);
 }
 
 TEST(WorkerRuntimeStateTest, RuntimeTransitionsPublishModeReasonAndPhaseMetrics)
@@ -183,9 +186,8 @@ TEST(WorkerRuntimeStateTest, RejectedTerminalTransitionDoesNotPolluteTransitionL
     for (const auto &part : metrics::DumpSummariesForTest()) {
         summary += part;
     }
-    const auto metric = summary.find("\"name\":\"worker_mode_transition_latency\"");
-    ASSERT_NE(metric, std::string::npos);
-    EXPECT_NE(summary.find("\"delta\":{\"count\":0", metric), std::string::npos);
+    EXPECT_EQ(summary.find("\"name\":\"worker_mode_transition_latency\""), std::string::npos);
+    EXPECT_EQ(state.GetSnapshot().mode, WorkerServiceMode::DRAINING);
 }
 
 TEST(WorkerRuntimeStateTest, SameModeRefreshDoesNotPolluteTransitionLatency)
@@ -205,9 +207,8 @@ TEST(WorkerRuntimeStateTest, SameModeRefreshDoesNotPolluteTransitionLatency)
     for (const auto &part : metrics::DumpSummariesForTest()) {
         summary += part;
     }
-    const auto metric = summary.find("\"name\":\"worker_mode_transition_latency\"");
-    ASSERT_NE(metric, std::string::npos);
-    EXPECT_NE(summary.find("\"delta\":{\"count\":0", metric), std::string::npos);
+    EXPECT_EQ(summary.find("\"name\":\"worker_mode_transition_latency\""), std::string::npos);
+    EXPECT_EQ(state.GetSnapshot().detail, "periodic refresh");
 }
 
 TEST(WorkerRuntimeStateTest, PublishesCurrentSnapshotAfterMetricsInitialize)

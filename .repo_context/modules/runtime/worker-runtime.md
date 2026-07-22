@@ -375,7 +375,36 @@
       small atomic service mode for admission and `WorkerServiceAdmission::Check()` returns OK without taking the full
       snapshot/detail-copy path only when no runtime transition is pending and the mode is `RUNNING`; all reject and
       transition paths still read the full snapshot for deterministic diagnostics and metrics.
+  33. worker isolation/recovery metrics are capped to eight low-cardinality descriptors:
+      `worker_service_mode`, `worker_service_reason`, `worker_recovery_phase`, `worker_recovery_evidence_mask`,
+      `worker_admission_reject_total`, `worker_control_backend_scope_local_total`,
+      `worker_control_backend_scope_global_total`, and `worker_control_backend_scope_inconclusive_total`. Per-mode
+      admission counters and recovery/object-table histograms were removed from hot recovery paths; service
+      mode/reason/phase gauges plus the aggregate reject counter provide admission diagnosis, while the three backend
+      scope counters provide alertable local/global/inconclusive failure-scope classification.
 - Recent focused verification:
+  - Metrics cardinality/performance slice: initial RED for
+    `WorkerRuntimeStateTest.SelfHealingMetricsUseFixedLowCardinalityDescriptors` and
+    `WorkerServiceAdmissionTest.RejectPublishesFixedModeCounter` failed because 14 worker self-healing descriptors were
+    still present and the aggregate `worker_admission_reject_total` plus backend-scope counters were missing. GREEN
+    passed those 2 tests in 0.05s.
+  - Added/updated 3 keepalive scope counter UTs:
+    `TopologyEngineTest.KeepAliveScopeCheckReturnsAfterFirstReachablePeerEvidence`,
+    `TopologyEngineTest.KeepAliveScopeCheckCountsGlobalBackendOutage`, and
+    `TopologyEngineTest.KeepAliveScopeCheckCountsInconclusiveProbeFailure`; the 3-test focused run passed in 0.04s.
+    These tests were added after the first implementation hook, so they are recorded as behavior coverage rather than a
+    strict RED-first slice.
+  - Current metrics slice validation: `scripts/clion_remote_build.sh tests-index` completed with URMA Mock enabled,
+    1157 compile-command entries, third-party cache reuse from `/home/ds-thirdparty-cache`, and total times 542s for the
+    first build plus 114s for the incremental topology-test rebuild. Focused regressions passed:
+    `cluster_topology_contract_ut --gtest_filter="TopologyEngineTest.*:TopologyControllerRuntimeTest.*:CoordinationBackendContractTest.*"`
+    44/44 in 4.00s,
+    `ds_ut --gtest_filter="WorkerServiceAdmissionTest.*:WorkerAdmissionFacadeTest.*:WorkerRuntimeStateTest.*:WorkerRuntimeFacadeTest.*:WorkerTopologyAvailabilityAdmissionTest.*"`
+    41/41 in 0.34s, and
+    `ds_ut_object --gtest_filter="ObjectCacheRecoveryStateTest.*:WorkerRecoveryEvidenceAdapterTest.*:WorkerOcServiceImplTest.*Recovery*:WorkerOcServiceImplTest.*OutOfMemory*:WorkerOcServiceImplTest.*ResourceRecovery*:WorkerOcServiceImplTest.*BuildObjectCacheRecoveryEvidence*:WorkerOcServiceImplTest.*ClearMatchedObjectsRecovers*:WorkerOcServiceImplTest.*NotifyRemoteGet*:MigrateDataServiceTest.*Drain*:MigrateDataServiceTest.*MigrateDataDirectResponse*:MetaDataRecoveryManagerTest.*:MetadataRecoverySelectorTest.*"`
+    66/66 in 10.94s. Current metrics-slice associated total: 151/151 focused tests passed; newly added/updated metrics
+    tests: 5 tests, focused execution time 0.09s. `git diff --check` is clean and `git clang-format --diff main/master
+    --` on touched files reports no changes.
   - Admission hot-path performance slice: initial RED focused test
     `WorkerServiceAdmissionTest.RunningSuccessPathDoesNotCopyFullSnapshotDetail` failed because three successful RUNNING
     checks called `WorkerRuntimeStateManager::GetSnapshot()` three times and copied the 4 KiB detail string. GREEN

@@ -343,7 +343,7 @@ TEST_F(MetaDataRecoveryManagerTest, RecoverMetadataBatchSizeShouldNotExceed500)
     for (const auto &part : metrics::DumpSummariesForTest()) {
         summary += part;
     }
-    EXPECT_NE(summary.find("\"name\":\"worker_metadata_recovery_batch_latency\""), std::string::npos);
+    EXPECT_EQ(summary.find("\"name\":\"worker_metadata_recovery_batch_latency\""), std::string::npos);
 }
 
 TEST_F(MetaDataRecoveryManagerTest, SuccessfulPushAfterConnectionProbeFailureCountsAsRecovered)
@@ -797,8 +797,8 @@ TEST_F(MetadataRecoverySelectorTest, SelectionPublishesBoundedScanMetrics)
     for (const auto &part : metrics::DumpSummariesForTest()) {
         summary += part;
     }
-    EXPECT_NE(summary.find("\"name\":\"worker_object_table_lock_hold_latency\""), std::string::npos);
-    EXPECT_NE(summary.find("\"name\":\"worker_recovery_candidate_count\""), std::string::npos);
+    EXPECT_EQ(summary.find("\"name\":\"worker_object_table_lock_hold_latency\""), std::string::npos);
+    EXPECT_EQ(summary.find("\"name\":\"worker_recovery_candidate_count\""), std::string::npos);
 }
 
 TEST_F(MetadataRecoverySelectorTest, SelectionRequestShouldPreserveInputAndValidateRanges)

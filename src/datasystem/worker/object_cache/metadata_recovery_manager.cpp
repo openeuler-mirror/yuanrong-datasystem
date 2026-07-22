@@ -24,7 +24,6 @@
 
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
-#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
@@ -537,7 +536,6 @@ void MetaDataRecoveryManager::SendRecoverBatch(const HostPort &masterAddr, const
     if (req.metas_size() == 0) {
         return;
     }
-    METRIC_TIMER(metrics::KvMetricId::WORKER_METADATA_RECOVERY_BATCH_LATENCY);
     if (clusterAccess_.checkConnection == nullptr) {
         result.failedIds.insert(result.failedIds.end(), batchObjectKeys.begin(), batchObjectKeys.end());
         result.status = Status(K_RUNTIME_ERROR, "metadata recovery checkConnection callback is not set");
