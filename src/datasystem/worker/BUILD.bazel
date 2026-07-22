@@ -170,6 +170,19 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "worker_coordination_backend_factory",
+    srcs = [
+        "worker_coordination_backend_factory.cpp",
+    ],
+    hdrs = [
+        "worker_coordination_backend_factory.h",
+    ],
+    deps = [
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
+    ],
+)
+
+ds_cc_library(
     name = "worker_oc_server",
     srcs = [
         "worker_oc_server.cpp",
@@ -195,6 +208,7 @@ ds_cc_library(
         "//src/datasystem/worker:worker_flags",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:rebalance_executor",
+        "//src/datasystem/worker:worker_coordination_backend_factory",
         "//src/datasystem/worker/runtime:worker_control_backend_probe",
         "//src/datasystem/worker/runtime:worker_runtime_core",
         "//src/datasystem/worker/runtime:worker_topology_phase_callbacks",

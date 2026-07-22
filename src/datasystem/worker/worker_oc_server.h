@@ -576,8 +576,6 @@ private:
      * @return Status of this call.
      */
     Status InitCoordinationBackend();
-    Status InitCoordinatorBackendFromFlag();
-    Status InitEtcdLikeCoordinationBackend();
 
     /**
      * @brief Construct worker-owned topology runtime components.

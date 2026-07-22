@@ -1,0 +1,27 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ */
+
+/**
+ * Description: Worker coordination backend factory.
+ */
+#include "datasystem/worker/worker_coordination_backend_factory.h"
+
+#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
+#include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
+
+namespace datasystem::worker {
+
+std::unique_ptr<cluster::ICoordinationBackend> CreateWorkerEtcdCoordinationBackend(EtcdStore *etcdStore)
+{
+    return std::make_unique<cluster::EtcdCoordinationBackend>(etcdStore);
+}
+
+std::unique_ptr<cluster::ICoordinationBackend> CreateWorkerDsCoordinationBackend(ICoordinatorServiceProxy *proxy,
+                                                                                 std::string watcherAddr)
+{
+    return std::make_unique<cluster::DsCoordinationBackend>(proxy, std::move(watcherAddr));
+}
+
+}  // namespace datasystem::worker

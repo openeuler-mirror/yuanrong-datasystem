@@ -91,6 +91,13 @@ class EnsureClionCompdbProjectTest(unittest.TestCase):
         self.assertLess(symlink, second_repair)
         self.assertLess(second_repair, ready)
 
+    def test_remote_build_script_uses_worktree_tmpdir(self):
+        script = (ROOT / "scripts" / "clion_remote_build.sh").read_text(encoding="utf-8")
+
+        self.assertIn('REMOTE_TMPDIR="${REMOTE_TMPDIR:-${REMOTE_DIR}/.clion-remote/${WORKTREE_NAME}/tmp}"', script)
+        self.assertIn('"mkdir -p \'${REMOTE_DIR}\' \'${REMOTE_TMPDIR}\'"', script)
+        self.assertIn("TMPDIR='${REMOTE_TMPDIR}'", script)
+
     def test_excludes_generated_and_bazel_paths_from_clion_module(self):
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "worker-self-healing-main-20260716"

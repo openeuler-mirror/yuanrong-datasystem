@@ -406,6 +406,27 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             self.assertNotIn(token, resolver_slice, "WorkerOCServer should delegate central metadata address policy")
         self.assertIn("CentralMetadataAddressResolver", text)
 
+    def test_worker_oc_server_delegates_concrete_coordination_backend_construction(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp",
+            REPO_ROOT / "src/datasystem/worker/worker_oc_server.h",
+        ]
+
+        forbidden_tokens = [
+            "datasystem/cluster/coordination_backend/ds_coordination_backend.h",
+            "datasystem/cluster/coordination_backend/etcd_coordination_backend.h",
+            "cluster::DsCoordinationBackend",
+            "cluster::EtcdCoordinationBackend",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use worker coordination backend factory")
+
+        factory = REPO_ROOT / "src/datasystem/worker/worker_coordination_backend_factory.h"
+        self.assertTrue(factory.exists())
+
     def test_worker_composition_uses_runtime_facade_methods(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp",

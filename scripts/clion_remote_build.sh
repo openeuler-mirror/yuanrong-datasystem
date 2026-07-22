@@ -8,6 +8,7 @@ REMOTE_THIRDPARTY="${REMOTE_THIRDPARTY:-/home/ds-thirdparty-cache}"
 LOCAL_THIRDPARTY="${LOCAL_THIRDPARTY:-.clion-remote/${WORKTREE_NAME}/ds-thirdparty-cache}"
 BUILD_DIR="${BUILD_DIR:-.clion-remote/${WORKTREE_NAME}/build}"
 OUTPUT_DIR="${OUTPUT_DIR:-.clion-remote/${WORKTREE_NAME}/output}"
+REMOTE_TMPDIR="${REMOTE_TMPDIR:-${REMOTE_DIR}/.clion-remote/${WORKTREE_NAME}/tmp}"
 JOBS="${JOBS:-80}"
 TEST_JOBS="${TEST_JOBS:-20}"
 TEST_TIMEOUT="${TEST_TIMEOUT:-40}"
@@ -36,7 +37,7 @@ echo "==> Ensuring local CLion project uses CompDB"
 python3 scripts/ensure_clion_compdb_project.py
 
 echo "==> Syncing worktree to ${REMOTE_HOST}:${REMOTE_DIR}"
-ssh "${REMOTE_HOST}" "mkdir -p '${REMOTE_DIR}'"
+ssh "${REMOTE_HOST}" "mkdir -p '${REMOTE_DIR}' '${REMOTE_TMPDIR}'"
 rsync -az --delete \
   --exclude '.worktrees/' \
   --exclude '.clion-remote/' \
@@ -49,7 +50,7 @@ rsync -az --delete \
   --exclude '.cache/' \
   ./ "${REMOTE_HOST}:${REMOTE_DIR}/"
 
-REMOTE_ENV=("DS_OPENSOURCE_DIR='${REMOTE_THIRDPARTY}'")
+REMOTE_ENV=("DS_OPENSOURCE_DIR='${REMOTE_THIRDPARTY}'" "TMPDIR='${REMOTE_TMPDIR}'")
 if [[ -n "${REMOTE_HTTP_PROXY}" ]]; then
   REMOTE_ENV+=("HTTP_PROXY='${REMOTE_HTTP_PROXY}'" "http_proxy='${REMOTE_HTTP_PROXY}'")
 fi

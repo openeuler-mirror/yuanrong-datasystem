@@ -34,8 +34,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-#include "datasystem/cluster/coordination_backend/ds_coordination_backend.h"
-#include "datasystem/cluster/coordination_backend/etcd_coordination_backend.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/common/constants.h"
 #include "datasystem/common/encrypt/secret_manager.h"
@@ -95,6 +93,7 @@
 #include "datasystem/worker/stream_cache/worker_sc_allocate_memory.h"
 #include "datasystem/worker/worker_health_check.h"
 #include "datasystem/worker/worker_liveness_check.h"
+#include "datasystem/worker/worker_coordination_backend_factory.h"
 #include "datasystem/worker/runtime/worker_topology_availability_admission.h"
 #include "datasystem/worker/runtime/worker_control_backend_probe.h"
 #include "datasystem/worker/rebalance_executor.h"
@@ -735,14 +734,13 @@ void WorkerOCServer::CreateMasterServices()
 
 void WorkerOCServer::CreateWorkerServices()
 {
-    using ObjectTable = SafeTable<ImmutableString, ObjectInterface>;
     LOG(INFO) << "Start create worker services";
 
     // create WorkerServiceImpl
     workerSvc_ = std::make_unique<WorkerServiceImpl>(hostPort_, masterAddr_, DFT_TIMEOUT_MULT, this, akSkManager_,
                                                      hostPort_.ToString(), topologyEngine_->Membership(),
                                                      topologyExitRequested_);
-    auto objectTable = std::make_shared<ObjectTable>();
+    auto objectTable = std::make_shared<object_cache::ObjectTable>();
     auto evictionManager = std::make_shared<object_cache::WorkerOcEvictionManager>(
         objectTable, hostPort_, masterAddr_, *metadataRouteResolver_, objCacheMasterSvc_.get());
     if (EnableOCService()) {
@@ -765,7 +763,7 @@ void WorkerOCServer::CreateWorkerServices()
 }
 
 void WorkerOCServer::CreateObjectCacheWorkerServices(
-    const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
+    const std::shared_ptr<object_cache::ObjectTable> &objectTable,
     const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
 {
     // create WorkerOCServices
@@ -807,7 +805,7 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
 }
 
 void WorkerOCServer::CreateRebalanceExecutor(
-    const std::shared_ptr<SafeTable<ImmutableString, ObjectInterface>> &objectTable,
+    const std::shared_ptr<object_cache::ObjectTable> &objectTable,
     const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
 {
     RebalanceExecutorConfig rebalanceConfig{ hostPort_,
@@ -920,6 +918,8 @@ Status WorkerOCServer::InitCoordinationBackend()
             coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyZmqImpl>(coordinatorDiscovery_);
         }
         RETURN_IF_NOT_OK(coordinatorServiceProxy_->Init());
+        metadataCoordinationBackend_ =
+            CreateWorkerDsCoordinationBackend(coordinatorServiceProxy_.get(), hostPort_.ToString());
         LOG(INFO) << "Using DataSystem Coordinator as cluster coordination backend, source=discovery";
         return Status::OK();
     }
@@ -968,8 +968,8 @@ Status WorkerOCServer::InitCoordinationBackend()
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
-    cluster::EtcdCoordinationBackend backend(etcdStore_.get());
-    object_cache::CentralMetadataAddressResolver resolver(backend);
+    metadataCoordinationBackend_ = CreateWorkerEtcdCoordinationBackend(etcdStore_.get());
+    object_cache::CentralMetadataAddressResolver resolver(*metadataCoordinationBackend_);
     RETURN_IF_NOT_OK(resolver.EnsureTable());
     return Status::OK();
 }
@@ -1091,8 +1091,8 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         builder.UseCoordinator(*coordinatorServiceProxy_, BuildCoordinatorWatchIngress());
     } else {
         CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_NOT_READY, "ETCD Store is not initialized");
-        builder.UseUnifiedCoordinationBackends(std::make_unique<cluster::EtcdCoordinationBackend>(etcdStore_.get()),
-                                               std::make_unique<cluster::EtcdCoordinationBackend>(etcdStore_.get()));
+        builder.UseUnifiedCoordinationBackends(CreateWorkerEtcdCoordinationBackend(etcdStore_.get()),
+                                               CreateWorkerEtcdCoordinationBackend(etcdStore_.get()));
     }
     RETURN_IF_NOT_OK(builder.Build(topologyEngine_));
     const bool isRestart = topologyEngine_->IsRestart();
@@ -1146,14 +1146,9 @@ bool WorkerOCServer::IsLocalMetadataMaster() const
 Status WorkerOCServer::ResolveCentralMetadataAddress(std::string &address)
 {
     const auto localAddress = hostPort_.ToString();
-    if (coordinatorServiceProxy_ == nullptr) {
-        CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_NOT_READY, "ETCD Store is not initialized");
-        cluster::EtcdCoordinationBackend backend(etcdStore_.get());
-        object_cache::CentralMetadataAddressResolver resolver(backend);
-        return resolver.ClaimOrRead(localAddress, address);
-    }
-    cluster::DsCoordinationBackend backend(coordinatorServiceProxy_.get(), localAddress);
-    object_cache::CentralMetadataAddressResolver resolver(backend);
+    CHECK_FAIL_RETURN_STATUS(metadataCoordinationBackend_ != nullptr, K_NOT_READY,
+                             "metadata coordination backend is not initialized");
+    object_cache::CentralMetadataAddressResolver resolver(*metadataCoordinationBackend_);
     return resolver.ClaimOrRead(localAddress, address);
 }
 
@@ -1180,6 +1175,41 @@ Status WorkerOCServer::PublishReadyMembership()
     }
     RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED,
                   "timed out publishing READY membership after first lease: " + lastStatus.ToString());
+}
+
+void WorkerOCServer::RefreshTopologyServingAdmission(cluster::TopologyAvailabilityLevel level)
+{
+    if (objCacheClientWorkerSvc_ != nullptr) {
+        const auto recoveryReport = objCacheClientWorkerSvc_->BuildObjectCacheRecoveryEvidenceReport();
+        SetTopologyServingAdmission(RefreshTopologyAvailabilityAdmission(level, workerRuntime_, recoveryReport));
+        return;
+    }
+    ApplyTopologyAvailabilityToRuntimeState(level, workerRuntime_);
+    SetTopologyServingAdmission(ShouldOpenTopologyServingAdmission(level, workerRuntime_.GetSnapshot()));
+}
+
+Status WorkerOCServer::HandleMembershipRecovery(const std::string &address, int64_t timestamp)
+{
+    (void)address;
+    (void)timestamp;
+    RETURN_OK_IF_TRUE(objCacheClientWorkerSvc_ == nullptr);
+    return objCacheClientWorkerSvc_->ReconcileNetworkRecoveryOwnership();
+}
+
+void WorkerOCServer::RefreshTopologyAdmissionFromObjectCacheRecovery()
+{
+    if (topologyEngine_ == nullptr) {
+        return;
+    }
+    RefreshTopologyServingAdmission(topologyEngine_->GetAvailability());
+}
+
+void WorkerOCServer::MarkRunningWithoutObjectCacheRecovery()
+{
+    if (topologyEngine_ == nullptr) {
+        return;
+    }
+    RefreshTopologyServingAdmission(topologyEngine_->GetAvailability());
 }
 
 Status WorkerOCServer::WaitForTopologyReady()
