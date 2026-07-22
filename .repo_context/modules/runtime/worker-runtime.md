@@ -366,7 +366,21 @@
       watch event sources, so an ETCD fallback Controller wrapper sharing the Worker-owned Store cannot accidentally
       stop the Worker membership lease, local-isolation handler, or recovery callback path. Full
       `ShutdownEventSources()` remains the owner-level backend shutdown path.
+  31. object-cache ownership recovery evidence is no longer inferred from `metadataReady && slotReady`. Recovery
+      aggregation now requires an explicit ownership evidence report supplied by object-cache recovery state, and
+      `BeginRecoveryEvidenceGeneration()` resets ownership to pending until Master metadata-owner reconciliation or an
+      equivalent confirmed no-work path publishes ownership evidence. This keeps the Master primary/local-copy/L2
+      ownership decision inside object-cache hooks while exposing only evidence to worker runtime.
 - Recent focused verification:
+  - Ownership evidence boundary slice: initial RED syntax check for
+    `WorkerRecoveryEvidenceAdapterTest.OwnershipEvidenceUsesExplicitMasterReconciliationResult` failed in 7.65s because
+    the adapter still accepted `metadataReady, slotReady` and auto-derived ownership. GREEN implementation passed
+    five affected translation-unit syntax checks, rebuilt `ds_ut_object` incrementally, and then
+    `ds_ut_object --gtest_filter="WorkerRecoveryEvidenceAdapterTest.*:ObjectCacheRecoveryStateTest.*:WorkerOcServiceImplTest.*Recovery*:WorkerOcServiceImplTest.*BuildObjectCacheRecoveryEvidence*:WorkerOcServiceImplTest.WorkerWorkerReadRejectsBeforeOwnershipEvidence"`
+    passed 31/31 in 0.08s.
+  - Post ownership-slice object-cache focused regression:
+    `ds_ut_object --gtest_filter="ObjectCacheRecoveryStateTest.*:WorkerRecoveryEvidenceAdapterTest.*:WorkerOcServiceImplTest.*Recovery*:WorkerOcServiceImplTest.*OutOfMemory*:WorkerOcServiceImplTest.*ResourceRecovery*:WorkerOcServiceImplTest.*BuildObjectCacheRecoveryEvidence*:WorkerOcServiceImplTest.*ClearMatchedObjectsRecovers*:WorkerOcServiceImplTest.*NotifyRemoteGet*:MigrateDataServiceTest.*Drain*:MigrateDataServiceTest.*MigrateDataDirectResponse*"`
+    passed 44/44 in 10.49s.
   - After rebasing to `main/master@11805014d`, `scripts/clion_remote_build.sh tests-index` rebuilt the CLion remote
     UT/ST index with URMA Mock enabled, generated 1157 compile-command entries, reused `/home/ds-thirdparty-cache`
     without rebuilding third-party dependencies, and completed in 139s.

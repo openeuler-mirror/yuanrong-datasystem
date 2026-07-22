@@ -26,6 +26,7 @@ namespace object_cache {
 class ObjectCacheRecoveryState {
 public:
     using SlotRecoveryEvidenceProvider = std::function<worker::WorkerRecoveryEvidenceReport()>;
+    using OwnershipRecoveryEvidenceProvider = std::function<worker::WorkerRecoveryEvidenceReport()>;
     using ResourceRecoveredProvider = std::function<bool(CacheType)>;
 
     struct ResourceRecoverySnapshot {
@@ -43,13 +44,16 @@ public:
     worker::WorkerRecoveryEvidenceReport GetLastMetadataRecoveryEvidenceReport() const;
     void SetMetadataRecoverySummary(const MetaDataRecoveryManager::RecoverySummary &summary);
     void SetMetadataRecoveryEvidenceReport(worker::WorkerRecoveryEvidenceReport report);
+    worker::WorkerRecoveryEvidenceReport GetLastOwnershipRecoveryEvidenceReport() const;
+    void SetOwnershipRecoveryEvidenceReport(worker::WorkerRecoveryEvidenceReport report);
 
     uint64_t MarkResourceRecoveryRequired(memory::CacheType cacheType);
     ResourceRecoverySnapshot GetResourceRecoverySnapshot() const;
     bool PublishResourceRecoveryIfCurrent(uint64_t generation, const std::function<bool()> &publish);
     worker::WorkerRecoveryEvidenceReport BuildObjectCacheRecoveryEvidenceReport(
-        const SlotRecoveryEvidenceProvider &slotEvidenceProvider, const ResourceRecoveredProvider &resourceRecovered,
-        uint64_t *resourceRecoveryGeneration = nullptr) const;
+        const SlotRecoveryEvidenceProvider &slotEvidenceProvider,
+        const OwnershipRecoveryEvidenceProvider &ownershipEvidenceProvider,
+        const ResourceRecoveredProvider &resourceRecovered, uint64_t *resourceRecoveryGeneration = nullptr) const;
 
     worker::WorkerRecoveryGeneration BeginRecoveryEvidenceGeneration(std::string detail);
     worker::WorkerRecoveryEvidenceReport TrackEvidenceForGeneration(worker::WorkerRecoveryGeneration generation,
@@ -58,6 +62,8 @@ public:
 private:
     mutable std::mutex metadataRecoveryEvidenceMutex_;
     worker::WorkerRecoveryEvidenceReport lastMetadataRecoveryEvidence_;
+    mutable std::mutex ownershipRecoveryEvidenceMutex_;
+    worker::WorkerRecoveryEvidenceReport lastOwnershipRecoveryEvidence_;
 
     mutable std::mutex resourceRecoveryMutex_;
     bool memoryRecoveryRequired_{ false };

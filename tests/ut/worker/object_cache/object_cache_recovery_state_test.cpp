@@ -10,6 +10,8 @@
 
 #include <gtest/gtest.h>
 
+#include "datasystem/worker/object_cache/worker_recovery_evidence_adapter.h"
+
 namespace datasystem {
 namespace object_cache {
 namespace {
@@ -82,9 +84,11 @@ TEST(ObjectCacheRecoveryStateTest, BuildsObjectCacheEvidenceFromInjectedReadines
         resourceChecks.emplace_back(cacheType);
         return cacheType == CacheType::MEMORY;
     };
+    auto ownershipProvider = [] { return BuildOwnershipRecoveryEvidenceReport(true, "master ownership confirmed"); };
 
     uint64_t evidenceGeneration = 0;
-    auto report = state.BuildObjectCacheRecoveryEvidenceReport(slotProvider, resourceRecovered, &evidenceGeneration);
+    auto report = state.BuildObjectCacheRecoveryEvidenceReport(slotProvider, ownershipProvider, resourceRecovered,
+                                                               &evidenceGeneration);
 
     EXPECT_EQ(evidenceGeneration, diskGeneration);
     EXPECT_TRUE(report.evidence.metadataReady);
@@ -94,6 +98,34 @@ TEST(ObjectCacheRecoveryStateTest, BuildsObjectCacheEvidenceFromInjectedReadines
     ASSERT_EQ(resourceChecks.size(), 2);
     EXPECT_EQ(resourceChecks[0], CacheType::MEMORY);
     EXPECT_EQ(resourceChecks[1], CacheType::DISK);
+}
+
+TEST(ObjectCacheRecoveryStateTest, NewRecoveryGenerationClearsOwnershipUntilMasterEvidenceArrives)
+{
+    ObjectCacheRecoveryState state;
+    worker::WorkerRecoveryEvidenceBuilder slotBuilder;
+    auto slotProvider = [&slotBuilder] { return slotBuilder.MarkSlotReady("slots complete").BuildReport("slots"); };
+    auto resourceRecovered = [](CacheType) { return true; };
+
+    state.BeginRecoveryEvidenceGeneration("network recovery pending");
+    worker::WorkerRecoveryEvidenceBuilder metadataBuilder;
+    state.SetMetadataRecoveryEvidenceReport(
+        metadataBuilder.MarkMetadataReady("metadata recovered").BuildReport("metadata recovered"));
+    auto pending = state.BuildObjectCacheRecoveryEvidenceReport(
+        slotProvider, [&state] { return state.GetLastOwnershipRecoveryEvidenceReport(); }, resourceRecovered);
+
+    EXPECT_TRUE(pending.evidence.metadataReady);
+    EXPECT_TRUE(pending.evidence.slotReady);
+    EXPECT_FALSE(pending.evidence.ownershipReady);
+    EXPECT_NE(pending.detail.find("ownership reconciliation pending"), std::string::npos);
+
+    state.SetOwnershipRecoveryEvidenceReport(
+        BuildOwnershipRecoveryEvidenceReport(true, "master ownership reconciliation complete"));
+    auto complete = state.BuildObjectCacheRecoveryEvidenceReport(
+        slotProvider, [&state] { return state.GetLastOwnershipRecoveryEvidenceReport(); }, resourceRecovered);
+
+    EXPECT_TRUE(complete.evidence.ownershipReady);
+    EXPECT_NE(complete.detail.find("master ownership reconciliation complete"), std::string::npos);
 }
 
 }  // namespace

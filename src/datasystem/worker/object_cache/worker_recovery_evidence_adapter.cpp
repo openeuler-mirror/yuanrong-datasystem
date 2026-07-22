@@ -81,11 +81,10 @@ worker::WorkerRecoveryEvidenceReport BuildSlotRecoveryEvidenceReport(const std::
     return builder.BuildReport(SlotSummaryDetail(readyCount, incidents.size(), failedCount));
 }
 
-worker::WorkerRecoveryEvidenceReport BuildOwnershipRecoveryEvidenceReport(bool metadataReady, bool slotReady,
+worker::WorkerRecoveryEvidenceReport BuildOwnershipRecoveryEvidenceReport(bool ownershipReady,
                                                                           const std::string &detail)
 {
     std::ostringstream oss;
-    const bool ownershipReady = metadataReady && slotReady;
     oss << "ownership_ready=" << (ownershipReady ? "true" : "false");
     if (!detail.empty()) {
         oss << "; " << detail;
@@ -100,7 +99,7 @@ worker::WorkerRecoveryEvidenceReport BuildOwnershipRecoveryEvidenceReport(bool m
 
 worker::WorkerRecoveryEvidenceReport BuildObjectCacheRecoveryEvidenceReport(
     const worker::WorkerRecoveryEvidenceReport &metadataReport, const worker::WorkerRecoveryEvidenceReport &slotReport,
-    bool resourceReady)
+    const worker::WorkerRecoveryEvidenceReport &ownershipReport, bool resourceReady)
 {
     worker::WorkerRecoveryEvidenceBuilder builder;
     if (metadataReport.evidence.metadataReady) {
@@ -109,10 +108,8 @@ worker::WorkerRecoveryEvidenceReport BuildObjectCacheRecoveryEvidenceReport(
     if (slotReport.evidence.slotReady) {
         builder.MarkSlotReady(slotReport.detail);
     }
-    const auto ownershipReport = BuildOwnershipRecoveryEvidenceReport(
-        metadataReport.evidence.metadataReady, slotReport.evidence.slotReady,
-        "metadata={" + metadataReport.detail + "}; slot={" + slotReport.detail + "}");
-    if (ownershipReport.evidence.ownershipReady) {
+    if (metadataReport.evidence.metadataReady && slotReport.evidence.slotReady
+        && ownershipReport.evidence.ownershipReady) {
         builder.MarkOwnershipReady(ownershipReport.detail);
     }
     if (resourceReady) {

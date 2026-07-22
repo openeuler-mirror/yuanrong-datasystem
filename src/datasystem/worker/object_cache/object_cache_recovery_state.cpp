@@ -16,7 +16,8 @@ namespace datasystem {
 namespace object_cache {
 
 ObjectCacheRecoveryState::ObjectCacheRecoveryState()
-    : lastMetadataRecoveryEvidence_(BuildMetadataRecoveryEvidenceReport(MetaDataRecoveryManager::RecoverySummary{}))
+    : lastMetadataRecoveryEvidence_(BuildMetadataRecoveryEvidenceReport(MetaDataRecoveryManager::RecoverySummary{})),
+      lastOwnershipRecoveryEvidence_(BuildOwnershipRecoveryEvidenceReport(true, "no ownership reconciliation pending"))
 {
 }
 
@@ -28,13 +29,30 @@ worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::GetLastMetadataRe
 
 void ObjectCacheRecoveryState::SetMetadataRecoverySummary(const MetaDataRecoveryManager::RecoverySummary &summary)
 {
-    SetMetadataRecoveryEvidenceReport(BuildMetadataRecoveryEvidenceReport(summary));
+    auto metadataReport = BuildMetadataRecoveryEvidenceReport(summary);
+    SetMetadataRecoveryEvidenceReport(metadataReport);
+    SetOwnershipRecoveryEvidenceReport(BuildOwnershipRecoveryEvidenceReport(
+        metadataReport.evidence.metadataReady, metadataReport.evidence.metadataReady
+                                                   ? "metadata owner reconciliation confirmed"
+                                                   : "metadata owner reconciliation incomplete"));
 }
 
 void ObjectCacheRecoveryState::SetMetadataRecoveryEvidenceReport(worker::WorkerRecoveryEvidenceReport report)
 {
     std::lock_guard<std::mutex> lock(metadataRecoveryEvidenceMutex_);
     lastMetadataRecoveryEvidence_ = std::move(report);
+}
+
+worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::GetLastOwnershipRecoveryEvidenceReport() const
+{
+    std::lock_guard<std::mutex> lock(ownershipRecoveryEvidenceMutex_);
+    return lastOwnershipRecoveryEvidence_;
+}
+
+void ObjectCacheRecoveryState::SetOwnershipRecoveryEvidenceReport(worker::WorkerRecoveryEvidenceReport report)
+{
+    std::lock_guard<std::mutex> lock(ownershipRecoveryEvidenceMutex_);
+    lastOwnershipRecoveryEvidence_ = std::move(report);
 }
 
 uint64_t ObjectCacheRecoveryState::MarkResourceRecoveryRequired(memory::CacheType cacheType)
@@ -70,13 +88,17 @@ bool ObjectCacheRecoveryState::PublishResourceRecoveryIfCurrent(uint64_t generat
 }
 
 worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::BuildObjectCacheRecoveryEvidenceReport(
-    const SlotRecoveryEvidenceProvider &slotEvidenceProvider, const ResourceRecoveredProvider &resourceRecovered,
-    uint64_t *resourceRecoveryGeneration) const
+    const SlotRecoveryEvidenceProvider &slotEvidenceProvider,
+    const OwnershipRecoveryEvidenceProvider &ownershipEvidenceProvider,
+    const ResourceRecoveredProvider &resourceRecovered, uint64_t *resourceRecoveryGeneration) const
 {
     const auto metadataReport = GetLastMetadataRecoveryEvidenceReport();
     worker::WorkerRecoveryEvidenceBuilder builder;
     const auto slotReport =
         slotEvidenceProvider == nullptr ? builder.BuildReport("slot_manager_unavailable") : slotEvidenceProvider();
+    const auto ownershipReport = ownershipEvidenceProvider == nullptr
+                                     ? builder.BuildReport("ownership_evidence_unavailable")
+                                     : ownershipEvidenceProvider();
     const auto resourceSnapshot = GetResourceRecoverySnapshot();
     if (resourceRecoveryGeneration != nullptr) {
         *resourceRecoveryGeneration = resourceSnapshot.generation;
@@ -85,7 +107,8 @@ worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::BuildObjectCacheR
         !resourceSnapshot.memoryRequired || (resourceRecovered != nullptr && resourceRecovered(CacheType::MEMORY));
     const bool diskReady =
         !resourceSnapshot.diskRequired || (resourceRecovered != nullptr && resourceRecovered(CacheType::DISK));
-    return object_cache::BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, memoryReady && diskReady);
+    return object_cache::BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, ownershipReport,
+                                                                memoryReady && diskReady);
 }
 
 worker::WorkerRecoveryGeneration ObjectCacheRecoveryState::BeginRecoveryEvidenceGeneration(std::string detail)
@@ -93,6 +116,7 @@ worker::WorkerRecoveryGeneration ObjectCacheRecoveryState::BeginRecoveryEvidence
     auto generation = recoveryEvidenceTracker_.BeginRecovery(detail);
     worker::WorkerRecoveryEvidenceBuilder builder;
     SetMetadataRecoveryEvidenceReport(builder.BuildReport(std::move(detail)));
+    SetOwnershipRecoveryEvidenceReport(builder.BuildReport("ownership reconciliation pending"));
     return generation;
 }
 

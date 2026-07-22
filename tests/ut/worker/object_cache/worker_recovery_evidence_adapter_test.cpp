@@ -77,15 +77,15 @@ TEST(WorkerRecoveryEvidenceAdapterTest, SlotRecoveryEvidenceRequiresEveryInciden
     EXPECT_NE(completeReport.detail.find("slot_incidents_ready=1/1"), std::string::npos);
 }
 
-TEST(WorkerRecoveryEvidenceAdapterTest, OwnershipEvidenceRequiresMetadataAndSlotReadiness)
+TEST(WorkerRecoveryEvidenceAdapterTest, OwnershipEvidenceUsesExplicitMasterReconciliationResult)
 {
-    auto unresolved = BuildOwnershipRecoveryEvidenceReport(false, true, "metadata incomplete");
+    auto unresolved = BuildOwnershipRecoveryEvidenceReport(false, "master reconciliation pending");
 
     EXPECT_FALSE(unresolved.evidence.ownershipReady);
     EXPECT_NE(unresolved.detail.find("ownership_ready=false"), std::string::npos);
-    EXPECT_NE(unresolved.detail.find("metadata incomplete"), std::string::npos);
+    EXPECT_NE(unresolved.detail.find("master reconciliation pending"), std::string::npos);
 
-    auto ready = BuildOwnershipRecoveryEvidenceReport(true, true, "metadata and slot agree");
+    auto ready = BuildOwnershipRecoveryEvidenceReport(true, "master ownership confirmed");
 
     EXPECT_TRUE(ready.evidence.ownershipReady);
     EXPECT_NE(ready.detail.find("ownership_ready=true"), std::string::npos);
@@ -103,13 +103,14 @@ TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateRequiresMeta
     completeSlot.set_completed_slots(1);
     auto slotReport = BuildSlotRecoveryEvidenceReport({ completeSlot });
 
-    auto aggregate = BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, true);
+    auto ownershipReport = BuildOwnershipRecoveryEvidenceReport(true, "master ownership confirmed");
+    auto aggregate = BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, ownershipReport, true);
 
     EXPECT_TRUE(aggregate.evidence.metadataReady);
     EXPECT_TRUE(aggregate.evidence.slotReady);
     EXPECT_TRUE(aggregate.evidence.ownershipReady);
     EXPECT_TRUE(aggregate.evidence.resourceReady);
-    EXPECT_NE(aggregate.detail.find("ownership_ready=true"), std::string::npos);
+    EXPECT_NE(aggregate.detail.find("master ownership confirmed"), std::string::npos);
 }
 
 TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateRequiresAllocatorHeadroom)
@@ -123,27 +124,30 @@ TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateRequiresAllo
     completeSlot.set_completed_slots(1);
     auto slotReport = BuildSlotRecoveryEvidenceReport({ completeSlot });
 
-    auto aggregate = BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, false);
+    auto ownershipReport = BuildOwnershipRecoveryEvidenceReport(true, "master ownership confirmed");
+    auto aggregate = BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, ownershipReport, false);
 
     EXPECT_TRUE(aggregate.evidence.ownershipReady);
     EXPECT_FALSE(aggregate.evidence.resourceReady);
 }
 
-TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateBlocksOwnershipWhenSlotIsMissing)
+TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateBlocksOwnershipWhenMasterEvidenceIsMissing)
 {
     MetaDataRecoveryManager::RecoverySummary metadataSummary;
     metadataSummary.requestedCount = 1;
     metadataSummary.recoveredCount = 1;
     auto metadataReport = BuildMetadataRecoveryEvidenceReport(metadataSummary);
 
-    SlotRecoveryInfoPb pendingSlot;
-    pendingSlot.set_total_slots(1);
-    auto slotReport = BuildSlotRecoveryEvidenceReport({ pendingSlot });
+    SlotRecoveryInfoPb completeSlot;
+    completeSlot.set_total_slots(1);
+    completeSlot.set_completed_slots(1);
+    auto slotReport = BuildSlotRecoveryEvidenceReport({ completeSlot });
+    auto ownershipReport = BuildOwnershipRecoveryEvidenceReport(false, "master primary not confirmed");
 
-    auto aggregate = BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, true);
+    auto aggregate = BuildObjectCacheRecoveryEvidenceReport(metadataReport, slotReport, ownershipReport, true);
 
     EXPECT_TRUE(aggregate.evidence.metadataReady);
-    EXPECT_FALSE(aggregate.evidence.slotReady);
+    EXPECT_TRUE(aggregate.evidence.slotReady);
     EXPECT_FALSE(aggregate.evidence.ownershipReady);
     EXPECT_NE(aggregate.detail.find("ownership_ready=false"), std::string::npos);
 }

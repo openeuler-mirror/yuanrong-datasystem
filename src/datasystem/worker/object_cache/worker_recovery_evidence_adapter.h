@@ -32,12 +32,12 @@ worker::WorkerRecoveryEvidenceReport BuildMetadataRecoveryEvidenceReport(
 
 worker::WorkerRecoveryEvidenceReport BuildSlotRecoveryEvidenceReport(const std::vector<SlotRecoveryInfoPb> &incidents);
 
-worker::WorkerRecoveryEvidenceReport BuildOwnershipRecoveryEvidenceReport(bool metadataReady, bool slotReady,
+worker::WorkerRecoveryEvidenceReport BuildOwnershipRecoveryEvidenceReport(bool ownershipReady,
                                                                           const std::string &detail);
 
 worker::WorkerRecoveryEvidenceReport BuildObjectCacheRecoveryEvidenceReport(
     const worker::WorkerRecoveryEvidenceReport &metadataReport, const worker::WorkerRecoveryEvidenceReport &slotReport,
-    bool resourceReady);
+    const worker::WorkerRecoveryEvidenceReport &ownershipReport, bool resourceReady);
 }  // namespace object_cache
 }  // namespace datasystem
 

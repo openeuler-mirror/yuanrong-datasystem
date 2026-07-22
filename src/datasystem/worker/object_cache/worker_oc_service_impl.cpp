@@ -399,6 +399,7 @@ worker::WorkerRecoveryEvidenceReport WorkerOCServiceImpl::BuildObjectCacheRecove
             return slotRecoveryManager_ == nullptr ? builder.BuildReport("slot_manager_unavailable")
                                                    : slotRecoveryManager_->BuildSlotRecoveryEvidenceReportFromStore();
         },
+        [this] { return recoveryState_->GetLastOwnershipRecoveryEvidenceReport(); },
         [this](CacheType cacheType) {
             if (cacheType == CacheType::DISK && !memory::Allocator::Instance()->IsDiskAvailable()) {
                 return false;
@@ -435,6 +436,8 @@ void WorkerOCServiceImpl::MarkRestartReconciliationEvidenceReady(const std::stri
     worker::WorkerRecoveryEvidenceBuilder builder;
     builder.MarkMetadataReady(detail);
     recoveryState_->SetMetadataRecoveryEvidenceReport(builder.BuildReport(detail));
+    recoveryState_->SetOwnershipRecoveryEvidenceReport(
+        object_cache::BuildOwnershipRecoveryEvidenceReport(true, detail));
     if (recoveryEvidenceReadyHandler_ != nullptr) {
         recoveryEvidenceReadyHandler_();
     }
@@ -1294,6 +1297,8 @@ Status WorkerOCServiceImpl::FinishRestartMetadataRecovery(const std::string &wor
         worker::WorkerRecoveryEvidenceBuilder builder;
         builder.MarkMetadataReady(detail.str());
         recoveryState_->SetMetadataRecoveryEvidenceReport(builder.BuildReport(detail.str()));
+        recoveryState_->SetOwnershipRecoveryEvidenceReport(
+            object_cache::BuildOwnershipRecoveryEvidenceReport(true, detail.str()));
         return Status::OK();
     }
     if (result.unresolvedCount == 0) {
