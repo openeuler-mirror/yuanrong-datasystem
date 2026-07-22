@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -18,9 +19,12 @@
 #include "datasystem/object/object_enum.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
 #include "datasystem/worker/runtime/worker_recovery_controller.h"
-#include "datasystem/worker/runtime/worker_recovery_evidence_tracker.h"
 
 namespace datasystem {
+namespace worker {
+class WorkerRecoveryEvidenceTracker;
+}
+
 namespace object_cache {
 
 class ObjectCacheRecoveryState {
@@ -36,7 +40,7 @@ public:
     };
 
     ObjectCacheRecoveryState();
-    ~ObjectCacheRecoveryState() = default;
+    ~ObjectCacheRecoveryState();
 
     ObjectCacheRecoveryState(const ObjectCacheRecoveryState &) = delete;
     ObjectCacheRecoveryState &operator=(const ObjectCacheRecoveryState &) = delete;
@@ -70,7 +74,7 @@ private:
     bool diskRecoveryRequired_{ false };
     uint64_t resourceRecoveryGeneration_{ 0 };
 
-    worker::WorkerRecoveryEvidenceTracker recoveryEvidenceTracker_;
+    std::unique_ptr<worker::WorkerRecoveryEvidenceTracker> recoveryEvidenceTracker_;
 };
 
 }  // namespace object_cache

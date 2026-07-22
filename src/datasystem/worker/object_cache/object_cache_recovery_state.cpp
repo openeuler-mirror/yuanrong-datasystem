@@ -11,15 +11,19 @@
 #include <utility>
 
 #include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
+#include "datasystem/worker/runtime/worker_recovery_evidence_tracker.h"
 
 namespace datasystem {
 namespace object_cache {
 
 ObjectCacheRecoveryState::ObjectCacheRecoveryState()
     : lastMetadataRecoveryEvidence_(BuildMetadataRecoveryEvidenceReport(MetaDataRecoveryManager::RecoverySummary{})),
-      lastOwnershipRecoveryEvidence_(BuildOwnershipRecoveryEvidenceReport(true, "no ownership reconciliation pending"))
+      lastOwnershipRecoveryEvidence_(BuildOwnershipRecoveryEvidenceReport(true, "no ownership reconciliation pending")),
+      recoveryEvidenceTracker_(std::make_unique<worker::WorkerRecoveryEvidenceTracker>())
 {
 }
+
+ObjectCacheRecoveryState::~ObjectCacheRecoveryState() = default;
 
 worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::GetLastMetadataRecoveryEvidenceReport() const
 {
@@ -113,7 +117,7 @@ worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::BuildObjectCacheR
 
 worker::WorkerRecoveryGeneration ObjectCacheRecoveryState::BeginRecoveryEvidenceGeneration(std::string detail)
 {
-    auto generation = recoveryEvidenceTracker_.BeginRecovery(detail);
+    auto generation = recoveryEvidenceTracker_->BeginRecovery(detail);
     worker::WorkerRecoveryEvidenceBuilder builder;
     SetMetadataRecoveryEvidenceReport(builder.BuildReport(std::move(detail)));
     SetOwnershipRecoveryEvidenceReport(builder.BuildReport("ownership reconciliation pending"));
@@ -123,10 +127,10 @@ worker::WorkerRecoveryGeneration ObjectCacheRecoveryState::BeginRecoveryEvidence
 worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::TrackEvidenceForGeneration(
     worker::WorkerRecoveryGeneration generation, worker::WorkerRecoveryEvidenceReport report)
 {
-    if (!recoveryEvidenceTracker_.UpdateEvidence(generation, std::move(report))) {
+    if (!recoveryEvidenceTracker_->UpdateEvidence(generation, std::move(report))) {
         return worker::WorkerRecoveryEvidenceReport{};
     }
-    auto evidence = recoveryEvidenceTracker_.GetEvidence(generation);
+    auto evidence = recoveryEvidenceTracker_->GetEvidence(generation);
     return evidence.has_value() ? evidence->report : worker::WorkerRecoveryEvidenceReport{};
 }
 

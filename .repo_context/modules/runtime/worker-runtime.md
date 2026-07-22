@@ -382,6 +382,9 @@
       admission counters and recovery/object-table histograms were removed from hot recovery paths; service
       mode/reason/phase gauges plus the aggregate reject counter provide admission diagnosis, while the three backend
       scope counters provide alertable local/global/inconclusive failure-scope classification.
+  34. `ObjectCacheRecoveryState` no longer exposes `WorkerRecoveryEvidenceTracker` from its public header. The object-cache
+      helper keeps only the recovery evidence report/generation contract in its interface and owns the concrete tracker
+      behind a private implementation pointer, keeping runtime tracking internals out of object-cache public headers.
 - Recent focused verification:
   - Metrics cardinality/performance slice: initial RED for
     `WorkerRuntimeStateTest.SelfHealingMetricsUseFixedLowCardinalityDescriptors` and
