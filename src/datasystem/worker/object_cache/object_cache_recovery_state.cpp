@@ -54,7 +54,8 @@ ObjectCacheRecoveryState::ResourceRecoverySnapshot ObjectCacheRecoveryState::Get
     return { memoryRecoveryRequired_, diskRecoveryRequired_, resourceRecoveryGeneration_ };
 }
 
-bool ObjectCacheRecoveryState::PublishResourceRecoveryIfCurrent(uint64_t generation, const std::function<bool()> &publish)
+bool ObjectCacheRecoveryState::PublishResourceRecoveryIfCurrent(uint64_t generation,
+                                                                const std::function<bool()> &publish)
 {
     std::lock_guard<std::mutex> lock(resourceRecoveryMutex_);
     if (generation != resourceRecoveryGeneration_) {

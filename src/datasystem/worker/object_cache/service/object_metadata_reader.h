@@ -25,9 +25,9 @@
 namespace datasystem {
 namespace object_cache {
 
-class IObjectMetadataReader {
+class ObjectMetadataReader {
 public:
-    virtual ~IObjectMetadataReader() = default;
+    virtual ~ObjectMetadataReader() = default;
 
     virtual Status QueryObjectMetadata(const std::string &objectKey, int32_t timeoutMs,
                                        master::QueryMetaInfoPb &queryMeta) = 0;

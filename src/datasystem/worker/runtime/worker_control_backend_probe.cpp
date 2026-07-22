@@ -18,11 +18,11 @@ namespace datasystem::worker {
 namespace {
 struct PendingControlBackendProbe {
     cluster::MemberIdentity peer;
-    std::unique_ptr<IControlBackendPeerProbeClient> client;
+    std::unique_ptr<WorkerControlBackendProbeClient> client;
     int64_t tag{ -1 };
 };
 
-Status StartControlBackendProbe(const ControlBackendPeerProbeClientFactory &clientFactory,
+Status StartControlBackendProbe(const WorkerControlBackendProbeClientFactory &clientFactory,
                                 const cluster::MemberIdentity &peer, std::chrono::steady_clock::time_point deadline,
                                 PendingControlBackendProbe &pending)
 {
@@ -31,7 +31,7 @@ Status StartControlBackendProbe(const ControlBackendPeerProbeClientFactory &clie
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
     const auto timeout =
         static_cast<int32_t>(std::min<int64_t>(std::numeric_limits<int32_t>::max(), std::max<int64_t>(remaining, 1)));
-    std::unique_ptr<IControlBackendPeerProbeClient> client;
+    std::unique_ptr<WorkerControlBackendProbeClient> client;
     RETURN_IF_NOT_OK(clientFactory(peer, client));
     CHECK_FAIL_RETURN_STATUS(client != nullptr, K_RUNTIME_ERROR, "cluster-state probe client is null");
     int64_t tag = -1;
@@ -52,7 +52,7 @@ Status FinishControlBackendProbe(const PendingControlBackendProbe &pending,
 
 std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
     const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline,
-    const ControlBackendPeerProbeClientFactory &clientFactory)
+    const WorkerControlBackendProbeClientFactory &clientFactory)
 {
     std::vector<PendingControlBackendProbe> pending;
     pending.reserve(peers.size());

@@ -284,7 +284,7 @@ std::string BuildWarmupKey(const std::string &workerAddr)
     return URMA_WARMUP_KEY_PREFIX + encoded;
 }
 
-class WorkerRpcControlBackendProbeClient : public IControlBackendPeerProbeClient {
+class WorkerRpcControlBackendProbeClient : public WorkerControlBackendProbeClient {
 public:
     explicit WorkerRpcControlBackendProbeClient(std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api)
         : api_(std::move(api))
@@ -1056,9 +1056,9 @@ void WorkerOCServer::ConfigureTopologyBuilder(cluster::TopologyEngine::Builder &
 {
     auto controlBackendProbe = [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers,
                                                                                       auto deadline) {
-        ControlBackendPeerProbeClientFactory clientFactory =
+        WorkerControlBackendProbeClientFactory clientFactory =
             [localAddress, akSkManager](const cluster::MemberIdentity &peer,
-                                        std::unique_ptr<IControlBackendPeerProbeClient> &client) {
+                                        std::unique_ptr<WorkerControlBackendProbeClient> &client) {
                 std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
                 RETURN_IF_NOT_OK(object_cache::CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
                 client = std::make_unique<WorkerRpcControlBackendProbeClient>(std::move(api));
@@ -2353,9 +2353,7 @@ Status WorkerOCServer::AddClient(const ClientKey &clientId, bool shmEnabled, int
     // that the kernel no longer considers open — review 180841385: a stale/invalid fd would slip
     // past the == INVALID_SOCKET_FD guard, then AddFdEvent(EPOLL_CTL_ADD) returns EBADF, the client
     // stays in SOCKET_HEARTBEAT with no epoll monitor and IsClientLost never trips).
-    auto isSocketFdValid = [](int fd) {
-        return fd != INVALID_SOCKET_FD && fcntl(fd, F_GETFD) != -1;
-    };
+    auto isSocketFdValid = [](int fd) { return fd != INVALID_SOCKET_FD && fcntl(fd, F_GETFD) != -1; };
     if (socketHeartbeat && !isSocketFdValid(socketFd)) {
         LOG(WARNING) << "Client " << clientId << " requested SOCKET_HEARTBEAT but socketFd is invalid"
                      << " (fd=" << socketFd << "); falling back to RPC_HEARTBEAT.";

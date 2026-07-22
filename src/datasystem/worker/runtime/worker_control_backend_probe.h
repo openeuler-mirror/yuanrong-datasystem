@@ -20,9 +20,9 @@
 
 namespace datasystem::worker {
 
-class IControlBackendPeerProbeClient {
+class WorkerControlBackendProbeClient {
 public:
-    virtual ~IControlBackendPeerProbeClient() = default;
+    virtual ~WorkerControlBackendProbeClient() = default;
 
     virtual Status Start(int32_t timeoutMs, int64_t &tag) = 0;
 
@@ -30,12 +30,12 @@ public:
                           cluster::ControlBackendObservation &observation) = 0;
 };
 
-using ControlBackendPeerProbeClientFactory =
-    std::function<Status(const cluster::MemberIdentity &, std::unique_ptr<IControlBackendPeerProbeClient> &)>;
+using WorkerControlBackendProbeClientFactory =
+    std::function<Status(const cluster::MemberIdentity &, std::unique_ptr<WorkerControlBackendProbeClient> &)>;
 
 std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
     const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline,
-    const ControlBackendPeerProbeClientFactory &clientFactory);
+    const WorkerControlBackendProbeClientFactory &clientFactory);
 }  // namespace datasystem::worker
 
 #endif  // DATASYSTEM_WORKER_RUNTIME_WORKER_CONTROL_BACKEND_PROBE_H

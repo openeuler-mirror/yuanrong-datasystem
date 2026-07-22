@@ -457,7 +457,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
 
     migrateRateController_ =
         std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-    auto metadataReader = std::make_shared<CoordinationObjectMetadataReader>(coordinationBackend_);
+    auto metadataReader = std::make_shared<ObjectMetadataCoordinationReader>(coordinationBackend_);
     getProc_ =
         std::make_shared<WorkerOcServiceGetImpl>(param, std::move(metadataReader), memCpyThreadPool_, threadPool_,
                                                  akSkManager_, localAddress_, migrateRateController_);

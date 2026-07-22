@@ -17,18 +17,16 @@
 #ifndef DATASYSTEM_WORKER_OBJECT_CACHE_OBJECT_METADATA_COORDINATION_READER_H
 #define DATASYSTEM_WORKER_OBJECT_CACHE_OBJECT_METADATA_COORDINATION_READER_H
 
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/worker/object_cache/service/object_metadata_reader.h"
 
 namespace datasystem {
-namespace cluster {
-class ICoordinationBackend;
-}
 namespace object_cache {
 
-class CoordinationObjectMetadataReader final : public IObjectMetadataReader {
+class ObjectMetadataCoordinationReader final : public ObjectMetadataReader {
 public:
-    explicit CoordinationObjectMetadataReader(cluster::ICoordinationBackend *backend);
-    ~CoordinationObjectMetadataReader() override = default;
+    explicit ObjectMetadataCoordinationReader(cluster::ICoordinationBackend *backend);
+    ~ObjectMetadataCoordinationReader() override = default;
 
     Status QueryObjectMetadata(const std::string &objectKey, int32_t timeoutMs,
                                master::QueryMetaInfoPb &queryMeta) override;

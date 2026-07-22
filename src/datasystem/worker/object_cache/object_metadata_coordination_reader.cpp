@@ -42,12 +42,12 @@ std::string BuildMetadataKey(const std::string &objectKey)
 }
 }  // namespace
 
-CoordinationObjectMetadataReader::CoordinationObjectMetadataReader(cluster::ICoordinationBackend *backend)
+ObjectMetadataCoordinationReader::ObjectMetadataCoordinationReader(cluster::ICoordinationBackend *backend)
     : backend_(backend)
 {
 }
 
-Status CoordinationObjectMetadataReader::QueryObjectMetadata(const std::string &objectKey, int32_t timeoutMs,
+Status ObjectMetadataCoordinationReader::QueryObjectMetadata(const std::string &objectKey, int32_t timeoutMs,
                                                              master::QueryMetaInfoPb &queryMeta)
 {
     CHECK_FAIL_RETURN_STATUS(backend_ != nullptr, K_NOT_READY, "coordination backend is not initialized");

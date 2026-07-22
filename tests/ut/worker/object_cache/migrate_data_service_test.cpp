@@ -594,8 +594,7 @@ public:
         const bool requestAdmitted = WaitForInjectPointExecuteCount(injectPoint, 1, schedulingTimeout);
 
         auto closeFuture = std::async(std::launch::async, [this, closeBudget] {
-            return impl_->CloseIncomingMigrationAdmissionAndWait(
-                std::chrono::steady_clock::now() + closeBudget);
+            return impl_->CloseIncomingMigrationAdmissionAndWait(std::chrono::steady_clock::now() + closeBudget);
         });
         const auto closeStatus = closeFuture.get();
         EXPECT_EQ(closeStatus.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
@@ -1236,7 +1235,7 @@ public:
         };
         rateController_ =
             std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-        metadataReader_ = std::make_shared<CoordinationObjectMetadataReader>(nullptr);
+        metadataReader_ = std::make_shared<ObjectMetadataCoordinationReader>(nullptr);
         impl_ = std::make_shared<WorkerOcServiceGetImpl>(param, metadataReader_, nullptr, nullptr, nullptr,
                                                          HostPort("127.0.0.1:18888"), rateController_);
     }
@@ -1262,7 +1261,7 @@ protected:
     std::shared_ptr<ObjectTable> objectTable_;
     std::shared_ptr<MigrateTestWorkerMasterApiManager> workerMasterApiManager_;
     WorkerRequestManager requestManager_;
-    std::shared_ptr<IObjectMetadataReader> metadataReader_;
+    std::shared_ptr<ObjectMetadataReader> metadataReader_;
     std::shared_ptr<WorkerOcServiceGetImpl> impl_;
     std::shared_ptr<MigrateDataRateController> rateController_;
 };
@@ -1279,7 +1278,7 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataUsesCoordinationStoreLogicalKe
 
     FakeMetadataCoordinationBackend backend;
     backend.values.emplace(std::make_pair(tableName, logicalKey), meta.SerializeAsString());
-    impl_->metadataReader_ = std::make_shared<CoordinationObjectMetadataReader>(&backend);
+    impl_->metadataReader_ = std::make_shared<ObjectMetadataCoordinationReader>(&backend);
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(timeoutMs);
 
@@ -1300,7 +1299,7 @@ TEST_F(NotifyRemoteGetMigrationTest, QueryMetadataRejectsUnavailableCoordination
 {
     FakeMetadataCoordinationBackend backend;
     backend.keepAliveTimeout = true;
-    impl_->metadataReader_ = std::make_shared<CoordinationObjectMetadataReader>(&backend);
+    impl_->metadataReader_ = std::make_shared<ObjectMetadataCoordinationReader>(&backend);
     ScopedRequestContext requestContext;
     GetRequestContext()->reqTimeoutDuration.Init(1'000);
 
@@ -1411,7 +1410,8 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetReturnsFailedKeyWhenMasterDo
         std::unordered_map<std::string,
                            std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>>;
     NotifyRemoteGetGroup groupedQueryMetas;
-    groupedQueryMetas.emplace("leaving-worker", std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>{});
+    groupedQueryMetas.emplace("leaving-worker",
+                              std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>{});
     std::vector<std::vector<std::string>> tempSuccessIds{ { objectKey } };
     std::vector<std::vector<ReadKey>> tempNeedRetryIds(1);
     std::vector<std::unordered_set<std::string>> tempFailedIds(1);
@@ -1511,11 +1511,11 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetShortCircuitsFailedConfirmat
     std::unordered_set<std::string> failedIds;
 
     impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
-                                              failedConfirmationOwners);
+                                             failedConfirmationOwners);
     confirmedIds.clear();
     failedIds.clear();
     impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
-                                              failedConfirmationOwners);
+                                             failedConfirmationOwners);
 
     EXPECT_EQ(requestCount, 1);
     EXPECT_TRUE(confirmedIds.empty());

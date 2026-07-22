@@ -25,13 +25,11 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/cluster/coordination_backend/coordination_backend.h"
 #include "datasystem/protos/slot_recovery.pb.h"
 #include "datasystem/utils/status.h"
 
 namespace datasystem {
-namespace cluster {
-class ICoordinationBackend;
-}
 namespace object_cache {
 
 class SlotRecoveryStore {
@@ -104,4 +102,4 @@ private:
 }  // namespace object_cache
 }  // namespace datasystem
 
-#endif
+#endif  // DATASYSTEM_WORKER_OBJECT_CACHE_SLOT_RECOVERY_STORE_H

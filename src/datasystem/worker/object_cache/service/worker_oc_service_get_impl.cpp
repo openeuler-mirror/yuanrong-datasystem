@@ -96,7 +96,7 @@ static constexpr double US_PER_MS = 1000.0;
 
 namespace {
 Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeObjType &entry,
-    const std::string &objectKey, const std::string &address)
+                               const std::string &objectKey, const std::string &address)
 {
     if (workerConnected && status.GetCode() == K_NOT_FOUND && entry->GetShmUnit() == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR,
@@ -148,7 +148,7 @@ std::string BuildExistRedirectExtra(const google::protobuf::RepeatedPtrField<Red
 }
 
 WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam,
-                                               std::shared_ptr<IObjectMetadataReader> metadataReader,
+                                               std::shared_ptr<ObjectMetadataReader> metadataReader,
                                                std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
                                                std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
@@ -197,7 +197,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
         remainingUs = changedRemainingUs;
         return Status::OK();
     });
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
@@ -1274,8 +1275,8 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     LOG_IF(INFO, elapsedMs > logThresholdMs)
         << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker finished, remoteAddress=" << endPoint
         << ", remoteWorkerId=" << remoteWorkerId << ", elapsed ms: " << elapsedMs
-        << ", realRemainingTimeMs="
-        << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() << ", status=" << rc.ToString();
+        << ", realRemainingTimeMs=" << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime()
+        << ", status=" << rc.ToString();
     RETURN_IF_NOT_OK(rc);
     RETURN_STATUS(K_TRY_AGAIN, "Reconnect success");
 }

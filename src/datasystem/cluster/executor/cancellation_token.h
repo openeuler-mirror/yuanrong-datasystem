@@ -16,8 +16,6 @@
 
 namespace datasystem::cluster {
 
-class TopologyTaskExecutor;
-
 /**
  * @brief Executor-owned cooperative cancellation signal.
  */
