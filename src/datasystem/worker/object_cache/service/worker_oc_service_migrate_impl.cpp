@@ -49,6 +49,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 DS_DECLARE_uint32(data_migrate_rate_limit_mb);
 
@@ -150,6 +151,16 @@ Status WorkerOcServiceMigrateImpl::CheckResource(const MigrateDataReqPb &req, Mi
 
 Status WorkerOcServiceMigrateImpl::CheckMigrateDataAdmission(const MigrateDataReqPb &req, MigrateDataRspPb &rsp)
 {
+    if (runtime_ != nullptr) {
+        auto runtimeRc = runtime_->CheckAdmission(worker::WorkerAdmissionKind::MIGRATION_TARGET, "MigrateData");
+        if (runtimeRc.IsError()) {
+            std::unordered_set<std::string> failedIds;
+            std::transform(req.objects().begin(), req.objects().end(), std::inserter(failedIds, failedIds.end()),
+                           [](const auto &info) { return info.object_key(); });
+            FillMigrateDataResponse(req, {}, failedIds, false, rsp);
+            return runtimeRc;
+        }
+    }
     auto rc = AcquireIncomingMigrationAdmission();
     if (rc.IsOk()) {
         return Status::OK();
@@ -214,9 +225,9 @@ Status WorkerOcServiceMigrateImpl::MigrateData(const MigrateDataReqPb &req, Migr
     LOG(INFO) << FormatString("[Migrate Data] Type: %d, Count: %d, Objects: %s, is_slot_migration: %d, slot_id: %u",
                               static_cast<int>(req.type()), req.objects_size(), VectorToString(GetObjects(req)),
                               req.is_slot_migration(), req.slot_id());
-    INJECT_POINT("worker.migrate_service.return");
     RETURN_IF_NOT_OK(CheckMigrateDataAdmission(req, rsp));
     Raii admission([this] { ReleaseIncomingMigrationAdmission(); });
+    INJECT_POINT("worker.migrate_service.return");
     INJECT_POINT_NO_RETURN("WorkerOcServiceMigrateImpl.MigrateData.afterAdmission");
     if (IsIncomingMigrationAdmissionClosed()) {
         std::unordered_set<std::string> failedIds;

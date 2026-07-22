@@ -43,6 +43,11 @@
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/protos/worker_object.pb.h"
 #include "datasystem/utils/status.h"
+
+namespace datasystem::worker {
+class WorkerRuntimeFacade;
+}
+
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/limiter/data_limiter.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -73,8 +78,7 @@ public:
      * @param[in] rateController Shared migration rate controller.
      */
     WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memcpyThreadPool,
-                               std::shared_ptr<AkSkManager> akSkManager,
-                               const std::string &localAddr,
+                               std::shared_ptr<AkSkManager> akSkManager, const std::string &localAddr,
                                std::shared_ptr<MigrateDataRateController> rateController);
 
     /**
@@ -109,6 +113,11 @@ public:
     void SetOutOfMemoryHandler(std::function<void(const Status &, const std::string &, memory::CacheType)> handler)
     {
         outOfMemoryHandler_ = std::move(handler);
+    }
+
+    void SetRuntimeFacade(const worker::WorkerRuntimeFacade *runtime)
+    {
+        runtime_ = runtime;
     }
 
     /**
@@ -279,7 +288,7 @@ private:
      * @return Shared memory owner or nullptr.
      */
     std::shared_ptr<ShmOwner> GetShmOwnerByIndex(int idx, const std::vector<uint32_t> &shmIndexMapping,
-                                                  const std::vector<std::shared_ptr<ShmOwner>> &shmOwners) const;
+                                                 const std::vector<std::shared_ptr<ShmOwner>> &shmOwners) const;
 
     /**
      * @brief Process remote read for a single object.
@@ -678,6 +687,8 @@ private:
     std::shared_ptr<MigrateDataRateController> rateController_;
 
     std::function<void(const Status &, const std::string &, memory::CacheType)> outOfMemoryHandler_;
+
+    const worker::WorkerRuntimeFacade *runtime_{ nullptr };
 
     struct PendingOutOfMemory {
         Status status;

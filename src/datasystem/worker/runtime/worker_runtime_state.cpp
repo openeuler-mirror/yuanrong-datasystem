@@ -275,6 +275,9 @@ bool WorkerRuntimeStateManager::TryMarkRunning(const WorkerRunningEvidence &evid
         return false;
     }
     if (!IsComplete(evidence)) {
+        if (snapshot_.mode == WorkerServiceMode::RUNNING) {
+            return false;
+        }
         (void)UpdateLocked(WorkerServiceMode::RECOVERING, WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE, evidence,
                            FirstMissingRecoveryPhase(evidence), std::move(detail));
     } else {

@@ -211,6 +211,25 @@ TEST(WorkerRuntimeStateTest, SameModeRefreshDoesNotPolluteTransitionLatency)
     EXPECT_EQ(state.GetSnapshot().detail, "periodic refresh");
 }
 
+TEST(WorkerRuntimeStateTest, StaleIncompleteEvidenceCannotCloseRunningWorker)
+{
+    WorkerRuntimeStateManager state;
+    state.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE, "metadata recovery pending",
+                         WorkerRecoveryPhase::METADATA);
+    ASSERT_TRUE(state.TryMarkRunning(CompleteEvidence(), "complete evidence"));
+
+    auto staleEvidence = CompleteEvidence();
+    staleEvidence.metadataReady = false;
+    EXPECT_FALSE(state.TryMarkRunning(staleEvidence, "stale metadata evidence"));
+
+    const auto snapshot = state.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
+    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
+    EXPECT_EQ(snapshot.recoveryPhase, WorkerRecoveryPhase::COMPLETE);
+    EXPECT_TRUE(snapshot.evidence.metadataReady);
+    EXPECT_EQ(snapshot.detail, "complete evidence");
+}
+
 TEST(WorkerRuntimeStateTest, PublishesCurrentSnapshotAfterMetricsInitialize)
 {
     Raii restoreMetrics([] {

@@ -1212,6 +1212,7 @@ bool TopologyEngine::IsControlBackendReachableFromPeers()
             METRIC_INC(metrics::KvMetricId::WORKER_CONTROL_BACKEND_SCOPE_GLOBAL_TOTAL);
             LOG(INFO) << "Keepalive backend failure scope is global, probeTargets: " << targets.size()
                       << ", observations: " << observationCount;
+            SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "control_backend_unavailable");
             INJECT_POINT_NO_RETURN("WorkerOCServer.GlobalBackendOutage");
             return false;
         }

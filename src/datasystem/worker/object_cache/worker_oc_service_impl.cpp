@@ -382,6 +382,9 @@ WorkerOCServiceImpl::~WorkerOCServiceImpl()
 void WorkerOCServiceImpl::SetRuntimeFacade(worker::WorkerRuntimeFacade *runtime)
 {
     runtime_ = runtime;
+    if (gMigrateProc_ != nullptr) {
+        gMigrateProc_->SetRuntimeFacade(runtime_);
+    }
     MarkRestartReconciliationPending(runtime_, recoveryState_.get(), isRestart_, controlBackendAvailableAtStartup_);
 }
 
@@ -432,6 +435,11 @@ void WorkerOCServiceImpl::RegisterRecoveryEvidenceReadyHandler(std::function<voi
 }
 
 void WorkerOCServiceImpl::MarkRestartReconciliationEvidenceReady(const std::string &detail)
+{
+    MarkReconciliationEvidenceReady(detail);
+}
+
+void WorkerOCServiceImpl::MarkReconciliationEvidenceReady(const std::string &detail)
 {
     worker::WorkerRecoveryEvidenceBuilder builder;
     builder.MarkMetadataReady(detail);
@@ -500,6 +508,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
 
     gMigrateProc_ = std::make_shared<WorkerOcServiceMigrateImpl>(param, memCpyThreadPool_, akSkManager_,
                                                                  GetLocalAddr().ToString(), migrateRateController_);
+    gMigrateProc_->SetRuntimeFacade(runtime_);
     gMigrateProc_->SetOutOfMemoryHandler(
         [this](const Status &rc, const std::string &operation, memory::CacheType cacheType) {
             MarkOutOfMemoryIfNeeded(rc, operation, cacheType);
@@ -1571,6 +1580,9 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
             RETURN_IF_NOT_OK(topologyEngine_->MarkExiting());
         } else {
             RETURN_IF_NOT_OK(topologyEngine_->NotifyReconciliationDone());
+            if (!req.is_restart()) {
+                MarkReconciliationEvidenceReady("membership_reconciliation metadata owners completed");
+            }
         }
     } else {
         LOG(INFO) << "Has finished reconciliation master num: " << numRecon_ << ", total expect num: " << hashWorkerNum;

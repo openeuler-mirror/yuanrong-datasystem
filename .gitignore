@@ -90,6 +90,9 @@ docs/superpowers/
 .bazelversion
 .claude
 plan.md
+.bazel-cache/
+.clion-remote/
+.codegraph/
 
 # bazel
 bazel-*

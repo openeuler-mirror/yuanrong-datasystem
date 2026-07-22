@@ -1323,6 +1323,7 @@ private:
      * @return OK if success.
      */
     Status GetReadyToWork(const PushMetaToWorkerReqPb &req);
+    void MarkReconciliationEvidenceReady(const std::string &detail);
 
     static bool HasCompleteReconciliationSet(const std::set<std::string> &expected,
                                              const std::unordered_set<std::string> &completed);

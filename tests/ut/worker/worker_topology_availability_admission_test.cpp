@@ -81,6 +81,52 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyAvailableWaitsForObjectCac
     EXPECT_FALSE(ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::NORMAL, snapshot));
 }
 
+TEST(WorkerTopologyAvailabilityAdmissionTest, NormalRecoveryRequestsObjectCacheEvidenceWhenMetadataIsPending)
+{
+    WorkerRuntimeFacade runtime;
+    runtime.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "keepalive failed");
+    auto report = IncompleteObjectCacheRecoveryReport();
+    report.evidence.metadataReady = false;
+
+    EXPECT_TRUE(ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel::NORMAL,
+                                                         runtime.GetSnapshot(), report));
+
+    runtime.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE, "topology reconciliation pending",
+                           WorkerRecoveryPhase::TOPOLOGY);
+    EXPECT_TRUE(ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel::NORMAL,
+                                                         runtime.GetSnapshot(), report));
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &report);
+    EXPECT_TRUE(ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel::NORMAL,
+                                                         runtime.GetSnapshot(), report));
+
+    auto completeReport = CompleteTopologyRecoveryReport();
+    EXPECT_FALSE(ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel::NORMAL,
+                                                          runtime.GetSnapshot(), completeReport));
+    EXPECT_FALSE(ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED,
+                                                          runtime.GetSnapshot(), report));
+
+    WorkerRuntimeFacade runningRuntime;
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runningRuntime,
+                                            &completeReport);
+    EXPECT_FALSE(ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel::NORMAL,
+                                                          runningRuntime.GetSnapshot(), report));
+}
+
+TEST(WorkerTopologyAvailabilityAdmissionTest, ControlDegradedReopensLocalIsolationWithoutObjectCacheRecoveryEvidence)
+{
+    WorkerRuntimeFacade runtime;
+    runtime.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "keepalive failed");
+    auto report = IncompleteObjectCacheRecoveryReport();
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED, runtime, &report);
+
+    const auto snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
+    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
+    EXPECT_TRUE(ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED, snapshot));
+}
+
 TEST(WorkerTopologyAvailabilityAdmissionTest, TopologyAvailableWithoutEvidenceReportsMetadataPhase)
 {
     WorkerRuntimeFacade runtime;

@@ -625,7 +625,7 @@ bool EtcdStore::ProcessKeepAliveFailure(const Status &status, int &confirmTimes,
     LOG(INFO) << "Keep alive task completed with error: " << status.ToString()
               << "keep alive failed time: " << keepAliveTimeoutTimer_.ElapsedMilliSecond();
     bool storeAvailable = false;
-    if (needHandleFailure && checkEtcdStateWhenNetworkFailedHandler_ != nullptr) {
+    if (checkEtcdStateWhenNetworkFailedHandler_ != nullptr) {
         storeAvailable = checkEtcdStateWhenNetworkFailedHandler_();
         if (!storeAvailable) {
             // No peer can reach etcd either, so this is a cluster-wide outage, not a local fault.
@@ -635,7 +635,7 @@ bool EtcdStore::ProcessKeepAliveFailure(const Status &status, int &confirmTimes,
         }
     }
     // retry-based failure check
-    if (storeAvailable && ++confirmTimes >= NETWORK_FAILURE_CONFIRM_MIN_TIMES) {
+    if (needHandleFailure && storeAvailable && ++confirmTimes >= NETWORK_FAILURE_CONFIRM_MIN_TIMES) {
         auto rc = HandleKeepAliveFailed();
         LOG_IF_ERROR(rc, "add remove event failed when keep alive failed");
         if (rc.IsOk()) {

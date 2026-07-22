@@ -749,12 +749,18 @@ TEST(TopologyEngineTest, KeepAliveScopeCheckCountsGlobalBackendOutage)
     auto *member = memberBackend.get();
     member->PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTopologyWithPeer());
 
+    std::atomic<size_t> degradedNotifications{ 0 };
     TopologyEngine::Builder builder;
     builder.SetClusterName(clusterName)
         .SetLocalAddress(LOCAL_ADDRESS)
         .UseUnifiedCoordinationBackends(std::move(memberBackend), std::move(controllerBackend))
         .SetPhaseCallbacks(callbacks)
         .SetNodeDeadTimeout(std::chrono::seconds(60))
+        .SetAvailabilityHandler([&degradedNotifications](TopologyAvailabilityLevel level) {
+            if (level == TopologyAvailabilityLevel::CONTROL_DEGRADED) {
+                degradedNotifications.fetch_add(1);
+            }
+        })
         .SetControlBackendProbe([](const ControlBackendObservation &local, const auto &peers, auto) {
             auto peer = local;
             peer.reporter = peers.front();
@@ -767,6 +773,8 @@ TEST(TopologyEngineTest, KeepAliveScopeCheckCountsGlobalBackendOutage)
     DS_ASSERT_OK(builder.Build(engine));
     DS_ASSERT_OK(engine->Start());
     EXPECT_FALSE(member->CheckStoreStateWhenNetworkFailed());
+    EXPECT_EQ(engine->GetAvailability(), TopologyAvailabilityLevel::CONTROL_DEGRADED);
+    EXPECT_EQ(degradedNotifications.load(), 1U);
     EXPECT_NE(
         DumpMetricSummary().find("{\"name\":\"worker_control_backend_scope_global_total\",\"total\":1,\"delta\":1}"),
         std::string::npos);

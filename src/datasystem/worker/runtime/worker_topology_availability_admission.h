@@ -27,6 +27,9 @@ bool RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel lev
                                           const WorkerRecoveryEvidenceReport &recoveryReport);
 bool ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel level,
                                         const WorkerRuntimeStateSnapshot &runtimeState);
+bool ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel level,
+                                              const WorkerRuntimeStateSnapshot &runtimeState,
+                                              const WorkerRecoveryEvidenceReport &recoveryReport);
 }  // namespace datasystem::worker
 
 #endif  // DATASYSTEM_WORKER_WORKER_TOPOLOGY_AVAILABILITY_ADMISSION_H

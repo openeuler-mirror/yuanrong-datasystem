@@ -3282,7 +3282,7 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvid
     AssertEventuallyOk([&]() { return verifyPublishRejected(isolatedRejectBuffer); },
                        "publish admission blocks locally isolated worker before object publication");
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", "1*pause"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", "pause"));
     bool recoveryPauseActive = true;
     Raii clearRecoveryPause([&]() {
         if (recoveryPauseActive) {
@@ -3496,7 +3496,7 @@ TEST_F(WorkerPushMetaTransportTest, LEVEL1_TestTransportReadInvisibleUntilOwners
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, readPause));
     readPauseActive = false;
     ASSERT_EQ(inFlightRead.get().GetCode(), K_NOT_READY);
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", "1*pause"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "WorkerRecoveryController.BeforeMarkRunning", "pause"));
     bool recoveryPauseActive = true;
     Raii clearRecoveryPause([&]() {
         if (recoveryPauseActive) {

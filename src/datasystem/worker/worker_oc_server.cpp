@@ -974,7 +974,6 @@ Status WorkerOCServer::InitCoordinationBackend()
     return Status::OK();
 }
 
-
 void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot)
 {
     for (const auto &member : snapshot.FailedMembers())
@@ -1181,11 +1180,34 @@ void WorkerOCServer::RefreshTopologyServingAdmission(cluster::TopologyAvailabili
 {
     if (objCacheClientWorkerSvc_ != nullptr) {
         const auto recoveryReport = objCacheClientWorkerSvc_->BuildObjectCacheRecoveryEvidenceReport();
+        RequestObjectCacheRecoveryEvidenceIfNeeded(level, recoveryReport);
         SetTopologyServingAdmission(RefreshTopologyAvailabilityAdmission(level, workerRuntime_, recoveryReport));
         return;
     }
     ApplyTopologyAvailabilityToRuntimeState(level, workerRuntime_);
     SetTopologyServingAdmission(ShouldOpenTopologyServingAdmission(level, workerRuntime_.GetSnapshot()));
+}
+
+void WorkerOCServer::RequestObjectCacheRecoveryEvidenceIfNeeded(cluster::TopologyAvailabilityLevel level,
+                                                                const worker::WorkerRecoveryEvidenceReport &report)
+{
+    if (worker::IsComplete(report.evidence)) {
+        objectCacheRecoveryRequestInFlight_.store(false);
+        return;
+    }
+    if (!worker::ShouldRequestObjectCacheRecoveryEvidence(level, workerRuntime_.GetSnapshot(), report)) {
+        return;
+    }
+    bool expected = false;
+    if (!objectCacheRecoveryRequestInFlight_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    auto rc =
+        HandleMembershipRecovery(hostPort_.ToString(), std::chrono::system_clock::now().time_since_epoch().count());
+    if (rc.IsError()) {
+        objectCacheRecoveryRequestInFlight_.store(false);
+        LOG(ERROR) << "Failed to request object-cache recovery evidence: " << rc.ToString();
+    }
 }
 
 Status WorkerOCServer::HandleMembershipRecovery(const std::string &address, int64_t timestamp)
@@ -2187,6 +2209,8 @@ Status WorkerOCServer::StartPreShutdownWorkers(bool scaleIn, const std::string &
 {
     if (scaleIn) {
         // Close local business and migration admission before starting the drain while membership remains READY.
+        workerRuntime_.MarkDraining("voluntary scale-in is draining local worker data");
+        INJECT_POINT_NO_RETURN("WorkerOCServer.AfterMarkDraining");
         topologyExitRequested_.store(true);
         if (objCacheClientWorkerSvc_ != nullptr) {
             const auto deadline = std::chrono::steady_clock::now() + TOPOLOGY_STOP_GRACE;

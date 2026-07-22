@@ -43,6 +43,24 @@ WorkerRecoveryEvidenceReport TopologyAvailableEvidenceReport(const WorkerRecover
     }
     return builder.BuildReport(detail);
 }
+
+WorkerRecoveryEvidenceReport ControlDegradedEvidenceReport(const WorkerRecoveryEvidenceReport *recoveryReport)
+{
+    WorkerRecoveryEvidenceBuilder builder;
+    builder.MarkMembershipReady("control backend degraded globally")
+        .MarkTopologyReady("topology scope classified control backend as globally degraded")
+        .MarkMetadataReady("object-cache metadata recovery is not required for global control backend degradation")
+        .MarkSlotReady("slot recovery is not required for global control backend degradation")
+        .MarkOwnershipReady("ownership reconciliation is not required for global control backend degradation");
+    std::string detail = "control backend globally degraded";
+    if (recoveryReport != nullptr && recoveryReport->evidence.resourceReady) {
+        builder.MarkResourceReady(recoveryReport->detail);
+        detail += "; " + recoveryReport->detail;
+    } else {
+        builder.MarkResourceReady("resource recovery is not required for global control backend degradation");
+    }
+    return builder.BuildReport(detail);
+}
 }  // namespace
 
 void ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel level, WorkerRuntimeFacade &runtime,
@@ -64,7 +82,10 @@ void ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel 
                        && (recoveryReport == nullptr || !IsComplete(recoveryReport->evidence))) {
                 break;
             }
-            const auto report = TopologyAvailableEvidenceReport(recoveryReport);
+            const auto report = level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED
+                                        && mode != WorkerServiceMode::OUT_OF_MEMORY
+                                    ? ControlDegradedEvidenceReport(recoveryReport)
+                                    : TopologyAvailableEvidenceReport(recoveryReport);
             (void)runtime.TryCompleteRecovery(report.evidence, report.detail);
             break;
         }
@@ -98,5 +119,20 @@ bool ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel level
     const bool topologyCanServe = level == cluster::TopologyAvailabilityLevel::NORMAL
                                   || level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED;
     return topologyCanServe && IsServingMode(runtimeState.mode);
+}
+
+bool ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel level,
+                                              const WorkerRuntimeStateSnapshot &runtimeState,
+                                              const WorkerRecoveryEvidenceReport &recoveryReport)
+{
+    if (level != cluster::TopologyAvailabilityLevel::NORMAL || IsComplete(recoveryReport.evidence)) {
+        return false;
+    }
+    if (runtimeState.mode == WorkerServiceMode::LOCAL_ISOLATED) {
+        return true;
+    }
+    return runtimeState.mode == WorkerServiceMode::RECOVERING
+           && runtimeState.reason == WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE
+           && runtimeState.recoveryPhase != WorkerRecoveryPhase::RESOURCE;
 }
 }  // namespace datasystem::worker

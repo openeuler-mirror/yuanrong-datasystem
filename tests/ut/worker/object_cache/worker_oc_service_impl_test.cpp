@@ -1316,6 +1316,20 @@ TEST_F(WorkerOcServiceImplTest, RestartReconciliationMarksMetadataEvidenceReadyW
     EXPECT_NE(report.detail.find("restart_reconciliation"), std::string::npos);
 }
 
+TEST_F(WorkerOcServiceImplTest, NetworkRecoveryReconciliationNotifiesEvidenceReadyWhenComplete)
+{
+    bool handlerCalled = false;
+    impl_->RegisterRecoveryEvidenceReadyHandler([&handlerCalled] { handlerCalled = true; });
+
+    impl_->MarkReconciliationEvidenceReady("network_recovery metadata owners completed");
+
+    const auto report = impl_->BuildObjectCacheRecoveryEvidenceReport();
+    EXPECT_TRUE(handlerCalled);
+    EXPECT_TRUE(report.evidence.metadataReady);
+    EXPECT_TRUE(report.evidence.ownershipReady);
+    EXPECT_NE(report.detail.find("network_recovery"), std::string::npos);
+}
+
 TEST_F(WorkerOcServiceImplTest, RuntimeAdmissionGuardRejectsWhenRuntimeIsNotRunning)
 {
     worker::WorkerRuntimeFacade runtime;

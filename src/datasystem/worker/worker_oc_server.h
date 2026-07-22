@@ -609,6 +609,8 @@ private:
      * @param[in] level Current topology availability level.
      */
     void RefreshTopologyServingAdmission(cluster::TopologyAvailabilityLevel level);
+    void RequestObjectCacheRecoveryEvidenceIfNeeded(cluster::TopologyAvailabilityLevel level,
+                                                    const worker::WorkerRecoveryEvidenceReport &recoveryReport);
 
     /**
      * @brief Deliver one deduplicated membership generation restart to local business owners.
@@ -758,6 +760,7 @@ private:
     std::unique_ptr<MetadataRouteResolver> metadataRouteResolver_{ nullptr };
     std::unique_ptr<object_cache::ObjectEndpointPolicy> objectEndpointPolicy_{ nullptr };
     std::atomic<bool> topologyExitRequested_{ false };
+    std::atomic<bool> objectCacheRecoveryRequestInFlight_{ false };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     HostPort masterAddr_;
     std::unique_ptr<datasystem::MetadataManagerHolder> metadataManagerHolder_{ nullptr };

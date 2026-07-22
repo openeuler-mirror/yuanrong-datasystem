@@ -71,9 +71,10 @@ void ExpectAdmissionRejected(const Status &rc, const std::string &mode, StatusCo
 }
 
 void ExpectDrainingWorkerExits(BaseCluster *cluster, EtcdStore *db, uint32_t workerIndex, const HostPort &workerAddress,
-                               ServerProcess *process, const std::string &statusPath)
+                               ServerProcess *process, const std::string &statusPath,
+                               const std::string &pauseInject = "WorkerOCServer.AfterMarkDraining")
 {
-    DS_ASSERT_OK(cluster->ClearInjectAction(WORKER, workerIndex, "WorkerOCServer.AfterMarkDraining"));
+    DS_ASSERT_OK(cluster->ClearInjectAction(WORKER, workerIndex, pauseInject));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
     int processStatus = 0;
     bool topologyRemoved = false;
@@ -234,7 +235,7 @@ TEST_F(MigrationTargetIsolationTest, LEVEL1_MigrationTargetFiltersIsolatedAndRec
     DS_ASSERT_OK(
         probe.ExpectRejected(cluster_.get(), 0, "LOCAL_ISOLATED", K_NOT_READY, "migration-target-local-isolated"));
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kBeforeMarkRunningInject, "1*pause"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kBeforeMarkRunningInject, "pause"));
     recoveryPauseActive = true;
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveFailureInject));
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kLeaseExpiredInject));
@@ -310,7 +311,7 @@ TEST_F(MigrationTargetIsolationTest, LEVEL1_ObjectClientRejectsReadWriteDuringIs
     ExpectAdmissionRejected(localIsolatedWriteBuffer->Publish(), "LOCAL_ISOLATED", K_NOT_READY,
                             "object publish during local isolation");
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kBeforeMarkRunningInject, "1*pause"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, kBeforeMarkRunningInject, "pause"));
     recoveryPauseActive = true;
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kKeepAliveFailureInject));
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, kLeaseExpiredInject));
@@ -482,7 +483,7 @@ TEST_F(MigrationTargetCombinedFaultTest, LEVEL1_MigrationTargetFiltersScaleInSou
     Raii clearFaults([&]() {
         if (drainPauseActive) {
             LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 0, "WorkerOCServer.AfterMarkDraining"),
-                         "clear combined-fault drain pause");
+                         "clear combined-fault scale-in drain pause");
         }
         if (keepAliveFailureActive) {
             LOG_IF_ERROR(cluster_->ClearInjectAction(WORKER, 1, kKeepAliveFailureInject),
