@@ -220,6 +220,19 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use ICoordinationBackend abstractions")
 
+    def test_coordination_backend_interface_hides_concrete_proxy_headers(self):
+        header = REPO_ROOT / "src/datasystem/cluster/coordination_backend/coordination_backend.h"
+        text = header.read_text(encoding="utf-8")
+
+        self.assertIn("class ICoordinatorServiceProxy;", text)
+        forbidden_tokens = [
+            "datasystem/common/coordinator/coordinator_service_proxy.h",
+            "ds_coordination_backend.h",
+            "etcd_coordination_backend.h",
+        ]
+        for token in forbidden_tokens:
+            self.assertNotIn(token, text, "ICoordinationBackend should not expose concrete backend/proxy headers")
+
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/slot_recovery/BUILD.bazel",

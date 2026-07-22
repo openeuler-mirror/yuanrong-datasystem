@@ -354,7 +354,39 @@
   27. peer control-backend probes keep partial successful observations instead of discarding all evidence when one peer
       probe fails. The scope classifier can use a fresh partial `AVAILABLE` peer observation to close local admission,
       while global outage still requires full peer evidence.
+  28. object-cache and stream hot-path admission now use `WorkerRuntimeFacade::AcquireAdmissionGuard` and hold the
+      runtime read window while the admitted business operation runs. This closes the check/use race between a serving
+      snapshot and a concurrent transition to `LOCAL_ISOLATED`, `RECOVERING`, or `DRAINING`; async paths capture a guard
+      token until the queued work starts/runs, while public service headers still expose only the facade boundary.
+  29. `ICoordinationBackend` keeps Coordinator concrete proxy headers out of the public coordination contract. The
+      interface exposes only the abstract backend and a forward-declared proxy factory hook; concrete Coordinator proxy
+      details stay in `DsCoordinationBackend`.
 - Recent focused verification:
+  - Post hot-path guard refactor and rebase to latest `main/master`: `scripts/clion_remote_build.sh tests-index`
+    rebuilt the CLion remote UT/ST index with URMA Mock enabled in 601s, generated 1157 compile-command entries, and
+    reused the third-party cache in 0s.
+  - Added/updated 1 runtime guard UT and boundary assertions for object-cache/stream guard usage:
+    `WorkerAdmissionFacadeTest.AdmissionGuardHoldsRuntimeReadWindowForWrites` verifies a held admission guard blocks a
+    concurrent local-isolation transition until the operation releases the guard.
+  - Post-rebase focused CMake/remote checks passed:
+    `WorkerAdmissionFacadeTest.*:WorkerRuntimeFacadeTest.*` ran 5/5 in 20ms,
+    `ClientWorkerSCServiceAdmissionTest.*` ran 2/2 in 1ms,
+    object-cache/migration guard filters ran 7/7 in 179ms, and
+    `tests/scripts/test_worker_runtime_module_boundary.py` ran 27/27 in 1.406s.
+  - Post-rebase Bazel 7.4.1 focused validation with `--config=release --config=test --config=urma_mock` passed:
+    focused build for runtime/stream/object-cache targets passed in 325.317s; runtime Bazel UTs passed 2/2 in 68.185s
+    with each test executing in about 0.1s; filtered object-cache Bazel UT passed 1/1 in 364.036s with test execution
+    time 1.4s. The long wall time came from Bazel action-cache invalidation after `--cxxopt` changed, not from CMake
+    third-party cache misses.
+  - Added 1 boundary-contract test:
+    `WorkerRuntimeModuleBoundaryTest.test_coordination_backend_interface_hides_concrete_proxy_headers`. Initial RED:
+    the test failed because `coordination_backend.h` included `coordinator_service_proxy.h`; the first implementation
+    attempt also failed CMake because the proxy was incorrectly forward-declared inside `datasystem::cluster`. GREEN:
+    `ICoordinatorServiceProxy` is now forward-declared in the outer `datasystem` namespace, the public backend contract
+    no longer includes the concrete proxy header, `python3 tests/scripts/test_worker_runtime_module_boundary.py` passed
+    28/28 in 0.067s, `scripts/clion_remote_build.sh tests-index` passed in 264s with URMA Mock enabled and third-party
+    cache hit in 1s, `cluster_topology_contract_ut` focused coordination backend tests passed 20/20 in 2ms, and Bazel
+    7.4.1 `//src/datasystem/cluster/coordination_backend:coordination_backend` passed in 230.979s.
   - Post peer-probe partial-evidence fix: CLion remote `scripts/clion_remote_build.sh tests-index` rebuilt with URMA Mock
     enabled in 101s, generated 1157 compile-command entries, and reused the third-party cache in 0s.
   - Added 2 UT cases:
