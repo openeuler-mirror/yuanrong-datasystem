@@ -584,6 +584,9 @@ private:
      */
     Status ConstructTopologyCallbacks();
 
+    // Issue #766: per-worker cleanup of worker<->worker stubs for FAILED members on snapshot publish
+    void CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot);
+
     /**
      * @brief Build the Coordinator watch RPC bind/drain capability for the Engine.
      * @return Complete ingress capability bound to coordinatorWatchSvc_.
