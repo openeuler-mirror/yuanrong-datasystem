@@ -2400,6 +2400,111 @@ TEST_F(WorkerPushMetaScaleOutFaultTest, LEVEL1_ScaleOutPreservesDataWhenWorkerIs
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, 0, localIsolatedInject));
 }
 
+TEST_F(WorkerPushMetaScaleOutFaultTest, LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage)
+{
+    StartWorkerAndWaitReady({ 0, 1 }, 0);
+    auto db = InitTestEtcdInstance();
+    ASSERT_NE(db, nullptr);
+    std::shared_ptr<ObjectClient> client0;
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(0, client0);
+    InitTestClient(1, client1);
+
+    std::vector<std::string> worker0Keys;
+    std::vector<std::string> worker1Keys;
+    GetObjectKeysHashToWorker(db.get(), 0, 3, worker0Keys);
+    GetObjectKeysHashToWorker(db.get(), 1, 3, worker1Keys);
+    std::string worker0Data = GenRandomString(1024);
+    std::string worker1Data = GenRandomString(1024);
+    CreateAndSealObject(client0, worker0Keys[0], worker0Data);
+    CreateAndSealObject(client1, worker1Keys[0], worker1Data);
+
+    StartWorkerAndWaitReady({ 2 }, 0, 30);
+    std::vector<pid_t> workerPids(3);
+    for (uint32_t workerIndex = 0; workerIndex < 3; ++workerIndex) {
+        workerPids[workerIndex] = cluster_->GetWorkerPid(workerIndex);
+        ASSERT_GT(workerPids[workerIndex], 0);
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, "WorkerOCServer.GlobalBackendOutage", "call()"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, "GetLeaseExpiredMs", "call(1000)"));
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(WORKER, workerIndex, "EtcdStore.LaunchKeepAliveThreads.loopQuickly", "call(0)"));
+    }
+    AssertEventuallyOk(
+        [&]() {
+            std::string topologyBytes;
+            RETURN_IF_NOT_OK(db->Get(GetTopologyTableName(), "", topologyBytes));
+            ClusterTopologyPb topology;
+            CHECK_FAIL_RETURN_STATUS(topology.ParseFromString(topologyBytes), K_RUNTIME_ERROR,
+                                     "failed to parse topology before scaleout/global-backend outage");
+            CHECK_FAIL_RETURN_STATUS(topology.members_size() == 3, K_NOT_READY,
+                                     "scaleout did not publish all members before backend outage");
+            for (const auto &member : topology.members()) {
+                CHECK_FAIL_RETURN_STATUS(member.second.state() == MembershipPb::ACTIVE, K_NOT_READY,
+                                         "scaleout member is not ACTIVE before backend outage");
+            }
+            return Status::OK();
+        },
+        "scaleout converges before transient global backend outage");
+    DS_ASSERT_OK(externalCluster_->ShutdownEtcds());
+    bool etcdDown = true;
+    Raii restoreEtcd([&]() {
+        if (etcdDown) {
+            LOG_IF_ERROR(externalCluster_->StartEtcdCluster(), "restore etcd after scaleout/global-backend outage");
+        }
+    });
+
+    AssertEventuallyOk(
+        [&]() {
+            for (uint32_t workerIndex = 0; workerIndex < 3; ++workerIndex) {
+                uint64_t executeCount = 0;
+                RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(
+                    WORKER, workerIndex, "WorkerOCServer.GlobalBackendOutage", executeCount));
+                CHECK_FAIL_RETURN_STATUS(
+                    executeCount > 0, K_NOT_READY,
+                    FormatString("worker %u has not classified the backend outage as global", workerIndex));
+                CHECK_FAIL_RETURN_STATUS(kill(workerPids[workerIndex], 0) == 0, K_RUNTIME_ERROR,
+                                         FormatString("worker %u exited during transient global outage", workerIndex));
+            }
+            return Status::OK();
+        },
+        "scaleout workers classify transient backend outage as global and stay alive");
+
+    DS_ASSERT_OK(externalCluster_->StartEtcdCluster());
+    etcdDown = false;
+    for (uint32_t workerIndex = 0; workerIndex < 3; ++workerIndex) {
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, "GetLeaseExpiredMs"));
+        DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, "EtcdStore.LaunchKeepAliveThreads.loopQuickly"));
+    }
+    DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 2, 30));
+    std::shared_ptr<ObjectClient> client2;
+    InitTestClient(2, client2);
+    AssertEventuallyOk(
+        [&]() {
+            std::string topologyBytes;
+            RETURN_IF_NOT_OK(db->Get(GetTopologyTableName(), "", topologyBytes));
+            ClusterTopologyPb topology;
+            CHECK_FAIL_RETURN_STATUS(topology.ParseFromString(topologyBytes), K_RUNTIME_ERROR,
+                                     "failed to parse topology after scaleout/global-backend outage");
+            CHECK_FAIL_RETURN_STATUS(topology.members_size() == 3, K_NOT_READY,
+                                     "scaleout did not publish all members after backend recovery");
+            for (const auto &member : topology.members()) {
+                CHECK_FAIL_RETURN_STATUS(member.second.state() == MembershipPb::ACTIVE, K_NOT_READY,
+                                         "scaleout member is not ACTIVE after backend recovery");
+            }
+            return Status::OK();
+        },
+        "scaleout converges after transient global backend outage");
+
+    std::vector<Optional<Buffer>> worker0Buffers;
+    std::vector<Optional<Buffer>> worker1Buffers;
+    DS_ASSERT_OK(client2->Get({ worker0Keys[0] }, 0, worker0Buffers));
+    DS_ASSERT_OK(client2->Get({ worker1Keys[0] }, 0, worker1Buffers));
+    ASSERT_TRUE(NotExistsNone(worker0Buffers));
+    ASSERT_TRUE(NotExistsNone(worker1Buffers));
+    AssertBufferEqual(*worker0Buffers[0], worker0Data);
+    AssertBufferEqual(*worker1Buffers[0], worker1Data);
+}
+
 class WorkerPushMetaTransportTest : public WorkerPushMetaTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override

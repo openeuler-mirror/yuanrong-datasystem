@@ -498,6 +498,11 @@
     two-worker object-cache cluster, drives worker 0 into actual keepalive-confirmed `LOCAL_ISOLATED`, then starts worker
     2 as a ScaleOut member. The ST verifies worker 0 stays alive, peer data remains readable during ScaleOut, and worker
     0 local data remains readable after local recovery.
+  - `ScaleOutSurvivesTransientGlobalBackendOutage`: covered by
+    `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage`, which starts a two-worker
+    object-cache cluster, stores data on both existing workers, completes ScaleOut to worker 2, then injects a transient
+    global ETCD outage. The ST verifies all three workers classify the outage as global and stay alive, topology returns
+    to three ACTIVE members after backend recovery, and pre-outage data remains readable through the ScaleOut member.
   - Regression suite: focused local/remote validation is green after rebasing to `main/master@0180554bf`; full PR CI and
     codecheck still need to be triggered and inspected before claiming merge readiness. Fresh focused evidence:
     - CMake build targets `ds_ut_object`, `ds_ut`, `ds_st_object_cache`, `ds_st_kv_cache`, `ds_st_stream_cache`, and
@@ -524,6 +529,17 @@
     - Remote Bazel 7.4.1 focused build for the changed ST component
       `//tests/st/client/object_cache:client_dfx_test` passed in 25.80s with 32 actions; the immediate cached rerun
       passed in 0.45s with 1 internal action.
+    - Added ScaleOut/global-backend-outage ST:
+      `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage` passed 1/1 in 14.18s. The
+      initial RED probe that shut down ETCD before worker 2 could read topology failed in 10.78s with worker 2 exiting
+      during startup; a second RED probe that waited for `MigrateData.afterAdmission` failed in 17.60s because this
+      ScaleOut data set does not deterministically trigger that migration RPC, so the final accepted ST targets the
+      stable post-ScaleOut transient-outage window.
+    - Fresh exact post-format validation: CLion remote `tests-index` rebuilt with URMA Mock in 108s and refreshed 1156
+      compile-command entries; the two ScaleOut STs
+      `LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage:LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`
+      passed in 27.95s; Bazel 7.4.1 `//tests/st/client/object_cache:client_dfx_test` passed in 24.15s and cached rerun
+      passed in 0.34s.
   - Follow-up scale/fault cases to add before claiming full story closure:
     1. ScaleOut while one existing worker is isolated is now covered at ST level by
        `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`; topology planning is
@@ -537,12 +553,14 @@
        is now locked both at the shared runtime admission-contract level by
        `ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow` and at the real worker RPC level by
        `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether`.
-    3. ScaleOut plus transient global backend outage is now covered at failure-classifier level by
+    3. ScaleOut plus transient global backend outage is now covered at ST level by
+       `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage`, which verifies a
+       completed ScaleOut member and the two existing workers survive a transient global ETCD outage and preserve
+       pre-outage object data. It is also covered at failure-classifier level by
        `ScaleOutMembersSurviveGlobalBackendOutagePause`; ScaleOut progress post-commit outage idempotency is covered by
        `ScaleOutProgressPostCommitFailureDoesNotDuplicateCallback`; ScaleIn task-overlap marker post-commit outage
        idempotency is covered at executor contract level by
-       `ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`; full end-to-end outage ST remains a
-       broader follow-up.
+       `ScaleInMetadataPostCommitFailureDoesNotDuplicateCallbackBeforeGateOpens`.
     4. Recovery metadata batch with mixed success/failure while membership changes is now covered at UT level for the
        deferred retry payload; broader ST-level membership churn around the same path remains pending. A direct attempt
        to extend `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability` with dynamic ScaleOut
