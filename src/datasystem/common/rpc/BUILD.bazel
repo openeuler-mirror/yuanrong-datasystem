@@ -25,9 +25,22 @@ ds_cc_library(
     ],
     deps = [
         ":rpc_constants",
-        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/util:format",
         "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "api_deadline_helpers",
+    srcs = [
+        "api_deadline_helpers.cpp",
+    ],
+    deps = [
+        ":api_deadline",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:format",
+        "//src/datasystem/common/util:request_context",
         "//src/datasystem/common/util:thread_local",
     ],
 )
