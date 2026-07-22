@@ -20,8 +20,7 @@ namespace datasystem::cluster {
 /**
  * @brief Bounded cleanup effect executed on the callback pool after Snapshot-gated authorization.
  */
-using TopologyCleanupEffect =
-    std::function<Status(std::chrono::steady_clock::time_point, const CancellationToken &)>;
+using TopologyCleanupEffect = std::function<Status(std::chrono::steady_clock::time_point, const CancellationToken &)>;
 
 }  // namespace datasystem::cluster
 

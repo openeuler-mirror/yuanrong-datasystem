@@ -30,8 +30,8 @@ CentralMetadataAddressResolver::CentralMetadataAddressResolver(cluster::ICoordin
 
 Status CentralMetadataAddressResolver::EnsureTable()
 {
-    RETURN_IF_NOT_OK_EXCEPT(
-        backend_.CreateTable(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_TABLE), K_DUPLICATED);
+    RETURN_IF_NOT_OK_EXCEPT(backend_.CreateTable(COORDINATION_MASTER_ADDRESS_TABLE, COORDINATION_MASTER_ADDRESS_TABLE),
+                            K_DUPLICATED);
     return Status::OK();
 }
 

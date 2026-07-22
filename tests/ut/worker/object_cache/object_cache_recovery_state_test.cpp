@@ -17,11 +17,7 @@ namespace {
 worker::WorkerRecoveryEvidenceReport CompleteObjectCacheReport()
 {
     worker::WorkerRecoveryEvidenceBuilder builder;
-    return builder.MarkMetadataReady()
-        .MarkSlotReady()
-        .MarkOwnershipReady()
-        .MarkResourceReady()
-        .BuildReport("complete");
+    return builder.MarkMetadataReady().MarkSlotReady().MarkOwnershipReady().MarkResourceReady().BuildReport("complete");
 }
 
 TEST(ObjectCacheRecoveryStateTest, MetadataSummaryUpdatesLatestEvidence)
