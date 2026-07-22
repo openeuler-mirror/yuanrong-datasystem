@@ -193,7 +193,7 @@ Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
     std::shared_lock<std::shared_mutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-    CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_ || liveWorkers_.find(workerKey) != liveWorkers_.end(), K_NOT_FOUND,
+    CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_ || liveWorkers_.find(workerKey) != liveWorkers_.end(), K_NOT_READY,
                              "Worker endpoint is absent from latest transport snapshot: " + workerKey);
     EntryMap::const_accessor constAccessor;
     if (entries_.find(constAccessor, workerKey)) {

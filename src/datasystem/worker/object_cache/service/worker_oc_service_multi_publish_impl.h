@@ -18,6 +18,8 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MULTI_PUBLISH_IMPL_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MULTI_PUBLISH_IMPL_H
 
+#include <chrono>
+
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/util/net_util.h"
@@ -75,6 +77,11 @@ private:
         Status rc;
         master::CreateMultiMetaRspPb rsp;
         HostPort masterAddr;
+    };
+
+    struct CreateMultiMetaAttemptResult {
+        std::vector<size_t> retryIndexes;
+        Status lastRetryRc;
     };
 
     /**
@@ -184,6 +191,17 @@ private:
                                                  const MultiPublishReqPb &pubReq, master::CreateMultiMetaRspPb &resp,
                                                  std::vector<uint64_t> &versions);
 
+    Status CreateMultiMetaAttempt(const std::vector<std::string> &objectKeys,
+                                  const std::vector<std::shared_ptr<SafeObjType>> &entries,
+                                  const std::vector<size_t> &originalIndexes, const MultiPublishReqPb &pubReq,
+                                  master::CreateMultiMetaRspPb &totalResp, std::vector<uint64_t> &versions,
+                                  CreateMultiMetaAttemptResult &attemptResult);
+
+    void MergeCreateMultiMetaResult(
+        const CreateMultiMetaResult &result, const ObjGroupMap &objGroup,
+        const std::vector<size_t> &originalIndexes, master::CreateMultiMetaRspPb &totalResp,
+        std::vector<uint64_t> &versions, CreateMultiMetaAttemptResult &attemptResult);
+
     /**
      * @brief Verify the validity of the object release.
      * @param[in] req Publish request meta.
@@ -203,8 +221,9 @@ private:
                                    std::vector<master::CreateMultiMetaReqPb> &reqs,
                                    std::vector<CreateMultiMetaResult> &respRes);
 
-    CreateMultiMetaResult BuildCreateMultiMetaResult(const std::shared_ptr<worker::WorkerMasterOCApi> &api,
-                                                     master::CreateMultiMetaReqPb &req, const HostPort &masterAddr);
+    CreateMultiMetaResult ExecuteCreateMultiMetaRequest(
+        const HostPort &masterAddr, master::CreateMultiMetaReqPb &req, int64_t remainingUs,
+        const std::chrono::steady_clock::time_point &dispatchTime, const std::string &traceId);
 
     /**
      * @brief Create multimeta request to master in parallel.

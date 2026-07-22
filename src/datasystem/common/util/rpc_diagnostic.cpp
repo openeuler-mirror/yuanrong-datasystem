@@ -124,6 +124,10 @@ Status WithRpcDiag(const Status &status, const RpcDiagnosticInfo &info)
     if (status.IsOk()) {
         return status;
     }
-    return Status(status.GetCode(), FormatRpcDiag(info, status));
+    Status diagnosed(status.GetCode(), FormatRpcDiag(info, status));
+    if (status.HasExtra()) {
+        diagnosed.WithExtra(status.GetExtra());
+    }
+    return diagnosed;
 }
 }  // namespace datasystem

@@ -62,6 +62,74 @@ inline constexpr int kBrpcInternal = 2001;       // brpc::EINTERNAL
 inline constexpr int kBrpcLogoff = 2003;         // brpc::ELOGOFF
 inline constexpr int kBrpcClose = 2005;          // brpc::ECLOSE
 inline constexpr int kBrpcDetailLogLevel = 2;
+inline constexpr int kDecimalRadix = 10;
+inline constexpr char kBrpcRequestNotSentExtra[] = "brpc_request_not_sent";
+
+/**
+ * @brief Check whether brpc proved that a request failed before reaching the peer.
+ *
+ * Only connection-establishment failures carry this marker. Socket resets, EOF,
+ * timeouts, and other errors remain ambiguous because the peer may have executed
+ * the request before the response path failed.
+ */
+inline bool IsBrpcRequestDefinitelyNotSent(const Status &status)
+{
+    return status.GetCode() == K_RPC_UNAVAILABLE && status.GetExtra() == kBrpcRequestNotSentExtra;
+}
+
+inline bool IsBrpcConnectionEstablishmentError(int errorCode)
+{
+    switch (errorCode) {
+        case ECONNREFUSED:
+        case EHOSTUNREACH:
+        case ENETUNREACH:
+        case ENOTCONN:
+        case EHOSTDOWN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+/**
+ * @brief Check all brpc attempts recorded in ErrorText, not only the final ErrorCode.
+ *
+ * brpc formats retry errors as `[E<number>]... [R1][E<number>]...`. A final
+ * connection-refused error is not enough to prove safety if an earlier attempt
+ * failed ambiguously after reaching the peer.
+ */
+inline bool AreBrpcAttemptsDefinitelyNotSent(int finalErrorCode, const std::string &errorText)
+{
+    if (!IsBrpcConnectionEstablishmentError(finalErrorCode)) {
+        return false;
+    }
+    size_t pos = 0;
+    bool hasAttemptDiagnostic = false;
+    while ((pos = errorText.find("[E", pos)) != std::string::npos) {
+        size_t codeBegin = pos + 2;
+        size_t codeEnd = codeBegin;
+        while (codeEnd < errorText.size() && errorText[codeEnd] >= '0' && errorText[codeEnd] <= '9') {
+            ++codeEnd;
+        }
+        if (codeEnd == codeBegin || codeEnd >= errorText.size() || errorText[codeEnd] != ']') {
+            return false;
+        }
+        int attemptErrorCode = 0;
+        for (size_t i = codeBegin; i < codeEnd; ++i) {
+            const int digit = errorText[i] - '0';
+            if (attemptErrorCode > (INT_MAX - digit) / kDecimalRadix) {
+                return false;
+            }
+            attemptErrorCode = attemptErrorCode * kDecimalRadix + digit;
+        }
+        if (!IsBrpcConnectionEstablishmentError(attemptErrorCode)) {
+            return false;
+        }
+        hasAttemptDiagnostic = true;
+        pos = codeEnd + 1;
+    }
+    return hasAttemptDiagnostic;
+}
 
 /**
  * @brief Map a brpc Controller ErrorCode() to a datasystem Status.
@@ -92,7 +160,7 @@ inline constexpr int kBrpcDetailLogLevel = 2;
  */
 inline Status MapBrpcErrorCodeToStatus(int errorCode, const std::string &errorText)
 {
-    auto makeStatus = [&](StatusCode code, const char *hint) {
+    auto makeStatus = [&](StatusCode code, const char *hint, bool requestNotSent = false) {
         // berror() renders brpc-registered errno (EFAILEDSOCKET, ELOGOFF, ...)
         // and system errno (ECONNREFUSED, ETIMEDOUT, ...) to a human-readable
         // name, so the StatusCode category plus this text lets an operator
@@ -100,12 +168,16 @@ inline Status MapBrpcErrorCodeToStatus(int errorCode, const std::string &errorTe
         // numeric codes. No __LINE__/__FILE__: they would all point at this
         // helper, which carries no diagnostic value.
         const char *errName = berror(errorCode);
-        return Status(code,
+        Status status(code,
                       std::string(hint) + " [brpc errno=" + std::to_string(errorCode)
                           + (errName != nullptr && errName[0] != '\0'
                                  ? std::string(" ") + errName
                                  : std::string())
                           + "] " + errorText);
+        if (requestNotSent) {
+            status.WithExtra(kBrpcRequestNotSentExtra);
+        }
+        return status;
     };
     switch (errorCode) {
         // Timeouts → deadline exceeded
@@ -120,16 +192,19 @@ inline Status MapBrpcErrorCodeToStatus(int errorCode, const std::string &errorTe
         case kBrpcInternal:
         case kBrpcLogoff:
         case kBrpcClose:
-        case ECONNREFUSED:
         case ECONNRESET:
         case ECONNABORTED:
+        case EPIPE:
+        case ESHUTDOWN:
+            return makeStatus(StatusCode::K_RPC_UNAVAILABLE, "RPC peer unavailable");
+        // Connection establishment failed, so application code was not reached.
+        case ECONNREFUSED:
         case EHOSTUNREACH:
         case ENETUNREACH:
         case ENOTCONN:
-        case EPIPE:
         case EHOSTDOWN:
-        case ESHUTDOWN:
-            return makeStatus(StatusCode::K_RPC_UNAVAILABLE, "RPC peer unavailable");
+            return makeStatus(StatusCode::K_RPC_UNAVAILABLE, "RPC peer unavailable",
+                              AreBrpcAttemptsDefinitelyNotSent(errorCode, errorText));
         // Genuine cancellation (brpc/OS) — keep K_RPC_CANCELLED
         case ECANCELED:
             return makeStatus(StatusCode::K_RPC_CANCELLED, "RPC cancelled");

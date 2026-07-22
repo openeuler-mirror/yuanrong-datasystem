@@ -78,6 +78,7 @@ ds_cc_test(
     srcs = ["transport_test.cpp"],
     deps = [
         "//include/datasystem:headers",
+        "//src/datasystem/client:datasystem",
         "//src/datasystem/client:client_transport",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/object_cache:object_base",

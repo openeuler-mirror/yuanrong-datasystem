@@ -56,7 +56,10 @@ constexpr uint32_t ROUTED_CLIENT_WORKER_INDEX = 1;
 constexpr size_t VALUE_SIZE = 128 * 1024;
 constexpr size_t KEY_SEARCH_LIMIT = 100'000;
 constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip";
+constexpr char CREATE_INJECT[] = "TransportLayer.Create.beforeTransport";
 constexpr char PUBLISH_INJECT[] = "WorkerRpcClient.InvokeSet.beforeRpc";
+constexpr char MULTI_CREATE_INJECT[] = "TransportLayer.MCreate.beforeTransport";
+constexpr char MULTI_PUBLISH_INJECT[] = "WorkerRpcClient.InvokeMultiSet.beforeRpc";
 constexpr char HOST_ID_ENV_NAME[] = "routing_transport_set_host_id";
 constexpr char HOST_ID_VALUE[] = "routing-transport-set-host";
 
@@ -116,7 +119,10 @@ public:
         localClient_.reset();
         readerClient_.reset();
         etcd_.reset();
+        (void)inject::Clear(CREATE_INJECT);
         (void)inject::Clear(PUBLISH_INJECT);
+        (void)inject::Clear(MULTI_CREATE_INJECT);
+        (void)inject::Clear(MULTI_PUBLISH_INJECT);
         (void)inject::Clear(SKIP_WARMUP_INJECT);
         ExternalClusterTest::TearDown();
         (void)unsetenv(HOST_ID_ENV_NAME);
@@ -485,6 +491,85 @@ TEST_F(KVClientTransportSetTest, ScaleDownPublishReroutesWholeTransaction)
     DS_ASSERT_OK(QueryPrimaryWorker(key, reroutedWorker));
     ASSERT_NE(reroutedWorker, firstWorker);
     AssertValue(key, value);
+}
+
+TEST_F(KVClientTransportSetTest, NotReadyCreateReroutesWholeTransaction)
+{
+    std::string key;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_set_not_ready_create_", key));
+    DS_ASSERT_OK(inject::Set(CREATE_INJECT, "1*return(K_NOT_READY)"));
+    const std::string value(VALUE_SIZE, 'c');
+
+    DS_ASSERT_OK(routedClient_->Set(key, value));
+
+    AssertValue(key, value);
+    AssertPrimaryWorker(key, ROUTED_CLIENT_WORKER_INDEX);
+}
+
+TEST_F(KVClientTransportSetTest, NotReadyPublishReroutesWholeTransaction)
+{
+    std::string key;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_set_not_ready_publish_", key));
+    DS_ASSERT_OK(inject::Set(PUBLISH_INJECT, "1*return(K_NOT_READY)"));
+    const std::string value(VALUE_SIZE, 'p');
+
+    DS_ASSERT_OK(routedClient_->Set(key, value));
+
+    AssertValue(key, value);
+    AssertPrimaryWorker(key, ROUTED_CLIENT_WORKER_INDEX);
+}
+
+TEST_F(KVClientTransportSetTest, NotReadyMultiCreateReroutesGroup)
+{
+    std::string firstKey;
+    std::string secondKey;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_not_ready_create_a_", firstKey));
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_not_ready_create_b_", secondKey));
+    DS_ASSERT_OK(inject::Set(MULTI_CREATE_INJECT, "1*return(K_NOT_READY)"));
+    const std::vector<std::string> keys{ firstKey, secondKey };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'a'), std::string(VALUE_SIZE, 'b') };
+    const std::vector<StringView> valueViews{ values[0], values[1] };
+    std::vector<std::string> failedKeys;
+
+    DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
+
+    EXPECT_TRUE(failedKeys.empty());
+    AssertValue(keys[0], values[0]);
+    AssertValue(keys[1], values[1]);
+    AssertPrimaryWorker(keys[0], ROUTED_CLIENT_WORKER_INDEX);
+    AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
+}
+
+TEST_F(KVClientTransportSetTest, NotReadyMultiPublishReroutesGroup)
+{
+    std::string firstKey;
+    std::string secondKey;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_not_ready_publish_a_", firstKey));
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_not_ready_publish_b_", secondKey));
+#ifdef USE_URMA
+    DS_ASSERT_OK(inject::Set(MULTI_PUBLISH_INJECT, "1*return(K_NOT_READY)"));
+#else
+    // SHM MSet publishes each buffer through InvokeSet instead of InvokeMultiSet. Fail every key in the first
+    // group so MSet returns K_NOT_READY and the complete group is rerouted to the alternate worker.
+    DS_ASSERT_OK(inject::Set(PUBLISH_INJECT, "2*return(K_NOT_READY)"));
+#endif
+    const std::vector<std::string> keys{ firstKey, secondKey };
+    const std::vector<std::string> values{ std::string(VALUE_SIZE, 'm'), std::string(VALUE_SIZE, 'n') };
+    const std::vector<StringView> valueViews{ values[0], values[1] };
+    std::vector<std::string> failedKeys;
+
+    DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
+
+#ifdef USE_URMA
+    EXPECT_EQ(inject::GetExecuteCount(MULTI_PUBLISH_INJECT), 1u);
+#else
+    EXPECT_EQ(inject::GetExecuteCount(PUBLISH_INJECT), keys.size());
+#endif
+    EXPECT_TRUE(failedKeys.empty());
+    AssertValue(keys[0], values[0]);
+    AssertValue(keys[1], values[1]);
+    AssertPrimaryWorker(keys[0], ROUTED_CLIENT_WORKER_INDEX);
+    AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
 }
 
 TEST_F(KVClientTransportSetTest, AmbiguousPublishFailureIsNotReplayedOnAnotherWorker)

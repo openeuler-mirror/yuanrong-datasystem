@@ -389,8 +389,10 @@ genrule(
         "//src/datasystem/common/rpc/plugin_generator:rpc_plugin",
     ],
     outs = [
-        "ut_object.brpc.pb.h", "ut_object.brpc.pb.cc",
-        "ut_object.brpc.stub.pb.h", "ut_object.brpc.stub.pb.cc",
+        "ut_object.brpc.pb.h",
+        "ut_object.brpc.pb.cc",
+        "ut_object.brpc.stub.pb.h",
+        "ut_object.brpc.stub.pb.cc",
         "ut_object.irpc.pb.h",
     ],
     cmd = """
@@ -401,8 +403,17 @@ genrule(
         PROTOC_REAL=$$(readlink -f $$PROTOC)
         GOOGLE_PROTOBUF_SRC=$$(dirname $$PROTOC_REAL)/../../../../../external/com_google_protobuf/src
         TMPD=$$(mktemp -d)
-        $$PROTOC -I$$PROTO_ROOT/src -I$$GOOGLE_PROTOBUF_SRC --plugin=protoc-gen-rpc=$$PLUGIN --rpc_out=$$TMPD datasystem/protos/ut_object.proto
-        cp $$TMPD/datasystem/protos/ut_object.brpc.pb.h $$TMPD/datasystem/protos/ut_object.brpc.pb.cc $$TMPD/datasystem/protos/ut_object.brpc.stub.pb.h $$TMPD/datasystem/protos/ut_object.brpc.stub.pb.cc $$TMPD/datasystem/protos/ut_object.irpc.pb.h $$OUT_DIR/
+        $$PROTOC \
+            -I$$PROTO_ROOT/src \
+            -I$$GOOGLE_PROTOBUF_SRC \
+            --plugin=protoc-gen-rpc=$$PLUGIN \
+            --rpc_out=$$TMPD \
+            datasystem/protos/ut_object.proto
+        GEN=$$TMPD/datasystem/protos
+        cp $$GEN/ut_object.brpc.pb.h $$GEN/ut_object.brpc.pb.cc \
+           $$GEN/ut_object.brpc.stub.pb.h $$GEN/ut_object.brpc.stub.pb.cc \
+           $$GEN/ut_object.irpc.pb.h \
+           $$OUT_DIR/
         rm -rf $$TMPD
     """,
 )

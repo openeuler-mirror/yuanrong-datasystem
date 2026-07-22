@@ -80,6 +80,17 @@ TEST_F(RpcDiagnosticTest, WithRpcDiagKeepsOriginalCode)
     EXPECT_EQ(status.GetMsg(), "Get->[192.0.2.12:45954] Request failed");
 }
 
+TEST_F(RpcDiagnosticTest, WithRpcDiagKeepsMachineReadableExtra)
+{
+    RpcDiagnosticInfo info{ "Publish", "", "192.0.2.12:45954" };
+    Status original(StatusCode::K_RPC_UNAVAILABLE, "Connection refused");
+    original.WithExtra("request_not_sent");
+
+    Status status = WithRpcDiag(original, info);
+
+    EXPECT_EQ(status.GetExtra(), "request_not_sent");
+}
+
 TEST_F(RpcDiagnosticTest, WithRpcDiagHostPortOverloadsFormatEndpoints)
 {
     HostPort src("192.0.2.10", 45954);
