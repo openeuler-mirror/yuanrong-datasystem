@@ -37,7 +37,7 @@
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
-#include "datasystem/worker/object_cache/worker_recovery_evidence_adapter.h"
+#include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
 
 DS_DECLARE_string(l2_cache_type);
 DS_DECLARE_uint32(node_dead_timeout_s);

@@ -63,7 +63,7 @@ ds_cc_library(
         "//src/datasystem/worker:worker_master_api_manager_base",
         "//src/datasystem/worker/runtime:worker_runtime_core",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
-        "//src/datasystem/worker/object_cache:worker_recovery_evidence_adapter",
+        "//src/datasystem/worker/object_cache:object_cache_recovery_evidence",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
     ],
 )

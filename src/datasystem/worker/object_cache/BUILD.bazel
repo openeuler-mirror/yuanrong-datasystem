@@ -250,12 +250,12 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "worker_recovery_evidence_adapter",
+    name = "object_cache_recovery_evidence",
     srcs = [
-        "worker_recovery_evidence_adapter.cpp",
+        "object_cache_recovery_evidence.cpp",
     ],
     hdrs = [
-        "worker_recovery_evidence_adapter.h",
+        "object_cache_recovery_evidence.h",
     ],
     deps = [
         "//src/datasystem/common/util:status_helper",
@@ -277,7 +277,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
-        "//src/datasystem/worker/object_cache:worker_recovery_evidence_adapter",
+        "//src/datasystem/worker/object_cache:object_cache_recovery_evidence",
         "//src/datasystem/worker/runtime:worker_runtime_core",
     ],
 )
@@ -405,7 +405,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
         "//src/datasystem/worker/object_cache:object_cache_recovery_state",
         "//src/datasystem/worker/object_cache:object_kv",
-        "//src/datasystem/worker/object_cache:worker_recovery_evidence_adapter",
+        "//src/datasystem/worker/object_cache:object_cache_recovery_evidence",
         "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker/object_cache:verify_leaving_state",

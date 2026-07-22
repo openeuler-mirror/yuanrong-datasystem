@@ -12,16 +12,16 @@
  */
 
 /**
- * Description: Tests for worker self-healing recovery evidence adapters.
+ * Description: Tests for object cache recovery evidence.
  */
-#include "datasystem/worker/object_cache/worker_recovery_evidence_adapter.h"
+#include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
 
 #include <gtest/gtest.h>
 
 namespace datasystem {
 namespace object_cache {
 namespace {
-TEST(WorkerRecoveryEvidenceAdapterTest, MetadataRecoverySummaryMarksMetadataReadyOnlyWhenAllRequestedMetasRecover)
+TEST(ObjectCacheRecoveryEvidenceTest, MetadataRecoverySummaryMarksMetadataReadyOnlyWhenAllRequestedMetasRecover)
 {
     MetaDataRecoveryManager::RecoverySummary partial;
     partial.requestedCount = 3;
@@ -44,7 +44,7 @@ TEST(WorkerRecoveryEvidenceAdapterTest, MetadataRecoverySummaryMarksMetadataRead
     EXPECT_NE(completeReport.detail.find("metadata_recovered=3/3"), std::string::npos);
 }
 
-TEST(WorkerRecoveryEvidenceAdapterTest, EmptyMetadataRecoveryBatchIsReady)
+TEST(ObjectCacheRecoveryEvidenceTest, EmptyMetadataRecoveryBatchIsReady)
 {
     MetaDataRecoveryManager::RecoverySummary empty;
 
@@ -54,7 +54,7 @@ TEST(WorkerRecoveryEvidenceAdapterTest, EmptyMetadataRecoveryBatchIsReady)
     EXPECT_NE(report.detail.find("metadata_recovered=0/0"), std::string::npos);
 }
 
-TEST(WorkerRecoveryEvidenceAdapterTest, SlotRecoveryEvidenceRequiresEveryIncidentTerminalWithoutFailures)
+TEST(ObjectCacheRecoveryEvidenceTest, SlotRecoveryEvidenceRequiresEveryIncidentTerminalWithoutFailures)
 {
     SlotRecoveryInfoPb complete;
     complete.set_total_slots(2);
@@ -77,7 +77,7 @@ TEST(WorkerRecoveryEvidenceAdapterTest, SlotRecoveryEvidenceRequiresEveryInciden
     EXPECT_NE(completeReport.detail.find("slot_incidents_ready=1/1"), std::string::npos);
 }
 
-TEST(WorkerRecoveryEvidenceAdapterTest, OwnershipEvidenceUsesExplicitMasterReconciliationResult)
+TEST(ObjectCacheRecoveryEvidenceTest, OwnershipEvidenceUsesExplicitMasterReconciliationResult)
 {
     auto unresolved = BuildOwnershipRecoveryEvidenceReport(false, "master reconciliation pending");
 
@@ -91,7 +91,7 @@ TEST(WorkerRecoveryEvidenceAdapterTest, OwnershipEvidenceUsesExplicitMasterRecon
     EXPECT_NE(ready.detail.find("ownership_ready=true"), std::string::npos);
 }
 
-TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateRequiresMetadataAndSlotReadiness)
+TEST(ObjectCacheRecoveryEvidenceTest, ObjectCacheRecoveryAggregateRequiresMetadataAndSlotReadiness)
 {
     MetaDataRecoveryManager::RecoverySummary metadataSummary;
     metadataSummary.requestedCount = 1;
@@ -113,7 +113,7 @@ TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateRequiresMeta
     EXPECT_NE(aggregate.detail.find("master ownership confirmed"), std::string::npos);
 }
 
-TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateRequiresAllocatorHeadroom)
+TEST(ObjectCacheRecoveryEvidenceTest, ObjectCacheRecoveryAggregateRequiresAllocatorHeadroom)
 {
     MetaDataRecoveryManager::RecoverySummary metadataSummary;
     metadataSummary.requestedCount = 1;
@@ -131,7 +131,7 @@ TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateRequiresAllo
     EXPECT_FALSE(aggregate.evidence.resourceReady);
 }
 
-TEST(WorkerRecoveryEvidenceAdapterTest, ObjectCacheRecoveryAggregateBlocksOwnershipWhenMasterEvidenceIsMissing)
+TEST(ObjectCacheRecoveryEvidenceTest, ObjectCacheRecoveryAggregateBlocksOwnershipWhenMasterEvidenceIsMissing)
 {
     MetaDataRecoveryManager::RecoverySummary metadataSummary;
     metadataSummary.requestedCount = 1;

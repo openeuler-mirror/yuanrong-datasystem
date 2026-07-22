@@ -112,7 +112,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/verify_leaving_state.h"
-#include "datasystem/worker/object_cache/worker_recovery_evidence_adapter.h"
+#include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/worker_health_check.h"
 

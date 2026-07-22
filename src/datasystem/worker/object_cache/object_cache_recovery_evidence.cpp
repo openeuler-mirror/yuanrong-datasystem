@@ -12,9 +12,9 @@
  */
 
 /**
- * Description: Adapters from object-cache recovery results to worker recovery evidence.
+ * Description: Object cache recovery evidence builders.
  */
-#include "datasystem/worker/object_cache/worker_recovery_evidence_adapter.h"
+#include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
 
 #include <sstream>
 

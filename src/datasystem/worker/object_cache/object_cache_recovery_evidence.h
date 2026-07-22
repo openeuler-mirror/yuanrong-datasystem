@@ -12,10 +12,10 @@
  */
 
 /**
- * Description: Adapters from object-cache recovery results to worker recovery evidence.
+ * Description: Object cache recovery evidence builders.
  */
-#ifndef DATASYSTEM_WORKER_OBJECT_CACHE_WORKER_RECOVERY_EVIDENCE_ADAPTER_H
-#define DATASYSTEM_WORKER_OBJECT_CACHE_WORKER_RECOVERY_EVIDENCE_ADAPTER_H
+#ifndef DATASYSTEM_WORKER_OBJECT_CACHE_OBJECT_CACHE_RECOVERY_EVIDENCE_H
+#define DATASYSTEM_WORKER_OBJECT_CACHE_OBJECT_CACHE_RECOVERY_EVIDENCE_H
 
 #include <cstdint>
 #include <string>
@@ -41,4 +41,4 @@ worker::WorkerRecoveryEvidenceReport BuildObjectCacheRecoveryEvidenceReport(
 }  // namespace object_cache
 }  // namespace datasystem
 
-#endif  // DATASYSTEM_WORKER_OBJECT_CACHE_WORKER_RECOVERY_EVIDENCE_ADAPTER_H
+#endif  // DATASYSTEM_WORKER_OBJECT_CACHE_OBJECT_CACHE_RECOVERY_EVIDENCE_H

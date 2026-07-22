@@ -22,7 +22,7 @@ set(WORKER_OC_SRCS
         async_update_location_manager.cpp
         metadata_recovery_manager.cpp
         object_cache_recovery_state.cpp
-        worker_recovery_evidence_adapter.cpp
+        object_cache_recovery_evidence.cpp
         metadata_recovery_selector.cpp
         rebalance_candidate_provider.cpp
         slot_recovery_orchestrator.cpp

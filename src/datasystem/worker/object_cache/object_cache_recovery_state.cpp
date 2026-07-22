@@ -10,7 +10,7 @@
 
 #include <utility>
 
-#include "datasystem/worker/object_cache/worker_recovery_evidence_adapter.h"
+#include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
 
 namespace datasystem {
 namespace object_cache {
