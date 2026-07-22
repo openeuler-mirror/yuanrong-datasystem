@@ -173,7 +173,8 @@ void RpcGenerator::GenerateBrpcAdapterCppPrologue(io::Printer &printer,
         "#include <cstring>\n"
         "#include <sys/time.h>\n"
         "#include \"datasystem/common/util/request_context.h\"\n"
-        "#include \"datasystem/common/util/thread_local.h\"\n";
+        "#include \"datasystem/common/util/thread_local.h\"\n"
+        "#include \"datasystem/common/rpc/api_deadline.h\"\n";
     printer.Print(vars, impl.c_str());
 }
 
@@ -695,6 +696,28 @@ void RpcGenerator::ImplementBrpcCallMethodUnarySocket(io::Printer &printer,
 
 std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
 {
+    // Initialize per-request timeouts on the brpc server-receive path. Mirrors the ZMQ
+    // receive path (zmq_service.cpp), which initializes reqTimeoutDuration /
+    // scTimeoutDuration AND ApiDeadline at every request entry.
+    //
+    // ApiDeadline initialization strategy (3 branches):
+    //   A) deadlineUs > 0 && remainingUs <= 0: InitUs(remainingUs) — keep the expired
+    //      absolute deadline expired (no extension fallback to timeout_ms).
+    //   B) remainingMs > 0:
+    //      - If remainingMs came from deadline_us (absolute, SDK-propagated): Init(ms)
+    //        so outbound RPCs are bounded by the client's request budget.
+    //      - If remainingMs came from cntl->timeout_ms (relative, per-hop RPC timeout
+    //        like 500ms channel default): Reset(). Using a small per-hop value as
+    //        ApiDeadline causes T14 CheckApiDeadline false positives on multi-hop
+    //        worker->master outbound calls (CI regression: remaining -1.5ms). Reset
+    //        clears stale state from a previous request while keeping T14 a no-op.
+    //   C) Neither deadline nor timeout: Reset() — no client budget, 60s default.
+    //
+    // Without this, the thread-local ApiDeadline carries a stale (initialized-but-expired)
+    // budget from the previous request served on this worker thread, and a later outbound
+    // RPC's CheckApiDeadline (e.g. the stub's slow-success deadline check) would wrongly
+    // fail a healthy RPC (PR #1550 stream ST regression: 15-17 stream cases failed with
+    // remaining -8..-23ms).
     return
         "$indent$// Init per-request timeout so worker-side retry loops (e.g.\n"
         "$indent$// TryGetObjectFromRemote) and worker->master RPCs use the client\n"
@@ -728,6 +751,11 @@ std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
         "$indent$        if (remainingUs <= 0) {\n"
         "$indent$            GetRequestContext()->reqTimeoutDuration.InitUs(remainingUs);\n"
         "$indent$            GetRequestContext()->scTimeoutDuration.InitUs(remainingUs);\n"
+        "$indent$            // Mirror the ZMQ receive path (zmq_service.cpp): keep the\n"
+        "$indent$            // thread-local ApiDeadline initialized so that a subsequent\n"
+        "$indent$            // outbound RPC stub's CheckApiDeadline sees the real (expired)\n"
+        "$indent$            // budget instead of a stale budget left by an earlier request.\n"
+        "$indent$            ::datasystem::ApiDeadline::Instance().InitUs(remainingUs);\n"
         "$indent$        } else {\n"
         "$indent$            remainingMs = (remainingUs + 999) / 1000;\n"
         "$indent$        }\n"
@@ -755,9 +783,35 @@ std::string RpcGenerator::BuildScTimeoutDurationInitSnippet()
         "$indent$    } else if (remainingMs > 0) {\n"
         "$indent$        GetRequestContext()->reqTimeoutDuration.Init(remainingMs);\n"
         "$indent$        GetRequestContext()->scTimeoutDuration.Init(remainingMs);\n"
+        "$indent$        // Initialize the per-thread ApiDeadline with the same client\n"
+        "$indent$        // budget. Without this, brpc server entry never initializes\n"
+        "$indent$        // ApiDeadline (unlike ZMQ), so after a worker thread serves one\n"
+        "$indent$        // request that initialized ApiDeadline via InitTimeoutsFromDispatch /\n"
+        "$indent$        // ApiDeadlineGuard, a later outbound RPC's CheckApiDeadline (e.g.\n"
+        "$indent$        // the stub's slow-success check) would observe a stale, already-\n"
+        "$indent$        // expired deadline and wrongly fail a healthy RPC.\n"
+        "$indent$        //\n"
+        "$indent$        // When the remainingMs came from deadline_us() (absolute deadline\n"
+        "$indent$        // propagated by the SDK), initialize ApiDeadline with it so the\n"
+        "$indent$        // budget is honored on outbound RPCs. Otherwise remainingMs came from\n"
+        "$indent$        // cntl->timeout_ms() — a per-hop RPC-level timeout (e.g. the 500ms\n"
+        "$indent$        // channel default) rather than the client's request budget. Using\n"
+        "$indent$        // this small value as ApiDeadline causes T14 CheckApiDeadline false\n"
+        "$indent$        // positives on multi-hop worker->master outbound calls. Reset instead\n"
+        "$indent$        // so the thread-local stays uninitialized (60s default, T14 no-op)\n"
+        "$indent$        // while still clearing stale state from a previous request.\n"
+        "$indent$        if (deadlineUs > 0) {\n"
+        "$indent$            ::datasystem::ApiDeadline::Instance().Init(remainingMs);\n"
+        "$indent$        } else {\n"
+        "$indent$            ::datasystem::ApiDeadline::Instance().Reset();\n"
+        "$indent$        }\n"
         "$indent$    } else {\n"
         "$indent$        GetRequestContext()->reqTimeoutDuration.Init();\n"
         "$indent$        GetRequestContext()->scTimeoutDuration.Init();\n"
+        "$indent$        // No client deadline on the wire (background / internal call):\n"
+        "$indent$        // reset so ApiRemainingUs() returns the 60s default and\n"
+        "$indent$        // CheckApiDeadline() returns OK, matching the ZMQ receive path.\n"
+        "$indent$        ::datasystem::ApiDeadline::Instance().Reset();\n"
         "$indent$    }\n"
         "$indent$}\n";
 }

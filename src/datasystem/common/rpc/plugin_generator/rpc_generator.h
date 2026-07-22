@@ -465,12 +465,16 @@ private:
     static void ImplementBrpcStubNoStreamDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
                                              int methodIndex, const std::string &indent, const std::string &stub);
     static std::string BuildBrpcStubNoStreamImpl(const google::protobuf::MethodDescriptor &method);
+    static std::string BuildCallMethodAndDiagnosticsSnippet();
+    static std::string BuildPostCallDeadlineCheckSnippet();
     static std::string BuildTraceIDAttachSnippet();
     static std::string BuildSendPayloadFramingSnippet();
     static std::string BuildRecvPayloadFramingSnippet();
     static std::string BuildAsyncRecvPayloadFramingSnippet();
     static std::string BuildAsyncWriteImpl(const google::protobuf::MethodDescriptor &method);
     static std::string BuildAsyncReadImpl(const google::protobuf::MethodDescriptor &method);
+    static std::string BuildAsyncReadDontWaitSnippet();
+    static std::string BuildAsyncReadWaitForSnippet();
     static void ImplementBrpcStubNoStreamDef2(io::Printer &printer, const google::protobuf::MethodDescriptor &method,
                                               int methodIndex, const std::string &indent, const std::string &stub);
     static void ImplBrpcStubNoStreamShortDef(io::Printer &printer, const google::protobuf::MethodDescriptor &method,

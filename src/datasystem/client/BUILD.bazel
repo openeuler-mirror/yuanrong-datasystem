@@ -287,6 +287,7 @@ ds_cc_library(
         "//src/datasystem/common/rdma:common_rdma",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:api_deadline_helpers",
         "//src/datasystem/common/rpc:brpc_factory",
         "//src/datasystem/common/rpc:mem_view",
         "//src/datasystem/common/rpc:rpc_message",

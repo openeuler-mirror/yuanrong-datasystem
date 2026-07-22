@@ -193,6 +193,9 @@ void SetEmptyObjectEntry(const std::string &objectKey, SafeObjType &entry);
  * @param[in] entry Safe object entry.
  * @param[in] nullable Enable nullable object or not.
  * @return Status of the call.
+ * @warning Contract: a non-OK return means the write lock was NOT acquired. Callers rely
+ *          on this and skip `WUnlock()` on the error path; this function must never
+ *          return an error while holding the lock (deadline checks release the lock first).
  */
 Status TryLockWithRetry(const std::string &objectKey, const std::shared_ptr<SafeObjType> &entry, bool nullable = false);
 

@@ -16,8 +16,6 @@
 
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/log/trace.h"
-#include "datasystem/common/util/request_context.h"
-#include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/util/format.h"
 
 namespace datasystem {
@@ -85,38 +83,6 @@ void ApiDeadline::Reset()
 {
     initialized_ = false;
     savedStates_.clear();
-}
-
-Status InitTimeoutsFromDispatch(int64_t capturedRemainingUs, std::chrono::steady_clock::time_point dispatchTime)
-{
-    auto queueDelayUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                            std::chrono::steady_clock::now() - dispatchTime)
-                            .count();
-    int64_t actualRemainingUs = capturedRemainingUs - queueDelayUs;
-    if (actualRemainingUs <= 0) {
-        ApiDeadline::Instance().Reset();
-        return Status(K_RPC_DEADLINE_EXCEEDED,
-                      FormatString("RPC deadline exceeded after queue wait, remaining %ld us.", actualRemainingUs));
-    }
-    GetRequestContext()->reqTimeoutDuration.InitUs(actualRemainingUs);
-    ApiDeadline::Instance().InitUs(actualRemainingUs);
-    return Status::OK();
-}
-
-int64_t GetRemainingUsForMeta()
-{
-    if (ApiDeadline::Instance().IsInitialized()) {
-        int64_t us = ApiDeadline::Instance().ApiRemainingUs();
-        return us > 0 ? us : 1;
-    }
-    // Background / fan-out threads (IsRequestLogTrace()==false): uninitialized ApiDeadline is
-    // the expected steady state — stay silent. Request-receive threads: unexpected fallback
-    // (deadline not propagated / exhausted in queue), bound to 1-per-N to avoid stress flooding.
-    if (Trace::Instance().IsRequestLogTrace()) {
-        VLOG_EVERY_N(1, K_API_DEADLINE_FALLBACK_LOG_EVERY_N)
-            << "ApiDeadline uninitialized, falling back to reqTimeoutDuration.";
-    }
-    return GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
 }
 
 }  // namespace datasystem

@@ -74,6 +74,7 @@ ds_cc_library(
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log_header",
         "//src/datasystem/common/perf:common_perf",
+        "//src/datasystem/common/rpc:api_deadline",
         "//src/datasystem/common/rpc:scoped_bthread_local",
         "//src/datasystem/common/rpc:timeout_duration",
         "//src/datasystem/common/rpc/zmq:zmq_message",
