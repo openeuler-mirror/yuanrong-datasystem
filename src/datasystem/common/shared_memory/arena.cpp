@@ -37,6 +37,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #endif
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/shared_memory/allocator.h"
 #include "datasystem/common/shared_memory/jemalloc.h"
@@ -65,9 +66,19 @@ DS_DECLARE_bool(enable_fallocate);
 
 namespace datasystem {
 namespace memory {
-// Per-allocation metadata moved to Arena::currentNeedFallocate_,
-// Arena::currentRequestSize_, and Arena::currentFakeAllocate_ (std::atomic members).
-// See arena.h for declarations.
+namespace {
+// Extent hooks execute synchronously inside Jemalloc::Allocate on this thread.
+struct ExtentAllocationDiagnostic {
+    bool active = false;
+    // "fresh" is a short metric label: this includes mmap allocation failure and extent commit failure;
+    // it does not prove that a new contiguous extent is absent.
+    bool freshExtentUnavailable = false;
+};
+
+thread_local ExtentAllocationDiagnostic g_threadExtentAllocationDiagnostic;
+
+Status AllocateWithExtentDiagnostic(uint32_t arenaId, uint64_t &size, void *&pointer, bool &freshExtentUnavailable);
+}  // namespace
 
 inline uintptr_t AlignCeiling(uintptr_t addr, uintptr_t alignment)
 {
@@ -102,18 +113,19 @@ Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSi
     CHECK_FAIL_RETURN_STATUS(!arenas_.empty(), StatusCode::K_RUNTIME_ERROR, "arenas_ is empty");
 
     if (size > maxSize_) {
-        RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, "Upper to the size limit");
+        RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, "Upper to the size limit, reason=logical_size_limit_reached");
     }
     if (memoryUsage_.fetch_add(size, std::memory_order_relaxed) > (maxSize_ - size)) {
         (void)memoryUsage_.fetch_sub(size, std::memory_order_relaxed);
-        RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, "Upper to the size limit");
+        RETURN_STATUS(StatusCode::K_OUT_OF_MEMORY, "Upper to the size limit, reason=logical_size_limit_reached");
     }
 
     auto index = nextId_.fetch_add(1) % arenas_.size();
 
     auto func = [&index, this](bool populate, uint64_t &size, void *&pointer, int &fd, ptrdiff_t &offset,
                                uint64_t &mmapSize) {
-        RETURN_IF_NOT_OK(AllocateMemoryImpl(true, populate, size, index, pointer));
+        bool freshExtentUnavailable = false;
+        RETURN_IF_NOT_OK(AllocateMemoryImpl(true, populate, size, index, pointer, freshExtentUnavailable));
         return arenas_[index]->GetAllocInfo(pointer, fd, offset, mmapSize);
     };
     realSize = size;
@@ -153,7 +165,20 @@ Status ArenaGroup::AllocateMemory(uint64_t size, bool populate, uint64_t &realSi
     return Status::OK();
 }
 
-Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size, size_t &index, void *&pointer)
+Status ArenaGroup::BuildExtentOomStatus(uint32_t arenaId, bool freshExtentUnavailable) const
+{
+    // "reusable" means no extent-provision failure was observed, not a jemalloc free-list inspection.
+    auto reason = freshExtentUnavailable ? "fresh_extent_unavailable" : "reusable_extent_unavailable";
+    METRIC_INC(freshExtentUnavailable ? metrics::KvMetricId::WORKER_SHM_FRESH_EXTENT_OOM_TOTAL
+                                      : metrics::KvMetricId::WORKER_SHM_REUSABLE_EXTENT_OOM_TOTAL);
+    auto it = CACHE_TYPE_STR.find(cacheType_);
+    auto errHint = it == CACHE_TYPE_STR.end() ? "UnknownType" : it->second;
+    return Status(StatusCode::K_OUT_OF_MEMORY,
+                  FormatString("%s no space in arena: %d, reason=%s", errHint, arenaId, reason));
+}
+
+Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size, size_t &index, void *&pointer,
+                                      bool &freshExtentUnavailable)
 {
     CHECK_FAIL_RETURN_STATUS(!arenas_.empty(), StatusCode::K_RUNTIME_ERROR, "arenas_ is empty");
     CHECK_FAIL_RETURN_STATUS(arenas_.size() > index, StatusCode::K_RUNTIME_ERROR, "index is bigger than arenas_ size");
@@ -179,20 +204,17 @@ Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size,
     auto arenaCount = arenas_.size();
     auto arenaId = arena->GetArenaId();
     auto beginTime = clock::now();
-    auto status = Jemalloc::Allocate(arenaId, size, pointer);
-    if (status.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
-        auto it = CACHE_TYPE_STR.find(cacheType_);
-        std::string errHint = "UnknowType";
-        if (it != CACHE_TYPE_STR.end()) {
-            errHint = it->second;
-        }
-        std::string errorMsg = FormatString("%s no space in arena: %d", errHint, arenaId);
-        status = Status(StatusCode::K_OUT_OF_MEMORY, errorMsg);
-    }
+    bool currentFreshExtentUnavailable = false;
+    Status status = AllocateWithExtentDiagnostic(arenaId, size, pointer, currentFreshExtentUnavailable);
+    // Across arena retries, classify the final OOM as provision failure if any attempted arena observed one.
+    freshExtentUnavailable = freshExtentUnavailable || currentFreshExtentUnavailable;
     auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - beginTime).count();
     PerfPoint::RecordElapsed(status.IsOk() ? PerfKey::JEMALLOC_ALLOCATE_SUCCESS : PerfKey::JEMALLOC_ALLOCATE_FAIL,
                              elapsed);
     if (!retry || arenaCount == 1 || status.GetCode() != StatusCode::K_OUT_OF_MEMORY) {
+        if (retry && status.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
+            status = BuildExtentOomStatus(arenaId, freshExtentUnavailable);
+        }
         return status;
     }
 
@@ -209,7 +231,7 @@ Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size,
             VLOG(1) << "try alloc from arena " << arena->GetArenaId()
                     << ", fallocate size:" << arena->GetPhysicalMemoryUsage()
                     << ", real allocate size:" << arena->GetRealMemoryUsage();
-            if (AllocateMemoryImpl(false, populate, size, nextIndex, pointer).IsOk()) {
+            if (AllocateMemoryImpl(false, populate, size, nextIndex, pointer, freshExtentUnavailable).IsOk()) {
                 index = nextIndex;
                 nextId_ = nextIndex + 1;
                 return Status::OK();
@@ -217,7 +239,7 @@ Status ArenaGroup::AllocateMemoryImpl(bool retry, bool populate, uint64_t &size,
         }
     }
 
-    return status;
+    return BuildExtentOomStatus(arenaId, freshExtentUnavailable);
 }
 
 Status ArenaGroup::FreeMemory(void *pointer, uint64_t &bytesFree, uint64_t &bytesRealFree, uint64_t usedSize)
@@ -475,7 +497,7 @@ void ArenaManager::FakeAllocate(CacheType type, const std::vector<uint64_t> &are
         auto status = Jemalloc::Allocate(arenaInd, hookSize, pointer);
         if (status.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
             auto it = CACHE_TYPE_STR.find(type);
-            std::string errHint = "UnknowType";
+            std::string errHint = "UnknownType";
             if (it != CACHE_TYPE_STR.end()) {
                 errHint = it->second;
             }
@@ -802,10 +824,16 @@ void *Arena::AllocHook(size_t size, size_t alignment, bool *zero, bool *commit)
     }
 
     if (needCommit && !AddPhysicalMemeoryUsage(size)) {
+        if (g_threadExtentAllocationDiagnostic.active) {
+            g_threadExtentAllocationDiagnostic.freshExtentUnavailable = true;
+        }
         return nullptr;
     }
     void *addr = mmap_->Allocate(size, alignment, zero, commit);
     if (addr == nullptr) {
+        if (g_threadExtentAllocationDiagnostic.active) {
+            g_threadExtentAllocationDiagnostic.freshExtentUnavailable = true;
+        }
         if (needCommit) {
             (void)SubPhysicalMemeoryUsage(size);
         }
@@ -835,6 +863,34 @@ void Arena::DestroyHook(void *addr, size_t size, bool committed)
     }
 }
 
+ScopedExtentAllocationDiagnostic::ScopedExtentAllocationDiagnostic()
+    : previousActive_(g_threadExtentAllocationDiagnostic.active),
+      previousFreshExtentUnavailable_(g_threadExtentAllocationDiagnostic.freshExtentUnavailable)
+{
+    g_threadExtentAllocationDiagnostic = { true, false };
+}
+
+ScopedExtentAllocationDiagnostic::~ScopedExtentAllocationDiagnostic()
+{
+    g_threadExtentAllocationDiagnostic = { previousActive_, previousFreshExtentUnavailable_ };
+}
+
+bool ScopedExtentAllocationDiagnostic::FreshExtentUnavailable() const
+{
+    return g_threadExtentAllocationDiagnostic.freshExtentUnavailable;
+}
+
+namespace {
+
+Status AllocateWithExtentDiagnostic(uint32_t arenaId, uint64_t &size, void *&pointer, bool &freshExtentUnavailable)
+{
+    ScopedExtentAllocationDiagnostic diagnostic;
+    Status status = Jemalloc::Allocate(arenaId, size, pointer);
+    freshExtentUnavailable = diagnostic.FreshExtentUnavailable();
+    return status;
+}
+}  // namespace
+
 bool Arena::CommitHook(bool commit, void *addr, size_t size, size_t offset, size_t length)
 {
     VLOG(1) << "CommitHook arena " << arenaId_;
@@ -845,10 +901,16 @@ bool Arena::CommitHook(bool commit, void *addr, size_t size, size_t offset, size
             return true;
         }
         if (!AddPhysicalMemeoryUsage(length)) {
+            if (g_threadExtentAllocationDiagnostic.active) {
+                g_threadExtentAllocationDiagnostic.freshExtentUnavailable = true;
+            }
             return true;
         }
         bool ret = CommitImpl(addr, offset, length);
         if (ret) {
+            if (g_threadExtentAllocationDiagnostic.active) {
+                g_threadExtentAllocationDiagnostic.freshExtentUnavailable = true;
+            }
             (void)SubPhysicalMemeoryUsage(length);
         }
         return ret;
