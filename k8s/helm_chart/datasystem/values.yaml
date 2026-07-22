@@ -373,8 +373,8 @@ global:
     # zmqClientIoContext, zmqClientIoThread, zmqChunkSz) do not take effect in brpc mode.
     # Per-service thread pools (rpcThreadNum, ocThreadNum, scThreadNum, etc.) still apply.
     brpc:
-      # Whether to use brpc instead of ZMQ for RPC communication. Default false.
-      useBrpc: false
+      # Whether to use brpc instead of ZMQ for RPC communication. Set to false to fall back to ZMQ.
+      useBrpc: true
       # Number of brpc server worker threads (bthread worker pool size).
       brpcServerNumThreads: 64
       # Max concurrent in-flight RPCs per brpc server. 0 means unlimited.
