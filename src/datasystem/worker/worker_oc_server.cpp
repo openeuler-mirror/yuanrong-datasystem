@@ -1001,6 +1001,26 @@ Status WorkerOCServer::InitCoordinationBackend()
     return Status::OK();
 }
 
+void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot)
+{
+    for (const auto &member : snapshot.Members()) {
+        if (member.state != cluster::MemberState::FAILED) {
+            continue;
+        }
+        HostPort addr;
+        if (addr.ParseString(member.identity.address).IsError() || addr.Empty()) {
+            continue;
+        }
+        for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC,
+                           StubType::WORKER_WORKER_TRANS_SVC }) {
+            auto rc = RpcStubCacheMgr::Instance().Remove(addr, type);
+            LOG_IF(WARNING, rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND)
+                << "Cleanup worker<->worker stub for FAILED member " << member.identity.address
+                << " type=" << static_cast<int>(type) << " rc=" << rc.ToString();
+        }
+    }
+}
+
 Status WorkerOCServer::ConstructTopologyCallbacks()
 {
     const bool centralizedMetadata = !FLAGS_enable_distributed_master;
@@ -1053,6 +1073,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
             return HandleMembershipRestart(address, timestamp);
         })
         .SetSnapshotPublishedHandler([this](std::shared_ptr<const cluster::TopologySnapshot> snapshot) {
+            CleanupRpcStubsForFailedMembers(*snapshot);
             ScheduleTopologySnapshotWarmup(std::move(snapshot));
         })
         .SetControlBackendProbe([localAddress = hostPort_, akSkManager = akSkManager_](
