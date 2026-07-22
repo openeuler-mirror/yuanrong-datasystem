@@ -425,6 +425,7 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
     def test_object_cache_public_headers_do_not_expose_runtime_internals(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/worker_worker_oc_service_impl.h",
         ]
 
         forbidden_tokens = [
@@ -432,6 +433,7 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             "datasystem/worker/runtime/worker_recovery_evidence_tracker.h",
             "datasystem/worker/runtime/worker_runtime_state.h",
             "datasystem/worker/runtime/worker_service_admission.h",
+            "WorkerRuntimeStateReadGuard",
         ]
 
         for file_path in files:

@@ -54,6 +54,7 @@
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_gather_layout.h"
 #include "datasystem/worker/object_cache/worker_worker_peer_state_codec.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 DS_DECLARE_string(worker_address);
 DS_DECLARE_int32(oc_worker_worker_direct_port);
@@ -74,6 +75,15 @@ bool IsUrmaWarmupRequest(const GetObjectRemoteReqPb &req)
 {
     return req.has_urma_info() && req.object_key().rfind(URMA_WARMUP_KEY_PREFIX, 0) == 0 && req.read_offset() == 0
            && req.read_size() == URMA_WARMUP_OBJECT_SIZE && req.data_size() == URMA_WARMUP_OBJECT_SIZE;
+}
+
+Status AcquireReadAdmission(const worker::WorkerRuntimeFacade *runtime, const std::string &operation,
+                            std::optional<worker::WorkerRuntimeStateReadGuard> &guard)
+{
+    if (runtime == nullptr) {
+        return Status::OK();
+    }
+    return runtime->AcquireNormalReadGuard(operation, guard);
 }
 
 }  // namespace
@@ -209,15 +219,6 @@ void WorkerWorkerOCServiceImpl::SetRuntimeFacade(const worker::WorkerRuntimeFaca
     runtime_ = runtime;
 }
 
-Status WorkerWorkerOCServiceImpl::AcquireReadAdmission(const std::string &operation,
-                                                       std::optional<worker::WorkerRuntimeStateReadGuard> &guard) const
-{
-    if (runtime_ == nullptr) {
-        return Status::OK();
-    }
-    return runtime_->AcquireNormalReadGuard(operation, guard);
-}
-
 Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi)
 {
@@ -288,7 +289,7 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
     INJECT_POINT("worker.worker_worker_read_before_admission");
     std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
-    RETURN_IF_NOT_OK(AcquireReadAdmission("GetObjectRemote", admissionGuard));
+    RETURN_IF_NOT_OK(AcquireReadAdmission(runtime_, "GetObjectRemote", admissionGuard));
     if (isQueryAndGet) {
         RETURN_IF_NOT_OK(CheckConnectionStable(req));
     }
@@ -1040,7 +1041,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
 {
     INJECT_POINT("worker.worker_worker_read_before_admission");
     std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
-    RETURN_IF_NOT_OK(AcquireReadAdmission("BatchGetObjectRemote", admissionGuard));
+    RETURN_IF_NOT_OK(AcquireReadAdmission(runtime_, "BatchGetObjectRemote", admissionGuard));
     PerfPoint point(PerfKey::WORKER_SERVER_BATCH_GET_REMOTE);
     BatchRh2dContext batchTransportContext;
     if (IsUrmaEnabled()) {

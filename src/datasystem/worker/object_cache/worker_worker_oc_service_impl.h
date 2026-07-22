@@ -18,8 +18,6 @@
 #define DATASYSTEM_WORKER_OC_WORKER_SERVICE_IMPL_H
 
 #include <functional>
-#include <optional>
-
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_send_lane.h"
@@ -30,9 +28,11 @@
 #include "datasystem/protos/worker_object.brpc.pb.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/common/object_cache/shm_guard.h"
-#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem {
+namespace worker {
+class WorkerRuntimeFacade;
+}
 namespace object_cache {
 class WorkerOCServiceImpl;
 
@@ -141,9 +141,6 @@ public:
     Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override;
 
 private:
-    Status AcquireReadAdmission(const std::string &operation,
-                                std::optional<worker::WorkerRuntimeStateReadGuard> &guard) const;
-
     struct AggregateInfo {
         bool canBatchHandler = false;
         std::vector<uint64_t> batchReqSize;
