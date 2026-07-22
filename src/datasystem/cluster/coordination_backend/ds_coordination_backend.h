@@ -15,6 +15,7 @@
 #include <functional>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -433,6 +434,8 @@ private:
 
     ICoordinatorServiceProxy *proxy_;
     std::string watcherAddr_;
+    mutable std::mutex tableMutex_;
+    std::unordered_map<std::string, std::string> tableMap_;
     std::string pendingWatchRegistrationId_;
     // Serializes complete watch registration transactions without being held by callbacks or RPC helpers.
     std::mutex rewatchMutex_;

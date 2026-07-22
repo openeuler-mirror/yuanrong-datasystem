@@ -36,6 +36,7 @@
 #include "datasystem/common/util/uuid_generator.h"
 
 DS_DECLARE_string(host_id_env_name);
+DS_DECLARE_string(cluster_name);
 DS_DECLARE_string(log_dir);
 DS_DECLARE_uint32(node_timeout_s);
 
@@ -115,15 +116,27 @@ Status DsCoordinationBackend::Get(const std::string &tableName, const std::strin
 
 Status DsCoordinationBackend::CreateTable(const std::string &tableName, const std::string &tablePrefix)
 {
-    (void)tableName;
-    (void)tablePrefix;
+    std::lock_guard<std::mutex> lock(tableMutex_);
+    CHECK_FAIL_RETURN_STATUS(tableMap_.find(tableName) == tableMap_.end(), K_DUPLICATED,
+                             "The table already exists. tableName:" + tableName);
+    if (!FLAGS_cluster_name.empty()) {
+        tableMap_.emplace(tableName, "/" + FLAGS_cluster_name + tablePrefix);
+    } else {
+        tableMap_.emplace(tableName, tablePrefix);
+    }
+
     return Status::OK();
 }
 
 Status DsCoordinationBackend::CreateTableWithExactPrefix(const std::string &tableName, const std::string &tablePrefix)
 {
-    (void)tableName;
-    (void)tablePrefix;
+    CHECK_FAIL_RETURN_STATUS(!tableName.empty(), K_INVALID, "Coordinator table name is empty");
+    CHECK_FAIL_RETURN_STATUS(!tablePrefix.empty() && tablePrefix.front() == '/', K_INVALID,
+                             "Coordinator table prefix must be an absolute path.");
+    std::lock_guard<std::mutex> lock(tableMutex_);
+    CHECK_FAIL_RETURN_STATUS(tableMap_.find(tableName) == tableMap_.end(), K_DUPLICATED,
+                             "The table already exists. tableName:" + tableName);
+    tableMap_.emplace(tableName, tablePrefix);
     return Status::OK();
 }
 
@@ -707,6 +720,14 @@ Status DsCoordinationBackend::UpdateNodeState(MemberLifecycleState state)
 Status DsCoordinationBackend::GetStorePrefix(const std::string &tableName, std::string &prefix)
 {
     CHECK_FAIL_RETURN_STATUS(!tableName.empty(), K_INVALID, "Coordinator table name is empty");
+    {
+        std::lock_guard<std::mutex> lock(tableMutex_);
+        auto iter = tableMap_.find(tableName);
+        if (iter != tableMap_.end()) {
+            prefix = iter->second;
+            return Status::OK();
+        }
+    }
     if (tableName == COORDINATION_CLUSTER_TABLE) {
         prefix = "/" + std::string(COORDINATION_CLUSTER_TABLE);
         return Status::OK();

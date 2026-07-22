@@ -238,6 +238,17 @@ TEST(CoordinationBackendContractTest, DsBackendPreservesClusterScopedMembershipT
     EXPECT_EQ(prefix, "/datasystem/cluster-a/topology");
 }
 
+TEST(CoordinationBackendContractTest, DsBackendRegistersLogicalTablePrefixes)
+{
+    DsCoordinationBackend backend(nullptr, "127.0.0.1:1");
+    std::string prefix;
+
+    ASSERT_TRUE(backend.CreateTableWithExactPrefix("logical", "/physical/root").IsOk());
+    EXPECT_TRUE(backend.GetStorePrefix("logical", prefix).IsOk());
+    EXPECT_EQ(prefix, "/physical/root");
+    EXPECT_EQ(backend.CreateTableWithExactPrefix("logical", "/physical/other").GetCode(), K_DUPLICATED);
+}
+
 TEST(CoordinationBackendContractTest, DsBackendPrefixWatchAcceptsCoordinatorChildEvents)
 {
     FakeCoordinatorServiceProxy proxy;
