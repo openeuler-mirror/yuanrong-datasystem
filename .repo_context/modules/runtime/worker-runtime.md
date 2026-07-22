@@ -521,6 +521,9 @@
       `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated` plus
       `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether` passed 2/2
       in 27.33s.
+    - Remote Bazel 7.4.1 focused build for the changed ST component
+      `//tests/st/client/object_cache:client_dfx_test` passed in 25.80s with 32 actions; the immediate cached rerun
+      passed in 0.45s with 1 internal action.
   - Follow-up scale/fault cases to add before claiming full story closure:
     1. ScaleOut while one existing worker is isolated is now covered at ST level by
        `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`; topology planning is
