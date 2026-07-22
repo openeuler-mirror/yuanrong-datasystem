@@ -26,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_set>
@@ -1003,19 +1004,18 @@ Status WorkerOCServer::InitCoordinationBackend()
 
 void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot)
 {
-    for (const auto &member : snapshot.Members()) {
-        if (member.state != cluster::MemberState::FAILED) {
-            continue;
-        }
+    for (const auto &member : snapshot.FailedMembers())
+        knownFailedAddresses_.insert(member->identity.address);
+    for (const auto &member : snapshot.ActiveMembers())
+        knownFailedAddresses_.erase(member->identity.address);
+    for (const auto &addrStr : knownFailedAddresses_) {
         HostPort addr;
-        if (addr.ParseString(member.identity.address).IsError() || addr.Empty()) {
-            continue;
-        }
+        if (addr.ParseString(addrStr).IsError() || addr.Empty()) continue;
         for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC,
                            StubType::WORKER_WORKER_TRANS_SVC }) {
             auto rc = RpcStubCacheMgr::Instance().Remove(addr, type);
             LOG_IF(WARNING, rc.IsError() && rc.GetCode() != StatusCode::K_NOT_FOUND)
-                << "Cleanup worker<->worker stub for FAILED member " << member.identity.address
+                << "Cleanup worker<->worker stub for FAILED member " << addrStr
                 << " type=" << static_cast<int>(type) << " rc=" << rc.ToString();
         }
     }

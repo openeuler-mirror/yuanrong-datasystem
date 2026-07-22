@@ -586,6 +586,7 @@ private:
 
     // Issue #766: per-worker cleanup of worker<->worker stubs for FAILED members on snapshot publish
     void CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot);
+    std::set<std::string> knownFailedAddresses_;
 
     /**
      * @brief Build the Coordinator watch RPC bind/drain capability for the Engine.

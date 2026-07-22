@@ -898,7 +898,7 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     RETURN_IF_NOT_OK(PublishBackendEvidence(*published));
     if (newlyPublished) {
         LogAndNotifyPublishedSnapshot(std::move(published));
-    } else if (published->FailedMembers().size() > 0) {
+    } else {
         NotifySnapshotPublished(std::move(published));
     }
     return Status::OK();
