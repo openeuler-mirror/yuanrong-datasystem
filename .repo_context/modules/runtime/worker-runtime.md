@@ -582,11 +582,24 @@
        churn step (`WaitNodeReady(WORKER, 1)` returned `K_NOT_READY`/`Subprocess is abnormal` with `PushMetaToWorker`
        rejected as `NOT_RECOVERING`), so this needs a dedicated stable fixture rather than enlarging that restart ST.
     5. Stream local-isolation data retention is now covered by the current admission ST; broader Stream scale/fault
-       data-retention ST remains pending if we want end-to-end evidence beyond the local-isolation recovery path.
+       data-retention ST remains pending if we want end-to-end evidence beyond the local-isolation recovery path. The
+       existing Stream scale data-verification cases are present, but the current bRPC validation path explicitly skips
+       the data-verification ScaleUp/ScaleDown/passive-fault cases because of the historical bRPC migration gap. A
+       direct `--use_brpc=false` attempt against the current ST binary still launched workers with `-use_brpc=true`, so
+       that run is counted only as skip evidence, not as ZMQ coverage.
 
 ## Fast Verification
 
 - Recent focused verification for scale/fault overlap coverage:
+  - Fresh Stream scale/fault evidence:
+    `ds_st_stream_cache --gtest_filter="StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering"`
+    passed 1/1 in 11.55s wall time on the bRPC path, covering Stream admission plus pre-isolation data retention after
+    recovery. The broader bRPC Stream scale/fault filter
+    `DataVerificationStreamClientScaleTest.TestVoluntaryScaleUp:DataVerificationStreamClientScaleTest.TestVoluntaryScaleDown:DataVerificationStreamClientPassiveScaleTest.TestPassiveScaleDown:DataVerificationStreamClientPassiveScaleTest.TestRestartPassiveScaleDown:StreamClientPassiveScaleTest.LEVEL1_TestRestartPassiveScaleDown`
+    ran 5 tests in 24.57s with 1 pass and 4 skips; the pass is the non-data-verification passive restart path, while
+    all four data-verification cases skip under the known bRPC migration gap. A follow-up
+    `--use_brpc=false` run of the four data-verification tests ran 4/4 skipped in 9.20s because the workers still
+    launched with `-use_brpc=true`, so it does not provide non-bRPC coverage.
   - Extended boundary coverage:
     `WorkerRuntimeModuleBoundaryTest.test_object_cache_service_does_not_keep_etcd_store` now also checks the
     `worker_oc_service_impl` Bazel target, and
