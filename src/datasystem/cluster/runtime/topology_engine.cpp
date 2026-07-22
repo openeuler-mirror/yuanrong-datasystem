@@ -9,6 +9,7 @@
 #include "datasystem/cluster/runtime/topology_engine.h"
 
 #include <algorithm>
+#include <csignal>
 #include <exception>
 #include <unordered_map>
 #include <unordered_set>
@@ -24,6 +25,7 @@
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -196,8 +198,8 @@ TopologyEngine::Builder &TopologyEngine::Builder::UseEtcd(EtcdStore &store)
     return *this;
 }
 
-TopologyEngine::Builder &TopologyEngine::Builder::UseCoordinator(
-    ICoordinatorServiceProxy &proxy, CoordinatorWatchIngress ingress)
+TopologyEngine::Builder &TopologyEngine::Builder::UseCoordinator(ICoordinatorServiceProxy &proxy,
+                                                                 CoordinatorWatchIngress ingress)
 {
     if (config_ == nullptr) {
         return *this;
@@ -373,8 +375,7 @@ TopologyEngine::TopologyEngine(std::unique_ptr<Builder::Config> config)
 }
 
 Status TopologyEngine::InitializeOwnedComponents(
-    std::function<Status(const std::string &, int64_t)> membershipRestartHandler,
-    std::chrono::seconds nodeDeadTimeout)
+    std::function<Status(const std::string &, int64_t)> membershipRestartHandler, std::chrono::seconds nodeDeadTimeout)
 {
     TopologyControllerRuntime::Options runtimeOptions;
     runtimeOptions.clusterName = options_.clusterName;
@@ -383,14 +384,12 @@ Status TopologyEngine::InitializeOwnedComponents(
     runtimeOptions.controller.eventSourceMode =
         options_.unifiedEtcdWatch ? TopologyEventSourceMode::EXTERNAL : TopologyEventSourceMode::SELF_MANAGED;
     runtimeOptions.janitor = TopologyTaskJanitorOptions{};
-    RETURN_IF_NOT_OK(TopologyControllerRuntime::Create(
-        std::move(runtimeOptions), *controllerBackend_, *algorithm_, controllerRuntime_));
+    RETURN_IF_NOT_OK(TopologyControllerRuntime::Create(std::move(runtimeOptions), *controllerBackend_, *algorithm_,
+                                                       controllerRuntime_));
     if (coordinatorProxy_ != nullptr) {
         recoveryReporter_ = std::make_unique<TopologyRecoveryReporter>(
             *coordinatorProxy_, options_.clusterName, options_.localAddress,
-            [this](uint64_t &version, std::string &canonical) {
-                return GetRecoveryTopology(version, canonical);
-            });
+            [this](uint64_t &version, std::string &canonical) { return GetRecoveryTopology(version, canonical); });
     }
     return Status::OK();
 }
@@ -399,8 +398,7 @@ TopologyEngine::~TopologyEngine()
 {
     auto status = Shutdown(std::chrono::steady_clock::time_point::max());
     if (status.IsError()) {
-        LOG(WARNING) << "CLUSTER_LIFECYCLE role=engine state=destructor_shutdown_failed status="
-                     << status.ToString();
+        LOG(WARNING) << "CLUSTER_LIFECYCLE role=engine state=destructor_shutdown_failed status=" << status.ToString();
         // A destructor cannot return while an owned thread still references this object. The external process
         // lifecycle manager supplies the hard termination bound when a business callback ignores cancellation.
         LOG_IF_ERROR(ShutdownComponents(std::chrono::steady_clock::time_point::max()),
@@ -413,8 +411,8 @@ Status TopologyEngine::BindCoordinatorIngress()
     if (coordinatorProxy_ == nullptr) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(coordinatorIngress_.bind(
-        [this](const std::string &coordinatorId, int64_t watchId, CoordinationEvent &&event) {
+    RETURN_IF_NOT_OK(
+        coordinatorIngress_.bind([this](const std::string &coordinatorId, int64_t watchId, CoordinationEvent &&event) {
             return RouteCoordinatorWatchEvent(coordinatorId, watchId, std::move(event));
         }));
     std::lock_guard<std::mutex> lock(lifecycleMutex_);
@@ -463,8 +461,7 @@ Status TopologyEngine::RouteCoordinatorWatchEvent(const std::string &coordinator
     LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_WATCH_EVENT_LOG_INTERVAL)
         << "CLUSTER_WATCH_EVENT cluster=" << options_.clusterName
         << " role=worker ingress=coordinator owner_role=" << (memberOwns ? "member" : "controller")
-        << " watch_id=" << watchId
-        << " coordinator_id_prefix=" << TopologyDiagnosticPrefix(coordinatorId)
+        << " watch_id=" << watchId << " coordinator_id_prefix=" << TopologyDiagnosticPrefix(coordinatorId)
         << " event=" << event.ToString();
     owner->HandleWatchEvent(coordinatorId, watchId, std::move(event));
     return Status::OK();
@@ -550,8 +547,7 @@ Status TopologyEngine::Start()
 Status TopologyEngine::StartMemberRole()
 {
     std::vector<WatchKey> watches;
-    const auto role =
-        options_.unifiedEtcdWatch ? TopologyRuntimeRole::UNIFIED_ETCD : TopologyRuntimeRole::WORKER;
+    const auto role = options_.unifiedEtcdWatch ? TopologyRuntimeRole::UNIFIED_ETCD : TopologyRuntimeRole::WORKER;
     RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(role, options_.localAddress, *keys_, 0, watches));
     RETURN_IF_NOT_OK(dispatcher_.Start());
     if (options_.unifiedEtcdWatch) {
@@ -567,8 +563,8 @@ Status TopologyEngine::StartMemberRole()
     }
     // A Coordinator rejects topology watches without a live owning membership, which also fences delayed watches
     // after lease deletion. Publish the lease first, then use watch initial snapshots and ReloadTopology to catch up.
-    RETURN_IF_NOT_OK(memberBackend_->InitKeepAlive(
-        keys_->MembershipTable(), options_.localAddress, options_.isRestart, true));
+    RETURN_IF_NOT_OK(
+        memberBackend_->InitKeepAlive(keys_->MembershipTable(), options_.localAddress, options_.isRestart, true));
     if (options_.unifiedEtcdWatch) {
         RETURN_IF_NOT_OK(controllerRuntime_->Start());
     }
@@ -580,8 +576,7 @@ Status TopologyEngine::StartMemberRole()
     }
     LOG(INFO) << "CLUSTER_WATCH cluster=" << options_.clusterName
               << " role=" << (options_.unifiedEtcdWatch ? "unified_etcd" : "worker")
-              << " scope_count=" << watches.size()
-              << " revision=0 status=registered";
+              << " scope_count=" << watches.size() << " revision=0 status=registered";
 
     auto readStatus = ReloadTopology(true);
     if (readStatus.IsError()) {
@@ -749,8 +744,7 @@ Status TopologyEngine::MarkReady()
                              "cluster topology member lease is not established");
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::READY);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
-              << " role=worker action=mark_ready address=" << options_.localAddress
-              << " status=" << rc.ToString();
+              << " role=worker action=mark_ready address=" << options_.localAddress << " status=" << rc.ToString();
     return rc;
 }
 
@@ -760,8 +754,7 @@ Status TopologyEngine::MarkExiting()
                              "cluster topology Engine is not running");
     auto rc = memberBackend_->UpdateNodeState(MemberLifecycleState::EXITING);
     LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << options_.clusterName
-              << " role=worker action=mark_exiting address=" << options_.localAddress
-              << " status=" << rc.ToString();
+              << " role=worker action=mark_exiting address=" << options_.localAddress << " status=" << rc.ToString();
     return rc;
 }
 
@@ -890,17 +883,18 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
         rc = snapshots_.PublishAfterFullRebuild(candidate);
         newlyPublished = rc.IsOk();
     }
-    if (rc.IsError() && (outcome == SnapshotUpdateOutcome::VERSION_ROLLBACK
-                         || outcome == SnapshotUpdateOutcome::CONFLICT)) {
+    if (rc.IsError()
+        && (outcome == SnapshotUpdateOutcome::VERSION_ROLLBACK || outcome == SnapshotUpdateOutcome::CONFLICT)) {
         authorityIsolated_.store(true);
         SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "authority_version_or_digest_conflict");
     }
     RETURN_IF_NOT_OK(rc);
     std::shared_ptr<const TopologySnapshot> published;
     RETURN_IF_NOT_OK(snapshots_.Load(published));
-    VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
-        << "CLUSTER_RING cluster=" << options_.clusterName << " version=" << published->Version()
-        << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest()) << " status=published";
+    VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL) << "CLUSTER_RING cluster=" << options_.clusterName
+                                     << " version=" << published->Version()
+                                     << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest())
+                                     << " status=published";
     RETURN_IF_NOT_OK(PublishBackendEvidence(*published));
     if (newlyPublished) {
         LogAndNotifyPublishedSnapshot(std::move(published));
@@ -916,14 +910,12 @@ void TopologyEngine::LogAndNotifyPublishedSnapshot(std::shared_ptr<const Topolog
     const Member *local = nullptr;
     const auto localStatus = published->FindMemberByAddress(options_.localAddress, local);
     LOG(INFO) << "CLUSTER_RING cluster=" << options_.clusterName << " role=worker status=published"
-              << " version=" << published->Version()
-              << " authority_revision=" << published->AuthorityRevision()
+              << " version=" << published->Version() << " authority_revision=" << published->AuthorityRevision()
               << " digest_prefix=" << TopologyDiagnosticPrefix(published->CanonicalDigest())
               << " batch_type=" << batchType << " batch_epoch=" << batchEpoch
               << " member_count=" << published->Members().size()
               << " active_count=" << published->ActiveMembers().size()
-              << " failed_count=" << published->FailedMembers().size()
-              << " local_member_found=" << localStatus.IsOk()
+              << " failed_count=" << published->FailedMembers().size() << " local_member_found=" << localStatus.IsOk()
               << " local_state=" << (localStatus.IsOk() ? MemberStateName(local->state) : "missing")
               << " local_member_id_prefix=" << (localStatus.IsOk() ? MemberIdForLog(local->identity.id) : "");
     NotifySnapshotPublished(std::move(published));
@@ -946,12 +938,24 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
     const Member *local = nullptr;
     const auto findStatus = snapshot.FindMemberByAddress(options_.localAddress, local);
     if (findStatus.GetCode() == K_NOT_FOUND) {
+        const bool localMemberExisted =
+            localMemberExistedInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
+        const bool localMemberWasLeaving =
+            localMemberWasLeavingInPreviousSnapshot_.exchange(false, std::memory_order_relaxed);
         {
             std::lock_guard<std::mutex> lock(stateMutex_);
             backendObservation_ = {};
         }
-        SetAvailability(TopologyAvailabilityLevel::NOT_READY, "local_member_missing");
-        return Status::OK();
+        if (!localMemberExisted || localMemberWasLeaving) {
+            SetAvailability(TopologyAvailabilityLevel::NOT_READY, "local_member_missing");
+            return Status::OK();
+        }
+        LOG(ERROR) << "CLUSTER_LIFECYCLE cluster=" << options_.clusterName
+                   << " role=worker state=local_member_missing action=kill_self signal=SIGKILL address="
+                   << options_.localAddress;
+        Provider::Instance().FlushLogs();
+        (void)std::raise(SIGKILL);
+        RETURN_STATUS(K_RUNTIME_ERROR, "local member missing from topology after SIGKILL request returned");
     }
     RETURN_IF_NOT_OK(findStatus);
     bool identityChanged = false;
@@ -976,6 +980,9 @@ Status TopologyEngine::PublishBackendEvidence(const TopologySnapshot &snapshot)
             IsCommitted(local->state) ? TopologyAvailabilityLevel::NORMAL : TopologyAvailabilityLevel::NOT_READY,
             IsCommitted(local->state) ? "" : "local_member_not_committed");
     }
+    localMemberExistedInPreviousSnapshot_.store(true, std::memory_order_relaxed);
+    localMemberWasLeavingInPreviousSnapshot_.store(
+        local->state == MemberState::PRE_LEAVING || local->state == MemberState::LEAVING, std::memory_order_relaxed);
     return Status::OK();
 }
 
@@ -1074,8 +1081,7 @@ void TopologyEngine::SetAvailability(TopologyAvailabilityLevel level, std::strin
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         previous = availability_.load();
-        if (previous == level && isolationReason_ == reason
-            && (!publish || publishedAvailability_.load() == level)) {
+        if (previous == level && isolationReason_ == reason && (!publish || publishedAvailability_.load() == level)) {
             return;
         }
     }
@@ -1144,8 +1150,7 @@ void TopologyEngine::Run()
         }
         if (dispatcher_.ConsumeResyncRequired()) {
             LOG(WARNING) << "CLUSTER_WATCH cluster=" << options_.clusterName
-                         << " role=worker scope=all status=resync queued_events="
-                         << dispatcher_.GetStats().queueDepth;
+                         << " role=worker scope=all status=resync queued_events=" << dispatcher_.GetStats().queueDepth;
             auto rebuild = ReloadTopology(true);
             if (rebuild.IsError()) {
                 RecordError(rebuild);
