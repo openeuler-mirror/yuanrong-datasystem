@@ -53,6 +53,7 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"  // kBrpcPortOffset
 #ifdef WITH_TESTS
 #include "datasystem/common/rpc/brpc_factory.h"
+#include "datasystem/protos/object_posix.brpc.stub.pb.h"
 #include "datasystem/protos/ut_object.brpc.stub.pb.h"
 #endif
 
@@ -152,6 +153,68 @@ void AssertEventuallyOk(Operation operation, const std::string &operationName)
     } while (std::chrono::steady_clock::now() < deadline);
     ASSERT_TRUE(rc.IsOk()) << operationName << " stayed non-OK for " << kEventuallyWaitTimeoutMs
                            << " ms, last status: " << rc.ToString();
+}
+
+Status DirectWorkerCreate(const HostPort &workerAddr, const RpcCredential &credential, const CreateReqPb &req,
+                          CreateRspPb &rsp, int32_t timeoutMs)
+{
+    RpcOptions opts;
+    opts.SetTimeout(timeoutMs);
+    if (FLAGS_use_brpc) {
+#ifdef WITH_TESTS
+        BrpcChannelConfig cfg;
+        cfg.endpoint = HostPort(workerAddr.Host(), workerAddr.Port() + kBrpcPortOffset).ToString();
+        cfg.timeout_ms = timeoutMs;
+        cfg.connect_timeout_ms = timeoutMs;
+        cfg.enable_circuit_breaker = false;
+        cfg.max_retry = 0;
+        std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
+        CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
+                                 "Failed to create brpc WorkerOCService channel to " + cfg.endpoint);
+        WorkerOCService_BrpcGenericStub stub(channel.get(), timeoutMs);
+        return stub.Create(opts, req, rsp);
+#else
+        (void)workerAddr;
+        (void)credential;
+        (void)req;
+        (void)rsp;
+        RETURN_STATUS(K_RUNTIME_ERROR, "brpc direct WorkerOCService ST helper requires WITH_TESTS");
+#endif
+    }
+    auto channel = std::make_shared<RpcChannel>(workerAddr, credential);
+    WorkerOCService_Stub stub(channel);
+    return stub.Create(opts, req, rsp);
+}
+
+Status DirectWorkerGetObjMetaInfo(const HostPort &workerAddr, const RpcCredential &credential,
+                                  const GetObjMetaInfoReqPb &req, GetObjMetaInfoRspPb &rsp, int32_t timeoutMs)
+{
+    RpcOptions opts;
+    opts.SetTimeout(timeoutMs);
+    if (FLAGS_use_brpc) {
+#ifdef WITH_TESTS
+        BrpcChannelConfig cfg;
+        cfg.endpoint = HostPort(workerAddr.Host(), workerAddr.Port() + kBrpcPortOffset).ToString();
+        cfg.timeout_ms = timeoutMs;
+        cfg.connect_timeout_ms = timeoutMs;
+        cfg.enable_circuit_breaker = false;
+        cfg.max_retry = 0;
+        std::shared_ptr<brpc::Channel> channel(BrpcChannelFactory::Create(cfg));
+        CHECK_FAIL_RETURN_STATUS(channel != nullptr, K_RPC_UNAVAILABLE,
+                                 "Failed to create brpc WorkerOCService channel to " + cfg.endpoint);
+        WorkerOCService_BrpcGenericStub stub(channel.get(), timeoutMs);
+        return stub.GetObjMetaInfo(opts, req, rsp);
+#else
+        (void)workerAddr;
+        (void)credential;
+        (void)req;
+        (void)rsp;
+        RETURN_STATUS(K_RUNTIME_ERROR, "brpc direct WorkerOCService ST helper requires WITH_TESTS");
+#endif
+    }
+    auto channel = std::make_shared<RpcChannel>(workerAddr, credential);
+    WorkerOCService_Stub stub(channel);
+    return stub.GetObjMetaInfo(opts, req, rsp);
 }
 }  // namespace
 
@@ -2166,8 +2229,6 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAnd
     DS_ASSERT_OK(cluster_->GetWorkerAddr(0, workerAddr0));
     RpcCredential cred;
     RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, cred);
-    auto channel = std::make_shared<RpcChannel>(workerAddr0, cred);
-    WorkerOCService_Stub worker0Stub(channel);
     AkSkManager akSk;
     DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
     auto db = InitTestEtcdInstance();
@@ -2235,7 +2296,7 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAnd
             RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
             RpcOptions opts;
             opts.SetTimeout(1000);
-            auto createStatus = worker0Stub.Create(opts, req, rsp);
+            auto createStatus = DirectWorkerCreate(workerAddr0, cred, req, rsp, 1'000);
             RETURN_IF_NOT_OK(
                 cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateAfter));
             RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginAfter));
@@ -2253,7 +2314,11 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAnd
                                          "isolated Create response leaked the object key");
                 return Status::OK();
             }
-            RETURN_STATUS(StatusCode::K_NOT_READY, "create request has not been blocked by worker admission yet");
+            RETURN_STATUS(StatusCode::K_NOT_READY,
+                          FormatString("create request has not been blocked by worker admission yet, "
+                                       "createStatus=%s, beforeValidate: %zu->%zu, createBegin: %zu->%zu",
+                                       createStatus.ToString(), beforeValidateBefore, beforeValidateAfter,
+                                       createBeginBefore, createBeginAfter));
         },
         "create admission blocks locally isolated worker before object allocation");
 
@@ -2352,8 +2417,6 @@ TEST_F(WorkerStalePrimaryTest, LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerReb
     DS_ASSERT_OK(cluster_->GetWorkerAddr(1, workerAddr1));
     RpcCredential cred;
     RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, cred);
-    auto channel = std::make_shared<RpcChannel>(workerAddr0, cred);
-    WorkerOCService_Stub worker0Stub(channel);
     auto masterChannel = std::make_shared<RpcChannel>(workerAddr1, cred);
     master::MasterOCService_Stub master1Stub(masterChannel);
     AkSkManager akSk;
@@ -2476,9 +2539,7 @@ TEST_F(WorkerStalePrimaryTest, LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerReb
         GetObjMetaInfoRspPb rsp;
         req.add_object_keys(key);
         DS_ASSERT_OK(akSk.GenerateSignature(req));
-        RpcOptions opts;
-        opts.SetTimeout(1'000);
-        ASSERT_EQ(worker0Stub.GetObjMetaInfo(opts, req, rsp).GetCode(), K_NOT_READY);
+        ASSERT_EQ(DirectWorkerGetObjMetaInfo(workerAddr0, cred, req, rsp, 1'000).GetCode(), K_NOT_READY);
         ASSERT_EQ(rsp.objs_meta_info_size(), 0);
     }
     ASSERT_EQ(workerProcess->Pid(), workerPid);
@@ -2602,8 +2663,6 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestGlobalBackendOutageDoesNotSelfIsolateWorke
                                                                beforeValidateBefore));
         RETURN_IF_NOT_OK(
             cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, "worker.Create.begin", createBeginBefore));
-        auto channel = std::make_shared<RpcChannel>(workerAddresses[workerIndex], credential);
-        WorkerOCService_Stub stub(channel);
         CreateReqPb req;
         CreateRspPb rsp;
         req.set_object_key(objectKey);
@@ -2615,13 +2674,17 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestGlobalBackendOutageDoesNotSelfIsolateWorke
         RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
         RpcOptions opts;
         opts.SetTimeout(1000);
-        (void)stub.Create(opts, req, rsp);
+        auto createStatus = DirectWorkerCreate(workerAddresses[workerIndex], credential, req, rsp, 1'000);
         RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, "worker.Create.beforeValidate",
                                                                beforeValidateAfter));
         RETURN_IF_NOT_OK(
             cluster_->GetInjectActionExecuteCount(WORKER, workerIndex, "worker.Create.begin", createBeginAfter));
         CHECK_FAIL_RETURN_STATUS(beforeValidateAfter > beforeValidateBefore && createBeginAfter > createBeginBefore,
-                                 K_NOT_READY, "global backend outage closed worker create admission");
+                                 K_NOT_READY,
+                                 FormatString("global backend outage closed worker create admission, createStatus=%s, "
+                                              "beforeValidate: %zu->%zu, createBegin: %zu->%zu",
+                                              createStatus.ToString(), beforeValidateBefore, beforeValidateAfter,
+                                              createBeginBefore, createBeginAfter));
         return Status::OK();
     };
     DS_ASSERT_OK(verifyAdmissionRemainsOpen(0, worker0Keys[1]));
@@ -2682,8 +2745,6 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestTopologyJitterDoesNotKillLocalWorker)
     ASSERT_GT(workerPid, 0);
     RpcCredential credential;
     RpcAuthKeyManager::CreateClientCredentials(RpcAuthKeys(), WORKER_SERVER_NAME, credential);
-    auto channel = std::make_shared<RpcChannel>(workerAddr0, credential);
-    WorkerOCService_Stub worker0Stub(channel);
     AkSkManager akSk;
     DS_ASSERT_OK(akSk.SetClientAkSk("QTWAOYTTINDUT2QVKYUC", "MFyfvK41ba2giqM7**********KGpownRZlmVmHc"));
     DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, "worker.Create.beforeValidate", "call()"));
@@ -2729,12 +2790,16 @@ TEST_F(WorkerPushMetaTest, LEVEL1_TestTopologyJitterDoesNotKillLocalWorker)
         RETURN_IF_NOT_OK(akSk.GenerateSignature(req));
         RpcOptions opts;
         opts.SetTimeout(1000);
-        (void)worker0Stub.Create(opts, req, rsp);
+        auto createStatus = DirectWorkerCreate(workerAddr0, credential, req, rsp, 1'000);
         RETURN_IF_NOT_OK(
             cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.beforeValidate", beforeValidateAfter));
         RETURN_IF_NOT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, "worker.Create.begin", createBeginAfter));
-        CHECK_FAIL_RETURN_STATUS(beforeValidateAfter > beforeValidateBefore && createBeginAfter == createBeginBefore,
-                                 K_NOT_READY, "topology-isolated worker still admitted Create allocation");
+        CHECK_FAIL_RETURN_STATUS(
+            beforeValidateAfter > beforeValidateBefore && createBeginAfter == createBeginBefore, K_NOT_READY,
+            FormatString("topology-isolated worker still admitted Create allocation, createStatus=%s, "
+                         "beforeValidate: %zu->%zu, createBegin: %zu->%zu",
+                         createStatus.ToString(), beforeValidateBefore, beforeValidateAfter, createBeginBefore,
+                         createBeginAfter));
         return Status::OK();
     };
     AssertEventuallyOk(verifyCreateBlockedBeforeAllocation,
