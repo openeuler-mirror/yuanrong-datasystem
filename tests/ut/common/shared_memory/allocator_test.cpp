@@ -290,7 +290,9 @@ void AllocatorTest::TestAllocateMemoryWithDefaultParam()
     ASSERT_EQ(GetMaxMemorySize(), size_t(MaxSize()));
     ASSERT_EQ(GetMemoryUsage(), size_t(0));
 
-    EXPECT_EQ(AllocateMemory(MaxSize() + 1, shmUnit).GetCode(), StatusCode::K_OUT_OF_MEMORY);
+    auto tooLargeStatus = AllocateMemory(MaxSize() + 1, shmUnit);
+    EXPECT_EQ(tooLargeStatus.GetCode(), StatusCode::K_OUT_OF_MEMORY);
+    EXPECT_NE(tooLargeStatus.GetMsg().find("reason=logical_size_limit_reached"), std::string::npos);
     ExpectUnChanged(shmUnit);
 
     uint64_t needSize = 16;
