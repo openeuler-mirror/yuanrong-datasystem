@@ -27,10 +27,11 @@
 #include <shared_mutex>
 #include <unordered_map>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/master/memory_rebalance_scheduler.h"
 #include "datasystem/common/util/thread.h"
+#include "datasystem/master/memory_rebalance_scheduler.h"
 #include "datasystem/protos/master_object.pb.h"
 
 namespace datasystem {
@@ -46,6 +47,12 @@ public:
      * @brief Deconstruct the reousrce manager.
      */
     ~ResourceManager();
+
+    /**
+     * @brief Bind the read-only topology membership view used by memory rebalance scheduling.
+     * @param[in] topologyMembership Non-owning view that outlives this resource manager.
+     */
+    void SetTopologyMembership(const cluster::MembershipEndpointView *topologyMembership);
 
     /**
      * @brief Report the memory info to master.

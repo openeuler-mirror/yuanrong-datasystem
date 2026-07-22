@@ -62,6 +62,11 @@ ResourceManager::~ResourceManager()
     }
 }
 
+void ResourceManager::SetTopologyMembership(const cluster::MembershipEndpointView *topologyMembership)
+{
+    rebalanceScheduler_.SetTopologyMembership(topologyMembership);
+}
+
 Status ResourceManager::ReportResource(const master::ResourceReportReqPb &req, master::ResourceReportRspPb &rsp)
 {
     auto currentTimestamp = GetSteadyClockTimeStampMs();

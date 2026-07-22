@@ -18,12 +18,14 @@
  * Description: Test worker-side memory rebalance components.
  */
 
-#include <condition_variable>
 #include <chrono>
+#include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -48,6 +50,9 @@ namespace ut {
 namespace {
 constexpr uint64_t MB = 1024ul * 1024ul;
 constexpr uint64_t TASK_TIMEOUT_MS = 60'000;
+constexpr size_t TOPOLOGY_MEMBER_ID_SIZE = 16;
+constexpr size_t TOPOLOGY_DIGEST_SIZE = 64;
+constexpr uint32_t TARGET_TOPOLOGY_TOKEN = 2;
 const HostPort LOCAL_ADDR("127.0.0.1", 31501);
 const HostPort MASTER_ADDR("127.0.0.1", 31500);
 const std::string TARGET_ADDR = "127.0.0.1:31502";
@@ -237,10 +242,12 @@ protected:
     };
 
     void InstallHooks(const std::vector<std::unordered_map<std::string, uint64_t>> &batches,
-                      const std::vector<RebalanceExecutor::MigrateResult> &results)
+                      const std::vector<RebalanceExecutor::MigrateResult> &results,
+                      std::function<void()> migrateSideEffect = nullptr)
     {
         batches_ = batches;
         results_ = results;
+        migrateSideEffect_ = std::move(migrateSideEffect);
         selectIndex_ = 0;
         migrateIndex_ = 0;
         reportCount_ = 0;
@@ -262,7 +269,11 @@ protected:
                     result.status = Status(K_RUNTIME_ERROR, "missing test result");
                     return result;
                 }
-                return results_[migrateIndex_++];
+                auto result = results_[migrateIndex_++];
+                if (migrateSideEffect_ != nullptr) {
+                    migrateSideEffect_();
+                }
+                return result;
             },
             [this](const master::RebalanceTaskPb &, master::RebalanceTaskStatusPb status, uint64_t migratedBytes,
                    uint64_t migratedObjects, uint64_t failedObjects, const std::string &failedReason) {
@@ -291,6 +302,57 @@ protected:
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepMs));
         }
         return false;
+    }
+
+    void PublishAssignedMasterState(
+        cluster::MemberState state,
+        cluster::EndpointAvailability availability = cluster::EndpointAvailability::UNKNOWN)
+    {
+        cluster::TopologyState topology;
+        topology.clusterHasInit = true;
+        topology.version = ++topologyVersion_;
+        if (state == cluster::MemberState::FAILED) {
+            topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::FAILURE, topologyVersion_ };
+        }
+        topology.members = {
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 'l'), LOCAL_ADDR.ToString() },
+                             cluster::MemberState::ACTIVE, { 0 } },
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 'm'), MASTER_ADDR.ToString() }, state, { 1 } },
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 't'), TARGET_ADDR },
+                             cluster::MemberState::ACTIVE, { TARGET_TOPOLOGY_TOKEN } },
+        };
+        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+        DS_ASSERT_OK(cluster::TopologySnapshot::Create(
+            std::move(topology), static_cast<int64_t>(topologyVersion_), std::string(TOPOLOGY_DIGEST_SIZE, 'a'),
+            snapshot));
+        cluster::SnapshotUpdateOutcome outcome;
+        DS_ASSERT_OK(snapshots_.Publish(std::move(snapshot), outcome));
+        if (availability != cluster::EndpointAvailability::UNKNOWN) {
+            cluster::MemberEndpoint endpoint;
+            DS_ASSERT_OK(membership_.ResolveByAddress(MASTER_ADDR.ToString(), endpoint));
+            cluster::EndpointObservation observation{ endpoint.identity, topologyVersion_, availability,
+                                                      std::chrono::steady_clock::now() };
+            DS_ASSERT_OK(membership_.UpdateObservation(observation));
+        }
+    }
+
+    void PublishTopologyWithoutAssignedMaster()
+    {
+        cluster::TopologyState topology;
+        topology.clusterHasInit = true;
+        topology.version = ++topologyVersion_;
+        topology.members = {
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 'l'), LOCAL_ADDR.ToString() },
+                             cluster::MemberState::ACTIVE, { 0 } },
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, 't'), TARGET_ADDR },
+                             cluster::MemberState::ACTIVE, { TARGET_TOPOLOGY_TOKEN } },
+        };
+        std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+        DS_ASSERT_OK(cluster::TopologySnapshot::Create(
+            std::move(topology), static_cast<int64_t>(topologyVersion_), std::string(TOPOLOGY_DIGEST_SIZE, 'a'),
+            snapshot));
+        cluster::SnapshotUpdateOutcome outcome;
+        DS_ASSERT_OK(snapshots_.Publish(std::move(snapshot), outcome));
     }
 
     RebalanceExecutor::MigrateResult MakeMigrateResult(const std::vector<std::string> &successIds,
@@ -325,7 +387,9 @@ protected:
     std::unique_ptr<RebalanceExecutor> executor_;
     std::vector<std::unordered_map<std::string, uint64_t>> batches_;
     std::vector<RebalanceExecutor::MigrateResult> results_;
+    std::function<void()> migrateSideEffect_;
     std::vector<std::vector<std::string>> migratedObjectKeys_;
+    uint64_t topologyVersion_ = 0;
     size_t selectIndex_ = 0;
     size_t migrateIndex_ = 0;
     std::mutex mutex_;
@@ -335,6 +399,94 @@ protected:
     std::vector<std::thread::id> reportThreadIds_;
 };
 
+TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterBecomesFailed)
+{
+    PublishAssignedMasterState(cluster::MemberState::FAILED);
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+
+    executor_->Submit(MakeTask("failed-master-task", 10), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(migrateIndex_, size_t(0));
+    EXPECT_NE(reports_[0].failedReason.find("unavailable"), std::string::npos);
+}
+
+TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterIsUnreachable)
+{
+    PublishAssignedMasterState(cluster::MemberState::ACTIVE, cluster::EndpointAvailability::UNREACHABLE);
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+
+    executor_->Submit(MakeTask("unreachable-master-task", 10), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(migrateIndex_, size_t(0));
+    EXPECT_NE(reports_[0].failedReason.find("unavailable"), std::string::npos);
+}
+
+TEST_F(RebalanceExecutorTest, AbortsWhenAssignedMasterIsAbsentFromTopology)
+{
+    PublishTopologyWithoutAssignedMaster();
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+
+    executor_->Submit(MakeTask("missing-master-task", 10), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(migrateIndex_, size_t(0));
+    EXPECT_NE(reports_[0].failedReason.find("not found"), std::string::npos);
+}
+
+TEST_F(RebalanceExecutorTest, ContinuesBeforeTopologySnapshotIsReady)
+{
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+
+    executor_->Submit(MakeTask("topology-not-ready-task", 10), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
+    EXPECT_EQ(migrateIndex_, size_t(1));
+}
+
+TEST_F(RebalanceExecutorTest, ContinuesWhileAssignedMasterIsActive)
+{
+    PublishAssignedMasterState(cluster::MemberState::ACTIVE);
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) });
+
+    executor_->Submit(MakeTask("active-master-task", 10), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_SUCCEEDED);
+    EXPECT_EQ(migrateIndex_, size_t(1));
+}
+
+TEST_F(RebalanceExecutorTest, ExpiresWhenAssignedMasterFailsDuringLastBatch)
+{
+    PublishAssignedMasterState(cluster::MemberState::ACTIVE);
+    InstallHooks({ { { "obj1", 10 } } }, { MakeMigrateResult({ "obj1" }) },
+                 [this] { PublishAssignedMasterState(cluster::MemberState::FAILED); });
+
+    executor_->Submit(MakeTask("master-fails-during-batch", 10), MASTER_ADDR.ToString());
+
+    ASSERT_TRUE(WaitReports(1));
+    ASSERT_TRUE(WaitTaskDone());
+    ASSERT_EQ(reports_.size(), size_t(1));
+    EXPECT_EQ(reports_[0].status, master::REBALANCE_TASK_EXPIRED);
+    EXPECT_EQ(reports_[0].migratedBytes, uint64_t(10));
+    EXPECT_EQ(migrateIndex_, size_t(1));
+}
+
 // Verifies the successful executor path: selected objects migrate successfully, the executor reports SUCCEEDED, clears
 // its running task state, and releases the rebalancing marks for the batch.
 TEST_F(RebalanceExecutorTest, SubmitReportsSucceededAndClearsRunningState)
@@ -343,7 +495,7 @@ TEST_F(RebalanceExecutorTest, SubmitReportsSucceededAndClearsRunningState)
     ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("obj1"));
     ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("obj2"));
 
-    executor_->Submit(MakeTask("success-task", 30));
+    executor_->Submit(MakeTask("success-task", 30), MASTER_ADDR.ToString());
 
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
@@ -369,7 +521,7 @@ TEST_F(RebalanceExecutorTest, SubmitReportsFailedAndClearsRunningState)
     ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("obj1"));
     ASSERT_TRUE(evictionManager_->TryMarkRebalancingObject("obj2"));
 
-    executor_->Submit(MakeTask("failed-task", 30));
+    executor_->Submit(MakeTask("failed-task", 30), MASTER_ADDR.ToString());
 
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
@@ -392,7 +544,7 @@ TEST_F(RebalanceExecutorTest, SubmitRunsMultipleBatchesUntilTargetBytesReached)
     InstallHooks({ { { "obj1", 30 }, { "obj2", 30 } }, { { "obj3", 40 } } },
                  { MakeMigrateResult({ "obj1", "obj2" }), MakeMigrateResult({ "obj3" }) });
 
-    executor_->Submit(MakeTask("multi-batch-task", 100));
+    executor_->Submit(MakeTask("multi-batch-task", 100), MASTER_ADDR.ToString());
 
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
@@ -412,7 +564,7 @@ TEST_F(RebalanceExecutorTest, SubmitReportsSucceededWhenCandidatesExhaustedAfter
 {
     InstallHooks({ { { "obj1", 30 }, { "obj2", 20 } } }, { MakeMigrateResult({ "obj1", "obj2" }) });
 
-    executor_->Submit(MakeTask("partial-task", 100));
+    executor_->Submit(MakeTask("partial-task", 100), MASTER_ADDR.ToString());
 
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
@@ -436,7 +588,7 @@ TEST_F(RebalanceExecutorTest, SubmitExpiredTaskReportsExpiredAndClearsRunningSta
     task.set_timeout_ms(0);
     task.set_deadline_ms(static_cast<uint64_t>(GetSteadyClockTimeStampMs()) - 1);
 
-    executor_->Submit(task);
+    executor_->Submit(task, MASTER_ADDR.ToString());
 
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
@@ -460,7 +612,7 @@ TEST_F(RebalanceExecutorTest, SubmitUsesTimeoutAsSourceLocalDeadline)
     task.set_deadline_ms(1);
     task.set_timeout_ms(TASK_TIMEOUT_MS);
 
-    executor_->Submit(task);
+    executor_->Submit(task, MASTER_ADDR.ToString());
 
     ASSERT_TRUE(WaitReports(1));
     ASSERT_TRUE(WaitTaskDone());
@@ -478,7 +630,7 @@ TEST_F(RebalanceExecutorTest, BusySourceReportsFailedWithoutReplacingRunningTask
     executor_->SetRunningForTest(true, "running-task");
     auto submitThreadId = std::this_thread::get_id();
 
-    executor_->Submit(MakeTask("new-task", 10));
+    executor_->Submit(MakeTask("new-task", 10), MASTER_ADDR.ToString());
 
     ASSERT_TRUE(WaitReports(1));
     ASSERT_EQ(reports_.size(), size_t(1));

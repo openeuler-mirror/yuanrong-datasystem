@@ -23,9 +23,13 @@
 #include <initializer_list>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include <gtest/gtest.h>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
+#include "datasystem/cluster/model/topology_snapshot.h"
+#include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/timer.h"
@@ -47,6 +51,8 @@ namespace {
 constexpr uint64_t MEMORY_CAPACITY = 1'000;
 constexpr uint64_t MS_PER_SECOND = 1'000;
 constexpr uint64_t TRANSFER_TIME_MULTIPLIER = 2;
+constexpr size_t TOPOLOGY_MEMBER_ID_SIZE = 16;
+constexpr size_t TOPOLOGY_DIGEST_SIZE = 64;
 const std::string WORKER_92 = "127.0.0.1:9200";
 const std::string WORKER_78 = "127.0.0.1:7800";
 const std::string WORKER_15 = "127.0.0.1:1500";
@@ -86,6 +92,28 @@ master::ReportRebalanceResultReqPb MakeResultReq(const master::RebalanceTaskPb &
     req.set_migrated_bytes(task.max_bytes());
     req.set_migrated_objects(1);
     return req;
+}
+
+void PublishScaleInTopology(cluster::TopologySnapshotState &snapshots,
+                            std::initializer_list<std::string> workers, const std::string &leavingWorker)
+{
+    cluster::TopologyState topology;
+    topology.clusterHasInit = true;
+    topology.version = 1;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_IN, 1 };
+    char id = 'a';
+    uint32_t token = 0;
+    for (const auto &worker : workers) {
+        const auto state =
+            worker == leavingWorker ? cluster::MemberState::LEAVING : cluster::MemberState::ACTIVE;
+        topology.members.emplace_back(
+            cluster::Member{ { std::string(TOPOLOGY_MEMBER_ID_SIZE, id++), worker }, state, { token++ } });
+    }
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(
+        std::move(topology), 1, std::string(TOPOLOGY_DIGEST_SIZE, 'a'), snapshot));
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(std::move(snapshot), outcome));
 }
 }  // namespace
 
@@ -184,6 +212,59 @@ TEST_F(MemoryRebalanceSchedulerTest, SelectBestSourceTargetPairFromFourWorkers)
     EXPECT_EQ(rsp.rebalance_task().source_worker(), WORKER_92);
     EXPECT_EQ(rsp.rebalance_task().target_worker(), WORKER_10);
     EXPECT_EQ(rsp.rebalance_task().max_bytes(), 410ul);
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, DoesNotPickLeavingWorkerAsTarget)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    PublishScaleInTopology(snapshots, { WORKER_92, WORKER_15, WORKER_10 }, WORKER_10);
+    MemoryRebalanceScheduler scheduler;
+    scheduler.SetTopologyMembership(&membership);
+    auto resourceSnapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 920, 80),
+        MakeNode(WORKER_15, 150, 850),
+        MakeNode(WORKER_10, 100, 900),
+    });
+
+    auto rsp = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
+
+    ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(rsp.rebalance_task().target_worker(), WORKER_15);
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, DoesNotDispatchFromLeavingSource)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    PublishScaleInTopology(snapshots, { WORKER_92, WORKER_10 }, WORKER_92);
+    MemoryRebalanceScheduler scheduler;
+    scheduler.SetTopologyMembership(&membership);
+    auto resourceSnapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 920, 80),
+        MakeNode(WORKER_10, 100, 900),
+    });
+
+    auto rsp = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
+
+    EXPECT_TRUE(rsp.rebalance_task().task_id().empty());
+}
+
+TEST_F(MemoryRebalanceSchedulerTest, FallsBackToResourceSnapshotBeforeTopologyIsReady)
+{
+    cluster::TopologySnapshotState snapshots;
+    cluster::MembershipEndpointView membership(snapshots);
+    MemoryRebalanceScheduler scheduler;
+    scheduler.SetTopologyMembership(&membership);
+    auto resourceSnapshot = MakeSnapshot({
+        MakeNode(WORKER_92, 920, 80),
+        MakeNode(WORKER_10, 100, 900),
+    });
+
+    auto rsp = ScheduleAndGetRsp(scheduler, WORKER_92, resourceSnapshot);
+
+    ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(rsp.rebalance_task().target_worker(), WORKER_10);
 }
 
 TEST_F(MemoryRebalanceSchedulerTest, UsageGapThresholdControlsWhetherTaskIsCreated)

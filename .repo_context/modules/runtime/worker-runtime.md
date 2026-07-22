@@ -115,6 +115,13 @@
   - manage shared-memory or socket-based FD passing for client-worker IPC
   - serve object-cache and stream-cache requests
   - tick perf manager, drive lightweight metrics summary emission, and monitor config changes
+  - memory-rebalance scheduling cross-checks ResourceManager candidates against one current immutable topology
+    Snapshot and assigns only `ACTIVE` sources and targets. Before the first Snapshot is available, it preserves the
+    legacy resource-readiness fallback instead of blocking scheduling.
+  - NodeSelector passes the exact master address that returned each rebalance task to RebalanceExecutor. Before every
+    bounded migration batch, the executor expires the task when that assigned master is `FAILED`, locally unreachable,
+    or absent from the current topology; a successor master reconstructs scheduling from later resource reports rather
+    than accepting completion for the predecessor's in-memory task.
 - Shutdown:
   - Parameterized lifecycle callbacks run outside `initMutex_`; once `onStart` is attempted, cleanup invokes `onStop` exactly once. The first lifecycle error is returned while later cleanup errors are logged, and internal shutdown always continues.
   - `PreShutDown` then `ShutDown`
@@ -152,7 +159,8 @@
     and business callback owners outlive the Engine. The abnormal destructor path first stops Rebalance, NodeSelector,
     and Worker background threads. If bounded shutdown did not converge, it performs a final safe Engine join while
     metadata/service callback targets remain alive; it then shuts down the metadata/service borrowers, resets their
-    endpoint and route adapters, and finally destroys Engine before Store/Proxy/callback owners.
+    endpoint and route adapters, destroys ResourceManager and its rebalance scheduler before their borrowed membership
+    view, and finally destroys Engine before Store/Proxy/callback owners.
   - embedded mode uses exported destroy helpers
 
 ## Cluster And Metadata Notes

@@ -24,6 +24,8 @@
 #include <limits>
 #include <vector>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
+#include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
@@ -67,6 +69,12 @@ void DecreaseCounter(std::unordered_map<std::string, uint64_t> &counter, const s
 }
 }  // namespace
 
+void MemoryRebalanceScheduler::SetTopologyMembership(const cluster::MembershipEndpointView *topologyMembership)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    topologyMembership_ = topologyMembership;
+}
+
 bool MemoryRebalanceScheduler::IsTerminalStatus(master::RebalanceTaskStatusPb status)
 {
     return status == master::REBALANCE_TASK_SUCCEEDED || status == master::REBALANCE_TASK_FAILED
@@ -104,6 +112,7 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
     const std::string &reportingWorker = req.stat().address();
     RETURN_OK_IF_TRUE(reportingWorker.empty());
 
+    auto topologySnapshot = GetTopologySnapshot();
     uint64_t nowMs = GetSteadyClockTimeStampMs();
     std::lock_guard<std::mutex> lock(mutex_);
     ExpireTimeoutTasksLocked(nowMs, reportingWorker);
@@ -117,7 +126,7 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
     }
 
     master::RebalanceTaskPb task;
-    Status rc = TryBuildTaskLocked(snapshot, reportingWorker, nowMs, task);
+    Status rc = TryBuildTaskLocked(snapshot, reportingWorker, nowMs, topologySnapshot.get(), task);
     RETURN_OK_IF_TRUE(rc.GetCode() == StatusCode::K_NOT_FOUND);
     RETURN_IF_NOT_OK(rc);
     RETURN_OK_IF_TRUE(task.source_worker() != reportingWorker);
@@ -152,6 +161,7 @@ bool MemoryRebalanceScheduler::NeedSnapshotForSchedule(const master::ResourceRep
         return false;
     }
 
+    auto topologySnapshot = GetTopologySnapshot();
     uint64_t nowMs = GetSteadyClockTimeStampMs();
     std::lock_guard<std::mutex> lock(mutex_);
     ExpireTimeoutTasksLocked(nowMs, reportingWorker);
@@ -163,7 +173,7 @@ bool MemoryRebalanceScheduler::NeedSnapshotForSchedule(const master::ResourceRep
         *rsp.mutable_rebalance_task() = activeTask->second.task;
         return false;
     }
-    return IsSourceCandidateLocked(reportingNode, nowMs);
+    return IsSourceCandidateLocked(reportingNode, nowMs, topologySnapshot.get());
 }
 
 Status MemoryRebalanceScheduler::ReportResult(const master::ReportRebalanceResultReqPb &req,
@@ -388,17 +398,54 @@ void MemoryRebalanceScheduler::ReleaseSnapshotHoldsLocked(const std::unordered_m
     }
 }
 
-bool MemoryRebalanceScheduler::IsSourceCandidateLocked(const NodeInfo &node, uint64_t nowMs) const
+std::shared_ptr<const cluster::TopologySnapshot> MemoryRebalanceScheduler::GetTopologySnapshot()
+{
+    const cluster::MembershipEndpointView *topologyMembership = nullptr;
+    {
+        // Copy the non-owning view under the scheduler lock, then invoke it without the lock. SetTopologyMembership is
+        // an initialization operation; WorkerOCServer also destroys this scheduler before the topology engine.
+        std::lock_guard<std::mutex> lock(mutex_);
+        topologyMembership = topologyMembership_;
+    }
+    if (topologyMembership == nullptr) {
+        return nullptr;
+    }
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    auto rc = topologyMembership->GetSnapshot(snapshot);
+    if (rc.IsError() || snapshot == nullptr) {
+        LOG_FIRST_N(WARNING, 1) << "[MemoryRebalance] topology snapshot is not ready; "
+                                   "falling back to the resource snapshot: "
+                                << rc.ToString();
+        return nullptr;
+    }
+    return snapshot;
+}
+
+bool MemoryRebalanceScheduler::IsWorkerActiveInTopology(
+    const std::string &worker, const cluster::TopologySnapshot *topologySnapshot) const
+{
+    if (topologySnapshot == nullptr) {
+        return true;
+    }
+    const cluster::Member *member = nullptr;
+    auto rc = topologySnapshot->FindMemberByAddress(worker, member);
+    return rc.IsOk() && member != nullptr && member->state == cluster::MemberState::ACTIVE;
+}
+
+bool MemoryRebalanceScheduler::IsSourceCandidateLocked(
+    const NodeInfo &node, uint64_t nowMs, const cluster::TopologySnapshot *topologySnapshot) const
 {
     uint64_t targetInflightBytes = GetTargetInflightBytesLocked(node.nodeId);
     bool hasInboundTask = targetInflightBytes > 0;
-    return node.isReady && node.memoryLimit > 0 && CalculateUsageRate(node) >= FLAGS_rebalance_source_usage_percent
+    return node.isReady && IsWorkerActiveInTopology(node.nodeId, topologySnapshot) && node.memoryLimit > 0
+           && CalculateUsageRate(node) >= FLAGS_rebalance_source_usage_percent
            && activeTasksBySource_.find(node.nodeId) == activeTasksBySource_.end() && !hasInboundTask
            && !IsInCooldownLocked(node.nodeId, nowMs);
 }
 
 void MemoryRebalanceScheduler::CollectWorkerCandidatesLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                                                              const std::string &sourceWorker, uint64_t nowMs,
+                                                             const cluster::TopologySnapshot *topologySnapshot,
                                                              std::vector<const NodeInfo *> &sources,
                                                              std::vector<const NodeInfo *> &targets) const
 {
@@ -406,10 +453,11 @@ void MemoryRebalanceScheduler::CollectWorkerCandidatesLocked(const std::unordere
     targets.reserve(snapshot.size());
     for (const auto &[worker, node] : snapshot) {
         (void)worker;
-        if (node.nodeId == sourceWorker && IsSourceCandidateLocked(node, nowMs)) {
+        if (node.nodeId == sourceWorker && IsSourceCandidateLocked(node, nowMs, topologySnapshot)) {
             sources.emplace_back(&node);
         }
-        if (node.isReady && node.memoryLimit > 0 && !IsInCooldownLocked(node.nodeId, nowMs)) {
+        if (node.isReady && IsWorkerActiveInTopology(node.nodeId, topologySnapshot) && node.memoryLimit > 0
+            && !IsInCooldownLocked(node.nodeId, nowMs)) {
             targets.emplace_back(&node);
         }
     }
@@ -477,6 +525,7 @@ void MemoryRebalanceScheduler::FillTaskFromPairLocked(const CandidatePair &bestP
 
 Status MemoryRebalanceScheduler::TryBuildTaskLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                                                     const std::string &sourceWorker, uint64_t nowMs,
+                                                    const cluster::TopologySnapshot *topologySnapshot,
                                                     master::RebalanceTaskPb &task)
 {
     CHECK_FAIL_RETURN_STATUS(snapshot.size() >= MIN_REBALANCE_WORKER_COUNT, K_NOT_FOUND,
@@ -484,7 +533,7 @@ Status MemoryRebalanceScheduler::TryBuildTaskLocked(const std::unordered_map<std
 
     std::vector<const NodeInfo *> sources;
     std::vector<const NodeInfo *> targets;
-    CollectWorkerCandidatesLocked(snapshot, sourceWorker, nowMs, sources, targets);
+    CollectWorkerCandidatesLocked(snapshot, sourceWorker, nowMs, topologySnapshot, sources, targets);
     CHECK_FAIL_RETURN_STATUS(!sources.empty() && !targets.empty(), K_NOT_FOUND,
                              "No source or target worker is suitable for memory rebalance");
 

@@ -19,6 +19,7 @@
 #include <thread>
 #include <utility>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
@@ -61,7 +62,7 @@ RebalanceExecutor::RebalanceExecutor(RebalanceExecutorConfig config)
 {
 }
 
-void RebalanceExecutor::Submit(const master::RebalanceTaskPb &task)
+void RebalanceExecutor::Submit(const master::RebalanceTaskPb &task, std::string assignedMasterAddress)
 {
     if (task.task_id().empty()) {
         return;
@@ -92,9 +93,9 @@ void RebalanceExecutor::Submit(const master::RebalanceTaskPb &task)
 
     // Do not block the resource-report thread; run data migration in the single-task executor.
     try {
-        executorPool_.Execute([this, task]() {
+        executorPool_.Execute([this, task, assignedMasterAddress = std::move(assignedMasterAddress)]() {
             try {
-                Execute(task);
+                Execute(task, assignedMasterAddress);
             } catch (const std::exception &e) {
                 LOG(ERROR) << "Execute rebalance task " << task.task_id() << " failed by exception: " << e.what();
                 ReportResult(task, master::REBALANCE_TASK_FAILED, 0, 0, 0, e.what());
@@ -197,6 +198,51 @@ bool RebalanceExecutor::IsExpired(uint64_t localDeadlineMs) const
     return localDeadlineMs != 0 && NowMsForExpiryCheck() > localDeadlineMs;
 }
 
+bool RebalanceExecutor::IsAssignedMasterUnavailable(const master::RebalanceTaskPb &task,
+                                                    ExecutionStats &stats) const
+{
+    if (membership_ == nullptr || stats.assignedMasterAddress.empty()) {
+        return false;
+    }
+    cluster::MemberEndpoint endpoint;
+    auto rc = membership_->ResolveByAddress(stats.assignedMasterAddress, endpoint);
+    if (rc.GetCode() == K_NOT_READY) {
+        return false;
+    }
+    bool unavailable = false;
+    std::string cause;
+    if (rc.GetCode() == K_NOT_FOUND) {
+        unavailable = true;
+        cause = rc.ToString();
+    } else if (rc.IsError()) {
+        // ResolveByAddress documents only K_NOT_READY and K_NOT_FOUND errors for address lookup. Preserve the
+        // data-safety fence if that contract is ever violated: a false expiry is retryable, but continuing a stale
+        // task can mutate placement after its assigning master has disappeared.
+        LOG(ERROR) << FormatString("Unexpected topology lookup failure for rebalance task %s, assigned master %s: %s",
+                                   task.task_id(), stats.assignedMasterAddress, rc.ToString());
+        unavailable = true;
+        cause = rc.ToString();
+    } else if (endpoint.topologyState == cluster::MemberState::FAILED) {
+        unavailable = true;
+        cause = "topology state is FAILED";
+    } else if (endpoint.localAvailability == cluster::EndpointAvailability::UNREACHABLE) {
+        unavailable = true;
+        cause = "endpoint is UNREACHABLE";
+    }
+    if (!unavailable) {
+        return false;
+    }
+    stats.status = master::REBALANCE_TASK_EXPIRED;
+    stats.failedReason = FormatString("Assigned cluster master %s is unavailable: %s", stats.assignedMasterAddress,
+                                      cause);
+    LOG(WARNING) << FormatString(
+        "Stop rebalance task %s because assigned cluster master %s is unavailable, topologyState=%d, "
+        "localAvailability=%d, status=%s",
+        task.task_id(), stats.assignedMasterAddress, static_cast<int>(endpoint.topologyState),
+        static_cast<int>(endpoint.localAvailability), rc.ToString());
+    return true;
+}
+
 Status RebalanceExecutor::ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
                                        ExecutionStats &stats, object_cache::DataMigrator &migrator)
 {
@@ -252,6 +298,9 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
             stats.failedReason = "Rebalance task is expired";
             break;
         }
+        if (IsAssignedMasterUnavailable(task, stats)) {
+            break;
+        }
         if (migrator == nullptr) {
             if (metadataRoute_ == nullptr || membership_ == nullptr || endpointPolicy_ == nullptr
                 || exitRequested_ == nullptr) {
@@ -275,11 +324,18 @@ void RebalanceExecutor::ExecuteBatches(const master::RebalanceTaskPb &task, cons
     }
 }
 
-void RebalanceExecutor::Execute(master::RebalanceTaskPb task)
+void RebalanceExecutor::Execute(master::RebalanceTaskPb task, std::string assignedMasterAddress)
 {
     ExecutionStats stats;
+    stats.assignedMasterAddress = std::move(assignedMasterAddress);
     Timer timer;
     do {
+        if (stats.assignedMasterAddress.empty()) {
+            stats.failedReason = "Assigned cluster master address is empty";
+            break;
+        }
+        LOG(INFO) << FormatString("Start rebalance task %s, assigned cluster master: %s", task.task_id(),
+                                  stats.assignedMasterAddress);
         HostPort targetAddr;
         auto localDeadlineMs = BuildLocalDeadlineMs(task);
         auto rc = ValidateTask(task, targetAddr, localDeadlineMs);
@@ -292,6 +348,9 @@ void RebalanceExecutor::Execute(master::RebalanceTaskPb task)
         }
 
         ExecuteBatches(task, targetAddr, stats, localDeadlineMs);
+        if (IsAssignedMasterUnavailable(task, stats)) {
+            break;
+        }
         bool targetReached = stats.migratedBytes >= task.max_bytes();
         bool partialCompleted = stats.migratedBytes > 0 && stats.candidatesExhausted;
         if (stats.status != master::REBALANCE_TASK_EXPIRED && stats.failedObjects == 0

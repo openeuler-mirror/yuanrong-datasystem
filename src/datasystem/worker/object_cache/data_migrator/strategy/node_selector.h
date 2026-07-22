@@ -37,7 +37,7 @@ namespace datasystem {
 namespace object_cache {
 class NodeSelector {
 public:
-    using RebalanceTaskHandler = std::function<void(const master::RebalanceTaskPb &)>;
+    using RebalanceTaskHandler = std::function<void(const master::RebalanceTaskPb &, const std::string &)>;
 
     /**
      * @brief Get the singleton instance.
@@ -95,7 +95,8 @@ public:
 
     /**
      * @brief Register the callback that consumes memory rebalance tasks returned by master.
-     * @param[in] handler The callback implemented by worker-side rebalance executor.
+     * @param[in] handler The callback implemented by worker-side rebalance executor. The second argument is the
+     *                    exact master address that returned the task.
      */
     void RegisterRebalanceTaskHandler(RebalanceTaskHandler handler);
 
