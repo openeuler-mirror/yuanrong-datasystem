@@ -50,6 +50,24 @@ Status FinishControlBackendProbe(const PendingControlBackendProbe &pending,
 }
 }  // namespace
 
+WorkerControlBackendProbe::WorkerControlBackendProbe(StartFn start, FinishFn finish)
+    : start_(std::move(start)), finish_(std::move(finish))
+{
+}
+
+Status WorkerControlBackendProbe::Start(int32_t timeoutMs, int64_t &tag)
+{
+    CHECK_FAIL_RETURN_STATUS(start_ != nullptr, K_RUNTIME_ERROR, "cluster-state probe start callback is null");
+    return start_(timeoutMs, tag);
+}
+
+Status WorkerControlBackendProbe::Finish(const cluster::MemberIdentity &peer, int64_t tag,
+                                         cluster::ControlBackendObservation &observation)
+{
+    CHECK_FAIL_RETURN_STATUS(finish_ != nullptr, K_RUNTIME_ERROR, "cluster-state probe finish callback is null");
+    return finish_(peer, tag, observation);
+}
+
 std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
     const std::vector<cluster::MemberIdentity> &peers, std::chrono::steady_clock::time_point deadline,
     const WorkerControlBackendProbeFactory &clientFactory)

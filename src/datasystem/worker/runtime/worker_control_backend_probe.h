@@ -22,12 +22,20 @@ namespace datasystem::worker {
 
 class WorkerControlBackendProbe {
 public:
-    virtual ~WorkerControlBackendProbe() = default;
+    using StartFn = std::function<Status(int32_t, int64_t &)>;
+    using FinishFn =
+        std::function<Status(const cluster::MemberIdentity &, int64_t, cluster::ControlBackendObservation &)>;
 
-    virtual Status Start(int32_t timeoutMs, int64_t &tag) = 0;
+    WorkerControlBackendProbe(StartFn start, FinishFn finish);
+    ~WorkerControlBackendProbe() = default;
 
-    virtual Status Finish(const cluster::MemberIdentity &peer, int64_t tag,
-                          cluster::ControlBackendObservation &observation) = 0;
+    Status Start(int32_t timeoutMs, int64_t &tag);
+
+    Status Finish(const cluster::MemberIdentity &peer, int64_t tag, cluster::ControlBackendObservation &observation);
+
+private:
+    StartFn start_;
+    FinishFn finish_;
 };
 
 using WorkerControlBackendProbeFactory =
