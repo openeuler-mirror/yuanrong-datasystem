@@ -249,6 +249,50 @@
     internals, ETCD keepalive/store internals, or Coordinator backend internals;
   - cluster information must cross module boundaries through `cluster::ICoordinationBackend` or narrower injected
     capability hooks/facades built on top of it. Concrete backend ownership stays in the composition root.
+- Story DryRun acceptance matrix:
+  1. Keepalive local isolation: covered by `WorkerIsolationCoordinatorTest.LocalIsolationClosesAdmissionAndKeepsProcessAlive`,
+     `TopologyEngineTest.KeepAliveScopeCheckReturnsAfterFirstReachablePeerEvidence`, and ST
+     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData`; final PR verification
+     must keep one focused UT plus the ST.
+  2. HashRing self passive scale down: covered by
+     `WorkerTopologyAvailabilityAdmissionTest.HashRingSelfPassiveScaleDownDoesNotKillWorker`,
+     `TopologyEngineTest.IsolatesWhenCommittedLocalMemberDisappearsFromAuthoritativeTopology`, and ST
+     `WorkerPushMetaTest.LEVEL1_TestTopologyJitterDoesNotKillLocalWorker`; final verification must include one
+     topology UT and the ST.
+  3. Voluntary scale down keeps controlled exit: covered by
+     `WorkerRuntimeStateTest.DrainingIsTerminalForServingTransitions`,
+     `TopologyPlanBuilderTest.ScaleInSourceStaysLeavingWhenPeerFails`, and ST
+     `WorkerPushMetaTest.LEVEL1_TestVoluntaryScaleDownStillExitsControlled`; final verification must include the ST so
+     self-healing does not reopen an administratively draining worker.
+  4. Coordination recovery before RUNNING: covered by
+     `WorkerIsolationCoordinatorTest.LocalRecoveryStartsRecoveringBeforeTopologyReconciliation`,
+     `WorkerRecoveryControllerTest.*`, and
+     `WorkerTopologyAvailabilityAdmissionTest.TopologyRecoveryCanReopenLocalIsolationWithFreshEvidence`; final
+     verification must include the runtime/admission focused UT group.
+  5. Local data invisible until ownership evidence passes: covered by
+     `ObjectCacheRecoveryEvidenceTest.ObjectCacheRecoveryAggregateBlocksOwnershipWhenMasterEvidenceIsMissing`,
+     `ObjectCacheRecoveryStateTest.NewRecoveryGenerationClearsOwnershipUntilMasterEvidenceArrives`, and
+     `WorkerOcServiceImplTest.WorkerWorkerReadRejectsBeforeOwnershipEvidence`; final verification must include the
+     object-cache recovery evidence group.
+  6. Other workers recover metadata before cleanup: covered by
+     `WorkerOcServiceImplTest.RetryFailedMetadataRecovery*`,
+     `WorkerOcServiceImplTest.ClearMatchedObjectsRecoversBeforeCleanupWhenMetadataRecoveryDisabled`, and ST
+     `MetadataRecoveryDisabledTest.OtherWorkersRecoverMetadataBeforeClearingDataWithoutMetadata`; final verification
+     must include the ST path because it exercises real worker/master metadata interaction.
+  7. Old primary does not steal primary after recovery: covered by
+     `OCMigrateMetadataManagerTest.RecoveredOldPrimaryDoesNotOverrideMasterPrimary`,
+     `OCMigrateMetadataManagerTest.NetworkRecoveryStopsBeforeMetadataPushWhenFenceDeliveryFails`, and
+     `OCMigrateMetadataManagerTest.NetworkRecoveryKeepsLocalPrimaryWhenNoAcknowledgedReplacementExists`; final
+     verification must include these ownership/fence UTs.
+  8. Cross-product admission coverage: Object/KV/Stream ordinary read/write rejection is covered by STs
+     `MigrationTargetIsolationTest.LEVEL1_ObjectClientRejectsReadWriteDuringIsolationAndRecovering`,
+     `KVClientEtcdDfxTest.LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRecovering`, and
+     `StreamClientAdmissionTest.LEVEL1_StreamClientRejectsReadWriteDuringIsolationAndRecovering`; these remain required
+     for final acceptance.
+  9. Scale/fault overlay follow-up: keep the already-added UT coverage
+     `TopologyDfxTest.*`, `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether`,
+     and KV rebalance overlay tests in the validation plan. Full end-to-end expansion for disabled slot scale/passive
+     scale cases remains a follow-up unless the disabled tests are re-enabled or replaced with bounded alternatives.
 - Boundary refactor order:
   1. keep worker control-backend scope classification independent from `TopologyEngine`; worker code should use evidence
      values and runtime/facade callbacks rather than the cluster engine composition root;
