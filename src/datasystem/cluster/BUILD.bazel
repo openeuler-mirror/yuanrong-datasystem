@@ -23,6 +23,7 @@ ds_cc_library(
         "executor/storage_scan_plan.cpp",
     ],
     hdrs = [
+        "executor/cancellation_token.h",
         "executor/hash_key_filter.h",
         "executor/key_filter.h",
         "executor/storage_scan_plan.h",

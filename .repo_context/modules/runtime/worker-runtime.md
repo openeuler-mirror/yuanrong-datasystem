@@ -779,6 +779,15 @@
     gtest time, about 1.24s wall time.
   - GREEN: `git diff --check` clean; `git clang-format --diff HEAD -- tests/ut/cluster/topology_plan_builder_test.cpp`
     reported no formatting changes.
+  - Bazel RED: remote Bazel 7.4.1 focused build
+    `//src/datasystem/cluster:cluster_topology` failed because the generated virtual include tree could not expose
+    `datasystem/cluster/executor/cancellation_token.h`; the header had been split into the topology scope but was not
+    listed in the Bazel `hdrs`.
+  - GREEN: after adding `executor/cancellation_token.h` to `cluster_topology_scope` hdrs, remote Bazel 7.4.1 focused
+    build with `--config=release --config=test --config=urma_mock` and shared `.bazel-cache/distdir` passed in
+    61.912s with 80 actions.
+  - GREEN: the same remote Bazel 7.4.1 command rerun against the same cache passed in 0.295s with 1 internal action,
+    confirming cache reuse for this focused target.
 - Build worker and tests:
   - `bash build.sh -t build`
 - Run common topology UT after building tests:
