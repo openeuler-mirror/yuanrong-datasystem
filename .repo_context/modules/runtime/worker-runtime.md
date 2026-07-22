@@ -241,6 +241,14 @@
   - aggregate recovery evidence and keep ordinary service closed until membership, ring, metadata, and data evidence pass;
   - hide backend scope classification, retry budget, recovery evidence tracking, and recovery phase internals from
     business services.
+- Runtime facade public-interface constraint:
+  - other worker components should use only semantic `WorkerRuntimeFacade` entrypoints such as `MarkLocalIsolated`,
+    `MarkRecovering`, `TryCompleteRecovery`, `CheckAdmission`, `AcquireNormalReadGuard`, `GetSnapshot`, and
+    `PublishMetrics`;
+  - they must not reach into runtime state manager, recovery controller, evidence tracker, topology availability mapper
+    internals, ETCD keepalive/store internals, or Coordinator backend internals;
+  - cluster information must cross module boundaries through `cluster::ICoordinationBackend` or narrower injected
+    capability hooks/facades built on top of it. Concrete backend ownership stays in the composition root.
 - Boundary refactor order:
   1. keep worker control-backend scope classification independent from `TopologyEngine`; worker code should use evidence
      values and runtime/facade callbacks rather than the cluster engine composition root;
@@ -485,9 +493,23 @@
     three-worker cluster, pauses one worker in voluntary ScaleIn `DRAINING`, drives another worker into
     `LOCAL_ISOLATED`, and verifies a healthy source worker's real worker-to-worker migration probe is rejected by both
     targets before the migration allocation service is reached.
-  - Regression suite: partial. Focused topology/metadata/slot/notify-worker UTs and selected Object/KV/Stream STs have
-    been run during development, but full CI, Bazel, and complete Object/KV/Stream ST suites are not yet green in this
-    session.
+  - Regression suite: focused local/remote validation is green after rebasing to `main/master@0180554bf`; full PR CI and
+    codecheck still need to be triggered and inspected before claiming merge readiness. Fresh focused evidence:
+    - CMake build targets `ds_ut_object`, `ds_ut`, `ds_st_object_cache`, `ds_st_kv_cache`, `ds_st_stream_cache`, and
+      `datasystem_worker_bin` built in the CLion remote tree with `BUILD_WITH_URMA_MOCK` enabled.
+    - Object-cache focused UT: 42 tests passed in 0.25s.
+    - Runtime/admission focused UT: 41 tests passed in 0.23s.
+    - Story ST main path: 9 tests passed in 1:38.54.
+    - KV admission ST: 2 tests passed in 21.73s.
+    - migration/scale/fault ST: 5 tests passed in 50.44s.
+    - Stream admission/data-retention ST: 1 test passed in 11.06s.
+    - Metadata recovery ST group: 11 tests ran, 9 passed and 2 skipped for the known brpc migration gap in 2:15.28.
+    - Runtime module boundary script: 26 tests passed in 0.106s.
+    - `git diff --check` and `git clang-format --diff main/master -- <changed-cpp-files>` are clean.
+    - Focused clang-tidy runs on the touched worker/object-cache files returned rc 0; output still contains existing
+      legacy style warnings, so this is not a repository-wide zero-warning claim.
+    - Remote Bazel 7.4.1 focused build with `--config=release --config=test --config=urma_mock` passed once in 6:15.93
+      using the branch `.bazel-cache/distdir`, and the identical cached rerun passed in 1.17s.
   - Follow-up scale/fault cases to add before claiming full story closure:
     1. ScaleOut while one existing worker is isolated is now covered at topology planning level by
        `ScaleOutDoesNotUseFailedWorkerAsMigrationSource`; active ScaleOut replan after a joining-member failure is
