@@ -504,6 +504,17 @@
     `--config=release --config=test --config=urma_mock`, and cache-owner execution passed for
     `//tests/ut/worker:object_cache_recovery_state_test //tests/ut/worker:worker_oc_service_impl_test` in 50.72s. The
     identical cached rerun passed in 0.38s with no package reload and one internal action, confirming Bazel cache reuse.
+  - Runtime/object-cache boundary follow-up: added 1 boundary case asserting `ObjectCacheRecoveryState` public header
+    does not expose `WorkerRecoveryEvidenceTracker`; initial RED failed on that include, GREEN passed the focused
+    boundary case in 0.08s and all boundary cases 30/30 in 0.16s. CLion remote `tests-index` then passed in 246.17s
+    with URMA Mock enabled, 1160 compile-command entries, and third-party cache hit in 0s; focused
+    `ObjectCacheRecoveryStateTest.*` passed 5/5 in 0.04s.
+  - Story-DryRun coverage smoke after the boundary follow-up: runtime/admission recovery UTs passed 57/57 in 0.34s;
+    coordination/topology failure-scale focused UTs passed 25/25 in 1.05s; object-cache recovery/metadata/ownership
+    focused UTs initially passed 48/50 and exposed a test isolation bug where `SlotRecoveryTest` leaked
+    `FLAGS_l2_cache_type=obs` into later evidence tests. After restoring the flag in the fixture teardown, CLion remote
+    `tests-index` passed in 131.87s with third-party cache hit in 1s and the object-cache focused set passed 50/50 in
+    0.53s.
   - After rebasing to `main/master@52433afc2`, `scripts/clion_remote_build.sh tests-index` rebuilt the CLion remote
     UT/ST index with URMA Mock enabled, 1156 compile-command entries, third-party cache hit in 1s, and total script
     time 103s.

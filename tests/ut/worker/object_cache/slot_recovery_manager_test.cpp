@@ -681,6 +681,7 @@ class SlotRecoveryTest : public testing::Test {
 public:
     void SetUp() override
     {
+        oldL2CacheType_ = FLAGS_l2_cache_type;
         FLAGS_l2_cache_type = "distributed_disk";
         BINEXPECT_CALL(&datasystem::memory::Allocator::GetMemoryAvailToHighWater, ())
             .WillRepeatedly(Return(std::numeric_limits<uint64_t>::max()));
@@ -689,8 +690,12 @@ public:
     void TearDown() override
     {
         datasystem::inject::ClearAll();
+        FLAGS_l2_cache_type = oldL2CacheType_;
         RELEASE_STUBS
     }
+
+private:
+    std::string oldL2CacheType_;
 };
 
 TEST_F(SlotRecoveryTest, LocalFailureMarksTaskFailed)
