@@ -591,6 +591,19 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should keep object-cache generation state local")
 
+    def test_object_cache_recovery_startup_hook_is_recovery_owned(self):
+        helper_files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/recovery/object_cache_recovery_startup.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/recovery/object_cache_recovery_startup.cpp",
+        ]
+        for file_path in helper_files:
+            self.assertTrue(file_path.exists(), f"{file_path} should own restart recovery startup hooks")
+
+        impl = (REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("void MarkRestartReconciliationPending(", impl)
+
     def test_stream_service_uses_runtime_facade_for_admission(self):
         header = REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
         impl = REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.cpp"

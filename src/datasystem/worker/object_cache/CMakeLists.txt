@@ -23,6 +23,7 @@ set(WORKER_OC_SRCS
         metadata_recovery_manager.cpp
         recovery/object_cache_recovery_state.cpp
         recovery/object_cache_recovery_evidence.cpp
+        recovery/object_cache_recovery_startup.cpp
         metadata_recovery_selector.cpp
         rebalance_candidate_provider.cpp
         slot_recovery_orchestrator.cpp

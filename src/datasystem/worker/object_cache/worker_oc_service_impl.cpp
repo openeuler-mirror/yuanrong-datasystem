@@ -106,13 +106,13 @@
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_startup.h"
 #include "datasystem/worker/object_cache/recovery/object_cache_recovery_state.h"
 #include "datasystem/worker/object_cache/object_kv.h"
 #include "datasystem/worker/object_cache/object_metadata_coordination_reader.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/verify_leaving_state.h"
-#include "datasystem/worker/object_cache/recovery/object_cache_recovery_evidence.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
 #include "datasystem/worker/worker_health_check.h"
 
@@ -196,23 +196,6 @@ Status BuildClusterTopologyPb(const cluster::TopologySnapshot &snapshot, ::datas
         topologyPb.mutable_active_batch()->set_epoch(snapshot.GetActiveBatch()->epoch);
     }
     return Status::OK();
-}
-
-void MarkRestartReconciliationPending(worker::WorkerRuntimeFacade *runtime, ObjectCacheRecoveryState *recoveryState,
-                                      bool isRestart, bool controlBackendAvailableAtStartup)
-{
-    if (!isRestart || !controlBackendAvailableAtStartup || !FLAGS_enable_reconciliation) {
-        return;
-    }
-    worker::WorkerRecoveryEvidenceBuilder builder;
-    if (recoveryState != nullptr) {
-        recoveryState->SetMetadataRecoveryEvidenceReport(builder.BuildReport("restart reconciliation pending"));
-    }
-    if (runtime == nullptr) {
-        return;
-    }
-    runtime->MarkRecovering(worker::WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE,
-                            "restart reconciliation pending", worker::WorkerRecoveryPhase::METADATA);
 }
 
 }  // namespace
@@ -390,7 +373,8 @@ void WorkerOCServiceImpl::SetRuntimeFacade(worker::WorkerRuntimeFacade *runtime)
     if (gMigrateProc_ != nullptr) {
         gMigrateProc_->SetRuntimeFacade(runtime_);
     }
-    MarkRestartReconciliationPending(runtime_, recoveryState_.get(), isRestart_, controlBackendAvailableAtStartup_);
+    MarkRestartReconciliationPending(runtime_, recoveryState_.get(), isRestart_, controlBackendAvailableAtStartup_,
+                                     FLAGS_enable_reconciliation);
 }
 
 worker::WorkerRecoveryEvidenceReport WorkerOCServiceImpl::GetLastMetadataRecoveryEvidenceReport() const
@@ -2626,7 +2610,8 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
         }
     } else {
         LOG(INFO) << "Local node restarted. Need reconciliation.";
-        MarkRestartReconciliationPending(runtime_, recoveryState_.get(), isRestart_, controlBackendAvailableAtStartup_);
+        MarkRestartReconciliationPending(runtime_, recoveryState_.get(), isRestart_, controlBackendAvailableAtStartup_,
+                                         FLAGS_enable_reconciliation);
         RETURN_IF_NOT_OK(ReconcileMembershipChange());
     }
     LOG_IF_ERROR(slotRecoveryManager_->ScheduleLocalPendingTasksFromStore(), "Recover slot failed");

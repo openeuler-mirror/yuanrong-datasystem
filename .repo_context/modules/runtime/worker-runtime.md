@@ -267,6 +267,10 @@
     evidence-ready callback dispatch; object-cache recovery state/evidence files are physically grouped under
     `src/datasystem/worker/object_cache/recovery` so metadata/slot/resource recovery aggregation is not scattered in
     the object-cache root;
+  - restart startup reconciliation hooks are owned by
+    `src/datasystem/worker/object_cache/recovery/object_cache_recovery_startup.{h,cpp}`. `WorkerOCServiceImpl` passes
+    immutable startup facts and the reconciliation switch into this helper instead of carrying restart recovery state
+    mutation in its anonymous namespace;
   - object-cache Get metadata fallback uses `IObjectMetadataReader`, with concrete coordination reads isolated in
     `CoordinationObjectMetadataReader`;
   - central metadata endpoint claim/read policy is isolated in `CentralMetadataAddressResolver`;
@@ -302,6 +306,11 @@
     CLion remote `tests-index` passed in 209s with URMA Mock and third-party cache reuse in 1s,
     `ObjectCacheRecoveryStateTest.*:ObjectCacheRecoveryEvidenceTest.*` passed 13/13 in 0.05s, and focused
     `WorkerOcServiceImplTest` recovery evidence cases passed 5/5 in 0.06s;
+  - object-cache recovery startup hook TDD evidence: boundary RED failed 38/39 before
+    `object_cache_recovery_startup.{h,cpp}` existed; after extracting the hook,
+    `ObjectCacheRecoveryStateTest.RestartStartupHook*` passed 2/2 in 0.05s,
+    `ObjectCacheRecoveryStateTest.*` passed 8/8 in 0.05s, the worker runtime/module boundary guard passed 39/39 in
+    0.172s, and `git diff --check` passed;
   - CLion remote `index` after classifier move: passed in 92s with third-party cache reuse in 0s and 693 compile
     database entries;
   - CLion remote `tests-index` after classifier move: passed in 513s with URMA Mock, third-party cache reuse in 0s,
@@ -356,6 +365,8 @@
   - object-cache recovery directory refactor: worker runtime/module boundary script 38/38 in 0.060s, CLion remote
     `tests-index` in 209s with URMA Mock and third-party cache reuse in 1s, recovery state/evidence UTs 13/13 in
     0.05s, and focused WorkerOcServiceImpl recovery evidence UTs 5/5 in 0.06s;
+  - object-cache recovery startup hook extraction: focused startup hook UTs 2/2 in 0.05s, recovery state UTs 8/8 in
+    0.05s, worker runtime/module boundary script 39/39 in 0.172s, and `git diff --check` passed;
   - post-classifier ownership guard: worker runtime/module boundary 36/36 in 0.09s;
   - post-classifier focused UTs: cluster classifier 8/8 in 0.03s, runtime facade 2/2 in 0.05s, topology keepalive
     scope 3/3 in 0.04s, object-cache recovery state 6/6 in 0.05s;

@@ -11,6 +11,8 @@
 #include <gtest/gtest.h>
 
 #include "datasystem/worker/object_cache/recovery/object_cache_recovery_evidence.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_startup.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -141,6 +143,33 @@ TEST(ObjectCacheRecoveryStateTest, OwnershipReconciliationReadyUsesInjectedCallb
     EXPECT_TRUE(state.GetLastOwnershipRecoveryEvidenceReport().evidence.ownershipReady);
     EXPECT_NE(state.GetLastOwnershipRecoveryEvidenceReport().detail.find("metadata owners complete"),
               std::string::npos);
+}
+
+TEST(ObjectCacheRecoveryStateTest, RestartStartupHookMarksReconciliationPending)
+{
+    ObjectCacheRecoveryState state;
+    worker::WorkerRuntimeFacade runtime;
+
+    MarkRestartReconciliationPending(&runtime, &state, true, true, true);
+
+    EXPECT_FALSE(state.GetLastMetadataRecoveryEvidenceReport().evidence.metadataReady);
+    EXPECT_NE(state.GetLastMetadataRecoveryEvidenceReport().detail.find("restart reconciliation pending"),
+              std::string::npos);
+    auto snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, worker::WorkerServiceMode::RECOVERING);
+    EXPECT_EQ(snapshot.reason, worker::WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE);
+    EXPECT_EQ(snapshot.recoveryPhase, worker::WorkerRecoveryPhase::METADATA);
+}
+
+TEST(ObjectCacheRecoveryStateTest, RestartStartupHookSkipsWhenReconciliationIsDisabled)
+{
+    ObjectCacheRecoveryState state;
+    worker::WorkerRuntimeFacade runtime;
+
+    MarkRestartReconciliationPending(&runtime, &state, true, true, false);
+
+    EXPECT_TRUE(state.GetLastMetadataRecoveryEvidenceReport().evidence.metadataReady);
+    EXPECT_EQ(runtime.GetSnapshot().mode, worker::WorkerServiceMode::STARTING);
 }
 
 }  // namespace

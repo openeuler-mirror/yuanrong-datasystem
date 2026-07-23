@@ -63,6 +63,8 @@ ds_cc_test(
     deps = [
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/worker/object_cache:object_cache_recovery_state",
+        "//src/datasystem/worker/object_cache:object_cache_recovery_startup",
+        "//src/datasystem/worker/runtime:worker_runtime_facade",
         "//tests/ut:ut_common",
     ],
 )

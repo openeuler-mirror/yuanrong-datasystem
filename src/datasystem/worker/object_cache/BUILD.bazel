@@ -283,6 +283,20 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "object_cache_recovery_startup",
+    srcs = [
+        "recovery/object_cache_recovery_startup.cpp",
+    ],
+    hdrs = [
+        "recovery/object_cache_recovery_startup.h",
+    ],
+    deps = [
+        "//src/datasystem/worker/object_cache:object_cache_recovery_state",
+        "//src/datasystem/worker/runtime:worker_runtime_facade",
+    ],
+)
+
+ds_cc_library(
     name = "central_metadata_address_resolver",
     srcs = [
         "central_metadata_address_resolver.cpp",
@@ -404,6 +418,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
         "//src/datasystem/worker/object_cache:object_cache_recovery_state",
+        "//src/datasystem/worker/object_cache:object_cache_recovery_startup",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:object_cache_recovery_evidence",
         "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
