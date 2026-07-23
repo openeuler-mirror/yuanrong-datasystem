@@ -261,6 +261,49 @@
      for disabled-slot/passive-scale recovery reopening now has focused runtime coverage in
      `WorkerTopologyAvailabilityAdmissionTest.DisabledSlotRecoveryDoesNotBlockPassiveIsolationRecovery`; broader
      disabled-slot ST variants remain optional acceptance expansion rather than a known uncovered runtime contract.
+- Story `#build` table 8-1 acceptance matrix:
+  1. `EtcdKeepAliveIsolationTest.ConfirmedLocalIsolationPublishesDeleteAndIsolationCallbackOnce`: covered by
+     `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationKeepsWorkerAliveAndProtectsPeerData`,
+     `CoordinationBackendContractTest.LocalIsolationSignalsDoNotDeleteMembershipThroughBackend`, and topology keepalive
+     scope UTs. The implementation shape routes local-isolation signaling through `ICoordinationBackend` rather than an
+     independent `LocalIsolationDetector` class.
+  2. `EtcdKeepAliveIsolationTest.GlobalEtcdOutageDoesNotPublishDeleteOrCloseAdmission`: covered by
+     `WorkerPushMetaTest.LEVEL1_TestGlobalBackendOutageDoesNotSelfIsolateWorkers` and
+     `ControlBackendScopeClassifierTest.*`.
+  3. `HashRingSelfPassiveScaleDownDoesNotKill`: covered by
+     `WorkerTopologyAvailabilityAdmissionTest.HashRingSelfPassiveScaleDownDoesNotKillWorker` and
+     `WorkerPushMetaTest.LEVEL1_TestTopologyJitterDoesNotKillLocalWorker`.
+  4. `VoluntaryScaleDownStillStopsAfterDrain`: covered by
+     `WorkerPushMetaTest.LEVEL1_TestVoluntaryScaleDownStillExitsControlled` and runtime stopping/draining UTs.
+  5. `RecoveredOldPrimaryDoesNotOverrideMasterPrimary`: covered by
+     `OCNotifyWorkerManagerTest.RecoveredOldPrimaryDoesNotOverrideMasterPrimary`.
+  6. `OrphanLocalDataRequiresRecoveryOrClearDataWithoutMeta`: covered by
+     `MetadataRecoveryDisabledTest.OrphanLocalDataRequiresRecoveryOrClearDataWithoutMeta`.
+  7. `OtherWorkersRecoverMetadataBeforeClearingDataWithoutMetadata`: covered by
+     `MetadataRecoveryDisabledTest.OtherWorkersRecoverMetadataBeforeClearingDataWithoutMetadata`.
+  8. `IsolatedWorkerMetaCleanupAllowsNewOwnerRebuild`: covered by
+     `WorkerStalePrimaryTest.LEVEL1_IsolatedWorkerMetaCleanupAllowsNewOwnerRebuild`.
+  9. `RecoverableLocalDataRebuildsOrUpdatesMetadata`: covered by
+     `MetaDataRecoveryManagerTest.RecoverableLocalDataRebuildsOrUpdatesMetadata`.
+  10. `RecoveredCoordinationEntersRecoveringBeforeRunning`: covered by
+      `WorkerPushMetaTest.LEVEL1_TestKeepAliveLocalIsolationRecoversThroughEvidenceGate` and
+      `WorkerRecoveryControllerTest.*`.
+  11. `WorkerServiceAdmissionRejectsReadWriteDuringIsolation`: covered by object/KV/stream admission STs and focused
+      runtime/service admission UTs.
+  12. `MigrationTargetFiltersIsolatedWorker`: covered by
+      `MigrationTargetIsolationTest.LEVEL1_MigrationTargetFiltersIsolatedAndRecoveringWorker`,
+      `MigrationTargetDrainingTest.LEVEL1_MigrationTargetFiltersDrainingWorker`, and
+      `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether`.
+  13. `RecoveringWorkerFallsBackToLocalIsolatedOnDisconnect`: covered by
+      `WorkerPushMetaTest.LEVEL1_TestRecoveringWorkerFallsBackToLocalIsolatedOnDisconnect` and
+      `WorkerRecoveryControllerTest.SecondDisconnectDuringRecoveryKeepsAdmissionClosed`.
+  14. `MetadataRecoveryBestEffortRetryDoesNotBlockAvailability`: covered by
+      `MetadataRecoveryTest.MetadataRecoveryBestEffortRetryDoesNotBlockAvailability` and
+      `WorkerOcServiceImplTest.RetryFailedMetadataRecoveryBestEffortDoesNotBlockRecoveredEntries`.
+  15. `MetadataRecoveryDoesNotHoldObjectTableLockDuringFullScan`: covered by
+      `MetadataRecoverySelectorTest.SelectionReleasesObjectTableLockBeforeMatchAndBatching`.
+  16. `topology/metadata/slot/notify-worker UT + KV/Object ST`: covered by the focused topology, metadata recovery,
+      slot recovery, notify-worker, KV/object/stream admission, Bazel, CMake, and boundary guard groups listed below.
 - Current refactor status:
   - `WorkerRuntimeFacade` hides runtime state internals and provides the service-facing admission/recovery contract;
   - `ObjectCacheRecoveryState` owns metadata evidence, ownership evidence, resource readiness generation, and injected
@@ -413,6 +456,14 @@
     object-cache recovery/service group passed 89/89 in 11.117s, representative migration-direct single case
     `MigrateDataDirectTest.TestMigrateDataDirectSuccess` passed 1/1 in 6ms, and stream admission group passed 3/3 in
     1ms;
+  - 2026-07-23 story table 8-1 focused ST acceptance run: 14 selected object-cache STs covering keepalive local
+    isolation, peer data survival, global backend outage, topology jitter, voluntary scale-down, recovery evidence gate,
+    stale-primary cleanup, migration-target filtering, and metadata recovery ran in 111.466s; 13/14 passed in the broad
+    single-process filter, and the only failed case
+    `WorkerPushMetaTest.LEVEL1_TestRecoveringWorkerFallsBackToLocalIsolatedOnDisconnect` passed when rerun alone in
+    8.679s, indicating ST grouping/timing sensitivity rather than a stable single-case regression;
+  - 2026-07-23 story table 8-1 focused UT acceptance run: runtime/hash-ring/recovery/migration-target UTs passed 7/7,
+    and primary/recoverable-data/object-table-lock/best-effort object-cache UTs passed 4/4 in the same command;
   - 2026-07-23 object-cache migration test hygiene note: running broad recovery and migration suites in one
     `ds_ut_object` process failed 32 legacy migration cases after `ArenaManager already destroyed`; the representative
     failed migration case passed when run in isolation, so focused worker-isolation regression commands should keep
