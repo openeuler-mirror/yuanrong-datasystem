@@ -1066,6 +1066,8 @@ private:
     void FreeAndUnlockUnconfirmedNotifyRemoteGetObjects(const std::map<std::string, uint64_t> &objectVersions,
                                                         std::map<ReadKey, LockedEntity> &lockedEntries);
 
+    void CleanupFailedRemoteGetMetas(const std::vector<std::list<GetObjectInfo>> &failedMetas);
+
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
 

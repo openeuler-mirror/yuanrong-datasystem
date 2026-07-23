@@ -3230,6 +3230,19 @@ void WorkerOcServiceGetImpl::FreeAndUnlockUnconfirmedNotifyRemoteGetObjects(
     BatchUnlockForGet(objectVersions, lockedEntries);
 }
 
+void WorkerOcServiceGetImpl::CleanupFailedRemoteGetMetas(
+    const std::vector<std::list<GetObjectInfo>> &failedMetas)
+{
+    for (const auto &failedMetaGroup : failedMetas) {
+        for (const auto &failedMeta : failedMetaGroup) {
+            auto &objectKey = failedMeta.queryMeta->meta().object_key();
+            auto &lockedEntry = *failedMeta.entry;
+            HandleGetFailureHelper(objectKey, failedMeta.queryMeta->meta().version(), lockedEntry.safeObj,
+                                   lockedEntry.insert);
+        }
+    }
+}
+
 void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
                                                                std::map<ReadKey, LockedEntity> &lockedEntries)
 {
@@ -3255,7 +3268,6 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
 {
     Status lastRc;
     std::vector<std::future<Status>> futures;
-    std::list<GetObjectInfo> failedMetas;
     std::vector<std::list<GetObjectInfo>> tempFailedMetas(groupedQueryMetas.size());
     std::vector<std::vector<std::string>> tempSuccessIds(groupedQueryMetas.size());
     std::vector<std::vector<ReadKey>> tempNeedRetryIds(groupedQueryMetas.size());
@@ -3303,6 +3315,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
             lastRc = std::move(rc);
         }
     }
+    CleanupFailedRemoteGetMetas(tempFailedMetas);
     PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
                                            tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas, migratedBytes,
                                            unconfirmedObjectVersions, failedConfirmationOwners);

@@ -1052,6 +1052,34 @@ TEST_F(NotifyRemoteGetMigrationTest, UnconfirmedNotifyRemoteGetObjectIsFreedAndE
     EXPECT_FALSE(entry->IsWLockedByCurrentThread());
 }
 
+TEST_F(NotifyRemoteGetMigrationTest, TransferFailureReleasesShmBeforeUnlock)
+{
+    const std::string objectKey = "notify_remote_get_transfer_failure";
+    auto object = std::make_unique<ObjCacheShmUnit>();
+    object->SetShmUnit(std::make_shared<ShmUnit>());
+    auto entry = std::make_shared<SafeObjType>(std::move(object));
+    DS_ASSERT_OK(entry->WLock());
+    WorkerOcServiceGetImpl::LockedEntity lockedEntity{ entry, false };
+    ReadKey readKey(objectKey);
+    auto queryMeta = MakeQueryMeta();
+    queryMeta.mutable_meta()->set_object_key(objectKey);
+    WorkerOcServiceGetImpl::GetObjectInfo failedInfo{
+        .readKey = &readKey,
+        .entry = &lockedEntity,
+        .queryMeta = &queryMeta,
+    };
+    std::vector<std::list<WorkerOcServiceGetImpl::GetObjectInfo>> failedMetas(1);
+    failedMetas.front().emplace_back(failedInfo);
+
+    impl_->CleanupFailedRemoteGetMetas(failedMetas);
+
+    EXPECT_EQ(entry->Get()->GetShmUnit(), nullptr);
+    EXPECT_EQ(entry->Get()->GetLifeState(), ObjectLifeState::OBJECT_INVALID);
+    EXPECT_TRUE(entry->Get()->stateInfo.IsCacheInvalid());
+    EXPECT_TRUE(entry->IsWLockedByCurrentThread());
+    entry->WUnlock();
+}
+
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetReturnsFailedKeyWhenMasterDoesNotConfirmCopyMeta)
 {
     const bool oldEnableDataReplication = FLAGS_enable_data_replication;
