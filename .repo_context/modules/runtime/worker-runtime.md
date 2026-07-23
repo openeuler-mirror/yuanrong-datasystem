@@ -267,9 +267,21 @@
   - slot recovery exposes a narrow store contract and keeps concrete `ICoordinationBackend` usage inside the store
     implementation;
   - topology phase callbacks use injected object-cache/metadata action interfaces;
-  - control-backend probing/classification lives in runtime and consumes injected peer-probe clients.
+  - control-backend peer probing lives in worker runtime and consumes injected peer-probe clients, while
+    control-backend failure-scope classification is owned by `src/datasystem/cluster/runtime` so cluster backend
+    evidence policy does not leak through worker runtime;
 - Verification notes:
   - latest main/master rebase point: `4bc7301d60cc6cae1d33f0de31a27e77ed2dd85b`;
+  - latest cluster scope-classifier ownership refactor: `61cc0b7bc`, with `control_backend_scope_classifier` moved to
+    cluster runtime and worker/runtime build targets no longer exposing `worker_control_backend_scope`;
+  - post-classifier ownership guard: worker runtime/module boundary 36/36 in 0.09s;
+  - post-classifier focused UTs: `ControlBackendScopeClassifierTest.*` 8/8 in 0.03s,
+    `WorkerRuntimeFacadeTest.*` 2/2 in 0.05s, `TopologyEngineTest.KeepAliveScopeCheck*` 3/3 in 0.04s, and
+    `ObjectCacheRecoveryStateTest.*` 6/6 in 0.05s;
+  - CLion remote `index` after classifier move: passed in 92s with third-party cache reuse in 0s and 693 compile
+    database entries;
+  - CLion remote `tests-index` after classifier move: passed in 513s with URMA Mock, third-party cache reuse in 0s,
+    and 1161 compile database entries;
   - CLion remote `tests-index` build after latest rebase: passed in 439s with URMA Mock, third-party cache reuse in 0s,
     and 1161 compile database entries;
   - rebase-after runtime/admission UT group: 57/57 passed in 0.34s;
@@ -310,6 +322,11 @@
   - `ds_st_stream_cache`
   - `ds_st_embedded_client`
 - Recent focused evidence from the worker-isolation branch:
+  - post-classifier ownership guard: worker runtime/module boundary 36/36 in 0.09s;
+  - post-classifier focused UTs: cluster classifier 8/8 in 0.03s, runtime facade 2/2 in 0.05s, topology keepalive
+    scope 3/3 in 0.04s, object-cache recovery state 6/6 in 0.05s;
+  - CLion remote `tests-index` after classifier move: passed in 513s with URMA Mock, third-party cache reuse in 0s,
+    and 1161 compile database entries;
   - object-cache recovery focused UT group: 20/20 passed in 0.06s;
   - worker runtime/module boundary script: 33/33 passed in 0.061s;
   - CLion remote `tests-index` build after latest rebase: passed in 439s with URMA Mock, third-party cache reuse in 0s,
@@ -321,3 +338,15 @@
 
 - Which worker flags are safe to classify as “hot config” versus startup-only in future docs?
 - Should hash-ring CLI operations live in this document permanently, or move to a deployment/ops-focused module later?
+
+## Remaining Worker Isolation Case Closure
+
+- Full scale/fault overlay coverage still needs expansion before declaring every Story variant complete:
+  - disabled slot-scale/passive scale variants need either enabled fast ST coverage or a documented replacement UT/ST
+    proving slot metadata/data protection under local isolation;
+  - coordinator-backed and pure ETCD-backed callback paths should both exercise metadata recovery evidence callbacks,
+    not only the default backend path;
+  - stream-cache data-retention coverage exists for local isolation recovery, but scale/fault overlay coverage is still
+    thinner than object-cache and should remain a tracked follow-up until an acceptance case covers it directly.
+- Gate-ready closure still requires a fresh main/master rebase, focused CMake/CLion regression, Bazel 7.4.1 focused
+  build/test rerun, `ds-pr-review prepare`, codecheck/clang-format/clang-tidy review, and CI retest evidence.
