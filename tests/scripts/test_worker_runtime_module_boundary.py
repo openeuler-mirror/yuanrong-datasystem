@@ -135,6 +135,17 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         for token in forbidden_tokens:
             self.assertNotIn(token, text, f"{header} should not expose concrete master metadata holder headers")
 
+    def test_object_cache_action_header_hides_service_impl(self):
+        header = REPO_ROOT / "src/datasystem/worker/object_cache/worker_topology_object_cache_actions.h"
+        text = header.read_text(encoding="utf-8")
+
+        self.assertIn("class WorkerOCServiceImpl;", text)
+        forbidden_tokens = [
+            "datasystem/worker/object_cache/worker_oc_service_impl.h",
+        ]
+        for token in forbidden_tokens:
+            self.assertNotIn(token, text, f"{header} should not expose concrete object-cache service headers")
+
     def test_data_migrator_does_not_depend_on_topology_callback_executor(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/data_migrator/data_migrator.cpp",

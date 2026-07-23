@@ -270,7 +270,7 @@
   - control-backend probing/classification lives in runtime and consumes injected peer-probe clients.
 - Verification notes:
   - focused object-cache recovery UT group: 18/18 passed in 0.05s;
-  - worker runtime/module boundary script: 32/32 passed in 0.16s;
+  - worker runtime/module boundary script: 33/33 passed in 0.11s;
   - CLion remote `tests-index` build after latest rebase: passed in 507.74s with URMA Mock and 1161 compile database
     entries;
   - rebase-after runtime/admission UT group: 57/57 passed in 0.34s;
@@ -307,7 +307,7 @@
   - `ds_st_embedded_client`
 - Recent focused evidence from the worker-isolation branch:
   - object-cache recovery focused UT group: 18/18 passed in 0.05s;
-  - worker runtime/module boundary script: 32/32 passed in 0.16s;
+  - worker runtime/module boundary script: 33/33 passed in 0.11s;
   - CLion remote `tests-index` build after latest rebase: passed in 507.74s with URMA Mock and 1161 compile database
     entries;
   - Bazel 7.4.1 focused worker/object-cache/runtime build: first correct run passed in 374.07s and cached rerun passed

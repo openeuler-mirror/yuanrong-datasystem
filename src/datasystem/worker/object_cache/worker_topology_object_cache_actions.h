@@ -11,10 +11,11 @@
 
 #include <functional>
 
-#include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #include "datasystem/worker/runtime/worker_topology_phase_callbacks.h"
 
 namespace datasystem::object_cache {
+
+class WorkerOCServiceImpl;
 
 class WorkerTopologyObjectCacheActions final : public worker::IWorkerTopologyObjectCacheActions {
 public:
