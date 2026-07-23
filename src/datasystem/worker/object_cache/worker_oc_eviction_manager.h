@@ -63,6 +63,7 @@ namespace master {
 class DeleteAllCopyMetaRspPb;
 class MasterOCServiceImpl;
 class RemoveMetaReqPb;
+class RemoveMetaRspPb;
 }
 namespace object_cache {
 
@@ -321,6 +322,19 @@ private:
     void RemoveEvictionMetaGroup(const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
                                  const EvictDeletedObjects &objectKeyVersions, EvictDeletedObjects &failedObjects,
                                  Status &lastRc);
+
+    /**
+     * @brief Send one eviction remove-meta request without following its response redirects.
+     * @param[in] masterAddr Metadata owner address.
+     * @param[in] objectKeys Object keys routed to the owner.
+     * @param[in] objectKeyVersions Object versions supplied by the eviction caller.
+     * @param[in] allowRedirect Whether the contacted metadata owner may redirect the request.
+     * @param[out] rsp Remove-meta response returned by the contacted owner.
+     * @return Status of the request.
+     */
+    Status RemoveEvictionMetaOnce(const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+                                  const EvictDeletedObjects &objectKeyVersions, bool allowRedirect,
+                                  master::RemoveMetaRspPb &rsp);
 
     /**
      * @brief Build the remove-meta request used by eviction metadata cleanup.
