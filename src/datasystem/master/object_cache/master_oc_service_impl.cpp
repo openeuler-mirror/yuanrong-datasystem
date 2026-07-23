@@ -346,6 +346,12 @@ Status MasterOCServiceImpl::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRsp
     Timer timer;
     GetRequestContext()->timeoutDuration.Init(req.timeout());
     Raii outerResetDuration([]() { GetRequestContext()->timeoutDuration.Reset(); });
+    const bool topologyRequest = !req.topology_operation_id().empty();
+    LOG_IF(INFO, topologyRequest)
+        << "TOPOLOGY_REMOVE_META_SERVER event=handler_begin operation_prefix="
+        << req.topology_operation_id().substr(0, 12) << " src=" << req.address()
+        << " dst=" << masterAddress_.ToString() << " ids=" << req.ids_size() + req.id_with_version_size()
+        << " cause=" << req.cause() << " request_timeout_ms=" << req.timeout();
 
     PerfPoint point(PerfKey::MASTER_REMOVE_META);
     INJECT_POINT("master.remove_meta");
@@ -354,6 +360,13 @@ Status MasterOCServiceImpl::RemoveMeta(const RemoveMetaReqPb &req, RemoveMetaRsp
     point.Record();
     auto elapsedMs = timer.ElapsedMilliSecond();
     GetMasterTimeCost().Append("Total RemoveMeta", elapsedMs);
+    LOG_IF(INFO, topologyRequest)
+        << "TOPOLOGY_REMOVE_META_SERVER event=handler_end operation_prefix="
+        << req.topology_operation_id().substr(0, 12) << " src=" << req.address()
+        << " dst=" << masterAddress_.ToString() << " elapsed_ms=" << elapsedMs << " status=" << status.ToString()
+        << " success=" << rsp.success_ids_size() << " failed=" << rsp.failed_ids_size()
+        << " need_data=" << rsp.need_data_ids_size() << " need_wait=" << rsp.need_wait_ids_size()
+        << " meta_moving=" << rsp.meta_is_moving() << " redirects=" << rsp.info_size();
     LOG(INFO) << FormatString(
         "RemoveMeta finished cost %d ms, receive id size: %d, success size: %d, need wait size: %d, need data size: "
         "%d, failed size: %d, outdated size: %d, req: %s %s",

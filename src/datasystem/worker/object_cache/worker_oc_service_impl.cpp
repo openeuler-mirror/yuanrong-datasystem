@@ -718,10 +718,22 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
     std::vector<std::string> migrateIds;
     std::vector<std::string> waitIds;
     std::vector<std::string> l2Ids;
-    RETURN_IF_NOT_OK(SelectTopologyScaleInObjects(copies, primaries));
-    RETURN_IF_NOT_OK(PrepareTopologyScaleInData(copies, primaries, migrateIds, waitIds, l2Ids, businessOperationId,
-                                                deadline, cancellation));
-    RETURN_IF_NOT_OK(MigrateData(migrateIds, action.taskId, deadline, cancellation));
+    Timer stageTimer;
+    auto status = SelectTopologyScaleInObjects(copies, primaries);
+    LOG(INFO) << "TOPOLOGY_SCALE_IN_DIAG stage=select operation_prefix=" << businessOperationId.substr(0, 12)
+              << " elapsed_ms=" << stageTimer.ElapsedMilliSecondAndReset() << " status=" << status.ToString()
+              << " copies=" << copies.size() << " primaries=" << primaries.size();
+    RETURN_IF_NOT_OK(status);
+    status = PrepareTopologyScaleInData(copies, primaries, migrateIds, waitIds, l2Ids, businessOperationId, deadline,
+                                        cancellation);
+    LOG(INFO) << "TOPOLOGY_SCALE_IN_DIAG stage=prepare operation_prefix=" << businessOperationId.substr(0, 12)
+              << " elapsed_ms=" << stageTimer.ElapsedMilliSecondAndReset() << " status=" << status.ToString()
+              << " migrate=" << migrateIds.size() << " wait=" << waitIds.size() << " l2=" << l2Ids.size();
+    RETURN_IF_NOT_OK(status);
+    status = MigrateData(migrateIds, action.taskId, deadline, cancellation);
+    LOG(INFO) << "TOPOLOGY_SCALE_IN_DIAG stage=migrate operation_prefix=" << businessOperationId.substr(0, 12)
+              << " elapsed_ms=" << stageTimer.ElapsedMilliSecondAndReset() << " status=" << status.ToString();
+    RETURN_IF_NOT_OK(status);
     std::vector<std::string> failures;
     GroupAndRemoveMeta(migrateIds, master::RemoveMetaReqPb::NORMAL, failures, migrateIds, waitIds, l2Ids,
                        businessOperationId);

@@ -400,8 +400,9 @@ void RpcStubCacheMgr::MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType
     // contention is bounded. If profiling shows this still hot, move the
     // check off the cache-hit path entirely and rely on E112 retry alone.
     if (!WaitForBrpcSocketAvailable(brpcAddr, 1, 0)) {
-        LOG(WARNING) << FormatString("Stale brpc stub evicted for %s type=%d, reconnecting", hostPort.ToString(),
-                                     static_cast<int>(type));
+        LOG(WARNING) << FormatString(
+            "Stale brpc stub evicted for %s type=%d, reconnecting; BRPC_STUB_DIAG event=stale_evicted trace=%s",
+            hostPort.ToString(), static_cast<int>(type), Trace::Instance().GetTraceID());
         (void)Remove(hostPort, type);
         rpcStub.reset();
     }
