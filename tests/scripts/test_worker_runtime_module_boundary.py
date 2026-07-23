@@ -626,6 +626,17 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should hide runtime internals behind facade methods")
 
+    def test_topology_engine_covers_local_recovery_handler_for_backend_modes(self):
+        test_file = REPO_ROOT / "tests/ut/cluster/topology_engine_test.cpp"
+        text = test_file.read_text(encoding="utf-8")
+
+        expected_cases = [
+            "UnifiedBackendLocalRecoveryHandlerTriggersInjectedCallback",
+            "CoordinatorBackendLocalRecoveryHandlerIsRegisteredThroughBuilder",
+        ]
+        for case in expected_cases:
+            self.assertIn(case, text, f"{test_file} should cover local recovery handler wiring for {case}")
+
 
 if __name__ == "__main__":
     unittest.main()

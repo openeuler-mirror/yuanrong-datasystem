@@ -24,6 +24,7 @@
 #include "datasystem/cluster/repository/topology_key_helper.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/raii.h"
@@ -814,6 +815,73 @@ TEST(TopologyEngineTest, KeepAliveScopeCheckCountsInconclusiveProbeFailure)
     EXPECT_NE(DumpMetricSummary().find(
                   "{\"name\":\"worker_control_backend_scope_inconclusive_total\",\"total\":1,\"delta\":1}"),
               std::string::npos);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, UnifiedBackendLocalRecoveryHandlerTriggersInjectedCallback)
+{
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "unified-local-recovery";
+    const auto keys = MakeKeys(clusterName);
+    auto memberBackend = std::make_unique<FakeCoordinationBackend>();
+    auto controllerBackend = std::make_unique<FakeCoordinationBackend>();
+    auto *member = memberBackend.get();
+    member->PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTopology());
+
+    std::atomic<size_t> recoveryCallbacks{ 0 };
+    TopologyEngine::Builder builder;
+    builder.SetClusterName(clusterName)
+        .SetLocalAddress(LOCAL_ADDRESS)
+        .UseUnifiedCoordinationBackends(std::move(memberBackend), std::move(controllerBackend))
+        .SetPhaseCallbacks(callbacks)
+        .SetNodeDeadTimeout(std::chrono::seconds(60))
+        .SetLocalRecoveryHandler([&recoveryCallbacks] { recoveryCallbacks.fetch_add(1); });
+
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+    member->EmitLocalRecovery();
+    EXPECT_EQ(recoveryCallbacks.load(), 1U);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, CoordinatorBackendLocalRecoveryHandlerIsRegisteredThroughBuilder)
+{
+    ASSERT_TRUE(inject::Set("CoordinationBackend.KeepAlive.intervalMs", "call(10)").IsOk());
+    ASSERT_TRUE(inject::Set("CoordinationBackend.KeepAlive.confirmTimes", "call(1)").IsOk());
+    ASSERT_TRUE(inject::Set("CoordinationBackend.KeepAlive.returnError", "2*return(K_RPC_UNAVAILABLE)").IsOk());
+    Raii clearInject([] {
+        (void)inject::Clear("CoordinationBackend.KeepAlive.intervalMs");
+        (void)inject::Clear("CoordinationBackend.KeepAlive.confirmTimes");
+        (void)inject::Clear("CoordinationBackend.KeepAlive.returnError");
+    });
+
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    PutTopology(proxy, "coordinator-local-recovery", MakeTopologyWithPeer());
+    std::atomic<size_t> isolationCallbacks{ 0 };
+    std::atomic<size_t> recoveryCallbacks{ 0 };
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, "coordinator-local-recovery");
+    builder.SetLocalIsolationHandler(
+        [&isolationCallbacks](const Status &) { isolationCallbacks.fetch_add(1, std::memory_order_relaxed); });
+    builder.SetLocalRecoveryHandler(
+        [&recoveryCallbacks] { recoveryCallbacks.fetch_add(1, std::memory_order_relaxed); });
+    builder.SetControlBackendProbe([](const ControlBackendObservation &local, const auto &peers, auto) {
+        auto peer = local;
+        peer.reporter = peers.front();
+        peer.state = ControlBackendState::AVAILABLE;
+        peer.observedAt = std::chrono::steady_clock::now();
+        return std::vector<ControlBackendObservation>{ peer };
+    });
+
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+
+    ASSERT_TRUE(WaitFor([&] { return isolationCallbacks.load(std::memory_order_relaxed) >= 1; }));
+    ASSERT_TRUE(WaitFor([&] { return recoveryCallbacks.load(std::memory_order_relaxed) >= 1; }));
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

@@ -278,6 +278,8 @@
   - post-classifier focused UTs: `ControlBackendScopeClassifierTest.*` 8/8 in 0.03s,
     `WorkerRuntimeFacadeTest.*` 2/2 in 0.05s, `TopologyEngineTest.KeepAliveScopeCheck*` 3/3 in 0.04s, and
     `ObjectCacheRecoveryStateTest.*` 6/6 in 0.05s;
+  - local recovery callback backend-mode coverage: `TopologyEngineTest.*LocalRecoveryHandler*` 2/2 in 0.06s, and
+    combined affected topology group 6/6 in 0.92s;
   - CLion remote `index` after classifier move: passed in 92s with third-party cache reuse in 0s and 693 compile
     database entries;
   - CLion remote `tests-index` after classifier move: passed in 513s with URMA Mock, third-party cache reuse in 0s,
@@ -322,6 +324,8 @@
   - `ds_st_stream_cache`
   - `ds_st_embedded_client`
 - Recent focused evidence from the worker-isolation branch:
+  - local recovery callback backend-mode coverage: unified backend and coordinator-backed Builder path 2/2 in 0.06s;
+  - affected topology keepalive/recovery group: 6/6 in 0.92s;
   - post-classifier ownership guard: worker runtime/module boundary 36/36 in 0.09s;
   - post-classifier focused UTs: cluster classifier 8/8 in 0.03s, runtime facade 2/2 in 0.05s, topology keepalive
     scope 3/3 in 0.04s, object-cache recovery state 6/6 in 0.05s;
@@ -344,8 +348,9 @@
 - Full scale/fault overlay coverage still needs expansion before declaring every Story variant complete:
   - disabled slot-scale/passive scale variants need either enabled fast ST coverage or a documented replacement UT/ST
     proving slot metadata/data protection under local isolation;
-  - coordinator-backed and pure ETCD-backed callback paths should both exercise metadata recovery evidence callbacks,
-    not only the default backend path;
+  - coordinator-backed and pure ETCD-style unified backend local recovery callback wiring now has focused topology UT
+    coverage; broader end-to-end metadata evidence callback coverage can still be expanded in later STs if gate time
+    allows;
   - stream-cache data-retention coverage exists for local isolation recovery, but scale/fault overlay coverage is still
     thinner than object-cache and should remain a tracked follow-up until an acceptance case covers it directly.
 - Gate-ready closure still requires a fresh main/master rebase, focused CMake/CLion regression, Bazel 7.4.1 focused
