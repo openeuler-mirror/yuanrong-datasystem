@@ -138,11 +138,11 @@ worker::WorkerRecoveryEvidenceReport ObjectCacheRecoveryState::BuildObjectCacheR
                                                                 memoryReady && diskReady);
 }
 
-worker::WorkerRecoveryGeneration ObjectCacheRecoveryState::BeginRecoveryEvidenceGeneration(std::string detail)
+worker::WorkerRecoveryGeneration ObjectCacheRecoveryState::BeginRecoveryEvidenceGeneration(const std::string &detail)
 {
     auto generation = recoveryEvidenceTracker_->BeginRecovery(detail);
     worker::WorkerRecoveryEvidenceBuilder builder;
-    SetMetadataRecoveryEvidenceReport(builder.BuildReport(std::move(detail)));
+    SetMetadataRecoveryEvidenceReport(builder.BuildReport(detail));
     SetOwnershipRecoveryEvidenceReport(builder.BuildReport("ownership reconciliation pending"));
     return generation;
 }

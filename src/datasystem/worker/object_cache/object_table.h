@@ -69,7 +69,7 @@ public:
     class RecoverySnapshotCursor {
     public:
         RecoverySnapshotCursor();
-        ~RecoverySnapshotCursor();
+        ~RecoverySnapshotCursor() = default;
 
     private:
         uint64_t generation_{ 0 };

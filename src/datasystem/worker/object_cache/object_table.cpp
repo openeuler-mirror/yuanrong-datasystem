@@ -154,8 +154,6 @@ ObjectTable::Iterator::~Iterator() = default;
 
 ObjectTable::RecoverySnapshotCursor::RecoverySnapshotCursor() = default;
 
-ObjectTable::RecoverySnapshotCursor::~RecoverySnapshotCursor() = default;
-
 ObjectTable::Iterator::reference ObjectTable::Iterator::operator*() const
 {
     return *(*impl_->iterator_);

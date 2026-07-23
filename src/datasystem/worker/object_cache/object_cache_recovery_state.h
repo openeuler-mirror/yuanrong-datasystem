@@ -61,7 +61,7 @@ public:
         const OwnershipRecoveryEvidenceProvider &ownershipEvidenceProvider,
         const ResourceRecoveredProvider &resourceRecovered, uint64_t *resourceRecoveryGeneration = nullptr) const;
 
-    worker::WorkerRecoveryGeneration BeginRecoveryEvidenceGeneration(std::string detail);
+    worker::WorkerRecoveryGeneration BeginRecoveryEvidenceGeneration(const std::string &detail);
     worker::WorkerRecoveryEvidenceReport TrackEvidenceForGeneration(worker::WorkerRecoveryGeneration generation,
                                                                     worker::WorkerRecoveryEvidenceReport report);
 

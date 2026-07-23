@@ -29,7 +29,7 @@
 namespace datasystem {
 namespace object_cache {
 namespace {
-static constexpr int DEBUG_LOG_LEVEL = 2;
+constexpr int DEBUG_LOG_LEVEL = 2;
 
 std::string BuildMetadataTableName()
 {
