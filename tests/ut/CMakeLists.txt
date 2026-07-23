@@ -313,30 +313,40 @@ target_link_libraries(data_worker_options_test PRIVATE
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
 target_link_libraries(worker_runtime_state_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
         GTest::gtest
         GTest::gmock
         worker_runtime_state
-        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END})
 target_link_libraries(worker_service_admission_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
         GTest::gtest
         GTest::gmock
         worker_service_admission
-        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END})
 target_link_libraries(worker_admission_facade_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
         GTest::gtest
         GTest::gmock
         worker_admission_facade
-        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END})
 target_link_libraries(worker_runtime_facade_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
         GTest::gtest
         GTest::gmock
         worker_runtime_facade
-        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END})
 target_link_libraries(worker_isolation_coordinator_ut PRIVATE
+        ${DS_UT_HEAVY_LINK_START}
         GTest::gtest
         GTest::gmock
         worker_isolation_coordinator
-        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        ${DS_UT_HEAVY_LINK_END})
 target_link_libraries(cluster_topology_contract_ut PRIVATE
         GTest::gtest
         GTest::gmock
