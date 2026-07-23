@@ -630,17 +630,24 @@ Status TopologyController::CommitConfirmedFailures(const TopologySnapshot &lates
     if (confirmed.size() == retainedCount) {
         return Status::OK();
     }
-    LOG(WARNING) << "CLUSTER_FAILURE cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+    const bool replan = latest.GetActiveBatch().has_value()
+                        && latest.GetActiveBatch()->type == TopologyChangeType::FAILURE;
+    LOG(WARNING) << "CLUSTER_FAILURE cluster=" << keys_.ClusterName() << " action=plan version=" << latest.Version()
                  << " confirmed_count=" << confirmed.size()
                  << " confirmed_missing_count=" << classification.confirmedMissing.size()
-                 << " sample=" << MemberIdentitySample(confirmed) << " outcome=start_or_replan";
+                 << " sample=" << MemberIdentitySample(confirmed)
+                 << " outcome=" << (replan ? "replan_pending" : "start_pending");
     TopologyPlan plan;
     RETURN_IF_NOT_OK(planBuilder_.BuildFailureStartOrReplan(
         { latest.ClusterHasInit(), latest.Version(), latest.Members(), latest.GetActiveBatch() }, confirmed, plan));
     EraseMembers(plan.next, classification.removeInitial);
     EraseMembers(plan.next, classification.removeJoining);
     std::shared_ptr<const TopologySnapshot> committed;
-    return CommitAndReadBack(latest.Version(), plan.next, committed);
+    auto rc = CommitAndReadBack(latest.Version(), plan.next, committed);
+    if (rc.IsOk()) {
+        LogBatchStart(latest, *committed, confirmed, replan ? "replan" : "start");
+    }
+    return rc;
 }
 
 Status TopologyController::CommitUncommittedCleanup(const TopologySnapshot &latest,
@@ -1100,20 +1107,20 @@ Status TopologyController::CommitStartedBatch(const TopologySnapshot &latest, co
     std::shared_ptr<const TopologySnapshot> committed;
     auto rc = CommitAndReadBack(latest.Version(), next, committed);
     if (rc.IsOk()) {
-        LogBatchStart(latest, *committed, participants);
+        LogBatchStart(latest, *committed, participants, "start");
     }
     return rc;
 }
 
 void TopologyController::LogBatchStart(const TopologySnapshot &latest, const TopologySnapshot &committed,
-                                       const std::vector<MemberIdentity> &participants) const
+                                       const std::vector<MemberIdentity> &participants, const char *action) const
 {
     const auto activeBatch = committed.GetActiveBatch();
     if (!activeBatch.has_value()) {
         return;
     }
     LOG(INFO) << "CLUSTER_CHANGE_BATCH cluster=" << keys_.ClusterName()
-              << " action=start batch_type=" << TopologyChangeTypeName(activeBatch->type)
+              << " action=" << action << " batch_type=" << TopologyChangeTypeName(activeBatch->type)
               << " batch_epoch=" << activeBatch->epoch << " previous_version=" << latest.Version()
               << " committed_version=" << committed.Version() << " participant_count=" << participants.size()
               << " sample=" << MemberIdentitySample(participants);
@@ -1137,10 +1144,12 @@ Status TopologyController::CommitAndReadBack(uint64_t expectedVersion, const Top
         desired.activeBatch.has_value() ? TopologyChangeTypeName(desired.activeBatch->type) : "none";
     const auto batchEpoch =
         desired.activeBatch.has_value() ? desired.activeBatch->epoch : TOPOLOGY_NO_ACTIVE_BATCH_EPOCH;
-    VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
-        << "CLUSTER_RING cluster=" << keys_.ClusterName() << " version=" << committed->Version()
-        << " digest_prefix=" << TopologyDiagnosticPrefix(committed->CanonicalDigest())
-        << " status=cas_committed";
+    LOG(INFO) << "CLUSTER_RING cluster=" << keys_.ClusterName() << " role=controller status=cas_committed"
+              << " version=" << committed->Version()
+              << " authority_revision=" << committed->AuthorityRevision()
+              << " digest_prefix=" << TopologyDiagnosticPrefix(committed->CanonicalDigest())
+              << " member_count=" << committed->Members().size()
+              << " " << TopologyRingViewsForLog(*committed);
     LOG(INFO) << "CLUSTER_CHANGE cluster=" << keys_.ClusterName() << " version=" << committed->Version()
               << " expected_version=" << expectedVersion << " authority_revision=" << committed->AuthorityRevision()
               << " digest_prefix=" << TopologyDiagnosticPrefix(committed->CanonicalDigest())

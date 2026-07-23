@@ -919,7 +919,8 @@ void TopologyEngine::LogAndNotifyPublishedSnapshot(std::shared_ptr<const Topolog
               << " active_count=" << published->ActiveMembers().size()
               << " failed_count=" << published->FailedMembers().size() << " local_member_found=" << localStatus.IsOk()
               << " local_state=" << (localStatus.IsOk() ? MemberStateName(local->state) : "missing")
-              << " local_member_id_prefix=" << (localStatus.IsOk() ? MemberIdForLog(local->identity.id) : "");
+              << " local_member_id_prefix=" << (localStatus.IsOk() ? MemberIdForLog(local->identity.id) : "")
+              << " " << TopologyRingViewsForLog(*published);
     NotifySnapshotPublished(std::move(published));
 }
 

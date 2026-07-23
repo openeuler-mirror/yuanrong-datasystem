@@ -347,7 +347,7 @@ private:
                               const std::vector<MemberIdentity> &participants);
 
     void LogBatchStart(const TopologySnapshot &latest, const TopologySnapshot &committed,
-                       const std::vector<MemberIdentity> &participants) const;
+                       const std::vector<MemberIdentity> &participants, const char *action) const;
 
     /**
      * @brief CAS and exact-read the committed state.
