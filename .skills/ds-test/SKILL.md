@@ -80,8 +80,9 @@ For a fresh worktree on the latest `main/master`, prefer a two-step CMake flow w
 
 ```bash
 DS_OPENSOURCE_DIR=<third_party_cache_dir> \
+TMPDIR=<build_dir>/tmp \
   bash build.sh -B <build_dir> -o <output_dir> -X off -P off -J off -G off -p off -j <jobs> -i on -t build
-cmake --build <build_dir> -j <jobs> --target <target>
+TMPDIR=<build_dir>/tmp cmake --build <build_dir> -j <jobs> --target <target>
 ```
 
 If a file glob change triggers CMake reconfigure during a later direct target build, refresh the build directory with the
@@ -101,9 +102,15 @@ build:
 
 ```bash
 cd <build_dir>
+export DATASYSTEM_ST_SOCKET_BASE_DIR=/home/$USER/dsuds
+mkdir -p "$DATASYSTEM_ST_SOCKET_BASE_DIR"
 LD_LIBRARY_PATH=src/datasystem/worker:src/datasystem/master:src/datasystem/common/kvstore/etcd:src/datasystem/common/rpc:src/datasystem/protos:$LD_LIBRARY_PATH \
   tests/st/ds_st --gtest_filter=<Suite.Test> --gtest_color=no
 ```
+
+On shared Linux hosts, keep both temporary roots off `/tmp` when root filesystem pressure is possible. Use `TMPDIR` for
+compiler temporary files and a short `DATASYSTEM_ST_SOCKET_BASE_DIR` path for ST worker UDS directories; the
+`unix_domain_socket_dir` validator rejects long paths.
 
 Do not blindly copy older worktree helper flags. In particular, the PR1129 `scripts/clion_remote_build.sh` used `-U on`,
 but current `main/master` `build.sh` no longer accepts `-U`. Check `bash build.sh -h` before generalizing a helper script.
@@ -117,7 +124,7 @@ For a worktree that has the CLion helper scripts, run:
 
 ```bash
 REMOTE_HOST=<linux_build_host> \
-REMOTE_THIRDPARTY=<shared_third_party_cache> \
+REMOTE_THIRDPARTY=/home/cache/ds-thirdparty-cache \
 JOBS=<jobs> \
   bash scripts/clion_remote_build.sh index
 ```

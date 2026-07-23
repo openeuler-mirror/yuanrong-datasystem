@@ -45,6 +45,13 @@ namespace datasystem {
 namespace st {
 namespace {
 constexpr int PORT_LISTEN_POLL_INTERVAL_MS = 10;
+constexpr const char *ST_SOCKET_BASE_DIR_ENV = "DATASYSTEM_ST_SOCKET_BASE_DIR";
+
+std::string GetStSocketBaseDir()
+{
+    const char *baseDir = std::getenv(ST_SOCKET_BASE_DIR_ENV);
+    return baseDir != nullptr && baseDir[0] != '\0' ? baseDir : "/tmp";
+}
 
 Status TryConnectTcpPort(const HostPort &addr)
 {
@@ -107,7 +114,7 @@ ExternalCluster::ExternalCluster(const ExternalClusterOptions &opt) : opts_(opt)
     }
     if (opts_.socketDir.empty()) {
         const int randomLen = 12;
-        opts_.socketDir = "/tmp/" + randomData_.GetRandomString(randomLen);
+        opts_.socketDir = JoinPath(GetStSocketBaseDir(), randomData_.GetRandomString(randomLen));
         FLAGS_unix_domain_socket_dir = opts_.socketDir;
     }
     // Add random prefixes to tables in etcd to prevent conflicts when multiple cases are running at the same time.
