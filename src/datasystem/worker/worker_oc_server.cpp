@@ -17,6 +17,7 @@
 #include "datasystem/worker/worker_oc_server.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <exception>
@@ -1007,8 +1008,9 @@ void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnap
         if (addr.ParseString(addrStr).IsError() || addr.Empty()) {
             continue;
         }
-        for (auto type :
-             { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC }) {
+        const std::array<StubType, 3> stubTypes{ StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC,
+                                                 StubType::WORKER_WORKER_TRANS_SVC };
+        for (auto type : stubTypes) {
             RpcStubCacheMgr::Instance().Remove(addr, type);
         }
     }

@@ -12,11 +12,8 @@
 #include <string>
 #include <unordered_map>
 
+#include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/common/util/status_helper.h"
-
-namespace datasystem::cluster {
-class TopologyEngine;
-}  // namespace datasystem::cluster
 
 namespace datasystem::worker {
 

@@ -17,8 +17,10 @@ namespace {
 TEST(ObjectCacheOwnershipReconciliationTest, LocalIsolationUsesCommittedOwnersAndLocalWorker)
 {
     ObjectCacheOwnershipReconciliationPlan plan;
-    auto rc = BuildOwnershipReconciliationPlan(false, "master:1", "worker:1", { "worker:2", "worker:3" },
-                                               OwnershipReconciliationKind::LOCAL_ISOLATION, plan);
+    ObjectCacheOwnershipReconciliationRequest request{
+        false, "master:1", "worker:1", { "worker:2", "worker:3" }, OwnershipReconciliationKind::LOCAL_ISOLATION
+    };
+    auto rc = BuildOwnershipReconciliationPlan(request, plan);
 
     ASSERT_TRUE(rc.IsOk());
     EXPECT_EQ(plan.metadataOwners, (std::set<std::string>{ "worker:1", "worker:2", "worker:3" }));
@@ -29,8 +31,10 @@ TEST(ObjectCacheOwnershipReconciliationTest, LocalIsolationUsesCommittedOwnersAn
 TEST(ObjectCacheOwnershipReconciliationTest, CentralizedNetworkRecoveryUsesMasterOnly)
 {
     ObjectCacheOwnershipReconciliationPlan plan;
-    auto rc = BuildOwnershipReconciliationPlan(true, "master:1", "worker:1", { "worker:2" },
-                                               OwnershipReconciliationKind::NETWORK_RECOVERY, plan);
+    ObjectCacheOwnershipReconciliationRequest request{
+        true, "master:1", "worker:1", { "worker:2" }, OwnershipReconciliationKind::NETWORK_RECOVERY
+    };
+    auto rc = BuildOwnershipReconciliationPlan(request, plan);
 
     ASSERT_TRUE(rc.IsOk());
     EXPECT_EQ(plan.metadataOwners, (std::set<std::string>{ "master:1" }));
@@ -41,7 +45,10 @@ TEST(ObjectCacheOwnershipReconciliationTest, CentralizedNetworkRecoveryUsesMaste
 TEST(ObjectCacheOwnershipReconciliationTest, EmptyDistributedOwnersReturnsNotReady)
 {
     ObjectCacheOwnershipReconciliationPlan plan;
-    auto rc = BuildOwnershipReconciliationPlan(false, "master:1", "", {}, OwnershipReconciliationKind::RESTART, plan);
+    ObjectCacheOwnershipReconciliationRequest request{
+        false, "master:1", "", {}, OwnershipReconciliationKind::RESTART
+    };
+    auto rc = BuildOwnershipReconciliationPlan(request, plan);
 
     EXPECT_TRUE(rc.IsError());
     EXPECT_EQ(rc.GetCode(), K_NOT_READY);

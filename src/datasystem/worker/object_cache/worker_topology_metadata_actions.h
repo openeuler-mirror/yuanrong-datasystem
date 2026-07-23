@@ -9,11 +9,8 @@
 #ifndef DATASYSTEM_WORKER_OBJECT_CACHE_WORKER_TOPOLOGY_METADATA_ACTIONS_H
 #define DATASYSTEM_WORKER_OBJECT_CACHE_WORKER_TOPOLOGY_METADATA_ACTIONS_H
 
+#include "datasystem/master/metadata_manager_holder.h"
 #include "datasystem/worker/runtime/worker_topology_phase_callbacks.h"
-
-namespace datasystem {
-class MetadataManagerHolder;
-}
 
 namespace datasystem::object_cache {
 

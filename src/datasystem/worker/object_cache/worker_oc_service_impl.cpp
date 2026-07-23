@@ -2499,9 +2499,10 @@ Status WorkerOCServiceImpl::ReconcileMembershipChange()
         RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
     }
     ObjectCacheOwnershipReconciliationPlan plan;
-    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(centralizedMetadata_, localMasterAddress_.ToString(),
-                                                      localAddress_.ToString(), committedAddresses,
-                                                      OwnershipReconciliationKind::RESTART, plan));
+    ObjectCacheOwnershipReconciliationRequest request{ centralizedMetadata_, localMasterAddress_.ToString(),
+                                                       localAddress_.ToString(), std::move(committedAddresses),
+                                                       OwnershipReconciliationKind::RESTART };
+    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(request, plan));
     const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
     for (const auto &masterAddress : plan.metadataOwners) {
         LOG_IF_ERROR(ScheduleReconciliationRequest(masterAddress, eventTimestamp, ReconciliationQueryPb::RESTART),
@@ -2517,9 +2518,10 @@ Status WorkerOCServiceImpl::ReconcileLocalIsolationOwnership()
         RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
     }
     ObjectCacheOwnershipReconciliationPlan plan;
-    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(centralizedMetadata_, localMasterAddress_.ToString(),
-                                                      localAddress_.ToString(), committedAddresses,
-                                                      OwnershipReconciliationKind::LOCAL_ISOLATION, plan));
+    ObjectCacheOwnershipReconciliationRequest request{ centralizedMetadata_, localMasterAddress_.ToString(),
+                                                       localAddress_.ToString(), std::move(committedAddresses),
+                                                       OwnershipReconciliationKind::LOCAL_ISOLATION };
+    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(request, plan));
     (void)BeginRecoveryEvidenceGeneration(plan.pendingEvidenceDetail);
     const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
     for (const auto &masterAddress : plan.metadataOwners) {
@@ -2537,9 +2539,10 @@ Status WorkerOCServiceImpl::ReconcileNetworkRecoveryOwnership()
         RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
     }
     ObjectCacheOwnershipReconciliationPlan plan;
-    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(centralizedMetadata_, localMasterAddress_.ToString(),
-                                                      localAddress_.ToString(), committedAddresses,
-                                                      OwnershipReconciliationKind::NETWORK_RECOVERY, plan));
+    ObjectCacheOwnershipReconciliationRequest request{ centralizedMetadata_, localMasterAddress_.ToString(),
+                                                       localAddress_.ToString(), std::move(committedAddresses),
+                                                       OwnershipReconciliationKind::NETWORK_RECOVERY };
+    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(request, plan));
     (void)BeginRecoveryEvidenceGeneration(plan.pendingEvidenceDetail);
     const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
     for (const auto &masterAddress : plan.metadataOwners) {

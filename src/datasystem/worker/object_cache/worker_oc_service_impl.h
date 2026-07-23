@@ -91,6 +91,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
+#include "datasystem/worker/runtime/worker_topology_runtime.h"
 
 namespace datasystem {
 namespace master {
@@ -98,7 +99,6 @@ class MasterOCServiceImpl;
 }
 namespace worker {
 class WorkerMasterOCApi;
-class IWorkerTopologyRuntime;
 }  // namespace worker
 namespace object_cache {
 

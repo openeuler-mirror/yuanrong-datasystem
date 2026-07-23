@@ -25,15 +25,12 @@
 #include <vector>
 
 #include "datasystem/cluster/membership/membership_types.h"
+#include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
 #include "datasystem/common/kvstore/kv_store.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/utils/status.h"
-
-namespace datasystem {
-class ICoordinatorServiceProxy;
-}  // namespace datasystem
 
 namespace datasystem::cluster {
 

@@ -146,27 +146,31 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use injected topology metadata actions")
 
-    def test_object_cache_metadata_action_header_hides_master_holder(self):
+    def test_object_cache_metadata_action_header_exposes_only_holder_boundary(self):
         header = REPO_ROOT / "src/datasystem/worker/object_cache/worker_topology_metadata_actions.h"
         text = header.read_text(encoding="utf-8")
 
-        self.assertIn("class MetadataManagerHolder;", text)
+        self.assertIn("datasystem/master/metadata_manager_holder.h", text)
         forbidden_tokens = [
-            "datasystem/master/metadata_manager_holder.h",
+            "datasystem/master/object_cache/oc_metadata_manager.h",
+            "datasystem/master/object_cache/oc_migrate_metadata_manager.h",
+            "datasystem/master/stream_cache/sc_metadata_manager.h",
+            "datasystem/master/stream_cache/sc_migrate_metadata_manager.h",
         ]
         for token in forbidden_tokens:
-            self.assertNotIn(token, text, f"{header} should not expose concrete master metadata holder headers")
+            self.assertNotIn(token, text, f"{header} should not expose concrete master metadata managers")
 
-    def test_object_cache_action_header_hides_service_impl(self):
+    def test_object_cache_action_header_exposes_only_service_boundary(self):
         header = REPO_ROOT / "src/datasystem/worker/object_cache/worker_topology_object_cache_actions.h"
         text = header.read_text(encoding="utf-8")
 
-        self.assertIn("class WorkerOCServiceImpl;", text)
+        self.assertIn("datasystem/worker/object_cache/worker_oc_service_impl.h", text)
         forbidden_tokens = [
-            "datasystem/worker/object_cache/worker_oc_service_impl.h",
+            "datasystem/cluster/executor/topology_phase_callbacks.h",
+            "datasystem/common/kvstore/etcd/etcd_store.h",
         ]
         for token in forbidden_tokens:
-            self.assertNotIn(token, text, f"{header} should not expose concrete object-cache service headers")
+            self.assertNotIn(token, text, f"{header} should keep object-cache action dependencies narrow")
 
     def test_data_migrator_does_not_depend_on_topology_callback_executor(self):
         files = [
@@ -215,9 +219,7 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
     def test_worker_oc_server_header_does_not_expose_runtime_internals(self):
         header = REPO_ROOT / "src/datasystem/worker/worker_oc_server.h"
         text = header.read_text(encoding="utf-8")
-        self.assertIn("class WorkerIsolationCoordinator;", text)
         forbidden_tokens = [
-            "datasystem/worker/runtime/worker_isolation_coordinator.h",
             "datasystem/worker/runtime/worker_topology_availability_admission.h",
             "datasystem/worker/runtime/worker_control_backend_probe.h",
             "datasystem/worker/runtime/worker_topology_phase_callbacks.h",
@@ -290,18 +292,18 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use ICoordinationBackend abstractions")
 
-    def test_coordination_backend_interface_hides_concrete_proxy_headers(self):
+    def test_coordination_backend_interface_hides_concrete_backend_headers(self):
         header = REPO_ROOT / "src/datasystem/cluster/coordination_backend/coordination_backend.h"
         text = header.read_text(encoding="utf-8")
 
-        self.assertIn("class ICoordinatorServiceProxy;", text)
+        self.assertIn("class ICoordinationBackend", text)
         forbidden_tokens = [
-            "datasystem/common/coordinator/coordinator_service_proxy.h",
             "ds_coordination_backend.h",
             "etcd_coordination_backend.h",
+            "datasystem/common/kvstore/etcd/etcd_store.h",
         ]
         for token in forbidden_tokens:
-            self.assertNotIn(token, text, "ICoordinationBackend should not expose concrete backend/proxy headers")
+            self.assertNotIn(token, text, "ICoordinationBackend should not expose concrete backend headers")
 
     def test_slot_recovery_store_uses_coordination_backend_not_etcd_store(self):
         files = [

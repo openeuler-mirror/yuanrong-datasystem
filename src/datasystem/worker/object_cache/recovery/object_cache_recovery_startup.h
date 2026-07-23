@@ -9,12 +9,13 @@
 #ifndef DATASYSTEM_WORKER_OBJECT_CACHE_RECOVERY_OBJECT_CACHE_RECOVERY_STARTUP_H
 #define DATASYSTEM_WORKER_OBJECT_CACHE_RECOVERY_OBJECT_CACHE_RECOVERY_STARTUP_H
 
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_state.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
+
 namespace datasystem {
 namespace worker {
-class WorkerRuntimeFacade;
 }  // namespace worker
 namespace object_cache {
-class ObjectCacheRecoveryState;
 
 void MarkRestartReconciliationPending(worker::WorkerRuntimeFacade *runtime, ObjectCacheRecoveryState *recoveryState,
                                       bool isRestart, bool controlBackendAvailableAtStartup, bool enableReconciliation);

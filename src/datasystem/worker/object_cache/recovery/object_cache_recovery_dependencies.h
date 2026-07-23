@@ -22,11 +22,11 @@
 
 #include <memory>
 
+#include "datasystem/worker/object_cache/service/object_metadata_reader.h"
+#include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
+
 namespace datasystem {
 namespace object_cache {
-
-class ObjectMetadataReader;
-class SlotRecoveryStore;
 
 struct ObjectCacheRecoveryDependencies {
     std::shared_ptr<ObjectMetadataReader> metadataReader;

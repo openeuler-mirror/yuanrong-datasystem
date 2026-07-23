@@ -67,6 +67,7 @@ public:
     explicit Impl(WorkerRuntimeStateReadGuard guard) : guard_(std::move(guard))
     {
     }
+    ~Impl() = default;
 
 private:
     WorkerRuntimeStateReadGuard guard_;
@@ -87,6 +88,7 @@ public:
     Impl() : admission(state), recovery(state)
     {
     }
+    ~Impl() = default;
 
     // Keep state before members that store references to it; C++ destroys members in reverse declaration order.
     WorkerRuntimeStateManager state;

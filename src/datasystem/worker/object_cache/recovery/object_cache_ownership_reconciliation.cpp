@@ -38,22 +38,20 @@ std::string EmptyOwnersMessage(OwnershipReconciliationKind kind)
 }
 }  // namespace
 
-Status BuildOwnershipReconciliationPlan(bool centralizedMetadata, const std::string &localMasterAddress,
-                                        const std::string &localWorkerAddress,
-                                        const std::vector<std::string> &committedAddresses,
-                                        OwnershipReconciliationKind kind, ObjectCacheOwnershipReconciliationPlan &plan)
+Status BuildOwnershipReconciliationPlan(const ObjectCacheOwnershipReconciliationRequest &request,
+                                        ObjectCacheOwnershipReconciliationPlan &plan)
 {
     plan = {};
-    plan.pendingEvidenceDetail = PendingEvidenceDetail(kind);
-    plan.emptyOwnersMessage = EmptyOwnersMessage(kind);
-    if (centralizedMetadata) {
-        if (!localMasterAddress.empty()) {
-            plan.metadataOwners.emplace(localMasterAddress);
+    plan.pendingEvidenceDetail = PendingEvidenceDetail(request.kind);
+    plan.emptyOwnersMessage = EmptyOwnersMessage(request.kind);
+    if (request.centralizedMetadata) {
+        if (!request.localMasterAddress.empty()) {
+            plan.metadataOwners.emplace(request.localMasterAddress);
         }
     } else {
-        plan.metadataOwners.insert(committedAddresses.begin(), committedAddresses.end());
-        if (!localWorkerAddress.empty()) {
-            plan.metadataOwners.emplace(localWorkerAddress);
+        plan.metadataOwners.insert(request.committedAddresses.begin(), request.committedAddresses.end());
+        if (!request.localWorkerAddress.empty()) {
+            plan.metadataOwners.emplace(request.localWorkerAddress);
         }
     }
     if (plan.metadataOwners.empty()) {

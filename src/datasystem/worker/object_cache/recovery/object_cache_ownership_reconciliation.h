@@ -30,10 +30,16 @@ struct ObjectCacheOwnershipReconciliationPlan {
     std::string emptyOwnersMessage;
 };
 
-Status BuildOwnershipReconciliationPlan(bool centralizedMetadata, const std::string &localMasterAddress,
-                                        const std::string &localWorkerAddress,
-                                        const std::vector<std::string> &committedAddresses,
-                                        OwnershipReconciliationKind kind, ObjectCacheOwnershipReconciliationPlan &plan);
+struct ObjectCacheOwnershipReconciliationRequest {
+    bool centralizedMetadata = false;
+    std::string localMasterAddress;
+    std::string localWorkerAddress;
+    std::vector<std::string> committedAddresses;
+    OwnershipReconciliationKind kind = OwnershipReconciliationKind::RESTART;
+};
+
+Status BuildOwnershipReconciliationPlan(const ObjectCacheOwnershipReconciliationRequest &request,
+                                        ObjectCacheOwnershipReconciliationPlan &plan);
 
 }  // namespace object_cache
 }  // namespace datasystem

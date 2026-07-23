@@ -21,10 +21,10 @@
 #include <string>
 
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/worker/runtime/worker_runtime_state.h"
 #include "datasystem/worker/runtime/worker_runtime_types.h"
 
 namespace datasystem::worker {
-class WorkerRuntimeStateManager;
 
 class WorkerServiceAdmission {
 public:

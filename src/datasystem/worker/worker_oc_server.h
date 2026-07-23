@@ -57,7 +57,9 @@
 #include "datasystem/worker/stream_cache/master_worker_sc_service_impl.h"
 #include "datasystem/worker/stream_cache/worker_worker_sc_service_impl.h"
 #include "datasystem/worker/worker_liveness_check.h"
+#include "datasystem/worker/runtime/worker_isolation_coordinator.h"
 #include "datasystem/worker/runtime/worker_runtime_facade.h"
+#include "datasystem/worker/runtime/worker_topology_runtime.h"
 #include "datasystem/protos/object_posix.brpc.pb.h"
 #include "datasystem/protos/master_heartbeat.brpc.pb.h"
 #include "datasystem/protos/share_memory.brpc.pb.h"
@@ -85,8 +87,6 @@
 #endif
 
 namespace datasystem::worker {
-class WorkerIsolationCoordinator;
-class WorkerTopologyRuntimeAdapter;
 
 class WorkerOCServer : public CommonServer {
 public:
