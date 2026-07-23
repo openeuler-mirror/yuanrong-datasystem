@@ -78,6 +78,7 @@ ds_cc_library(
         ":worker_recovery_controller",
         ":worker_recovery_evidence",
         ":worker_runtime_types",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/util:status_helper",
     ],
 )
