@@ -401,7 +401,26 @@
   - CLion remote `tests-index` build after latest rebase: passed in 439s with URMA Mock, third-party cache reuse in 0s,
     and 1161 compile database entries;
   - Bazel 7.4.1 focused worker/object-cache/runtime build: first correct run passed in 374.07s and cached rerun passed
-    in 0.62s.
+    in 0.62s;
+  - 2026-07-23 post-codecheck-fix verification on
+    `feat/worker-self-healing-main-20260716@4ca91a95c94c03d0ae5546c6d95cafdbe7667f09`: CLion remote
+    `tests-index` passed in 262s with `REMOTE_THIRDPARTY=/home/cache/ds-thirdparty-cache`, third-party cache reuse in
+    1s, URMA Mock enabled, and 1162 compile database entries;
+  - 2026-07-23 post-codecheck-fix focused checks: `git diff --check` passed,
+    `git clang-format --diff main/master -- <7 touched C++ files>` reported no modified files, and
+    `python3 tests/scripts/test_worker_runtime_module_boundary.py` passed 40/40 in 0.056s;
+  - 2026-07-23 post-codecheck-fix focused UTs: runtime/coordination admission group passed 47/47 in 78ms,
+    object-cache recovery/service group passed 89/89 in 11.117s, representative migration-direct single case
+    `MigrateDataDirectTest.TestMigrateDataDirectSuccess` passed 1/1 in 6ms, and stream admission group passed 3/3 in
+    1ms;
+  - 2026-07-23 object-cache migration test hygiene note: running broad recovery and migration suites in one
+    `ds_ut_object` process failed 32 legacy migration cases after `ArenaManager already destroyed`; the representative
+    failed migration case passed when run in isolation, so focused worker-isolation regression commands should keep
+    migration lifecycle suites in their existing dedicated process grouping;
+  - 2026-07-23 PR gate workflow: latest `main/master` was fetched at
+    `4bc7301d60cc6cae1d33f0de31a27e77ed2dd85b` and is an ancestor of the branch head; `ds-pr-review prepare` passed
+    with 202 files, 330 comments, no warnings, and `parallel_multi_round`; branch push to GitCode succeeded and
+    `/retest` was posted to PR 1405.
 
 ## Open Questions
 
@@ -420,5 +439,7 @@
   - stream-cache scale/fault overlay now has direct focused admission coverage for DRAINING plus local-isolation overlap;
     broader stream data-retention ST coverage can still be expanded if acceptance wants an end-to-end stream case beyond
     the admission contract.
-- Gate-ready closure still requires `ds-pr-review prepare`, openlibing codecheck review, broader clang-tidy/file-scope
-  spot checks if codecheck reports source findings, and CI retest evidence.
+- Gate-ready closure still requires the next GitCode CI result and any new OpenLibing codecheck source findings after
+  the 2026-07-23 `/retest`; the latest actionable pre-fix OpenLibing report had two remaining include-style findings
+  that intentionally conflict with the `ICoordinationBackend`/runtime-boundary constraint and must not be "fixed" by
+  exposing concrete backend/runtime internals.
