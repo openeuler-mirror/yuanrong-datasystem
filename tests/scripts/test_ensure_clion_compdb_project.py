@@ -8,10 +8,18 @@ from xml.etree import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "ensure_clion_compdb_project.py"
+REWRITE_SCRIPT = ROOT / "scripts" / "rewrite_clion_compile_commands.py"
 
 
 def load_module():
     spec = importlib.util.spec_from_file_location("ensure_clion_compdb_project", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_rewrite_module():
+    spec = importlib.util.spec_from_file_location("rewrite_clion_compile_commands", REWRITE_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -94,9 +102,36 @@ class EnsureClionCompdbProjectTest(unittest.TestCase):
     def test_remote_build_script_uses_worktree_tmpdir(self):
         script = (ROOT / "scripts" / "clion_remote_build.sh").read_text(encoding="utf-8")
 
+        self.assertIn('REMOTE_THIRDPARTY="${REMOTE_THIRDPARTY:-/home/cache/ds-thirdparty-cache}"', script)
         self.assertIn('REMOTE_TMPDIR="${REMOTE_TMPDIR:-${REMOTE_DIR}/.clion-remote/${WORKTREE_NAME}/tmp}"', script)
         self.assertIn('"mkdir -p \'${REMOTE_DIR}\' \'${REMOTE_TMPDIR}\'"', script)
         self.assertIn("TMPDIR='${REMOTE_TMPDIR}'", script)
+
+    def test_rewrite_compile_commands_maps_current_and_legacy_thirdparty_roots(self):
+        module = load_rewrite_module()
+        entry = {
+            "command": (
+                "c++ -I/home/cache/ds-thirdparty-cache/gtest/include "
+                "-isystem /home/ds-thirdparty-cache/brpc/include"
+            ),
+            "arguments": [
+                "c++",
+                "-I/home/cache/ds-thirdparty-cache/protobuf/include",
+                "-isystem",
+                "/home/ds-thirdparty-cache/absl/include",
+            ],
+        }
+
+        module.rewrite_cache_paths(
+            entry,
+            module.remote_cache_roots("/home/cache/ds-thirdparty-cache"),
+            "/repo/.clion-remote/worktree/ds-thirdparty-cache",
+        )
+
+        serialized = repr(entry)
+        self.assertNotIn("/home/cache/ds-thirdparty-cache", serialized)
+        self.assertNotIn("/home/ds-thirdparty-cache", serialized)
+        self.assertIn("/repo/.clion-remote/worktree/ds-thirdparty-cache/brpc/include", serialized)
 
     def test_excludes_generated_and_bazel_paths_from_clion_module(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -4,7 +4,7 @@ set -euo pipefail
 REMOTE_HOST="${REMOTE_HOST:-tiantiyun-80c128g}"
 WORKTREE_NAME="$(basename "$(pwd)")"
 REMOTE_DIR="${REMOTE_DIR:-$(pwd)}"
-REMOTE_THIRDPARTY="${REMOTE_THIRDPARTY:-/home/ds-thirdparty-cache}"
+REMOTE_THIRDPARTY="${REMOTE_THIRDPARTY:-/home/cache/ds-thirdparty-cache}"
 LOCAL_THIRDPARTY="${LOCAL_THIRDPARTY:-.clion-remote/${WORKTREE_NAME}/ds-thirdparty-cache}"
 BUILD_DIR="${BUILD_DIR:-.clion-remote/${WORKTREE_NAME}/build}"
 OUTPUT_DIR="${OUTPUT_DIR:-.clion-remote/${WORKTREE_NAME}/output}"
