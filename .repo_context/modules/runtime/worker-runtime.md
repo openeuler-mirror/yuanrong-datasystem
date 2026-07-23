@@ -494,6 +494,17 @@
     coordination-backend boundaries, object-cache metadata recovery, cluster topology, UT/ST, CLion scripts, and plan
     evidence. The latest working-tree refactor is intentionally small and subtractive in `worker_oc_service_impl.cpp`
     while adding one cohesive recovery helper plus focused tests/build entries.
+  - 2026-07-23 post-rebase scale/fault overlay closure: branch was rebased cleanly onto
+    `main/master@997ae2443bc07f2bfbef0eb08a71e6807d561568`; added
+    `WorkerTopologyAvailabilityAdmissionTest.VoluntaryScaleDownIsNotReopenedByTopologyRecoveryEvidence` to pin the
+    ScaleIn/DRAINING terminal contract when topology recovery or global control-backend-degraded evidence arrives.
+    The new UT ran 1/1 in 0ms, the related runtime/admission group passed 27/27 in 52ms, `git diff --check` passed,
+    worker runtime/module boundary passed 40/40 in 0.058s, and `git clang-format --diff main/master -- <touched test>`
+    reported no modified files.
+  - 2026-07-23 post-rebase Bazel 7.4.1 focused validation for the new ScaleIn/fault-overlay guard:
+    `//tests/ut/worker:worker_topology_availability_admission_test` passed in 144.266s on the first run after rebase
+    and cached rerun passed in 0.362s. The first run rebuilt Bazel action-cache entries for gRPC/proto/etcd and local
+    targets from `.bazel-cache/distdir`; it did not indicate a CMake third-party rebuild.
 
 ## Open Questions
 

@@ -295,6 +295,30 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, DisabledSlotRecoveryDoesNotBlockPa
     EXPECT_TRUE(runtime.CheckAdmission(WorkerAdmissionKind::NORMAL_WRITE, "Create").IsOk());
 }
 
+TEST(WorkerTopologyAvailabilityAdmissionTest, VoluntaryScaleDownIsNotReopenedByTopologyRecoveryEvidence)
+{
+    WorkerRuntimeFacade runtime;
+    WorkerRecoveryEvidenceReport completeReport = CompleteTopologyRecoveryReport();
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &completeReport);
+    ASSERT_EQ(runtime.GetSnapshot().mode, WorkerServiceMode::RUNNING);
+
+    runtime.MarkDraining("voluntary scale-down drain started");
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &completeReport);
+
+    auto snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, WorkerServiceMode::DRAINING);
+    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
+    EXPECT_EQ(runtime.CheckAdmission(WorkerAdmissionKind::NORMAL_WRITE, "Create").GetCode(), K_NOT_READY);
+    EXPECT_EQ(runtime.CheckAdmission(WorkerAdmissionKind::MIGRATION_TARGET, "MigrateData").GetCode(), K_NOT_READY);
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED, runtime,
+                                            &completeReport);
+    snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, WorkerServiceMode::DRAINING);
+    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
+}
+
 TEST(WorkerTopologyAvailabilityAdmissionTest, ShuttingDownIsTerminal)
 {
     WorkerRuntimeFacade runtime;
