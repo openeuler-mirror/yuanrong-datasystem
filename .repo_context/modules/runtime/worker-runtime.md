@@ -520,6 +520,12 @@
     `ObjectTable::Get/Contains` failed `ObjectTableDoesNotPublishBeforeRecoveryGenerationCommit`, proving the lock is
     part of the index/table commit-order boundary. The change was reverted, and the related
     `MetadataRecoverySelectorTest.ObjectTable*` plus bounded-snapshot selectors passed 11/11 in 438ms.
+  - 2026-07-23 PR follow-up after `2166c810d`: fetched upstream `main/master` and confirmed
+    `997ae2443bc07f2bfbef0eb08a71e6807d561568` remains an ancestor of the PR head; local `docs/` diff is empty,
+    `git diff --check` passed, worker runtime/module boundary passed 40/40 in 0.060s,
+    `git clang-format --diff main/master -- worker_oc_service_impl.h <runtime plan>` reported no modified files, and
+    `ds-pr-review prepare` passed with no warnings. Existing CI comments showed earlier retests hit CodeCheck service
+    500s, so `/retest` was posted again for the latest head rather than waiting on stale jobs.
 
 ## Open Questions
 
