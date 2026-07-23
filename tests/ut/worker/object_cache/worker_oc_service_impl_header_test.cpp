@@ -79,7 +79,7 @@ public:
             objectTable_, hostPort, hostPort, GetTestMetadataRoute(), nullptr);
         impl_ = std::make_shared<WorkerOCServiceImpl>(
             hostPort, hostPort, objectTable_, nullptr, evictionManager, nullptr, nullptr, nullptr,
-            nullptr, GetTestMetadataRoute(), membership_, &exitRequested_, false, false);
+            nullptr, GetTestMetadataRoute(), membership_, &exitRequested_, nullptr, false, false);
         impl_->InitMetaSize();
         impl_->InitServiceImpl();
     }

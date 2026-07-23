@@ -335,7 +335,7 @@ public:
         impl_ = std::make_shared<WorkerOCServiceImpl>(
             localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
             topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
-            topologyRuntime_.Engine()->IsRestart(), false);
+            nullptr, topologyRuntime_.Engine()->IsRestart(), false);
         dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
             objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, nullptr, metadataRoute_, *endpointPolicy_,
             localAddress_.ToString());
