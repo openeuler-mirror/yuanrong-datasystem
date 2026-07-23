@@ -561,16 +561,6 @@ public:
     Status ReconcileNetworkRecoveryOwnership();
 
     /**
-     * @brief Schedule one reconciliation request to a metadata owner.
-     * @param[in] masterAddress Metadata owner address from the current topology.
-     * @param[in] eventTimestamp Stable timestamp shared by this reconciliation fanout.
-     * @param[in] eventType Reconciliation event type consumed by the metadata owner.
-     * @return Status of creating the API and scheduling the bounded asynchronous request.
-     */
-    Status ScheduleReconciliationRequest(const std::string &masterAddress, int64_t eventTimestamp,
-                                         master::ReconciliationQueryPb::EventType eventType);
-
-    /**
      * @brief Get the metadata size for specific data size.
      * @return The metadata size
      */
@@ -771,9 +761,6 @@ public:
      */
     Status RecoverMetadataOfRestartedWorker(const std::string &workerAddr);
 
-    Status FinishRestartMetadataRecovery(const std::string &workerAddr, const std::vector<std::string> &matchObjIds,
-                                         const std::vector<std::string> &failedIds);
-
     /**
      * @brief Handle worker restart event for metadata recovery.
      * @param[in] workerAddr Restarted worker address.
@@ -939,6 +926,19 @@ public:
 private:
     Status InitThreadResources();
     Status InitRecoveryServices();
+
+    Status FinishRestartMetadataRecovery(const std::string &workerAddr, const std::vector<std::string> &matchObjIds,
+                                         const std::vector<std::string> &failedIds);
+
+    /**
+     * @brief Schedule one reconciliation request to a metadata owner.
+     * @param[in] masterAddress Metadata owner address from the current topology.
+     * @param[in] eventTimestamp Stable timestamp shared by this reconciliation fanout.
+     * @param[in] eventType Reconciliation event type consumed by the metadata owner.
+     * @return Status of creating the API and scheduling the bounded asynchronous request.
+     */
+    Status ScheduleReconciliationRequest(const std::string &masterAddress, int64_t eventTimestamp,
+                                         master::ReconciliationQueryPb::EventType eventType);
 
     struct PreparedScaleInCleanupState {
         std::vector<std::string> objectIds;

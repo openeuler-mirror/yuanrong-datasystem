@@ -509,6 +509,17 @@
     `REMOTE_THIRDPARTY=/home/cache/ds-thirdparty-cache`; the third-party build stage reused cache in 0s, URMA Mock was
     enabled, and the generated compile database has 1164 entries. The long tail was source build, install/strip, example
     build, and CLion compile-command rewriting, not third-party recompilation.
+  - 2026-07-23 object-cache surface reduction: restored the non-PR `docs/superpowers` files so the PR no longer carries
+    those docs changes, and moved `WorkerOCServiceImpl::ScheduleReconciliationRequest` plus
+    `FinishRestartMetadataRecovery` from public to private because they are implementation-only helpers. Verification:
+    `git diff --check` passed, `git clang-format --diff main/master -- worker_oc_service_impl.h` reported no modified
+    files, worker runtime/module boundary passed 40/40 in 0.102s, and focused
+    `WorkerOcServiceImplTest.*Recovery*:*Reconciliation*:*Evidence*` passed 26/26 in 23ms after a header-triggered
+    CMake rebuild.
+  - 2026-07-23 ObjectTable hot-path lock audit: attempting to remove the shard read lock from ordinary
+    `ObjectTable::Get/Contains` failed `ObjectTableDoesNotPublishBeforeRecoveryGenerationCommit`, proving the lock is
+    part of the index/table commit-order boundary. The change was reverted, and the related
+    `MetadataRecoverySelectorTest.ObjectTable*` plus bounded-snapshot selectors passed 11/11 in 438ms.
 
 ## Open Questions
 
