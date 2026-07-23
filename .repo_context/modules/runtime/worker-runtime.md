@@ -279,6 +279,11 @@
     ScaleOut plus global backend outage 1/1 in 13.35s;
   - Bazel 7.4.1 focused worker/object-cache/runtime build: first correct run passed in 374.07s and cached rerun passed
     in 0.62s;
+  - latest post-refactor script guards: worker runtime/module boundary 33/33 in 0.077s, CLion helper 5/5 in 0.386s,
+    ds-pr-review sensitive scan 17/17 in 0.038s;
+  - latest post-refactor admission/fault STs with `DATASYSTEM_ST_SOCKET_BASE_DIR=/home/$USER/dsuds`: object-cache
+    overlay/admission 4/4 in 87.03s, KV admission 1/1 in 5.95s, stream admission 1/1 in 4.71s. The short socket base
+    dir avoids shared-host `/tmp` root filesystem exhaustion and the `unix_domain_socket_dir` 80-character validator;
   - the full detailed execution log is kept outside the source PR under the workbench RFC archive.
 
 ## Fast Verification
