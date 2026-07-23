@@ -380,6 +380,17 @@
   - object-cache recovery dependency injection: CLion remote `tests-index` in 215s with URMA Mock and third-party cache
     reuse in 0s, restart reconciliation UT 1/1 in 0.05s, metadata header UTs 7/7 in 0.06s,
     `WorkerOcServiceImplTest.*` 72/72 in 11.18s, and worker runtime/module boundary script 40/40 in 0.052s;
+  - latest rebase onto `main/master@4bc7301d60cc6cae1d33f0de31a27e77ed2dd85b`: no conflicts;
+  - post-rebase focused UTs: runtime/admission group 26/26 in 0.11s, object-cache recovery/service group 87/87 in
+    11.18s with one pre-existing disabled case, and stream admission group 3/3 in 0.04s;
+  - Bazel 7.4.1 focused worker/object-cache build after dependency injection: first run exposed a missing
+    `worker_runtime_facade` dependency on `//src/datasystem/cluster:cluster_topology`; after declaring the component
+    dependency, the focused Bazel build passed in 206.74s and cached rerun passed in 0.65s;
+  - clang-tidy focused core runtime/recovery sweep: `worker_runtime_facade.cpp`, `worker_runtime_state.cpp`,
+    `worker_service_admission.cpp`, `object_cache_recovery_startup.cpp`, `object_cache_recovery_state.cpp`, and
+    `object_cache_recovery_evidence.cpp` completed with exit code 0 using the CLion compile database; tool-only
+    compile-command noise was suppressed with `-Wno-unused-command-line-argument` and the existing inject framework
+    `std::result_of` warning was suppressed with `-Wno-deprecated-declarations`;
   - post-classifier ownership guard: worker runtime/module boundary 36/36 in 0.09s;
   - post-classifier focused UTs: cluster classifier 8/8 in 0.03s, runtime facade 2/2 in 0.05s, topology keepalive
     scope 3/3 in 0.04s, object-cache recovery state 6/6 in 0.05s;
@@ -409,5 +420,5 @@
   - stream-cache scale/fault overlay now has direct focused admission coverage for DRAINING plus local-isolation overlap;
     broader stream data-retention ST coverage can still be expanded if acceptance wants an end-to-end stream case beyond
     the admission contract.
-- Gate-ready closure still requires a fresh main/master rebase, focused CMake/CLion regression, Bazel 7.4.1 focused
-  build/test rerun, `ds-pr-review prepare`, codecheck/clang-format/clang-tidy review, and CI retest evidence.
+- Gate-ready closure still requires `ds-pr-review prepare`, openlibing codecheck review, broader clang-tidy/file-scope
+  spot checks if codecheck reports source findings, and CI retest evidence.
