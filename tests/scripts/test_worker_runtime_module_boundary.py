@@ -594,12 +594,17 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         header = REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
         impl = REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.cpp"
         server = REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp"
+        admission_test = REPO_ROOT / "tests/ut/worker/stream_cache/client_worker_sc_service_admission_test.cpp"
 
         self.assertIn("SetRuntimeFacade", header.read_text(encoding="utf-8"))
         self.assertIn("AcquireStreamAdmissionGuard", impl.read_text(encoding="utf-8"))
         self.assertIn("runtime->AcquireAdmissionGuard", impl.read_text(encoding="utf-8"))
         self.assertNotIn("runtime_->CheckAdmission", impl.read_text(encoding="utf-8"))
         self.assertIn("streamCacheClientWorkerSvc_->SetRuntimeFacade(&workerRuntime_)", server.read_text(encoding="utf-8"))
+        self.assertIn(
+            "ScaleFaultOverlayRejectsStreamWritesDuringDrainingIsolation",
+            admission_test.read_text(encoding="utf-8"),
+        )
 
     def test_object_cache_service_uses_runtime_guard_for_admission(self):
         impl = REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp"

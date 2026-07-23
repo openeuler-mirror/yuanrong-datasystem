@@ -255,8 +255,10 @@
      `WorkerServiceAdmissionTest.ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow`,
      `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether`,
      `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`, and
-     `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage`. Full expansion for
-     disabled slot scale/passive scale variants remains a tracked follow-up before claiming every overlay variant.
+     `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage`; stream-cache admission
+     now has focused overlay coverage in
+     `ClientWorkerSCServiceAdmissionTest.ScaleFaultOverlayRejectsStreamWritesDuringDrainingIsolation`. Full expansion
+     for disabled slot scale/passive scale variants remains a tracked follow-up before claiming every overlay variant.
 - Current refactor status:
   - `WorkerRuntimeFacade` hides runtime state internals and provides the service-facing admission/recovery contract;
   - `ObjectCacheRecoveryState` owns metadata evidence, ownership evidence, resource readiness generation, and injected
@@ -280,6 +282,10 @@
     `ObjectCacheRecoveryStateTest.*` 6/6 in 0.05s;
   - local recovery callback backend-mode coverage: `TopologyEngineTest.*LocalRecoveryHandler*` 2/2 in 0.06s, and
     combined affected topology group 6/6 in 0.92s;
+  - stream scale/fault overlay TDD evidence: boundary RED failed 36/37 in 0.052s before the acceptance UT existed;
+    after adding the focused stream admission UT, `ClientWorkerSCServiceAdmissionTest.ScaleFaultOverlayRejectsStreamWritesDuringDrainingIsolation`
+    passed 1/1 in 0.05s, the full stream admission group passed 3/3 in 0.05s, and the worker runtime/module boundary
+    guard passed 37/37 in 0.047s;
   - CLion remote `index` after classifier move: passed in 92s with third-party cache reuse in 0s and 693 compile
     database entries;
   - CLion remote `tests-index` after classifier move: passed in 513s with URMA Mock, third-party cache reuse in 0s,
@@ -326,6 +332,8 @@
 - Recent focused evidence from the worker-isolation branch:
   - local recovery callback backend-mode coverage: unified backend and coordinator-backed Builder path 2/2 in 0.06s;
   - affected topology keepalive/recovery group: 6/6 in 0.92s;
+  - stream scale/fault overlay admission: 1/1 in 0.05s, full `ClientWorkerSCServiceAdmissionTest.*` group 3/3 in
+    0.05s, and worker runtime/module boundary script 37/37 in 0.047s;
   - post-classifier ownership guard: worker runtime/module boundary 36/36 in 0.09s;
   - post-classifier focused UTs: cluster classifier 8/8 in 0.03s, runtime facade 2/2 in 0.05s, topology keepalive
     scope 3/3 in 0.04s, object-cache recovery state 6/6 in 0.05s;
@@ -351,7 +359,8 @@
   - coordinator-backed and pure ETCD-style unified backend local recovery callback wiring now has focused topology UT
     coverage; broader end-to-end metadata evidence callback coverage can still be expanded in later STs if gate time
     allows;
-  - stream-cache data-retention coverage exists for local isolation recovery, but scale/fault overlay coverage is still
-    thinner than object-cache and should remain a tracked follow-up until an acceptance case covers it directly.
+  - stream-cache scale/fault overlay now has direct focused admission coverage for DRAINING plus local-isolation overlap;
+    broader stream data-retention ST coverage can still be expanded if acceptance wants an end-to-end stream case beyond
+    the admission contract.
 - Gate-ready closure still requires a fresh main/master rebase, focused CMake/CLion regression, Bazel 7.4.1 focused
   build/test rerun, `ds-pr-review prepare`, codecheck/clang-format/clang-tidy review, and CI retest evidence.
