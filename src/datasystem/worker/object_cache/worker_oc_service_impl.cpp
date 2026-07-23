@@ -159,6 +159,30 @@ using RuntimeAdmissionGuard = datasystem::worker::WorkerRuntimeFacade::Admission
 constexpr char CLUSTER_TOPOLOGY_SCHEMA_VERSION[] = "1";
 constexpr char TOPOLOGY_READINESS_PROBE_KEY[] = "topology-readiness-probe";
 
+std::string JoinP2PMetaObjectKeys(const GetP2PMetaReqPb &req)
+{
+    std::stringstream allKeys;
+    bool first = true;
+    for (const auto &devObjMeta : req.dev_obj_meta()) {
+        if (!first) {
+            allKeys << ", ";
+        }
+        allKeys << devObjMeta.object_key();
+        first = false;
+    }
+    return allKeys.str();
+}
+
+void RewriteP2PMetaWorkerAddress(GetP2PMetaReqPb &req, const HostPort &localAddress)
+{
+    for (auto &devObjMeta : *req.mutable_dev_obj_meta()) {
+        for (auto &location : *devObjMeta.mutable_locations()) {
+            location.set_worker_ip(localAddress.Host());
+        }
+    }
+    req.set_worker_address(localAddress.ToString());
+}
+
 Status ToTopologyChangeTypePb(cluster::TopologyChangeType type, ::datasystem::TypePb &typePb)
 {
     switch (type) {
@@ -2948,29 +2972,15 @@ Status WorkerOCServiceImpl::GetP2PMeta(
     devThreadPool_->Execute([=]() mutable {
         (void)admissionGuard;
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        std::stringstream allKeys;
-        bool first = true;
-        for (const auto &dev_obj_meta : *req.mutable_dev_obj_meta()) {
-            if (!first) {
-                allKeys << ", ";
-            }
-            allKeys << dev_obj_meta.object_key();
-            first = false;
-        }
         LOG(INFO) << FormatString("Worker processes GetP2PMeta from client: %s, allKeys: [%s], threads Statistics: %s",
-                                  clientId, allKeys.str(), devThreadPool_->GetStatistics());
+                                  clientId, JoinP2PMetaObjectKeys(req), devThreadPool_->GetStatistics());
         auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
         if (initRc.IsError()) {
             LOG(ERROR) << initRc.GetMsg();
             LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
             return;
         }
-        for (auto &dev_obj_meta : *req.mutable_dev_obj_meta()) {
-            for (auto &location : *dev_obj_meta.mutable_locations()) {
-                location.set_worker_ip(localAddress_.Host());
-            }
-        }
-        req.set_worker_address(localAddress_.ToString());
+        RewriteP2PMetaWorkerAddress(req, localAddress_);
         LOG_IF_ERROR(workerDevOcManager_->ProcessGetP2PMetaRequest(req, serverApi), "Process GetP2PMeta failed");
         LOG(INFO) << "Process GetP2PMeta done";
     });

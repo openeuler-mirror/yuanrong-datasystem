@@ -921,18 +921,28 @@ Status WorkerOCServer::InitializeAllServices()
 Status WorkerOCServer::InitCoordinationBackend()
 {
     if (coordinatorDiscovery_ != nullptr) {
-        if (FLAGS_use_brpc) {
-            coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyBrpcImpl>(coordinatorDiscovery_);
-        } else {
-            coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyZmqImpl>(coordinatorDiscovery_);
-        }
-        RETURN_IF_NOT_OK(coordinatorServiceProxy_->Init());
-        metadataCoordinationBackend_ =
-            CreateWorkerDsCoordinationBackend(coordinatorServiceProxy_.get(), hostPort_.ToString());
-        LOG(INFO) << "Using DataSystem Coordinator as cluster coordination backend, source=discovery";
-        return Status::OK();
+        return InitDataSystemCoordinationBackend();
     }
 
+    return InitEtcdCoordinationBackend();
+}
+
+Status WorkerOCServer::InitDataSystemCoordinationBackend()
+{
+    if (FLAGS_use_brpc) {
+        coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyBrpcImpl>(coordinatorDiscovery_);
+    } else {
+        coordinatorServiceProxy_ = std::make_unique<CoordinatorServiceProxyZmqImpl>(coordinatorDiscovery_);
+    }
+    RETURN_IF_NOT_OK(coordinatorServiceProxy_->Init());
+    metadataCoordinationBackend_ =
+        CreateWorkerDsCoordinationBackend(coordinatorServiceProxy_.get(), hostPort_.ToString());
+    LOG(INFO) << "Using DataSystem Coordinator as cluster coordination backend, source=discovery";
+    return Status::OK();
+}
+
+Status WorkerOCServer::InitEtcdCoordinationBackend()
+{
     // EtcdStore is owned by WorkerOcServer. It is used by multiple services.
     CHECK_FAIL_RETURN_STATUS(ValidateEtcdOrMetastoreAddress(), K_RUNTIME_ERROR,
                              "Neither etcd_address nor metastore_address is specified");

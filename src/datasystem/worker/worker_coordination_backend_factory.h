@@ -13,11 +13,10 @@
 #include <string>
 
 #include "datasystem/cluster/coordination_backend/coordination_backend.h"
+#include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 
 namespace datasystem {
-class EtcdStore;
-class ICoordinatorServiceProxy;
-
 namespace worker {
 
 std::unique_ptr<cluster::ICoordinationBackend> CreateWorkerEtcdCoordinationBackend(EtcdStore *etcdStore);

@@ -28,8 +28,7 @@ struct GenerationedWorkerRecoveryEvidenceReport {
     WorkerRecoveryEvidenceReport report;
 };
 
-class WorkerRecoveryEvidenceBuilder {
-public:
+struct WorkerRecoveryEvidenceBuilder {
     WorkerRecoveryEvidenceBuilder() = default;
     ~WorkerRecoveryEvidenceBuilder() = default;
 

@@ -28,12 +28,11 @@
 #include "datasystem/protos/worker_object.brpc.pb.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
 #include "datasystem/common/object_cache/shm_guard.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem {
-namespace worker {
-class WorkerRuntimeFacade;
-}
 namespace object_cache {
+
 class WorkerOCServiceImpl;
 
 class WorkerWorkerOCServiceImpl : public WorkerWorkerOCService, public IWorkerWorkerOCService {
