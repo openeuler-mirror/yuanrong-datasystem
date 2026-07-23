@@ -673,34 +673,28 @@ Status WorkerOCServiceImpl::PrepareTopologyScaleInData(const std::vector<std::st
                        businessOperationId);
 
     const int intervalMs = 500;
-    const int giveUpPrimaryMaxRetryTime = 10;
     int retryTime = 0;
     while (true) {
         CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
         CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                                  "topology ScaleIn deadline exceeded");
-        if (copyFailures.empty() && primaryFailures.empty()) {
-            break;
-        }
-        if (retryTime > giveUpPrimaryMaxRetryTime && !primaryFailures.empty()) {
+        if (!primaryFailures.empty()) {
             LOG(WARNING) << "CLUSTER_SCALE_IN action=give_up_primary_fallback"
                          << " operation_prefix=" << businessOperationId.substr(0, 12)
                          << " retry_count=" << retryTime
-                         << " fallback_count=" << primaryFailures.size();
+                         << " fallback_count=" << primaryFailures.size()
+                         << " policy=immediate_data_migration";
             migrateIds.insert(migrateIds.end(), primaryFailures.begin(), primaryFailures.end());
             primaryFailures.clear();
         }
+        if (copyFailures.empty()) {
+            break;
+        }
         std::vector<std::string> retryCopies = std::move(copyFailures);
-        std::vector<std::string> retryPrimaries = std::move(primaryFailures);
         copyFailures.clear();
-        primaryFailures.clear();
         if (!retryCopies.empty()) {
             GroupAndRemoveMeta(retryCopies, master::RemoveMetaReqPb::NORMAL, copyFailures, migrateIds, waitIds, l2Ids,
                                businessOperationId);
-        }
-        if (!retryPrimaries.empty()) {
-            GroupAndRemoveMeta(retryPrimaries, master::RemoveMetaReqPb::GIVEUP_PRIMARY, primaryFailures, migrateIds,
-                               waitIds, l2Ids, businessOperationId);
         }
         const auto retryDeadline = std::min(
             deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(intervalMs));
