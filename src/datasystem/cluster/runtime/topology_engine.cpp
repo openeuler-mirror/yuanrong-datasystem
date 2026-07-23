@@ -702,6 +702,10 @@ void TopologyEngine::CommitSuccessfulStart()
         std::lock_guard<std::mutex> lock(lifecycleMutex_);
         lifecycleOperationInFlight_ = false;
     }
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    if (snapshots_.Load(snapshot).IsOk()) {
+        NotifySnapshotPublishedIfRunning(std::move(snapshot));
+    }
 }
 
 Status TopologyEngine::StartStateThread()
@@ -995,8 +999,6 @@ Status TopologyEngine::ReloadTopology(bool fullRebuildAllowed)
     RETURN_IF_NOT_OK(PublishBackendEvidence(*published));
     if (newlyPublished) {
         LogAndNotifyPublishedSnapshot(std::move(published));
-    } else {
-        NotifySnapshotPublished(std::move(published));
     }
     return Status::OK();
 }
@@ -1017,7 +1019,7 @@ void TopologyEngine::LogAndNotifyPublishedSnapshot(std::shared_ptr<const Topolog
               << " failed_count=" << published->FailedMembers().size() << " local_member_found=" << localStatus.IsOk()
               << " local_state=" << (localStatus.IsOk() ? MemberStateName(local->state) : "missing")
               << " local_member_id_prefix=" << (localStatus.IsOk() ? MemberIdForLog(local->identity.id) : "");
-    NotifySnapshotPublished(std::move(published));
+    NotifySnapshotPublishedIfRunning(std::move(published));
 }
 
 Status TopologyEngine::ReloadTopologyAndNotify()
@@ -1353,6 +1355,27 @@ void TopologyEngine::NotifySnapshotPublished(std::shared_ptr<const TopologySnaps
         return;
     }
     options_.snapshotPublishedHandler(std::move(snapshot));
+}
+
+void TopologyEngine::NotifySnapshotPublishedIfRunning(std::shared_ptr<const TopologySnapshot> snapshot)
+{
+    if (snapshot == nullptr || state_.load() != TopologyEngineState::RUNNING) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        if (lifecycleOperationInFlight_) {
+            return;
+        }
+    }
+    auto previous = lastNotifiedSnapshotVersion_.load(std::memory_order_acquire);
+    while (snapshot->Version() > previous) {
+        if (lastNotifiedSnapshotVersion_.compare_exchange_weak(previous, snapshot->Version(), std::memory_order_acq_rel,
+                                                               std::memory_order_acquire)) {
+            NotifySnapshotPublished(std::move(snapshot));
+            return;
+        }
+    }
 }
 
 void TopologyEngine::RecordError(const Status &status)

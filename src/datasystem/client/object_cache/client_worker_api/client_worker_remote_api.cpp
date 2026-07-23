@@ -66,6 +66,9 @@ static constexpr char CLIENT_TO_WORKER_FALLBACK[] = "client->worker";
 const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
                                                        StatusCode::K_RPC_DEADLINE_EXCEEDED,
                                                        StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_OUT_OF_MEMORY };
+const std::unordered_set<StatusCode> CREATE_RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
+                                                              StatusCode::K_RPC_DEADLINE_EXCEEDED,
+                                                              StatusCode::K_RPC_UNAVAILABLE };
 static constexpr uint64_t P2P_TIMEOUT_MS = 60000;
 constexpr uint64_t P2P_SUBSCRIBE_TIMEOUT_MS = 20000;
 
@@ -106,6 +109,26 @@ void FillMultiPublishObjectInfo(const std::shared_ptr<ObjectBufferInfo> &bufferI
         objectInfoPb.set_shm_id(bufferInfo->shmId);
     }
     req.mutable_object_info()->Add(std::move(objectInfoPb));
+}
+
+template <class Function>
+Status RetryCreateOnError(int32_t timeoutMs, Function &&func, int32_t maxRpcTimeoutMs)
+{
+    bool oomRetried = false;
+    return RetryOnError(
+        timeoutMs,
+        [&func, &oomRetried](int32_t realRpcTimeout) {
+            auto rc = func(realRpcTimeout);
+            if (rc.GetCode() != K_OUT_OF_MEMORY) {
+                return rc;
+            }
+            if (oomRetried) {
+                return rc;
+            }
+            oomRetried = true;
+            return Status(K_TRY_AGAIN, rc.GetMsg());
+        },
+        []() { return Status::OK(); }, CREATE_RETRY_ERROR_CODE, maxRpcTimeoutMs);
 }
 
 void InitMultiPublishReq(const std::vector<std::shared_ptr<ObjectBufferInfo>> &bufferInfo, const PublishParam &param,
@@ -353,9 +376,9 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
     CreateRspPb rsp;
     PerfPoint partPoint(PerfKey::RPC_CLIENT_CREATE_OBJECT);
     Timer rpcTimer;
-    auto status = RetryOnError(
-        static_cast<int32_t>(std::min<int64_t>(
-            TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()), MAX_RPC_TIMEOUT_MS)),
+    auto status = RetryCreateOnError(
+        static_cast<int32_t>(std::min<int64_t>(TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()),
+                                               MAX_RPC_TIMEOUT_MS)),
         [this, &req, &rsp](int32_t realRpcTimeout) {
             RpcOptions opts;
             opts.SetTimeout(realRpcTimeout);
@@ -365,7 +388,7 @@ Status ClientWorkerRemoteApi::Create(const std::string &objectKey, int64_t dataS
             VLOG(1) << "Start to send rpc to create object: " << req.object_key();
             return DS_OC_DISPATCH(Create, opts, req, rsp);
         },
-        []() { return Status::OK(); }, RETRY_ERROR_CODE, rpcTimeoutMs_);
+        rpcTimeoutMs_);
     if (status.IsError()) {
         status = WithRpcDiag(status, "Create", hostPort_);
     }

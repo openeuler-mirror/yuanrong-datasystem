@@ -1373,6 +1373,23 @@ TEST_F(WorkerOcServiceImplTest, ObjectCacheOutOfMemoryMarksRuntimeState)
     EXPECT_NE(snapshot.detail.find("allocation failed"), std::string::npos);
 }
 
+TEST_F(WorkerOcServiceImplTest, InjectedCreateOutOfMemoryDoesNotMarkRuntimeState)
+{
+    worker::WorkerRuntimeFacade runtime;
+    ASSERT_TRUE(MarkRuntimeRunning(runtime));
+    impl_->SetRuntimeFacade(&runtime);
+
+    impl_->MarkOutOfMemoryIfNeeded(
+        Status(StatusCode::K_OUT_OF_MEMORY, "Thread ID 1 Out of memory. Status inject by worker.Create.AllocateMemory"),
+        "Create");
+
+    auto snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, worker::WorkerServiceMode::RUNNING);
+    auto recoverySnapshot = impl_->recoveryState_->GetResourceRecoverySnapshot();
+    EXPECT_FALSE(recoverySnapshot.memoryRequired);
+    EXPECT_FALSE(recoverySnapshot.diskRequired);
+}
+
 TEST_F(WorkerOcServiceImplTest, DiskCreateOutOfMemoryRecordsDiskRecoveryRequirement)
 {
     worker::WorkerRuntimeFacade runtime;

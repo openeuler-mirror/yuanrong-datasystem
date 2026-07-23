@@ -63,6 +63,10 @@ Status WorkerAdmissionFacade::AcquireGuard(WorkerAdmissionKind kind, const std::
 {
     auto candidate = runtimeState_.TryAcquireReadGuard();
     if (!candidate.has_value()) {
+        const auto rc = admission_.Check(kind, operation);
+        if (rc.GetCode() == K_OUT_OF_MEMORY) {
+            return rc;
+        }
         return Status(K_NOT_READY, "Worker is not accepting " + operation + ", kind=" + std::string(ToString(kind))
                                        + ", runtime transition pending");
     }

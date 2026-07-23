@@ -558,6 +558,12 @@ private:
     void NotifySnapshotPublished(std::shared_ptr<const TopologySnapshot> snapshot) const;
 
     /**
+     * @brief Notify at most once per published Snapshot version after the Engine is RUNNING.
+     * @param[in] snapshot Newly published or latest startup Snapshot.
+     */
+    void NotifySnapshotPublishedIfRunning(std::shared_ptr<const TopologySnapshot> snapshot);
+
+    /**
      * @brief Record a runtime error without exposing high-cardinality payload.
      * @param[in] status Runtime error to retain and log.
      */
@@ -606,6 +612,7 @@ private:
     std::atomic<uint64_t> recoveryGenerationCompleted_{ 0 };
     std::atomic<uint64_t> activeReloadGeneration_{ 0 };
     std::atomic<bool> runtimeReloadInProgress_{ false };
+    std::atomic<uint64_t> lastNotifiedSnapshotVersion_{ 0 };
     std::string isolationReason_;
     std::string lastError_;
     ControlBackendObservation backendObservation_;

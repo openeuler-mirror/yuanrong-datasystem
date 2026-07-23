@@ -130,6 +130,10 @@ Status WorkerServiceAdmission::Check(WorkerAdmissionKind kind, const std::string
     }
     const bool transitionWasPending = runtimeState_.IsTransitionPending();
     auto snapshot = runtimeState_.GetSnapshot();
+    if ((transitionWasPending || runtimeState_.IsTransitionPending())
+        && snapshot.mode == WorkerServiceMode::OUT_OF_MEMORY) {
+        return Evaluate(snapshot, kind, operation);
+    }
     if ((transitionWasPending || runtimeState_.IsTransitionPending()) && !IsTransitionAllowed(kind)) {
         return Reject(snapshot, kind, operation, K_NOT_READY, "TRANSITION_PENDING");
     }

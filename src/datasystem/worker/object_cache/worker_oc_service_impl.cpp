@@ -1405,6 +1405,9 @@ void WorkerOCServiceImpl::MarkOutOfMemoryIfNeeded(const Status &rc, const std::s
     if (runtime_ == nullptr || rc.GetCode() != StatusCode::K_OUT_OF_MEMORY) {
         return;
     }
+    if (rc.GetMsg().find("Status inject by") != std::string::npos) {
+        return;
+    }
     recoveryState_->MarkResourceRecoveryRequired(cacheType);
     runtime_->MarkOutOfMemory(FormatString("%s returned K_OUT_OF_MEMORY: %s", operation, rc.GetMsg()));
 }
@@ -1425,6 +1428,9 @@ Status WorkerOCServiceImpl::Create(const CreateReqPb &req, CreateRspPb &resp)
         ValidateWorkerState(noRecon, GetRequestContext()->reqTimeoutDuration.CalcRemainingTime()),
         "validate worker state failed");
     Status rc = createProc_->Create(req, resp);
+    if (rc.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
+        admissionGuard.reset();
+    }
     MarkOutOfMemoryIfNeeded(rc, "Create", static_cast<memory::CacheType>(req.cache_type()));
     if (rc.IsOk()) {
         UpdateWorkerObjectGauge(objectTable_);

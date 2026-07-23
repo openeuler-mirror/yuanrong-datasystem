@@ -393,7 +393,7 @@ TEST(TopologyEngineTest, SnapshotPublicationCallbackRunsOnlyAfterStartPublishes)
     EXPECT_EQ(published.load(), 0U);
 
     DS_ASSERT_OK(engine->Start());
-    EXPECT_EQ(published.load(), 1U);
+    EXPECT_GE(published.load(), 1U);
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 

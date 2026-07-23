@@ -45,7 +45,8 @@ DS_DECLARE_uint64(oc_worker_aggregate_merge_size);
 
 namespace datasystem {
 namespace object_cache {
-constexpr int64_t K_MIN_OOM_RETRY_TIMEOUT_MS = 50;
+constexpr int64_t K_MIN_OOM_RETRY_TIMEOUT_MS = 500;
+constexpr int64_t K_MAX_OOM_RETRY_WAIT_MS = 400;
 
 ObjCacheShmUnit::ObjCacheShmUnit()
 {
@@ -231,13 +232,15 @@ Status AllocateMemoryForObject(const std::string &objectKey, const uint64_t data
         INJECT_POINT("worker.AllocateMemory.afterOOM");
         for (int t : WAIT_MSECOND) {
             auto remainingTime = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
-            if (remainingTime <= K_MIN_OOM_RETRY_TIMEOUT_MS) {
+            auto elapsedTime = timer.ElapsedMilliSecond();
+            if (remainingTime <= K_MIN_OOM_RETRY_TIMEOUT_MS || elapsedTime >= K_MAX_OOM_RETRY_WAIT_MS) {
                 VLOG(1) << FormatString(
-                    "Stop OOM retry to reserve reply time: remainingTime %ld ms, objectKey: %s, needSize %ld",
-                    remainingTime, objectKey, needSize);
+                    "Stop OOM retry: remainingTime %ld ms, elapsedTime %ld ms, objectKey: %s, needSize %ld",
+                    remainingTime, elapsedTime, objectKey, needSize);
                 break;
             }
-            auto retryBudget = remainingTime - K_MIN_OOM_RETRY_TIMEOUT_MS;
+            auto retryBudget =
+                std::min<int64_t>(remainingTime - K_MIN_OOM_RETRY_TIMEOUT_MS, K_MAX_OOM_RETRY_WAIT_MS - elapsedTime);
             auto sleepTime = std::min<int64_t>(retryBudget, t);
             INJECT_POINT("worker.AllocateMemory.sleepTime", [&sleepTime](int time) {
                 sleepTime = time;
