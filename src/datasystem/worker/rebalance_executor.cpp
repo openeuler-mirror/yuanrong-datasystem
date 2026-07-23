@@ -162,6 +162,7 @@ RebalanceExecutor::MigrateResult RebalanceExecutor::MigrateToTarget(const master
                                                                     const std::vector<std::string> &objectKeys,
                                                                     object_cache::DataMigrator &migrator)
 {
+    (void)task;
 #ifdef WITH_TESTS
     if (migrateHook_ != nullptr) {
         return migrateHook_(task, targetAddr, objectKeys);

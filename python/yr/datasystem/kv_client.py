@@ -449,7 +449,7 @@ class KVClient:
             existence_opt(ExistenceOpt): Controlling the behavior of Set keys.
                 The options are as follows:
                 ExistenceOpt.NONE: Set the key without checking whether the key exists.
-                ExistenceOpt.NX(Not support): Only set the key if it does not already exist.
+                ExistenceOpt.NX: Only set the key if it does not already exist.
 
         Returns:
             failedKeys: Return the keys that failed to set.

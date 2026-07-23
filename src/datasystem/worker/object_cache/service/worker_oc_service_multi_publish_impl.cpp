@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <unordered_set>
 #include <utility>
 
 
@@ -42,8 +43,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/object_cache/service/service_execution_policy.h"
-
-DS_DECLARE_bool(enable_distributed_master);
 
 using namespace datasystem::worker;
 using namespace datasystem::master;
@@ -134,10 +133,6 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishImpl(const MultiPublishReqPb
     RETURN_IF_NOT_OK(
         WorkerOcServiceCrudCommonApi::CheckShmUnitByTenantId(tenantId, clientId, shmUnits, memoryRefTable_));
 
-    CHECK_FAIL_RETURN_STATUS(!(FLAGS_enable_distributed_master && req.existence() == ExistenceOptPb::NX),
-                             K_RUNTIME_ERROR,
-                             "The MSet with NX existence option is not supported in distributed master mode");
-
     RETURN_IF_NOT_OK(CheckIfL2CacheNeededAndWritable(supportL2Storage_, WriteMode(req.write_mode())));
 
     std::vector<std::string> namespaceUri;
@@ -178,10 +173,11 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
         }
     });
     std::unordered_set<std::string> failedKeys;
+    std::unordered_set<std::string> rollbackOnlyKeys;
     VerifyObjectsNtx(req, namespaceUri, entries, failedKeys, localExistKeys);
     Status lastRc;
     point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_IMPL);
-    Status rc = MultiPublishObjectNtx(req, namespaceUri, entries, payloads, lastRc, failedKeys);
+    Status rc = MultiPublishObjectNtx(req, namespaceUri, entries, payloads, lastRc, failedKeys, rollbackOnlyKeys);
     point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_POST_PROCESS);
     if (rc.IsError()) {
         BatchRollBackEntries(namespaceUri, ifInserts, entries);
@@ -189,7 +185,8 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishNtx(std::vector<std::string>
     }
     resp.mutable_last_rc()->set_error_code(lastRc.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
-    // roll back failed ids;
+    // Roll back local objects that should not be published.
+    BatchRollBackEntries(namespaceUri, ifInserts, entries, rollbackOnlyKeys);
     BatchRollBackEntries(namespaceUri, ifInserts, entries, failedKeys, resp);
     return Status::OK();
 }
@@ -247,7 +244,8 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
                                                               std::vector<std::string> &objectKeys,
                                                               std::vector<std::shared_ptr<SafeObjType>> &entries,
                                                               std::vector<RpcMessage> &payloads, Status &lastRc,
-                                                              std::unordered_set<std::string> &failedKeys)
+                                                              std::unordered_set<std::string> &failedKeys,
+                                                              std::unordered_set<std::string> &rollbackOnlyKeys)
 {
     PerfPoint point(PerfKey::WORKER_MULTI_PUBLISH_NTX_SAVE_ENTRY);
     // Save shmId to the entry, it also need to copy data to share memory if it's the small data.
@@ -307,7 +305,7 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
         }
     }
     point.RecordAndReset(PerfKey::WORKER_MULTI_PUBLISH_NTX_SEND_TO_MASTER);
-    RETURN_IF_NOT_OK(SendToMasterAndUpdateObject(req, objectKeys, failedKeys, entries, lastRc));
+    RETURN_IF_NOT_OK(SendToMasterAndUpdateObject(req, objectKeys, failedKeys, entries, lastRc, rollbackOnlyKeys));
     return Status::OK();
 }
 
@@ -527,6 +525,8 @@ void WorkerOcServiceMultiPublishImpl::MergeCreateMultiMetaResult(
     const bool retryResponse = responseRc.IsError() && IsCreateMultiMetaRetryable(responseRc);
     std::unordered_set<std::string> failedKeys(result.rsp.failed_object_keys().begin(),
                                                result.rsp.failed_object_keys().end());
+    std::unordered_set<std::string> existingKeys(result.rsp.existing_object_keys().begin(),
+                                                 result.rsp.existing_object_keys().end());
     for (const auto &object : objects) {
         if (failedKeys.find(object.first) != failedKeys.end()) {
             if (retryResponse) {
@@ -535,6 +535,8 @@ void WorkerOcServiceMultiPublishImpl::MergeCreateMultiMetaResult(
             } else {
                 totalResp.add_failed_object_keys(object.first);
             }
+        } else if (existingKeys.find(object.first) != existingKeys.end()) {
+            totalResp.add_existing_object_keys(object.first);
         } else {
             versions[originalIndexes[object.second]] = result.rsp.version();
         }
@@ -659,7 +661,8 @@ void WorkerOcServiceMultiPublishImpl::UpdateObjectAfterCreatingMeta(
 
 Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
     const MultiPublishReqPb &req, std::vector<std::string> &objectKeys, std::unordered_set<std::string> &failedKeys,
-    std::vector<std::shared_ptr<SafeObjType>> &objectEntries, Status &lastRc)
+    std::vector<std::shared_ptr<SafeObjType>> &objectEntries, Status &lastRc,
+    std::unordered_set<std::string> &rollbackOnlyKeys)
 {
     CreateMultiMetaRspPb rsp;
     std::vector<std::string> keys;
@@ -681,7 +684,16 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
     }
     point.Record();
 
-    failedKeys.insert(rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
+    std::unordered_set<std::string> excludedKeys;
+    excludedKeys.reserve(static_cast<size_t>(rsp.failed_object_keys_size() + rsp.existing_object_keys_size()));
+    for (const auto &failedKey : rsp.failed_object_keys()) {
+        failedKeys.emplace(failedKey);
+        excludedKeys.emplace(failedKey);
+    }
+    for (const auto &existingKey : rsp.existing_object_keys()) {
+        rollbackOnlyKeys.emplace(existingKey);
+        excludedKeys.emplace(existingKey);
+    }
 
     if (rsp.has_last_rc()) {
         Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
@@ -694,7 +706,7 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
     publishedEntries.reserve(entries.size());
     publishedVersions.reserve(versions.size());
     for (size_t i = 0; i < keys.size(); ++i) {
-        if (failedKeys.find(keys[i]) != failedKeys.end()) {
+        if (excludedKeys.find(keys[i]) != excludedKeys.end()) {
             continue;
         }
         publishedKeys.emplace_back(std::move(keys[i]));
@@ -733,6 +745,22 @@ void WorkerOcServiceMultiPublishImpl::BatchRollBackEntries(const std::vector<std
 {
     size_t size = objectKeys.size();
     for (size_t i = 0; i < size; ++i) {
+        BatchRollBackEntriesImpl(objectKeys[i], ifInserts[i], entries[i]);
+    }
+}
+
+void WorkerOcServiceMultiPublishImpl::BatchRollBackEntries(const std::vector<std::string> &objectKeys,
+                                                           const std::vector<bool> &ifInserts,
+                                                           std::vector<std::shared_ptr<SafeObjType>> &entries,
+                                                           const std::unordered_set<std::string> &rollbackKeys)
+{
+    if (rollbackKeys.empty()) {
+        return;
+    }
+    for (size_t i = 0; i < objectKeys.size(); i++) {
+        if (rollbackKeys.find(objectKeys[i]) == rollbackKeys.end()) {
+            continue;
+        }
         BatchRollBackEntriesImpl(objectKeys[i], ifInserts[i], entries[i]);
     }
 }

@@ -19,6 +19,7 @@
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_MULTI_PUBLISH_IMPL_H
 
 #include <chrono>
+#include <unordered_set>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -117,11 +118,13 @@ private:
      * @param[in] payloads Payloads for non-shared-memory cases.
      * @param[out] lastRc status of last failed object
      * @param[out] failedKeys The failed object keys.
+     * @param[out] rollbackOnlyKeys Keys that need local rollback but are API-level successes.
      * @return Status of the call.
      */
     Status MultiPublishObjectNtx(const MultiPublishReqPb &req, std::vector<std::string> &objectKeys,
                                  std::vector<std::shared_ptr<SafeObjType>> &entries, std::vector<RpcMessage> &payloads,
-                                 Status &lastRc, std::unordered_set<std::string> &failedKeys);
+                                 Status &lastRc, std::unordered_set<std::string> &failedKeys,
+                                 std::unordered_set<std::string> &rollbackOnlyKeys);
 
     /**
      * @brief Create or update metadata to master, object will be unlocked during requesting master.
@@ -261,11 +264,13 @@ private:
      * @param[in] failedKeys The failed object keys.
      * @param[out] objectEntries The object entries.
      * @param[out] lastRc status of last failed object
+     * @param[out] rollbackOnlyKeys Keys that need local rollback but are API-level successes.
      * @return Status of the call.
      */
     Status SendToMasterAndUpdateObject(const MultiPublishReqPb &req, std::vector<std::string> &objectKeys,
                                        std::unordered_set<std::string> &failedKeys,
-                                       std::vector<std::shared_ptr<SafeObjType>> &objectEntries, Status &lastRc);
+                                       std::vector<std::shared_ptr<SafeObjType>> &objectEntries, Status &lastRc,
+                                       std::unordered_set<std::string> &rollbackOnlyKeys);
 
     /**
      * @brief Release memory and resource if failing to publish.
@@ -275,6 +280,17 @@ private:
      */
     void BatchRollBackEntries(const std::vector<std::string> &objectKeys, const std::vector<bool> &ifInserts,
                               std::vector<std::shared_ptr<SafeObjType>> &entries);
+
+    /**
+     * @brief Release memory and resource for rollback-only keys without reporting them to client.
+     * @param[in] objectKeys Object key list.
+     * @param[in] ifInserts If the object insert to objectTable_.
+     * @param[in] entries The object entries.
+     * @param[in] rollbackKeys Keys that need local rollback but are API-level successes.
+     */
+    void BatchRollBackEntries(const std::vector<std::string> &objectKeys, const std::vector<bool> &ifInserts,
+                              std::vector<std::shared_ptr<SafeObjType>> &entries,
+                              const std::unordered_set<std::string> &rollbackKeys);
 
     /**
      * @brief Release memory and resource if failing to publish.

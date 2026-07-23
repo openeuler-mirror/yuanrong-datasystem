@@ -874,6 +874,66 @@ TEST_F(STCClientDistMasterTest, TestMutiSetGet)
     }
 }
 
+TEST_F(STCClientDistMasterTest, TestMSetNxKeepsExistingValuesAcrossDistributedMasters)
+{
+    StartClustersAndWaitReady();
+    GetWorkerUuids();
+
+    std::vector<std::string> keys;
+    keys.emplace_back(ObjectKeyWithOwner(0, uuidMap_));
+    keys.emplace_back(ObjectKeyWithOwner(1, uuidMap_));
+    keys.emplace_back(ObjectKeyWithOwner(0, uuidMap_));
+    keys.emplace_back(ObjectKeyWithOwner(1, uuidMap_));
+
+    const std::string oldValue0 = "dist_master_mset_nx_old_0";
+    const std::string oldValue1 = "dist_master_mset_nx_old_1";
+    DS_ASSERT_OK(client_->Set(keys[0], oldValue0));
+    DS_ASSERT_OK(client1_->Set(keys[1], oldValue1));
+
+    std::vector<std::string> rawValues{ "dist_master_mset_nx_new_0", "dist_master_mset_nx_new_1",
+                                        "dist_master_mset_nx_new_2", "dist_master_mset_nx_new_3" };
+    std::vector<StringView> values;
+    values.reserve(rawValues.size());
+    for (const auto &value : rawValues) {
+        values.emplace_back(value);
+    }
+
+    std::vector<std::string> failedKeys;
+    MSetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
+    DS_ASSERT_OK(client2_->MSet(keys, values, failedKeys, param));
+    ASSERT_TRUE(failedKeys.empty());
+
+    std::vector<std::string> getValues;
+    DS_ASSERT_OK(client_->Get(keys, getValues));
+    ASSERT_EQ(getValues.size(), keys.size());
+    ASSERT_EQ(getValues[0], oldValue0);
+    ASSERT_EQ(getValues[1], oldValue1);
+    ASSERT_EQ(getValues[2], rawValues[2]);
+    ASSERT_EQ(getValues[3], rawValues[3]);
+}
+
+TEST_F(STCClientDistMasterTest, TestSetNxKeepsExistingValueAcrossWorkers)
+{
+    StartClustersAndWaitReady();
+    GetWorkerUuids();
+
+    std::string key = ObjectKeyWithOwner(0, uuidMap_);
+    std::string oldValue = "dist_master_set_nx_old";
+    std::string newValue = "dist_master_set_nx_new";
+    DS_ASSERT_OK(client_->Set(key, oldValue));
+
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE, .ttlSecond = 0, .existence = ExistenceOpt::NX };
+    DS_ASSERT_OK(client2_->Set(key, newValue, param));
+
+    std::string valueGet;
+    DS_ASSERT_OK(client_->Get(key, valueGet));
+    ASSERT_EQ(valueGet, oldValue);
+    DS_ASSERT_OK(client1_->Get(key, valueGet));
+    ASSERT_EQ(valueGet, oldValue);
+    DS_ASSERT_OK(client2_->Get(key, valueGet));
+    ASSERT_EQ(valueGet, oldValue);
+}
+
 TEST_F(STCClientDistMasterTest, DISABLED_LEVEL1_TestSetSpecialKey)
 {
     StartClustersAndWaitReady();
