@@ -25,7 +25,8 @@ def _parse_hixl_version(value):
     parsed = []
     for part in parts[:3]:
         digits = ""
-        for char in part:
+        for i in range(len(part)):
+            char = part[i]
             if char < "0" or char > "9":
                 break
             digits += char

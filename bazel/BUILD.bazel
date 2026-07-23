@@ -12,11 +12,17 @@ load("@rules_python//python:defs.bzl", "py_library")
 load("@rules_python//python:packaging.bzl", "py_package", "py_wheel")
 load("//bazel:datasystem_sdk.bzl", "datasystem_sdk_tree")
 load("//bazel:datasystem_sdk_cmake_config.bzl", "datasystem_cmake_config")
+load("//bazel/sdk:validation.bzl", "source_sdk_validation")
 load("//:version.bzl", "DATASYSTEM_VERSION")
 
 licenses(["notice"])
 
 exports_files(["generate_commit_id.sh"])
+
+source_sdk_validation(
+    name = "source_sdk_client_validation",
+    target = "@datasystem_sdk_validation//bazel/sdk:client_build_validation",
+)
 
 config_setting(
     name = "linux_x86_64",
@@ -42,6 +48,7 @@ py_package(
         "yr",
     ],
     deps = [
+        ":source_sdk_client_validation",
         "//:cli_files",
         "//:datasystem_header_files",
         "//:libdatasystem_file",

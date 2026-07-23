@@ -1,0 +1,15 @@
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "client",
+)
+
+cc_library(
+    name = "headers",
+)
+
+filegroup(
+    name = "runtime_files",
+    # Matches the source SDK packaging interface on unsupported platforms.
+    srcs = [],
+)

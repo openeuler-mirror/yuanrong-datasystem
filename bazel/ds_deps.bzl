@@ -4,6 +4,20 @@ load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load(":ds_python_deps.bzl", "ds_python_deps")
 load(":grpc_deps.bzl", "grpc_deps")
 load(":cuda_local_repo.bzl", "cuda_local_repository")
+load(
+    "//bazel/sdk:repositories.bzl",
+    "setup_braft",
+    "setup_brpc",
+    "setup_curl",
+    "setup_gflags",
+    "setup_jemalloc",
+    "setup_leveldb",
+    "setup_nlohmann_json",
+    "setup_rocksdb",
+    "setup_spdlog",
+    "setup_tbb",
+    "setup_zmq",
+)
 
 def ds_deps():
     """Loads dependencies need to compile and test the Yuanrong Datasystem ."""
@@ -40,17 +54,6 @@ def setup_cuda():
     maybe(
         cuda_local_repository,
         name = "local_cuda",
-    )
-
-def setup_nlohmann_json():
-    maybe(
-        http_archive,
-        name = "nlohmann_json",
-        sha256 = "0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406",
-        strip_prefix = "json-3.11.3",
-        urls = [
-            "https://github.com/nlohmann/json/archive/v3.11.3.tar.gz",
-        ],
     )
 
 def setup_openssl():
@@ -105,68 +108,6 @@ def setup_securec():
         patches = ["@yuanrong-datasystem//third_party/patches/securec:libboundscheck-cmake-support.patch"],
         patch_args = ["-p1"],
         build_file = "@yuanrong-datasystem//third_party:securec.BUILD",
-    )
-
-def setup_spdlog():
-    """Setup spdlog library for Bazel builds."""
-    maybe(
-        http_archive,
-        name = "ds-spdlog",
-        sha256 = "4dccf2d10f410c1e2feaff89966bfc49a1abb29ef6f08246335b110e001e09a9",
-        strip_prefix = "spdlog-1.12.0",
-        urls = [
-            "https://github.com/gabime/spdlog/archive/v1.12.0.tar.gz",
-        ],
-        patches = [
-            "@yuanrong-datasystem//third_party/patches/spdlog:change-namespace.patch",
-            "@yuanrong-datasystem//third_party/patches/spdlog:change-rotating-file-sink.patch",
-        ],
-        patch_args = ["-p1"],
-        build_file = "@yuanrong-datasystem//third_party:ds-spdlog.BUILD",
-    )
-
-def setup_tbb():
-    """Setup tbb library for Bazel builds."""
-    maybe(
-        http_archive,
-        name = "tbb",
-        sha256 = "ebc4f6aa47972daed1f7bf71d100ae5bf6931c2e3144cf299c8cc7d041dca2f3",
-        strip_prefix = "oneTBB-2020.3",
-        urls = [
-            "https://github.com/uxlfoundation/oneTBB/archive/v2020.3.tar.gz",
-        ],
-        patches = [
-            "@yuanrong-datasystem//third_party/patches/tbb:2020.3/soft-link.patch",
-            "@yuanrong-datasystem//third_party/patches/tbb:2020.3/adapt-task.h-to-gcc-14.patch",
-        ],
-        patch_args = ["-p1"],
-        build_file = "@yuanrong-datasystem//third_party:tbb.BUILD",
-    )
-
-def setup_zmq():
-    """Setup zmq library for Bazel builds."""
-    maybe(
-        http_archive,
-        name = "zmq",
-        sha256 = "6c972d1e6a91a0ecd79c3236f04cf0126f2f4dfbbad407d72b4606a7ba93f9c6",
-        strip_prefix = "libzmq-4.3.5",
-        urls = [
-            "https://github.com/zeromq/libzmq/archive/v4.3.5.tar.gz",
-        ],
-        build_file = "@yuanrong-datasystem//third_party:zmq.BUILD",
-    )
-
-def setup_jemalloc():
-    """Setup Jemalloc library for Bazel builds."""
-    maybe(
-        http_archive,
-        name = "jemalloc_kvc",
-        sha256 = "ef6f74fd45e95ee4ef7f9e19ebe5b075ca6b7fbe0140612b2a161abafb7ee179",
-        strip_prefix = "jemalloc-5.3.0",
-        urls = [
-            "https://github.com/jemalloc/jemalloc/archive/refs/tags/5.3.0.tar.gz",
-        ],
-        build_file = "@yuanrong-datasystem//third_party:jemalloc.BUILD",
     )
 
 def setup_rules():
@@ -297,85 +238,6 @@ def setup_re2():
         patch_args = ["-p1"],
     )
 
-def setup_gflags():
-    """Setup gflags library for Bazel builds (brpc dependency)."""
-    maybe(
-        http_archive,
-        name = "com_github_gflags_gflags",
-        sha256 = "34af2f15cf7367513b352bdcd2493ab14ce43692d2dcd9dfc499492966c64dcf",
-        strip_prefix = "gflags-2.2.2",
-        urls = ["https://github.com/gflags/gflags/archive/refs/tags/v2.2.2.tar.gz"],
-    )
-
-def setup_leveldb():
-    """Setup leveldb library for Bazel builds (brpc dependency)."""
-    maybe(
-        http_archive,
-        name = "com_github_google_leveldb",
-        sha256 = "9a37f8a6174f09bd622bc723b55881dc541cd50747cbd08831c2a82d620f6d76",
-        strip_prefix = "leveldb-1.23",
-        urls = ["https://github.com/google/leveldb/archive/refs/tags/1.23.tar.gz"],
-        build_file = "@yuanrong-datasystem//third_party:leveldb.BUILD",
-    )
-
-def setup_brpc():
-    """Setup brpc library for Bazel builds."""
-    maybe(
-        http_archive,
-        name = "com_github_apache_brpc",
-        sha256 = "f674b753af71dc313d9d2dcf34f574f0a3438c9f9bb9e7e6ca500a3b0ca7ddfb",
-        urls = ["https://github.com/apache/brpc/archive/refs/tags/1.15.0.tar.gz"],
-        strip_prefix = "brpc-1.15.0",
-        repo_mapping = {
-            "@com_github_madler_zlib": "@zlib",
-            "@openssl": "@boringssl",
-        },
-        patches = [
-            "@yuanrong-datasystem//third_party/patches/brpc:fix-boringssl-compat.patch",
-        ],
-        patch_args = ["-p1"],
-    )
-
-def setup_braft():
-    """Setup braft using the existing brpc and common dependency repositories."""
-    maybe(
-        http_archive,
-        name = "braft",
-        sha256 = "bb3705f61874f8488e616ae38464efdec1a20610ddd6cd82468adc814488f14e",
-        urls = ["https://github.com/baidu/braft/archive/refs/tags/v1.1.2.tar.gz"],
-        strip_prefix = "braft-1.1.2",
-        build_file = "@yuanrong-datasystem//third_party:braft.BUILD",
-    )
-
-def setup_rocksdb():
-    maybe(
-        # 7.10.2
-        http_archive,
-        name = "rocksdb",
-        sha256 = "4619ae7308cd3d11cdd36f0bfad3fb03a1ad399ca333f192b77b6b95b08e2f78",
-        strip_prefix = "rocksdb-7.10.2",
-        urls = [
-            "https://github.com/facebook/rocksdb/archive/refs/tags/v7.10.2.tar.gz",
-        ],
-        patches = [
-            "@yuanrong-datasystem//third_party/patches/rocksdb:include-algorithm-for-gcc-14.patch",
-        ],
-        patch_args = ["-p1"],
-        build_file = "@yuanrong-datasystem//third_party:rocksdb.BUILD",
-    )
-
-def setup_curl():
-    maybe(
-        http_archive,
-        name = "curl",
-        sha256 = "264537d90e58d2b09dddc50944baf3c38e7089151c8986715e2aaeaaf2b8118f",
-        strip_prefix = "curl-8.11.0",
-        urls = [
-            "https://github.com/curl/curl/releases/download/curl-8_11_0/curl-8.11.0.tar.gz",
-        ],
-        build_file = "@yuanrong-datasystem//third_party:curl.BUILD",
-    )
-
 def setup_mlcachedirect():
     maybe(
         http_archive,
@@ -394,4 +256,3 @@ def setup_local_urma():
         path = "/usr",
         build_file = "@mlcachedirect//third_party:BUILD.urma",
     )
-

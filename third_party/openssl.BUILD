@@ -28,7 +28,7 @@ genrule(
         "//conditions:default": "export openssl_config='config' &&",
     }) + " && ".join([
         "mkdir -p openssl-output",
-        "cp -rL external/openssl/* openssl-output",
+        "cp -rL $$(dirname $(location Configure))/* openssl-output",
         "cd openssl-output",
         "./$${openssl_config} &>/dev/null",
         "make -j4 &>/dev/null",

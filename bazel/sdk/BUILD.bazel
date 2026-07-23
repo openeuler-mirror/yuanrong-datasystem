@@ -1,0 +1,31 @@
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "headers",
+    actual = "//include/datasystem:headers",
+)
+
+cc_library(
+    name = "client",
+    deps = [
+        "//include/datasystem:headers",
+        "//src/datasystem/client:datasystem",
+    ],
+    alwayslink = True,
+)
+
+# Private build probe used by the owning repository. Its executable stays in
+# the validation output group and is never included in the SDK package.
+cc_binary(
+    name = "client_build_validation",
+    srcs = ["client_build_validation.cpp"],
+    deps = [":client"],
+)
+
+filegroup(
+    name = "runtime_files",
+    # The source SDK is linked into YuanRong targets, so it has no standalone
+    # DataSystem shared library to package. Keep this stable interface for
+    # consumers that assemble runtime distributions.
+    srcs = [],
+)
