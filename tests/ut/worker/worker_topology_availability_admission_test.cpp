@@ -269,6 +269,32 @@ TEST(WorkerTopologyAvailabilityAdmissionTest, HashRingSelfPassiveScaleDownDoesNo
     EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
 }
 
+TEST(WorkerTopologyAvailabilityAdmissionTest, DisabledSlotRecoveryDoesNotBlockPassiveIsolationRecovery)
+{
+    WorkerRuntimeFacade runtime;
+    WorkerRecoveryEvidenceReport completeReport = CompleteTopologyRecoveryReport();
+    WorkerRecoveryEvidenceReport disabledSlotReport = CompleteTopologyRecoveryReport();
+    disabledSlotReport.detail = "metadata recovered; slot_recovery_disabled; ownership ready";
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &completeReport);
+    ASSERT_EQ(runtime.GetSnapshot().mode, WorkerServiceMode::RUNNING);
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::ROLE_ISOLATED, runtime,
+                                            &completeReport);
+    auto snapshot = runtime.GetSnapshot();
+    ASSERT_EQ(snapshot.mode, WorkerServiceMode::LOCAL_ISOLATED);
+    ASSERT_EQ(snapshot.reason, WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN);
+
+    ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel::NORMAL, runtime, &disabledSlotReport);
+
+    snapshot = runtime.GetSnapshot();
+    EXPECT_EQ(snapshot.mode, WorkerServiceMode::RUNNING);
+    EXPECT_EQ(snapshot.reason, WorkerIsolationReason::NONE);
+    EXPECT_TRUE(snapshot.evidence.slotReady);
+    EXPECT_NE(snapshot.detail.find("slot_recovery_disabled"), std::string::npos);
+    EXPECT_TRUE(runtime.CheckAdmission(WorkerAdmissionKind::NORMAL_WRITE, "Create").IsOk());
+}
+
 TEST(WorkerTopologyAvailabilityAdmissionTest, ShuttingDownIsTerminal)
 {
     WorkerRuntimeFacade runtime;

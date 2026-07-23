@@ -606,6 +606,13 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             admission_test.read_text(encoding="utf-8"),
         )
 
+    def test_runtime_recovery_covers_disabled_slot_passive_overlay(self):
+        runtime_test = REPO_ROOT / "tests/ut/worker/worker_topology_availability_admission_test.cpp"
+        self.assertIn(
+            "DisabledSlotRecoveryDoesNotBlockPassiveIsolationRecovery",
+            runtime_test.read_text(encoding="utf-8"),
+        )
+
     def test_object_cache_service_uses_runtime_guard_for_admission(self):
         impl = REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp"
         text = impl.read_text(encoding="utf-8")

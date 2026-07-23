@@ -258,7 +258,9 @@
      `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage`; stream-cache admission
      now has focused overlay coverage in
      `ClientWorkerSCServiceAdmissionTest.ScaleFaultOverlayRejectsStreamWritesDuringDrainingIsolation`. Full expansion
-     for disabled slot scale/passive scale variants remains a tracked follow-up before claiming every overlay variant.
+     for disabled-slot/passive-scale recovery reopening now has focused runtime coverage in
+     `WorkerTopologyAvailabilityAdmissionTest.DisabledSlotRecoveryDoesNotBlockPassiveIsolationRecovery`; broader
+     disabled-slot ST variants remain optional acceptance expansion rather than a known uncovered runtime contract.
 - Current refactor status:
   - `WorkerRuntimeFacade` hides runtime state internals and provides the service-facing admission/recovery contract;
   - `ObjectCacheRecoveryState` owns metadata evidence, ownership evidence, resource readiness generation, and injected
@@ -286,6 +288,12 @@
     after adding the focused stream admission UT, `ClientWorkerSCServiceAdmissionTest.ScaleFaultOverlayRejectsStreamWritesDuringDrainingIsolation`
     passed 1/1 in 0.05s, the full stream admission group passed 3/3 in 0.05s, and the worker runtime/module boundary
     guard passed 37/37 in 0.047s;
+  - disabled-slot/passive-scale overlay TDD evidence: boundary RED failed 37/38 in 0.047s before the acceptance UT
+    existed; after adding the focused runtime UT,
+    `WorkerTopologyAvailabilityAdmissionTest.DisabledSlotRecoveryDoesNotBlockPassiveIsolationRecovery` passed 1/1 in
+    0.06s, the full topology admission group passed 15/15 in 0.05s, the CLion remote `tests-index` build passed in
+    109s with URMA Mock and third-party cache reuse in 0s, and the worker runtime/module boundary guard passed 38/38 in
+    0.048s;
   - CLion remote `index` after classifier move: passed in 92s with third-party cache reuse in 0s and 693 compile
     database entries;
   - CLion remote `tests-index` after classifier move: passed in 513s with URMA Mock, third-party cache reuse in 0s,
@@ -334,6 +342,9 @@
   - affected topology keepalive/recovery group: 6/6 in 0.92s;
   - stream scale/fault overlay admission: 1/1 in 0.05s, full `ClientWorkerSCServiceAdmissionTest.*` group 3/3 in
     0.05s, and worker runtime/module boundary script 37/37 in 0.047s;
+  - disabled-slot/passive-scale runtime reopening: 1/1 in 0.06s, full
+    `WorkerTopologyAvailabilityAdmissionTest.*` group 15/15 in 0.05s, CLion remote `tests-index` in 109s with URMA
+    Mock and third-party cache reuse in 0s, and worker runtime/module boundary script 38/38 in 0.048s;
   - post-classifier ownership guard: worker runtime/module boundary 36/36 in 0.09s;
   - post-classifier focused UTs: cluster classifier 8/8 in 0.03s, runtime facade 2/2 in 0.05s, topology keepalive
     scope 3/3 in 0.04s, object-cache recovery state 6/6 in 0.05s;
@@ -354,8 +365,9 @@
 ## Remaining Worker Isolation Case Closure
 
 - Full scale/fault overlay coverage still needs expansion before declaring every Story variant complete:
-  - disabled slot-scale/passive scale variants need either enabled fast ST coverage or a documented replacement UT/ST
-    proving slot metadata/data protection under local isolation;
+  - disabled slot-scale/passive scale now has a focused runtime replacement UT proving passive isolation can recover
+    with `slot_recovery_disabled` evidence; an enabled fast ST can still be added if reviewers require storage-level
+    slot data coverage rather than runtime/evidence coverage;
   - coordinator-backed and pure ETCD-style unified backend local recovery callback wiring now has focused topology UT
     coverage; broader end-to-end metadata evidence callback coverage can still be expanded in later STs if gate time
     allows;
