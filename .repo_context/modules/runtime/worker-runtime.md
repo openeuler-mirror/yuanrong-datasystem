@@ -505,6 +505,10 @@
     `//tests/ut/worker:worker_topology_availability_admission_test` passed in 144.266s on the first run after rebase
     and cached rerun passed in 0.362s. The first run rebuilt Bazel action-cache entries for gRPC/proto/etcd and local
     targets from `.bazel-cache/distdir`; it did not indicate a CMake third-party rebuild.
+  - 2026-07-23 post-rebase CLion remote `tests-index` validation passed in 485s with
+    `REMOTE_THIRDPARTY=/home/cache/ds-thirdparty-cache`; the third-party build stage reused cache in 0s, URMA Mock was
+    enabled, and the generated compile database has 1164 entries. The long tail was source build, install/strip, example
+    build, and CLion compile-command rewriting, not third-party recompilation.
 
 ## Open Questions
 
