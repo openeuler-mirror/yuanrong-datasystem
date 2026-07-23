@@ -111,6 +111,15 @@ private:
                              ObjectKV &objectKV);
 
     /**
+     * @brief Construct the create metadata request sent to master.
+     * @param[in] objectKV The object to be published.
+     * @param[in] params The publish parameters.
+     * @param[out] metaReq The request sent to master.
+     */
+    void ConstructCreateMetaRequest(const ObjectKV &objectKV, const PublishParams &params,
+                                    master::CreateMetaReqPb &metaReq) const;
+
+    /**
      * @brief Create a new object metadata to master.
      * @param[in] objectKV The object to be sealed and its corresponding objectKey.
      * @param[in] params The params of Publish request.

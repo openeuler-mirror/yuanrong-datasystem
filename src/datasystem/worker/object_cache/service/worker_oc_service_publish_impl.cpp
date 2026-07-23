@@ -16,6 +16,7 @@
  */
 #include "datasystem/worker/object_cache/service/worker_oc_service_publish_impl.h"
 
+#include <algorithm>
 #include <utility>
 
 
@@ -51,9 +52,52 @@ using namespace datasystem::master;
 namespace datasystem {
 namespace object_cache {
 static constexpr int DEBUG_LOG_LEVEL = 2;
-
-
 static constexpr double US_PER_MS = 1000.0;
+static constexpr int64_t META_ROUTE_ATTEMPT_TIMEOUT_MS = 2 * 1000;
+static constexpr int64_t META_ROUTE_RETRY_INTERVAL_MS = 100;
+
+namespace {
+bool IsMetadataRouteRetryable(const Status &rc)
+{
+    static const std::unordered_set<StatusCode> retryableCodes{
+        K_NOT_READY, K_RPC_CANCELLED, K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE, K_SCALING, K_TRY_AGAIN
+    };
+    return retryableCodes.find(rc.GetCode()) != retryableCodes.end();
+}
+
+template <typename Resolver, typename Requester, typename Sleeper>
+Status RetryMetadataRequestWithRouteRefresh(std::shared_ptr<WorkerMasterOCApi> &workerMasterApi,
+                                            bool retryRequestFailure, Resolver &&resolver, Requester &&requester,
+                                            Sleeper &&sleeper)
+{
+    Status rc;
+    bool shouldRetry = true;
+    while (shouldRetry) {
+        workerMasterApi.reset();
+        bool requestAttempted = false;
+        rc = resolver(workerMasterApi);
+        if (rc.IsOk()) {
+            CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "Resolve metadata owner failed");
+            auto &requestTimeout = GetRequestContext()->reqTimeoutDuration;
+            auto savedTimeout = requestTimeout;
+            Raii restoreTimeout([&requestTimeout, savedTimeout]() { requestTimeout = savedTimeout; });
+            requestTimeout.Init(std::min<int64_t>(requestTimeout.CalcRealRemainingTime(),
+                                                  META_ROUTE_ATTEMPT_TIMEOUT_MS));
+            requestAttempted = true;
+            rc = requester(workerMasterApi);
+        }
+        shouldRetry = IsMetadataRouteRetryable(rc) && (!requestAttempted || retryRequestFailure);
+        if (shouldRetry) {
+            int64_t remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+            shouldRetry = remainingMs > META_ROUTE_RETRY_INTERVAL_MS;
+            if (shouldRetry) {
+                sleeper(std::min<int64_t>(remainingMs, META_ROUTE_RETRY_INTERVAL_MS));
+            }
+        }
+    }
+    return rc;
+}
+}  // namespace
 
 WorkerOcServicePublishImpl::WorkerOcServicePublishImpl(WorkerOcServiceCrudParam &initParam,
                                                        std::shared_ptr<ThreadPool> memCpyThreadPool,
@@ -103,6 +147,28 @@ Status WorkerOcServicePublishImpl::PrepareForPublish(const PublishReqPb &req, co
     return AttachShmUnitToObject(clientId, objectKey, shmUnitId, req.data_size(), safeObj);
 }
 
+void WorkerOcServicePublishImpl::ConstructCreateMetaRequest(const ObjectKV &objectKV, const PublishParams &params,
+                                                            CreateMetaReqPb &metaReq) const
+{
+    const SafeObjType &safeObj = objectKV.GetObjEntry();
+    ObjectMetaPb *metadata = metaReq.mutable_meta();
+    if (params.lifeState != ObjectLifeState::OBJECT_INVALID) {
+        *metaReq.mutable_nested_keys() = { params.nestedObjectKeys.begin(), params.nestedObjectKeys.end() };
+    }
+    metadata->set_object_key(objectKV.GetObjKey());
+    metadata->set_data_size(safeObj->GetDataSize());
+    metadata->set_life_state(static_cast<uint32_t>(params.lifeState));
+    metadata->set_ttl_second(params.ttlSecond);
+    metadata->set_existence(static_cast<ExistenceOptPb>(params.existence));
+    ConfigPb *configPb = metadata->mutable_config();
+    configPb->set_write_mode(static_cast<uint32_t>(safeObj->modeInfo.GetWriteMode()));
+    configPb->set_data_format(static_cast<uint32_t>(safeObj->stateInfo.GetDataFormat()));
+    configPb->set_consistency_type(static_cast<uint32_t>(safeObj->modeInfo.GetConsistencyType()));
+    configPb->set_cache_type(static_cast<uint32_t>(params.cacheType));
+    metaReq.set_address(localAddress_.ToString());
+    metaReq.set_redirect(true);
+}
+
 Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &objectKV, const PublishParams &params,
                                                           uint64_t &version)
 {
@@ -113,38 +179,31 @@ Status WorkerOcServicePublishImpl::CreateMetadataToMaster(const ObjectKV &object
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_CREATE_META_RPC_START);
     }
     const auto &objectKey = objectKV.GetObjKey();
-    const SafeObjType &safeObj = objectKV.GetObjEntry();
 
     master::CreateMetaReqPb metaReq;
-    datasystem::ObjectMetaPb *metadata = metaReq.mutable_meta();
-    if (params.lifeState != ObjectLifeState::OBJECT_INVALID) {
-        *metaReq.mutable_nested_keys() = { params.nestedObjectKeys.begin(), params.nestedObjectKeys.end() };
-    }
-    metadata->set_object_key(objectKey);
-    metadata->set_data_size(safeObj->GetDataSize());
-    metadata->set_life_state(static_cast<uint32_t>(params.lifeState));
-    metadata->set_ttl_second(params.ttlSecond);
-    metadata->set_existence(static_cast<::datasystem::ExistenceOptPb>(params.existence));
-    ConfigPb *configPb = metadata->mutable_config();
-    configPb->set_write_mode(static_cast<uint32_t>(safeObj->modeInfo.GetWriteMode()));
-    configPb->set_data_format(static_cast<uint32_t>(safeObj->stateInfo.GetDataFormat()));
-    configPb->set_consistency_type(static_cast<uint32_t>(safeObj->modeInfo.GetConsistencyType()));
-    configPb->set_cache_type(static_cast<uint32_t>(params.cacheType));
-    metaReq.set_address(localAddress_.ToString());
-    metaReq.set_redirect(true);
+    ConstructCreateMetaRequest(objectKV, params, metaReq);
     master::CreateMetaRspPb metaResp;
     PerfPoint point(PerfKey::WORKER_CREATE_META);
 
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
-    RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi));
-    std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func = [&workerMasterApi](CreateMetaReqPb &metaReq,
-                                                                                          CreateMetaRspPb &metaResp) {
-        VLOG(1) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", workerMasterApi->GetHostPort()),
-                                      metaReq.address(), workerMasterApi->GetHostPort());
-        return workerMasterApi->CreateMeta(metaReq, metaResp);
-    };
     Timer rpcTimer;
-    Status rc = RedirectRetryWhenMetaMoving(metaReq, metaResp, workerMasterApi, func);
+    const bool retryRequestFailure = params.lifeState != ObjectLifeState::OBJECT_SEALED;
+    Status rc = RetryMetadataRequestWithRouteRefresh(
+        workerMasterApi, retryRequestFailure,
+        [this, &objectKey](std::shared_ptr<WorkerMasterOCApi> &api) {
+            return workerMasterApiManager_->GetWorkerMasterApi(objectKey, api);
+        },
+        [this, &metaReq, &metaResp](std::shared_ptr<WorkerMasterOCApi> &api) {
+            metaResp.Clear();
+            std::function<Status(CreateMetaReqPb &, CreateMetaRspPb &)> func =
+                [&api](CreateMetaReqPb &req, CreateMetaRspPb &rsp) {
+                    VLOG(1) << AppendSrcDstForLog(FormatString("Create meta to master[%s]", api->GetHostPort()),
+                                                  req.address(), api->GetHostPort());
+                    return api->CreateMeta(req, rsp);
+                };
+            return RedirectRetryWhenMetaMoving(metaReq, metaResp, api, func);
+        },
+        [this](int64_t sleepTimeMs) { SleepForMetaMovingRetry(sleepTimeMs); });
     const auto rpcUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
     FinalizeMasterRpcLatency(LatencyTickKey::WORKER_CREATE_META_RPC_END, config, traceEnabled,
                              metaResp, objectKey, rpcUs, rc, workerMasterApi, "CreateMeta");
@@ -183,15 +242,24 @@ Status WorkerOcServicePublishImpl::UpdateMetadataToMaster(const ObjectKV &object
     VLOG(1) << FormatString("Send Update metadata to master for object: %s, address: %s", objectKey,
                             localAddress_.ToString());
     std::shared_ptr<WorkerMasterOCApi> workerMasterApi;
-    RETURN_IF_NOT_OK(workerMasterApiManager_->GetWorkerMasterApi(objectKey, workerMasterApi));
-    std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func = [&workerMasterApi](UpdateMetaReqPb &metaReq,
-                                                                                          UpdateMetaRspPb &metaRsp) {
-        VLOG(1) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", workerMasterApi->GetHostPort()),
-                                      metaReq.address(), workerMasterApi->GetHostPort());
-        return workerMasterApi->UpdateMeta(metaReq, metaRsp);
-    };
     Timer rpcTimer;
-    Status rc = RedirectRetryWhenMetaMoving(metaReq, metaRsp, workerMasterApi, func);
+    const bool retryRequestFailure = params.lifeState != ObjectLifeState::OBJECT_SEALED;
+    Status rc = RetryMetadataRequestWithRouteRefresh(
+        workerMasterApi, retryRequestFailure,
+        [this, &objectKey](std::shared_ptr<WorkerMasterOCApi> &api) {
+            return workerMasterApiManager_->GetWorkerMasterApi(objectKey, api);
+        },
+        [this, &metaReq, &metaRsp](std::shared_ptr<WorkerMasterOCApi> &api) {
+            metaRsp.Clear();
+            std::function<Status(UpdateMetaReqPb &, UpdateMetaRspPb &)> func =
+                [&api](UpdateMetaReqPb &req, UpdateMetaRspPb &rsp) {
+                    VLOG(1) << AppendSrcDstForLog(FormatString("Update meta to master[%s]", api->GetHostPort()),
+                                                  req.address(), api->GetHostPort());
+                    return api->UpdateMeta(req, rsp);
+                };
+            return RedirectRetryWhenMetaMoving(metaReq, metaRsp, api, func);
+        },
+        [this](int64_t sleepTimeMs) { SleepForMetaMovingRetry(sleepTimeMs); });
     const auto rpcUs = static_cast<uint64_t>(rpcTimer.ElapsedMicroSecond());
     FinalizeMasterRpcLatency(LatencyTickKey::WORKER_UPDATE_META_RPC_END, config, traceEnabled,
                              metaRsp, objectKey, rpcUs, rc, workerMasterApi, "UpdateMeta");

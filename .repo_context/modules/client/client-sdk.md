@@ -268,8 +268,26 @@
     before sending it.
   - Set retries rebuild RPC or UB state once on the same worker inside `TransportLayer`. Cross-worker retry starts a
     new Create transaction, excludes `K_SCALE_DOWN` workers without poisoning their global health, and reports
-    connection failures through `Routing::UpdateState`. A Publish connection failure is treated as ambiguous and is
-    never replayed on another worker.
+    connection failures through `Routing::UpdateState`. A worker `K_NOT_READY` response safely reroutes the complete
+    Create-to-Publish transaction. A Publish `K_RPC_UNAVAILABLE` is rerouted only when brpc reports a conservative
+    connection-establishment failure with complete per-attempt diagnostics that proves the request was not sent;
+    missing diagnostics, timeout, EOF, connection reset, and other ambiguous failures are never replayed on another
+    worker. If a same-worker retry follows an ambiguous first Publish result, `TransportLayer` preserves that first
+    result so a later connection-refused error cannot make replay appear safe.
+  - Routed Set and MSet use the remaining SDK `ApiDeadline` for transport Create and Publish RPCs. brpc delivers the
+    selected RPC timeout to the target worker, whose generated unary adapter initializes `reqTimeoutDuration` before
+    entering the object-cache handler. Nested request contexts inherit that deadline, so metadata-owner retry loops and
+    worker-to-master RPCs remain bounded by the caller's request budget. Connection-establishment failures still return
+    immediately and follow bounded rerouting, while a slow but reachable worker can finish recovery work within that
+    budget.
+  - Worker metadata publication uses bounded per-owner attempts. Retryable Set failures re-resolve the metadata owner
+    from the latest placement before the next attempt; MSet re-groups only unresolved keys and preserves successful
+    owner groups. The MSet metadata route loop is bounded by both the API deadline and 10 attempts. MSet keys whose
+    metadata was not created are never transitioned to the published state and are returned through
+    `failed_object_keys` when either retry budget is exhausted. Seal metadata requests remain non-retryable after the
+    master call is attempted; only route-resolution failures before that call may refresh the route and retry.
+  - A worker absent from the latest transport snapshot returns `K_NOT_READY`, not object-level `K_NOT_FOUND`. Because
+    no RPC was sent, routed Set and MSet may safely exclude that worker and rebuild the request on a current route.
   - Transport MSet preserves worker-reported partial failures and performs at most one same-worker UB recovery attempt.
     Routed `MultiCreateReqPb` and `MultiPublishReqPb` requests carry `is_routed=true`; target workers authenticate their
     signatures and tenant IDs without requiring the client to register separately on every metadata-owner worker.
@@ -307,7 +325,8 @@
     resolves the metadata owner through the real SDK `Routing` path before asserting TCP or UB data transport.
   - `tests/st/client/kv_cache/kv_client_transport_set_test.cpp` covers the routed Set transaction over TCP or UB. It
     verifies successful data and metadata publication, complete transaction rerouting after a Publish-time scale-down
-    response, and the rule that an ambiguous Publish connection failure is not replayed on another worker.
+    or worker-not-ready response, Set and MSet rerouting from Create and Publish stages, and the rule that an ambiguous
+    Publish connection failure is not replayed on another worker.
   - standby failover candidate order is randomized per switch attempt, so when one worker fails a batch of clients can spread across the remaining ready workers instead of stampeding to the first candidate in a shared list.
   - after a standby switch publishes the new current worker, cleanup of the previous worker's mmap fds captured at switch commit runs immediately when that worker API has no pending invocations; otherwise cleanup is deferred until its invocation count reaches zero. Cleanup removes only the captured fds, so mappings added for another worker before the deferred callback runs are preserved.
   - Python `DsTensorClient` depends on `HeteroClient`; tensor features are not an independent transport stack.

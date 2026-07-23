@@ -79,6 +79,7 @@
 #include "datasystem/common/rdma/npu/remote_h2d_manager.h"
 #endif
 #include "datasystem/common/rpc/api_deadline.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -2918,6 +2919,7 @@ Status ObjectClientImpl::ProcessTransportPut(
     createParam.cacheType = param.cacheType;
     createParam.consistencyType = param.consistencyType;
     createParam.writeMode = param.writeMode;
+    createParam.subTimeoutMs = requestTimeoutMs_;
     failureStage = SetFailureStage::CREATE;
     std::shared_ptr<ObjectBuffer> buffer;
     RETURN_IF_NOT_OK(transportLayer_->Create(routeContext.worker, objectKey, size, createParam, buffer));
@@ -2934,6 +2936,7 @@ Status ObjectClientImpl::ProcessTransportPut(
     setParam.nestedKeys = nestedObjectKeys;
     setParam.ttlSecond = ttlSecond;
     setParam.existence = static_cast<ExistenceOpt>(existence);
+    setParam.subTimeoutMs = requestTimeoutMs_;
     failureStage = SetFailureStage::PUBLISH;
     Status setRc = transportLayer_->Set(*buffer, setParam);
     if (setRc.GetCode() == K_URMA_NEED_CONNECT) {
@@ -2950,21 +2953,34 @@ bool ObjectClientImpl::HandleSetRouteFailure(const Status &status, SetFailureSta
     if (routing == nullptr) {
         return false;
     }
-    if (status.GetCode() == K_SCALE_DOWN) {
+    auto excludeWorker = [&excludedWorkers, &worker]() {
         if (std::find(excludedWorkers.begin(), excludedWorkers.end(), worker) == excludedWorkers.end()) {
             excludedWorkers.emplace_back(worker);
         }
+    };
+    if (status.GetCode() == K_SCALE_DOWN) {
+        excludeWorker();
         return true;
     }
     const bool connectionFailure = status.GetCode() == K_CLIENT_WORKER_DISCONNECT
                                    || status.GetCode() == K_RPC_UNAVAILABLE;
     const bool transferFailure = status.GetCode() == K_URMA_NEED_CONNECT;
-    if (connectionFailure || transferFailure) {
+    const bool workerNotReady = status.GetCode() == K_NOT_READY
+                                && (failureStage == SetFailureStage::CREATE
+                                    || failureStage == SetFailureStage::PUBLISH);
+    const bool publishNotSent = failureStage == SetFailureStage::PUBLISH
+                                && IsBrpcRequestDefinitelyNotSent(status);
+    if (connectionFailure || transferFailure || workerNotReady) {
         routing->UpdateState(worker, K_CLIENT_WORKER_DISCONNECT);
     }
-    // A Publish connection error is ambiguous. It must not be replayed on another worker.
-    return (failureStage == SetFailureStage::CREATE && connectionFailure)
-           || (failureStage == SetFailureStage::TRANSFER && transferFailure);
+    const bool retry = (failureStage == SetFailureStage::CREATE && (connectionFailure || workerNotReady))
+                       || (failureStage == SetFailureStage::TRANSFER && transferFailure)
+                       || (failureStage == SetFailureStage::PUBLISH && (workerNotReady || publishNotSent));
+    if (retry) {
+        excludeWorker();
+    }
+    // An unmarked Publish connection error is ambiguous and must not be replayed on another worker.
+    return retry;
 }
 
 Status ObjectClientImpl::ExecuteSetFlow(
@@ -5093,6 +5109,7 @@ Status ObjectClientImpl::ProcessTransportMSet(const MSetRouteGroup &group, const
     createParam.cacheType = param.cacheType;
     createParam.consistencyType = ConsistencyType::CAUSAL;
     createParam.writeMode = param.writeMode;
+    createParam.subTimeoutMs = requestTimeoutMs_;
     std::vector<uint64_t> sizes;
     uint64_t dataSizeSum = 0;
     ComputeDataSizes(group.values, sizes, dataSizeSum);
@@ -5114,6 +5131,7 @@ Status ObjectClientImpl::ProcessTransportMSet(const MSetRouteGroup &group, const
     setParam.requestContext = requestContext;
     setParam.ttlSecond = param.ttlSecond;
     setParam.existence = param.existence;
+    setParam.subTimeoutMs = requestTimeoutMs_;
     point.RecordAndReset(PerfKey::CLIENT_MSET_MULTI_PUBLISH);
     failureStage = SetFailureStage::PUBLISH;
     Status rc = transportLayer_->MSet(buffers, setParam, result);

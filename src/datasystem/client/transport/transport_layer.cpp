@@ -34,7 +34,9 @@
 #include "datasystem/client/transport/rpc/exist_request_builder.h"
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/transport_advisor.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uri.h"
 
@@ -162,6 +164,7 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
                               const TransportCreateParam &param, std::shared_ptr<ObjectBuffer> &buffer)
 {
     RETURN_IF_NOT_OK(ValidateCreateRequest(objectKey, dataSize, param));
+    INJECT_POINT("TransportLayer.Create.beforeTransport");
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
@@ -193,6 +196,12 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
     TransportSetParam retryParam = param;
     Status rc = transporter->Set(buffer, retryParam);
+    const bool firstPublishMayHaveReachedWorker = rc.GetCode() == K_RPC_UNAVAILABLE
+                                                  && !IsBrpcRequestDefinitelyNotSent(rc);
+    Status firstPublishRc;
+    if (firstPublishMayHaveReachedWorker) {
+        firstPublishRc = rc;
+    }
     if (rc.GetCode() == K_URMA_NEED_CONNECT) {
         LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString()
                      << " after Set failed: " << rc;
@@ -208,11 +217,16 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     }
     Status rebuildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
     if (rebuildRc.IsOk()) {
+        // A same-worker retry is idempotent through isRetry. Cross-worker replay is not safe when the first Publish
+        // may have executed, so preserve that ambiguity if this recovery attempt also fails.
         retryParam.isRetry = true;
         rc = transporter->Set(buffer, retryParam);
         if (rc.IsError()) {
             LOG(WARNING) << "Set still failed after rebuilding transport for worker " << workerAddr.ToString()
                          << ": " << rc;
+            if (firstPublishMayHaveReachedWorker) {
+                rc = firstPublishRc;
+            }
         }
     } else {
         rc = rebuildRc;
@@ -227,6 +241,7 @@ Status TransportLayer::MCreate(const HostPort &workerAddr, const std::vector<std
                                std::vector<std::shared_ptr<ObjectBuffer>> &buffers)
 {
     RETURN_IF_NOT_OK(ValidateMultiCreateRequest(objectKeys, dataSizes, param));
+    INJECT_POINT("TransportLayer.MCreate.beforeTransport");
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);

@@ -1750,7 +1750,7 @@ TEST(DataPlaneManagerTest, PublishedSnapshotRejectsAbsentWorkersBeforeCleanup)
     snapshot.ringVersion = 10;
     snapshot.otherAddrs.push_back(live);
     ASSERT_TRUE(manager.UpdateWorkerSnapshot(snapshot).IsOk());
-    EXPECT_EQ(manager.GetOrCreate(removed, TransportHint::TCP_ONLY, transporter).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(manager.GetOrCreate(removed, TransportHint::TCP_ONLY, transporter).GetCode(), K_NOT_READY);
     EXPECT_EQ(removedTransporter->closeCount, 0);
 
     manager.ReconcileWithSnapshot(snapshot);

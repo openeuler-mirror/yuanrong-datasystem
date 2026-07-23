@@ -95,22 +95,46 @@ TEST(BrpcStatusUtilTest, SystemETimedoutMapsToDeadlineExceeded)
 }
 
 // Peer-unreachable mappings → K_RPC_UNAVAILABLE
-TEST(BrpcStatusUtilTest, ConnectionRefusedMapsToUnavailable)
+TEST(BrpcStatusUtilTest, ConnectionRefusedWithoutAttemptDiagnosticRemainsAmbiguous)
 {
     auto st = TryExtractStatusFromControllerError("refused", ECONNREFUSED);
     EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
 TEST(BrpcStatusUtilTest, ConnectionResetMapsToUnavailable)
 {
     auto st = TryExtractStatusFromControllerError("reset", ECONNRESET);
     EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
-TEST(BrpcStatusUtilTest, HostUnreachableMapsToUnavailable)
+TEST(BrpcStatusUtilTest, HostUnreachableWithoutAttemptDiagnosticRemainsAmbiguous)
 {
     auto st = TryExtractStatusFromControllerError("no route", EHOSTUNREACH);
     EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
+}
+
+TEST(BrpcStatusUtilTest, AllConnectionEstablishmentRetriesAreDefinitelyNotSent)
+{
+    auto st = TryExtractStatusFromControllerError(
+        "[E112]Not connected [R1][E111]Connection refused [R2][E113]No route", ECONNREFUSED);
+    EXPECT_TRUE(IsBrpcRequestDefinitelyNotSent(st));
+}
+
+TEST(BrpcStatusUtilTest, AmbiguousEarlierRetryIsNotDefinitelyNotSent)
+{
+    auto st = TryExtractStatusFromControllerError(
+        "[E104]Connection reset [R1][E111]Connection refused", ECONNREFUSED);
+    EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
+}
+
+TEST(BrpcStatusUtilTest, MalformedRetryDiagnosticIsNotDefinitelyNotSent)
+{
+    auto st = TryExtractStatusFromControllerError(
+        "[E111]Connection refused [R1][Ebad]Malformed retry", ECONNREFUSED);
+    EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
 TEST(BrpcStatusUtilTest, BrpcFailedSocketMapsToUnavailable)

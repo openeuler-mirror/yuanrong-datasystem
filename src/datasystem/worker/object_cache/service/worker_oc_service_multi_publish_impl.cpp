@@ -51,6 +51,27 @@ namespace datasystem {
 namespace object_cache {
 static constexpr int RETRY_INTERNAL_MS_META_MOVING = 200;
 static constexpr int THREAD_WAIT_TIME_MS = 10;
+static constexpr int64_t CREATE_MULTI_META_ATTEMPT_TIMEOUT_MS = 2 * 1000;
+static constexpr int64_t CREATE_MULTI_META_ROUTE_RETRY_INTERVAL_MS = 100;
+static constexpr uint32_t CREATE_MULTI_META_RETRY_LOG_EVERY_N = 10;
+static constexpr uint32_t CREATE_MULTI_META_MAX_ATTEMPTS = 10;
+
+namespace {
+bool IsCreateMultiMetaRetryable(const Status &rc)
+{
+    static const std::unordered_set<StatusCode> retryableCodes{
+        K_NOT_READY, K_RPC_CANCELLED, K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE, K_SCALING, K_TRY_AGAIN
+    };
+    return retryableCodes.find(rc.GetCode()) != retryableCodes.end();
+}
+
+void SetLastError(const Status &rc, CreateMultiMetaRspPb &rsp)
+{
+    rsp.mutable_last_rc()->set_error_code(rc.GetCode());
+    rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
+}
+}  // namespace
+
 WorkerOcServiceMultiPublishImpl::WorkerOcServiceMultiPublishImpl(
     WorkerOcServiceCrudParam &initParam, std::shared_ptr<ThreadPool> memCpyThreadPool,
     std::shared_ptr<ThreadPool> threadPool,
@@ -290,20 +311,28 @@ Status WorkerOcServiceMultiPublishImpl::MultiPublishObjectNtx(const MultiPublish
     return Status::OK();
 }
 
-WorkerOcServiceMultiPublishImpl::CreateMultiMetaResult WorkerOcServiceMultiPublishImpl::BuildCreateMultiMetaResult(
-    const std::shared_ptr<worker::WorkerMasterOCApi> &api, master::CreateMultiMetaReqPb &req,
-    const HostPort &masterAddr)
+WorkerOcServiceMultiPublishImpl::CreateMultiMetaResult WorkerOcServiceMultiPublishImpl::ExecuteCreateMultiMetaRequest(
+    const HostPort &masterAddr, CreateMultiMetaReqPb &req, int64_t remainingUs,
+    const std::chrono::steady_clock::time_point &dispatchTime, const std::string &traceId)
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
+    std::shared_ptr<WorkerMasterOCApi> api;
+    auto rc = workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api);
+    if (rc.IsError()) {
+        return CreateMultiMetaResult{ rc, {}, masterAddr };
+    }
+    auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+    if (initRc.IsError()) {
+        return CreateMultiMetaResult{ initRc, {}, masterAddr };
+    }
+    auto &requestTimeout = GetRequestContext()->reqTimeoutDuration;
+    auto savedTimeout = requestTimeout;
+    Raii restoreTimeout([&requestTimeout, savedTimeout]() { requestTimeout = savedTimeout; });
+    requestTimeout.Init(
+        std::min<int64_t>(requestTimeout.CalcRealRemainingTime(), CREATE_MULTI_META_ATTEMPT_TIMEOUT_MS));
     CreateMultiMetaRspPb rsp;
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META);
-    auto rc = RetryCreateMultiMeta(api, req, rsp);
-    if (IsRpcTimeout(rc)) {
-        rsp.mutable_last_rc()->set_error_code(rc.GetCode());
-        rsp.mutable_last_rc()->set_error_msg(rc.GetMsg());
-        for (auto &meta : *(req.mutable_metas())) {
-            rsp.add_failed_object_keys(meta.object_key());
-        }
-    }
+    rc = RetryCreateMultiMeta(api, req, rsp);
     return CreateMultiMetaResult{ rc, rsp, masterAddr };
 }
 
@@ -320,25 +349,15 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaParallel(const std::vecto
                       FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     }
     auto dispatchTime = std::chrono::steady_clock::now();
-    auto traceId = Trace::Instance().GetTraceID();
+    const auto traceId = Trace::Instance().GetTraceID();
     std::vector<std::future<CreateMultiMetaResult>> futures;
     CreateMultiMetaResult lastRc;
     const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
     for (size_t i = 0; i < masterAddrs.size(); i++) {
         auto &masterAddr = masterAddrs[i];
         auto &req = reqs[i];
-        auto func = [this, &masterAddr, &req, remainingUs, dispatchTime, &traceId] {
-            TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
-            std::shared_ptr<WorkerMasterOCApi> api;
-            auto rc = workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api);
-            if (rc.IsError()) {
-                return CreateMultiMetaResult{ rc, {}, masterAddr };
-            }
-            auto initRc = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
-            if (initRc.IsError()) {
-                return CreateMultiMetaResult{ initRc, {}, masterAddr };
-            }
-            return BuildCreateMultiMetaResult(api, req, masterAddr);
+        auto func = [this, &masterAddr, &req, remainingUs, dispatchTime, traceId] {
+            return ExecuteCreateMultiMetaRequest(masterAddr, req, remainingUs, dispatchTime, traceId);
         };
         auto runInline = [&func]() {
             // Use the caller thread for brpc mode and for the last non-brpc task.
@@ -391,52 +410,138 @@ Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaToDistributedMasterNtx(
     const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &entries,
     const MultiPublishReqPb &pubReq, CreateMultiMetaRspPb &totalResp, std::vector<uint64_t> &versions)
 {
+    std::vector<size_t> pendingIndexes(objectKeys.size());
+    for (size_t i = 0; i < pendingIndexes.size(); ++i) {
+        pendingIndexes[i] = i;
+    }
+    uint32_t attemptCount = 0;
+    while (!pendingIndexes.empty()) {
+        ++attemptCount;
+        std::vector<std::string> pendingKeys;
+        std::vector<std::shared_ptr<SafeObjType>> pendingEntries;
+        pendingKeys.reserve(pendingIndexes.size());
+        pendingEntries.reserve(pendingIndexes.size());
+        for (const auto index : pendingIndexes) {
+            pendingKeys.emplace_back(objectKeys[index]);
+            pendingEntries.emplace_back(entries[index]);
+        }
+        CreateMultiMetaAttemptResult attemptResult;
+        RETURN_IF_NOT_OK(CreateMultiMetaAttempt(pendingKeys, pendingEntries, pendingIndexes, pubReq, totalResp,
+                                                versions, attemptResult));
+        if (attemptResult.retryIndexes.empty()) {
+            return Status::OK();
+        }
+        int64_t remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+        const bool attemptLimitReached = attemptCount >= CREATE_MULTI_META_MAX_ATTEMPTS;
+        if (remainingMs <= CREATE_MULTI_META_ROUTE_RETRY_INTERVAL_MS || attemptLimitReached) {
+            Status exhaustedRc = attemptResult.lastRetryRc.IsError()
+                                     ? attemptResult.lastRetryRc
+                                     : Status(attemptLimitReached ? K_TRY_AGAIN : K_RPC_DEADLINE_EXCEEDED,
+                                              "CreateMultiMeta retry budget exhausted");
+            LOG(WARNING) << "CreateMultiMeta retries exhausted, attempts: " << attemptCount
+                         << ", pending object count: " << attemptResult.retryIndexes.size()
+                         << ", last error: " << exhaustedRc;
+            SetLastError(exhaustedRc, totalResp);
+            for (const auto index : attemptResult.retryIndexes) {
+                totalResp.add_failed_object_keys(objectKeys[index]);
+            }
+            return Status::OK();
+        }
+        pendingIndexes = std::move(attemptResult.retryIndexes);
+        VLOG(1) << "Retry CreateMultiMeta with refreshed route, next attempt: " << (attemptCount + 1)
+                << ", pending object count: " << pendingIndexes.size();
+        SleepForMetaMovingRetry(std::min<int64_t>(CREATE_MULTI_META_ROUTE_RETRY_INTERVAL_MS, remainingMs));
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceMultiPublishImpl::CreateMultiMetaAttempt(
+    const std::vector<std::string> &objectKeys, const std::vector<std::shared_ptr<SafeObjType>> &entries,
+    const std::vector<size_t> &originalIndexes, const MultiPublishReqPb &pubReq, CreateMultiMetaRspPb &totalResp,
+    std::vector<uint64_t> &versions, CreateMultiMetaAttemptResult &attemptResult)
+{
     PerfPoint point(PerfKey::WORKER_CREATE_MULTI_META_ROUTER);
     CHECK_FAIL_RETURN_STATUS(metadataRouteResolver_ != nullptr, K_NOT_READY, "Metadata route resolver is unavailable");
     auto grouped = metadataRouteResolver_->GroupIndexedOwners(objectKeys);
-    const auto &objGroup = grouped.groups;
-    // Fixme: Currently, even if there is only one object for which the master node has not been identified, we will
-    // refuse to process all objects, which is very inefficient.
-    CHECK_FAIL_RETURN_STATUS(grouped.failures.empty(), K_RPC_UNAVAILABLE,
-                             "Getting master api failed. ObjectKey: " + grouped.failures.begin()->first);
-    point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_CONSTRUCT_REQ);
-
-    std::vector<HostPort> addrs;
-    addrs.reserve(objGroup.size());
-    std::vector<CreateMultiMetaReqPb> createReqs(objGroup.size());
-    int idx = 0;
-    // Group by metadata owner HostPort. The current topology has one worker per HostPort.
-    for (const auto &[masterAddr, objInfos] : objGroup) {
-        auto &req = createReqs[idx];
-        addrs.emplace_back(masterAddr);
-        ConstructCreateReq(objInfos, entries, pubReq, req);
-        idx++;
+    std::unordered_map<std::string, size_t> keyIndexes;
+    keyIndexes.reserve(objectKeys.size());
+    for (size_t i = 0; i < objectKeys.size(); ++i) {
+        keyIndexes.emplace(objectKeys[i], i);
     }
-
+    for (const auto &failure : grouped.failures) {
+        const size_t originalIndex = originalIndexes[keyIndexes.at(failure.first)];
+        if (IsCreateMultiMetaRetryable(failure.second)) {
+            attemptResult.retryIndexes.emplace_back(originalIndex);
+            attemptResult.lastRetryRc = failure.second;
+        } else {
+            totalResp.add_failed_object_keys(failure.first);
+            SetLastError(failure.second, totalResp);
+        }
+    }
+    point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_CONSTRUCT_REQ);
+    std::vector<HostPort> addrs;
+    std::vector<CreateMultiMetaReqPb> createReqs(grouped.groups.size());
+    size_t index = 0;
+    for (const auto &group : grouped.groups) {
+        addrs.emplace_back(group.first);
+        ConstructCreateReq(group.second, entries, pubReq, createReqs[index++]);
+    }
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_PARALLEL);
-    std::vector<CreateMultiMetaResult> respRes;
-    respRes.reserve(createReqs.size());
-    RETURN_IF_NOT_OK(CreateMultiMetaParallel(addrs, createReqs, respRes));
+    std::vector<CreateMultiMetaResult> results;
+    results.reserve(createReqs.size());
+    RETURN_IF_NOT_OK(CreateMultiMetaParallel(addrs, createReqs, results));
+    CHECK_FAIL_RETURN_STATUS(results.size() == createReqs.size(), K_RUNTIME_ERROR,
+                             "CreateMultiMeta result count does not match request count");
     point.RecordAndReset(PerfKey::WORKER_CREATE_MULTI_META_FILL_RSP);
-    CHECK_FAIL_RETURN_STATUS(
-        respRes.size() == createReqs.size(), K_RUNTIME_ERROR,
-        FormatString("The object size(%d) and the versions(%d) is not equal", createReqs.size(), respRes.size()));
-
-    for (size_t index = 0; index < respRes.size(); index++) {
-        auto &resp = respRes[index].rsp;
-        for (const auto &failedId : resp.failed_object_keys()) {
-            totalResp.add_failed_object_keys(failedId);
-        }
-        LOG_IF_ERROR(respRes[index].rc, "Get error with createMeta");
-        for (const auto &obj : objGroup.at(respRes[index].masterAddr)) {
-            versions[obj.second] = resp.version();
-        }
-        if (resp.has_last_rc() && static_cast<StatusCode>(resp.last_rc().error_code()) != StatusCode::K_OK) {
-            totalResp.mutable_last_rc()->set_error_code(resp.last_rc().error_code());
-            totalResp.mutable_last_rc()->set_error_msg(resp.last_rc().error_msg());
-        }
+    for (const auto &result : results) {
+        MergeCreateMultiMetaResult(result, grouped.groups, originalIndexes, totalResp, versions, attemptResult);
     }
     return Status::OK();
+}
+
+void WorkerOcServiceMultiPublishImpl::MergeCreateMultiMetaResult(
+    const CreateMultiMetaResult &result, const ObjGroupMap &objGroup, const std::vector<size_t> &originalIndexes,
+    CreateMultiMetaRspPb &totalResp, std::vector<uint64_t> &versions,
+    CreateMultiMetaAttemptResult &attemptResult)
+{
+    const auto &objects = objGroup.at(result.masterAddr);
+    if (result.rc.IsError()) {
+        LOG_EVERY_N(WARNING, CREATE_MULTI_META_RETRY_LOG_EVERY_N)
+            << "CreateMultiMeta attempt failed: " << result.rc.ToString();
+        for (const auto &object : objects) {
+            if (IsCreateMultiMetaRetryable(result.rc)) {
+                attemptResult.retryIndexes.emplace_back(originalIndexes[object.second]);
+                attemptResult.lastRetryRc = result.rc;
+            } else {
+                totalResp.add_failed_object_keys(object.first);
+                SetLastError(result.rc, totalResp);
+            }
+        }
+        return;
+    }
+    Status responseRc;
+    if (result.rsp.has_last_rc()) {
+        responseRc = Status(static_cast<StatusCode>(result.rsp.last_rc().error_code()),
+                            result.rsp.last_rc().error_msg());
+    }
+    const bool retryResponse = responseRc.IsError() && IsCreateMultiMetaRetryable(responseRc);
+    std::unordered_set<std::string> failedKeys(result.rsp.failed_object_keys().begin(),
+                                               result.rsp.failed_object_keys().end());
+    for (const auto &object : objects) {
+        if (failedKeys.find(object.first) != failedKeys.end()) {
+            if (retryResponse) {
+                attemptResult.retryIndexes.emplace_back(originalIndexes[object.second]);
+                attemptResult.lastRetryRc = responseRc;
+            } else {
+                totalResp.add_failed_object_keys(object.first);
+            }
+        } else {
+            versions[originalIndexes[object.second]] = result.rsp.version();
+        }
+    }
+    if (responseRc.IsError() && !retryResponse) {
+        *totalResp.mutable_last_rc() = result.rsp.last_rc();
+    }
 }
 
 void WorkerOcServiceMultiPublishImpl::ConstructCreateReqCommon(SafeObjType &entry, const MultiPublishReqPb &pubReq,
@@ -582,8 +687,22 @@ Status WorkerOcServiceMultiPublishImpl::SendToMasterAndUpdateObject(
         Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
         lastRc = recvRc.IsOk() ? lastRc : recvRc;
     }
+    std::vector<std::string> publishedKeys;
+    std::vector<std::shared_ptr<SafeObjType>> publishedEntries;
+    std::vector<uint64_t> publishedVersions;
+    publishedKeys.reserve(keys.size());
+    publishedEntries.reserve(entries.size());
+    publishedVersions.reserve(versions.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (failedKeys.find(keys[i]) != failedKeys.end()) {
+            continue;
+        }
+        publishedKeys.emplace_back(std::move(keys[i]));
+        publishedEntries.emplace_back(std::move(entries[i]));
+        publishedVersions.emplace_back(versions[i]);
+    }
     point.Reset(PerfKey::WORKER_UPDATE_OBJECT_AFTER_CREATE_META);
-    UpdateObjectAfterCreatingMeta(keys, entries, versions, req.ttl_second());
+    UpdateObjectAfterCreatingMeta(publishedKeys, publishedEntries, publishedVersions, req.ttl_second());
 
     return Status::OK();
 }
