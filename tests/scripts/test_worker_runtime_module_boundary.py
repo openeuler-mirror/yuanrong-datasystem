@@ -604,6 +604,22 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         )
         self.assertNotIn("void MarkRestartReconciliationPending(", impl)
 
+    def test_worker_oc_service_uses_injected_recovery_dependencies(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp",
+        ]
+        forbidden_tokens = [
+            "cluster::ICoordinationBackend",
+            "ObjectMetadataCoordinationReader",
+            "CoordinationSlotRecoveryStore",
+            "coordinationBackend_",
+        ]
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should use injected object-cache recovery dependencies")
+
     def test_stream_service_uses_runtime_facade_for_admission(self):
         header = REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
         impl = REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.cpp"

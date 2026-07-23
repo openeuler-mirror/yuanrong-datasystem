@@ -76,6 +76,7 @@
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/metadata_recovery_manager.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_dependencies.h"
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
@@ -93,10 +94,6 @@
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
 
 namespace datasystem {
-namespace cluster {
-class ICoordinationBackend;
-}
-
 namespace master {
 class MasterOCServiceImpl;
 }
@@ -128,6 +125,7 @@ public:
      * @param[in] manager Used to do AK/SK authenticate.
      * @param[in] evictionManager The eviction manager.
      * @param[in] persistApi Persistence service client.
+     * @param[in] recoveryDependencies Object-cache recovery dependencies injected by the composition root.
      * @param[in] masterOCService The master service.
      * @param[in] topologyEngine Borrowed topology lifecycle and query service.
      * @param[in] metadataRoute Metadata owner resolver that outlives this service.
@@ -138,7 +136,8 @@ public:
      */
     WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
                         std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-                        std::shared_ptr<PersistenceApi> persistApi, cluster::ICoordinationBackend *coordinationBackend,
+                        std::shared_ptr<PersistenceApi> persistApi,
+                        ObjectCacheRecoveryDependencies recoveryDependencies,
                         master::MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
                         const worker::MetadataRouteResolver &metadataRoute,
                         const cluster::MembershipEndpointView &membership, const std::atomic<bool> *exitRequested,
@@ -1381,7 +1380,7 @@ private:
     std::shared_ptr<SlotRecoveryManager> slotRecoveryManager_{ nullptr };
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
-    cluster::ICoordinationBackend *coordinationBackend_;  // pointer to backend adapter in WorkerOcServer
+    ObjectCacheRecoveryDependencies recoveryDependencies_;
     cluster::TopologyEngine *topologyEngine_{ nullptr };  // Non-owning lifecycle service owned by Worker Host.
     const worker::MetadataRouteResolver &metadataRoute_;
     const cluster::MembershipEndpointView &membership_;

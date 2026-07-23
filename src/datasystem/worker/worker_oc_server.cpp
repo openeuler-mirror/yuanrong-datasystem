@@ -84,6 +84,8 @@
 #include "datasystem/worker/cluster_event_type.h"
 #include "datasystem/worker/object_cache/central_metadata_address_resolver.h"
 #include "datasystem/worker/object_cache/data_migrator/strategy/node_selector.h"
+#include "datasystem/worker/object_cache/object_metadata_coordination_reader.h"
+#include "datasystem/worker/object_cache/slot_recovery/slot_recovery_store.h"
 #include "datasystem/worker/object_cache/worker_topology_object_cache_actions.h"
 #include "datasystem/worker/object_cache/worker_topology_metadata_actions.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
@@ -766,11 +768,18 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
     const std::shared_ptr<object_cache::ObjectTable> &objectTable,
     const std::shared_ptr<object_cache::WorkerOcEvictionManager> &evictionManager)
 {
+    object_cache::ObjectCacheRecoveryDependencies recoveryDependencies;
+    recoveryDependencies.metadataReader =
+        std::make_shared<object_cache::ObjectMetadataCoordinationReader>(metadataCoordinationBackend_.get());
+    if (metadataCoordinationBackend_ != nullptr) {
+        recoveryDependencies.slotRecoveryStore =
+            std::make_shared<object_cache::CoordinationSlotRecoveryStore>(metadataCoordinationBackend_.get());
+    }
     // create WorkerOCServices
     objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
-        hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_,
-        metadataCoordinationBackend_.get(), objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_,
-        topologyEngine_->Membership(), &topologyExitRequested_, topologyEngine_->IsRestart(), true);
+        hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, recoveryDependencies,
+        objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
+        &topologyExitRequested_, topologyEngine_->IsRestart(), true);
     objCacheClientWorkerSvc_->SetRuntimeFacade(&workerRuntime_);
     objCacheClientWorkerSvc_->RegisterRecoveryEvidenceReadyHandler(
         [this] { RefreshTopologyAdmissionFromObjectCacheRecovery(); });
@@ -982,8 +991,10 @@ void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnap
         knownFailedAddresses_.erase(member->identity.address);
     for (const auto &addrStr : knownFailedAddresses_) {
         HostPort addr;
-        if (addr.ParseString(addrStr).IsError() || addr.Empty()) continue;
-        for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC })
+        if (addr.ParseString(addrStr).IsError() || addr.Empty())
+            continue;
+        for (auto type :
+             { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC })
             RpcStubCacheMgr::Instance().Remove(addr, type);
     }
 }
@@ -2266,8 +2277,8 @@ void WorkerOCServer::WaitForPreShutdownTasks(bool scaleIn)
             constexpr int kShutdownProgressLogEvery = 5;
             waitFlag = checkAsyncTasksDone_ && allClientsExited_;
             LOG_EVERY_N(INFO, kShutdownProgressLogEvery)
-                << "[Graceful exit] The progress of voluntary scaling down is as follows: "
-                << "checkAsyncTasksDone_: " << checkAsyncTasksDone_ << ", allClientsExited_: " << allClientsExited_;
+                << "[Graceful exit] The progress of voluntary scaling down is as follows: " << "checkAsyncTasksDone_: "
+                << checkAsyncTasksDone_ << ", allClientsExited_: " << allClientsExited_;
         } else {
             waitFlag = checkAsyncTasksDone_;
         }

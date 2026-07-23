@@ -472,9 +472,9 @@ public:
         gRefProc_ =
             std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_, nullptr, localAddress_);
         impl_ = std::make_shared<WorkerOCServiceImpl>(
-            localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
-            topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
-            topologyRuntime_.Engine()->IsRestart(), false);
+            localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr,
+            ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Engine(), metadataRoute_,
+            topologyRuntime_.Engine()->Membership(), &exitRequested_, topologyRuntime_.Engine()->IsRestart(), false);
         dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, nullptr,
                                                                         gRefProc_, deleteProc_, nullptr, metadataRoute_,
                                                                         *endpointPolicy_, localAddress_.ToString());
@@ -530,9 +530,9 @@ public:
     std::shared_ptr<WorkerOCServiceImpl> CreateWorkerOCService(const std::shared_ptr<AkSkManager> &akSkManager)
     {
         return std::make_shared<WorkerOCServiceImpl>(
-            localAddress_, localAddress_, objectTable_, akSkManager, evictionManager_, nullptr, nullptr, nullptr,
-            topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
-            topologyRuntime_.Engine()->IsRestart(), false);
+            localAddress_, localAddress_, objectTable_, akSkManager, evictionManager_, nullptr,
+            ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Engine(), metadataRoute_,
+            topologyRuntime_.Engine()->Membership(), &exitRequested_, topologyRuntime_.Engine()->IsRestart(), false);
     }
 
     WorkerWorkerOCServiceImpl CreateWorkerWorkerOCService(std::shared_ptr<AkSkManager> akSkManager = nullptr)
@@ -1405,10 +1405,10 @@ TEST_F(WorkerOcServiceImplTest, DiskCreateOutOfMemoryRecordsDiskRecoveryRequirem
 
 TEST_F(WorkerOcServiceImplTest, RestartReconciliationMarksRuntimeRecoveringBeforeFanout)
 {
-    auto restartService =
-        std::make_shared<WorkerOCServiceImpl>(localAddress_, localAddress_, objectTable_, nullptr, evictionManager_,
-                                              nullptr, nullptr, nullptr, topologyRuntime_.Engine(), metadataRoute_,
-                                              topologyRuntime_.Engine()->Membership(), &exitRequested_, true, true);
+    auto restartService = std::make_shared<WorkerOCServiceImpl>(
+        localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr,
+        ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Engine(), metadataRoute_,
+        topologyRuntime_.Engine()->Membership(), &exitRequested_, true, true);
     restartService->InitServiceImpl();
     worker::WorkerRuntimeFacade runtime;
     ASSERT_TRUE(MarkRuntimeRunning(runtime));

@@ -109,7 +109,6 @@
 #include "datasystem/worker/object_cache/recovery/object_cache_recovery_startup.h"
 #include "datasystem/worker/object_cache/recovery/object_cache_recovery_state.h"
 #include "datasystem/worker/object_cache/object_kv.h"
-#include "datasystem/worker/object_cache/object_metadata_coordination_reader.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/verify_leaving_state.h"
@@ -300,7 +299,7 @@ constexpr size_t GET_MATCH_OBJECT_BATCH = 500;  // batch number is 500.
 WorkerOCServiceImpl::WorkerOCServiceImpl(
     HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
     std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
-    std::shared_ptr<PersistenceApi> persistApi, cluster::ICoordinationBackend *coordinationBackend,
+    std::shared_ptr<PersistenceApi> persistApi, ObjectCacheRecoveryDependencies recoveryDependencies,
     MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
     const worker::MetadataRouteResolver &metadataRoute, const cluster::MembershipEndpointView &membership,
     const std::atomic<bool> *exitRequested, bool isRestart, bool controlBackendAvailableAtStartup)
@@ -309,7 +308,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(
       persistenceApi_(persistApi),
       objectTable_(std::move(objectTable)),
       evictionManager_(std::move(evictionManager)),
-      coordinationBackend_(coordinationBackend),
+      recoveryDependencies_(std::move(recoveryDependencies)),
       topologyEngine_(topologyEngine),
       metadataRoute_(metadataRoute),
       membership_(membership),
@@ -478,10 +477,9 @@ void WorkerOCServiceImpl::InitServiceImpl()
 
     migrateRateController_ =
         std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
-    auto metadataReader = std::make_shared<ObjectMetadataCoordinationReader>(coordinationBackend_);
     getProc_ =
-        std::make_shared<WorkerOcServiceGetImpl>(param, std::move(metadataReader), memCpyThreadPool_, threadPool_,
-                                                 akSkManager_, localAddress_, migrateRateController_);
+        std::make_shared<WorkerOcServiceGetImpl>(param, recoveryDependencies_.metadataReader, memCpyThreadPool_,
+                                                 threadPool_, akSkManager_, localAddress_, migrateRateController_);
 
     deleteProc_ = std::make_shared<WorkerOcServiceDeleteImpl>(param, akSkManager_, localAddress_, getProc_);
 
@@ -565,12 +563,9 @@ Status WorkerOCServiceImpl::InitRecoveryServices()
     InitServiceImpl();
     NodeSelector::Instance().Init(localAddress_.ToString(), membership_, exitRequested_, workerMasterApiManager_);
     getProc_->Init();
-    std::shared_ptr<SlotRecoveryStore> slotRecoveryStore;
-    if (coordinationBackend_ != nullptr) {
-        slotRecoveryStore = std::make_shared<CoordinationSlotRecoveryStore>(coordinationBackend_);
-    }
     RETURN_IF_NOT_OK(slotRecoveryManager_->Init(localAddress_, membership_, persistenceApi_, workerMasterApiManager_,
-                                                std::move(slotRecoveryStore), metadataRecoveryManager_.get()));
+                                                recoveryDependencies_.slotRecoveryStore,
+                                                metadataRecoveryManager_.get()));
     clearDataFlow_ = std::make_unique<WorkerOcServiceClearDataFlow>(
         objectTable_, globalRefTable_, workerMasterApiManager_, gRefProc_, deleteProc_, metadataRecoveryManager_.get(),
         metadataRoute_, endpointPolicy_, localAddress_.ToString());

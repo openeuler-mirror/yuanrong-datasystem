@@ -283,6 +283,13 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "object_cache_recovery_dependencies",
+    hdrs = [
+        "recovery/object_cache_recovery_dependencies.h",
+    ],
+)
+
+ds_cc_library(
     name = "object_cache_recovery_startup",
     srcs = [
         "recovery/object_cache_recovery_startup.cpp",
@@ -348,7 +355,6 @@ ds_cc_library(
         "//src/datasystem/cluster:cluster_topology_scope",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker/object_cache:object_endpoint_policy",
-        "//src/datasystem/worker/object_cache:object_metadata_coordination_reader",
         "//src/datasystem/common/ak_sk:ak_sk_manager",
         "//src/datasystem/common/eventloop:common_event_loop",
         "//src/datasystem/common/flags:ds_flags",
@@ -421,6 +427,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:object_cache_recovery_startup",
         "//src/datasystem/worker/object_cache:object_kv",
         "//src/datasystem/worker/object_cache:object_cache_recovery_evidence",
+        "//src/datasystem/worker/object_cache:object_cache_recovery_dependencies",
         "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager",
         "//src/datasystem/worker/object_cache:worker_master_oc_api",
         "//src/datasystem/worker/object_cache:verify_leaving_state",
