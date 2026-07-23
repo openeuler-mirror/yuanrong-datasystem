@@ -409,7 +409,8 @@ std::future<MigrateDataHandler::MigrateResult> DataMigrator::MigrateDataByNode(
     Status rc = ConnectAndCreateRemoteApi(remoteWorkerStub, addr);
     auto traceID = Trace::Instance().GetTraceID();
     return rc.IsOk() ? threadPool_->Submit([this, remoteWorkerStub, objectKeys, traceID, strategy]() {
-        TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
+        TraceGuard traceGuard = Trace::Instance().SetTraceNewID("migr;" + GetStringUuid());
+        LOG(INFO) << "MigrateDataByNodeImpl started " << "parent trace: " << traceID;
         return MigrateDataByNodeImpl(remoteWorkerStub, objectKeys, strategy);
     })
                      : ConstructFailedFuture(addr.ToString().empty() ? localAddress_.ToString() : addr.ToString(), rc,

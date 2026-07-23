@@ -27,6 +27,7 @@
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
+#include "datasystem/common/util/uuid_generator.h"
 
 namespace datasystem::cluster {
 namespace {
@@ -508,6 +509,7 @@ Status TopologyTaskExecutor::ValidateCallbackWindowLocked(const TopologyExecutio
 void TopologyTaskExecutor::ExecuteCallback(TopologyExecutionFence fence, std::string operation,
                                            std::shared_ptr<CancellationToken> cancellation) noexcept
 {
+    TraceGuard traceGuard = Trace::Instance().SetTraceNewID("task;" + GetStringUuid());
     const auto phase = fence.phase;
     auto callbackStatus = Status::OK();
     auto submitStatus = Status(K_RUNTIME_ERROR, "topology callback completion was not submitted");
