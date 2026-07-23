@@ -38,9 +38,9 @@ set(DS_UT_DEPEND_LIBS
         datasystem_worker_static
         )
 
-# RequestContext owns ZmqMessage and is now pulled by lightweight runtime UTs;
-# keep it grouped with common_util so static archive order resolves ZmqMessage.
-set(DS_UT_COMMON_UTIL_EXTRA_LIBS common_request_context common_util common_rpc_zmq)
+# RequestContext owns ZmqMessage, whose implementation lives in common_util.
+# Keep common_util after common_request_context so static archive order resolves it.
+set(DS_UT_COMMON_UTIL_EXTRA_LIBS common_request_context common_rpc_zmq common_util)
 # Wrap heavy UT link lines: GNU ld scans each static archive once unless grouped.
 set(DS_UT_HEAVY_LINK_START -Wl,--start-group)
 set(DS_UT_HEAVY_LINK_END -Wl,--end-group)
