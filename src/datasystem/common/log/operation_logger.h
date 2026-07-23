@@ -20,9 +20,11 @@
 #ifndef DATASYSTEM_COMMON_LOG_OPERATION_LOGGER_H
 #define DATASYSTEM_COMMON_LOG_OPERATION_LOGGER_H
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 
 #include <spdlog/spdlog.h>
 
@@ -82,6 +84,13 @@ public:
     void LogConfigFailed(const std::string &name, const std::string &reason);
 
     /**
+     * @brief Record an operation-level config failure in audit log.
+     * @param[in] operation Operation tag, e.g. "UpdateConfig".
+     * @param[in] reason Failure reason.
+     */
+    void LogConfigApiFailed(const std::string &operation, const std::string &reason);
+
+    /**
      * @brief Get operation audit log file path.
      * @return ${log_dir}/${log_filename}_operation.log
      */
@@ -95,7 +104,32 @@ private:
     OperationLogger(OperationLogger &&) = delete;
     OperationLogger &operator=(OperationLogger &&) = delete;
 
-    void WriteLog(const std::string &message, const ds_spdlog::source_loc &sourceLoc);
+    /**
+     * @brief Snapshot {role, logger} under mutex_, then apply role-based filtering and write to
+     *        the logger outside the lock.
+     * @param[in] sourceLoc Caller source location for %s:%#.
+     * @param[in] gateByRole True for dynamic-change events (LogConfigChanged/LogConfigFailed) that
+     *            must be role-filtered via ShouldRecordChange; false for events written unconditionally.
+     * @param[in] flagName Flag name when gateByRole is true (passed to ShouldRecordChange); ignored otherwise.
+     * @param[in] buildMessage Builds the payload from the snapshot role (called outside the lock).
+     */
+    void WriteLogWithRole(const ds_spdlog::source_loc &sourceLoc, bool gateByRole,
+                          const std::string &flagName,
+                          std::function<std::string(const std::string &role)> buildMessage);
+
+    /**
+     * @brief Trim the flags snapshot for the given role (value snapshot).
+     * @param[in] flagsSnapshot Raw "--name=value\n" snapshot from GetAllFlagsStr().
+     * @param[in] role Role snapshot acquired under mutex_.
+     * @return For client role, snapshot with non-allow-listed flag lines removed; otherwise unchanged.
+     */
+    static std::string FilterByRole(const std::string &flagsSnapshot, const std::string &role);
+
+    /**
+     * @brief Whether a dynamic change to the given flag should be recorded for the given role.
+     * @return Worker/master: always true. Client: true only if the flag is in ClientUsedFlagNames.
+     */
+    static bool ShouldRecordChange(const std::string &flagName, const std::string &role);
 
     std::shared_ptr<ds_spdlog::logger> logger_;
     std::string role_;
