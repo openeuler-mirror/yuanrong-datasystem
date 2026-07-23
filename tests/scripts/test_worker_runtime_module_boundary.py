@@ -539,6 +539,22 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should hide runtime internals behind facade methods")
 
+    def test_object_cache_recovery_state_owns_generation_without_runtime_tracker(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/object_cache_recovery_state.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/object_cache_recovery_state.cpp",
+        ]
+
+        forbidden_tokens = [
+            "datasystem/worker/runtime/worker_recovery_evidence_tracker.h",
+            "WorkerRecoveryEvidenceTracker",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should keep object-cache generation state local")
+
     def test_stream_service_uses_runtime_facade_for_admission(self):
         header = REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.h"
         impl = REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.cpp"

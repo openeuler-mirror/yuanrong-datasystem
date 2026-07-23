@@ -11,7 +11,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <string>
 
@@ -21,10 +20,6 @@
 #include "datasystem/worker/runtime/worker_recovery_evidence.h"
 
 namespace datasystem {
-namespace worker {
-class WorkerRecoveryEvidenceTracker;
-}
-
 namespace object_cache {
 
 class ObjectCacheRecoveryState {
@@ -76,7 +71,9 @@ private:
     bool diskRecoveryRequired_{ false };
     uint64_t resourceRecoveryGeneration_{ 0 };
 
-    std::unique_ptr<worker::WorkerRecoveryEvidenceTracker> recoveryEvidenceTracker_;
+    mutable std::mutex recoveryEvidenceGenerationMutex_;
+    worker::WorkerRecoveryGeneration recoveryEvidenceGeneration_{ 0 };
+    worker::WorkerRecoveryEvidenceReport recoveryEvidenceReport_;
 
     mutable std::mutex recoveryEvidenceReadyHandlerMutex_;
     std::function<void()> recoveryEvidenceReadyHandler_;

@@ -260,7 +260,7 @@ ds_cc_library(
     deps = [
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:slot_recovery_cc_proto",
-        "//src/datasystem/worker/runtime:worker_runtime_core",
+        "//src/datasystem/worker/runtime:worker_recovery_evidence",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache/slot_recovery:slot_recovery_manager_header",
     ],
@@ -278,7 +278,7 @@ ds_cc_library(
         "//src/datasystem/common/shared_memory:common_shared_memory",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:object_cache_recovery_evidence",
-        "//src/datasystem/worker/runtime:worker_runtime_core",
+        "//src/datasystem/worker/runtime:worker_recovery_evidence",
     ],
 )
 
