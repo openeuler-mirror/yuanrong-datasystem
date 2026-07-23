@@ -29,7 +29,7 @@ struct WorkerIsolationCoordinatorHooks {
     std::function<bool()> isTopologyRuntimeReady;
     std::function<Status()> publishRecoveringMembership;
     std::function<Status()> reconcileNetworkRecoveryOwnership;
-    std::function<Status(std::function<void()>)> requestRecoveryReconciliation;
+    std::function<Status(const std::function<void()> &)> requestRecoveryReconciliation;
 };
 
 class WorkerIsolationCoordinator {

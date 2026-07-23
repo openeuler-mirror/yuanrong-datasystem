@@ -1366,8 +1366,9 @@ Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs, worker::WorkerAdmissionKind)
+Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs, worker::WorkerAdmissionKind kind)
 {
+    (void)kind;
     Timer timer;
     if (!IsHealthy()) {
         const bool runtimeAdmissionOverridesLegacyGate =
@@ -2775,10 +2776,12 @@ Status WorkerOCServiceImpl::CheckWaitTopologyReady()
 {
     constexpr int64_t waitIntervalMs = 100;
     constexpr int logPerCount = 10;
-    const int64_t timeoutMs = std::max<int64_t>(TOPOLOGY_READY_WAIT_TIMEOUT_S, FLAGS_node_timeout_s) * SECS_TO_MS;
+    const int64_t timeoutMs =
+        std::max<int64_t>(TOPOLOGY_READY_WAIT_TIMEOUT_S, FLAGS_node_timeout_s) * static_cast<int64_t>(SECS_TO_MS);
     Timer timer;
     auto rc = CheckTopologyServingReady();
-    while (rc.GetCode() == K_NOT_READY && timer.ElapsedMilliSecond() < timeoutMs && !IsTermSignalReceived()) {
+    while (rc.GetCode() == K_NOT_READY && timer.ElapsedMilliSecond() < static_cast<double>(timeoutMs)
+           && !IsTermSignalReceived()) {
         LOG_FIRST_AND_EVERY_N(INFO, logPerCount)
             << "Waiting topology ready before setting worker health, elapsed ms: " << timer.ElapsedMilliSecond()
             << ", status: " << rc.ToString();

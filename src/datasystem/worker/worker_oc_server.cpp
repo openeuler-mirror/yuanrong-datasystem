@@ -966,26 +966,25 @@ Status WorkerOCServer::InitEtcdCoordinationBackend()
     }
     etcdStore_ = std::make_unique<EtcdStore>(etcdOrMetastoreAddress_);
     workerIsolationCoordinator_ = std::make_unique<WorkerIsolationCoordinator>(
-        workerRuntime_,
-        WorkerIsolationCoordinatorHooks{
-            .setTopologyServingAdmission = [this](bool open) { SetTopologyServingAdmission(open); },
-            .reconcileLocalIsolationOwnership =
-                [this] {
-                    RETURN_OK_IF_TRUE(objCacheClientWorkerSvc_ == nullptr);
-                    return objCacheClientWorkerSvc_->ReconcileLocalIsolationOwnership();
-                },
-            .isTopologyRuntimeReady = [this] { return topologyEngine_ != nullptr; },
-            .publishRecoveringMembership = [this] { return topologyEngine_->MarkRecovering(); },
-            .reconcileNetworkRecoveryOwnership =
-                [this] {
-                    RETURN_OK_IF_TRUE(objCacheClientWorkerSvc_ == nullptr);
-                    return objCacheClientWorkerSvc_->ReconcileNetworkRecoveryOwnership();
-                },
-            .requestRecoveryReconciliation =
-                [this](std::function<void()> onReconciliationStarted) {
-                    return topologyEngine_->RequestRecoveryReconciliation(std::move(onReconciliationStarted));
-                },
-        });
+        workerRuntime_, WorkerIsolationCoordinatorHooks{
+                            .setTopologyServingAdmission = [](bool open) { SetTopologyServingAdmission(open); },
+                            .reconcileLocalIsolationOwnership =
+                                [this] {
+                                    RETURN_OK_IF_TRUE(objCacheClientWorkerSvc_ == nullptr);
+                                    return objCacheClientWorkerSvc_->ReconcileLocalIsolationOwnership();
+                                },
+                            .isTopologyRuntimeReady = [this] { return topologyEngine_ != nullptr; },
+                            .publishRecoveringMembership = [this] { return topologyEngine_->MarkRecovering(); },
+                            .reconcileNetworkRecoveryOwnership =
+                                [this] {
+                                    RETURN_OK_IF_TRUE(objCacheClientWorkerSvc_ == nullptr);
+                                    return objCacheClientWorkerSvc_->ReconcileNetworkRecoveryOwnership();
+                                },
+                            .requestRecoveryReconciliation =
+                                [this](const std::function<void()> &onReconciliationStarted) {
+                                    return topologyEngine_->RequestRecoveryReconciliation(onReconciliationStarted);
+                                },
+                        });
     RETURN_IF_NOT_OK(etcdStore_->Init());
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
@@ -997,17 +996,21 @@ Status WorkerOCServer::InitEtcdCoordinationBackend()
 
 void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot)
 {
-    for (const auto &member : snapshot.FailedMembers())
+    for (const auto &member : snapshot.FailedMembers()) {
         knownFailedAddresses_.insert(member->identity.address);
-    for (const auto &member : snapshot.ActiveMembers())
+    }
+    for (const auto &member : snapshot.ActiveMembers()) {
         knownFailedAddresses_.erase(member->identity.address);
+    }
     for (const auto &addrStr : knownFailedAddresses_) {
         HostPort addr;
-        if (addr.ParseString(addrStr).IsError() || addr.Empty())
+        if (addr.ParseString(addrStr).IsError() || addr.Empty()) {
             continue;
+        }
         for (auto type :
-             { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC })
+             { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC }) {
             RpcStubCacheMgr::Instance().Remove(addr, type);
+        }
     }
 }
 
