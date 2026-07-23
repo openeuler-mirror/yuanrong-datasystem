@@ -427,18 +427,35 @@ Status WorkerRemoteMasterOCApi::QueryMeta(master::QueryMetaReqPb &request, uint6
 Status WorkerRemoteMasterOCApi::RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response)
 {
     RpcOptions opts;
+    const bool topologyRequest = !request.topology_operation_id().empty();
+    uint32_t attempt = 0;
     auto &reqTimeoutDuration = GetRequestContext()->reqTimeoutDuration;
 
     int64_t timeoutMs = TimeoutDuration::WorkerGetRequestTimeout(reqTimeoutDuration.CalcRealRemainingTime());
     auto status = RetryOnErrorRepent(
         timeoutMs,
-        [this, &opts, &request, &response](int32_t) {
+        [this, &opts, &request, &response, topologyRequest, &attempt](int32_t retryBudgetMs) {
+            const auto attemptIndex = ++attempt;
             CHECK_AND_SET_TIMEOUT(&GetRequestContext()->reqTimeoutDuration, request, opts);
             RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(request));
             Timer timer;
+            LOG_IF(INFO, topologyRequest)
+                << "TOPOLOGY_REMOVE_META_RPC event=attempt_begin operation_prefix="
+                << request.topology_operation_id().substr(0, 12) << " attempt=" << attemptIndex
+                << " src=" << localHostPort_.ToString() << " dst=" << hostPort_.ToString()
+                << " ids=" << request.ids_size() + request.id_with_version_size() << " cause=" << request.cause()
+                << " request_timeout_ms=" << request.timeout() << " retry_budget_ms=" << retryBudgetMs
+                << " transport=" << (brpcSession_ ? "brpc" : "zmq");
             Status rc = (brpcSession_ ? brpcSession_->RemoveMeta(opts, request, response)
                                         : rpcSession_->RemoveMeta(opts, request, response));
-            GetWorkerTimeCost().Append("Worker to master rpc RemoveMeta", timer.ElapsedMilliSecond());
+            auto elapsedMs = timer.ElapsedMilliSecond();
+            GetWorkerTimeCost().Append("Worker to master rpc RemoveMeta", elapsedMs);
+            LOG_IF(INFO, topologyRequest)
+                << "TOPOLOGY_REMOVE_META_RPC event=attempt_end operation_prefix="
+                << request.topology_operation_id().substr(0, 12) << " attempt=" << attemptIndex
+                << " src=" << localHostPort_.ToString() << " dst=" << hostPort_.ToString()
+                << " elapsed_ms=" << elapsedMs << " status=" << rc.ToString()
+                << " meta_moving=" << response.meta_is_moving() << " redirects=" << response.info_size();
             return rc;
         },
         []() { return Status::OK(); },
