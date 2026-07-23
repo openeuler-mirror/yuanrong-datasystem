@@ -144,21 +144,6 @@ ds_cc_library(
 )
 
 ds_cc_library(
-    name = "worker_control_backend_scope_classification",
-    srcs = [
-        "worker_control_backend_scope_classification.cpp",
-    ],
-    hdrs = [
-        "worker_control_backend_scope.h",
-    ],
-    deps = [
-        "//src/datasystem/cluster:cluster_topology",
-        "//src/datasystem/common/ak_sk:ak_sk_manager",
-        "//src/datasystem/common/util:net_util",
-    ],
-)
-
-ds_cc_library(
     name = "worker_control_backend_probe",
     srcs = [
         "worker_control_backend_probe.cpp",
@@ -177,7 +162,6 @@ ds_cc_library(
     name = "worker_runtime_core",
     deps = [
         ":worker_admission_facade",
-        ":worker_control_backend_scope_classification",
         ":worker_isolation_coordinator",
         ":worker_recovery_controller",
         ":worker_recovery_evidence",

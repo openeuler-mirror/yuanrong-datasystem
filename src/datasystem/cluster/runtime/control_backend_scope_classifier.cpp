@@ -1,60 +1,43 @@
 /**
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * http://www.apache.org/licenses/LICENSE-2.0
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 /**
- * Description: Worker control backend failure scope evidence classifier.
+ * Description: Control backend failure scope evidence classifier.
  */
-#include "datasystem/worker/runtime/worker_control_backend_scope.h"
+#include "datasystem/cluster/runtime/control_backend_scope_classifier.h"
 
 #include <chrono>
 #include <unordered_map>
 #include <unordered_set>
 
-namespace datasystem::worker {
+namespace datasystem::cluster {
 namespace {
 constexpr auto BACKEND_EVIDENCE_MAX_AGE = std::chrono::seconds(5);
 
-bool IsFreshControlBackendObservation(const cluster::ControlBackendObservation &observation,
+bool IsFreshControlBackendObservation(const ControlBackendObservation &observation,
                                       std::chrono::steady_clock::time_point now)
 {
     return observation.observedAt != std::chrono::steady_clock::time_point{} && observation.observedAt <= now
            && now - observation.observedAt <= BACKEND_EVIDENCE_MAX_AGE;
 }
 
-bool SameControlBackendAuthorityStamp(const cluster::ControlBackendObservation &left,
-                                      const cluster::ControlBackendObservation &right)
+bool SameControlBackendAuthorityStamp(const ControlBackendObservation &left, const ControlBackendObservation &right)
 {
     return left.topologyVersion == right.topologyVersion && left.topologyRevision == right.topologyRevision
            && !left.topologyDigest.empty() && left.topologyDigest == right.topologyDigest;
 }
 }  // namespace
 
-bool ConfirmsGlobalBackendOutage(const cluster::ControlBackendObservation &local,
-                                 const std::vector<cluster::MemberIdentity> &targets,
-                                 const std::vector<cluster::ControlBackendObservation> &observations)
-{
-    return ClassifyControlBackendFailureScope(local, targets, observations)
-           == ControlBackendFailureScope::GLOBAL_OUTAGE;
-}
-
 ControlBackendFailureScope ClassifyControlBackendFailureScope(
-    const cluster::ControlBackendObservation &local, const std::vector<cluster::MemberIdentity> &targets,
-    const std::vector<cluster::ControlBackendObservation> &observations)
+    const ControlBackendObservation &local, const std::vector<MemberIdentity> &targets,
+    const std::vector<ControlBackendObservation> &observations)
 {
     if (targets.empty() || observations.empty()) {
         return ControlBackendFailureScope::INCONCLUSIVE;
     }
-    std::unordered_map<std::string, cluster::MemberIdentity> expected;
+    std::unordered_map<std::string, MemberIdentity> expected;
     expected.reserve(targets.size());
     for (const auto &target : targets) {
         expected.emplace(target.address, target);
@@ -68,14 +51,14 @@ ControlBackendFailureScope ClassifyControlBackendFailureScope(
         auto target = expected.find(observation.reporter.address);
         if (target == expected.end() || !(target->second == observation.reporter)
             || !accepted.insert(observation.reporter.address).second
-            || observation.state == cluster::ControlBackendState::UNKNOWN
+            || observation.state == ControlBackendState::UNKNOWN
             || !IsFreshControlBackendObservation(observation, now)) {
             return ControlBackendFailureScope::INCONCLUSIVE;
         }
         if (!SameControlBackendAuthorityStamp(local, observation)) {
             authorityMismatch = true;
         }
-        peerAvailable = peerAvailable || observation.state == cluster::ControlBackendState::AVAILABLE;
+        peerAvailable = peerAvailable || observation.state == ControlBackendState::AVAILABLE;
     }
     if (peerAvailable) {
         return ControlBackendFailureScope::LOCAL_ISOLATION;
@@ -83,9 +66,16 @@ ControlBackendFailureScope ClassifyControlBackendFailureScope(
     if (accepted.size() != targets.size()) {
         return ControlBackendFailureScope::INCONCLUSIVE;
     }
-    if (!peerAvailable && authorityMismatch) {
+    if (authorityMismatch) {
         return ControlBackendFailureScope::INCONCLUSIVE;
     }
     return ControlBackendFailureScope::GLOBAL_OUTAGE;
 }
-}  // namespace datasystem::worker
+
+bool ConfirmsGlobalBackendOutage(const ControlBackendObservation &local, const std::vector<MemberIdentity> &targets,
+                                 const std::vector<ControlBackendObservation> &observations)
+{
+    return ClassifyControlBackendFailureScope(local, targets, observations)
+           == ControlBackendFailureScope::GLOBAL_OUTAGE;
+}
+}  // namespace datasystem::cluster

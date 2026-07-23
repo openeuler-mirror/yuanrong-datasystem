@@ -79,6 +79,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/dynamic_config_updater_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_monitor_gate_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags_config_monitor_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/cluster_topology_schema_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/control_backend_scope_classifier_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_key_helper_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/coordination_backend_contract_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/ds_coordination_backend_session_test\\.cpp$)
@@ -190,6 +191,7 @@ add_ds_ut_executable(data_worker_options_test
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
 add_executable(cluster_topology_contract_ut
         cluster/cluster_topology_schema_test.cpp
+        cluster/control_backend_scope_classifier_test.cpp
         cluster/coordination_backend_contract_test.cpp
         cluster/ds_coordination_backend_session_test.cpp
         cluster/membership_contract_test.cpp

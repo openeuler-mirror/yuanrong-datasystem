@@ -27,6 +27,10 @@ add_library(cluster_topology_scope STATIC
 target_include_directories(cluster_topology_scope PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(cluster_topology_scope PUBLIC common_util)
 
+add_library(cluster_control_backend_scope_classifier STATIC
+        runtime/control_backend_scope_classifier.cpp)
+target_include_directories(cluster_control_backend_scope_classifier PUBLIC ${PROJECT_SOURCE_DIR}/src)
+
 add_library(cluster_topology STATIC
         algorithm/algorithm_catalog.cpp
         algorithm/hash_algorithm.cpp
@@ -52,6 +56,7 @@ add_library(cluster_topology STATIC
 
 target_include_directories(cluster_topology PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(cluster_topology PUBLIC
+        cluster_control_backend_scope_classifier
         cluster_coordination_backend
         cluster_membership_codec
         cluster_topology_keyspace

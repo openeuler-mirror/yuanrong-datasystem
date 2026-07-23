@@ -49,6 +49,19 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "cluster_control_backend_scope_classifier",
+    srcs = [
+        "runtime/control_backend_scope_classifier.cpp",
+    ],
+    hdrs = [
+        "runtime/control_backend_scope_classifier.h",
+    ],
+    deps = [
+        ":cluster_control_backend_state",
+    ],
+)
+
+ds_cc_library(
     name = "cluster_topology_keyspace",
     srcs = ["repository/topology_key_helper.cpp"],
     hdrs = ["repository/topology_key_helper.h"],
@@ -106,6 +119,7 @@ ds_cc_library(
         "routing/placement_facade.h",
         "routing/placement_types.h",
         "runtime/control_backend_state.h",
+        "runtime/control_backend_scope_classifier.h",
         "runtime/coordination_event_dispatcher.h",
         "runtime/topology_engine.h",
         "runtime/topology_observer.h",
@@ -116,6 +130,7 @@ ds_cc_library(
     ],
     deps = [
         ":cluster_membership_codec",
+        ":cluster_control_backend_scope_classifier",
         ":cluster_topology_keyspace",
         ":cluster_topology_scope",
         "//include/datasystem/utils:utils_headers",

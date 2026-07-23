@@ -12,7 +12,6 @@
 #include <exception>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
@@ -21,6 +20,7 @@
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
+#include "datasystem/cluster/runtime/control_backend_scope_classifier.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -55,12 +55,6 @@ bool IsFresh(const ControlBackendObservation &observation, std::chrono::steady_c
 {
     return observation.observedAt != std::chrono::steady_clock::time_point{} && observation.observedAt <= now
            && now - observation.observedAt <= BACKEND_EVIDENCE_MAX_AGE;
-}
-
-bool SameAuthorityStamp(const ControlBackendObservation &left, const ControlBackendObservation &right)
-{
-    return left.topologyVersion == right.topologyVersion && left.topologyRevision == right.topologyRevision
-           && !left.topologyDigest.empty() && left.topologyDigest == right.topologyDigest;
 }
 
 bool IsCommitted(MemberState state)
@@ -112,59 +106,6 @@ Status SelectQuorumProbeTargets(const TopologySnapshot &snapshot, const std::str
     return Status::OK();
 }
 
-bool ConfirmsGlobalOutage(const ControlBackendObservation &local, const std::vector<MemberIdentity> &targets,
-                          const std::vector<ControlBackendObservation> &observations)
-{
-    if (observations.size() != targets.size()) {
-        return false;
-    }
-    std::unordered_map<std::string, MemberIdentity> expected;
-    expected.reserve(targets.size());
-    for (const auto &target : targets) {
-        expected.emplace(target.address, target);
-    }
-    std::unordered_set<std::string> accepted;
-    accepted.reserve(targets.size());
-    const auto now = std::chrono::steady_clock::now();
-    for (const auto &observation : observations) {
-        auto target = expected.find(observation.reporter.address);
-        if (target == expected.end() || !(target->second == observation.reporter)
-            || !accepted.insert(observation.reporter.address).second
-            || observation.state != ControlBackendState::UNAVAILABLE || !SameAuthorityStamp(local, observation)
-            || !IsFresh(observation, now)) {
-            return false;
-        }
-    }
-    return accepted.size() == targets.size();
-}
-
-bool ConfirmsPeerBackendReachability(const ControlBackendObservation &local, const std::vector<MemberIdentity> &targets,
-                                     const std::vector<ControlBackendObservation> &observations)
-{
-    if (observations.size() != targets.size()) {
-        return false;
-    }
-    std::unordered_map<std::string, MemberIdentity> expected;
-    expected.reserve(targets.size());
-    for (const auto &target : targets) {
-        expected.emplace(target.address, target);
-    }
-    std::unordered_set<std::string> accepted;
-    accepted.reserve(targets.size());
-    const auto now = std::chrono::steady_clock::now();
-    bool peerAvailable = false;
-    for (const auto &observation : observations) {
-        auto target = expected.find(observation.reporter.address);
-        if (target == expected.end() || !(target->second == observation.reporter)
-            || !accepted.insert(observation.reporter.address).second
-            || observation.state == ControlBackendState::UNKNOWN || !SameAuthorityStamp(local, observation)
-            || !IsFresh(observation, now)) {
-            return false;
-        }
-        peerAvailable = peerAvailable || observation.state == ControlBackendState::AVAILABLE;
-    }
-    return accepted.size() == targets.size() && peerAvailable;
-}
 }  // namespace
 
 struct TopologyEngine::Builder::Config {
@@ -1176,7 +1117,7 @@ Status TopologyEngine::ReevaluateFailureScope()
     } catch (...) {
         LOG(ERROR) << "CLUSTER_BACKEND_PROBE_FAILED reason=unknown_exception";
     }
-    if (ConfirmsGlobalOutage(local, targets, observations)) {
+    if (ConfirmsGlobalBackendOutage(local, targets, observations)) {
         SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "control_backend_unavailable");
     } else {
         SetAvailability(TopologyAvailabilityLevel::ROLE_ISOLATED, "backend_quorum_not_confirmed");
@@ -1276,8 +1217,9 @@ bool TopologyEngine::ProbePeerBackendReachabilityOnce(const ControlBackendObserv
         return false;
     }
     observationCount = observations.size();
-    globalOutage = ConfirmsGlobalOutage(local, targets, observations);
-    return !globalOutage && ConfirmsPeerBackendReachability(local, targets, observations);
+    const auto scope = ClassifyControlBackendFailureScope(local, targets, observations);
+    globalOutage = scope == ControlBackendFailureScope::GLOBAL_OUTAGE;
+    return scope == ControlBackendFailureScope::LOCAL_ISOLATION;
 }
 
 Status TopologyEngine::RefreshUnavailableBackend()

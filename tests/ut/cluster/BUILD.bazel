@@ -1,0 +1,11 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "control_backend_scope_classifier_test",
+    srcs = ["control_backend_scope_classifier_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_control_backend_scope_classifier",
+    ],
+)

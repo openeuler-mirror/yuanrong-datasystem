@@ -576,15 +576,6 @@ ds_cc_test(
 )
 
 ds_cc_test(
-    name = "worker_control_backend_scope_test",
-    srcs = ["worker_control_backend_scope_test.cpp"],
-    deps = [
-        "//src/datasystem/common/rdma:fast_transport_base_test_stub",
-        "//src/datasystem/worker/runtime:worker_control_backend_scope_classification",
-    ],
-)
-
-ds_cc_test(
     name = "worker_control_backend_probe_test",
     srcs = ["worker_control_backend_probe_test.cpp"],
     deps = [
@@ -695,7 +686,6 @@ test_suite(
         "worker_oc_spill_eviction_test",
         "worker_oc_spill_test",
         "worker_control_backend_probe_test",
-        "worker_control_backend_scope_test",
         "worker_runtime_state_test",
         "worker_isolation_coordinator_test",
         "worker_recovery_controller_test",
