@@ -230,6 +230,7 @@ target_link_libraries(ds_ut_object PRIVATE
         ${DS_UT_HEAVY_LINK_START}
         ${DS_UT_DEPEND_LIBS}
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
+        test_port_allocator
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
 if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)

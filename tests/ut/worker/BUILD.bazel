@@ -273,6 +273,7 @@ ds_cc_test(
         "//src/datasystem/worker/object_cache:worker_request_manager",
         "//src/datasystem/worker/object_cache/service:worker_oc_service_migrate_impl",
         "//tests/common/binmock",
+        "//tests/st/cluster:test_port_allocator",
         "//tests/ut:ut_common",
     ],
 )

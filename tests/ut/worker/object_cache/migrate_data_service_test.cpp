@@ -38,6 +38,7 @@
 
 #include "ut/common.h"
 #include "../../../common/binmock/binmock.h"
+#include "cluster/test_port_allocator.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/shared_memory/allocator.h"
@@ -197,6 +198,11 @@ public:
     void SetDefaultApi(const std::shared_ptr<worker::WorkerMasterOCApi> &api)
     {
         defaultApi_ = api;
+    }
+
+    void SetApi(const HostPort &masterAddress, const std::shared_ptr<worker::WorkerMasterOCApi> &api)
+    {
+        apiByAddr_[masterAddress.ToString()] = api;
     }
 
 private:
@@ -1062,6 +1068,73 @@ TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetAcceptsOnlyExplicitlyConfirm
 
     EXPECT_THAT(confirmedIds, ElementsAre(objectKey));
     EXPECT_TRUE(failedIds.empty());
+}
+
+TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetFollowsCopyMetaRedirectAfterMetadataMigration)
+{
+    const bool oldEnableDataReplication = FLAGS_enable_data_replication;
+    Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
+    FLAGS_enable_data_replication = true;
+    const std::string objectKey = "notify_remote_get_redirected";
+    auto &portAllocator = st::TestPortAllocator::Instance();
+    portAllocator.SetOwnerInfo("ds_ut_object", "copy-meta-redirect", GetTestCaseDataDir());
+    std::vector<st::TestPortLease> masterPortLeases;
+    DS_ASSERT_OK(portAllocator.ReserveBatch({ "old-master", "new-master" }, masterPortLeases));
+    Raii releaseMasterPorts([&portAllocator, &masterPortLeases]() {
+        for (const auto &lease : masterPortLeases) {
+            portAllocator.Release(lease.Port());
+        }
+    });
+    ASSERT_EQ(masterPortLeases.size(), 2);
+    const HostPort oldMasterAddress("127.0.0.1", masterPortLeases[0].Port());
+    const HostPort newMasterAddress("127.0.0.1", masterPortLeases[1].Port());
+    RouteObjectToMaster(objectKey, oldMasterAddress);
+
+    auto oldMasterApi = std::make_shared<MigrateTestWorkerMasterOCApi>(oldMasterAddress, localAddress_);
+    auto newMasterApi = std::make_shared<MigrateTestWorkerMasterOCApi>(newMasterAddress, localAddress_);
+    size_t oldMasterCalls = 0;
+    size_t newMasterCalls = 0;
+    oldMasterApi->createMultiCopyMeta_ = [&](master::CreateMultiCopyMetaReqPb &req,
+                                               master::CreateMultiCopyMetaRspPb &rsp) {
+        ++oldMasterCalls;
+        EXPECT_TRUE(req.redirect());
+        EXPECT_EQ(req.multi_copy_meta_req_elems_size(), 1);
+        if (req.multi_copy_meta_req_elems_size() == 1) {
+            EXPECT_EQ(req.multi_copy_meta_req_elems(0).object_key(), objectKey);
+        }
+        auto *redirect = rsp.add_info();
+        redirect->set_redirect_meta_address(newMasterAddress.ToString());
+        redirect->add_change_meta_ids(objectKey);
+        return Status::OK();
+    };
+    newMasterApi->createMultiCopyMeta_ = [&](master::CreateMultiCopyMetaReqPb &req,
+                                               master::CreateMultiCopyMetaRspPb &rsp) {
+        ++newMasterCalls;
+        EXPECT_FALSE(req.redirect());
+        EXPECT_EQ(req.multi_copy_meta_req_elems_size(), 1);
+        if (req.multi_copy_meta_req_elems_size() == 1) {
+            EXPECT_EQ(req.multi_copy_meta_req_elems(0).object_key(), objectKey);
+        }
+        rsp.add_confirmed_object_keys(objectKey);
+        return Status::OK();
+    };
+    workerMasterApiManager_->SetApi(oldMasterAddress, oldMasterApi);
+    workerMasterApiManager_->SetApi(newMasterAddress, newMasterApi);
+
+    QueryMetaMap queryMetas{ { objectKey, MakeQueryMeta() } };
+    std::vector<std::string> confirmedIds;
+    std::unordered_set<std::string> failedIds;
+    std::unordered_set<std::string> failedConfirmationOwners;
+    ScopedRequestContext requestContext;
+
+    impl_->ConfirmCopyMetaForNotifyRemoteGet({ objectKey }, queryMetas, confirmedIds, failedIds,
+                                              failedConfirmationOwners);
+
+    EXPECT_EQ(oldMasterCalls, 1);
+    EXPECT_EQ(newMasterCalls, 1);
+    EXPECT_THAT(confirmedIds, ElementsAre(objectKey));
+    EXPECT_TRUE(failedIds.empty());
+    EXPECT_TRUE(failedConfirmationOwners.empty());
 }
 
 TEST_F(NotifyRemoteGetMigrationTest, NotifyRemoteGetRejectsCopyMetaPersistenceFailure)

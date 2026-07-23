@@ -20,7 +20,10 @@
 #include <chrono>
 #include <cstddef>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -171,6 +174,121 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       asyncPersistenceDelManager_(initParam.asyncPersistenceDelManager)
 {
     supportL2Storage_ = GetCurrentStorageType();
+}
+
+Status WorkerOcServiceCrudCommonApi::PartitionMultiCopyMetaRequest(
+    const master::CreateMultiCopyMetaReqPb &request, const master::CreateMultiCopyMetaRspPb &redirectResponse,
+    master::CreateMultiCopyMetaReqPb &localRequest,
+    std::unordered_map<HostPort, master::CreateMultiCopyMetaReqPb> &redirectRequests)
+{
+    std::unordered_map<std::string, const master::MultiCopyMetaReqElem *> requestElements;
+    requestElements.reserve(request.multi_copy_meta_req_elems_size());
+    for (const auto &element : request.multi_copy_meta_req_elems()) {
+        (void)requestElements.emplace(element.object_key(), &element);
+    }
+
+    std::unordered_set<std::string> redirectedKeys;
+    redirectedKeys.reserve(request.multi_copy_meta_req_elems_size());
+    redirectRequests.reserve(redirectResponse.info_size());
+    for (const auto &redirectInfo : redirectResponse.info()) {
+        if (redirectInfo.change_meta_ids().empty()) {
+            continue;
+        }
+        HostPort redirectAddress;
+        RETURN_IF_NOT_OK(redirectAddress.ParseString(redirectInfo.redirect_meta_address()));
+        auto [requestIter, inserted] = redirectRequests.try_emplace(redirectAddress);
+        if (inserted) {
+            requestIter->second.CopyFrom(request);
+            requestIter->second.clear_multi_copy_meta_req_elems();
+            requestIter->second.set_redirect(false);
+        }
+        for (const auto &objectKey : redirectInfo.change_meta_ids()) {
+            auto element = requestElements.find(objectKey);
+            if (element == requestElements.end()) {
+                continue;
+            }
+            (void)redirectedKeys.emplace(objectKey);
+            *requestIter->second.add_multi_copy_meta_req_elems() = *element->second;
+        }
+    }
+
+    localRequest.CopyFrom(request);
+    localRequest.clear_multi_copy_meta_req_elems();
+    localRequest.set_redirect(false);
+    for (const auto &element : request.multi_copy_meta_req_elems()) {
+        if (redirectedKeys.count(element.object_key()) == 0) {
+            *localRequest.add_multi_copy_meta_req_elems() = element;
+        }
+    }
+    return Status::OK();
+}
+
+Status WorkerOcServiceCrudCommonApi::RedirectRetryForMultiCopyMeta(
+    master::CreateMultiCopyMetaReqPb &req, master::CreateMultiCopyMetaRspPb &rsp,
+    const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+    const std::function<Status(const std::shared_ptr<worker::WorkerMasterOCApi> &, master::CreateMultiCopyMetaReqPb &,
+                               master::CreateMultiCopyMetaRspPb &)> &fun)
+{
+    CHECK_FAIL_RETURN_STATUS(workerMasterApi != nullptr, K_RUNTIME_ERROR, "worker master api is nullptr");
+    static constexpr int64_t initSleepTimeMs = 1;
+    static constexpr int64_t maxSleepTimeMs = 128;
+    int64_t sleepTimeMs = initSleepTimeMs;
+    while (true) {
+        CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        rsp.Clear();
+        RETURN_IF_NOT_OK(fun(workerMasterApi, req, rsp));
+        if (!rsp.meta_is_moving()) {
+            break;
+        }
+        int64_t remainingTimeMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+        CHECK_FAIL_RETURN_STATUS(remainingTimeMs > 0, K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        sleepTimeMs = std::min(sleepTimeMs, remainingTimeMs);
+        SleepForMetaMovingRetry(sleepTimeMs);
+        sleepTimeMs = std::min(sleepTimeMs * 2, maxSleepTimeMs);
+    }
+    if (rsp.info().empty()) {
+        return Status::OK();
+    }
+
+    master::CreateMultiCopyMetaReqPb localRequest;
+    std::unordered_map<HostPort, master::CreateMultiCopyMetaReqPb> redirectRequests;
+    RETURN_IF_NOT_OK(PartitionMultiCopyMetaRequest(req, rsp, localRequest, redirectRequests));
+    master::CreateMultiCopyMetaRspPb finalResponse;
+    auto sendSubRequest = [&fun, &finalResponse](const std::shared_ptr<worker::WorkerMasterOCApi> &api,
+                                                 master::CreateMultiCopyMetaReqPb &request) -> Status {
+        CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                                 K_RPC_DEADLINE_EXCEEDED, "Rpc timeout");
+        CHECK_FAIL_RETURN_STATUS(api != nullptr, K_RUNTIME_ERROR, "worker master api is nullptr");
+        master::CreateMultiCopyMetaRspPb response;
+        RETURN_IF_NOT_OK(fun(api, request, response));
+        CHECK_FAIL_RETURN_STATUS(!response.meta_is_moving() && response.info().empty(), K_RUNTIME_ERROR,
+                                 "CreateMultiCopyMeta returned an unexpected redirect for a non-redirect request");
+        finalResponse.mutable_failed_object_keys()->Add(response.failed_object_keys().begin(),
+                                                        response.failed_object_keys().end());
+        finalResponse.mutable_confirmed_object_keys()->Add(response.confirmed_object_keys().begin(),
+                                                           response.confirmed_object_keys().end());
+        return Status::OK();
+    };
+
+    if (!localRequest.multi_copy_meta_req_elems().empty()) {
+        RETURN_IF_NOT_OK(sendSubRequest(workerMasterApi, localRequest));
+    }
+    CHECK_FAIL_RETURN_STATUS(workerMasterApiManager_ != nullptr, K_RUNTIME_ERROR,
+                             "worker master api manager is nullptr");
+    for (auto &[address, redirectRequest] : redirectRequests) {
+        if (redirectRequest.multi_copy_meta_req_elems().empty()) {
+            continue;
+        }
+        LOG(INFO) << "Follow CreateMultiCopyMeta redirect, target: " << address.ToString()
+                  << ", key count: " << redirectRequest.multi_copy_meta_req_elems_size();
+        auto redirectApi = workerMasterApiManager_->GetWorkerMasterApi(address);
+        CHECK_FAIL_RETURN_STATUS(redirectApi != nullptr, K_RUNTIME_ERROR,
+                                 "hash master get failed, RedirectRetryForMultiCopyMeta failed");
+        RETURN_IF_NOT_OK(sendSubRequest(redirectApi, redirectRequest));
+    }
+    rsp = std::move(finalResponse);
+    return Status::OK();
 }
 
 Status WorkerOcServiceCrudCommonApi::SaveBinaryObjectToPersistence(ObjectKV &objectKV)

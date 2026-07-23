@@ -113,6 +113,20 @@ public:
     Status SaveBinaryObjectToPersistence(ObjectKV &objectKV);
 
     /**
+     * @brief Retry while metadata is moving, then split and follow multiple metadata redirects.
+     * @param[in] req Request to master.
+     * @param[out] rsp Aggregated response from all target masters.
+     * @param[in] workerMasterApi Initial worker master API.
+     * @param[in] fun Function that sends the request through the specified worker master API.
+     * @return Status of the call.
+     */
+    Status RedirectRetryForMultiCopyMeta(
+        master::CreateMultiCopyMetaReqPb &req, master::CreateMultiCopyMetaRspPb &rsp,
+        const std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi,
+        const std::function<Status(const std::shared_ptr<worker::WorkerMasterOCApi> &,
+                                   master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &)> &fun);
+
+    /**
      * @brief Retry and redirect
      * @tparam Req Request to master
      * @tparam Rsp Response of master
@@ -415,6 +429,19 @@ protected:
     static void SleepForMetaMovingRetry(int64_t sleepTimeMs);
 
 private:
+    /**
+     * @brief Partition a multi-copy metadata request into local and redirected sub-requests.
+     * @param[in] request Original multi-copy metadata request.
+     * @param[in] redirectResponse Response containing redirect groups.
+     * @param[out] localRequest Sub-request retained for the initial master.
+     * @param[out] redirectRequests Sub-requests grouped by redirected master address.
+     * @return Status of the call.
+     */
+    static Status PartitionMultiCopyMetaRequest(
+        const master::CreateMultiCopyMetaReqPb &request, const master::CreateMultiCopyMetaRspPb &redirectResponse,
+        master::CreateMultiCopyMetaReqPb &localRequest,
+        std::unordered_map<HostPort, master::CreateMultiCopyMetaReqPb> &redirectRequests);
+
     /**
      * @brief Merge one remove-metadata result and process any redirected metadata.
      * @param[in] result Remove-metadata RPC status.

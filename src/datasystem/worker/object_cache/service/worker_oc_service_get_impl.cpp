@@ -3183,16 +3183,21 @@ void WorkerOcServiceGetImpl::ConfirmCopyMetaForNotifyRemoteGet(
             elem->set_version(meta.version());
             elem->set_data_format(meta.config().data_format());
         }
-        std::function<Status(master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &)> func =
-            [&api](master::CreateMultiCopyMetaReqPb &request, master::CreateMultiCopyMetaRspPb &response) {
-                return api->CreateMultiCopyMeta(request, response);
+        std::function<Status(const std::shared_ptr<WorkerMasterOCApi> &, master::CreateMultiCopyMetaReqPb &,
+                             master::CreateMultiCopyMetaRspPb &)> func =
+            [](const std::shared_ptr<WorkerMasterOCApi> &targetApi, master::CreateMultiCopyMetaReqPb &request,
+               master::CreateMultiCopyMetaRspPb &response) {
+                return targetApi->CreateMultiCopyMeta(request, response);
             };
         const auto remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
         ScopedRequestContext confirmationContext;
         GetRequestContext()->reqTimeoutDuration.Init(std::min(confirmationTimeoutMs, remainingMs));
-        Status status = WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(req, rsp, func);
+        Status status = RedirectRetryForMultiCopyMeta(req, rsp, api, func);
         if (!ClassifyCopyMetaConfirmationResult(rsp, status, objectKeys, confirmedIds, failedIds)) {
             failedConfirmationOwners.emplace(masterKey);
+            LOG(WARNING) << "CopyMetaConfirmation failed, master : " << masterKey
+                         << ", rsp info size: " << rsp.info().size() << ", meta_is_moving: " << rsp.meta_is_moving()
+                         << ", status: " << status << ", failed count: " << failedIds.size();
         }
     }
 }
