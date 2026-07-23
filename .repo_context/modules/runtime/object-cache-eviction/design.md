@@ -493,6 +493,8 @@ Failure-sensitive steps:
   - none-L2-evict 对象生命周期结束必须通过 master 全局删除语义。
 - Retry, idempotency, deduplication, or exactly-once assumptions:
   - `RemoveMetaFromMasterForEviction` 在 `AsyncMasterTask` 内最多重试 3 次。
+  - eviction metadata cleanup 的单次 pass 最多执行初始 owner 请求和每个首跳 redirect target 的一次转发；
+    转发请求禁用 redirect，目标再次返回 redirect 时将该组对象留待下一次 pass，禁止递归形成 A/B 循环。
   - master `AsyncDeleteByExpired` 对已删除中的对象把 `K_TRY_AGAIN` 视为成功。
   - lock/version 失败的 spill task 会回滚或重试。
 - What must remain true after failure:

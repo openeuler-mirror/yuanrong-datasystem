@@ -355,6 +355,19 @@ master::RemoveMetaReqPb WorkerOcEvictionManager::BuildEvictionRemoveMetaReq(
     return req;
 }
 
+Status WorkerOcEvictionManager::RemoveEvictionMetaOnce(const HostPort &masterAddr,
+                                                        const std::vector<std::string> &objectKeys,
+                                                        const EvictDeletedObjects &objectKeyVersions,
+                                                        bool allowRedirect, master::RemoveMetaRspPb &rsp)
+{
+    CHECK_FAIL_RETURN_STATUS(!masterAddr.Empty(), K_NOT_FOUND, "Cannot find master for eviction remove-meta.");
+    auto workerMasterApi =
+        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
+    RETURN_IF_NOT_OK(workerMasterApi->Init());
+    auto req = BuildEvictionRemoveMetaReq(objectKeys, objectKeyVersions, localAddress_, allowRedirect);
+    return workerMasterApi->RemoveMeta(req, rsp);
+}
+
 void WorkerOcEvictionManager::RemoveEvictionMetaGroup(
     const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
     const EvictDeletedObjects &objectKeyVersions, EvictDeletedObjects &failedObjects, Status &lastRc)
@@ -369,37 +382,51 @@ void WorkerOcEvictionManager::RemoveEvictionMetaGroup(
     if (objectKeys.empty()) {
         return;
     }
-    if (masterAddr.Empty()) {
-        addFailedObjects(objectKeys, { K_NOT_FOUND, "Cannot find master for eviction remove-meta." });
-        return;
-    }
-    auto workerMasterApi =
-        worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
-    auto rc = workerMasterApi->Init();
-    if (rc.IsError()) {
-        addFailedObjects(objectKeys, rc);
-        return;
-    }
     master::RemoveMetaRspPb rsp;
-    auto req = BuildEvictionRemoveMetaReq(objectKeys, objectKeyVersions, localAddress_, true);
-    rc = workerMasterApi->RemoveMeta(req, rsp);
+    auto rc = RemoveEvictionMetaOnce(masterAddr, objectKeys, objectKeyVersions, true, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("RemoveMeta failed, object count %zu, status: %s.", objectKeys.size(),
                                    rc.ToString());
         addFailedObjects(objectKeys, rc);
-    } else if (rsp.meta_is_moving()) {
+        return;
+    }
+    if (rsp.meta_is_moving()) {
         addFailedObjects(objectKeys, { K_TRY_AGAIN, "Meta is moving." });
-    } else {
-        for (const auto &redirectInfo : rsp.info()) {
-            std::vector<std::string> redirectKeys(redirectInfo.change_meta_ids().begin(),
-                                                  redirectInfo.change_meta_ids().end());
-            HostPort redirectMasterAddr;
-            rc = redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address());
-            if (rc.IsError()) {
-                addFailedObjects(redirectKeys, rc);
-                continue;
-            }
-            RemoveEvictionMetaGroup(redirectMasterAddr, redirectKeys, objectKeyVersions, failedObjects, lastRc);
+        return;
+    }
+    for (const auto &redirectInfo : rsp.info()) {
+        std::vector<std::string> redirectKeys(redirectInfo.change_meta_ids().begin(),
+                                              redirectInfo.change_meta_ids().end());
+        if (redirectKeys.empty()) {
+            continue;
+        }
+        HostPort redirectMasterAddr;
+        rc = redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address());
+        if (rc.IsError()) {
+            addFailedObjects(redirectKeys, rc);
+            continue;
+        }
+        master::RemoveMetaRspPb redirectRsp;
+        rc = RemoveEvictionMetaOnce(redirectMasterAddr, redirectKeys, objectKeyVersions, false, redirectRsp);
+        if (rc.IsError()) {
+            LOG(ERROR) << FormatString("Forwarded RemoveMeta failed, object count %zu, status: %s.",
+                                       redirectKeys.size(), rc.ToString());
+            addFailedObjects(redirectKeys, rc);
+            continue;
+        }
+        if (redirectRsp.meta_is_moving()) {
+            addFailedObjects(redirectKeys, { K_TRY_AGAIN, "Forwarded meta is moving." });
+            continue;
+        }
+        if (!redirectRsp.info().empty()) {
+            LOG(WARNING) << FormatString("Forwarded RemoveMeta returned another redirect, object count %zu.",
+                                         redirectKeys.size());
+            addFailedObjects(redirectKeys, { K_TRY_AGAIN, "Forwarded RemoveMeta returned another redirect." });
+            continue;
+        }
+        if (!redirectRsp.failed_ids().empty()) {
+            std::vector<std::string> failedIds(redirectRsp.failed_ids().begin(), redirectRsp.failed_ids().end());
+            addFailedObjects(failedIds, { K_TRY_AGAIN, "Forwarded RemoveMeta returned failed ids." });
         }
     }
     if (!rsp.failed_ids().empty()) {
