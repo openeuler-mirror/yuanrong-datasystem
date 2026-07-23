@@ -269,21 +269,20 @@
   - topology phase callbacks use injected object-cache/metadata action interfaces;
   - control-backend probing/classification lives in runtime and consumes injected peer-probe clients.
 - Verification notes:
-  - focused object-cache recovery UT group: 18/18 passed in 0.05s;
-  - worker runtime/module boundary script: 33/33 passed in 0.11s;
-  - CLion remote `tests-index` build after latest rebase: passed in 507.74s with URMA Mock and 1161 compile database
-    entries;
+  - latest main/master rebase point: `4bc7301d60cc6cae1d33f0de31a27e77ed2dd85b`;
+  - CLion remote `tests-index` build after latest rebase: passed in 439s with URMA Mock, third-party cache reuse in 0s,
+    and 1161 compile database entries;
   - rebase-after runtime/admission UT group: 57/57 passed in 0.34s;
-  - rebase-after focused admission STs: object 1/1 in 4.73s, KV 1/1 in 5.84s, stream 1/1 in 4.64s;
-  - fault-overlay STs: ScaleIn plus isolated peer 1/1 in 8.85s, ScaleOut plus local isolation 1/1 in 5.75s,
-    ScaleOut plus global backend outage 1/1 in 13.35s;
+  - rebase-after focused object-cache recovery UT group: 20/20 passed in 0.06s;
+  - rebase-after admission/fault STs with `DATASYSTEM_ST_SOCKET_BASE_DIR=/home/$USER/dsuds`: object-cache
+    overlay/admission 4/4 in 31.24s, KV admission 1/1 in 5.94s, stream admission 1/1 in 4.84s. The short socket base
+    dir avoids shared-host `/tmp` root filesystem exhaustion and the `unix_domain_socket_dir` 80-character validator;
   - Bazel 7.4.1 focused worker/object-cache/runtime build: first correct run passed in 374.07s and cached rerun passed
     in 0.62s;
-  - latest post-refactor script guards: worker runtime/module boundary 33/33 in 0.077s, CLion helper 5/5 in 0.386s,
-    ds-pr-review sensitive scan 17/17 in 0.038s;
-  - latest post-refactor admission/fault STs with `DATASYSTEM_ST_SOCKET_BASE_DIR=/home/$USER/dsuds`: object-cache
-    overlay/admission 4/4 in 87.03s, KV admission 1/1 in 5.95s, stream admission 1/1 in 4.71s. The short socket base
-    dir avoids shared-host `/tmp` root filesystem exhaustion and the `unix_domain_socket_dir` 80-character validator;
+  - latest post-refactor script guards: worker runtime/module boundary 33/33 in 0.061s, CLion helper 5/5 in 0.344s,
+    ds-pr-review sensitive scan 17/17 in 0.019s;
+  - `git diff --check` passed, and `git clang-format --diff main/master -- <changed C++ files>` reported no modified
+    files to format;
   - the full detailed execution log is kept outside the source PR under the workbench RFC archive.
 
 ## Fast Verification
@@ -311,10 +310,10 @@
   - `ds_st_stream_cache`
   - `ds_st_embedded_client`
 - Recent focused evidence from the worker-isolation branch:
-  - object-cache recovery focused UT group: 18/18 passed in 0.05s;
-  - worker runtime/module boundary script: 33/33 passed in 0.11s;
-  - CLion remote `tests-index` build after latest rebase: passed in 507.74s with URMA Mock and 1161 compile database
-    entries;
+  - object-cache recovery focused UT group: 20/20 passed in 0.06s;
+  - worker runtime/module boundary script: 33/33 passed in 0.061s;
+  - CLion remote `tests-index` build after latest rebase: passed in 439s with URMA Mock, third-party cache reuse in 0s,
+    and 1161 compile database entries;
   - Bazel 7.4.1 focused worker/object-cache/runtime build: first correct run passed in 374.07s and cached rerun passed
     in 0.62s.
 
