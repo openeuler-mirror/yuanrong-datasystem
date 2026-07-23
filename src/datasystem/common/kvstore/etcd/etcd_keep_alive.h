@@ -21,6 +21,7 @@
 #define DATASYSTEM_COMMON_KVSTORE_ETCD_ETCD_LEASEKEEPALLIVE_H
 
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <thread>
 
@@ -113,6 +114,15 @@ public:
     Status Run(Timer &keepAliveTimeoutTimer);
 
     /**
+     * @brief Set a one-shot callback invoked after the first successful lease renewal.
+     * @param[in] handler Callback used to notify local keepalive recovery.
+     */
+    void SetFirstRenewalHandler(std::function<void()> handler)
+    {
+        firstRenewalHandler_ = std::move(handler);
+    }
+
+    /**
      * @brief Send keep-alive RPC request to ETCD server to keep alive.
      * @return RPC status and etcd response pair.
      */
@@ -154,6 +164,9 @@ private:
 
     // Check keep-alive is running or not.
     std::atomic<bool> shuttingDown_;
+
+    // One-shot notification that the recreated keep-alive stream can renew its lease.
+    std::function<void()> firstRenewalHandler_;
 
     // Protect shuttingDown flag during shutdowns
     WriterPrefRWLock shutdownLock_;

@@ -40,6 +40,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "datasystem/worker/object_cache/worker_oc_eviction_manager.h"
 #include "datasystem/worker/object_cache/worker_request_manager.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem {
 namespace object_cache {
@@ -98,6 +99,7 @@ struct WorkerOcServiceCrudParam {
     const worker::MetadataRouteResolver *metadataRouteResolver;
     const ObjectEndpointPolicy *endpointPolicy;
     const std::atomic<bool> *exitRequested;
+    worker::WorkerRuntimeFacade *workerRuntime{ nullptr };
     bool allowDirectoryLag;
 };
 
@@ -468,6 +470,7 @@ protected:
     const worker::MetadataRouteResolver *metadataRouteResolver_{ nullptr };
     const ObjectEndpointPolicy *endpointPolicy_{ nullptr };
     const std::atomic<bool> *exitRequested_{ nullptr };
+    worker::WorkerRuntimeFacade *workerRuntime_{ nullptr };
     const bool allowDirectoryLag_{ false };
 
     std::shared_ptr<AsyncPersistenceDelManager> asyncPersistenceDelManager_{ nullptr };

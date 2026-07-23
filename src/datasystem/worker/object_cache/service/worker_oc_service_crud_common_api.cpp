@@ -169,6 +169,7 @@ WorkerOcServiceCrudCommonApi::WorkerOcServiceCrudCommonApi(WorkerOcServiceCrudPa
       metadataRouteResolver_(initParam.metadataRouteResolver),
       endpointPolicy_(initParam.endpointPolicy),
       exitRequested_(initParam.exitRequested),
+      workerRuntime_(initParam.workerRuntime),
       allowDirectoryLag_(initParam.allowDirectoryLag),
       asyncPersistenceDelManager_(initParam.asyncPersistenceDelManager)
 {

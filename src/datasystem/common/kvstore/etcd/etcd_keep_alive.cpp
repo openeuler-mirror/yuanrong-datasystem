@@ -254,6 +254,10 @@ Status EtcdKeepAlive::Run(Timer &keepAliveTimeoutTimer)
             return res;
         } else {
             keepAliveTimeoutTimer.Reset();
+            if (firstRenewalHandler_ != nullptr) {
+                auto handler = std::move(firstRenewalHandler_);
+                handler();
+            }
         }
 
         // Calculate how much time to wait before sending another keep alive message

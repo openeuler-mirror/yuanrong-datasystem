@@ -6,6 +6,51 @@ load("//bazel:build_defs.bzl", "ds_cc_test", "ds_cc_test_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test(
+    name = "worker_runtime_state_test",
+    srcs = ["worker_runtime_state_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_runtime_state",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_service_admission_test",
+    srcs = ["worker_service_admission_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_service_admission",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_admission_facade_test",
+    srcs = ["worker_admission_facade_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_admission_facade",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_runtime_facade_test",
+    srcs = ["worker_runtime_facade_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_runtime_facade",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_isolation_coordinator_test",
+    srcs = ["worker_isolation_coordinator_test.cpp"],
+    deps = [
+        "//src/datasystem/worker/runtime:worker_isolation_coordinator",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "data_worker_options_test",
     srcs = ["data_worker_options_test.cpp"],
     deps = [

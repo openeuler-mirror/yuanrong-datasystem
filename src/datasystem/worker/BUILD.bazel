@@ -194,6 +194,7 @@ ds_cc_library(
         "//src/datasystem/common/l2cache:persistence_api_header",
         "//src/datasystem/common/l2cache:slot_client",
         "//src/datasystem/worker:worker_flags",
+        "//src/datasystem/worker/runtime:worker_runtime_core",
         "//src/datasystem/worker:metadata_route_resolver",
         "//src/datasystem/worker:rebalance_executor",
         "//src/datasystem/common/log:common_log",

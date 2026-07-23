@@ -85,6 +85,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_expire_impl.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_clear_data_flow.h"
 #include "datasystem/worker/object_cache/slot_recovery/slot_recovery_manager.h"
+#include "datasystem/worker/runtime/worker_runtime_facade.h"
 
 namespace datasystem {
 namespace master {
@@ -130,7 +131,8 @@ public:
                         master::MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
                         const worker::MetadataRouteResolver &metadataRoute,
                         const cluster::MembershipEndpointView &membership,
-                        const std::atomic<bool> *exitRequested, bool isRestart,
+                        const std::atomic<bool> *exitRequested, worker::WorkerRuntimeFacade *workerRuntime,
+                        bool isRestart,
                         bool controlBackendAvailableAtStartup);
 
     ~WorkerOCServiceImpl() override;
@@ -1315,6 +1317,7 @@ private:
     const cluster::MembershipEndpointView &membership_;
     ObjectEndpointPolicy endpointPolicy_;
     const std::atomic<bool> *exitRequested_{ nullptr };
+    worker::WorkerRuntimeFacade *workerRuntime_{ nullptr };
     const bool isRestart_;
     const bool centralizedMetadata_;
     const bool controlBackendAvailableAtStartup_;

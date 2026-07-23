@@ -69,6 +69,11 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\.cpp
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_store_perf_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/coordinator_server_options_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/data_worker_options_test\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/worker_runtime_state_test\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/worker_service_admission_test\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/worker_admission_facade_test\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/worker_runtime_facade_test\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/worker_isolation_coordinator_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/stream_cache/.*)
@@ -187,6 +192,21 @@ add_ds_ut_executable(data_worker_options_test
         worker/data_worker_options_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
+add_ds_ut_executable(worker_runtime_state_ut
+        worker/worker_runtime_state_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
+add_ds_ut_executable(worker_service_admission_ut
+        worker/worker_service_admission_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
+add_ds_ut_executable(worker_admission_facade_ut
+        worker/worker_admission_facade_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
+add_ds_ut_executable(worker_runtime_facade_ut
+        worker/worker_runtime_facade_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
+add_ds_ut_executable(worker_isolation_coordinator_ut
+        worker/worker_isolation_coordinator_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
 add_executable(cluster_topology_contract_ut
         cluster/cluster_topology_schema_test.cpp
         cluster/coordination_backend_contract_test.cpp
@@ -292,6 +312,31 @@ target_link_libraries(data_worker_options_test PRIVATE
         ${DS_UT_COMMON_UTIL_EXTRA_LIBS}
         ${DS_UT_HEAVY_LINK_END}
         -Wl,--reduce-memory-overheads)
+target_link_libraries(worker_runtime_state_ut PRIVATE
+        GTest::gtest
+        GTest::gmock
+        worker_runtime_state
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+target_link_libraries(worker_service_admission_ut PRIVATE
+        GTest::gtest
+        GTest::gmock
+        worker_service_admission
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+target_link_libraries(worker_admission_facade_ut PRIVATE
+        GTest::gtest
+        GTest::gmock
+        worker_admission_facade
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+target_link_libraries(worker_runtime_facade_ut PRIVATE
+        GTest::gtest
+        GTest::gmock
+        worker_runtime_facade
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
+target_link_libraries(worker_isolation_coordinator_ut PRIVATE
+        GTest::gtest
+        GTest::gmock
+        worker_isolation_coordinator
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
 target_link_libraries(cluster_topology_contract_ut PRIVATE
         GTest::gtest
         GTest::gmock
@@ -323,6 +368,11 @@ add_datasystem_test(ds_ut_slot_store TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_store_perf_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(coordinator_server_options_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(data_worker_options_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(worker_runtime_state_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(worker_service_admission_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(worker_admission_facade_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(worker_runtime_facade_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(worker_isolation_coordinator_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(cluster_topology_contract_ut TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 if (BUILD_WITH_URMA OR BUILD_WITH_URMA_MOCK)

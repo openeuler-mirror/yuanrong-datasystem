@@ -22,6 +22,7 @@ add_subdirectory(object_cache)
 add_subdirectory(stream_cache)
 add_subdirectory(client_manager)
 add_subdirectory(coordinator)
+add_subdirectory(runtime)
 
 # Set source files
 set(WORKER_SRCS
@@ -73,6 +74,7 @@ set(WORKER_DEPEND_LIBS
         worker_update_flag_check
         worker_health_check
         metadata_route_resolver
+        worker_runtime_core
         coordinator_watch_service_impl
         topology_recovery_reporter
         )

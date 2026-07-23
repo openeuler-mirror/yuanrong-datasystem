@@ -410,6 +410,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:worker_master_oc_api_header",
         "//src/datasystem/worker/object_cache:worker_request_manager_header",
         "//src/datasystem/worker/object_cache/device:worker_device_oc_manager_header",
+        "//src/datasystem/worker/runtime:worker_runtime_facade",
     ],
 )
 

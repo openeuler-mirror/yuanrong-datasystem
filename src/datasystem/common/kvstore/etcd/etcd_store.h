@@ -17,6 +17,7 @@
 #ifndef DATASYSTEM_COMMON_KVSTORE_ETCD_ETCD_STORE_H
 #define DATASYSTEM_COMMON_KVSTORE_ETCD_ETCD_STORE_H
 
+#include <functional>
 #include <memory>
 #include <shared_mutex>
 #include <string>
@@ -474,6 +475,16 @@ public:
         checkEtcdStateWhenNetworkFailedHandler_ = std::move(CheckEtcdStateWhenNetworkFailedHandler);
     }
 
+    void SetLocalIsolationHandler(std::function<void(const Status &)> localIsolationHandler)
+    {
+        localIsolationHandler_ = std::move(localIsolationHandler);
+    }
+
+    void SetLocalRecoveryHandler(std::function<void()> localRecoveryHandler)
+    {
+        localRecoveryHandler_ = std::move(localRecoveryHandler);
+    }
+
     /**
      * @brief Set event handler.
      * @param[in] eventHandler Functions that handle events that are watched or obtained through other means.
@@ -516,23 +527,23 @@ private:
      * @brief Launches the internal thread that loops the actual keep-alive logic
      * timestamp and tag, and each time reconnecting the etcd use the same value.
      * @param[in,out] keepAliveTimeoutTimer Timer measuring continuous local keepalive failure.
-     * @param[in,out] deathTimer Backup suicide timer armed after confirmed local isolation.
+     * @param[in,out] networkFailedConfirmTimes Consecutive local-isolation confirmations.
+     * @param[in,out] needHandleKeepAliveFailure Whether a local-isolation event still needs to be published.
      * @return Status of the call.
      */
-    Status RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTimer);
+    Status RunKeepAliveTask(Timer &keepAliveTimeoutTimer, int &networkFailedConfirmTimes,
+                            bool &needHandleKeepAliveFailure);
+    void HandleKeepAliveRenewal(std::atomic<bool> &keepAliveRenewed, int &networkFailedConfirmTimes,
+                                bool &needHandleKeepAliveFailure);
 
     /**
-     * @brief Classify one failed keepalive attempt and publish local-isolation evidence when confirmed.
-     *        On confirmed local isolation past node_dead_timeout_s (and auto_del_dead_node), raises SIGKILL.
+     * @brief Classify one failed keepalive attempt and publish local-isolation handling when confirmed.
      * @param[in] status Failed keepalive status.
-     * @param[in,out] observedLeaseId Lease generation used by the current confirmation counter.
      * @param[in,out] confirmTimes Consecutive local-isolation confirmations.
      * @param[in,out] needHandleFailure Whether a fake DELETE still needs to be published for this lease.
-     * @param[in,out] deathTimer Backup suicide timer armed after confirmed local isolation.
      * @return True when the lease-expiry threshold was reached and the caller should delay before retrying.
      */
-    bool ProcessKeepAliveFailure(const Status &status, int64_t &observedLeaseId, int &confirmTimes,
-                                 bool &needHandleFailure, Timer &deathTimer);
+    bool ProcessKeepAliveFailure(const Status &status, int &confirmTimes, bool &needHandleFailure);
 
     /**
      * @brief Helper function to kick off the threading and loops for the keep alive
@@ -634,6 +645,8 @@ private:
     Timer keepAliveTimeoutTimer_;
 
     std::function<bool()> checkEtcdStateWhenNetworkFailedHandler_;
+    std::function<void(const Status &)> localIsolationHandler_;
+    std::function<void()> localRecoveryHandler_;
 
     std::atomic<bool> keepAliveTimeout_{ true };
 

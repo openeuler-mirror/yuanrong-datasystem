@@ -99,7 +99,7 @@ static constexpr double US_PER_MS = 1000.0;
 
 namespace {
 Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeObjType &entry,
-    const std::string &objectKey, const std::string &address)
+                               const std::string &objectKey, const std::string &address)
 {
     if (workerConnected && status.GetCode() == K_NOT_FOUND && entry->GetShmUnit() == nullptr) {
         RETURN_STATUS(K_RUNTIME_ERROR,
@@ -112,6 +112,19 @@ Status ValidateRemoteGetResult(bool workerConnected, const Status &status, SafeO
         RETURN_STATUS(K_NOT_FOUND, FormatString("GetFromRemote failed, object(%s) not exist in worker.", objectKey));
     }
     return Status::OK();
+}
+
+Status CheckGetAdmission(worker::WorkerRuntimeFacade *workerRuntime,
+                         const std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> &serverApi)
+{
+    if (workerRuntime == nullptr) {
+        return Status::OK();
+    }
+    auto admissionRc = workerRuntime->CheckAdmission(worker::WorkerAdmissionKind::NORMAL_READ, "Get");
+    if (admissionRc.IsError()) {
+        LOG_IF_ERROR(serverApi->SendStatus(admissionRc), "Send status failed");
+    }
+    return admissionRc;
 }
 }  // namespace
 
@@ -149,8 +162,7 @@ std::string BuildExistRedirectExtra(const google::protobuf::RepeatedPtrField<Red
     return nlohmann::json{ { EXIST_REDIRECTS_FIELD, std::move(redirects) } }.dump();
 }
 
-WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam,
-                                               EtcdStore *etcdStore,
+WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initParam, EtcdStore *etcdStore,
                                                std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
                                                std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
@@ -191,6 +203,7 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                             timer.ElapsedMilliSecond(), inflightGauge.Get());
     std::string tenantId;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(worker::Authenticate(akSkManager_, req, tenantId), "Authenticate failed.");
+    RETURN_IF_NOT_OK(CheckGetAdmission(workerRuntime_, serverApi));
 
     int64_t subTimeout = req.sub_timeout();
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
@@ -199,7 +212,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
         remainingUs = changedRemainingUs;
         return Status::OK();
     });
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
@@ -229,10 +243,13 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
                 LOG(ERROR) << initRc.GetMsg();
                 LOG_IF_ERROR(serverApi->SendStatus(initRc), "Send status failed");
             } else {
+                if (CheckGetAdmission(workerRuntime_, serverApi).IsError()) {
+                    return;
+                }
                 int64_t currentRemainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
                 VLOG(1) << FormatString("[Get] Receive, clientId: %s, objects: %s, threadPool: %s, remainingUs: %ld",
-                    clientId, VectorToString(request->GetRawObjectKeys()), threadPool_->GetStatistics(),
-                    currentRemainingUs);
+                                        clientId, VectorToString(request->GetRawObjectKeys()),
+                                        threadPool_->GetStatistics(), currentRemainingUs);
                 // subTimeout is the client's subscribe budget; the actual wait is capped by
                 // std::min(subTimeout, remainingTimeMs) in ProcessGetObjectRequest.
                 auto newSubTimeout = subTimeout > 0 ? subTimeout : 0;
@@ -948,8 +965,8 @@ Status WorkerOcServiceGetImpl::MarkReferencedAbsentObjectsFailed(
 
     std::unordered_set<std::string> referencedRequestKeys;
     for (const auto &item : grouped.groups) {
-        RETURN_IF_NOT_OK(QueryReferencedRequestKeys(item.first, item.second, responseKeyToRequestKey,
-                                                    referencedRequestKeys));
+        RETURN_IF_NOT_OK(
+            QueryReferencedRequestKeys(item.first, item.second, responseKeyToRequestKey, referencedRequestKeys));
     }
     if (referencedRequestKeys.empty()) {
         return Status::OK();
@@ -1276,8 +1293,8 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     LOG_IF(INFO, elapsedMs > logThresholdMs)
         << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker finished, remoteAddress=" << endPoint
         << ", remoteWorkerId=" << remoteWorkerId << ", elapsed ms: " << elapsedMs
-        << ", realRemainingTimeMs="
-        << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() << ", status=" << rc.ToString();
+        << ", realRemainingTimeMs=" << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime()
+        << ", status=" << rc.ToString();
     RETURN_IF_NOT_OK(rc);
     RETURN_STATUS(K_TRY_AGAIN, "Reconnect success");
 }
@@ -1721,9 +1738,9 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
 }
 
 void WorkerOcServiceGetImpl::FinalizeAbsentQueryMetadata(
-    const std::unordered_set<std::string> &routeFailedObjectKeys,
-    ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, bool queryEtcdMeta,
-    std::vector<master::QueryMetaInfoPb> &queryMetas, std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
+    const std::unordered_set<std::string> &routeFailedObjectKeys, ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
+    bool queryEtcdMeta, std::vector<master::QueryMetaInfoPb> &queryMetas,
+    std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
     const std::map<std::string, uint64_t> &deletingObjectsWithVersion)
 {
     auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
@@ -1766,8 +1783,8 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
             RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
             Timer queryMetaTimer;
-            auto rc = QueryMetaDataFromMasterImpl(itemPtr->first, subTimeout, itemPtr->second, result.rsp,
-                                                  result.payloads);
+            auto rc =
+                QueryMetaDataFromMasterImpl(itemPtr->first, subTimeout, itemPtr->second, result.rsp, result.payloads);
             if (rc.IsError()) {
                 LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms",
                                            itemPtr->first.ToString(), rc.ToString(),
@@ -1790,10 +1807,10 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
     return lastRc;
 }
 
-Status WorkerOcServiceGetImpl::MergeQueryMetadataResults(
-    std::vector<BatchQueryMetaResult> &batchQueryResults, bool traceEnabled, QueryMetadataFromMasterResult &result,
-    ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
-    std::map<std::string, uint64_t> &deletingObjectsWithVersion)
+Status WorkerOcServiceGetImpl::MergeQueryMetadataResults(std::vector<BatchQueryMetaResult> &batchQueryResults,
+                                                         bool traceEnabled, QueryMetadataFromMasterResult &result,
+                                                         ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
+                                                         std::map<std::string, uint64_t> &deletingObjectsWithVersion)
 {
     auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
     auto &objectKeysPuzzled = std::get<OBJECTS_PUZZLED_IDX>(objectKeysQueryMetaFailed);
@@ -2213,8 +2230,8 @@ Status WorkerOcServiceGetImpl::GetObjectFromRemoteOnLock(const ObjectMetaPb &met
                                          FormatString("Parse object %s address %s failed", objKey, address));
         // Step1: Try to get data from local AZ's worker
         CHECK_FAIL_RETURN_STATUS(endpointPolicy_ != nullptr, K_NOT_READY, "Object endpoint policy is unavailable");
-        checkConnectStatus = endpointPolicy_->CheckEndpoint(
-            hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
+        checkConnectStatus =
+            endpointPolicy_->CheckEndpoint(hostAddr, ToleranceNotExistNode(singleCopy, meta.config().write_mode()));
         if (checkConnectStatus.IsOk()) {
             ifWorkerConnected = true;
             INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
@@ -2877,9 +2894,9 @@ Status WorkerOcServiceGetImpl::QueryExistMetadataViaPureQueryMeta(const std::vec
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()),
                                          "Parse Exist redirect master address failed");
         auto redirectWorkerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
-        CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
-                                 FormatString("Get redirect master api failed, address: %s",
-                                              redirectMasterAddr.ToString()));
+        CHECK_FAIL_RETURN_STATUS(
+            redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
+            FormatString("Get redirect master api failed, address: %s", redirectMasterAddr.ToString()));
         master::PureQueryMetaReqPb redirectReq;
         master::PureQueryMetaRspPb redirectRsp;
         redirectReq.set_redirect(false);
@@ -3197,9 +3214,11 @@ void WorkerOcServiceGetImpl::ConfirmCopyMetaForNotifyRemoteGet(
     }
 }
 
-bool WorkerOcServiceGetImpl::ClassifyCopyMetaConfirmationResult(
-    const master::CreateMultiCopyMetaRspPb &rsp, const Status &status, const std::vector<std::string> &objectKeys,
-    std::vector<std::string> &confirmedIds, std::unordered_set<std::string> &failedIds)
+bool WorkerOcServiceGetImpl::ClassifyCopyMetaConfirmationResult(const master::CreateMultiCopyMetaRspPb &rsp,
+                                                                const Status &status,
+                                                                const std::vector<std::string> &objectKeys,
+                                                                std::vector<std::string> &confirmedIds,
+                                                                std::unordered_set<std::string> &failedIds)
 {
     if (status.IsError() || !rsp.info().empty() || rsp.meta_is_moving()) {
         failedIds.insert(objectKeys.begin(), objectKeys.end());
@@ -3249,8 +3268,7 @@ void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
     std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
     std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp, std::set<ReadKey> &objectsNeedGetRemote,
-    const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
-    std::map<std::string, uint64_t> &unconfirmedObjectVersions,
+    const QueryMetaMap &queryMetas, uint64_t &migratedBytes, std::map<std::string, uint64_t> &unconfirmedObjectVersions,
     std::unordered_set<std::string> &failedConfirmationOwners)
 {
     Status lastRc;
@@ -3347,9 +3365,9 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
             GroupQueryMeta(info, groupedQueryMetas);
             SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj);
         }
-        auto remoteGetRc = ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lockedEntries, rsp,
-                                                              objectsNeedGetRemote, queryMetas, migratedBytes,
-                                                              unconfirmedObjectVersions, failedConfirmationOwners);
+        auto remoteGetRc =
+            ProcessRemoteGetInNotificationImpl(groupedQueryMetas, lockedEntries, rsp, objectsNeedGetRemote, queryMetas,
+                                               migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners);
         if (remoteGetRc.IsError()) {
             LOG(WARNING) << "ProcessRemoteGetInNotificationImpl failed, rc: " << remoteGetRc.ToString();
             lastRc = std::move(remoteGetRc);

@@ -1,0 +1,72 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "worker_runtime_types",
+    hdrs = ["worker_runtime_types.h"],
+)
+
+ds_cc_library(
+    name = "worker_runtime_state",
+    srcs = ["worker_runtime_state.cpp"],
+    hdrs = ["worker_runtime_state.h"],
+    deps = [
+        ":worker_runtime_types",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_service_admission",
+    srcs = ["worker_service_admission.cpp"],
+    hdrs = ["worker_service_admission.h"],
+    deps = [
+        ":worker_runtime_state",
+        ":worker_runtime_types",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_admission_facade",
+    srcs = ["worker_admission_facade.cpp"],
+    hdrs = ["worker_admission_facade.h"],
+    deps = [
+        ":worker_service_admission",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_runtime_facade",
+    srcs = ["worker_runtime_facade.cpp"],
+    hdrs = ["worker_runtime_facade.h"],
+    deps = [
+        ":worker_admission_facade",
+        ":worker_runtime_types",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_isolation_coordinator",
+    srcs = ["worker_isolation_coordinator.cpp"],
+    hdrs = ["worker_isolation_coordinator.h"],
+    deps = [
+        ":worker_runtime_facade",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "worker_runtime_core",
+    deps = [
+        ":worker_admission_facade",
+        ":worker_isolation_coordinator",
+        ":worker_runtime_facade",
+        ":worker_runtime_state",
+        ":worker_runtime_types",
+        ":worker_service_admission",
+    ],
+)

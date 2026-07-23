@@ -240,6 +240,38 @@ Status CheckLocalTopologyServingReady(cluster::TopologyEngine &engine, const std
     return engine.Placement().Locate(TOPOLOGY_READINESS_PROBE_KEY, decision);
 }
 
+bool ApplyTopologyAvailabilityToRuntime(WorkerRuntimeFacade &runtime, cluster::TopologyAvailabilityLevel level)
+{
+    WorkerRunningEvidence evidence;
+    evidence.membershipReady = true;
+    evidence.topologyReady = true;
+    evidence.resourceReady = true;
+
+    switch (level) {
+        case cluster::TopologyAvailabilityLevel::NORMAL:
+        case cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED:
+            (void)runtime.TryMarkRunning(evidence, "topology available");
+            break;
+        case cluster::TopologyAvailabilityLevel::ROLE_ISOLATED:
+            runtime.MarkLocalIsolated(WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN,
+                                      "topology availability is role-isolated");
+            break;
+        case cluster::TopologyAvailabilityLevel::NOT_READY:
+            runtime.MarkJoining("topology availability is not ready");
+            break;
+        case cluster::TopologyAvailabilityLevel::SHUTTING_DOWN:
+            runtime.MarkStopping(WorkerIsolationReason::PROCESS_STOPPING, "topology runtime is shutting down");
+            break;
+        default:
+            runtime.MarkRecovering(WorkerIsolationReason::RUNTIME_READY_INCOMPLETE, "unknown topology availability",
+                                   WorkerRecoveryPhase::TOPOLOGY);
+            break;
+    }
+    const bool topologyCanServe = level == cluster::TopologyAvailabilityLevel::NORMAL
+                                  || level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED;
+    return topologyCanServe && IsServingMode(runtime.GetSnapshot().mode);
+}
+
 struct PendingControlBackendProbe {
     cluster::MemberIdentity peer;
     std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
@@ -831,7 +863,7 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
     objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
         hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
         objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
-        &topologyExitRequested_, topologyEngine_->IsRestart(), true);
+        &topologyExitRequested_, &workerRuntime_, topologyEngine_->IsRestart(), true);
     CreateRebalanceExecutor(objectTable, evictionManager);
     objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &,
                                                                    std::chrono::steady_clock::time_point deadline,
@@ -1000,6 +1032,12 @@ Status WorkerOCServer::InitCoordinationBackend()
     }
     etcdStore_ = std::make_unique<EtcdStore>(etcdOrMetastoreAddress_);
     RETURN_IF_NOT_OK(etcdStore_->Init());
+    WorkerIsolationCoordinatorHooks hooks;
+    hooks.setTopologyServingAdmission = [](bool allowed) { SetTopologyServingAdmission(allowed); };
+    workerIsolationCoordinator_ = std::make_unique<WorkerIsolationCoordinator>(workerRuntime_, std::move(hooks));
+    etcdStore_->SetLocalIsolationHandler(
+        [this](const Status &status) { workerIsolationCoordinator_->OnLocalIsolation(status); });
+    etcdStore_->SetLocalRecoveryHandler([this] { workerIsolationCoordinator_->OnLocalRecovery(); });
     RETURN_IF_NOT_OK(
         etcdStore_->Authenticate(FLAGS_etcd_username, FLAGS_etcd_password, FLAGS_etcd_token_refresh_interval_s));
     RETURN_IF_NOT_OK_EXCEPT(
@@ -1017,7 +1055,9 @@ void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnap
     for (const auto &addrStr : knownFailedAddresses_) {
         HostPort addr;
         if (addr.ParseString(addrStr).IsError() || addr.Empty()) continue;
-        for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC })
+        for (auto type : { StubType::WORKER_WORKER_OC_SVC,
+                           StubType::WORKER_WORKER_SC_SVC,
+                           StubType::WORKER_WORKER_TRANS_SVC })
             RpcStubCacheMgr::Instance().Remove(addr, type);
     }
 }
@@ -1080,10 +1120,8 @@ Status WorkerOCServer::ConstructTopologyRuntime()
             [localAddress = hostPort_, akSkManager = akSkManager_](const auto &, const auto &peers, auto deadline) {
                 return ProbeControlBackendPeers(localAddress, akSkManager, peers, deadline);
             })
-        .SetAvailabilityHandler([](cluster::TopologyAvailabilityLevel level) {
-            const bool allowBusiness = level == cluster::TopologyAvailabilityLevel::NORMAL
-                                       || level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED;
-            SetTopologyServingAdmission(allowBusiness);
+        .SetAvailabilityHandler([this](cluster::TopologyAvailabilityLevel level) {
+            SetTopologyServingAdmission(ApplyTopologyAvailabilityToRuntime(workerRuntime_, level));
         });
     if (coordinatorServiceProxy_ != nullptr) {
         builder.UseCoordinator(*coordinatorServiceProxy_, BuildCoordinatorWatchIngress());

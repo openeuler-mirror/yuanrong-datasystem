@@ -282,6 +282,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
                                          const worker::MetadataRouteResolver &metadataRoute,
                                          const cluster::MembershipEndpointView &membership,
                                          const std::atomic<bool> *exitRequested,
+                                         worker::WorkerRuntimeFacade *workerRuntime,
                                          bool isRestart,
                                          bool controlBackendAvailableAtStartup)
     : WorkerOCService(std::move(serverAddr)),
@@ -295,6 +296,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(HostPort serverAddr, HostPort masterAdd
       membership_(membership),
       endpointPolicy_(metadataRoute, membership),
       exitRequested_(exitRequested),
+      workerRuntime_(workerRuntime),
       isRestart_(isRestart),
       centralizedMetadata_(!FLAGS_enable_distributed_master),
       controlBackendAvailableAtStartup_(controlBackendAvailableAtStartup),
@@ -380,6 +382,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .metadataRouteResolver = &metadataRoute_,
         .endpointPolicy = &endpointPolicy_,
         .exitRequested = exitRequested_,
+        .workerRuntime = workerRuntime_,
         .allowDirectoryLag = centralizedMetadata_,
     };
     createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, akSkManager_, localAddress_);
@@ -1197,6 +1200,9 @@ Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr
 Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeoutMs)
 {
     Timer timer;
+    if (workerRuntime_ != nullptr) {
+        RETURN_IF_NOT_OK(workerRuntime_->CheckAdmission(worker::WorkerAdmissionKind::NORMAL_WRITE, "Object/KV"));
+    }
     if (!IsHealthy()) {
         RETURN_STATUS(K_NOT_READY, "Worker not ready");
     }
