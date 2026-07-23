@@ -21,6 +21,7 @@
 #include <netdb.h>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unistd.h>
 #include <vector>
 #include "client/kv_cache/kv_client_scale_common.h"
@@ -283,7 +284,10 @@ TEST_F(KVClientEtcdDfxTest, LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRec
 
     std::shared_ptr<KVClient> client;
     InitTestKVClient(workerIndex, client);
-    const std::string key = "kv_admission_" + GetStringUuid();
+    InitTestEtcdInstance();
+    std::unordered_map<HostPort, std::string> uuidMap;
+    GetWorkerUuids(db_.get(), uuidMap);
+    const std::string key = ObjectKeyWithOwner(workerIndex, uuidMap);
     const std::string value = "value";
     DS_ASSERT_OK(client->Set(key, value));
     std::string got;
@@ -325,7 +329,7 @@ TEST_F(KVClientEtcdDfxTest, LEVEL1_KVClientRejectsReadWriteDuringIsolationAndRec
     ExpectAdmissionRejected(client->Set("kv_admission_isolated_" + GetStringUuid(), value), "LOCAL_ISOLATED",
                             "kv set during local isolation");
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kBeforeMarkRunningInject, "1*pause"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kBeforeMarkRunningInject, "pause"));
     recoveryPauseActive = true;
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kKeepAliveFailureInject));
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kLeaseExpiredInject));

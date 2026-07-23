@@ -143,7 +143,7 @@ TEST_F(StreamClientAdmissionTest, LEVEL1_StreamClientRejectsReadWriteDuringIsola
     std::vector<Element> outElements;
     ExpectAdmissionRejected(readyConsumer->Receive(1, 1'000, outElements), "stream receive during local isolation");
 
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kBeforeMarkRunningInject, "1*pause"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, kBeforeMarkRunningInject, "pause"));
     recoveryPauseActive = true;
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kKeepAliveFailureInject));
     DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, workerIndex, kLeaseExpiredInject));
