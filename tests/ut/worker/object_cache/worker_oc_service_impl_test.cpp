@@ -65,7 +65,7 @@ DS_DECLARE_string(l2_cache_type);
 #include "datasystem/worker/object_cache/worker_oc_service_impl.h"
 #undef private
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
-#include "datasystem/worker/object_cache/object_cache_recovery_state.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_state.h"
 
 using namespace testing;
 

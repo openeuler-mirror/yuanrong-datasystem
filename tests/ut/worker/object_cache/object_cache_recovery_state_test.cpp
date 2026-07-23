@@ -6,11 +6,11 @@
 /**
  * Description: Tests for object-cache recovery state aggregation.
  */
-#include "datasystem/worker/object_cache/object_cache_recovery_state.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_state.h"
 
 #include <gtest/gtest.h>
 
-#include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_evidence.h"
 
 namespace datasystem {
 namespace object_cache {

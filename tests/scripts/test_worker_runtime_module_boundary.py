@@ -556,7 +556,7 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
 
     def test_object_cache_public_headers_do_not_expose_runtime_internals(self):
         files = [
-            REPO_ROOT / "src/datasystem/worker/object_cache/object_cache_recovery_state.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/recovery/object_cache_recovery_state.h",
             REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.h",
             REPO_ROOT / "src/datasystem/worker/object_cache/worker_worker_oc_service_impl.h",
         ]
@@ -576,8 +576,8 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
 
     def test_object_cache_recovery_state_owns_generation_without_runtime_tracker(self):
         files = [
-            REPO_ROOT / "src/datasystem/worker/object_cache/object_cache_recovery_state.h",
-            REPO_ROOT / "src/datasystem/worker/object_cache/object_cache_recovery_state.cpp",
+            REPO_ROOT / "src/datasystem/worker/object_cache/recovery/object_cache_recovery_state.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/recovery/object_cache_recovery_state.cpp",
         ]
 
         forbidden_tokens = [
@@ -586,6 +586,7 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         ]
 
         for file_path in files:
+            self.assertTrue(file_path.exists(), f"{file_path} should keep object-cache recovery state internal")
             text = file_path.read_text(encoding="utf-8")
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should keep object-cache generation state local")

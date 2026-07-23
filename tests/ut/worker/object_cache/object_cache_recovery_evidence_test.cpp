@@ -14,7 +14,7 @@
 /**
  * Description: Tests for object cache recovery evidence.
  */
-#include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_evidence.h"
 
 #include <gtest/gtest.h>
 

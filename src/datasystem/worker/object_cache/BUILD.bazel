@@ -252,10 +252,10 @@ ds_cc_library(
 ds_cc_library(
     name = "object_cache_recovery_evidence",
     srcs = [
-        "object_cache_recovery_evidence.cpp",
+        "recovery/object_cache_recovery_evidence.cpp",
     ],
     hdrs = [
-        "object_cache_recovery_evidence.h",
+        "recovery/object_cache_recovery_evidence.h",
     ],
     deps = [
         "//src/datasystem/common/util:status_helper",
@@ -269,10 +269,10 @@ ds_cc_library(
 ds_cc_library(
     name = "object_cache_recovery_state",
     srcs = [
-        "object_cache_recovery_state.cpp",
+        "recovery/object_cache_recovery_state.cpp",
     ],
     hdrs = [
-        "object_cache_recovery_state.h",
+        "recovery/object_cache_recovery_state.h",
     ],
     deps = [
         "//src/datasystem/common/shared_memory:common_shared_memory",

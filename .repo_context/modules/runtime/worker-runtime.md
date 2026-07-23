@@ -264,7 +264,9 @@
 - Current refactor status:
   - `WorkerRuntimeFacade` hides runtime state internals and provides the service-facing admission/recovery contract;
   - `ObjectCacheRecoveryState` owns metadata evidence, ownership evidence, resource readiness generation, and injected
-    evidence-ready callback dispatch;
+    evidence-ready callback dispatch; object-cache recovery state/evidence files are physically grouped under
+    `src/datasystem/worker/object_cache/recovery` so metadata/slot/resource recovery aggregation is not scattered in
+    the object-cache root;
   - object-cache Get metadata fallback uses `IObjectMetadataReader`, with concrete coordination reads isolated in
     `CoordinationObjectMetadataReader`;
   - central metadata endpoint claim/read policy is isolated in `CentralMetadataAddressResolver`;
@@ -294,6 +296,12 @@
     0.06s, the full topology admission group passed 15/15 in 0.05s, the CLion remote `tests-index` build passed in
     109s with URMA Mock and third-party cache reuse in 0s, and the worker runtime/module boundary guard passed 38/38 in
     0.048s;
+  - object-cache recovery directory refactor TDD evidence: boundary RED failed 36/38 with missing
+    `object_cache/recovery` paths before the move; after moving recovery state/evidence files under
+    `src/datasystem/worker/object_cache/recovery`, the worker runtime/module boundary guard passed 38/38 in 0.060s,
+    CLion remote `tests-index` passed in 209s with URMA Mock and third-party cache reuse in 1s,
+    `ObjectCacheRecoveryStateTest.*:ObjectCacheRecoveryEvidenceTest.*` passed 13/13 in 0.05s, and focused
+    `WorkerOcServiceImplTest` recovery evidence cases passed 5/5 in 0.06s;
   - CLion remote `index` after classifier move: passed in 92s with third-party cache reuse in 0s and 693 compile
     database entries;
   - CLion remote `tests-index` after classifier move: passed in 513s with URMA Mock, third-party cache reuse in 0s,
@@ -345,6 +353,9 @@
   - disabled-slot/passive-scale runtime reopening: 1/1 in 0.06s, full
     `WorkerTopologyAvailabilityAdmissionTest.*` group 15/15 in 0.05s, CLion remote `tests-index` in 109s with URMA
     Mock and third-party cache reuse in 0s, and worker runtime/module boundary script 38/38 in 0.048s;
+  - object-cache recovery directory refactor: worker runtime/module boundary script 38/38 in 0.060s, CLion remote
+    `tests-index` in 209s with URMA Mock and third-party cache reuse in 1s, recovery state/evidence UTs 13/13 in
+    0.05s, and focused WorkerOcServiceImpl recovery evidence UTs 5/5 in 0.06s;
   - post-classifier ownership guard: worker runtime/module boundary 36/36 in 0.09s;
   - post-classifier focused UTs: cluster classifier 8/8 in 0.03s, runtime facade 2/2 in 0.05s, topology keepalive
     scope 3/3 in 0.04s, object-cache recovery state 6/6 in 0.05s;

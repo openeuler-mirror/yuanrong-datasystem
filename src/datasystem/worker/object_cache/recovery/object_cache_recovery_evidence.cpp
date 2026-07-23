@@ -14,7 +14,7 @@
 /**
  * Description: Object cache recovery evidence builders.
  */
-#include "datasystem/worker/object_cache/object_cache_recovery_evidence.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_recovery_evidence.h"
 
 #include <sstream>
 
