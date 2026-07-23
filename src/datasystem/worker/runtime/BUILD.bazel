@@ -84,6 +84,20 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "worker_topology_runtime",
+    srcs = [
+        "worker_topology_runtime.cpp",
+    ],
+    hdrs = [
+        "worker_topology_runtime.h",
+    ],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
     name = "worker_topology_availability_admission",
     srcs = [
         "worker_topology_availability_admission.cpp",
@@ -171,6 +185,7 @@ ds_cc_library(
         ":worker_runtime_state",
         ":worker_runtime_types",
         ":worker_service_admission",
+        ":worker_topology_runtime",
         ":worker_topology_availability_admission",
     ],
 )

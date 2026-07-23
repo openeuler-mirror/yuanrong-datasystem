@@ -318,6 +318,11 @@
     metadata/slot adapters. `WorkerOCServer` remains the composition root that converts the selected
     `ICoordinationBackend` into `ObjectCacheRecoveryDependencies`, while `WorkerOCServiceImpl` consumes only
     `ObjectMetadataReader` and `SlotRecoveryStore` ports;
+  - `WorkerOCServiceImpl` no longer retains `cluster::TopologyEngine` either. It consumes the narrow
+    `worker::IWorkerTopologyRuntime` port for member-lease, lifecycle mark, reconciliation-done, and routing-host-id
+    queries. `WorkerOCServer` remains the composition root that adapts the owned `TopologyEngine` through
+    `WorkerTopologyRuntimeAdapter`, and public worker/object-cache headers use forward declarations so the adapter
+    implementation does not leak through runtime boundaries;
   - object-cache Get metadata fallback uses `IObjectMetadataReader`, with concrete coordination reads isolated in
     `CoordinationObjectMetadataReader`;
   - central metadata endpoint claim/read policy is isolated in `CentralMetadataAddressResolver`;
@@ -364,6 +369,12 @@
     Focused UTs passed: restart reconciliation 1/1 in 0.05s, metadata header 7/7 in 0.06s,
     `WorkerOcServiceImplTest.*` 72/72 in 11.18s, worker runtime/module boundary 40/40 in 0.052s, and
     `git diff --check` passed;
+  - topology runtime port extraction evidence: worker runtime/module boundary guard passed 41/41 in 0.317s; CLion
+    remote CMake build of `ds_ut_object` reused the third-party cache and passed the focused
+    `WorkerGetHashRingTest.*:WorkerOcServiceImplTest.*Recovery*:WorkerOcServiceImplTest.*Reconciliation*:WorkerOcServiceImplTest.*Evidence*`
+    group 29/29 in 25ms; Bazel 7.4.1 with `--config=urma_mock` passed
+    `//tests/ut/worker:worker_oc_service_impl_test` cold after sync in 364.739s with test time 12.6s and hot after
+    header dependency slimming in 63.627s with test time 12.5s;
   - CLion remote `index` after classifier move: passed in 92s with third-party cache reuse in 0s and 693 compile
     database entries;
   - CLion remote `tests-index` after classifier move: passed in 513s with URMA Mock, third-party cache reuse in 0s,
@@ -418,6 +429,9 @@
   - object-cache recovery directory refactor: worker runtime/module boundary script 38/38 in 0.060s, CLion remote
     `tests-index` in 209s with URMA Mock and third-party cache reuse in 1s, recovery state/evidence UTs 13/13 in
     0.05s, and focused WorkerOcServiceImpl recovery evidence UTs 5/5 in 0.06s;
+  - topology runtime port extraction: worker runtime/module boundary script 41/41 in 0.317s, focused
+    WorkerGetHashRing/WorkerOcServiceImpl recovery evidence group 29/29 in 25ms, and Bazel 7.4.1
+    `//tests/ut/worker:worker_oc_service_impl_test` hot run in 63.627s with URMA Mock enabled;
   - object-cache recovery startup hook extraction: focused startup hook UTs 2/2 in 0.05s, recovery state UTs 8/8 in
     0.05s, worker runtime/module boundary script 39/39 in 0.172s, and `git diff --check` passed;
   - object-cache recovery dependency injection: CLion remote `tests-index` in 215s with URMA Mock and third-party cache

@@ -25,6 +25,7 @@
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
 #include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/worker/metadata_route_resolver.h"
+#include "datasystem/worker/runtime/worker_topology_runtime.h"
 #include "ut/cluster/testing/fake_coordinator_service_proxy.h"
 
 namespace datasystem::ut {
@@ -93,7 +94,9 @@ public:
             .UseCoordinator(proxy_, std::move(ingress))
             .SetPhaseCallbacks(callbacks_)
             .SetNodeDeadTimeout(std::chrono::seconds(30));
-        return builder.Build(engine_);
+        RETURN_IF_NOT_OK(builder.Build(engine_));
+        runtime_ = std::make_unique<worker::WorkerTopologyRuntimeAdapter>(engine_.get());
+        return Status::OK();
     }
 
     cluster::TopologyEngine *Engine() const
@@ -101,10 +104,16 @@ public:
         return engine_.get();
     }
 
+    worker::IWorkerTopologyRuntime *Runtime() const
+    {
+        return runtime_.get();
+    }
+
 private:
     cluster::testing::FakeCoordinatorServiceProxy proxy_;
     TestTopologyPhaseCallbacks callbacks_;
     std::unique_ptr<cluster::TopologyEngine> engine_;
+    std::unique_ptr<worker::WorkerTopologyRuntimeAdapter> runtime_;
 };
 
 inline ObjectTopologyTestRuntime &GetObjectTopologyTestRuntime()

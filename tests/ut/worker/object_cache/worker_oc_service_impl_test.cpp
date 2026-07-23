@@ -473,7 +473,7 @@ public:
             std::make_shared<WorkerOcServiceGlobalReferenceImpl>(param, globalRefTable_, nullptr, localAddress_);
         impl_ = std::make_shared<WorkerOCServiceImpl>(
             localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr,
-            ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Engine(), metadataRoute_,
+            ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Runtime(), metadataRoute_,
             topologyRuntime_.Engine()->Membership(), &exitRequested_, topologyRuntime_.Engine()->IsRestart(), false);
         dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, nullptr,
                                                                         gRefProc_, deleteProc_, nullptr, metadataRoute_,
@@ -531,7 +531,7 @@ public:
     {
         return std::make_shared<WorkerOCServiceImpl>(
             localAddress_, localAddress_, objectTable_, akSkManager, evictionManager_, nullptr,
-            ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Engine(), metadataRoute_,
+            ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Runtime(), metadataRoute_,
             topologyRuntime_.Engine()->Membership(), &exitRequested_, topologyRuntime_.Engine()->IsRestart(), false);
     }
 
@@ -1407,7 +1407,7 @@ TEST_F(WorkerOcServiceImplTest, RestartReconciliationMarksRuntimeRecoveringBefor
 {
     auto restartService = std::make_shared<WorkerOCServiceImpl>(
         localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr,
-        ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Engine(), metadataRoute_,
+        ObjectCacheRecoveryDependencies{}, nullptr, topologyRuntime_.Runtime(), metadataRoute_,
         topologyRuntime_.Engine()->Membership(), &exitRequested_, true, true);
     restartService->InitServiceImpl();
     worker::WorkerRuntimeFacade runtime;

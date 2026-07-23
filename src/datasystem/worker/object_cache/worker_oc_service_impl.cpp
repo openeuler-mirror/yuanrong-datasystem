@@ -114,6 +114,7 @@
 #include "datasystem/worker/object_cache/service/worker_oc_service_crud_common_api.h"
 #include "datasystem/worker/object_cache/verify_leaving_state.h"
 #include "datasystem/worker/object_cache/worker_oc_spill.h"
+#include "datasystem/worker/runtime/worker_topology_runtime.h"
 #include "datasystem/worker/worker_health_check.h"
 
 DS_DEFINE_int32(oc_thread_num, 32, "Thread number of worker service");
@@ -325,7 +326,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(
     HostPort serverAddr, HostPort masterAddr, std::shared_ptr<ObjectTable> objectTable,
     std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
     std::shared_ptr<PersistenceApi> persistApi, ObjectCacheRecoveryDependencies recoveryDependencies,
-    MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
+    MasterOCServiceImpl *masterOCService, worker::IWorkerTopologyRuntime *topologyRuntime,
     const worker::MetadataRouteResolver &metadataRoute, const cluster::MembershipEndpointView &membership,
     const std::atomic<bool> *exitRequested, bool isRestart, bool controlBackendAvailableAtStartup)
     : WorkerOCService(std::move(serverAddr)),
@@ -334,7 +335,7 @@ WorkerOCServiceImpl::WorkerOCServiceImpl(
       objectTable_(std::move(objectTable)),
       evictionManager_(std::move(evictionManager)),
       recoveryDependencies_(std::move(recoveryDependencies)),
-      topologyEngine_(topologyEngine),
+      topologyRuntime_(topologyRuntime),
       metadataRoute_(metadataRoute),
       membership_(membership),
       endpointPolicy_(metadataRoute, membership),
@@ -1319,7 +1320,7 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
 {
     LOG(INFO) << "Begin to recover metadata of restarted worker: " << workerAddr
               << ", local worker: " << localAddress_.ToString();
-    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "topologyEngine is null");
+    CHECK_FAIL_RETURN_STATUS(topologyRuntime_ != nullptr, K_RUNTIME_ERROR, "topology runtime is null");
     CHECK_FAIL_RETURN_STATUS(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR, "metadataRecoveryManager is null");
     HostPort restartedAddress;
     RETURN_IF_NOT_OK(restartedAddress.ParseString(workerAddr));
@@ -1571,7 +1572,7 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         }
         if (req.is_restart()) {
             LOG(INFO) << "Restart finish. Set health file.";
-            if (!topologyEngine_->HasEstablishedMemberLease() && controlBackendAvailableAtStartup_) {
+            if (!topologyRuntime_->HasEstablishedMemberLease() && controlBackendAvailableAtStartup_) {
                 RETURN_STATUS(K_NOT_READY,
                               "Setting the health file is not allowed before the first lease is successfully created");
             }
@@ -1581,9 +1582,9 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         }
         if (exitRequested_ != nullptr && exitRequested_->load()) {
             INJECT_POINT("recover.toexiting.delay");
-            RETURN_IF_NOT_OK(topologyEngine_->MarkExiting());
+            RETURN_IF_NOT_OK(topologyRuntime_->MarkExiting());
         } else {
-            RETURN_IF_NOT_OK(topologyEngine_->NotifyReconciliationDone());
+            RETURN_IF_NOT_OK(topologyRuntime_->NotifyReconciliationDone());
             if (!req.is_restart()) {
                 MarkReconciliationEvidenceReady("membership_reconciliation metadata owners completed");
             }
@@ -2736,7 +2737,7 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
 
 Status WorkerOCServiceImpl::UpdateLocalNodeReady()
 {
-    return topologyEngine_->MarkReady();
+    return topologyRuntime_->MarkReady();
 }
 
 Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, std::string &finishReason,
@@ -2754,7 +2755,7 @@ Status WorkerOCServiceImpl::CheckGiveUpReconciliationAfterLock(int64_t waitMs, s
         finishReason = FormatString("waiting for reconciliation, expected: %d", hashWorkerNum);
         return Status::OK();
     }
-    if (!topologyEngine_->HasEstablishedMemberLease()) {
+    if (!topologyRuntime_->HasEstablishedMemberLease()) {
         finishReason = "first keepalive is not sent";
         return Status::OK();
     }
@@ -3180,12 +3181,12 @@ Status WorkerOCServiceImpl::GetHashRing(const GetHashRingReqPb &req, GetHashRing
     ScopedRequestContext ctx;
     RETURN_RUNTIME_ERROR_IF_NULL(akSkManager_);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    RETURN_RUNTIME_ERROR_IF_NULL(topologyEngine_);
+    RETURN_RUNTIME_ERROR_IF_NULL(topologyRuntime_);
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(membership_.GetSnapshot(snapshot));
     auto loadHostIds = [this](RoutingHostIdMap &hostIdMap) {
         std::unordered_map<std::string, std::string> hostIds;
-        RETURN_IF_NOT_OK(topologyEngine_->GetRoutingHostIds(hostIds));
+        RETURN_IF_NOT_OK(topologyRuntime_->GetRoutingHostIds(hostIds));
         hostIdMap.insert(hostIds.begin(), hostIds.end());
         return Status::OK();
     };

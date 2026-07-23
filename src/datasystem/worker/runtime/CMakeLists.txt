@@ -42,6 +42,10 @@ add_library(worker_runtime_facade STATIC worker_runtime_facade.cpp)
 target_include_directories(worker_runtime_facade PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(worker_runtime_facade PUBLIC worker_admission_facade worker_recovery_controller)
 
+add_library(worker_topology_runtime STATIC worker_topology_runtime.cpp)
+target_include_directories(worker_topology_runtime PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(worker_topology_runtime PUBLIC cluster_topology common_util)
+
 add_library(worker_control_backend_probe STATIC worker_control_backend_probe.cpp)
 target_include_directories(worker_control_backend_probe PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(worker_control_backend_probe PRIVATE common_log common_util)
@@ -57,6 +61,7 @@ target_link_libraries(worker_runtime_core INTERFACE
         worker_runtime_state
         worker_runtime_types
         worker_service_admission
+        worker_topology_runtime
         worker_topology_availability_admission
         )
 

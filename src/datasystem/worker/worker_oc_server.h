@@ -86,6 +86,7 @@
 
 namespace datasystem::worker {
 class WorkerIsolationCoordinator;
+class WorkerTopologyRuntimeAdapter;
 
 class WorkerOCServer : public CommonServer {
 public:
@@ -759,6 +760,7 @@ private:
     // ResourceManager's rebalance scheduler borrows MembershipEndpointView from this engine. The destructor must reset
     // resourceManager_ before resetting topologyEngine_; declaration order provides the same fallback ordering.
     std::unique_ptr<cluster::TopologyEngine> topologyEngine_{ nullptr };
+    std::unique_ptr<WorkerTopologyRuntimeAdapter> workerTopologyRuntime_{ nullptr };
     std::unique_ptr<MetadataRouteResolver> metadataRouteResolver_{ nullptr };
     std::unique_ptr<object_cache::ObjectEndpointPolicy> objectEndpointPolicy_{ nullptr };
     std::atomic<bool> topologyExitRequested_{ false };

@@ -440,6 +440,23 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         target_slice = target_slice.split("ds_cc_library(", 1)[0]
         self.assertNotIn("common/kvstore/etcd:etcd_store", target_slice)
 
+    def test_object_cache_service_uses_topology_runtime_port_not_engine(self):
+        files = [
+            REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.h",
+            REPO_ROOT / "src/datasystem/worker/object_cache/worker_oc_service_impl.cpp",
+        ]
+
+        for file_path in files:
+            text = file_path.read_text(encoding="utf-8")
+            self.assertIn("topologyRuntime", text, f"{file_path} should depend on the narrow topology runtime port")
+            forbidden_tokens = [
+                "datasystem/cluster/runtime/topology_engine.h",
+                "cluster::TopologyEngine",
+                "topologyEngine_",
+            ]
+            for token in forbidden_tokens:
+                self.assertNotIn(token, text, f"{file_path} should not directly depend on TopologyEngine")
+
     def test_get_service_uses_metadata_reader_not_coordination_backend(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/service/BUILD.bazel",

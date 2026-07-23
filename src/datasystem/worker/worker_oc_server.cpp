@@ -99,6 +99,7 @@
 #include "datasystem/worker/runtime/worker_isolation_coordinator.h"
 #include "datasystem/worker/runtime/worker_control_backend_probe.h"
 #include "datasystem/worker/rebalance_executor.h"
+#include "datasystem/worker/runtime/worker_topology_runtime.h"
 #include "datasystem/worker/runtime/worker_topology_phase_callbacks.h"
 
 DS_DECLARE_bool(use_brpc);
@@ -776,9 +777,10 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
             std::make_shared<object_cache::CoordinationSlotRecoveryStore>(metadataCoordinationBackend_.get());
     }
     // create WorkerOCServices
+    workerTopologyRuntime_ = std::make_unique<WorkerTopologyRuntimeAdapter>(topologyEngine_.get());
     objCacheClientWorkerSvc_ = std::make_shared<datasystem::object_cache::WorkerOCServiceImpl>(
         hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, recoveryDependencies,
-        objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
+        objCacheMasterSvc_.get(), workerTopologyRuntime_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
         &topologyExitRequested_, topologyEngine_->IsRestart(), true);
     objCacheClientWorkerSvc_->SetRuntimeFacade(&workerRuntime_);
     objCacheClientWorkerSvc_->RegisterRecoveryEvidenceReadyHandler(

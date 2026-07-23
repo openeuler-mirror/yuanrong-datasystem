@@ -71,7 +71,6 @@
 #include "datasystem/cluster/routing/placement_types.h"
 #include "datasystem/worker/authenticate.h"
 #include "datasystem/worker/client_manager/client_manager.h"
-#include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/worker/object_cache/async_rpc_request_manager.h"
 #include "datasystem/worker/object_cache/async_send_manager.h"
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
@@ -99,7 +98,8 @@ class MasterOCServiceImpl;
 }
 namespace worker {
 class WorkerMasterOCApi;
-}
+class IWorkerTopologyRuntime;
+}  // namespace worker
 namespace object_cache {
 
 using QueryMetaMap = std::unordered_map<std::string, master::QueryMetaInfoPb>;
@@ -127,7 +127,7 @@ public:
      * @param[in] persistApi Persistence service client.
      * @param[in] recoveryDependencies Object-cache recovery dependencies injected by the composition root.
      * @param[in] masterOCService The master service.
-     * @param[in] topologyEngine Borrowed topology lifecycle and query service.
+     * @param[in] topologyRuntime Borrowed topology lifecycle and query service.
      * @param[in] metadataRoute Metadata owner resolver that outlives this service.
      * @param[in] membership Membership query capability that outlives this service.
      * @param[in] exitRequested Local graceful-exit flag that outlives this service.
@@ -138,7 +138,7 @@ public:
                         std::shared_ptr<AkSkManager> manager, std::shared_ptr<WorkerOcEvictionManager> evictionManager,
                         std::shared_ptr<PersistenceApi> persistApi,
                         ObjectCacheRecoveryDependencies recoveryDependencies,
-                        master::MasterOCServiceImpl *masterOCService, cluster::TopologyEngine *topologyEngine,
+                        master::MasterOCServiceImpl *masterOCService, worker::IWorkerTopologyRuntime *topologyRuntime,
                         const worker::MetadataRouteResolver &metadataRoute,
                         const cluster::MembershipEndpointView &membership, const std::atomic<bool> *exitRequested,
                         bool isRestart, bool controlBackendAvailableAtStartup);
@@ -1286,7 +1286,7 @@ private:
                                       std::vector<std::string> &objectKeysNotInRsp);
 
     /**
-     * @brief Check whether the size of the node table in TopologyEngine equals to the number of running workers.
+     * @brief Check whether the size of the topology node table equals to the number of running workers.
      * If not, wait until they are equal or time is out.
      * @return Status
      */
@@ -1381,7 +1381,7 @@ private:
     std::shared_ptr<WorkerOcEvictionManager> evictionManager_;
     std::shared_ptr<WorkerDeviceOcManager> workerDevOcManager_{ nullptr };
     ObjectCacheRecoveryDependencies recoveryDependencies_;
-    cluster::TopologyEngine *topologyEngine_{ nullptr };  // Non-owning lifecycle service owned by Worker Host.
+    worker::IWorkerTopologyRuntime *topologyRuntime_{ nullptr };  // Non-owning lifecycle service owned by Worker Host.
     const worker::MetadataRouteResolver &metadataRoute_;
     const cluster::MembershipEndpointView &membership_;
     ObjectEndpointPolicy endpointPolicy_;
