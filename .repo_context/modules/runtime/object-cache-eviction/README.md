@@ -157,6 +157,8 @@
   - `SPILL` 成功后才释放内存并标记 spill state；重加锁失败时需要回滚 spill 文件。
   - spill eviction 只删除 write-through、write-back 且 writeback done、或 `NONE_L2_CACHE_EVICT` 对象。
   - master metadata 删除失败的对象必须回到 eviction list，避免静默丢失候选。
+  - eviction `RemoveMeta` 只允许初始 metadata owner 重定向一次；转发请求使用 `redirect=false`，目标若仍返回
+    redirect、`meta_is_moving` 或 failed ids，则相关对象保留重试资格，不继续递归转发。
 - Observability or debugging hooks:
   - Logs: `Eviction start`, `Evict is going on`, `EvictionList size before/after evict`, `Spill eviction list size before/after evict`。
   - Perf keys: `WORKER_EVICT_LIST_ADD`, `WORKER_EVICT_LIST_ERASE`, `WORKER_EVICT_LIST_FIND`, `WORKER_EVICT_ONE_OBJECT`, `WORKER_EVICT_DELETE`, `WORKER_EVICT_FREE`。

@@ -18,10 +18,14 @@
  * Description: Test EvictionManager.
  */
 #include <fcntl.h>
+#include <functional>
 #include <vector>
+
+#include <gmock/gmock.h>
 
 #include "securec.h"
 
+#include "../../../common/binmock/binmock.h"
 #include "bench_helper.h"
 #include "ut/common.h"
 #include "datasystem/common/constants.h"
@@ -56,6 +60,31 @@ DS_DECLARE_string(etcd_address);
 
 namespace datasystem {
 namespace ut {
+
+class FakeEvictionMasterApi final : public worker::WorkerLocalMasterOCApi {
+public:
+    using RemoveMetaHandler = std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)>;
+
+    FakeEvictionMasterApi(const HostPort &localAddress, RemoveMetaHandler handler)
+        : WorkerLocalMasterOCApi(nullptr, localAddress, nullptr), handler_(std::move(handler))
+    {
+    }
+
+    ~FakeEvictionMasterApi() override = default;
+
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
+    Status RemoveMeta(master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) override
+    {
+        return handler_(request, response);
+    }
+
+private:
+    RemoveMetaHandler handler_;
+};
 
 class EvictionManagerTest : public CommonTest, public EvictionManagerCommon {
 public:
@@ -98,7 +127,7 @@ public:
         DS_ASSERT_OK(DeleteObject("id3"));
     }
 
-    void TestEvictionRemoveMetaRequestEnablesRedirect()
+    void TestEvictionRemoveMetaRequestRespectsRedirectPolicy()
     {
         WorkerOcEvictionManager::EvictDeletedObjects objectKeyVersions{ { "id1", 11 }, { "id2", 12 } };
         std::vector<std::string> objectKeys{ "id1", "id2" };
@@ -114,6 +143,70 @@ public:
         EXPECT_EQ(req.id_with_version(0).version(), 11U);
         EXPECT_EQ(req.id_with_version(1).id(), "id2");
         EXPECT_EQ(req.id_with_version(1).version(), 12U);
+
+        auto forwardedReq = WorkerOcEvictionManager::BuildEvictionRemoveMetaReq(
+            objectKeys, objectKeyVersions, HostPort("127.0.0.1", 31501), false);
+        EXPECT_FALSE(forwardedReq.redirect());
+    }
+
+    void TestEvictionRedirectStopsAtForwardedTarget()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31502);
+        const HostPort targetMaster("127.0.0.1", 31503);
+        const std::string objectKey = "redirected-eviction-key";
+        size_t sourceCalls = 0;
+        size_t targetCalls = 0;
+        bool targetAllowsRedirect = true;
+
+        auto sourceApi = std::make_shared<FakeEvictionMasterApi>(
+            sourceMaster, [&](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+                ++sourceCalls;
+                response.Clear();
+                if (sourceCalls > 1) {
+                    return Status(K_RUNTIME_ERROR, "redirect loop reached source master again");
+                }
+                EXPECT_TRUE(request.redirect());
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(targetMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                return Status::OK();
+            });
+        auto targetApi = std::make_shared<FakeEvictionMasterApi>(
+            targetMaster, [&](master::RemoveMetaReqPb &request, master::RemoveMetaRspPb &response) {
+                ++targetCalls;
+                targetAllowsRedirect = request.redirect();
+                response.Clear();
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(sourceMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                return Status::OK();
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Invoke(
+                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                    master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                    if (masterAddress.ToString() == targetMaster.ToString()) {
+                        return targetApi;
+                    }
+                    return sourceApi;
+                }));
+
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), sourceMaster,
+                                        GetTestMetadataRoute());
+        WorkerOcEvictionManager::EvictDeletedObjects objectKeyVersions{ { objectKey, 1 } };
+        WorkerOcEvictionManager::EvictDeletedObjects failedObjects;
+        Status lastRc;
+        manager.RemoveEvictionMetaGroup(sourceMaster, { objectKey }, objectKeyVersions, failedObjects, lastRc);
+        RELEASE_STUBS
+
+        EXPECT_EQ(sourceCalls, 1U);
+        EXPECT_EQ(targetCalls, 1U);
+        EXPECT_FALSE(targetAllowsRedirect);
+        ASSERT_EQ(failedObjects.size(), 1U);
+        EXPECT_EQ(failedObjects.at(objectKey), 1U);
+        EXPECT_EQ(lastRc.GetCode(), K_TRY_AGAIN);
     }
 
     static constexpr uint64_t TEST_DATA_SIZE = 10 * 1024 * 1024;
@@ -207,9 +300,14 @@ TEST_F(EvictionManagerTest, TestEvictionManagerInit)
     ASSERT_EQ(objsInList.size(), size_t(0));
 }
 
-TEST_F(EvictionManagerTest, EvictionRemoveMetaRequestEnablesRedirect)
+TEST_F(EvictionManagerTest, EvictionRemoveMetaRequestRespectsRedirectPolicy)
 {
-    TestEvictionRemoveMetaRequestEnablesRedirect();
+    TestEvictionRemoveMetaRequestRespectsRedirectPolicy();
+}
+
+TEST_F(EvictionManagerTest, EvictionRedirectStopsAtForwardedTarget)
+{
+    TestEvictionRedirectStopsAtForwardedTarget();
 }
 
 TEST_F(EvictionManagerTest, AddTracksObjectTableAndEvictionCounters)
