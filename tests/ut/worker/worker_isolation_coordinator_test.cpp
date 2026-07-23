@@ -28,18 +28,18 @@ TEST(WorkerIsolationCoordinatorTest, LocalIsolationClosesAdmissionAndKeepsProces
     EXPECT_FALSE(admissionOpen);
 }
 
-TEST(WorkerIsolationCoordinatorTest, LocalRecoveryKeepsAdmissionClosed)
+TEST(WorkerIsolationCoordinatorTest, LocalRecoveryReopensAdmission)
 {
     WorkerRuntimeFacade runtime;
-    bool admissionOpen = true;
+    bool admissionOpen = false;
     WorkerIsolationCoordinatorHooks hooks;
     hooks.setTopologyServingAdmission = [&](bool open) { admissionOpen = open; };
     WorkerIsolationCoordinator coordinator(runtime, std::move(hooks));
 
     coordinator.OnLocalRecovery();
 
-    EXPECT_EQ(runtime.GetSnapshot().mode, WorkerServiceMode::RECOVERING);
-    EXPECT_FALSE(admissionOpen);
+    EXPECT_EQ(runtime.GetSnapshot().mode, WorkerServiceMode::RUNNING);
+    EXPECT_TRUE(admissionOpen);
 }
 }  // namespace
 }  // namespace datasystem::worker

@@ -35,10 +35,15 @@ void WorkerIsolationCoordinator::OnLocalIsolation(const Status &status)
 void WorkerIsolationCoordinator::OnLocalRecovery()
 {
     runtime_.MarkRecovering(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION,
-                            "control backend keepalive renewal recovered; keep business admission closed",
+                            "control backend keepalive renewal recovered; reopen after serving evidence",
                             WorkerRecoveryPhase::MEMBERSHIP);
+    WorkerRunningEvidence evidence;
+    evidence.membershipReady = true;
+    evidence.topologyReady = true;
+    evidence.resourceReady = true;
+    const bool serving = runtime_.TryMarkRunning(evidence, "control backend keepalive renewal recovered");
     if (hooks_.setTopologyServingAdmission != nullptr) {
-        hooks_.setTopologyServingAdmission(false);
+        hooks_.setTopologyServingAdmission(serving);
     }
 }
 }  // namespace datasystem::worker
