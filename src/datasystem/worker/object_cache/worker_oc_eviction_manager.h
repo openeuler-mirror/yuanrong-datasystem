@@ -518,6 +518,15 @@ private:
                                               std::unordered_set<std::string> &failedKeys);
 
     /**
+     * @brief Collect primary end-life failures while treating no-meta and outdated versions as completed.
+     * @param[in] rsp The DeleteAllCopyMeta response.
+     * @param[out] failedKeys Keys that should not proceed to local erase.
+     * @return Batch error only when it cannot be attributed to specific failed keys.
+     */
+    static Status CollectPrimaryEndLifeDeleteResult(const master::DeleteAllCopyMetaRspPb &rsp,
+                                                    std::unordered_set<std::string> &failedKeys);
+
+    /**
      * @brief Collect failed keys from a DeleteAllCopyMeta response, including redirect and moving metadata cases.
      * @param[in] rsp The DeleteAllCopyMeta response.
      * @param[out] failedKeys Keys that should not proceed to local erase.

@@ -39,9 +39,12 @@
   - 当前分支已将 memory eviction 主 loop 中的所有 `Action::END_LIFE` 投递到独立 fixed-1 primary end-life lane；`EvictSpilledObjects` 和 `SpillImpl` no-space fallback 仍保持同步。
   - primary end-life lane 使用 `objectKey -> entry->GetCreateTime()` pending 去重，pending 上限使用源码内固定常量，不新增用户可见配置；成功前不得 erase 本地对象。
   - primary end-life lane 需要 drain 内部 queue，并将同一个 master 的 key 聚合为 batch `DeleteAllCopyMeta`；不同 master 必须拆成不同请求，batch 使用 repeated `ids_with_version`。
-  - primary end-life 的 `DeleteAllCopyMeta` 必须检查 `failed_object_keys`、`outdated_objs`、
-    `objs_without_meta`、redirect info、`meta_is_moving` 和 `last_rc`，并对每个 batch 使用 5s API
+  - primary end-life 复用现有 `DeleteAllCopyMeta` 响应：`objs_without_meta` 和 `outdated_objs` 表示当前
+    incarnation 的 metadata 已无需删除，按幂等完成处理；仅 `failed_object_keys` 和 redirect key 做逐 key
+    重试，`meta_is_moving` 或无法归因到具体 key 的 `last_rc` 错误才整批重试。每个 batch 使用 3s API
     总超时预算。
+  - Master 不新增结果协议，只保证创建中 key 进入 `failed_object_keys`，且初次 no-meta 后 metadata 回生或
+    key 已被提前判失败时不再执行 metadata cleanup。
   - pending 上限只限制 key 数，不限制对象字节数；primary lane 必须在发送 `DeleteAllCopyMeta` 前用触发本次
     eviction 的 `needSize` 复查 low watermark，并按对象大小控制 batch 预计释放量，已达低水位则跳过本次
     end-life、清 pending 并回补 eviction list，避免大对象 queued primary 后续造成过度释放。
@@ -172,8 +175,9 @@
   直接视为已有 task 接管，lane drain 内部 queue 并按 master 聚合 batch
   `DeleteAllCopyMeta`，batch 使用 repeated
   `ids_with_version`，lane 用固定短重试和不依赖 eviction list membership 的窄 guard helper 复核状态，发送
-  `DeleteAllCopyMeta` 前复查 low watermark 并按对象大小控制 batch 预计释放量以避免大对象过度释放，5s
-  `DeleteAllCopyMeta` 总预算，`failed_object_keys`、`outdated_objs`、`objs_without_meta`、redirect info 或
-  `meta_is_moving` 均不得本地 erase，失败统一用 `READD_COUNTER` 回补 eviction list 但不主动触发 `Evict()`。
+  `DeleteAllCopyMeta` 前复查 low watermark 并按对象大小控制 batch 预计释放量以避免大对象过度释放，3s
+  `DeleteAllCopyMeta` 总预算；`objs_without_meta` 和 `outdated_objs` 按幂等完成处理，仅明确失败、
+  redirect、meta moving 或无法归因的批次错误使用 `READD_COUNTER` 回补 eviction list，且不主动触发
+  `Evict()`。
 - 如果未来要让 memory eviction 真正并发，需要先设计候选队列并发、对象锁竞争、低水位判断和 batch flush 的一致性，不能恢复 `eviction_thread_num` 作为调优入口。
 - 如果未来扩展到 `EvictSpilledObjects` 或 `SpillImpl` fallback 异步化，需要单独定义 spill eviction list erase、compact 触发和 spill 成功收尾语义。
