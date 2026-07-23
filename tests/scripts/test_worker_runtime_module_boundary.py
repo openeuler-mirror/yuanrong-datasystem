@@ -203,6 +203,19 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         for token in forbidden_tokens:
             self.assertNotIn(token, text, f"{header} should not expose runtime implementation headers")
 
+    def test_worker_oc_server_uses_facade_for_topology_availability(self):
+        server = REPO_ROOT / "src/datasystem/worker/worker_oc_server.cpp"
+        text = server.read_text(encoding="utf-8")
+        forbidden_tokens = [
+            "datasystem/worker/runtime/worker_topology_availability_admission.h",
+            "ApplyTopologyAvailabilityToRuntimeState",
+            "RefreshTopologyAvailabilityAdmission",
+            "ShouldOpenTopologyServingAdmission",
+            "worker::ShouldRequestObjectCacheRecoveryEvidence",
+        ]
+        for token in forbidden_tokens:
+            self.assertNotIn(token, text, f"{server} should use WorkerRuntimeFacade topology methods")
+
     def test_master_metadata_managers_use_narrow_topology_callback_inputs(self):
         files = [
             REPO_ROOT / "src/datasystem/master/object_cache/oc_metadata_manager.h",

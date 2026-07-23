@@ -17,100 +17,16 @@
 #include "datasystem/worker/runtime/worker_topology_availability_admission.h"
 
 namespace datasystem::worker {
-namespace {
-WorkerRecoveryEvidenceReport TopologyAvailableEvidenceReport(const WorkerRecoveryEvidenceReport *recoveryReport)
-{
-    WorkerRecoveryEvidenceBuilder builder;
-    builder.MarkMembershipReady("topology runtime reported membership available")
-        .MarkTopologyReady("topology runtime reported topology available");
-    std::string detail = "topology available";
-    if (recoveryReport != nullptr) {
-        if (recoveryReport->evidence.metadataReady) {
-            builder.MarkMetadataReady(recoveryReport->detail);
-        }
-        if (recoveryReport->evidence.slotReady) {
-            builder.MarkSlotReady(recoveryReport->detail);
-        }
-        if (recoveryReport->evidence.ownershipReady) {
-            builder.MarkOwnershipReady(recoveryReport->detail);
-        }
-        if (recoveryReport->evidence.resourceReady) {
-            builder.MarkResourceReady(recoveryReport->detail);
-        }
-        detail += "; " + recoveryReport->detail;
-    } else {
-        detail += "; waiting for recovery evidence";
-    }
-    return builder.BuildReport(detail);
-}
-
-WorkerRecoveryEvidenceReport ControlDegradedEvidenceReport(const WorkerRecoveryEvidenceReport *recoveryReport)
-{
-    WorkerRecoveryEvidenceBuilder builder;
-    builder.MarkMembershipReady("control backend degraded globally")
-        .MarkTopologyReady("topology scope classified control backend as globally degraded")
-        .MarkMetadataReady("object-cache metadata recovery is not required for global control backend degradation")
-        .MarkSlotReady("slot recovery is not required for global control backend degradation")
-        .MarkOwnershipReady("ownership reconciliation is not required for global control backend degradation");
-    std::string detail = "control backend globally degraded";
-    if (recoveryReport != nullptr && recoveryReport->evidence.resourceReady) {
-        builder.MarkResourceReady(recoveryReport->detail);
-        detail += "; " + recoveryReport->detail;
-    } else {
-        builder.MarkResourceReady("resource recovery is not required for global control backend degradation");
-    }
-    return builder.BuildReport(detail);
-}
-}  // namespace
-
 void ApplyTopologyAvailabilityToRuntimeState(cluster::TopologyAvailabilityLevel level, WorkerRuntimeFacade &runtime,
                                              const WorkerRecoveryEvidenceReport *recoveryReport)
 {
-    switch (level) {
-        case cluster::TopologyAvailabilityLevel::NORMAL:
-        case cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED: {
-            const auto mode = runtime.GetSnapshot().mode;
-            if (mode == WorkerServiceMode::LOCAL_ISOLATED) {
-                runtime.MarkRecovering(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION,
-                                       "topology available; validating recovery evidence",
-                                       WorkerRecoveryPhase::TOPOLOGY);
-            } else if (mode == WorkerServiceMode::OUT_OF_MEMORY) {
-                runtime.MarkRecovering(WorkerIsolationReason::OUT_OF_MEMORY,
-                                       "topology available; validating resource recovery evidence",
-                                       WorkerRecoveryPhase::RESOURCE);
-            } else if (mode == WorkerServiceMode::RUNNING
-                       && (recoveryReport == nullptr || !IsComplete(recoveryReport->evidence))) {
-                break;
-            }
-            const auto report = level == cluster::TopologyAvailabilityLevel::CONTROL_DEGRADED
-                                        && mode != WorkerServiceMode::OUT_OF_MEMORY
-                                    ? ControlDegradedEvidenceReport(recoveryReport)
-                                    : TopologyAvailableEvidenceReport(recoveryReport);
-            (void)runtime.TryCompleteRecovery(report.evidence, report.detail);
-            break;
-        }
-        case cluster::TopologyAvailabilityLevel::ROLE_ISOLATED:
-            runtime.MarkLocalIsolated(WorkerIsolationReason::TOPOLOGY_PASSIVE_SCALE_DOWN,
-                                      "topology availability is role-isolated");
-            break;
-        case cluster::TopologyAvailabilityLevel::NOT_READY:
-            runtime.MarkJoining("topology availability is not ready");
-            break;
-        case cluster::TopologyAvailabilityLevel::SHUTTING_DOWN:
-            runtime.MarkStopping(WorkerIsolationReason::PROCESS_STOPPING, "topology runtime is shutting down");
-            break;
-        default:
-            runtime.MarkRecovering(WorkerIsolationReason::RECOVERY_EVIDENCE_INCOMPLETE, "unknown topology availability",
-                                   WorkerRecoveryPhase::TOPOLOGY);
-            break;
-    }
+    (void)runtime.ApplyTopologyAvailability(level, recoveryReport);
 }
 
 bool RefreshTopologyAvailabilityAdmission(cluster::TopologyAvailabilityLevel level, WorkerRuntimeFacade &runtime,
                                           const WorkerRecoveryEvidenceReport &recoveryReport)
 {
-    ApplyTopologyAvailabilityToRuntimeState(level, runtime, &recoveryReport);
-    return ShouldOpenTopologyServingAdmission(level, runtime.GetSnapshot());
+    return runtime.ApplyTopologyAvailability(level, &recoveryReport);
 }
 
 bool ShouldOpenTopologyServingAdmission(cluster::TopologyAvailabilityLevel level,

@@ -39,5 +39,25 @@ TEST(WorkerRuntimeFacadeTest, CentralizesAdmissionRecoveryAndScaleDownTerminalSt
     EXPECT_EQ(runtime.CheckAdmission(WorkerAdmissionKind::MIGRATION_TARGET, "MigrateData").GetCode(), K_NOT_READY);
     EXPECT_EQ(runtime.GetSnapshot().mode, WorkerServiceMode::DRAINING);
 }
+
+TEST(WorkerRuntimeFacadeTest, AppliesTopologyAvailabilityWithObjectCacheEvidence)
+{
+    WorkerRuntimeFacade runtime;
+    runtime.MarkLocalIsolated(WorkerIsolationReason::CONTROL_BACKEND_LOCAL_ISOLATION, "keepalive failed");
+
+    WorkerRecoveryEvidenceBuilder pendingBuilder;
+    const auto pending = pendingBuilder.MarkMembershipReady().MarkTopologyReady().BuildReport("metadata pending");
+    EXPECT_TRUE(runtime.ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel::NORMAL, pending));
+
+    WorkerRecoveryEvidenceBuilder completeBuilder;
+    const auto complete =
+        completeBuilder.MarkMetadataReady().MarkSlotReady().MarkOwnershipReady().MarkResourceReady().BuildReport(
+            "object-cache recovery complete");
+    EXPECT_TRUE(runtime.ApplyTopologyAvailability(cluster::TopologyAvailabilityLevel::NORMAL, &complete));
+    EXPECT_FALSE(
+        runtime.ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel::NORMAL, complete));
+    EXPECT_EQ(runtime.GetSnapshot().mode, WorkerServiceMode::RUNNING);
+    EXPECT_TRUE(runtime.CheckAdmission(WorkerAdmissionKind::NORMAL_WRITE, "Create").IsOk());
+}
 }  // namespace
 }  // namespace datasystem::worker

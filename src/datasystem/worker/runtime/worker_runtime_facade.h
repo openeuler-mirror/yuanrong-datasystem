@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 
+#include "datasystem/cluster/runtime/topology_runtime_types.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/worker/runtime/worker_recovery_evidence.h"
 #include "datasystem/worker/runtime/worker_runtime_types.h"
@@ -59,6 +60,10 @@ public:
     Status CheckAdmission(WorkerAdmissionKind kind, const std::string &operation) const;
     Status AcquireAdmissionGuard(WorkerAdmissionKind kind, const std::string &operation, AdmissionGuard &guard) const;
     Status AcquireNormalReadGuard(const std::string &operation, AdmissionGuard &guard) const;
+    bool ApplyTopologyAvailability(cluster::TopologyAvailabilityLevel level,
+                                   const WorkerRecoveryEvidenceReport *recoveryReport = nullptr);
+    bool ShouldRequestObjectCacheRecoveryEvidence(cluster::TopologyAvailabilityLevel level,
+                                                  const WorkerRecoveryEvidenceReport &recoveryReport) const;
     void PublishMetrics() const;
 
 private:

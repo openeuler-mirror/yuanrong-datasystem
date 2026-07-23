@@ -95,7 +95,6 @@
 #include "datasystem/worker/worker_liveness_check.h"
 #include "datasystem/worker/worker_coordination_backend_factory.h"
 #include "datasystem/worker/runtime/worker_isolation_coordinator.h"
-#include "datasystem/worker/runtime/worker_topology_availability_admission.h"
 #include "datasystem/worker/runtime/worker_control_backend_probe.h"
 #include "datasystem/worker/rebalance_executor.h"
 #include "datasystem/worker/runtime/worker_topology_phase_callbacks.h"
@@ -1182,11 +1181,10 @@ void WorkerOCServer::RefreshTopologyServingAdmission(cluster::TopologyAvailabili
     if (objCacheClientWorkerSvc_ != nullptr) {
         const auto recoveryReport = objCacheClientWorkerSvc_->BuildObjectCacheRecoveryEvidenceReport();
         RequestObjectCacheRecoveryEvidenceIfNeeded(level, recoveryReport);
-        SetTopologyServingAdmission(RefreshTopologyAvailabilityAdmission(level, workerRuntime_, recoveryReport));
+        SetTopologyServingAdmission(workerRuntime_.ApplyTopologyAvailability(level, &recoveryReport));
         return;
     }
-    ApplyTopologyAvailabilityToRuntimeState(level, workerRuntime_);
-    SetTopologyServingAdmission(ShouldOpenTopologyServingAdmission(level, workerRuntime_.GetSnapshot()));
+    SetTopologyServingAdmission(workerRuntime_.ApplyTopologyAvailability(level));
 }
 
 void WorkerOCServer::RequestObjectCacheRecoveryEvidenceIfNeeded(cluster::TopologyAvailabilityLevel level,
@@ -1196,7 +1194,7 @@ void WorkerOCServer::RequestObjectCacheRecoveryEvidenceIfNeeded(cluster::Topolog
         objectCacheRecoveryRequestInFlight_.store(false);
         return;
     }
-    if (!worker::ShouldRequestObjectCacheRecoveryEvidence(level, workerRuntime_.GetSnapshot(), report)) {
+    if (!workerRuntime_.ShouldRequestObjectCacheRecoveryEvidence(level, report)) {
         return;
     }
     bool expected = false;
