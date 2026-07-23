@@ -639,13 +639,20 @@ void WorkerOCServiceImpl::RegisterAsyncTasksDoneChecker(AsyncTasksDoneChecker ch
 Status WorkerOCServiceImpl::SelectTopologyScaleInObjects(std::vector<std::string> &copies,
                                                          std::vector<std::string> &primaries) const
 {
+    size_t skippedEmptyObjects = 0;
     for (const auto &entryPair : *objectTable_) {
         const auto &entry = entryPair.second;
-        RETURN_IF_NOT_OK_APPEND_MSG(entry->TryRLock(), "member-wide object selection needs retry");
+        RETURN_IF_NOT_OK_APPEND_MSG(entry->TryRLock(true), "member-wide object selection needs retry");
         Raii unlock([&entry]() { entry->RUnlock(); });
+        if (entry->Get() == nullptr) {
+            ++skippedEmptyObjects;
+            continue;
+        }
         auto &destination = (*entry)->stateInfo.IsPrimaryCopy() ? primaries : copies;
         destination.emplace_back(entryPair.first);
     }
+    LOG_IF(WARNING, skippedEmptyObjects > 0)
+        << "CLUSTER_SCALE_IN action=skip_empty_local_objects count=" << skippedEmptyObjects;
     return Status::OK();
 }
 
