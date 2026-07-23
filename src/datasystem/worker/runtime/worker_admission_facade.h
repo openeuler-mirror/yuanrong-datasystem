@@ -21,6 +21,7 @@
 #include <string>
 
 #include "datasystem/worker/runtime/worker_service_admission.h"
+#include "datasystem/worker/runtime/worker_runtime_state.h"
 
 namespace datasystem::worker {
 class WorkerAdmissionFacade {

@@ -103,8 +103,7 @@ constexpr int64_t K_WAIT_FIRST_MOVING_CALL_TIMEOUT_MS = 1000;
 constexpr int64_t K_WAIT_RETRY_SLEEP_INJECT_TIMEOUT_MS = 1000;
 constexpr int64_t K_LOCK_PROBE_TIMEOUT_MS = 1000;
 
-bool WaitForInjectPointExecuteCount(const std::string &name, uint64_t expectedCount,
-                                    std::chrono::milliseconds timeout)
+bool WaitForInjectPointExecuteCount(const std::string &name, uint64_t expectedCount, std::chrono::milliseconds timeout)
 {
     auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
@@ -427,9 +426,11 @@ private:
         topology.version = TOPOLOGY_VERSION;
         topology.members = {
             cluster::Member{ { std::string(MEMBER_ID_SIZE, LOCAL_MEMBER_ID_FILL), localAddress.ToString() },
-                             cluster::MemberState::ACTIVE, { LOCAL_MEMBER_TOKEN } },
+                             cluster::MemberState::ACTIVE,
+                             { LOCAL_MEMBER_TOKEN } },
             cluster::Member{ { std::string(MEMBER_ID_SIZE, PEER_MEMBER_ID_FILL), peerAddress.ToString() },
-                             cluster::MemberState::ACTIVE, { PEER_MEMBER_TOKEN } }
+                             cluster::MemberState::ACTIVE,
+                             { PEER_MEMBER_TOKEN } }
         };
         std::shared_ptr<const cluster::TopologySnapshot> snapshot;
         RETURN_IF_NOT_OK(cluster::TopologySnapshot::Create(std::move(topology), TOPOLOGY_VERSION,
@@ -462,8 +463,8 @@ public:
         globalRefTable_ = std::make_shared<ObjectGlobalRefTable<ClientKey>>();
         localAddress_ = HostPort("127.0.0.1", 18481);
         DS_ASSERT_OK(topologyRuntime_.Init(localAddress_));
-        endpointPolicy_ = std::make_unique<ObjectEndpointPolicy>(metadataRoute_,
-                                                                 topologyRuntime_.Engine()->Membership());
+        endpointPolicy_ =
+            std::make_unique<ObjectEndpointPolicy>(metadataRoute_, topologyRuntime_.Engine()->Membership());
         evictionManager_ = std::make_shared<WorkerOcEvictionManager>(objectTable_, localAddress_, localAddress_,
                                                                      metadataRoute_, nullptr);
         WorkerOcServiceCrudParam param = MakeCrudParam();
@@ -474,9 +475,9 @@ public:
             localAddress_, localAddress_, objectTable_, nullptr, evictionManager_, nullptr, nullptr, nullptr,
             topologyRuntime_.Engine(), metadataRoute_, topologyRuntime_.Engine()->Membership(), &exitRequested_,
             topologyRuntime_.Engine()->IsRestart(), false);
-        dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(
-            objectTable_, globalRefTable_, nullptr, gRefProc_, deleteProc_, nullptr, metadataRoute_, *endpointPolicy_,
-            localAddress_.ToString());
+        dataClearImpl_ = std::make_shared<WorkerOcServiceClearDataFlow>(objectTable_, globalRefTable_, nullptr,
+                                                                        gRefProc_, deleteProc_, nullptr, metadataRoute_,
+                                                                        *endpointPolicy_, localAddress_.ToString());
         impl_->InitServiceImpl();
     }
 
@@ -1345,14 +1346,13 @@ TEST_F(WorkerOcServiceImplTest, RuntimeAdmissionGuardRejectsWhenRuntimeIsNotRunn
         SetUnhealthy();
     });
 
-    std::optional<worker::WorkerRuntimeStateReadGuard> admissionGuard;
+    worker::WorkerRuntimeFacade::AdmissionGuard admissionGuard;
     auto rc =
         runtime.AcquireAdmissionGuard(worker::WorkerAdmissionKind::NORMAL_WRITE, "ObjectCacheService", admissionGuard);
 
     ASSERT_NE(rc.GetCode(), StatusCode::K_OK);
     EXPECT_EQ(rc.GetCode(), StatusCode::K_NOT_READY);
     EXPECT_NE(rc.GetMsg().find("LOCAL_ISOLATED"), std::string::npos);
-    EXPECT_FALSE(admissionGuard.has_value());
 
     ReadLock noRecon;
     DS_ASSERT_OK(impl_->ValidateWorkerState(noRecon, 100));

@@ -19,6 +19,7 @@
 #include <sstream>
 
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/worker/runtime/worker_runtime_state.h"
 
 namespace datasystem::worker {
 namespace {

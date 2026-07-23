@@ -18,65 +18,15 @@
 #define DATASYSTEM_WORKER_WORKER_RUNTIME_STATE_H
 
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <string>
 
+#include "datasystem/worker/runtime/worker_runtime_types.h"
+
 namespace datasystem::worker {
-enum class WorkerServiceMode : std::uint8_t {
-    STARTING = 0,
-    JOINING,
-    RUNNING,
-    DRAINING,
-    LOCAL_ISOLATED,
-    OUT_OF_MEMORY,
-    RECOVERING,
-    STOPPING,
-};
-
-enum class WorkerIsolationReason : std::uint8_t {
-    NONE = 0,
-    STARTUP_NOT_READY,
-    RECOVERY_EVIDENCE_INCOMPLETE,
-    CONTROL_BACKEND_LOCAL_ISOLATION,
-    CONTROL_BACKEND_GLOBAL_OUTAGE,
-    TOPOLOGY_PASSIVE_SCALE_DOWN,
-    OUT_OF_MEMORY,
-    PROCESS_STOPPING,
-};
-
-enum class WorkerRecoveryPhase : std::uint8_t {
-    NONE = 0,
-    MEMBERSHIP,
-    TOPOLOGY,
-    METADATA,
-    SLOT,
-    OWNERSHIP,
-    RESOURCE,
-    COMPLETE,
-};
-
-struct WorkerRunningEvidence {
-    bool membershipReady{ false };
-    bool topologyReady{ false };
-    bool metadataReady{ false };
-    bool slotReady{ false };
-    bool ownershipReady{ false };
-    bool resourceReady{ false };
-};
-
-struct WorkerRuntimeStateSnapshot {
-    WorkerServiceMode mode{ WorkerServiceMode::STARTING };
-    WorkerIsolationReason reason{ WorkerIsolationReason::STARTUP_NOT_READY };
-    WorkerRecoveryPhase recoveryPhase{ WorkerRecoveryPhase::NONE };
-    WorkerRunningEvidence evidence;
-    std::string detail;
-    std::chrono::steady_clock::time_point changedAt;
-};
-
 class WorkerRuntimeStateManager;
 
 class WorkerRuntimeStateTransitionGuard {
@@ -117,14 +67,6 @@ private:
     std::shared_lock<std::shared_mutex> lock_;
     WorkerRuntimeStateSnapshot snapshot_;
 };
-
-const char *ToString(WorkerServiceMode mode);
-const char *ToString(WorkerIsolationReason reason);
-const char *ToString(WorkerRecoveryPhase phase);
-bool IsComplete(const WorkerRunningEvidence &evidence);
-WorkerRecoveryPhase FirstMissingRecoveryPhase(const WorkerRunningEvidence &evidence);
-uint32_t RecoveryEvidenceMask(const WorkerRunningEvidence &evidence);
-bool IsServingMode(WorkerServiceMode mode);
 
 class WorkerRuntimeStateManager {
 public:

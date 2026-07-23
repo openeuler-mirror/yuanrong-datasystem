@@ -3,6 +3,13 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
+    name = "worker_runtime_types",
+    hdrs = [
+        "worker_runtime_types.h",
+    ],
+)
+
+ds_cc_library(
     name = "worker_runtime_state",
     srcs = [
         "worker_runtime_state.cpp",
@@ -11,6 +18,7 @@ ds_cc_library(
         "worker_runtime_state.h",
     ],
     deps = [
+        ":worker_runtime_types",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/metrics:common_metrics",
     ],
@@ -25,7 +33,7 @@ ds_cc_library(
         "worker_recovery_evidence.h",
     ],
     deps = [
-        ":worker_runtime_state",
+        ":worker_runtime_types",
     ],
 )
 
@@ -39,6 +47,7 @@ ds_cc_library(
     ],
     deps = [
         ":worker_runtime_state",
+        ":worker_runtime_types",
         "//src/datasystem/common/util:status_helper",
     ],
 )
@@ -67,6 +76,9 @@ ds_cc_library(
     deps = [
         ":worker_admission_facade",
         ":worker_recovery_controller",
+        ":worker_recovery_evidence",
+        ":worker_runtime_types",
+        "//src/datasystem/common/util:status_helper",
     ],
 )
 
@@ -172,6 +184,7 @@ ds_cc_library(
         ":worker_recovery_evidence_tracker",
         ":worker_runtime_facade",
         ":worker_runtime_state",
+        ":worker_runtime_types",
         ":worker_service_admission",
         ":worker_topology_availability_admission",
     ],

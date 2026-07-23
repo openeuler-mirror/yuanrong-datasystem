@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <string>
 
-#include "datasystem/worker/runtime/worker_runtime_state.h"
+#include "datasystem/worker/runtime/worker_runtime_types.h"
 
 namespace datasystem::worker {
 struct WorkerRecoveryEvidenceReport {

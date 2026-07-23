@@ -1,10 +1,13 @@
+add_library(worker_runtime_types INTERFACE)
+target_include_directories(worker_runtime_types INTERFACE ${PROJECT_SOURCE_DIR}/src)
+
 add_library(worker_runtime_state STATIC worker_runtime_state.cpp)
 target_include_directories(worker_runtime_state PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(worker_runtime_state PUBLIC common_metrics)
+target_link_libraries(worker_runtime_state PUBLIC worker_runtime_types common_metrics)
 
 add_library(worker_recovery_evidence STATIC worker_recovery_evidence.cpp)
 target_include_directories(worker_recovery_evidence PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(worker_recovery_evidence PUBLIC worker_runtime_state)
+target_link_libraries(worker_recovery_evidence PUBLIC worker_runtime_types)
 
 add_library(worker_recovery_controller STATIC worker_recovery_controller.cpp)
 target_include_directories(worker_recovery_controller PUBLIC ${PROJECT_SOURCE_DIR}/src)
@@ -56,6 +59,7 @@ target_link_libraries(worker_runtime_core INTERFACE
         worker_recovery_evidence_tracker
         worker_runtime_facade
         worker_runtime_state
+        worker_runtime_types
         worker_service_admission
         worker_topology_availability_admission
         )

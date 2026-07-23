@@ -9,17 +9,37 @@
 #ifndef DATASYSTEM_WORKER_WORKER_RUNTIME_FACADE_H
 #define DATASYSTEM_WORKER_WORKER_RUNTIME_FACADE_H
 
-#include <optional>
+#include <memory>
 #include <string>
 
-#include "datasystem/worker/runtime/worker_admission_facade.h"
-#include "datasystem/worker/runtime/worker_recovery_controller.h"
+#include "datasystem/common/util/status_helper.h"
+#include "datasystem/worker/runtime/worker_recovery_evidence.h"
+#include "datasystem/worker/runtime/worker_runtime_types.h"
 
 namespace datasystem::worker {
 class WorkerRuntimeFacade {
 public:
+    class AdmissionGuard {
+    public:
+        AdmissionGuard();
+        ~AdmissionGuard();
+
+        AdmissionGuard(AdmissionGuard &&) noexcept;
+        AdmissionGuard &operator=(AdmissionGuard &&) noexcept;
+
+        AdmissionGuard(const AdmissionGuard &) = delete;
+        AdmissionGuard &operator=(const AdmissionGuard &) = delete;
+
+    private:
+        friend class WorkerRuntimeFacade;
+        class Impl;
+        explicit AdmissionGuard(std::unique_ptr<Impl> impl);
+
+        std::unique_ptr<Impl> impl_;
+    };
+
     WorkerRuntimeFacade();
-    ~WorkerRuntimeFacade() = default;
+    ~WorkerRuntimeFacade();
 
     WorkerRuntimeFacade(const WorkerRuntimeFacade &) = delete;
     WorkerRuntimeFacade &operator=(const WorkerRuntimeFacade &) = delete;
@@ -37,17 +57,13 @@ public:
 
     bool TryCompleteRecovery(const WorkerRunningEvidence &evidence, const std::string &detail);
     Status CheckAdmission(WorkerAdmissionKind kind, const std::string &operation) const;
-    Status AcquireAdmissionGuard(WorkerAdmissionKind kind, const std::string &operation,
-                                 std::optional<WorkerRuntimeStateReadGuard> &guard) const;
-    Status AcquireNormalReadGuard(const std::string &operation,
-                                  std::optional<WorkerRuntimeStateReadGuard> &guard) const;
+    Status AcquireAdmissionGuard(WorkerAdmissionKind kind, const std::string &operation, AdmissionGuard &guard) const;
+    Status AcquireNormalReadGuard(const std::string &operation, AdmissionGuard &guard) const;
     void PublishMetrics() const;
 
 private:
-    // Keep state_ before members that store references to it; C++ destroys members in reverse declaration order.
-    WorkerRuntimeStateManager state_;
-    WorkerAdmissionFacade admission_;
-    WorkerRecoveryController recovery_;
+    class Impl;
+    std::unique_ptr<Impl> impl_;
 };
 }  // namespace datasystem::worker
 

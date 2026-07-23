@@ -24,6 +24,7 @@
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/util/raii.h"
 #include "datasystem/worker/metadata_route_resolver.h"
+#include "datasystem/worker/runtime/worker_runtime_state.h"
 #include "gtest/gtest.h"
 #include "ut/common.h"
 

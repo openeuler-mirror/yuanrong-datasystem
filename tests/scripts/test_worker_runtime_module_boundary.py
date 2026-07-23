@@ -345,12 +345,14 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             REPO_ROOT / "src/datasystem/worker/object_cache/master_worker_oc_service_impl.h",
             REPO_ROOT / "src/datasystem/worker/object_cache/master_worker_oc_service_impl.cpp",
             REPO_ROOT / "src/datasystem/worker/object_cache/worker_worker_oc_service_impl.cpp",
+            REPO_ROOT / "src/datasystem/worker/stream_cache/client_worker_sc_service_impl.cpp",
         ]
 
         forbidden_tokens = [
             "datasystem/worker/runtime/worker_admission_facade.h",
             "datasystem/worker/runtime/worker_service_admission.h",
             "datasystem/worker/runtime/worker_runtime_state.h",
+            "WorkerRuntimeStateReadGuard",
         ]
 
         for file_path in files:
@@ -459,9 +461,13 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
         text = header.read_text(encoding="utf-8")
 
         forbidden_tokens = [
+            "worker_admission_facade.h",
+            "worker_recovery_controller.h",
+            "worker_runtime_state.h",
             "RuntimeState()",
             "WorkerRuntimeStateManager &",
             "const WorkerRuntimeStateManager &",
+            "WorkerRuntimeStateReadGuard",
         ]
 
         for token in forbidden_tokens:

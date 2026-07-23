@@ -21,21 +21,10 @@
 #include <string>
 
 #include "datasystem/common/util/status_helper.h"
-#include "datasystem/worker/runtime/worker_runtime_state.h"
+#include "datasystem/worker/runtime/worker_runtime_types.h"
 
 namespace datasystem::worker {
-enum class WorkerAdmissionKind : std::uint8_t {
-    NORMAL_READ = 0,
-    NORMAL_WRITE,
-    MIGRATION_TARGET,
-    RECOVERY_RPC,
-    CLEANUP_RPC,
-    RESOURCE_RECOVERY_RPC,
-    INTERNAL_JOINING_RPC,
-    DIAGNOSTIC_RPC,
-};
-
-const char *ToString(WorkerAdmissionKind kind);
+class WorkerRuntimeStateManager;
 
 class WorkerServiceAdmission {
 public:
