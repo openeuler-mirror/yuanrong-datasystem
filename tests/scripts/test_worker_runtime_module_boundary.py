@@ -124,6 +124,17 @@ class WorkerRuntimeModuleBoundaryTest(unittest.TestCase):
             for token in forbidden_tokens:
                 self.assertNotIn(token, text, f"{file_path} should use injected topology metadata actions")
 
+    def test_object_cache_metadata_action_header_hides_master_holder(self):
+        header = REPO_ROOT / "src/datasystem/worker/object_cache/worker_topology_metadata_actions.h"
+        text = header.read_text(encoding="utf-8")
+
+        self.assertIn("class MetadataManagerHolder;", text)
+        forbidden_tokens = [
+            "datasystem/master/metadata_manager_holder.h",
+        ]
+        for token in forbidden_tokens:
+            self.assertNotIn(token, text, f"{header} should not expose concrete master metadata holder headers")
+
     def test_data_migrator_does_not_depend_on_topology_callback_executor(self):
         files = [
             REPO_ROOT / "src/datasystem/worker/object_cache/data_migrator/data_migrator.cpp",

@@ -251,8 +251,12 @@
      manager fence/ownership UTs;
   8. object/KV/stream ordinary read-write traffic is rejected during local isolation and recovery: covered by the
      corresponding object, KV, and stream admission STs;
-  9. scale-in/scale-out plus fault overlay has partial UT/ST coverage, but full end-to-end expansion for disabled slot
-     scale/passive scale cases remains a follow-up before claiming full design closure.
+  9. scale-in/scale-out plus fault overlay is covered for the primary object-cache paths by
+     `WorkerServiceAdmissionTest.ScaleInAndIsolationRejectMigrationTargetDuringCombinedFaultWindow`,
+     `MigrationTargetCombinedFaultTest.LEVEL1_MigrationTargetFiltersScaleInSourceAndIsolatedPeerTogether`,
+     `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutPreservesDataWhenWorkerIsLocallyIsolated`, and
+     `WorkerPushMetaScaleOutFaultTest.LEVEL1_ScaleOutSurvivesTransientGlobalBackendOutage`. Full expansion for
+     disabled slot scale/passive scale variants remains a tracked follow-up before claiming every overlay variant.
 - Current refactor status:
   - `WorkerRuntimeFacade` hides runtime state internals and provides the service-facing admission/recovery contract;
   - `ObjectCacheRecoveryState` owns metadata evidence, ownership evidence, resource readiness generation, and injected
@@ -265,9 +269,14 @@
   - topology phase callbacks use injected object-cache/metadata action interfaces;
   - control-backend probing/classification lives in runtime and consumes injected peer-probe clients.
 - Verification notes:
-  - focused object-cache recovery UT group: 17/17 passed in 0.06s;
-  - worker runtime/module boundary script: 31/31 passed in 0.039s;
-  - CLion remote `tests-index` build: passed in 236.91s with URMA Mock and 1161 compile database entries;
+  - focused object-cache recovery UT group: 18/18 passed in 0.05s;
+  - worker runtime/module boundary script: 32/32 passed in 0.16s;
+  - CLion remote `tests-index` build after latest rebase: passed in 507.74s with URMA Mock and 1161 compile database
+    entries;
+  - rebase-after runtime/admission UT group: 57/57 passed in 0.34s;
+  - rebase-after focused admission STs: object 1/1 in 4.73s, KV 1/1 in 5.84s, stream 1/1 in 4.64s;
+  - fault-overlay STs: ScaleIn plus isolated peer 1/1 in 8.85s, ScaleOut plus local isolation 1/1 in 5.75s,
+    ScaleOut plus global backend outage 1/1 in 13.35s;
   - Bazel 7.4.1 focused worker/object-cache/runtime build: first correct run passed in 374.07s and cached rerun passed
     in 0.62s;
   - the full detailed execution log is kept outside the source PR under the workbench RFC archive.
@@ -297,9 +306,10 @@
   - `ds_st_stream_cache`
   - `ds_st_embedded_client`
 - Recent focused evidence from the worker-isolation branch:
-  - object-cache recovery focused UT group: 17/17 passed in 0.06s;
-  - worker runtime/module boundary script: 31/31 passed in 0.039s;
-  - CLion remote `tests-index` build: passed in 236.91s with URMA Mock and 1161 compile database entries;
+  - object-cache recovery focused UT group: 18/18 passed in 0.05s;
+  - worker runtime/module boundary script: 32/32 passed in 0.16s;
+  - CLion remote `tests-index` build after latest rebase: passed in 507.74s with URMA Mock and 1161 compile database
+    entries;
   - Bazel 7.4.1 focused worker/object-cache/runtime build: first correct run passed in 374.07s and cached rerun passed
     in 0.62s.
 
