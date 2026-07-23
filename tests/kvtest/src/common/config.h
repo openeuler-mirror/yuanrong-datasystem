@@ -52,7 +52,7 @@ struct Config {
     std::string etcdAddress;
     std::string coordinatorAddress; // when set, use CoordinatorServiceDiscovery instead of etcd
     std::string clusterName = "";
-    std::string hostIdEnvName = "JD_HOST_IP";
+    std::string hostIdEnvName = "HOST_IP";
     int32_t connectTimeoutMs = 1000;
     int32_t requestTimeoutMs = 20;
     uint64_t fastTransportMemSize = 512ULL * 1024 * 1024;  // 512MB default
