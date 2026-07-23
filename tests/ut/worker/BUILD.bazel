@@ -58,6 +58,15 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "object_cache_ownership_reconciliation_test",
+    srcs = ["object_cache/object_cache_ownership_reconciliation_test.cpp"],
+    deps = [
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/worker/object_cache:object_cache_ownership_reconciliation",
+    ],
+)
+
+ds_cc_test(
     name = "object_cache_recovery_state_test",
     srcs = ["object_cache/object_cache_recovery_state_test.cpp"],
     deps = [
@@ -670,6 +679,7 @@ test_suite(
         "migrate_data_handler_test",
         "migrate_data_service_test",
         "node_selector_test",
+        "object_cache_ownership_reconciliation_test",
         "object_cache_recovery_state_test",
         "object_endpoint_policy_test",
         "rebalance_worker_test",

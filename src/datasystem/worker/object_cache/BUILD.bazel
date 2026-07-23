@@ -250,6 +250,20 @@ ds_cc_library(
 )
 
 ds_cc_library(
+    name = "object_cache_ownership_reconciliation",
+    srcs = [
+        "recovery/object_cache_ownership_reconciliation.cpp",
+    ],
+    hdrs = [
+        "recovery/object_cache_ownership_reconciliation.h",
+    ],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
     name = "object_cache_recovery_evidence",
     srcs = [
         "recovery/object_cache_recovery_evidence.cpp",
@@ -423,6 +437,7 @@ ds_cc_library(
         "//src/datasystem/worker/object_cache:kv_event_publisher",
         "//src/datasystem/worker/object_cache:metadata_recovery_manager",
         "//src/datasystem/worker/object_cache:metadata_recovery_selector",
+        "//src/datasystem/worker/object_cache:object_cache_ownership_reconciliation",
         "//src/datasystem/worker/object_cache:object_cache_recovery_state",
         "//src/datasystem/worker/object_cache:object_cache_recovery_startup",
         "//src/datasystem/worker/object_cache:object_kv",

@@ -21,6 +21,7 @@ set(WORKER_OC_SRCS
         async_send_manager.cpp
         async_update_location_manager.cpp
         metadata_recovery_manager.cpp
+        recovery/object_cache_ownership_reconciliation.cpp
         recovery/object_cache_recovery_state.cpp
         recovery/object_cache_recovery_evidence.cpp
         recovery/object_cache_recovery_startup.cpp

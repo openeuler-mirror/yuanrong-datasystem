@@ -472,6 +472,28 @@
     `4bc7301d60cc6cae1d33f0de31a27e77ed2dd85b` and is an ancestor of the branch head; `ds-pr-review prepare` passed
     with 202 files, 330 comments, no warnings, and `parallel_multi_round`; branch push to GitCode succeeded and
     `/retest` was posted to PR 1405.
+  - 2026-07-23 object-cache ownership reconciliation planning was extracted from scattered
+    `WorkerOCServiceImpl` branches into
+    `src/datasystem/worker/object_cache/recovery/object_cache_ownership_reconciliation.{h,cpp}`. This keeps metadata
+    owner selection, pending-evidence detail, and empty-owner fallback messages together while preserving the existing
+    `ScheduleReconciliationRequest` execution path.
+  - 2026-07-23 ownership reconciliation focused verification: 3 new UT cases cover distributed local-isolation owners,
+    centralized network-recovery owner selection, and empty distributed owner failure; focused CMake UT group passed
+    30/30 in 20ms, with the 3 new cases at 0ms each. CLion remote `tests-index` passed in 177s with URMA Mock enabled,
+    third-party cache reuse in 0s, and 1164 compile database entries.
+  - 2026-07-23 ownership reconciliation Bazel 7.4.1 focused target:
+    `//tests/ut/worker:object_cache_ownership_reconciliation_test` passed in 2.468s after syncing the CLion remote
+    worktree, and cached rerun passed in 0.238s. The initial failure was not a third-party download problem: stale
+    remote BUILD content still depended on `//tests/ut:ut_common`, which pulled `rdma/device/buffer_composer`; after
+    syncing and keeping the new test target narrow, only a test-side `common_log` link dependency was needed for
+    `Status` trace support.
+  - 2026-07-23 ownership reconciliation hygiene checks: `git diff --check` passed,
+    `python3 tests/scripts/test_worker_runtime_module_boundary.py` passed 40/40 in 0.074s, and
+    `git clang-format --diff main/master -- <ownership reconciliation touched C++ files>` reported no modified files.
+  - 2026-07-23 code-size review note: the PR-level diff is still large because it aggregates runtime facade,
+    coordination-backend boundaries, object-cache metadata recovery, cluster topology, UT/ST, CLion scripts, and plan
+    evidence. The latest working-tree refactor is intentionally small and subtractive in `worker_oc_service_impl.cpp`
+    while adding one cohesive recovery helper plus focused tests/build entries.
 
 ## Open Questions
 

@@ -106,6 +106,7 @@
 #include "datasystem/worker/object_cache/kv_event/kv_event_publisher.h"
 #include "datasystem/worker/object_cache/metadata_recovery_selector.h"
 #include "datasystem/worker/object_cache/obj_cache_shm_unit.h"
+#include "datasystem/worker/object_cache/recovery/object_cache_ownership_reconciliation.h"
 #include "datasystem/worker/object_cache/recovery/object_cache_recovery_startup.h"
 #include "datasystem/worker/object_cache/recovery/object_cache_recovery_state.h"
 #include "datasystem/worker/object_cache/object_kv.h"
@@ -2491,20 +2492,16 @@ Status WorkerOCServiceImpl::CheckTopologyServingReady() const
 
 Status WorkerOCServiceImpl::ReconcileMembershipChange()
 {
-    std::set<std::string> masterAddresses;
-    if (centralizedMetadata_) {
-        masterAddresses.emplace(localMasterAddress_.ToString());
-    } else {
-        std::vector<std::string> committedAddresses;
+    std::vector<std::string> committedAddresses;
+    if (!centralizedMetadata_) {
         RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
-        masterAddresses.insert(committedAddresses.begin(), committedAddresses.end());
-        // The local metadata master still participates while this member is transitioning through restart admission.
-        masterAddresses.emplace(localAddress_.ToString());
     }
-    CHECK_FAIL_RETURN_STATUS(!masterAddresses.empty(), K_NOT_READY,
-                             "No committed metadata owner is available for restart reconciliation");
+    ObjectCacheOwnershipReconciliationPlan plan;
+    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(centralizedMetadata_, localMasterAddress_.ToString(),
+                                                      localAddress_.ToString(), committedAddresses,
+                                                      OwnershipReconciliationKind::RESTART, plan));
     const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
-    for (const auto &masterAddress : masterAddresses) {
+    for (const auto &masterAddress : plan.metadataOwners) {
         LOG_IF_ERROR(ScheduleReconciliationRequest(masterAddress, eventTimestamp, ReconciliationQueryPb::RESTART),
                      "Failed to schedule restart reconciliation with metadata owner " + masterAddress);
     }
@@ -2513,20 +2510,17 @@ Status WorkerOCServiceImpl::ReconcileMembershipChange()
 
 Status WorkerOCServiceImpl::ReconcileLocalIsolationOwnership()
 {
-    (void)BeginRecoveryEvidenceGeneration("local isolation ownership reconciliation pending");
-    std::set<std::string> masterAddresses;
-    if (centralizedMetadata_) {
-        masterAddresses.emplace(localMasterAddress_.ToString());
-    } else {
-        std::vector<std::string> committedAddresses;
+    std::vector<std::string> committedAddresses;
+    if (!centralizedMetadata_) {
         RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
-        masterAddresses.insert(committedAddresses.begin(), committedAddresses.end());
-        masterAddresses.emplace(localAddress_.ToString());
     }
-    CHECK_FAIL_RETURN_STATUS(!masterAddresses.empty(), K_NOT_READY,
-                             "No committed metadata owner is available for local-isolation handoff");
+    ObjectCacheOwnershipReconciliationPlan plan;
+    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(centralizedMetadata_, localMasterAddress_.ToString(),
+                                                      localAddress_.ToString(), committedAddresses,
+                                                      OwnershipReconciliationKind::LOCAL_ISOLATION, plan));
+    (void)BeginRecoveryEvidenceGeneration(plan.pendingEvidenceDetail);
     const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
-    for (const auto &masterAddress : masterAddresses) {
+    for (const auto &masterAddress : plan.metadataOwners) {
         LOG_IF_ERROR(
             ScheduleReconciliationRequest(masterAddress, eventTimestamp, ReconciliationQueryPb::LOCAL_ISOLATION),
             "Failed to schedule local-isolation ownership handoff with metadata owner " + masterAddress);
@@ -2536,20 +2530,17 @@ Status WorkerOCServiceImpl::ReconcileLocalIsolationOwnership()
 
 Status WorkerOCServiceImpl::ReconcileNetworkRecoveryOwnership()
 {
-    (void)BeginRecoveryEvidenceGeneration("network recovery ownership reconciliation pending");
-    std::set<std::string> masterAddresses;
-    if (centralizedMetadata_) {
-        masterAddresses.emplace(localMasterAddress_.ToString());
-    } else {
-        std::vector<std::string> committedAddresses;
+    std::vector<std::string> committedAddresses;
+    if (!centralizedMetadata_) {
         RETURN_IF_NOT_OK(GetCommittedMemberAddresses(committedAddresses));
-        masterAddresses.insert(committedAddresses.begin(), committedAddresses.end());
-        masterAddresses.emplace(localAddress_.ToString());
     }
-    CHECK_FAIL_RETURN_STATUS(!masterAddresses.empty(), K_NOT_READY,
-                             "No committed metadata owner is available for network recovery");
+    ObjectCacheOwnershipReconciliationPlan plan;
+    RETURN_IF_NOT_OK(BuildOwnershipReconciliationPlan(centralizedMetadata_, localMasterAddress_.ToString(),
+                                                      localAddress_.ToString(), committedAddresses,
+                                                      OwnershipReconciliationKind::NETWORK_RECOVERY, plan));
+    (void)BeginRecoveryEvidenceGeneration(plan.pendingEvidenceDetail);
     const int64_t eventTimestamp = std::chrono::system_clock::now().time_since_epoch().count();
-    for (const auto &masterAddress : masterAddresses) {
+    for (const auto &masterAddress : plan.metadataOwners) {
         LOG_IF_ERROR(
             ScheduleReconciliationRequest(masterAddress, eventTimestamp, ReconciliationQueryPb::NETWORK_RECOVERY),
             "Failed to schedule network recovery with metadata owner " + masterAddress);
