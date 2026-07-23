@@ -66,6 +66,7 @@ ds_cc_test(
     name = "memory_rebalance_scheduler_test",
     srcs = ["memory_rebalance_scheduler_test.cpp"],
     deps = [
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/worker:add_miss_libs_fixme",
         "//src/datasystem/common/object_cache:node_info",
         "//src/datasystem/common/flags:dynamic_flag_config_header",

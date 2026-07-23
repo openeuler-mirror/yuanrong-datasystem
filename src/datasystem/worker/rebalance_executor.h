@@ -67,8 +67,9 @@ public:
     /**
      * @brief Submit a task returned by master from ResourceReportRspPb.
      * @param[in] task The rebalance task assigned to this source worker.
+     * @param[in] assignedMasterAddress Exact master address that returned the task.
      */
-    void Submit(const master::RebalanceTaskPb &task);
+    void Submit(const master::RebalanceTaskPb &task, std::string assignedMasterAddress);
 
 #ifdef WITH_TESTS
     using SelectCandidatesHook = std::function<Status(uint64_t, std::unordered_map<std::string, uint64_t> &)>;
@@ -111,14 +112,16 @@ private:
         uint64_t migratedObjects = 0;
         uint64_t failedObjects = 0;
         bool candidatesExhausted = false;
+        std::string assignedMasterAddress;
         std::string failedReason;
     };
 
-    void Execute(master::RebalanceTaskPb task);
+    void Execute(master::RebalanceTaskPb task, std::string assignedMasterAddress);
     void SubmitBusyResult(const master::RebalanceTaskPb &task, const std::string &runningTaskId);
     uint64_t BuildLocalDeadlineMs(const master::RebalanceTaskPb &task) const;
     uint64_t NowMsForExpiryCheck() const;
     bool IsExpired(uint64_t localDeadlineMs) const;
+    bool IsAssignedMasterUnavailable(const master::RebalanceTaskPb &task, ExecutionStats &stats) const;
     Status ExecuteBatch(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
                         object_cache::DataMigrator &migrator);
     void ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,

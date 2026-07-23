@@ -21,11 +21,14 @@
 #define DATASYSTEM_MASTER_MEMORY_REBALANCE_SCHEDULER_H
 
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "datasystem/cluster/membership/membership_endpoint_view.h"
+#include "datasystem/cluster/model/topology_snapshot.h"
 #include "datasystem/common/object_cache/node_info.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/protos/master_object.pb.h"
@@ -41,6 +44,12 @@ namespace master {
 class MemoryRebalanceScheduler {
 public:
     ~MemoryRebalanceScheduler() = default;
+
+    /**
+     * @brief Bind the read-only topology membership view used to fence rebalance candidates.
+     * @param[in] topologyMembership Non-owning view that outlives this scheduler.
+     */
+    void SetTopologyMembership(const cluster::MembershipEndpointView *topologyMembership);
 
     /**
      * @brief Try to assign one rebalance task to the reporting source worker.
@@ -93,9 +102,14 @@ private:
     // Release held in-flight for every target whose snapshot timestamp advanced since its
     // latest completion (swap-lagged backup for non-reporting targets).
     void ReleaseSnapshotHoldsLocked(const std::unordered_map<std::string, NodeInfo> &snapshot);
-    bool IsSourceCandidateLocked(const NodeInfo &node, uint64_t nowMs) const;
+    std::shared_ptr<const cluster::TopologySnapshot> GetTopologySnapshot();
+    bool IsWorkerActiveInTopology(const std::string &worker,
+                                  const cluster::TopologySnapshot *topologySnapshot) const;
+    bool IsSourceCandidateLocked(const NodeInfo &node, uint64_t nowMs,
+                                 const cluster::TopologySnapshot *topologySnapshot) const;
     void CollectWorkerCandidatesLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
                                        const std::string &sourceWorker, uint64_t nowMs,
+                                       const cluster::TopologySnapshot *topologySnapshot,
                                        std::vector<const NodeInfo *> &sources,
                                        std::vector<const NodeInfo *> &targets) const;
     void CollectCandidatePairsLocked(const std::vector<const NodeInfo *> &sources,
@@ -103,13 +117,16 @@ private:
                                      std::vector<CandidatePair> &targetPairs) const;
     void FillTaskFromPairLocked(const CandidatePair &bestPair, uint64_t nowMs, master::RebalanceTaskPb &task) const;
     Status TryBuildTaskLocked(const std::unordered_map<std::string, NodeInfo> &snapshot,
-                              const std::string &sourceWorker, uint64_t nowMs, master::RebalanceTaskPb &task);
+                              const std::string &sourceWorker, uint64_t nowMs,
+                              const cluster::TopologySnapshot *topologySnapshot, master::RebalanceTaskPb &task);
     uint64_t CalculateTaskBytesLocked(const NodeInfo &source, const NodeInfo &target,
                                       uint64_t targetInflightBytes) const;
     uint64_t CalculateProjectedTargetUsageRate(const NodeInfo &target, uint64_t targetInflightBytes,
                                                uint64_t maxBytes) const;
 
     std::mutex mutex_;
+    // Non-owning read-only topology view. WorkerOCServer destroys ResourceManager before TopologyEngine.
+    const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::unordered_map<std::string, RunningTask> activeTasksBySource_;
     std::unordered_map<std::string, uint64_t> targetInflightBytes_;
     std::unordered_map<std::string, uint64_t> cooldownUntilMs_;

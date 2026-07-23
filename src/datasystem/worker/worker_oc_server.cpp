@@ -444,6 +444,9 @@ WorkerOCServer::~WorkerOCServer()
     StopDeferredCleanupReaper();
     objectEndpointPolicy_.reset();
     metadataRouteResolver_.reset();
+    // ResourceManager owns the scheduler that borrows topologyEngine_->Membership(). Destroy and join it before the
+    // topology engine so no scheduler access can outlive the borrowed membership view.
+    resourceManager_.reset();
     // All Engine threads and business borrowers are stopped. Destroy Engine while Store/Proxy and callback owners are
     // still alive, and before the process allocator is shut down.
     topologyEngine_.reset();
@@ -776,6 +779,7 @@ void WorkerOCServer::CreateMasterServices()
     commonSvc_ = std::make_unique<MasterServiceImpl>(hostPort_, akSkManager_);
     if (EnableOCService()) {
         // create MasterOCServiceImpl
+        resourceManager_->SetTopologyMembership(&topologyEngine_->Membership());
         objCacheMasterSvc_ = std::make_unique<MasterOCServiceImpl>(hostPort_, persistenceApi_, akSkManager_,
                                                                    metadataManagerHolder_.get(), resourceManager_.get(),
                                                                    topologyEngine_->Membership(), hostPort_.ToString());
@@ -871,12 +875,13 @@ void WorkerOCServer::CreateRebalanceExecutor(
                                              evictionManager,
                                              objCacheClientWorkerSvc_->GetWorkerMasterApiManager() };
     rebalanceExecutor_ = std::make_unique<RebalanceExecutor>(std::move(rebalanceConfig));
-    object_cache::NodeSelector::Instance().RegisterRebalanceTaskHandler([this](const master::RebalanceTaskPb &task) {
-        std::lock_guard<std::mutex> lock(rebalanceExecutorMutex_);
-        if (rebalanceExecutor_ != nullptr) {
-            rebalanceExecutor_->Submit(task);
-        }
-    });
+    object_cache::NodeSelector::Instance().RegisterRebalanceTaskHandler(
+        [this](const master::RebalanceTaskPb &task, const std::string &assignedMasterAddress) {
+            std::lock_guard<std::mutex> lock(rebalanceExecutorMutex_);
+            if (rebalanceExecutor_ != nullptr) {
+                rebalanceExecutor_->Submit(task, assignedMasterAddress);
+            }
+        });
 }
 
 void WorkerOCServer::CreateAllServices()

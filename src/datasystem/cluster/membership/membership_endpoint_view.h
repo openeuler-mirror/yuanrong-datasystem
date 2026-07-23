@@ -93,7 +93,7 @@ public:
      * @brief Resolve topology identity/state and local availability by address.
      * @param[in] address Canonical member address.
      * @param[out] endpoint Combined query result.
-     * @return K_OK, K_NOT_FOUND, or K_NOT_READY before the first Snapshot.
+     * @return K_OK; K_NOT_FOUND when the address is absent; K_NOT_READY before the first Snapshot.
      */
     Status ResolveByAddress(const std::string &address, MemberEndpoint &endpoint) const;
 

@@ -723,6 +723,8 @@ private:
     std::unique_ptr<cluster::ITopologyPhaseCallbacks> topologyTaskCallbacks_{ nullptr };
     // Declared before topologyEngine_ so the Engine drains ingress before the service is destroyed.
     std::unique_ptr<coordinator::CoordinatorWatchServiceImpl> coordinatorWatchSvc_{ nullptr };
+    // ResourceManager's rebalance scheduler borrows MembershipEndpointView from this engine. The destructor must reset
+    // resourceManager_ before resetting topologyEngine_; declaration order provides the same fallback ordering.
     std::unique_ptr<cluster::TopologyEngine> topologyEngine_{ nullptr };
     std::unique_ptr<MetadataRouteResolver> metadataRouteResolver_{ nullptr };
     std::unique_ptr<object_cache::ObjectEndpointPolicy> objectEndpointPolicy_{ nullptr };

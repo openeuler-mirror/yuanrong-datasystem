@@ -97,6 +97,7 @@ ds_cc_library(
         "memory_rebalance_scheduler.h",
     ],
     deps = [
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:node_info",
         "//src/datasystem/common/util:common_util",
@@ -116,6 +117,7 @@ ds_cc_library(
     ],
     deps = [
         ":memory_rebalance_scheduler",
+        "//src/datasystem/cluster:cluster_topology",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
         "//src/datasystem/common/object_cache:node_info",

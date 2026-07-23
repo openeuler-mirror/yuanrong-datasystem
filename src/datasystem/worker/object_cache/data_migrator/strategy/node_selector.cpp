@@ -334,8 +334,9 @@ Status NodeSelector::CollectClusterInfo()
             handler = rebalanceTaskHandler_;
         }
         if (handler != nullptr) {
-            // Master piggybacks rebalance tasks in ResourceReportRspPb; NodeSelector only dispatches them.
-            handler(rsp.rebalance_task());
+            // Preserve the exact master that returned the task. Resolving the owner again in the executor can race
+            // with failover and incorrectly bind an old task to the new master.
+            handler(rsp.rebalance_task(), workerMasterApi->GetHostPort());
         }
     }
     // update the rankList_
