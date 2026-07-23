@@ -63,7 +63,7 @@ cd tests/kvtest
   "listen_port": 9000,
   "etcd_address": "127.0.0.1:2379",
   "cluster_name": "",
-  "host_id_env_name": "JD_HOST_IP",
+  "host_id_env_name": "HOST_IP",
   "connect_options": {
     "connect_timeout_ms": 1000,
     "request_timeout_ms": 20,
@@ -94,7 +94,7 @@ cd tests/kvtest
 | `etcd_address` | string | **必填** | etcd 地址，格式 `ip:port`。与 `coordinator_address` 二选一 |
 | `coordinator_address` | string | "" | coordinator 服务发现地址，格式 `ip:port`。设置后使用 `CoordinatorServiceDiscovery` 替代 etcd，此时 `etcd_address` 留空 |
 | `cluster_name` | string | "" | 集群名，多集群环境区分 |
-| `host_id_env_name` | string | "JD_HOST_IP" | Worker IP 环境变量名 |
+| `host_id_env_name` | string | "HOST_IP" | Worker IP 环境变量名 |
 | `connect_options.connect_timeout_ms` | int | 1000 | KVClient 连接超时（毫秒） |
 | `connect_options.request_timeout_ms` | int | 20 | KVClient 请求超时（毫秒） |
 | `connect_options.enable_cross_node_connection` | bool | true | 允许跨节点连接 standby Worker |

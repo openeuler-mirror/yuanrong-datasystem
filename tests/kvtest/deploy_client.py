@@ -923,6 +923,7 @@ def cmd_gen_config(args):
                 'pod_name': pod['name'],
                 'pod_ip': pod['ip'],
                 'namespace': args.namespace,
+                'host': pod['node'],
                 'instance_id': i,
                 'role': 'writer' if is_writer else 'reader',
                 'pipeline': writer_pipeline if is_writer else notify_pipeline,

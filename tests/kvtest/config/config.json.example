@@ -4,7 +4,7 @@
   "instance_id": 0,
   "etcd_address": "127.0.0.1:2379",
   "cluster_name": "",
-  "host_id_env_name": "JD_HOST_IP",
+  "host_id_env_name": "HOST_IP",
   "listen_port": 9000,
 
   "connect_options": {

@@ -762,7 +762,7 @@ JSON 配置文件，使用 nlohmann/json 解析。
 | `etcd_address` | string | 二选一 | 非空 | etcd 地址（host:port）。与 `coordinator_address` 二选一 |
 | `coordinator_address` | string | "" | 非空（启用时） | coordinator 服务发现地址（host:port）。设置后走 `CoordinatorServiceDiscovery`，`etcd_address` 留空 |
 | `cluster_name` | string | "" | - | 集群名称，本地测试留空 |
-| `host_id_env_name` | string | "JD_HOST_IP" | - | 主机 IP 环境变量名 |
+| `host_id_env_name` | string | "HOST_IP" | - | 主机 IP 环境变量名 |
 | `connect_timeout_ms` | int | 1000 | > 0 | SDK 连接超时 |
 | `request_timeout_ms` | int | 20 | ≥ 0 | SDK 请求超时 |
 | `fast_transport_mem_size` | string | "512MB" | > 0（支持单位） | 快速传输内存大小 |
