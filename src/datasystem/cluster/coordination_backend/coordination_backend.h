@@ -25,7 +25,6 @@
 #include <vector>
 
 #include "datasystem/cluster/membership/membership_types.h"
-#include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
 #include "datasystem/common/kvstore/kv_store.h"
@@ -320,15 +319,6 @@ public:
      */
     virtual void SetCheckStoreStateWhenNetworkFailedHandler(std::function<bool()> handler) = 0;
 };
-
-/**
- * @brief Create a Coordinator-backed coordination backend behind the backend interface.
- * @param[in] proxy Coordinator proxy that must outlive the returned backend.
- * @param[in] watcherAddr Canonical Worker address used to register watches.
- * @return Coordinator-backed backend instance.
- */
-std::unique_ptr<ICoordinationBackend> CreateDsCoordinationBackend(ICoordinatorServiceProxy *proxy,
-                                                                  std::string watcherAddr);
 
 }  // namespace datasystem::cluster
 

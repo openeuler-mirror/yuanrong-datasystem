@@ -482,5 +482,14 @@ private:
     int64_t keepAliveTtlMs_{ 0 };
 };
 
+/**
+ * @brief Create a Coordinator-backed coordination backend behind the backend interface.
+ * @param[in] proxy Coordinator proxy that must outlive the returned backend.
+ * @param[in] watcherAddr Canonical Worker address used to register watches.
+ * @return Coordinator-backed backend instance.
+ */
+std::unique_ptr<ICoordinationBackend> CreateDsCoordinationBackend(ICoordinatorServiceProxy *proxy,
+                                                                  std::string watcherAddr);
+
 }  // namespace datasystem::cluster
 #endif  // DATASYSTEM_CLUSTER_COORDINATION_BACKEND_DS_COORDINATION_BACKEND_H
