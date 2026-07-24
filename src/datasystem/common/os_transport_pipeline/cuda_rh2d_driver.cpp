@@ -75,7 +75,9 @@ Status CudaRH2DDriver::Init()
         CUDA_RETURN_IF_NOT_OK(cudaStreamCreateWithFlags, &stream_, cudaStreamNonBlocking);
     }
 
-    RETURN_RUNTIME_ERROR_IF_NULL(GetSelfEvent(true /* createIfNotExists */));
+    if (!UseExternalStream_) {
+        RETURN_RUNTIME_ERROR_IF_NULL(GetSelfEvent(true /* createIfNotExists */));
+    }
 
     // Temporary verification log. In the old implementation, different drivers printed the same
     // stream address. With this implementation, different CudaRH2DDriver instances should usually
@@ -149,10 +151,7 @@ Status CudaRH2DDriver::SubmitIO(void *srcData, size_t srcSize, size_t destOffset
     CUDA_RETURN_IF_NOT_OK(cudaMemcpyAsync, (void *)destAddr, srcData, srcSize, cudaMemcpyHostToDevice, stream_);
 
     if (!UseExternalStream_) {
-        cudaEvent_t event = GetSelfEvent(false /* createIfNotExists */);
-        if (event == nullptr) {
-            return Status(StatusCode::K_RUNTIME_ERROR, "no event for internal stream Submit");
-        }
+        cudaEvent_t event = GetSelfEvent(true /* createIfNotExists */);
         CUDA_RETURN_IF_NOT_OK(cudaEventRecord, event, stream_);
         VLOG(2) << PIPLN_LOG_PREFIX "RH2D submit internal stream: driver=" << this << " stream=" << stream_
                 << " event=" << event << " srcSize=" << srcSize << " destOffset=" << destOffset;

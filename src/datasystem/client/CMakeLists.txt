@@ -18,6 +18,7 @@ list(APPEND CLIENT_SRCS
         object_cache/exist_handler.cpp
         object_cache/object_client.cpp
         object_cache/object_client_impl.cpp
+        object_cache/direct_receive_buffer_owner.cpp
         object_cache/client_memory_ref_table.cpp
         object_cache/device/client_device_object_manager.cpp
         object_cache/device/p2p_subscribe.cpp

@@ -60,6 +60,9 @@ public:
      */
     virtual Status QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items);
 
+    /** @brief Query object locations without requesting inline object data. */
+    virtual Status QueryMetadata(const HostPort &address, const ObjectMetadataBatch &items);
+
 private:
     enum class InlineTransportMode : uint8_t { NONE = 0, TCP = 1, UB = 2 };
 
@@ -76,6 +79,8 @@ private:
             transportInstanceId.clear();
         }
     };
+
+    Status Query(const HostPort &address, const ObjectMetadataBatch &items, bool enableInlineData);
 
     Status QueryWithRetry(const HostPort &address, const ObjectMetadataBatch &items, bool allowRedirect,
                           master::QueryAndGetRspPb &response, std::vector<RpcMessage> &payloads,

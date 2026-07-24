@@ -10,6 +10,7 @@ CLIENT_SRCS = [
     "client_flags_monitor.cpp",
     "context/context.cpp",
     "object_cache/client_worker_api.cpp",
+    "object_cache/direct_receive_buffer_owner.cpp",
     "object_cache/exist_handler.cpp",
     "object_cache/object_client_impl.cpp",
     "kv_cache/read_only_buffer.cpp",
@@ -18,6 +19,7 @@ CLIENT_SRCS = [
 
 CLIENT_HDRS = [
     "object_cache/client_worker_api.h",
+    "object_cache/direct_receive_buffer_owner.h",
     "mmap_manager.h",
     "client_worker_common_api.h",
     "client_flags_monitor.h",

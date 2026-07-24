@@ -1733,14 +1733,18 @@ private:
      * @brief check args
      *
      * @param[in] objectKeys  The vector of the object key.
-     * @param[in] devShmChunk The vector of target cuda device share memory position.
-     * @param[in] subTimeoutMs timeoutMs of waiting for the result return if object not ready. A positive integer number
-     * required. 0 means no waiting time allowed.
-     * @param[out] workerApi  The worker that handles get request.
+     * @param[in] devBlob The vector of target CUDA device buffers.
      * @return K_OK on success; the error code otherwise.
      */
-    Status CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys, const std::vector<Blob> &devBlob,
-                                 std::shared_ptr<IClientWorkerApi> &workerApi);
+    Status CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys, const std::vector<Blob> &devBlob);
+
+    /**
+     * @brief Check arguments and state specific to the local-worker pipeline path.
+     *
+     * @param[out] workerApi The local worker that handles the get request.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status CheckLocalPipelineRH2DArgs(std::shared_ptr<IClientWorkerApi> &workerApi);
 
     /**
      * @brief construct share memory buffer and find need wait keys
@@ -1753,7 +1757,8 @@ private:
      * @return std::vector<std::pair<std::string *, uint32_t>> need to wait keys
      */
     std::vector<std::pair<std::string *, uint32_t>> PostProcessPipelineKeys(
-        std::vector<std::string> &objectKeys, GetRspPb &rsp, PiplnRh2dParam &piplnRh2dParam, uint32_t version,std::vector<std::string> &failedKeys);
+        std::vector<std::string> &objectKeys, GetRspPb &rsp, PiplnRh2dParam &piplnRh2dParam, uint32_t version,
+        std::vector<std::string> &failedKeys);
     /**
      * @brief post process rh2d response
      *
@@ -1763,6 +1768,11 @@ private:
      * @param buffers buffer list of values
      * @return K_OK on success; the error code otherwise.
      */
+    Status RunClientDirectPipelineRH2D(const std::vector<std::string> &objectKeys,
+                                       const std::vector<Blob> &devBlob,
+                                       std::vector<std::shared_ptr<Buffer>> &buffers, void *h2dStream,
+                                       std::vector<std::string> &failedKeys);
+
     Status PostPipelineRH2D(std::promise<AsyncResult> &promise, PiplnRh2dParam &piplnRh2dParam, GetRspPb &rsp,
                             std::vector<std::shared_ptr<Buffer>> &buffers);
 
@@ -1793,6 +1803,8 @@ private:
     std::mutex preRegisteredDeviceMemoryMutex_;
     std::vector<void *> preRegisteredDeviceMemoryAddrs_;
     bool enableRemoteH2D_;
+    bool enableClientDirectPipelineH2D_ = false;
+    int32_t clientDirectPipelineH2DThreadNum_ = 64;
     int32_t devId_ = -1;
     std::string deviceId_;
 
@@ -1810,6 +1822,7 @@ private:
     std::shared_ptr<ThreadPool> memoryCopyThreadPool_;
     std::shared_ptr<ThreadPool> asyncSetRPCPool_;
     std::shared_ptr<ThreadPool> asyncGetRPCPool_;
+    std::shared_ptr<ThreadPool> asyncPipelineRH2DPool_;
     std::shared_ptr<ThreadPool> asyncGetCopyPool_;
     std::shared_ptr<ThreadPool> asyncSwitchWorkerPool_;
     std::shared_ptr<ThreadPool> asyncDevDeletePool_;

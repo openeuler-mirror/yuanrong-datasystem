@@ -17,6 +17,8 @@
 /**
  * Description: pipeline h2d interface implement for client and worker
  */
+#include <atomic>
+#include <mutex>
 #include <set>
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/os_transport_pipeline/cuda_rh2d_driver.h"
@@ -42,6 +44,9 @@ using namespace datasystem;
 
 static std::shared_ptr<PipelineRH2DQueueProducer> gQueueProducer = std::make_shared<PipelineRH2DQueueProducer>();
 static bool g_isClientMode = false;
+std::mutex g_clientPipelineConfigMutex;
+int32_t g_clientPipelineThreadNum = DEFAULT_PIPLN_THREAD_NUM;
+bool g_clientPipelineThreadNumConfigured = false;
 Status SetIsClientMode(bool clientMode)
 {
     g_isClientMode = clientMode;
@@ -186,19 +191,21 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
     PerfPoint point(PerfKey::PIPLN_RH2D_WORKER_TRIGGER_REMOTE);
     uint32_t reqId;
     RETURN_IF_NOT_OK(mgr.GetReqId(key, reqId));
+    if (size <= ChunkTag::chunkSize2MB) {
+        VLOG(1) << PIPLN_LOG_PREFIX "Use one-shot URMA write for small object: key=" << key
+                << ", reqId=" << reqId << ", size=" << size;
+        return Status::OK();
+    }
 
     // get seg
     uint64_t segAddress;
     uint64_t segSize;
-    urma_target_seg_t *targetSeg = nullptr;
-    urma_jfr_t *targetJfr = nullptr;
-    urma_jetty_t *targetJetty = nullptr;
     uint64_t pointer = reinterpret_cast<uint64_t>(shmUnit->GetPointer());
     uint64_t dataSrc = pointer + dataOffset;  // dataOffset = MetaSize + readOffset( always 0 )
     uint64_t totalOffset = shmUnit->GetOffset() + dataOffset;
     GetSegmentInfoFromShmUnit(shmUnit, pointer, segAddress, segSize);
-    RETURN_IF_NOT_OK(
-        UrmaManager::Instance().GetTargetSeg(segAddress, segSize, remoteAddress, &targetSeg, &targetJfr, &targetJetty));
+    UrmaRecvTargetLease recvTarget;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().AcquireRecvTarget(segAddress, segSize, remoteAddress, recvTarget));
 
     PIPLN_DEBUG_LOG_DATA("Before StartReceiver", key, reqId, shmUnit, dataOffset, size);
     // start Receiver
@@ -206,8 +213,9 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
     Status receiverRc = Status::OK();
     {
         PerfPoint receiverPoint(PerfKey::PIPLN_RH2D_START_RECEIVER);
-        receiverRc = mgr.DoPiplnStep1_StartReceiver(reqId, dataSrc, size, targetSeg, targetJfr, targetJetty,
-                                                    shmUnit->GetFd(), shmUnit->GetMmapSize(), totalOffset);
+        receiverRc = mgr.DoPiplnStep1_StartReceiver(
+            reqId, dataSrc, size, recvTarget.TargetSeg(), recvTarget.TargetJfr(), recvTarget.TargetJetty(),
+            shmUnit->GetFd(), shmUnit->GetMmapSize(), totalOffset);
     }
     const auto receiverUs = static_cast<uint64_t>(receiverTimer.ElapsedMicroSecond());
     auto processThresholdUs = GetServerLatencyTraceConfig().processSlowerThanUs;
@@ -215,7 +223,12 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
                         PIPLN_LOG_PREFIX " worker start receiver done, reqId: "
                             << reqId << ", dataSize: " << size << ", remoteAddress: " << remoteAddress
                             << ", costUs: " << receiverUs << ", status: " << receiverRc.ToString());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(receiverRc, PIPLN_LOG_PREFIX "failed to start receiver");
+    if (receiverRc.IsError()) {
+        LOG(WARNING) << PIPLN_LOG_PREFIX "Start receiver failed, fallback to one-shot URMA write: key=" << key
+                     << ", reqId=" << reqId << ", size=" << size << ", remote=" << remoteAddress
+                     << ", status=" << receiverRc.ToString();
+        return Status::OK();
+    }
     VLOG(2) << PIPLN_LOG_PREFIX "Remote data path: key=" << key << ", reqId=" << reqId << ", size=" << size
             << ", remote=" << remoteAddress;
 
@@ -223,6 +236,37 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
     subReq.mutable_urma_info()->set_pipeline_rh2d_req_id(reqId);
 
     return Status::OK();
+}
+
+Status SetClientPipelineThreadNum(int32_t threadNum)
+{
+    int32_t actualThreadNum = threadNum;
+    if (threadNum < MIN_PIPLN_THREAD_NUM || threadNum > MAX_PIPLN_THREAD_NUM) {
+        actualThreadNum = DEFAULT_PIPLN_THREAD_NUM;
+        LOG(WARNING) << PIPLN_LOG_PREFIX "Invalid client direct pipeline thread num=" << threadNum
+                     << ", use default=" << actualThreadNum;
+    }
+
+    std::lock_guard<std::mutex> lock(g_clientPipelineConfigMutex);
+    if (!g_clientPipelineThreadNumConfigured) {
+        g_clientPipelineThreadNum = actualThreadNum;
+        g_clientPipelineThreadNumConfigured = true;
+        LOG(INFO) << PIPLN_LOG_PREFIX "Set client direct pipeline thread num to " << actualThreadNum;
+    } else if (g_clientPipelineThreadNum != actualThreadNum) {
+        LOG(WARNING) << PIPLN_LOG_PREFIX "Try to set client direct pipeline thread num to " << actualThreadNum
+                     << ", but it is already set to " << g_clientPipelineThreadNum;
+    }
+    return Status::OK();
+}
+
+Status RegisterHostMemory(void *ptr, size_t size)
+{
+    return CudaRH2DDriver::RegisterHostMemory(ptr, size);
+}
+
+void UnRegisterHostMemory(void *ptr)
+{
+    CudaRH2DDriver::UnRegisterHostMemory(ptr);
 }
 
 Status InitOsPiplnRH2DEnv(void *ctx, void *jfc, void *jfce, uint32_t jettySize)
@@ -233,7 +277,8 @@ Status InitOsPiplnRH2DEnv(void *ctx, void *jfc, void *jfce, uint32_t jettySize)
         return Status::OK();
     }
     if (g_isClientMode) {
-        actualThreadNum = 0;  // client should not have pipeline worker thread, so init with 0 thread
+        std::lock_guard<std::mutex> lock(g_clientPipelineConfigMutex);
+        actualThreadNum = g_clientPipelineThreadNum;
     } else if (FLAGS_pipeline_h2d_thread_num < MIN_PIPLN_THREAD_NUM
                || FLAGS_pipeline_h2d_thread_num > MAX_PIPLN_THREAD_NUM) {
         actualThreadNum = DEFAULT_PIPLN_THREAD_NUM;

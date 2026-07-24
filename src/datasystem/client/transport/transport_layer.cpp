@@ -61,12 +61,14 @@ uint64_t GetConfiguredUbInlineBufferSize()
 
 TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
                                uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig,
-                               std::shared_ptr<ThreadPool> releasePool)
+                               std::shared_ptr<ThreadPool> releasePool, bool enableClientDirectPipelineH2D,
+                               int32_t pipelineThreadNum)
     : advisor_(std::make_shared<TransportAdvisor>()), releasePool_(std::move(releasePool))
 {
     auto ubBufferProvider = CreateDefaultUbReceiveBufferProvider();
     manager_ = std::make_shared<DataPlaneManager>(std::move(signature), fastTransportMemSize,
-                                                  std::move(channelConfig), ubBufferProvider);
+                                                  std::move(channelConfig), ubBufferProvider,
+                                                  enableClientDirectPipelineH2D, pipelineThreadNum);
     auto retry = std::make_shared<DeadlineRetry>();
     auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
                                                            GetConfiguredUbInlineBufferSize());
@@ -102,6 +104,25 @@ Status TransportLayer::Init()
     } catch (const std::exception &error) {
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("Start transport reconcile thread failed: ") + error.what());
     }
+    return Status::OK();
+}
+
+Status TransportLayer::ResolveMetadata(const ObjectReadRequest &input,
+                                       std::vector<ObjectMetadataItem> &metadata)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(objectRead_);
+    return objectRead_->ResolveMetadata(input, metadata);
+}
+
+Status TransportLayer::PrepareDirectUbEndpoint(const HostPort &workerAddr,
+                                               std::shared_ptr<WorkerRpcClient> &rpcClient)
+{
+    std::shared_ptr<IDataTransporter> transporter;
+    RETURN_IF_NOT_OK(
+        manager_->GetOrCreateEndpoint(workerAddr, TransportHint::UB_CANDIDATE, transporter, rpcClient));
+    RETURN_RUNTIME_ERROR_IF_NULL(transporter);
+    CHECK_FAIL_RETURN_STATUS(transporter->Kind() == AccessTransportKind::UB, K_NOT_SUPPORTED,
+                             "Client direct pipeline H2D requires UB transport");
     return Status::OK();
 }
 

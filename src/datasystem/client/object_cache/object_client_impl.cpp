@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <future>
 #include <memory>
@@ -44,10 +45,12 @@
 #include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/client/routing/routing.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
+#include "datasystem/client/transport/common/deadline_retry.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/client/transport/worker_snapshot.h"
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
 #include "datasystem/client/object_cache/exist_handler.h"
+#include "datasystem/client/object_cache/direct_receive_buffer_owner.h"
 #include "datasystem/client/routing/broken_filter.h"
 #include "datasystem/client/routing/hash_ring_refresher.h"
 #include "datasystem/client/routing/worker_router.h"
@@ -355,6 +358,8 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     LOG_IF_ERROR(authKeys_.SetServerKey(WORKER_SERVER_NAME, connectOptions.serverPublicKey),
                  "RpcAuthKeys SetServerKey failed");
     enableRemoteH2D_ = connectOptions.enableRemoteH2D;
+    enableClientDirectPipelineH2D_ = connectOptions.enableClientDirectPipelineH2D;
+    clientDirectPipelineH2DThreadNum_ = connectOptions.clientDirectPipelineH2DThreadNum;
     serviceDiscovery_ = connectOptions.serviceDiscovery;
     fastTransportMemSize_ = connectOptions.fastTransportMemSize;
     deviceId_ = connectOptions.deviceId;
@@ -424,6 +429,7 @@ Status ObjectClientImpl::ShutDown(bool &needRollbackState, bool isDestruct)
     }
     asyncSetRPCPool_ = nullptr;
     asyncGetRPCPool_ = nullptr;
+    asyncPipelineRH2DPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
     asyncDevDeletePool_ = nullptr;
 
@@ -527,6 +533,7 @@ void ObjectClientImpl::ConstructTreadPool()
     asyncSetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_set");
     asyncGetCopyPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_copy");
     asyncGetRPCPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_get_rpc");
+    asyncPipelineRH2DPool_ = std::make_shared<ThreadPool>(0, threadCount, "async_pipeline_rh2d");
     asyncSwitchWorkerPool_ = std::make_shared<ThreadPool>(0, 1, "switch");
     asyncDevDeletePool_ = std::make_shared<ThreadPool>(0, threadCount);
     asyncReleasePool_ = std::make_shared<ThreadPool>(0, 4, "async_release_buffer");
@@ -542,7 +549,8 @@ Status ObjectClientImpl::InitTransportLayer()
     RETURN_RUNTIME_ERROR_IF_NULL(asyncReleasePool_);
     auto transportLayer =
         std::make_unique<client::TransportLayer>(transportSignature_, asyncGetRPCPool_, fastTransportMemSize_,
-                                                 BrpcChannelConfig{}, asyncReleasePool_);
+                                                 BrpcChannelConfig{}, asyncReleasePool_,
+                                                 enableClientDirectPipelineH2D_, clientDirectPipelineH2DThreadNum_);
     RETURN_IF_NOT_OK(transportLayer->Init());
     // Inject shm dependencies (workerApi for GetClientFd fd-passing, mmapManager for mmap)
     // so ShmTransporter can do real zero-copy shm instead of RPC payload inline.
@@ -689,7 +697,7 @@ Status ObjectClientImpl::InitClientRuntimeAt(WorkerNode node, bool initWithWorke
     auto &workerApi = workerApi_[node];
     mmapManager_ = std::make_unique<client::MmapManager>(workerApi, initWithWorker);
     ConstructTreadPool();
-    if (!enableLocalCache_) {
+    if (!enableLocalCache_ || enableClientDirectPipelineH2D_) {
         RETURN_IF_NOT_OK(InitTransportLayer());
     }
 
@@ -805,6 +813,7 @@ void ObjectClientImpl::ClearFailedInitAttempt()
     devOcImpl_.reset();
     asyncSetRPCPool_ = nullptr;
     asyncGetRPCPool_ = nullptr;
+    asyncPipelineRH2DPool_ = nullptr;
     asyncGetCopyPool_ = nullptr;
     asyncSwitchWorkerPool_ = nullptr;
     asyncDevDeletePool_ = nullptr;
@@ -3224,8 +3233,7 @@ Status ObjectClientImpl::PostPipelineRH2D(std::promise<AsyncResult> &promise, Pi
 #endif
 
 Status ObjectClientImpl::CheckPipelineRH2DArgs(const std::vector<std::string> &objectKeys,
-                                               const std::vector<Blob> &devBlob,
-                                               std::shared_ptr<IClientWorkerApi> &workerApi)
+                                               const std::vector<Blob> &devBlob)
 {
     // check args
     CHECK_FAIL_RETURN_STATUS(objectKeys.size() == devBlob.size(), K_INVALID,
@@ -3248,7 +3256,12 @@ Status ObjectClientImpl::CheckPipelineRH2DArgs(const std::vector<std::string> &o
         CHECK_FAIL_RETURN_STATUS(devBlob[i].size > 0, K_INVALID,
                                  FormatString("device blob size is zero, key index: %zu", i));
     }
+    RETURN_IF_NOT_OK(IsClientReady());
+    return Status::OK();
+}
 
+Status ObjectClientImpl::CheckLocalPipelineRH2DArgs(std::shared_ptr<IClientWorkerApi> &workerApi)
+{
     // client should be at same site with worker by shmem
     workerApi = workerApi_[LOCAL_WORKER];
     CHECK_FAIL_RETURN_STATUS(workerApi != nullptr, K_INVALID, "no local worker api");
@@ -3258,24 +3271,744 @@ Status ObjectClientImpl::CheckPipelineRH2DArgs(const std::vector<std::string> &o
     CHECK_FAIL_RETURN_STATUS(workerApi->WorkerSupportPiplnRH2D(), K_NOT_SUPPORTED, "worker don't enable pipeline rh2d");
 
     // check connection
-    RETURN_IF_NOT_OK(IsClientReady());
     RETURN_IF_NOT_OK(CheckConnection());
     return Status::OK();
 }
+
+#if defined(BUILD_PIPLN_H2D) && defined(USE_URMA)
+namespace {
+struct DirectPipelineItem {
+    size_t index = 0;
+    std::string key;
+    uint64_t size = 0;
+    uint32_t reqId = 0;
+    uint8_t *buffer = nullptr;
+    size_t replicaIndex = 0;
+    bool registered = false;
+    bool pipeline = false;
+    bool completed = false;
+    bool finalFailed = false;
+    bool hasFallbackPayload = false;
+    Status attemptStatus = Status(K_NOT_READY, "Client direct RH2D attempt is not started");
+    std::vector<HostPort> replicas;
+    std::shared_ptr<UrmaManager::BufferHandle> handle;
+    UrmaRemoteAddrPb remoteAddr;
+    std::shared_ptr<UrmaManager::BufferHandle> fallbackHandle;
+    uint8_t *fallbackBuffer = nullptr;
+};
+
+struct DirectBatchGetTask {
+    std::shared_ptr<client::WorkerRpcClient> rpcClient;
+    BatchGetObjectRemoteReqPb request;
+    BatchGetObjectRemoteRspPb response;
+    std::vector<RpcMessage> payloads;
+    Status status = Status(K_NOT_READY, "Direct batch-get RPC is not started");
+};
+
+void RecordFirstFailure(const Status &status, Status &firstFailure)
+{
+    if (status.IsError() && firstFailure.IsOk()) {
+        firstFailure = status;
+    }
+}
+
+void AppendFailedKey(const std::string &key, std::vector<std::string> &failedKeys)
+{
+    failedKeys.emplace_back(key);
+}
+
+Status ParseDirectReplicas(const master::ObjectLocationInfoPb &location, std::vector<HostPort> &replicas)
+{
+    for (const auto &address : location.object_locations()) {
+        HostPort worker;
+        Status rc = worker.ParseString(address);
+        if (rc.IsOk()) {
+            replicas.emplace_back(std::move(worker));
+        } else {
+            LOG(WARNING) << PIPLN_LOG_PREFIX "Ignore invalid replica address: " << address
+                         << ", status=" << rc.ToString();
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(!replicas.empty(), K_NOT_FOUND, "No valid object replica address");
+    return Status::OK();
+}
+
+Status BuildDirectPipelineItem(size_t index, const std::string &key, const Blob &devBlob,
+                               const client::ObjectMetadataItem &metadata, DirectPipelineItem &item)
+{
+    RETURN_IF_NOT_OK(metadata.status);
+    CHECK_FAIL_RETURN_STATUS(metadata.location.object_locations_size() > 0, K_NOT_FOUND,
+                             "Object has no replica location");
+    item.index = index;
+    item.key = key;
+    item.size = metadata.location.object_size();
+    CHECK_FAIL_RETURN_STATUS(item.size > 0, K_INVALID, "Object size is zero");
+    CHECK_FAIL_RETURN_STATUS(devBlob.pointer != nullptr && devBlob.size >= item.size, K_INVALID,
+                             "Device blob is smaller than object");
+    RETURN_IF_NOT_OK(ParseDirectReplicas(metadata.location, item.replicas));
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(item.handle, item.size));
+    uint64_t bufferSize = 0;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferInfo(item.handle, item.buffer, bufferSize,
+                                                                 item.remoteAddr));
+    CHECK_FAIL_RETURN_STATUS(bufferSize >= item.size, K_RUNTIME_ERROR, "Receive buffer is smaller than object");
+    return Status::OK();
+}
+
+bool IsPendingDirectMetadata(const Status &status)
+{
+    switch (status.GetCode()) {
+        case K_NOT_FOUND:
+        case K_NOT_READY:
+        case K_TRY_AGAIN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool HasPendingDirectMetadata(const std::vector<bool> &metadataDone)
+{
+    return std::any_of(metadataDone.begin(), metadataDone.end(), [](bool done) { return !done; });
+}
+
+void BuildPendingDirectMetadata(const std::vector<std::string> &keys, const std::vector<bool> &metadataDone,
+                                std::vector<std::string> &pendingKeys, std::vector<size_t> &pendingIndexes)
+{
+    pendingKeys.clear();
+    pendingIndexes.clear();
+    pendingKeys.reserve(keys.size());
+    pendingIndexes.reserve(keys.size());
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (!metadataDone[i]) {
+            pendingKeys.emplace_back(keys[i]);
+            pendingIndexes.emplace_back(i);
+        }
+    }
+}
+
+Status CollectDirectPipelineItems(const std::vector<std::string> &keys, const std::vector<Blob> &devBlob,
+                                  const std::vector<client::ObjectMetadataItem> &metadata,
+                                  const std::vector<size_t> &pendingIndexes, std::vector<bool> &metadataDone,
+                                  std::vector<DirectPipelineItem> &items, std::vector<std::string> &failedKeys,
+                                  Status &firstFailure)
+{
+    for (size_t i = 0; i < pendingIndexes.size(); ++i) {
+        const size_t originalIndex = pendingIndexes[i];
+        if (i >= metadata.size() || IsPendingDirectMetadata(metadata[i].status)) {
+            continue;
+        }
+        metadataDone[originalIndex] = true;
+        DirectPipelineItem item;
+        Status rc = BuildDirectPipelineItem(originalIndex, keys[originalIndex], devBlob[originalIndex],
+                                            metadata[i], item);
+        if (rc.GetCode() == K_OUT_OF_MEMORY) {
+            LOG(WARNING) << PIPLN_LOG_PREFIX "Client direct receive buffer allocation failed: key="
+                         << keys[originalIndex] << ", status=" << rc.ToString();
+            return rc;
+        }
+        if (rc.IsError()) {
+            LOG(ERROR) << PIPLN_LOG_PREFIX "Prepare client direct object failed: key=" << keys[originalIndex]
+                       << ", status=" << rc.ToString();
+            RecordFirstFailure(rc, firstFailure);
+            AppendFailedKey(keys[originalIndex], failedKeys);
+            continue;
+        }
+        items.emplace_back(std::move(item));
+    }
+    return Status::OK();
+}
+
+void MarkPendingMetadataFailed(const std::vector<std::string> &keys, const std::vector<bool> &metadataDone,
+                               const Status &status, std::vector<std::string> &failedKeys)
+{
+    size_t pendingKeyNum = 0;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (!metadataDone[i]) {
+            AppendFailedKey(keys[i], failedKeys);
+            ++pendingKeyNum;
+        }
+    }
+    LOG(ERROR) << PIPLN_LOG_PREFIX "Client direct metadata wait failed: pendingKeyNum=" << pendingKeyNum
+               << ", status=" << status.ToString();
+}
+
+Status PrepareDirectReceiver(DirectPipelineItem &item, const HostPort &worker, H2DChunkManager &manager)
+{
+    if (item.size <= OsXprtPipln::ChunkTag::chunkSize2MB) {
+        VLOG(1) << PIPLN_LOG_PREFIX "Use one-shot URMA write for small object: key=" << item.key
+                << ", reqId=" << item.reqId << ", size=" << item.size;
+        return Status::OK();
+    }
+    UrmaRecvTargetLease recvTarget;
+    Status rc = UrmaManager::Instance().AcquireRecvTarget(
+        item.handle->GetSegmentAddress(), item.handle->GetSegmentSize(), worker.ToString(), recvTarget);
+    if (rc.IsOk()) {
+        rc = manager.DoPiplnStep1_StartReceiver(
+            item.reqId, reinterpret_cast<uint64_t>(item.buffer), item.size, recvTarget.TargetSeg(),
+            recvTarget.TargetJfr(), recvTarget.TargetJetty(), -1, item.size, 0);
+    }
+    if (rc.IsError()) {
+        LOG(WARNING) << PIPLN_LOG_PREFIX "Client direct receiver failed, fallback to one-shot URMA write: key="
+                     << item.key << ", reqId=" << item.reqId << ", status=" << rc.ToString();
+        return Status::OK();
+    }
+    item.pipeline = true;
+    item.remoteAddr.set_pipeline_rh2d_req_id(item.reqId);
+    return Status::OK();
+}
+
+Status PrepareDirectAttempt(DirectPipelineItem &item, const Blob &devBlob, void *stream,
+                            const HostPort &worker, H2DChunkManager &manager)
+{
+    item.reqId = H2DChunkManager::GenerateReqId();
+    item.registered = false;
+    item.pipeline = false;
+    item.hasFallbackPayload = false;
+    item.fallbackHandle.reset();
+    item.fallbackBuffer = nullptr;
+    item.attemptStatus = Status::OK();
+    item.remoteAddr.clear_pipeline_rh2d_req_id();
+    OsXprtPipln::DevShmInfo devInfo{ OsXprtPipln::TargetDeviceType::CUDA, (uint32_t)-1, devBlob.pointer,
+                                    static_cast<size_t>(devBlob.size), stream };
+    RETURN_IF_NOT_OK(manager.AddKey(item.key, item.reqId, devInfo, static_cast<int>(item.index)));
+    item.registered = true;
+    return PrepareDirectReceiver(item, worker, manager);
+}
+
+void FailDirectAttempt(DirectPipelineItem &item, const Status &status, H2DChunkManager &manager)
+{
+    item.attemptStatus = status;
+    if (item.registered) {
+        manager.MarkCancelOrDone(item.reqId, false);
+    }
+}
+
+bool IsDirectObjectSizeMatched(const DirectPipelineItem &item, const GetObjectRemoteRspPb &rsp)
+{
+    if (rsp.data_size() < 0) {
+        return false;
+    }
+    return static_cast<uint64_t>(rsp.data_size()) == item.size;
+}
+
+bool IsValidDirectDataSource(DataTransferSource source)
+{
+    return source == DataTransferSource::DATA_ALREADY_TRANSFERRED || source == DataTransferSource::DATA_IN_PAYLOAD;
+}
+
+Status ValidateDirectBatchResponse(const DirectPipelineItem &item, const GetObjectRemoteRspPb &rsp)
+{
+    Status rc(static_cast<StatusCode>(rsp.error().error_code()), rsp.error().error_msg());
+    if (rc.IsError()) {
+        return rc;
+    }
+    if (!IsDirectObjectSizeMatched(item, rsp)) {
+        return Status(K_OC_REMOTE_GET_NOT_ENOUGH, "Client direct object size changed");
+    }
+    if (IsValidDirectDataSource(rsp.data_source())) {
+        return Status::OK();
+    }
+    return Status(K_RUNTIME_ERROR, "Client direct response has invalid data source");
+}
+
+Status ApplyDirectPayloadResponse(DirectPipelineItem &item, RpcMessage &payload)
+{
+    CHECK_FAIL_RETURN_STATUS(payload.Size() == item.size, K_RUNTIME_ERROR, "Client direct payload size mismatch");
+    std::shared_ptr<UrmaManager::BufferHandle> fallbackHandle;
+    uint8_t *fallbackBuffer = nullptr;
+    uint64_t fallbackBufferSize = 0;
+    UrmaRemoteAddrPb fallbackRemoteAddr;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(fallbackHandle, item.size));
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferInfo(fallbackHandle, fallbackBuffer, fallbackBufferSize,
+                                                                 fallbackRemoteAddr));
+    CHECK_FAIL_RETURN_STATUS(fallbackBufferSize >= item.size, K_RUNTIME_ERROR,
+                             "Client direct fallback buffer is smaller than object");
+    std::memcpy(fallbackBuffer, payload.Data(), item.size);
+    item.fallbackHandle = std::move(fallbackHandle);
+    item.fallbackBuffer = fallbackBuffer;
+    item.hasFallbackPayload = true;
+    return Status::OK();
+}
+
+Status ApplyDirectPayloadIfNeeded(DirectPipelineItem &item, const GetObjectRemoteRspPb &rsp,
+                                  std::vector<RpcMessage> &payloads, size_t &payloadIndex)
+{
+    if (rsp.data_source() != DataTransferSource::DATA_IN_PAYLOAD) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(payloadIndex < payloads.size(), K_RUNTIME_ERROR,
+                             "Client direct payload size mismatch");
+    Status rc = ApplyDirectPayloadResponse(item, payloads[payloadIndex]);
+    ++payloadIndex;
+    return rc;
+}
+
+Status ApplyDirectBatchResponse(const std::vector<DirectPipelineItem *> &items,
+                                const BatchGetObjectRemoteRspPb &response, std::vector<RpcMessage> &payloads,
+                                H2DChunkManager &manager)
+{
+    CHECK_FAIL_RETURN_STATUS(response.responses_size() == static_cast<int>(items.size()), K_RUNTIME_ERROR,
+                             "Client direct batch response size mismatch");
+    size_t payloadIndex = 0;
+    for (size_t i = 0; i < items.size(); ++i) {
+        auto &item = *items[i];
+        const auto &rsp = response.responses(static_cast<int>(i));
+        Status rc = ValidateDirectBatchResponse(item, rsp);
+        if (rc.IsOk()) {
+            rc = ApplyDirectPayloadIfNeeded(item, rsp, payloads, payloadIndex);
+        }
+        if (rc.IsError()) {
+            FailDirectAttempt(item, rc, manager);
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(payloadIndex == payloads.size(), K_RUNTIME_ERROR,
+                             "Client direct payload count mismatch");
+    return Status::OK();
+}
+
+Status BuildDirectPipelineBatch(const std::shared_ptr<client::WorkerRpcClient> &rpcClient,
+                                const std::vector<DirectPipelineItem *> &items,
+                                DirectBatchGetTask &task)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient);
+    task.rpcClient = rpcClient;
+    std::string instanceId;
+    RETURN_IF_NOT_OK(GetLocalTransportInstanceId(instanceId));
+    task.request.set_urma_instance_id(instanceId);
+    for (auto *item : items) {
+        auto *subReq = task.request.add_requests();
+        subReq->set_object_key(item->key);
+        subReq->set_data_size(item->size);
+        subReq->set_read_offset(0);
+        subReq->set_read_size(item->size);
+        subReq->set_try_lock(true);
+        *subReq->mutable_urma_info() = item->remoteAddr;
+    }
+    return Status::OK();
+}
+
+void ApplyDirectPipelineBatch(const std::vector<DirectPipelineItem *> &items,
+                              DirectBatchGetTask &task, H2DChunkManager &manager)
+{
+    if (task.status.IsError()) {
+        for (auto *item : items) {
+            FailDirectAttempt(*item, task.status, manager);
+        }
+        return;
+    }
+    Status rc = ApplyDirectBatchResponse(items, task.response, task.payloads, manager);
+    if (rc.IsError()) {
+        for (auto *item : items) {
+            if (item->attemptStatus.IsOk()) {
+                FailDirectAttempt(*item, rc, manager);
+            }
+        }
+    }
+}
+
+// The pool lifecycle remains rooted in ObjectClientImpl. This function borrows it synchronously and drains every
+// submitted future before returning, so neither the pool nor task storage crosses this call's lifetime boundary.
+Status InvokeDirectBatchGets(ThreadPool &taskPool, std::vector<DirectBatchGetTask> &tasks)
+{
+    if (tasks.empty()) {
+        return Status::OK();
+    }
+    const auto traceContext = Trace::Instance().GetContext();
+    const int64_t remainingUs = ApiDeadline::Instance().ApiRemainingUs();
+    const auto dispatchTime = std::chrono::steady_clock::now();
+    std::vector<std::future<Status>> futures;
+    futures.reserve(tasks.size());
+    Status submitStatus = Status::OK();
+    try {
+        for (auto &task : tasks) {
+            auto *taskPtr = &task;
+            futures.emplace_back(taskPool.Submit([taskPtr, traceContext, remainingUs, dispatchTime]() {
+                try {
+                    TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
+                    ApiDeadline::Instance().Push();
+                    Raii deadlineRaii([]() { ApiDeadline::Instance().Pop(); });
+                    RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
+                    RETURN_RUNTIME_ERROR_IF_NULL(taskPtr->rpcClient);
+                    return taskPtr->rpcClient->InvokeBatchGetObject(taskPtr->request, taskPtr->response,
+                                                                    taskPtr->payloads);
+                } catch (const std::exception &error) {
+                    return Status(K_RUNTIME_ERROR,
+                                  std::string("Direct batch-get RPC task failed: ") + error.what());
+                }
+            }));
+        }
+    } catch (const std::exception &error) {
+        submitStatus = Status(K_RUNTIME_ERROR, std::string("Submit direct batch-get RPC failed: ") + error.what());
+    }
+    for (size_t i = 0; i < futures.size(); ++i) {
+        tasks[i].status = futures[i].get();
+    }
+    return submitStatus;
+}
+
+void SubmitDirectOneShotH2D(DirectPipelineItem &item, H2DChunkManager &manager)
+{
+    if (!item.registered || item.attemptStatus.IsError() || (item.pipeline && !item.hasFallbackPayload)) {
+        return;
+    }
+    if (item.pipeline) {
+        Status rc = manager.DoPiplnStep2_FallbackConsume(item.reqId, item.fallbackBuffer, item.size);
+        if (rc.IsError()) {
+            item.attemptStatus = rc;
+            return;
+        }
+        item.pipeline = false;
+        return;
+    }
+    OsXprtPipln::ChunkTag tag{ .reqId = item.reqId,
+                              .chunkType = OsXprtPipln::ChunkTag::lastChunkTag,
+                              .chunkId = 0,
+                              .chunkSize = 0 };
+    OsXprtPipln::ChunkTag::SetReservePart(tag, item.size);
+    void *dataSrc = item.hasFallbackPayload ? item.fallbackBuffer : item.buffer;
+    manager.DoPiplnStep2_ChunkConsume(item.reqId, reinterpret_cast<uint64_t>(dataSrc), tag, item.size);
+}
+
+bool IsRetryableDirectReplicaError(const Status &status)
+{
+    switch (status.GetCode()) {
+        case K_TRY_AGAIN:
+        case K_RPC_UNAVAILABLE:
+        case K_URMA_NEED_CONNECT:
+        case K_URMA_CONNECT_FAILED:
+        case K_WORKER_PULL_OBJECT_NOT_FOUND:
+        case K_NOT_FOUND:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void FinishDirectItem(DirectPipelineItem &item, const Status &waitRc, H2DChunkManager &manager)
+{
+    OsXprtPipln::ReqInfo *info = item.registered ? manager.GetReqInfo(item.reqId) : nullptr;
+    if (info != nullptr && info->ioStatus.IsError()) {
+        item.attemptStatus = info->ioStatus;
+        item.finalFailed = true;
+        LOG(ERROR) << PIPLN_LOG_PREFIX "Client direct RH2D local H2D failed: key=" << item.key
+                   << ", status=" << info->ioStatus.ToString();
+        return;
+    }
+    const bool success = item.registered && item.attemptStatus.IsOk()
+                         && manager.CheckIsRequestSuccess(item.reqId);
+    if (success) {
+        item.completed = true;
+        return;
+    }
+    if (item.attemptStatus.IsOk()) {
+        item.attemptStatus = waitRc.IsError()
+                                 ? waitRc
+                                 : Status(K_RUNTIME_ERROR, "Client direct RH2D request did not complete");
+    }
+    if (IsRetryableDirectReplicaError(item.attemptStatus)
+        && item.replicaIndex + 1 < item.replicas.size()) {
+        ++item.replicaIndex;
+        VLOG(1) << PIPLN_LOG_PREFIX "Retry client direct RH2D on next replica: key=" << item.key
+                << ", status=" << item.attemptStatus.ToString();
+        return;
+    }
+    item.finalFailed = true;
+    LOG(ERROR) << PIPLN_LOG_PREFIX "Client direct RH2D failed without replica retry: key=" << item.key
+               << ", status=" << item.attemptStatus.ToString();
+}
+
+void FinishDirectRound(std::vector<DirectPipelineItem *> &active, H2DChunkManager &manager)
+{
+    Status waitRc = manager.KeyNum() > 0 ? manager.WaitAll() : Status::OK();
+    for (auto *item : active) {
+        FinishDirectItem(*item, waitRc, manager);
+    }
+}
+
+void PrepareDirectPipelineBatches(client::TransportLayer &transport, const std::vector<Blob> &devBlob,
+                                  void *stream, H2DChunkManager &manager,
+                                  std::vector<std::vector<DirectPipelineItem *>> &batchItems,
+                                  std::vector<DirectBatchGetTask> &batchTasks,
+                                  const std::unordered_map<HostPort, std::vector<DirectPipelineItem *>> &groups)
+{
+    for (const auto &group : groups) {
+        std::shared_ptr<client::WorkerRpcClient> rpcClient;
+        Status endpointRc = transport.PrepareDirectUbEndpoint(group.first, rpcClient);
+        std::vector<DirectPipelineItem *> ready;
+        for (auto *item : group.second) {
+            item->registered = false;
+            item->pipeline = false;
+            item->hasFallbackPayload = false;
+            item->attemptStatus = Status(K_NOT_READY, "Client direct attempt is not prepared");
+            Status rc = endpointRc.IsOk()
+                            ? PrepareDirectAttempt(*item, devBlob[item->index], stream, group.first, manager)
+                            : endpointRc;
+            if (rc.IsError()) {
+                item->attemptStatus = rc;
+            } else {
+                ready.emplace_back(item);
+            }
+        }
+        if (ready.empty()) {
+            continue;
+        }
+        DirectBatchGetTask task;
+        Status rc = BuildDirectPipelineBatch(rpcClient, ready, task);
+        if (rc.IsError()) {
+            for (auto *item : ready) {
+                FailDirectAttempt(*item, rc, manager);
+            }
+            continue;
+        }
+        batchItems.emplace_back(std::move(ready));
+        batchTasks.emplace_back(std::move(task));
+    }
+}
+
+Status ApplyDirectPipelineResults(std::vector<DirectPipelineItem *> &active, ThreadPool &rpcPool,
+                                  std::vector<std::vector<DirectPipelineItem *>> &batchItems,
+                                  std::vector<DirectBatchGetTask> &batchTasks, H2DChunkManager &manager)
+{
+    Status submitRc = InvokeDirectBatchGets(rpcPool, batchTasks);
+    if (submitRc.IsError()) {
+        for (auto &itemsInBatch : batchItems) {
+            for (auto *item : itemsInBatch) {
+                FailDirectAttempt(*item, submitRc, manager);
+            }
+        }
+    } else {
+        for (size_t i = 0; i < batchTasks.size(); ++i) {
+            ApplyDirectPipelineBatch(batchItems[i], batchTasks[i], manager);
+        }
+    }
+    for (auto *item : active) {
+        SubmitDirectOneShotH2D(*item, manager);
+    }
+    FinishDirectRound(active, manager);
+    return Status::OK();
+}
+
+Status RunDirectPipelineRound(client::TransportLayer &transport, ThreadPool &rpcPool,
+                              const std::vector<Blob> &devBlob, void *stream,
+                              std::vector<DirectPipelineItem> &items)
+{
+    H2DChunkManager manager(true);
+    std::vector<DirectPipelineItem *> active;
+    std::unordered_map<HostPort, std::vector<DirectPipelineItem *>> groups;
+    for (auto &item : items) {
+        if (!item.completed && !item.finalFailed) {
+            active.emplace_back(&item);
+            groups[item.replicas[item.replicaIndex]].emplace_back(&item);
+        }
+    }
+    std::vector<std::vector<DirectPipelineItem *>> batchItems;
+    std::vector<DirectBatchGetTask> batchTasks;
+    batchItems.reserve(groups.size());
+    batchTasks.reserve(groups.size());
+    PrepareDirectPipelineBatches(transport, devBlob, stream, manager, batchItems, batchTasks, groups);
+    return ApplyDirectPipelineResults(active, rpcPool, batchItems, batchTasks, manager);
+}
+
+bool HasPendingDirectItems(const std::vector<DirectPipelineItem> &items)
+{
+    return std::any_of(items.begin(), items.end(), [](const DirectPipelineItem &item) {
+        return !item.completed && !item.finalFailed;
+    });
+}
+
+template <typename BuildRequest>
+Status ResolveAndTransferDirectItems(client::TransportLayer &transport,
+                                     ThreadPool &rpcPool,
+                                     const std::vector<std::string> &objectKeys,
+                                     const std::vector<Blob> &devBlob, void *h2dStream,
+                                     std::vector<DirectPipelineItem> &items,
+                                     std::vector<std::string> &failedKeys, Status &waitStatus,
+                                     Status &firstFailure, BuildRequest &&buildRequest)
+{
+    std::vector<bool> metadataDone(objectKeys.size(), false);
+    client::DeadlineRetry retry;
+    int64_t backoffMs = 1;
+    while (HasPendingDirectMetadata(metadataDone)) {
+        std::vector<std::string> pendingKeys;
+        std::vector<size_t> pendingIndexes;
+        BuildPendingDirectMetadata(objectKeys, metadataDone, pendingKeys, pendingIndexes);
+        client::ObjectReadRequest request;
+        std::vector<Status> itemStatuses(pendingKeys.size(), Status(K_NOT_READY, "Metadata is not resolved"));
+        buildRequest(pendingKeys, request, itemStatuses);
+        std::vector<client::ObjectMetadataItem> metadata;
+        RETURN_IF_NOT_OK(transport.ResolveMetadata(request, metadata));
+        metadata.resize(pendingKeys.size());
+        RETURN_IF_NOT_OK(CollectDirectPipelineItems(objectKeys, devBlob, metadata, pendingIndexes,
+                                                    metadataDone, items, failedKeys, firstFailure));
+        while (HasPendingDirectItems(items)) {
+            RETURN_IF_NOT_OK(retry.CheckDeadline());
+            RETURN_IF_NOT_OK(RunDirectPipelineRound(transport, rpcPool, devBlob, h2dStream, items));
+        }
+        if (!HasPendingDirectMetadata(metadataDone)) {
+            break;
+        }
+        waitStatus = retry.Backoff(backoffMs);
+        if (waitStatus.IsError()) {
+            RecordFirstFailure(waitStatus, firstFailure);
+            MarkPendingMetadataFailed(objectKeys, metadataDone, waitStatus, failedKeys);
+            break;
+        }
+    }
+    return Status::OK();
+}
+
+template <typename MaterializeItem>
+void MaterializeDirectItems(std::vector<DirectPipelineItem> &items,
+                            std::vector<std::shared_ptr<Buffer>> &buffers,
+                            std::vector<std::string> &failedKeys, Status &firstFailure,
+                            MaterializeItem &&materializeItem)
+{
+    for (auto &item : items) {
+        if (!item.completed) {
+            if (item.attemptStatus.IsError()) {
+                RecordFirstFailure(item.attemptStatus, firstFailure);
+            } else {
+                RecordFirstFailure(Status(K_RUNTIME_ERROR, "Client direct RH2D item did not complete"),
+                                   firstFailure);
+            }
+            AppendFailedKey(item.key, failedKeys);
+            continue;
+        }
+        client::ObjectReadItemResult result;
+        result.objectKey = item.key;
+        result.status = Status::OK();
+        result.data.response.set_data_size(item.size);
+        result.data.response.set_data_source(DataTransferSource::DATA_ALREADY_TRANSFERRED);
+        result.data.externalData = item.hasFallbackPayload ? item.fallbackBuffer : item.buffer;
+        result.data.externalSize = item.size;
+        result.data.externalOwner = std::make_shared<DirectReceiveBufferOwner>(item.handle, item.fallbackHandle);
+        result.data.kind = AccessTransportKind::UB;
+        Status rc = materializeItem(item.key, result, buffers[item.index]);
+        if (rc.IsError()) {
+            LOG(ERROR) << PIPLN_LOG_PREFIX "Materialize client direct RH2D result failed: key=" << item.key
+                       << ", status=" << rc.ToString();
+            RecordFirstFailure(rc, firstFailure);
+            AppendFailedKey(item.key, failedKeys);
+        }
+    }
+}
+
+}  // namespace
+
+Status ObjectClientImpl::RunClientDirectPipelineRH2D(const std::vector<std::string> &objectKeys,
+                                                     const std::vector<Blob> &devBlob,
+                                                     std::vector<std::shared_ptr<Buffer>> &buffers,
+                                                     void *h2dStream,
+                                                     std::vector<std::string> &failedKeys)
+{
+    RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    RETURN_RUNTIME_ERROR_IF_NULL(asyncGetRPCPool_);
+    std::vector<DirectPipelineItem> items;
+    items.reserve(objectKeys.size());
+    Status waitStatus = Status::OK();
+    Status firstFailure = Status::OK();
+    auto buildRequest = [this](const std::vector<std::string> &keys, client::ObjectReadRequest &request,
+                               std::vector<Status> &statuses) {
+        BuildTransportReadRequest(keys, request, statuses);
+    };
+    Status rc = ResolveAndTransferDirectItems(*transportLayer_, *asyncGetRPCPool_, objectKeys, devBlob,
+                                              h2dStream, items, failedKeys, waitStatus, firstFailure, buildRequest);
+    if (rc.IsError()) {
+        for (const auto &key : objectKeys) {
+            AppendFailedKey(key, failedKeys);
+        }
+        return rc;
+    }
+    auto materializeItem = [this](const std::string &key, client::ObjectReadItemResult &item,
+                                  std::shared_ptr<Buffer> &buffer) {
+        return MaterializeTransportItem(key, item, buffer);
+    };
+    MaterializeDirectItems(items, buffers, failedKeys, firstFailure, materializeItem);
+    if (waitStatus.IsError()) {
+        return waitStatus;
+    }
+    if (failedKeys.empty()) {
+        return Status::OK();
+    }
+    return firstFailure.IsError() ? firstFailure
+                                  : Status(K_RUNTIME_ERROR, std::to_string(failedKeys.size()) + " keys failed");
+}
+
+#elif defined(BUILD_PIPLN_H2D)
+Status ObjectClientImpl::RunClientDirectPipelineRH2D(const std::vector<std::string> &objectKeys,
+                                                     const std::vector<Blob> &devBlob,
+                                                     std::vector<std::shared_ptr<Buffer>> &buffers,
+                                                     void *h2dStream,
+                                                     std::vector<std::string> &failedKeys)
+{
+    (void)devBlob;
+    (void)buffers;
+    (void)h2dStream;
+    failedKeys = objectKeys;
+    return Status(K_NOT_SUPPORTED, "Client direct pipeline H2D requires USE_URMA");
+}
+#endif
 
 std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
     const std::vector<std::string> &objectKeys, const std::vector<Blob> &devBlob,
     std::vector<std::shared_ptr<Buffer>> &buffers, void *h2dStream)
 {
+    ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     auto asyncResource = std::make_shared<PipelineAsyncResource>();
     std::shared_future<AsyncResult> future = asyncResource->promise.get_future().share();
 
 #ifdef BUILD_PIPLN_H2D
     PerfPoint perfPoint(PerfKey::PIPLN_RH2D_CLIENT_SUBMIT);
+    if (asyncPipelineRH2DPool_ == nullptr) {
+        Status rc(K_RUNTIME_ERROR, "Pipeline RH2D task pool is not initialized");
+        asyncResource->promise.set_value({ rc, objectKeys });
+        return future;
+    }
 
-    // check status
+    Status rc = CheckPipelineRH2DArgs(objectKeys, devBlob);
+    if (rc.IsError()) {
+        asyncResource->promise.set_value({ rc, objectKeys });
+        LOG(ERROR) << rc.GetMsg();
+        return future;
+    }
+
+    const auto localWorkerApi =
+        workerApi_.size() > LOCAL_WORKER ? workerApi_[LOCAL_WORKER] : nullptr;
+    const bool hasLocalWorker = localWorkerApi != nullptr && localWorkerApi->IsShmEnable();
+    if (!hasLocalWorker && enableClientDirectPipelineH2D_) {
+        auto traceContext = Trace::Instance().GetContext();
+        int64_t apiRemainingUs = ApiDeadline::Instance().ApiRemainingUs();
+        if (apiRemainingUs <= 0) {
+            Status rc(K_RPC_DEADLINE_EXCEEDED, "API deadline exceeded before client direct RH2D dispatch");
+            asyncResource->promise.set_value({ rc, objectKeys });
+            return future;
+        }
+        buffers.assign(objectKeys.size(), nullptr);
+        auto keysCopy = objectKeys;
+        auto blobCopy = devBlob;
+        auto dispatchTime = std::chrono::steady_clock::now();
+        asyncResource->rpcFuture = asyncPipelineRH2DPool_->Submit(
+            [this, asyncResource, traceContext, apiRemainingUs, dispatchTime, keys = std::move(keysCopy),
+             blobs = std::move(blobCopy), &buffers, h2dStream]() {
+                TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
+                ApiDeadline::Instance().Push();
+                Raii deadlineRaii([]() { ApiDeadline::Instance().Pop(); });
+                Status rc = InitTimeoutsFromDispatch(apiRemainingUs, dispatchTime);
+                std::vector<std::string> failedKeys;
+                if (rc.IsOk()) {
+                    rc = RunClientDirectPipelineRH2D(keys, blobs, buffers, h2dStream, failedKeys);
+                } else {
+                    failedKeys = keys;
+                }
+                asyncResource->promise.set_value({ rc, std::move(failedKeys) });
+                return rc;
+            });
+        perfPoint.Record();
+        return future;
+    }
+
     std::shared_ptr<IClientWorkerApi> workerApi;
-    Status rc = CheckPipelineRH2DArgs(objectKeys, devBlob, workerApi);
+    rc = CheckLocalPipelineRH2DArgs(workerApi);
     if (rc.IsError()) {
         if (workerApi) {
             workerApi->DecreaseInvokeCount();
@@ -3310,7 +4043,7 @@ std::shared_future<AsyncResult> ObjectClientImpl::GetWithOsTransportPipeline(
         return future;
     }
     auto dispatchTime = std::chrono::steady_clock::now();
-    asyncResource->rpcFuture = asyncGetRPCPool_->Submit(
+    asyncResource->rpcFuture = asyncPipelineRH2DPool_->Submit(
         [this, asyncResource, traceContext, workerApi, apiRemainingUs, dispatchTime, &buffers]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
         ApiDeadline::Instance().Push();

@@ -171,6 +171,16 @@ UrmaManager::~UrmaManager()
     }
     UrmaUninit();
     urma_dlopen::Cleanup();
+    {
+        std::lock_guard<std::mutex> lock(clientTransportMemoryPinMutex_);
+#ifdef BUILD_PIPLN_H2D
+        if (clientTransportMemoryPinned_ && memoryBuffer_ != nullptr) {
+            OsXprtPipln::UnRegisterHostMemory(memoryBuffer_);
+        }
+#endif
+        clientTransportMemoryPinned_ = false;
+        clientTransportMemoryPinRef_ = 0;
+    }
     if (memoryBuffer_ != nullptr) {
         munmap(memoryBuffer_, ubTransportMemSize_.load());
         memoryBuffer_ = nullptr;
@@ -331,6 +341,48 @@ Status UrmaManager::InitMemoryBufferPool()
     }
 
     return rc;
+}
+
+Status UrmaManager::EnsureClientPipelineH2DEnv()
+{
+#ifdef BUILD_PIPLN_H2D
+    RETURN_RUNTIME_ERROR_IF_NULL(urmaResource_);
+    RETURN_IF_NOT_OK(urmaResource_->InitPipelineH2DEnv());
+#endif
+    return Status::OK();
+}
+
+Status UrmaManager::RegisterClientTransportMemoryForH2D()
+{
+#ifdef BUILD_PIPLN_H2D
+    std::lock_guard<std::mutex> lock(clientTransportMemoryPinMutex_);
+    if (clientTransportMemoryPinRef_ > 0) {
+        ++clientTransportMemoryPinRef_;
+        return Status::OK();
+    }
+    RETURN_RUNTIME_ERROR_IF_NULL(memoryBuffer_);
+    RETURN_IF_NOT_OK(OsXprtPipln::RegisterHostMemory(memoryBuffer_, ubTransportMemSize_.load()));
+    clientTransportMemoryPinned_ = true;
+    clientTransportMemoryPinRef_ = 1;
+#endif
+    return Status::OK();
+}
+
+void UrmaManager::UnregisterClientTransportMemoryForH2D()
+{
+#ifdef BUILD_PIPLN_H2D
+    std::lock_guard<std::mutex> lock(clientTransportMemoryPinMutex_);
+    if (clientTransportMemoryPinRef_ == 0) {
+        return;
+    }
+    if (--clientTransportMemoryPinRef_ > 0) {
+        return;
+    }
+    if (clientTransportMemoryPinned_ && memoryBuffer_ != nullptr) {
+        OsXprtPipln::UnRegisterHostMemory(memoryBuffer_);
+    }
+    clientTransportMemoryPinned_ = false;
+#endif
 }
 
 Status UrmaManager::GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size)
@@ -602,12 +654,11 @@ Status UrmaManager::GetLocalJetty(const std::string &key, std::shared_ptr<UrmaJe
     return Status::OK();
 }
 
-Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const std::string &address,
-                                 urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr, urma_jetty_t **targetJetty)
+Status UrmaManager::AcquireRecvTarget(uint64_t segAddress, uint64_t segSize, const std::string &address,
+                                      UrmaRecvTargetLease &lease)
 {
-    UrmaLocalSegmentMap::const_accessor accessor;
-    RETURN_IF_NOT_OK(GetOrRegisterSegment(segAddress, segSize, accessor));
-    *targetSeg = accessor->second->Raw();
+    lease.Reset();
+    RETURN_IF_NOT_OK(GetOrRegisterSegment(segAddress, segSize, lease.segmentAccessor_));
 
     HostPort remoteSenderAddr;
     remoteSenderAddr.ParseString(address);
@@ -617,22 +668,25 @@ Status UrmaManager::GetTargetSeg(uint64_t segAddress, uint64_t segSize, const st
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
         urmaConnectionMap_.find(connectionAccessor, remoteConnectionId) && connectionAccessor->second != nullptr,
         K_URMA_NEED_CONNECT,
-        FormatString("[GetTargetSeg] No exchanged URMA connection for %s; cannot use exchanged recv Jetty",
+        FormatString("[AcquireRecvTarget] No exchanged URMA connection for %s; cannot use exchanged recv Jetty",
                      remoteConnectionId));
 
     std::shared_ptr<UrmaJetty> recvJetty;
     RETURN_IF_NOT_OK_APPEND_MSG(urmaResource_->GetOrCreateSharedRecvJetty(recvJetty),
-                                FormatString("[GetTargetSeg] Failed to get shared recv Jetty for %s",
+                                FormatString("[AcquireRecvTarget] Failed to get shared recv Jetty for %s",
                                              remoteConnectionId));
 
-    *targetJetty = recvJetty->Raw();
+    lease.postPermit_ = recvJetty->TryAcquirePostPermit();
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        *targetJetty != nullptr, K_RUNTIME_ERROR,
-        FormatString("[GetTargetSeg] Shared recv Jetty raw handle is null for %s", remoteConnectionId));
-    *targetJfr = recvJetty->SharedJfrRaw();
+        lease.postPermit_, K_URMA_TRY_AGAIN,
+        FormatString("[AcquireRecvTarget] Shared recv Jetty is closing for %s", remoteConnectionId));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-        *targetJfr != nullptr, K_RUNTIME_ERROR,
-        FormatString("[GetTargetSeg] Shared recv Jetty JFR is null for %s", remoteConnectionId));
+        lease.TargetJetty() != nullptr, K_RUNTIME_ERROR,
+        FormatString("[AcquireRecvTarget] Shared recv Jetty raw handle is null for %s", remoteConnectionId));
+    lease.targetJfr_ = recvJetty->SharedJfrRaw();
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        lease.TargetJfr() != nullptr, K_RUNTIME_ERROR,
+        FormatString("[AcquireRecvTarget] Shared recv Jetty JFR is null for %s", remoteConnectionId));
     return Status::OK();
 }
 
@@ -2306,10 +2360,17 @@ Status UrmaManager::ExchangeJfr(const UrmaHandshakeReqPb &req, UrmaHandshakeRspP
     return Status::OK();
 }
 
-void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t transportSize)
+void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t transportSize, bool enablePipelineH2D)
 {
     // Note: The parameter needs to be consistent in the same client process.
     if (urmaMode == FastTransportMode::UB) {
+#ifdef BUILD_PIPLN_H2D
+        if (enablePipelineH2D) {
+            SetClientPipelineRH2DEnabled();
+        }
+#else
+        (void)enablePipelineH2D;
+#endif
         FLAGS_enable_urma = true;
         FLAGS_enable_ub_numa_affinity = true;
         UrmaManager::clientMode_ = true;
@@ -2321,10 +2382,6 @@ void UrmaManager::SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t trans
                 "Try to set client UB transport memory size to %lu, but it is already set to %lu", transportSize,
                 UrmaManager::ubTransportMemSize_);
         }
-#ifdef BUILD_PIPLN_H2D
-        // pipeline h2d flag should be set for client to init pipeline env
-        FLAGS_enable_pipeline_h2d = true;
-#endif
         // FLAGS_urma_connection_size is deprecated; JFS/JFR are created per-connection.
     }
 }

@@ -97,6 +97,11 @@
     into `libds_client_py`; it is not part of the public C++ `datasystem` SDK ABI or the Worker request path.
   - Python package `yr.datasystem` lazily exposes public SDK symbols, `DsTensorClient`, and optional transfer-engine
     bindings so importing `TransferEngine` alone does not eagerly load `libds_client_py` or its `libbrpc` dependency.
+  - Client-direct pipeline RH2D serializes manager registration and response application, while independent worker
+    batch-get RPCs fan out through the client-owned Get RPC pool after registration completes. The pool is passed
+    explicitly into the direct round and is not additionally owned by `TransportLayer`. Each RPC owns its mutable
+    request/response/payload state. A fallback payload is copied into a separate `UrmaManager` buffer instead of the
+    active receive buffer, and the returned buffer owner retains both handles for external-stream source lifetime.
 - Pending verification:
   - exact internal ownership split between `listen_worker.cpp`, `client_worker_common_api.cpp`, and `embedded_client_worker_api.cpp` for each API family;
   - whether Java and Go clients follow the same runtime layering closely enough to share one future module document.

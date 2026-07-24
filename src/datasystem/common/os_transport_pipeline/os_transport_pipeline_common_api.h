@@ -24,12 +24,25 @@
 #include "datasystem/common/os_transport_pipeline/pipeline_notify_queue.h"
 
 #ifdef BUILD_PIPLN_H2D
+#include <atomic>
 #include <ub/umdk/urma/urma_api.h>
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/os_transport_pipeline/chunk_manager.h"
+inline std::atomic<bool> &ClientPipelineRH2DEnabled()
+{
+    static std::atomic<bool> enabled(false);
+    return enabled;
+}
+
+inline void SetClientPipelineRH2DEnabled()
+{
+    ClientPipelineRH2DEnabled().store(true, std::memory_order_release);
+}
+
 static inline bool SupportPipelineRH2D()
 {
-    return (FLAGS_enable_urma && FLAGS_enable_pipeline_h2d);
+    return ClientPipelineRH2DEnabled().load(std::memory_order_acquire)
+           || (FLAGS_enable_urma && FLAGS_enable_pipeline_h2d);
 }
 #define RETURN_IF_NOT_SUPPORT_PIPLN_H2D() \
     if (!SupportPipelineRH2D())           \

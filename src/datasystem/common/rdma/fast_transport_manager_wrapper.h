@@ -68,7 +68,8 @@ Status SetRH2DLocalEndpointIp(const std::string &localIp);
  * @param[in] fastTransportMode The fast transport mode, e.g. UB.
  * @param[in] transportSize The size of the client transport.
  */
-void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize);
+void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize,
+                                bool enablePipelineH2D = false);
 
 /**
  * @brief Initialize Fast Transport Manager.

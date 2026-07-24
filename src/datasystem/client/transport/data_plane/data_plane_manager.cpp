@@ -27,7 +27,11 @@
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#ifdef USE_URMA
+#include "datasystem/common/rdma/urma_manager.h"
+#endif
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -42,13 +46,13 @@ AccessTransportKind KindForHint(TransportHint hint)
     return hint == TransportHint::TCP_ONLY ? AccessTransportKind::TCP : AccessTransportKind::UB;
 }
 
-Status InitClientUbRuntime(uint64_t fastTransportMemSize)
+Status InitClientUbRuntime(uint64_t fastTransportMemSize, bool enablePipelineH2D)
 {
 #ifdef USE_URMA
     static std::once_flag initOnce;
     static Status initStatus;
-    std::call_once(initOnce, [fastTransportMemSize]() {
-        SetClientFastTransportMode(FastTransportMode::UB, fastTransportMemSize);
+    SetClientFastTransportMode(FastTransportMode::UB, fastTransportMemSize, enablePipelineH2D);
+    std::call_once(initOnce, []() {
         initStatus = InitializeFastTransportManager();
         if (initStatus.IsError()) {
             initStatus.AppendMsg("Fast transport init failed");
@@ -57,6 +61,7 @@ Status InitClientUbRuntime(uint64_t fastTransportMemSize)
     return initStatus;
 #else
     (void)fastTransportMemSize;
+    (void)enablePipelineH2D;
     return Status::OK();
 #endif
 }
@@ -97,10 +102,11 @@ void DataPlaneManager::WorkerTransportEntry::ResetDataPlane()
 
 DataPlaneManager::DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
                                    BrpcChannelConfig channelConfig,
-                                   std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider)
+                                   std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider,
+                                   bool enableClientDirectPipelineH2D, int32_t pipelineThreadNum)
     : signature_(std::move(signature)), channelConfig_(std::move(channelConfig)),
-      ubBufferProvider_(std::move(ubBufferProvider)),
-      fastTransportMemSize_(fastTransportMemSize)
+      ubBufferProvider_(std::move(ubBufferProvider)), fastTransportMemSize_(fastTransportMemSize),
+      enableClientDirectPipelineH2D_(enableClientDirectPipelineH2D), pipelineThreadNum_(pipelineThreadNum)
 {
 }
 
@@ -111,16 +117,24 @@ DataPlaneManager::~DataPlaneManager()
 
 Status DataPlaneManager::Init()
 {
+    std::lock_guard<std::mutex> lock(lifecycleMutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
-
     RETURN_RUNTIME_ERROR_IF_NULL(signature_);
     if (initialized_.load(std::memory_order_acquire)) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(InitClientUbRuntime(fastTransportMemSize_));
-    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
-                             "DataPlaneManager is shutting down");
+    if (enableClientDirectPipelineH2D_) {
+        RETURN_IF_NOT_OK(OsXprtPipln::SetClientPipelineThreadNum(pipelineThreadNum_));
+    }
+    RETURN_IF_NOT_OK(InitClientUbRuntime(fastTransportMemSize_, enableClientDirectPipelineH2D_));
+#ifdef USE_URMA
+    if (enableClientDirectPipelineH2D_) {
+        RETURN_IF_NOT_OK(UrmaManager::Instance().EnsureClientPipelineH2DEnv());
+        RETURN_IF_NOT_OK(UrmaManager::Instance().RegisterClientTransportMemoryForH2D());
+        h2dMemoryRegistered_ = true;
+    }
+#endif
     initialized_.store(true, std::memory_order_release);
     return Status::OK();
 }
@@ -141,6 +155,28 @@ Status DataPlaneManager::GetOrCreate(const HostPort &workerAddr, TransportHint h
     std::shared_ptr<WorkerTransportEntry> entry;
     RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
     return GetOrBuildTransporter(workerAddr, hint, KindForHint(hint), entry, out);
+}
+
+Status DataPlaneManager::GetOrCreateEndpoint(const HostPort &workerAddr, TransportHint hint,
+                                             std::shared_ptr<IDataTransporter> &transporter,
+                                             std::shared_ptr<WorkerRpcClient> &rpcClient)
+{
+    transporter.reset();
+    rpcClient.reset();
+    const AccessTransportKind expectedKind = KindForHint(hint);
+    std::shared_ptr<WorkerTransportEntry> entry;
+    RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
+    RETURN_IF_NOT_OK(GetOrBuildTransporter(workerAddr, hint, expectedKind, entry, transporter));
+
+    std::shared_lock<std::shared_mutex> lock(entry->mutex);
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "DataPlaneManager is shutting down");
+    CHECK_FAIL_RETURN_STATUS(entry->transporter == transporter && entry->HasAliveTransporter(expectedKind),
+                             K_URMA_NEED_CONNECT, "Data-plane transporter changed before endpoint acquisition");
+    CHECK_FAIL_RETURN_STATUS(entry->rpcClient != nullptr && entry->rpcClient->IsAlive(), K_RPC_UNAVAILABLE,
+                             "RPC client is unavailable while acquiring endpoint");
+    rpcClient = entry->rpcClient;
+    return Status::OK();
 }
 
 Status DataPlaneManager::WithDataPlaneLease(
@@ -371,6 +407,7 @@ void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
 
 void DataPlaneManager::Shutdown()
 {
+    std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
     if (shutdown_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
@@ -389,6 +426,12 @@ void DataPlaneManager::Shutdown()
     for (auto &entry : entries) {
         entry->ResetDataPlane();
     }
+#ifdef USE_URMA
+    if (h2dMemoryRegistered_) {
+        UrmaManager::Instance().UnregisterClientTransportMemoryForH2D();
+        h2dMemoryRegistered_ = false;
+    }
+#endif
 }
 
 Status DataPlaneManager::BuildUbTransporter(const HostPort &workerAddr,

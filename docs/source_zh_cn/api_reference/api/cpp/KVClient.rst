@@ -180,6 +180,11 @@ KVClient
     .. cpp:function:: Status MGetH2D(const std::vector<std::string> &keys, const std::vector<Blob> &devBlob, std::vector<std::string> &outFailedKeys, void *h2dStream = nullptr)
 
         通过 RH2D（Remote Host to Device）将多个 key 对应的 value 拷贝到调用方提供的设备内存中。
+        当 Client 存在本地 Worker 时优先使用原有 RH2D 路径；当本地 Worker 不存在且
+        :cpp:member:`ConnectOptions::enableClientDirectPipelineH2D` 为 ``true`` 时，Client 查询对象元数据，
+        直接向副本 Worker 发起批量读取，并在 Client 侧接收数据和提交 H2D。对象大小不超过默认分片长度
+        （2 MiB）时使用一次 URMA write；更大对象使用 MLCacheDirect 分片传输，receiver 启动失败时自动
+        回退为一次 URMA write。
 
         参数：
             - **keys** - 需要获取的一组 key，不允许包含重复 key。key 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个 key 最大长度为 255 字节。
