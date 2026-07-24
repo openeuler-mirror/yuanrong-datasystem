@@ -197,7 +197,7 @@ TEST(TopologySnapshotTest, AcceptsScaleInFenceAndRejectsFailureBatch)
     fence.target = scaleIn.members[0].identity;
     EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
     fence.target = scaleIn.members[3].identity;
-    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
+    DS_ASSERT_OK(snapshot->ValidateMigrationFence(fence));
 
     TopologyState failure;
     failure.version = 13;
