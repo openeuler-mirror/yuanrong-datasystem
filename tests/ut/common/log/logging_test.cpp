@@ -426,6 +426,27 @@ TEST_F(LoggingTest, TestRollingGZFiles)
     TestRollingFiles(true);
 }
 
+TEST_F(LoggingTest, TestRollingCompressedBacklogRespectsMaxLogFileNum)
+{
+    FLAGS_log_compress = true;
+    FLAGS_log_filename = "ds_llt";
+    constexpr uint32_t MAX_LOG_FILE_NUM = 5;
+    constexpr int FILE_NUM = 8;
+    constexpr int FILE_SIZE = 1024;
+    FLAGS_max_log_file_num = MAX_LOG_FILE_NUM;
+    DS_EXPECT_OK(CreateLogFiles(FILE_NUM, FILE_SIZE, false));
+    bool isCompressed = false;
+    DS_ASSERT_OK(LogManager::DoLogFileCompress(isCompressed));
+    ASSERT_TRUE(isCompressed);
+    DS_EXPECT_OK(LogManager::DoLogFileRolling());
+    std::vector<std::string> logFiles;
+    std::vector<std::string> compressedFiles;
+    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/ds_llt.INFO.*[0-9].log", logFiles));
+    DS_ASSERT_OK(Glob(FLAGS_log_dir + "/ds_llt.INFO.*[0-9].log.gz", compressedFiles));
+    EXPECT_LE(logFiles.size() + compressedFiles.size(), FLAGS_max_log_file_num);
+    DeleteFilesMatching(FLAGS_log_dir, R"(ds_llt\.INFO\.\d{14}\.log(\.gz)?)");
+}
+
 TEST_F(LoggingTest, TestEnvSucceed)
 {
     constexpr int NUM_LOG_FILES_TO_CREATE = 10;
