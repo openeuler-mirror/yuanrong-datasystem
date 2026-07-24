@@ -49,7 +49,6 @@ const std::string K_HIXL_DIRECT_ROCE_BUFFER_POOL = "0:0";
 // HCCL registration limit: keep a small reserve under the 256 MEM_DEVICE limit.
 // Long-lived pre-registrations and temporary fallback registrations share this budget.
 constexpr size_t MAX_DEVICE_REGISTRATIONS = 253;
-constexpr size_t MAX_TRANSFER_DESCS_PER_BATCH = 1024;
 
 datasystem::HixlMemoryMode DetermineHixlMemoryMode()
 {
@@ -570,12 +569,6 @@ static Status FlushHixlBatch(Batch &batch)
     return Status::OK();
 }
 
-static Status FlushHixlBatchIfDescFull(Batch &batch)
-{
-    RETURN_OK_IF_TRUE(batch.descs.size() < MAX_TRANSFER_DESCS_PER_BATCH);
-    return FlushHixlBatch(batch);
-}
-
 static Status RegisterTemporaryDeviceMemoryForBatch(Batch &batch, uintptr_t localAddr, uint64_t len)
 {
     CHECK_FAIL_RETURN_STATUS(batch.tempRegisterBudget > 0, StatusCode::K_RUNTIME_ERROR,
@@ -625,7 +618,6 @@ Status HCCSTransport::ScatterBatch(P2pScatterEntry *entries, uint32_t count, con
             uint64_t len = entry.counts[j];
 
             bool registered = HasRegisteredDeviceMemoryLocked(localAddr, len);
-            RETURN_IF_NOT_OK(FlushHixlBatchIfDescFull(batch));
             if (!registered) {
                 RETURN_IF_NOT_OK(RegisterTemporaryDeviceMemoryForBatch(batch, localAddr, len));
             }
