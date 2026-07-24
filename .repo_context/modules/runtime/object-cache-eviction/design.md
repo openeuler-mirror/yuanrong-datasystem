@@ -107,7 +107,7 @@
 | `SPILL` | 本地写 spill 文件，成功后释放内存并标记 spilled | `TryEvictObject`, `SpillImpl` |
 | `MIGRATE` | 通过 `DataMigrator` 将对象迁移到其他 worker 内存 | `MigrateData` |
 | `END_LIFE` | 对 none-L2-evict 或 write-back-l2-cache-evict 对象调用 `DeleteAllCopyMeta`，结束对象生命周期 | primary end-life lane, `DeleteNoneL2CacheEvictableObject` fallback |
-| `async_delete` | 不是 `DeleteAllCopyMetaReqPb` 请求字段；当前源码只有 master 侧 `FLAGS_async_delete`，且只在 `need_forward_objs_without_meta` 场景影响 master 内部处理 | `master_object.proto`, `OCMetadataManager::DeleteAllCopyMetaImpl` |
+| `async_delete` | `DeleteAllCopyMetaReqPb` 请求字段；为 true 时 Master 将 key 加入 `ExpiredObjectManager` 后返回 | `master_object.proto`, `OCMetadataManager::DeleteAllCopyMetaImpl` |
 
 ## Current State And Design Choice Notes
 
@@ -117,8 +117,10 @@
   - `EvictionTask` 在主循环里同步决定每个对象动作；本地 spill 和 master `RemoveMeta` 被异步化，主 loop 中的 `END_LIFE` 当前投递到 primary end-life lane。
   - `EvictSpilledObjects` 和 `SpillImpl` no-space fallback 仍同步调用 `DeleteNoneL2CacheEvictableObject`；该路径构造 `DeleteAllCopyMetaReqPb` 时使用 `object_keys`、本地 worker address 和 `redirect=true`。
   - `eviction_thread_num` 已删除，且 dscli 默认配置、k8s deployment、k8s daemonset Helm values/template、中文部署文档和示例需要同步清理该参数。
-  - 当前正式方案只将 memory eviction 主 loop 的所有 `Action::END_LIFE` 投递到独立 fixed-1 primary
-    end-life lane；`EvictSpilledObjects` 和 `SpillImpl` no-space fallback 保持同步。
+  - 当前正式方案将 memory eviction 主 loop 的所有 `Action::END_LIFE` 投递到
+    `primaryEndLifeThreadPool_`；`PRIMARY_END_LIFE_THREAD_NUM=4` 个 drain 线程同步发送 RPC，请求
+    `async_delete=true` 时 Master 入队后快速返回，`EvictSpilledObjects` 和 `SpillImpl` no-space fallback
+    保持同步。
 - Relevant constraints from current release or deployment:
   - 对象 table、shm、spill state、master metadata 之间依赖 create time/version 防止误删。
   - eviction 是后台路径，但被 allocation retry 触发时会直接影响前台延迟和成功率。
@@ -126,10 +128,12 @@
   - 主 eviction loop 保持单任务，降低候选队列和全局水位并发复杂度。
   - 耗时 spill I/O 进入 `SpillThread`；本地 copy metadata 删除进入 `MasterTaskThread`。
   - `NONE_L2_CACHE_EVICT` 没有 L2 可恢复副本，primary copy 必须先让 master 进入全局删除语义，再释放本地对象。
-  - 正式 primary end-life 方案只解耦主 loop 和慢 `DeleteAllCopyMeta`，不缩短对象锁时间，不做锁外 RPC，不引入前台可见 pending 状态。
+  - primary end-life 在短锁校验后释放对象锁，由 drain 线程发送带 `async_delete=true` 的
+    `DeleteAllCopyMeta`；Master 入队成功返回后重新获取对象锁并复核 version，再执行本地 erase，不引入
+    前台可见 pending 状态。
 - Known tradeoffs:
   - 历史 `END_LIFE` 同步 RPC 会阻塞 `EvictionTask`；当前主 loop 已通过 primary end-life lane 隔离该瓶颈。
-  - primary end-life lane 和同步 fallback 仍在对象写锁内等待 `DeleteAllCopyMeta`，会阻塞同 key 并发操作。
+  - primary end-life lane 不在对象写锁内等待 `DeleteAllCopyMeta`；同步 fallback 仍会阻塞同 key 并发操作。
   - 单任务门闩让单纯增加 `MemEvictionThread` 数量在当前主流程中基本没有吞吐收益，因此不再暴露 `eviction_thread_num`。
   - primary end-life lane 入队成功只表示任务已接管，不表示内存已经释放；实际释放仍发生在 lane 成功 erase 本地对象之后。
 
@@ -279,7 +283,7 @@ Failure-sensitive steps:
 | remote spill enabled and peer memory enough | `MIGRATE` | batch 远端迁移 |
 | local spill enabled and spill not too full | `SPILL` | 异步本地 spill |
 | local spill enabled, spill nearly full, object has L2 | `DELETE` | 删除本地 copy |
-| no spill and write-back-l2-cache-evict | `END_LIFE` | memory eviction 主 loop 投递 primary lane；lane 在 metadata 和本地删除成功后移除 async send |
+| no spill and write-back-l2-cache-evict | `END_LIFE` | memory eviction 主 loop 投递 primary lane；lane 在 Master 接受或连续三次 RPC 通信失败后执行本地删除，成功后移除 async send |
 | no spill and has L2 | `DELETE` | 删除本地 copy |
 | no spill and `NONE_L2_CACHE_EVICT` | `END_LIFE` | memory eviction 主 loop 投递 primary lane |
 | otherwise | `RETAIN` | 保留 |
@@ -291,7 +295,8 @@ Key files:
 
 Failure-sensitive steps:
 
-- `NONE_L2_CACHE_EVICT` 的 primary copy 不能直接本地 erase，否则 master 仍可能认为对象存在或其他 copy 语义未清理。
+- `NONE_L2_CACHE_EVICT` 的 primary copy 正常路径不能直接本地 erase；可用性优先策略仅在同一 batch
+  连续三次 `DeleteAllCopyMeta` RPC 通信失败后允许强制释放，并记录 ERROR。
 - L2 已存在的判断对 write-back 依赖 `stateInfo.IsWriteBackDone()`。
 
 ### Synchronous `NONE_L2_CACHE_EVICT` Fallback Path
@@ -408,7 +413,8 @@ Failure-sensitive steps:
   - `RemoveMeta` runs on `MasterTaskThread`。
   - spill eviction runs on one `SpillEvictionThread` task at a time。
   - object mutation requires `SafeObjType` write lock；spill read path uses read lock plus shm latch。
-  - primary end-life lane uses one independent worker thread and must not reuse `MasterTaskThread` or add a user-visible thread-count config。
+  - primary end-life lane 使用源码内固定的 4 线程池；不增加独立 RPC 线程，不复用
+    `MasterTaskThread`，也不增加用户可见线程数配置。
 - Ordering requirements or invariants:
   - 先决定 action，再做 local/master/spill effects。
   - `SPILL` 必须先持有 shm guard 并写成功，再释放 shm 和设置 spill state。
@@ -473,7 +479,7 @@ Failure-sensitive steps:
   - 本地 spill 目录对 `SPILL` 是同步 I/O 依赖。
 - Failure domains and blast-radius limits:
   - `DELETE` metadata cleanup 失败影响 master copy metadata 收敛，不应恢复本地已删对象。
-  - `END_LIFE` 失败只影响当前对象，候选会重加。
+  - `END_LIFE` 路由或 Master 业务失败时重加；同一 batch 连续三次 RPC 通信失败后强制删除本地对象。
 - Capacity reservation or headroom assumptions:
   - object 高水位 0.9，低水位 0.8。
   - spill 高/低水位由 `WorkerOcSpill` factor 控制；active spill size 低水位用于删除 spill 文件。
@@ -509,8 +515,9 @@ Failure-sensitive steps:
   - `DELETE` metadata cleanup batch size 300 或 10 ms flush。
   - remote migrate batch threshold 512。
 - Timeout, circuit-breaker, and backpressure strategy:
-  - source-visible timeout mainly在 RPC layer；primary end-life lane 使用固定 pending 上限和 5s
-    `DeleteAllCopyMeta` API 总预算，但没有新增用户可见队列超时或熔断 flag。
+  - source-visible timeout mainly在 RPC layer；primary end-life lane 使用固定 pending 上限，每次
+    `DeleteAllCopyMeta` 调用使用 1s API 总预算，RPC 通信错误最多调用三轮，但没有新增用户可见队列超时
+    或熔断 flag。
 - Dependency failure handling:
   - master metadata cleanup失败日志记录并对部分路径重试；
   - spill no-space 对 none-L2-evict 可降级为 end-life delete；
@@ -540,6 +547,15 @@ Failure-sensitive steps:
   - `Eviction start.`
   - `Evict is going on...`
   - `EvictionList size before/after evict`
+  - `PRIMARY_END_LIFE_DIAG stage=<stage>`：正常阶段使用 `VLOG(1)`；阶段耗时或 queue wait 达到 100 ms、
+    RPC 错误或 per-key 失败使用 `LOG(WARNING)`。阶段覆盖 eviction summary、dequeue、route grouping、
+    candidate prepare、RPC attempt、local cleanup 和整批 drain。
+  - eviction summary、route grouping、candidate prepare、RPC attempt 和 local cleanup 使用
+    `event=start/complete` 配对；start 后没有对应 complete 表示任务仍停留在该阶段。
+    `eviction_summary.elapsed_ms` 记录整个主 `EvictionTask` 的耗时，用于区分主 eviction 卡顿与
+    primary end-life lane 积压。
+  - primary end-life pressure 字段包括 pending、queued、active drain 和 pending limit；
+    dequeue 记录 oldest queue wait，RPC attempt 记录 master、attempt 和单轮/累计耗时。
   - `RemoveMetaFromMasterForEviction failed`
   - `DeleteNoneL2CacheEvictableObject start/end`
   - `Spill eviction list size before/after evict`
@@ -596,9 +612,8 @@ Failure-sensitive steps:
   - `NONE_L2_CACHE_EVICT` primary copy 的 `END_LIFE` 曾在 `EvictionTask` 中同步调用
     `DeleteAllCopyMeta`，而且通常持有对象写锁；一个慢 master/RPC 会拖住主 eviction task。
 - Remaining bottleneck:
-  - primary end-life lane 和 `EvictSpilledObjects` / `SpillImpl` no-space fallback 仍在对象写锁内等待
-    `DeleteAllCopyMeta`；慢 master/RPC 会阻塞同 key 操作和 primary lane，但不再阻塞主 memory eviction
-    loop 继续处理 local copy。
+  - primary end-life lane 在锁外等待 `DeleteAllCopyMeta`，并在 RPC 完成后按 version 重新锁住对象；
+    `EvictSpilledObjects` / `SpillImpl` no-space fallback 仍在对象写锁内同步等待。
 - Why object lock matters:
   - 写锁保证对象 create time、spill state、shm、object table erase 和并发 get/set/evict 互斥。
   - 同步 RPC 放在写锁内，会让同一个 key 的其他操作等待；当前方案避免它延长主 eviction task 的单对象处理时间。
@@ -606,7 +621,8 @@ Failure-sensitive steps:
   - 历史上该 flag 只配置 `MemEvictionThread` pool 大小；`Evict` 的 `isDone_` gate 只允许一个 `EvictionTask`。
   - 该 flag 容易误导运维以为调大可以提升 eviction 并发，现已删除；删除必须同步清理源码、测试、dscli、k8s deployment、k8s daemonset、部署文档和示例。
 - Selected formal plan: worker-side primary end-life lane.
-  - 将 memory eviction 主 loop 中所有 `Action::END_LIFE` 任务从主 loop 移到独立 fixed-1 `primaryEndLifeThreadPool_`。
+  - 将 memory eviction 主 loop 中所有 `Action::END_LIFE` 任务移到固定 4 线程的
+    `primaryEndLifeThreadPool_`。
   - 入队成功从 `memEvictionList_` 移除并记录 `objectKey -> entry->GetCreateTime()` pending；pending 上限使用源码内固定常量，不新增用户可见配置。
   - lane 使用内部 queue/drain 模型而不是 per-key lambda 直接 RPC；同一个 master 的 key 聚合为 batch `DeleteAllCopyMeta`，不同 master 拆开请求。
   - pending 上限只约束 key 数，不约束对象字节数；lane 在发送 `DeleteAllCopyMeta` 前使用触发本次
@@ -616,22 +632,26 @@ Failure-sensitive steps:
     只有当 lane 重新拿到对象写锁、`DeleteAllCopyMeta` 对该 key 成功且本地删除成功后才移除 async send
     queue，避免 low watermark、锁失败、版本变化、redirect/meta moving 等回补路径丢失 write-back 回写任务。
   - `DeleteAllCopyMeta` 已成功但本地 cleanup 失败时，lane 记录该 key/version 的 metadata-deleted 状态；
-    后续 retry 跳过 master metadata 删除，只重试本地 cleanup，避免 master 返回 `objs_without_meta` 后永久跳过本地 erase。
+    后续 retry 跳过 master metadata 删除，只重试本地 cleanup。
   - pending duplicate 表示已有 lane task 接管该 key，返回 OK，不重复提交，也不回补 eviction list。
   - lane 执行前用 `TryWLock()` 固定短重试处理刚启动时的锁冲突，然后通过窄 guard helper 复核 version、evictable、primary 和 end-life mode；不完整复刻 `GetObjectNextAction`。
   - lane guard 不能直接调用当前 `IsObjectEvictable()`，因为当前 helper 要求 key 仍在 `memEvictionList_`，而 accepted lane task 已从 list 移除。
   - batch 内多个对象 WLock 必须按稳定顺序获取，建议按 object key 排序；不得在 pending/queue mutex 下获取对象 WLock 或发送 RPC。
   - low watermark 复查应发生在获取 master 地址或至少发送 `DeleteAllCopyMeta` 前，且必须包含本次前台分配的
     `needSize`；已达低水位时不得 erase 本地对象，也不主动调用 `Evict()`。
-  - `DeleteAllCopyMeta` batch 使用 repeated `ids_with_version`；`objs_without_meta` 和 `outdated_objs` 说明
-    当前 incarnation 的 metadata 已无需删除，按幂等完成处理；`failed_object_keys` 和 redirect info 只阻止
-    对应 key 本地 erase。RPC 失败、`meta_is_moving` 或无法归因到具体 failed key 的 `last_rc` 错误才让整批
-    key 保守失败。
+  - `DeleteAllCopyMeta` batch 使用 repeated `ids_with_version` 并设置 `async_delete=true`；Master 入队成功
+    即表示接受。同一 batch 只对 RPC 通信错误立即重试，最多调用三次；第三次仍失败时强制本地删除。
+    metadata owner 路由失败、`failed_object_keys`、redirect info、`meta_is_moving` 和 Master 业务错误
+    保持保守失败，不触发强制删除。
   - Master 侧只增加与该语义直接相关的保护：`PENDING` 必须标记为失败，已失败 key 和初次 no-meta 后回生
     的 metadata 都不得继续 cleanup；不增加版本下界判断或新的逐 key response。
   - `GetMetaAddress()` 已知 master 不可达或路由不可解析时快速跳过，不发 RPC；`K_RPC_UNAVAILABLE` 归类为 master/connection unavailable，`K_NOT_FOUND` 归类为 route/meta-address unavailable。
-  - remote master RPC 卡顿由 3s API 总预算约束；local-bypass master 通过 request timeout 和 master-side `timeoutDuration` 传递预算，但不是传输层强制中断。
-  - 失败或版本变化后清 pending，并统一用 `READD_COUNTER` 回补 `memEvictionList_`；lane 不主动调用 `Evict()`，避免故障 master 场景 tight retry。
+  - remote master 每次 RPC 调用由 1s API 总预算约束，通信失败最多进行三轮调用；local-bypass master
+    通过 request timeout 和 master-side `timeoutDuration` 传递预算，但不是传输层强制中断。
+  - primary end-life 的 `DeleteAllCopyMetaReqPb` 设置 `async_delete=true`；Master 使用请求中的 version
+    将 key 加入 `ExpiredObjectManager`，入队成功即回复，后台继续做引用检查、通知和 metadata cleanup。
+  - 三轮 RPC 通信失败后记录 ERROR，重新锁住对象并复核 version 后强制本地删除；其他失败清 pending，
+    并用 `READD_COUNTER` 回补 `memEvictionList_`。lane 不主动调用 `Evict()`。
   - `primaryEndLifeThreadPool_` shutdown 需要在 manager 析构中显式 reset；若要丢弃未开始任务，需要使用 `ThreadPool` droppable 模式，否则默认线程池会 drain 队列。
   - `EvictSpilledObjects` 和 `SpillImpl` no-space fallback 继续保持同步，不属于本方案范围。
 - Candidate 2: release object lock around RPC with version recheck.
@@ -639,7 +659,7 @@ Failure-sensitive steps:
   - 若单独采用该候选，可缩短锁持有时间，但主 eviction task 仍同步等 RPC；只能缓解对象级阻塞，不能提升主 loop 吞吐。
 - Batch `DeleteAllCopyMeta` for selected plan:
   - 已纳入正式 primary end-life lane，而不是后续独立候选。
-  - 复用 `DeleteAllCopyMetaReqPb.ids_with_version` repeated 字段，不改 proto。
+  - 复用 `DeleteAllCopyMetaReqPb.ids_with_version` repeated 字段，并增加 `async_delete` 请求字段。
   - 同 master 聚合、跨 master 拆分；batch limit 和 short flush delay 是源码内部常量，不新增用户可见配置。
 - Candidate 4: redesign true memory eviction concurrency.
   - 需要移除或细化 `isDone_` gate，设计共享水位、candidate list、pendingSpillSize、delete batch、spill task id 的并发所有权。
@@ -677,7 +697,7 @@ Failure-sensitive steps:
 | EV-NONE-003 | two-worker last local copy metadata | 验证所有 copy meta 清理 | two workers | remove both copy locations | query meta returns not exist |
 | EV-SPILL-001 | spill full eviction | 验证 spill eviction list | small spill limit | fill spill and add evictable objects | spill files are deleted/compacted below water |
 | EV-LOCK-001 | object lock busy | 验证 re-add behavior | object held by another operation | trigger eviction | candidate re-adds with retry counter |
-| EV-RPC-001 | DeleteAllCopyMeta timeout/failure | 验证同步瓶颈和重试语义 | inject worker/master RPC failure | evict none-L2-evict primary | object is not locally erased unless master success |
+| EV-RPC-001 | DeleteAllCopyMeta timeout/failure | 验证有界重试和可用性兜底 | inject worker/master RPC failure | evict none-L2-evict primary | each call is bounded to 1s; after three communication failures, local erase still rechecks object version |
 | EV-RPC-002 | slow master and large primary objects | 验证 low watermark 复查避免过度释放 | small memory, mixed local and large none-L2 primary objects | delay master delete, let local eviction reduce pressure, then recover master | queued primary end-life does not continue after low watermark is reached; no obvious over-evict |
 | EV-RPC-003 | batch DeleteAllCopyMeta by master | 验证同 master 聚合和跨 master 拆分 | multi-master or injectable routing | evict multiple none-L2 primary keys mapped to same and different masters | same-master keys are sent in batch, different-master keys are split, partial failures do not erase failed keys |
 
