@@ -12,6 +12,8 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/routing/placement_facade.h"
@@ -130,6 +132,62 @@ TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailin
     EXPECT_TRUE(response.meta_is_moving());
     EXPECT_EQ(response.failed_ids_size(), 0);
     EXPECT_EQ(response.success_ids_size(), 0);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteMetadataThatReappeared)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    const std::string objectKey = "delete_no_meta_reappeared";
+    DeleteObjectMediator mediator(LOCAL_ADDRESS, { { objectKey, true } });
+    mediator.AddHashObjsWithoutMeta(objectKey);
+    InsertPrimaryWithCopy(manager, objectKey);
+    std::unordered_map<std::string, DeleteStruct> deleteObjects{ { objectKey, DeleteStruct{} } };
+    std::unordered_set<std::string> failedObjects;
+
+    Status rc = manager.ClearMetaInfo(deleteObjects, false, failedObjects, mediator);
+
+    EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(failedObjects.count(objectKey), size_t(1));
+    TbbMetaTable::const_accessor accessor;
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    EXPECT_TRUE(shard.table.find(accessor, objectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteObjectAlreadyClassifiedFailed)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    const std::string objectKey = "delete_preclassified_failed";
+    InsertPrimaryWithCopy(manager, objectKey);
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    {
+        TbbMetaTable::accessor accessor;
+        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.multiSetState = PENDING;
+    }
+    DeleteObjectMediator mediator(LOCAL_ADDRESS, { { objectKey, true } });
+    std::unordered_map<std::string, DeleteStruct> deleteObjects{ { objectKey, DeleteStruct{} } };
+    EXPECT_EQ(manager.GetMetaInfoAndSetDeleting(objectKey, deleteObjects.at(objectKey), mediator).GetCode(),
+              K_NOT_FOUND);
+    EXPECT_EQ(mediator.GetFailedObjs().count(objectKey), size_t(1));
+    {
+        TbbMetaTable::accessor accessor;
+        std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.multiSetState = IDLE;
+    }
+    std::unordered_set<std::string> failedObjects;
+
+    Status rc = manager.ClearMetaInfo(deleteObjects, false, failedObjects, mediator);
+
+    EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(failedObjects.count(objectKey), size_t(1));
+    TbbMetaTable::const_accessor accessor;
+    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    EXPECT_TRUE(shard.table.find(accessor, objectKey));
 }
 }  // namespace
 }  // namespace datasystem::master

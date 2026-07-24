@@ -302,39 +302,45 @@ public:
         const std::string okKey = "primary_end_life_batch_ok";
         const std::string failedKey = "primary_end_life_batch_failed";
         const std::string outdatedKey = "primary_end_life_batch_outdated";
+        const std::string noMetaKey = "primary_end_life_batch_no_meta";
 
         master::DeleteAllCopyMetaRspPb rsp;
         rsp.add_failed_object_keys(failedKey);
         rsp.add_outdated_objs(outdatedKey);
+        rsp.add_objs_without_meta(noMetaKey);
+        rsp.mutable_last_rc()->set_error_code(K_RUNTIME_ERROR);
+        rsp.mutable_last_rc()->set_error_msg("partial delete failed");
         std::unordered_set<std::string> failedKeys;
-        DS_ASSERT_OK(WorkerOcEvictionManager::CollectDeleteAllCopyMetaResult(rsp, failedKeys));
+        DS_ASSERT_OK(WorkerOcEvictionManager::CollectPrimaryEndLifeDeleteResult(rsp, failedKeys));
         ASSERT_EQ(failedKeys.count(okKey), size_t(0));
         ASSERT_EQ(failedKeys.count(failedKey), size_t(1));
-        ASSERT_EQ(failedKeys.count(outdatedKey), size_t(1));
+        ASSERT_EQ(failedKeys.count(outdatedKey), size_t(0));
+        ASSERT_EQ(failedKeys.count(noMetaKey), size_t(0));
 
-        rsp.mutable_last_rc()->set_error_code(K_RUNTIME_ERROR);
-        rsp.mutable_last_rc()->set_error_msg("delete failed");
+        master::DeleteAllCopyMetaRspPb fatalRsp;
+        fatalRsp.mutable_last_rc()->set_error_code(K_RUNTIME_ERROR);
+        fatalRsp.mutable_last_rc()->set_error_msg("unclassified delete failure");
         failedKeys.clear();
-        ASSERT_EQ(WorkerOcEvictionManager::CollectDeleteAllCopyMetaResult(rsp, failedKeys).GetCode(),
+        ASSERT_EQ(WorkerOcEvictionManager::CollectPrimaryEndLifeDeleteResult(fatalRsp, failedKeys).GetCode(),
                   K_RUNTIME_ERROR);
-        ASSERT_EQ(failedKeys.count(failedKey), size_t(1));
-        ASSERT_EQ(failedKeys.count(outdatedKey), size_t(1));
 
         const std::string redirectKey = "primary_end_life_batch_redirect";
-        const std::string noMetaKey = "primary_end_life_batch_no_meta";
         master::DeleteAllCopyMetaRspPb redirectRsp;
-        redirectRsp.add_objs_without_meta(noMetaKey);
         auto *redirectInfo = redirectRsp.add_info();
         redirectInfo->add_change_meta_ids(redirectKey);
         failedKeys.clear();
-        DS_ASSERT_OK(WorkerOcEvictionManager::CollectDeleteAllCopyMetaResult(redirectRsp, failedKeys));
+        DS_ASSERT_OK(WorkerOcEvictionManager::CollectPrimaryEndLifeDeleteResult(redirectRsp, failedKeys));
         ASSERT_EQ(failedKeys.count(redirectKey), size_t(1));
-        ASSERT_EQ(failedKeys.count(noMetaKey), size_t(1));
+        redirectRsp.mutable_last_rc()->set_error_code(K_RUNTIME_ERROR);
+        redirectRsp.mutable_last_rc()->set_error_msg("unclassified local failure");
+        failedKeys.clear();
+        ASSERT_EQ(WorkerOcEvictionManager::CollectPrimaryEndLifeDeleteResult(redirectRsp, failedKeys).GetCode(),
+                  K_RUNTIME_ERROR);
 
         master::DeleteAllCopyMetaRspPb movingRsp;
         movingRsp.set_meta_is_moving(true);
         failedKeys.clear();
-        ASSERT_EQ(WorkerOcEvictionManager::CollectDeleteAllCopyMetaResult(movingRsp, failedKeys).GetCode(),
+        ASSERT_EQ(WorkerOcEvictionManager::CollectPrimaryEndLifeDeleteResult(movingRsp, failedKeys).GetCode(),
                   K_TRY_AGAIN);
     }
 
