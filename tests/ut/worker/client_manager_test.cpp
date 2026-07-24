@@ -63,6 +63,33 @@ TEST_F(ClientInfoTest, TestInvalid)
     EXPECT_FALSE(clientInfo.RemoveShmUnit(shmUnit));
 }
 
+TEST_F(ClientInfoTest, ConcurrentLostHandlerRegistrationIsSafe)
+{
+    constexpr int iterationCount = 100'000;
+    ClientInfo clientInfo(-1, ClientKey::Intern("concurrent-lost-handler"), false);
+    std::atomic<bool> start{ false };
+    std::atomic<int> callbackCount{ 0 };
+    auto callback = [&callbackCount]() { callbackCount.fetch_add(1, std::memory_order_relaxed); };
+    clientInfo.SetLostHandler(callback, HeartbeatType::RPC_HEARTBEAT);
+    std::thread writer([&clientInfo, &callback, &start]() {
+        while (!start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        for (int i = 0; i < iterationCount; ++i) {
+            clientInfo.SetLostHandler(callback, HeartbeatType::RPC_HEARTBEAT);
+        }
+    });
+    std::thread reader([&clientInfo, &start]() {
+        start.store(true, std::memory_order_release);
+        for (int i = 0; i < iterationCount; ++i) {
+            clientInfo.LostHandler();
+        }
+    });
+    writer.join();
+    reader.join();
+    EXPECT_GT(callbackCount.load(std::memory_order_relaxed), 0);
+}
+
 TEST_F(ClientManagerTest, TestAddShmUnitUniqueCount)
 {
     ClientManager &clientMgr = ClientManager::Instance();
