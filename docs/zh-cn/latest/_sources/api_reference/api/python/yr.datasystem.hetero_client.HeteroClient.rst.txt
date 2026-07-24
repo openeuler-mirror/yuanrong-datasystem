@@ -1,7 +1,7 @@
 yr.datasystem.hetero_client.HeteroClient
 ========================================
 
-.. py:class:: yr.datasystem.hetero_client.HeteroClient(host, port, connect_timeout_ms=9000, client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False)
+.. py:class:: yr.datasystem.hetero_client.HeteroClient(host, port, connect_timeout_ms=9000, token="", client_public_key="", client_private_key="", server_public_key="", access_key="", secret_key="", tenant_id="", enable_cross_node_connection=False, req_timeout_ms=0, enable_remote_h2d=False)
 
     异构对象客户端。
 
@@ -9,6 +9,7 @@ yr.datasystem.hetero_client.HeteroClient
         - **host** (str) - 数据系统 Worker 的主机 IP 地址。
         - **port** (int) - 数据系统 Worker 的端口号。
         - **connect_timeout_ms** (int) - 客户端连接和请求超时时间，单位为毫秒。默认值： ``9000`` 。
+        - **token** (str) - 客户端认证令牌。默认值： ``""`` 。
         - **client_public_key** (str) - 用于 curve 认证的客户端公钥。默认值： ``""`` 。
         - **client_private_key** (str) - 用于 curve 认证的客户端私钥。默认值： ``""`` 。
         - **server_public_key** (str) - 用于 curve 认证的服务端公钥。默认值： ``""`` 。
@@ -17,7 +18,6 @@ yr.datasystem.hetero_client.HeteroClient
         - **tenant_id** (str) - 租户 ID。默认值： ``""`` 。
         - **enable_cross_node_connection** (bool) - 如果为 ``True`` ，允许客户端在与当前数据系统 Worker 连接异常时自动切换到备用节点。默认值： ``False`` 。
         - **req_timeout_ms** (int) - 请求超时时间，单位为毫秒。当 req_timeout_ms<=0 时，req_timeout_ms 与 connect_timeout_ms 相同。默认值： ``0`` 。
-        - **enable_exclusive_connection** (bool) - 实验性质特性，开启可提升client与本地datasystem_worker之间的IPC传输性能。默认值： ``False`` 。**连接数限制**：单个 ``worker`` 最多支持 128 个启用 ``enable_exclusive_connection`` 的客户端连接。若并发连接数超过此阈值，系统将抛出请求异常。
         - **enable_remote_h2d** (bool) - 如果为 ``True`` ，启用异构场景远端共享内存到NPU内存的数据传输功能。默认值： ``False`` 。
 
     输出：
@@ -33,8 +33,14 @@ yr.datasystem.hetero_client.HeteroClient
          - 初始化异构对象客户端。
        * - :doc:`mget_h2d <yr.datasystem.hetero_client.HeteroClient.mget_h2d>`
          - 从 host 中获取数据并写入 device 中。
+       * - :doc:`mget_h2d_from_multi_buffers <yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers>`
+         - 通过二维地址和大小列表将 host 对象直接写入多个 device buffer。
+       * - :doc:`pre_register_device_memory <yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory>`
+         - 为 RH2D over HIXL HCCS 预注册后续 MGetH2D 使用的 device 目标内存。
        * - :doc:`mset_d2h <yr.datasystem.hetero_client.HeteroClient.mset_d2h>`
          - 将 device 的数据写入到 host 中。
+       * - :doc:`mset_d2h_from_multi_buffers <yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers>`
+         - 通过二维地址和大小列表将多个 device buffer 写入 host 对象。
        * - :doc:`async_mget_h2d <yr.datasystem.hetero_client.HeteroClient.async_mget_h2d>`
          - 从 host 中获取数据并写入 device 中的异步接口。
        * - :doc:`async_mset_d2h <yr.datasystem.hetero_client.HeteroClient.async_mset_d2h>`
@@ -59,6 +65,8 @@ yr.datasystem.hetero_client.HeteroClient
          - 生成唯一的键。
        * - :doc:`get_meta_info <yr.datasystem.hetero_client.HeteroClient.get_meta_info>`
          - 获取keys 对应的元数据信息。
+       * - :doc:`batch_is_exist <yr.datasystem.hetero_client.HeteroClient.batch_is_exist>`
+         - Batch-check key existence and return integer indicators.
        * - :doc:`exist <yr.datasystem.hetero_client.HeteroClient.exist>`
          - 检查给定的键在数据系统中是否存在。
 
@@ -68,7 +76,10 @@ yr.datasystem.hetero_client.HeteroClient
 
     yr.datasystem.hetero_client.HeteroClient.init
     yr.datasystem.hetero_client.HeteroClient.mget_h2d
+    yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers
+    yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory
     yr.datasystem.hetero_client.HeteroClient.mset_d2h
+    yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers
     yr.datasystem.hetero_client.HeteroClient.async_mget_h2d
     yr.datasystem.hetero_client.HeteroClient.async_mset_d2h
     yr.datasystem.hetero_client.HeteroClient.delete
@@ -81,4 +92,5 @@ yr.datasystem.hetero_client.HeteroClient
     yr.datasystem.hetero_client.HeteroClient.async_dev_delete
     yr.datasystem.hetero_client.HeteroClient.generate_key
     yr.datasystem.hetero_client.HeteroClient.get_meta_info
+    yr.datasystem.hetero_client.HeteroClient.batch_is_exist
     yr.datasystem.hetero_client.HeteroClient.exist

@@ -4,10 +4,11 @@
 
 集群管理是 openYuanrong datasystem 的核心能力之一，负责实现节点发现、健康检测、故障恢复及在线扩缩容等功能。通过集群管理，datasystem worker 能够注册到集群中，实现元数据的分布式管理，支持系统水平线性扩展和高可用。
 
-openYuanrong datasystem 目前支持两种集群管理方式：
+openYuanrong datasystem 目前支持三种集群管理方式：
 
 - **ETCD**：基于外部 ETCD 服务的分布式元数据存储方案
 - **Metastore**：内置在 datasystem worker 中的元数据存储服务，无需部署外部 ETCD
+- **Coordinator**：通过独立的 datasystem Coordinator 服务管理集群信息，Worker 使用 `coordinator_address` 接入
 
 ## 集群管理方式对比
 ### 基于 ETCD 的集群管理
@@ -50,6 +51,25 @@ Metastore 是集成在 datasystem worker 中的元数据存储服务，提供与
 - **资源受限**：生产环境资源有限，希望减少组件数量
 - **简化运维**：减少组件数量，降低运维复杂度
 
+### 基于 Coordinator 的集群管理
+
+Coordinator 作为独立服务运行，Worker 通过 `coordinator_address` 连接 Coordinator，并从 Coordinator 获取
+集群管理所需的信息。客户端可以使用 `CoordinatorServiceDiscovery` 从 Coordinator 查询就绪 Worker，
+再按节点亲和性策略选择连接目标。
+
+该方式具有以下特点：
+
+- **独立服务**：需要单独启动和管理 `datasystem_coordinator` 进程
+- **统一入口**：Worker 和 SDK 均通过 Coordinator 获取集群信息
+- **无需 ETCD**：使用 Coordinator 管理集群时，不需要同时配置 ETCD 或 Worker 内置 Metastore
+- **当前地址约束**：SDK 的 Coordinator 服务发现当前要求配置且仅配置一个 Coordinator 地址
+
+**适用场景**：
+
+- 希望将集群管理能力从 Worker 进程中独立部署
+- Worker 和客户端需要通过统一的 Coordinator 查询集群信息
+- 希望通过 `dscli` 在同一节点统一启停 Coordinator 和 Worker
+
 
 ## 部署方式
 
@@ -70,8 +90,9 @@ dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379
 
 ```bash
 dscli generate_config -o ./
-# [INFO] Cluster configuration file has been generated to /home/user
-# [INFO] Worker configuration file has been generated to /home/user
+# [INFO] Configuration file cluster_config.json has been generated to /home/user/cluster_config.json
+# [INFO] Configuration file worker_config.json has been generated to /home/user/worker_config.json
+# [INFO] Configuration file coordinator_config.json has been generated to /home/user/coordinator_config.json
 # [INFO] Configuration generation completed successfully
 ```
 
@@ -206,3 +227,45 @@ dscli up -f ./cluster_config.json
 ```bash
 dscli up --metastore_head_node 192.168.1.1 -f ./cluster_config.json
 ```
+
+### 基于 Coordinator 部署
+
+使用 Coordinator 时，需要先启动 Coordinator，再启动配置了 `coordinator_address` 的 Worker。
+
+```bash
+# 分别启动 Coordinator 和 Worker
+dscli start --coordinator_args --coordinator_address "127.0.0.1:31511"
+dscli start --worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
+```
+
+也可以通过一条命令依次启动两个服务：
+
+```bash
+dscli start --coordinator_worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
+```
+
+使用配置文件时，`coordinator_config.json` 中的 `service_type` 为 `coordinator`，`worker_config.json` 中的
+`service_type` 为 `worker`。同时需要将 `worker_config.json` 中的 `coordinator_address` 配置为 Coordinator
+服务地址；Worker 的 `coordinator_address`、`etcd_address` 和 `metastore_address` 必须且只能配置一个。
+
+```json
+{
+    "coordinator_address": {
+        "value": "127.0.0.1:31511"
+    }
+}
+```
+
+`dscli start -f` 和 `dscli stop -f` 根据 `service_type` 选择对应服务；字段缺失或值为空时按 Worker 处理。
+
+```bash
+# 使用配置文件分别启动服务
+dscli start -f ./coordinator_config.json
+dscli start -f ./worker_config.json
+
+# 先停止 Worker，再停止 Coordinator
+dscli stop --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
+```
+
+完整的 Coordinator 和 Worker 启停命令参见
+[使用Coordinator部署](../deployment/dscli.md#openyuanrong-datasystem集群使用coordinator部署)。

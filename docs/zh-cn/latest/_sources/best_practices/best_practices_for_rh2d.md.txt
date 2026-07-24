@@ -2,7 +2,27 @@
 
 远端主机到设备数据传输（Remote Host to Device，RH2D）是一种基于昇腾（Ascend）NPU（Neural Processing Unit）的，支持从远端节点主机侧共享内存到设备侧 HBM 内存的跨节点数据传输机制。通过 NPU 驱动及 CANN 工具包的支持，RH2D 提供了一个高效的数据传输通道，支持异构计算单元间的高效协同，支持大规模的并行计算、AI 训练等高性能计算任务。
 
-openYuanrong datasystem 现已集成对 RH2D over RoCE (RDMA over Converged Ethernet) 的支持，实现了分布式缓存在物理节点之间的硬件级加速。基于 RH2D 构建的全局缓存抽象，透明化了下层拓扑，使得应用能够以极简的编程方式，在跨节点通信场景中实现数据直通，充分释放底层硬件性能。
+openYuanrong datasystem 支持 RH2D over P2P-Transfer RoCE（RDMA over Converged Ethernet）和 RH2D over HIXL HCCS。P2P-Transfer RoCE 是默认链路，适用于配置了 RoCE 网络的跨节点场景；HIXL HCCS 适用于 HCCS 可达的 Atlas A3 环境。两种链路对上层 MGetH2D/MSetD2H API 透明，均由 Client 主动将远端 Worker 共享内存中的数据读取到本地 NPU HBM。
+
+## 链路选择与约束
+
+| 项目 | RH2D over P2P-Transfer RoCE | RH2D over HIXL HCCS |
+| --- | --- | --- |
+| 适用环境 | 配置并打通 RoCE 网络的 Ascend 节点 | HCCS 可达的 Atlas A3 环境 |
+| Worker链路参数 | `--remote_h2d_link_type "ROCE"`，默认值 | `--remote_h2d_link_type "HCCS"` |
+| Client链路参数 | `DS_RH2D_LINK_TYPE=ROCE`，默认值 | `DS_RH2D_LINK_TYPE=HCCS` |
+| Worker Host内存 | 注册到 NPU，需要锁页 | HIXL buffer-pool relay，不注册、不锁页 |
+| 传输后端及依赖 | P2P-Transfer及RoCE运行环境 | HIXL及HCCS运行环境；需要CANN HIXL头文件、`libcann_hixl.so`、`libmetadef.so` |
+
+使用时需满足以下约束：
+
+1. 同一个 RH2D 通信链路两端必须使用相同的 `remote_h2d_link_type`；HCCS 场景的 buffer-pool 参数也应保持一致。
+2. 链路类型是进程级配置，必须在 Worker 启动前或 Client 第一次 RH2D 操作前设置，运行期间不能动态切换。
+3. Client 进程仅使用一个 NPU device id。Worker 可以配置多个 device id，并按 Client 连接轮询分配。
+4. HCCS 场景要求构建产物包含 HIXL 支持。构建时未发现 HIXL 头文件、`libcann_hixl.so` 或 `libmetadef.so`，将无法使用 `HCCS` 链路。
+5. HCCS 使用 Worker 地址以及 Client 所连接本地 Worker 的地址作为 HIXL endpoint IP。请配置 HCCS 环境中可达的实际 IP，避免使用 `127.0.0.1` 或 `0.0.0.0`。
+6. HIXL HCCS 在未设置 `HCCL_INTRA_ROCE_ENABLE` 时使用 buffer-pool relay。如需启用 HIXL RoCE 直连模式，Worker 和 Client 进程均需在启动前设置 `HCCL_INTRA_ROCE_ENABLE=1`，并确保 RoCE 网络可达。
+7. HCCS 当前在单个进程内串行执行 HIXL `TransferSync()`；需要提高并发度时，建议使用多个 Client 进程。
 
 ## 源码编译安装
 
@@ -11,7 +31,7 @@ openYuanrong datasystem 现已集成对 RH2D over RoCE (RDMA over Converged Ethe
 |软件名称|版本|作用|
 |-|-|-|
 |Ascend-hdk-npu-driver|25.5.0+|Ascend驱动依赖|
-|Ascend-cann-toolkit|8.2.RC1+|Ascend工具包依赖|
+|Ascend-cann-toolkit|8.2.RC1+（P2P-Transfer RoCE）；8.5.2+（HIXL HCCS）|Ascend工具包依赖|
 
 ### 下载源码
 
@@ -26,6 +46,8 @@ RH2D需要异构能力的编译。默认配置下数据系统会启用异构能�
 ```bash
 bash build.sh
 ```
+
+构建 HIXL HCCS 能力时，CANN 安装目录中必须包含 `include/hixl/hixl.h`、`include/hixl/hixl_types.h`、`lib64/libcann_hixl.so` 和 `lib64/libmetadef.so`。缺少任一依赖时，构建产物不会包含 HCCS transport，只能使用默认 P2P-Transfer RoCE 链路。
 
 
 编译成功后，会在output目录下产生如下编译产物：
@@ -110,7 +132,9 @@ openYuanrong datasystem 进程部署主要通过 dscli 工具，在使用前请�
 >   --name "<docker name>" <image_name> /bin/bash
 > ```
 
-分别在两个节点执行如下命令：
+分别在两个节点执行如下命令。非空的 `remote_h2d_device_ids` 会启用 Worker 侧 RH2D。
+
+P2P-Transfer RoCE 链路使用以下命令：
 
 ```bash
 # 根据共享内存大小提升最大锁定内存大小
@@ -121,18 +145,58 @@ dscli start \
     --worker_address "${node_address}" \
     --etcd_address "${etcd_address}" \
     --arena_per_tenant 1 \
-    --remote_h2d_device_ids "0"
+    --remote_h2d_device_ids "0" \
+    --remote_h2d_link_type "ROCE"
 ```
-参数说明：
-- `node_address`：当前节点的通信地址与端口。格式为 `IP:Port`，例如：`192.168.0.1:31501`。
-- `etcd_address`：ETCD集群的访问地址列表。格式为多个 `IP:Port` 的逗号分隔字符串，例如：`192.168.1.100:2379,192.168.1.101:2379,192.168.1.102:2379`。
-- `arena_per_tenant`：不应超过系统内存资源限制，避免初始化失败，初始建议值为`1`，在保证功能的前提下提供最快的启动速度。
-- `remote_h2d_device_ids`：在worker端提供NPU设备ID并启用RH2D功能，默认值为空表示不启用。worker使用多个NPU需用逗号分隔，例如：`0,1,2,3,4,5,6,7`。
+
+HIXL HCCS 链路使用以下命令：
+
+```bash
+dscli start \
+    -w \
+    --worker_address "${node_address}" \
+    --etcd_address "${etcd_address}" \
+    --arena_per_tenant 1 \
+    --remote_h2d_device_ids "0" \
+    --remote_h2d_link_type "HCCS" \
+    --remote_h2d_hccs_buffer_pool "4:8"
+```
+
+Worker 参数说明：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `worker_address` | - | 当前节点通信地址，格式为 `IP:Port`，例如：`192.168.0.1:31501`。HCCS 场景中的 IP 还会作为 HIXL endpoint IP |
+| `etcd_address` | - | ETCD 集群访问地址列表，多个 `IP:Port` 使用逗号分隔 |
+| `arena_per_tenant` | - | 不应超过系统内存资源限制，避免初始化失败，初始建议值为 `1` |
+| `remote_h2d_device_ids` | 空 | 非空时启用 Worker RH2D；多个 device id 使用逗号分隔，例如：`0,1,2,3,4,5,6,7` |
+| `remote_h2d_link_type` | `ROCE` | 支持 `ROCE`、`HCCS`，区分大小写 |
+| `remote_h2d_hccs_buffer_pool` | `4:8` | HIXL buffer-pool 参数，仅 HCCS 使用，格式为两个正整数 `<count>:<size>`；无明确调优需求时保持默认值 |
 
 
 :::
 
 ::::
+
+### Client配置
+
+Client 必须通过 API 参数启用 RH2D。Python `HeteroClient` 和 `DsTensorClient` 使用 `enable_remote_h2d=True`，C++ Client 使用 `ConnectOptions.enableRemoteH2D=true`。Client 使用的 device id 来自本次操作的 `DeviceBlobList`。
+
+P2P-Transfer RoCE 是 Client 默认链路，无需额外环境变量。HIXL HCCS 场景需要在启动 Client 进程前设置：
+
+```bash
+export DS_RH2D_LINK_TYPE=HCCS
+export DS_RH2D_HCCS_BUFFER_POOL=4:8
+```
+
+如果使用 HIXL RoCE 直连模式，请在 Worker 和 Client 进程启动前都设置 `HCCL_INTRA_ROCE_ENABLE=1`。该模式不使用 HIXL buffer-pool relay，`DS_RH2D_HCCS_BUFFER_POOL`/`remote_h2d_hccs_buffer_pool` 不生效，要求两端 RoCE 网络已正确配置并可达。
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `enable_remote_h2d` | `False` | Client API 的 RH2D 开关 |
+| `DS_RH2D_LINK_TYPE` | `ROCE` | Client 链路类型，支持 `ROCE`、`HCCS`，必须与 Worker 一致 |
+| `DS_RH2D_HCCS_BUFFER_POOL` | `4:8` | Client HIXL buffer-pool 参数，仅 HCCS buffer-pool 模式使用，应与 Worker 一致 |
+| `HCCL_INTRA_ROCE_ENABLE` | 未设置 | HIXL HCCS 的 RoCE 直连模式开关。设置为 `1` 时启用 RoCE direct，Worker 和 Client 必须一致 |
 
 ## 快速验证
 
@@ -305,6 +369,40 @@ dscli start -w \
 
 ::::
 
+### HIXL HCCS设备内存预注册
+
+RH2D over HIXL HCCS 支持在 Client 侧预注册后续 MGetH2D 会写入的 device 目标内存，减少热路径中反复执行 HIXL `RegisterMem(MEM_DEVICE)` 的开销。Python 使用 `HeteroClient.pre_register_device_memory(dev_ptrs, sizes)`，C++ 使用 `HeteroClient::PreRegisterDeviceMemory(devPtrs, sizes)`。
+
+使用该接口时需满足以下约束：
+
+1. 仅支持 `enable_remote_h2d=True` 且链路类型为 `HCCS` 的 RH2D 场景，不适用于 P2P-Transfer RoCE、GPU 或未启用 RH2D 的场景。
+2. 调用前需完成 ACL 初始化、设置当前 device，并完成 `HeteroClient.init()`；当前 device 应与后续 MGetH2D 的 `DeviceBlobList` 中的 device id 一致。
+3. 预注册句柄由 Client 管理，并在 `HeteroClient` shutdown 或析构时释放；用户无需在每次 MGetH2D 后手动释放。
+4. 推荐预注册一块或少量大连续 HBM 目标池，再把后续 MGetH2D 的目标 Blob 切分到这些范围内。避免把大量离散小块逐个预注册，以免占满 HIXL MEM_DEVICE 注册预算。
+5. 预注册范围之外的目标 Blob 仍会走临时注册 fallback；长期预注册和临时注册共享同一 HIXL 注册预算，因此混用时应预留足够空间。
+
+示例：
+
+```python
+import acl
+from yr.datasystem import HeteroClient, Blob, DeviceBlobList
+
+acl.init()
+device_id = 0
+acl.rt.set_device(device_id)
+
+client = HeteroClient("192.168.0.2", 31501, enable_remote_h2d=True)
+client.init()
+
+pool_size = 1024 * 1024 * 1024
+pool_ptr, _ = acl.rt.malloc(pool_size, 0)
+client.pre_register_device_memory([pool_ptr], [pool_size])
+
+# 后续 MGetH2D 的 Blob 目标地址应落在 [pool_ptr, pool_ptr + pool_size) 范围内。
+out_data_blob_list = [DeviceBlobList(device_id, [Blob(pool_ptr, 1024 * 1024)])]
+client.mget_h2d(["key"], out_data_blob_list, 60000)
+```
+
 ## 性能测试
 
 在启动etcd并根据需求（共享内存大小，NPU IDs，NUMA亲和，共享内存大页，worker到worker对象数据批量获取，等）部署完worker之后，通过tests/benchmark/hetero_h2d_d2h_benchmark.py的性能测试脚本可以进行基础的性能验证。运行可以选择单client进程或多client进程场景，以及各种数据大小规格。
@@ -332,13 +430,18 @@ python hetero_h2d_d2h_benchmark.py -i 192.168.0.2 -p 31501 --get-only --no-warmu
 > | -i, --ip | Worker组件的IP地址 | 127.0.0.1 |
 > | -p, --port | Worker组件的端口号 | 31699|
 > | -k, --keys | 保存对象key的路径。set-only场景生成对象key，再由get-only场景读取生成的对象key | ./keys.json |
+> | --key-seed | 确定性生成 key 的种子。跨节点 set/get 使用相同 seed 时，可以不通过 `keys.json` 传递 key | "" |
 > | --no-warmup | 跳过预热。在RH2D场景预热是无效的 | False|
 > | -n, --name | 测试名称。如果未设置则运行所有测试，而这在仅运行set或get的场景里是无法跑通的 | None |
-> | -d, --deviceid | 初始Device ID。在多进程场景每个进程使用的Device ID会增加 | 3 |
-> | --get-multiplier | 倍数重复相同的get请求 | 1 |
+> | -d, --device-ids | 使用的 NPU device id 列表，多个 id 以逗号分隔。多进程场景按列表轮询分配 | 0,1,2,3,4,5,6,7 |
+> | --get-multiplier | 倍数重复相同的 get 请求。多 client 进程测试 MGetH2D 时建议设置该参数，增加每个进程的 get 请求数量，减少进程启动和同步开销对带宽结果的影响 | 1 |
 > | --show-all-request-times | 展示每个请求的时延信息 | False |
+> | --perf-path | datasystem perf 日志记录输出路径 | `datasystem_perf_<timestamp>.csv` |
+> | --pre-register-device-memory | 在 get/all 模式下为每种 blob 配置预分配一块连续 device 目标内存并预注册，再将 MGetH2D 的目标 Blob 切分到该范围内。仅适用于 RH2D over HIXL HCCS | False |
 >
 > 入参IP和端口号需要替换为节点1/节点2 Worker组件的IP和端口号。
+>
+> 多进程 MGetH2D 性能测试时，建议结合 `--get-multiplier` 增大 get 请求量，例如 `--get-multiplier 50` 或更高，避免每个进程请求过少导致总带宽被初始化和连接等开销稀释。
 >
 > 2. 根据需求设置-n参数，来选择测试场景
 >
@@ -380,7 +483,6 @@ vllm-ascend样例命令（调整自`[PATCH] Implement yuanrong backend`内容）
 ```bash
 export PYTHONHASHSEED=0
 export DS_WORKER_ADDR="${WORKER_IP}:31501"
-export DS_ENABLE_EXCLUSIVE_CONNECTION=0
 # 启用client侧RH2D功能，默认为0表示不启用
 export DS_ENABLE_REMOTE_H2D=1
 

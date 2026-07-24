@@ -61,27 +61,30 @@ KVClient
 
     .. cpp:function:: Status UpdateConfig(const std::string &configJson)
 
-        运行时动态更新客户端可修改的配置项（gflag）。
+        运行时动态更新客户端可修改的配置项（KVClientConfig 所管理的参数）。
 
         参数 ``configJson`` 为 JSON 对象，键为 flag 名称，值必须为字符串，例如
         ``{"v":"1","minloglevel":"0"}``。全部校验通过后一次性生效；任一项失败则整批拒绝。
 
-        与配置文件监控互斥：进程首次 ``Init`` 时若 ``MonitorConfigPath`` 非空，或文件监控
-        线程已启用，则返回 ``StatusCode::K_INVALID``。
+        前置条件：仅当进程首次 ``Init`` 时 :cpp:func:`KVClientConfig::Builder::MonitorConfigPath`
+        显式设为空字符串才能使用本接口；若 ``MonitorConfigPath`` 非空或文件监控线程已启用，
+        则返回 ``StatusCode::K_INVALID``。
 
         参数：
-            - **configJson** - JSON 格式的 flag 名称与字符串值映射。
+            - **configJson** - JSON 格式的 flag 名称与字符串值映射，键为 flag 名（如
+              ``minloglevel``、``v``），值为字符串。
 
         返回：
             - ``StatusCode::K_OK`` 表示更新成功（空 JSON 对象亦视为成功）。
-            - ``StatusCode::K_INVALID`` 表示 JSON 非法、flag 不可修改、值非法，或与文件监控冲突。
+            - ``StatusCode::K_INVALID`` 表示 JSON 非法、flag 不可修改或不存在、值非法，
+              或与文件监控冲突。
 
     .. cpp:function:: Status Create(const std::string &key, uint64_t size, const SetParam &param, std::shared_ptr<Buffer> &buffer)
 
         创建数据系统共享内存Buffer，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。该接口应用于避免创建临时内存，减少内存拷贝的场景。
 
         参数：
-            - **key** - 需要设置的key。key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+            - **key** - 需要设置的key。key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
             - **size** - 需要创建的共享内存Buffer的大小，以字节为单位。
             - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
             - **buffer** - 传出参数，表示创建好的共享内存 :cpp:class:`Buffer` 。
@@ -105,7 +108,7 @@ KVClient
         当 ``param.existence=ExistenceOpt::NX`` 时：key不存在时写入；key已存在时返回成功且不覆盖。重复Set同一key时需保证 value 一致。
 
         参数：
-            - **key** - 键，key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节.
+            - **key** - 键，key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节.
             - **val** - 需要缓存的值.
             - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
 
@@ -128,7 +131,7 @@ KVClient
         批量创建数据系统共享内存Buffer，可以将数据拷贝到Buffer中，再调用Set接口缓存到数据系统中。该接口应用于避免创建临时内存，减少内存拷贝的场景。
 
         参数： 
-            - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``·-_!@#%^*()+=:;``，单个key最大长度为255字节. key的个数 `<=10000`，推荐单次设置的key个数 `<=64`。
+            - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``·-_!@#%^*()+=:;``，单个key最大长度为1024字节. key的个数 `<=10000`，推荐单次设置的key个数 `<=64`。
             - **sizes** - 设置共享内存Buffer的大小，以字节为单位. 该数组长度需要与 ``keys`` 的长度相等。
             - **param** - 设置参数，详见 :cpp:class:`SetParam` 章节。
             - **buffers** - 传出参数，表示创建好的共享内存 :cpp:class:`Buffer` 数组，该数组的长度与 ``keys`` 相等，索引位置一一对应，即每个 ``buffers[i]`` 的值与 ``keys[i]`` 相对应。
@@ -152,7 +155,7 @@ KVClient
         当 ``param.existence=ExistenceOpt::NX`` 时：key 不存在则创建；key 已存在视为成功，不覆盖已有值，且不会写入 ``outFailedKeys``。
 
         参数：
-            - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节. key的个数 `<=10000`，推荐单次设置的key个数 `<=64`。出于性能考虑，只校验第一个key的有效性。
+            - **keys** - 需要设置的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为1024字节. key的个数 `<=10000`，推荐单次设置的key个数 `<=64`。出于性能考虑，只校验第一个key的有效性。
             - **vals** - 需要设置的一组key对应的value. 该数组长度需要与 ``keys`` 的长度相等。
             - **outFailedKeys** - 传出参数，代表设置失败的key。
             - **param** - 设置参数，详见 :cpp:class:`MSetParam` 章节。
@@ -174,43 +177,36 @@ KVClient
         返回：
             固定返回 ``StatusCode::K_RUNTIME_ERROR``。
 
-    .. cpp:function:: Status MGetH2D(const std::vectorstd::string &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk, std::vectorstd::string &outFailedKeys, int32_t subTimeoutMs)
+    .. cpp:function:: Status MGetH2D(const std::vector<std::string> &keys, const std::vector<Blob> &devBlob, std::vector<std::string> &outFailedKeys, void *h2dStream = nullptr)
 
-        由服务端将多个键对应的值复制到设备共享内存中。
+        通过 RH2D（Remote Host to Device）将多个 key 对应的 value 拷贝到调用方提供的设备内存中。
 
         参数：
-            - **keys** - 键列表。
-            - **devShmChunk** - 设备共享内存指针与大小的配对列表，用于指定目标设备内存地址及容量。
-            - **outFailedKeys** - 传出参数，返回主机到设备（H2D）传输失败的键列表。
-            - **subTimeoutMs** - 当对象未就绪时，等待结果返回的超时时长，单位毫秒。必须为非负整数，0 表示不允许等待（立即返回）。
+            - **keys** - 需要获取的一组 key，不允许包含重复 key。key 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个 key 最大长度为 255 字节。
+            - **devBlob** - 目标设备内存描述数组。每个 key 对应一个连续 ``Blob``，用于指定 H2D 的目标设备地址及容量。
+            - **outFailedKeys** - 传出参数，返回获取或 H2D 失败的 key 列表。
+            - **h2dStream** - 可选的外部 CUDA stream 句柄。默认值为 ``nullptr``，表示使用内部 stream 并等待 H2D 完成。
+            - **readOnlyBuffers** - 可选的返回 ReadOnlyBuffer 列表的指针，当 h2dStream 不为空时，要求 readOnlyBuffers 不能为空。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示操作成功。
-            - 返回 ``StatusCode::K_INVALID`` 表示 ``key`` 为空或参数校验不通过。
-            - 返回 ``StatusCode::K_NOT_FOUND`` 表示 ``key`` 不存在。
-            - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示无法从 worker 获取值或服务端内部错误。
-            - 返回 ``StatusCode::K_NOT_SUPPORT`` 表示 client 或 worker 不支持 MGetH2D。
-
-    .. cpp:function:: std::shared_future<AsyncResult> AsyncMGetH2D(const std::vectorstd::string &keys, const std::vector<std::pair<void *, size_t>> &devShmChunk, int32_t subTimeoutMs)
-
-        由服务端异步将多个键对应的值复制到设备共享内存中。
-
-        参数：
-            - **keys** - 键列表。
-            - **devShmChunk** - 设备共享内存指针与大小的配对列表，用于指定目标设备内存地址及容量。
-            - **subTimeoutMs** - 当对象未就绪时，等待结果返回的超时时长，单位毫秒。必须为非负整数，0 表示不允许等待（立即返回）。
-
-        返回：
-            - 返回 ``std::shared_future<AsyncResult>`` 异步任务句柄，调用方可通过该句柄查询操作状态或获取最终结果。
+            - 返回 ``StatusCode::K_INVALID`` 表示 ``keys`` 与 ``devBlob`` 长度不一致、包含重复或非法 key、设备内存地址为空、设备内存容量为 0 或容量不足等参数错误。
+            - 返回 ``StatusCode::K_NOT_FOUND`` 表示 key 不存在。
+            - 返回 ``StatusCode::K_RUNTIME_ERROR`` 表示无法从 worker 获取值、H2D 提交/等待失败或服务端内部错误。
+            - 返回 ``StatusCode::K_NOT_SUPPORTED`` 表示当前 client/worker、共享内存、编译选项或 worker 启动参数不支持 RH2D。
 
     .. cpp:function:: Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)
 
         获取键对应的数据。
 
         参数：
-            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节。
+            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为1024字节。
             - **val** - 传出参数，返回缓存数据。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示获取成功。
@@ -224,9 +220,13 @@ KVClient
         获取键对应的只读共享内存 :cpp:class:`ReadOnlyBuffer`。
 
         参数：
-            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为255字节。
+            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，单个key最大长度为1024字节。
             - **readOnlyBuffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的只读共享内存 :cpp:class:`ReadOnlyBuffer` 。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示获取成功。
@@ -240,8 +240,13 @@ KVClient
         获取键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::string &key, std::string &val, int32_t subTimeoutMs)` 可减少一次从共享内存到临时内存的拷贝，直接读取缓存在共享内存上的数据，性能更优。
 
         参数：
-            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为255字节。
+            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
             - **buffer** - 传出参数，返回的使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` ，当 Get 返回失败时，``buffer`` 的值为 ``nullptr``。
 
         返回：
@@ -257,8 +262,13 @@ KVClient
         批量获取数据。
 
         参数：
-            - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为255字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
+            - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
             - **vals** - 传出参数，返回一组获取的数据。若有部分数据获取不成功，则对应位置的vector的对象为空。
 
         返回：
@@ -276,6 +286,10 @@ KVClient
             - **keys** - 需要获取的一组key.
             - **readOnlyBuffers** - 传出参数，返回的一组使用 :cpp:class:`Optional` 封装的只读共享内存 :cpp:class:`ReadOnlyBuffer` 。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
 
         返回：
             - 返回 ``StatusCode::K_OK`` 表示至少有一个数据获取成功。
@@ -304,8 +318,13 @@ KVClient
         批量获取多个键对应的共享内存 :cpp:class:`Buffer` 。该接口相比 :cpp:any:`Status Get(const std::vector<std::string> &keys, std::vector<std::string> &vals, int32_t subTimeoutMs)` 少一次从共享内存到临时内存的拷贝，性能更优。
         
         参数：
-            - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为255字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
+            - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
             - **subTimeoutMs** - 支持订阅不存在的数据，subTimeoutMs表示订阅等待的时长，单位ms。不允许为负数，默认值为0表示不等待。
+
+              .. note::
+
+                  subTimeoutMs 的实际生效值受 client 初始化时 :cpp:member:`ConnectOptions::requestTimeoutMs` 的上限约束，实际生效值为 ``min(requestTimeoutMs, subTimeoutMs)``。
+
             - **buffers** - 传出参数，返回的一组使用 :cpp:class:`Optional` 封装的共享内存 :cpp:class:`Buffer` 。若有部分数据获取不成功，则对应位置的vector的对象为空。
 
         返回：
@@ -320,7 +339,7 @@ KVClient
         删除指定键值对。key不存在时视为删除成功。
 
         参数：
-            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为255字节。
+            - **key** - 键. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。
 
         返回：
             返回值状态码为 `K_OK` 时表示初始化成功，否则返回其他错误码。
@@ -330,7 +349,7 @@ KVClient
         批量删除指定键值对。key不存在时视为删除成功。
 
         参数：
-            - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为255字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
+            - **keys** - 需要获取的一组key. key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;`` ，单个key最大长度为1024字节。传入的key的个数 `<=10000`，推荐单次获取key个数 `<=64`。
             - **failedKeys** - 传出参数，返回删除失败的key。
         
         返回：
@@ -385,10 +404,10 @@ KVClient
 
     .. cpp:function:: Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 
-        批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多10000个键的查询。
+        批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多100000个键的查询。
 
         参数：
-            - **keys** - 待查询的键列表，最大支持10000个键。
+            - **keys** - 待查询的键列表，最大支持100000个键。
             - **exists** - 传出参数，返回每个键的存在性状态。
 
         返回：
