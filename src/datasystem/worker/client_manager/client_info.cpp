@@ -80,15 +80,21 @@ void ClientInfo::UpdateLastHeartbeat()
 
 void ClientInfo::LostHandler()
 {
-    if (lostHandler_) {
-        lostHandler_();
+    std::function<void()> lostHandler;
+    {
+        std::lock_guard<std::mutex> lck(mutex_);
+        lostHandler = lostHandler_;
+    }
+    if (lostHandler) {
+        lostHandler();
     }
 }
 
 void ClientInfo::SetLostHandler(std::function<void()> lostHandler, HeartbeatType heartbeatType)
 {
-    heartbeatType_ = heartbeatType;
+    std::lock_guard<std::mutex> lck(mutex_);
     lostHandler_ = std::move(lostHandler);
+    heartbeatType_ = heartbeatType;
 }
 
 bool ClientInfo::IsClientLost()
