@@ -15,6 +15,27 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
+def _print_timings(action, timings):
+    """Print per-pod duration stats for an action.
+
+    ``timings`` is a list of ``(target, elapsed_seconds, succeeded)``
+    tuples populated from worker threads (list.append is GIL-atomic in
+    CPython, so concurrent appends from the thread pool are safe).
+    """
+    if not timings:
+        return
+    print(f'\n{action} per-pod timings:')
+    for target, elapsed, ok in sorted(timings, key=lambda x: x[0]):
+        print(f'  {target:<40} {elapsed:7.2f}s  {"OK" if ok else "FAIL"}')
+    elapsed_all = [t for _, t, _ in timings]
+    ok_count = sum(1 for _, _, ok in timings if ok)
+    fail_count = len(timings) - ok_count
+    print(f'  min={min(elapsed_all):.2f}s  max={max(elapsed_all):.2f}s  '
+          f'avg={sum(elapsed_all) / len(elapsed_all):.2f}s  '
+          f'total={sum(elapsed_all):.2f}s  '
+          f'(succeeded={ok_count}, failed={fail_count})')
+
+
 class Deployer:
     def __init__(self, deploy_path, config_template_path):
         with open(deploy_path) as f:
@@ -500,15 +521,29 @@ class Deployer:
 
         print(f'Version: {self.version}')
 
+        timings = []
+
+        def _deploy_with_timing(node):
+            target = self._exec_target(node)
+            t0 = time.monotonic()
+            ok = False
+            try:
+                ok = self.deploy_node(node)
+                return ok
+            finally:
+                elapsed = time.monotonic() - t0
+                timings.append((target, elapsed, bool(ok)))
+
         results = []
         with ThreadPoolExecutor(max_workers=len(self.nodes) or 1) as pool:
-            futures = {pool.submit(self.deploy_node, n): n for n in self.nodes}
+            futures = {pool.submit(_deploy_with_timing, n): n for n in self.nodes}
             for future in as_completed(futures):
                 results.append(future.result())
 
         ok = sum(1 for r in results if r)
         total = len(results)
         print(f'\nDeploy result: {ok}/{total} succeeded')
+        _print_timings('start', timings)
 
     def do_stop(self):
         if not self.nodes:
@@ -516,6 +551,7 @@ class Deployer:
             return
 
         print(f'Stopping {len(self.nodes)} instances...')
+        timings = []
 
         def http_stop(node):
             """Try HTTP POST /stop via curl, wget, then python3."""
@@ -553,9 +589,11 @@ class Deployer:
             if r is not None and (r.returncode != 0 or not r.stdout.strip()):
                 print(f'  {target} -> no kvtest process, skipped')
                 return (target, None)
-            if http_stop(node):
-                return (target, True)
-            return (target, False)
+            t0 = time.monotonic()
+            ok = http_stop(node)
+            elapsed = time.monotonic() - t0
+            timings.append((target, elapsed, bool(ok)))
+            return (target, ok)
 
         # Phase 1: graceful HTTP stop
         ok = 0
@@ -619,6 +657,7 @@ class Deployer:
 
         print(f'Stop result: {ok}/{len(self.nodes)} graceful, '
               f'{len(alive)} force killed')
+        _print_timings('stop', timings)
 
     def do_clean(self):
         results = []

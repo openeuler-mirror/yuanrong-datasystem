@@ -36,16 +36,62 @@ def read_proc_stat(pid):
         return None
 
 
-def read_proc_statm(pid):
-    """Read RSS in pages from /proc/<pid>/statm."""
+def read_proc_mem_breakdown(pid):
+    """Read resident memory breakdown (RSS, private RSS, shared RSS) in bytes.
+
+    Returns (rss_bytes, anon_bytes, shared_bytes) where:
+      - rss_bytes: total resident set size (all resident pages in RAM).
+      - anon_bytes: private resident memory = Private_Clean + Private_Dirty
+        from smaps_rollup. These are pages unique to this process: heap,
+        stack, private anonymous mmap, and dirty private file-mmap pages.
+        Labeled "Anon" because it tracks the process's own footprint.
+      - shared_bytes: shared resident memory = Shared_Clean + Shared_Dirty
+        from smaps_rollup. These are pages shared with other processes:
+        shared library text, shmem, tmpfs, shared mmap.
+
+    anon + shared approximates RSS exactly except for hugetlb pages (see
+    the Shared_Hugetlb / Private_Hugetlb fields), which are counted in RSS
+    but excluded from the four-way split. Most KV-test workloads do not
+    use hugepages, so the sum holds.
+
+    Primary source is /proc/<pid>/smaps_rollup for the accurate four-way
+    split. Falls back to /proc/<pid>/statm when smaps_rollup is unavailable
+    (restricted container, pre-4.4 kernels): shared is read from statm's
+    `shared` field, anon is computed as RSS - shared. The fallback is
+    less precise but keeps the anon/shared split usable everywhere.
+
+    Returns (None, None, None) if neither source can be read.
+    """
+    # Primary: smaps_rollup (values in kB).
+    try:
+        stats = {}
+        with open(f"/proc/{pid}/smaps_rollup") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].endswith(":"):
+                    try:
+                        stats[parts[0][:-1]] = int(parts[1])
+                    except ValueError:
+                        continue
+        if "Rss" in stats:
+            rss_kb = stats["Rss"]
+            anon_kb = stats.get("Private_Clean", 0) + stats.get("Private_Dirty", 0)
+            shared_kb = stats.get("Shared_Clean", 0) + stats.get("Shared_Dirty", 0)
+            return rss_kb * 1024, anon_kb * 1024, shared_kb * 1024
+    except (FileNotFoundError, PermissionError, OSError):
+        pass
+
+    # Fallback: statm (values in pages).
     try:
         with open(f"/proc/{pid}/statm") as f:
             fields = f.read().split()
-        rss_pages = int(fields[1])
         page_size = os.sysconf("SC_PAGE_SIZE")
-        return rss_pages * page_size
-    except (FileNotFoundError, ValueError, IndexError):
-        return None
+        rss_bytes = int(fields[1]) * page_size
+        shared_bytes = int(fields[2]) * page_size
+        anon_bytes = rss_bytes - shared_bytes
+        return rss_bytes, anon_bytes, shared_bytes
+    except (FileNotFoundError, ValueError, IndexError, PermissionError, OSError):
+        return None, None, None
 
 
 def read_proc_fd_count(pid):
@@ -186,6 +232,8 @@ def main():
 
     samples_cpu = []
     samples_mem = []
+    samples_mem_anon = []
+    samples_mem_shared = []
     samples_fd = []
     samples_retrans = []
     total_retrans = 0
@@ -211,7 +259,7 @@ def main():
 
         now = time.monotonic()
         cpu_ticks = read_proc_stat(pid)
-        rss_bytes = read_proc_statm(pid)
+        rss_bytes, anon_bytes, shared_bytes = read_proc_mem_breakdown(pid)
         fd_count = read_proc_fd_count(pid)
 
         if cpu_ticks is None or rss_bytes is None:
@@ -225,9 +273,13 @@ def main():
             cpu_pct = 0.0
 
         mem_mb = rss_bytes / (1024 * 1024)
+        anon_mb = anon_bytes / (1024 * 1024)
+        shared_mb = shared_bytes / (1024 * 1024)
 
         samples_cpu.append(cpu_pct)
         samples_mem.append(mem_mb)
+        samples_mem_anon.append(anon_mb)
+        samples_mem_shared.append(shared_mb)
         if fd_count is not None:
             samples_fd.append(fd_count)
 
@@ -251,7 +303,9 @@ def main():
 
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
         fd_str = f" FD={fd_count}" if fd_count is not None else ""
-        emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB{fd_str}{tcp_str}")
+        emit(f"[{ts}] PID={pid} CPU={cpu_pct:.1f}% MEM={format_mb(rss_bytes)}MB"
+             f" Anon={format_mb(anon_bytes)}MB Shared={format_mb(shared_bytes)}MB"
+             f"{fd_str}{tcp_str}")
 
         prev_cpu = cpu_ticks
         prev_time = now
@@ -264,7 +318,13 @@ def main():
         emit(f"CPU  avg={sum(samples_cpu)/len(samples_cpu):.1f}%  peak={max(samples_cpu):.1f}%")
         avg_mem = sum(samples_mem) / len(samples_mem)
         peak_mem = max(samples_mem)
-        emit(f"MEM  avg={avg_mem:.1f}MB peak={peak_mem:.1f}MB")
+        emit(f"MEM  RSS     avg={avg_mem:.1f}MB peak={peak_mem:.1f}MB")
+        avg_anon = sum(samples_mem_anon) / len(samples_mem_anon)
+        peak_anon = max(samples_mem_anon)
+        emit(f"MEM  Anon    avg={avg_anon:.1f}MB peak={peak_anon:.1f}MB")
+        avg_shared = sum(samples_mem_shared) / len(samples_mem_shared)
+        peak_shared = max(samples_mem_shared)
+        emit(f"MEM  Shared  avg={avg_shared:.1f}MB peak={peak_shared:.1f}MB")
     if samples_fd:
         avg_fd = sum(samples_fd) / len(samples_fd)
         peak_fd = max(samples_fd)
