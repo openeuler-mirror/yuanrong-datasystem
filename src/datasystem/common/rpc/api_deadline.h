@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Thread-local API-level deadline budget shared across the request call chain.
+ * Description: API-level deadline budget selected from the active RequestContext with a thread-local fallback.
  */
 #ifndef DATASYSTEM_COMMON_RPC_API_DEADLINE_H
 #define DATASYSTEM_COMMON_RPC_API_DEADLINE_H
@@ -28,13 +28,23 @@
 
 namespace datasystem {
 
+class ApiDeadline;
+class ScopedRequestContext;
+struct RequestContext;
+
 /**
- * @brief ApiDeadline singleton class tracking the per-thread API deadline budget
+ * @brief Return the ApiDeadline owned by the active BRPC RequestContext.
+ * @return The request-owned deadline, or nullptr when no BRPC request context is active.
+ */
+ApiDeadline *GetBthreadApiDeadline();
+
+/**
+ * @brief ApiDeadline singleton class tracking the current execution context's API deadline budget
  * shared by the client, worker, and master along one request call chain.
  */
 class ApiDeadline {
 public:
-    /** @brief Get the thread-local singleton ApiDeadline instance. @return ApiDeadline instance. */
+    /** @brief Get the current request or fallback ApiDeadline instance. @return ApiDeadline instance. */
     static ApiDeadline &Instance();
 
     /**
@@ -79,6 +89,19 @@ public:
     ApiDeadline& operator=(ApiDeadline&&) = delete;
 
 private:
+    void InheritDeadlineFrom(const ApiDeadline &other)
+    {
+        initialized_ = other.initialized_;
+        deadline_ = other.deadline_;
+        savedStates_.clear();
+    }
+
+    void InheritStateFrom(const ApiDeadline &other)
+    {
+        InheritDeadlineFrom(other);
+        savedStates_ = other.savedStates_;
+    }
+
     struct SaveState {
         std::chrono::steady_clock::time_point deadline;
         uint8_t initialized;
@@ -86,6 +109,9 @@ private:
 
     ApiDeadline() = default;
     ~ApiDeadline() = default;
+
+    friend struct RequestContext;
+    friend class ScopedRequestContext;
 
     bool initialized_ = false;
     std::chrono::steady_clock::time_point deadline_;

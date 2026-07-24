@@ -180,6 +180,7 @@ ds_cc_test(
     name = "request_context_test",
     srcs = ["request_context_test.cpp"],
     deps = [
+        "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/util:request_context",
         "//tests/ut:ut_common",
     ],

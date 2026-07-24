@@ -44,6 +44,7 @@
 
 #include "datasystem/common/log/time_cost.h"
 #include "datasystem/common/log/trace.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/thread_local.h"
 
 namespace datasystem {
@@ -58,6 +59,11 @@ struct RequestContext {
     // Per-request transport kind tracked by AccessTransportTracker.
     // Default SHM=0; full enum definition in access_recorder.h.
     AccessTransportKind accessTransportKind = static_cast<AccessTransportKind>(0);
+
+    // API-level deadline owned by this request. ApiDeadline::Instance() resolves to this object
+    // while the RequestContext is active, so it remains stable across BRPC bthread migration.
+    ApiDeadline apiDeadline;
+    bool isFallbackContext = false;
 
     // Per-request timeout trackers (replaces ScopedBthreadLocal<TimeoutDuration>).
     // Each request lazily inits its own TimeoutDuration (default RPC_TIMEOUT) at
@@ -88,6 +94,7 @@ void InitRequestContext();
 // Store RequestContext pointer for current bthread (brpc handlers).
 // The pointer must remain valid for the duration of the request.
 void SetRequestContext(RequestContext* ctx);
+
 
 // Get the RequestContext for the current execution context.
 // NEVER returns nullptr — falls back to a per-pthread static instance
@@ -134,6 +141,12 @@ public:
         // the auth strings are consumed (std::move'd out) before business
         // handlers create nested scopes, so they are intentionally NOT inherited.
         if (saved_ != nullptr) {
+            ApiDeadline *activeDeadline = GetBthreadApiDeadline();
+            if (activeDeadline != nullptr) {
+                ctx_.apiDeadline.InheritStateFrom(*activeDeadline);
+            } else {
+                ctx_.apiDeadline.InheritDeadlineFrom(ApiDeadline::Instance());
+            }
             ctx_.reqTimeoutDuration = saved_->reqTimeoutDuration;
             ctx_.scTimeoutDuration = saved_->scTimeoutDuration;
             ctx_.timeoutDuration = saved_->timeoutDuration;
