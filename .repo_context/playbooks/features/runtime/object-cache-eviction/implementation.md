@@ -194,12 +194,14 @@ Use this section when implementing the formal primary end-life lane plan.
     `READD_COUNTER`, and do not actively call `Evict()`;
   - while building a batch, account for each candidate's expected released size, preferably `entry->GetDataSize() + entry->GetMetadataSize()` adjusted to the actual local-memory release semantics; avoid adding more keys once the batch would clearly exceed the current space above low watermark, except that one oversized object may still be selected to make progress;
   - use repeated `ids_with_version` for batch `DeleteAllCopyMeta`; do not use `object_keys` in the new eviction lane;
-  - set a 5s total API budget per batch through `reqTimeoutDuration` with RAII reset;
+  - set a 3s total API budget per batch through `reqTimeoutDuration` with RAII reset;
   - treat `GetMetaAddress()` unavailable errors as fast skip without sending RPC; classify `K_RPC_UNAVAILABLE` as
     master/connection unavailable and `K_NOT_FOUND` as route or meta-address unavailable rather than always calling it a failed master;
-  - process batch response per key: RPC failure or non-OK `last_rc` means all keys in the batch fail; otherwise collect
-    `failed_object_keys`, `outdated_objs`, `objs_without_meta`, redirect info and `meta_is_moving` before allowing a key
-    to proceed to local erase;
+  - process the existing batch response without adding a new master result field: treat `objs_without_meta` and
+    `outdated_objs` as idempotent completion for that incarnation, retry only `failed_object_keys` and redirect keys,
+    and fail the whole batch only for RPC failure, `meta_is_moving`, or a non-OK `last_rc` with no specific failed key;
+  - on the Master, make `PENDING` an explicit failed key and prevent cleanup after a key was already rejected or after
+    metadata reappeared following the initial no-meta lookup; do not add a reverse version-bound check;
   - do not add a new dependency on `DeleteAllCopyMetaRspPb.delete_result`; current master delete paths communicate the
     relevant failure/version result through `failed_object_keys`, `outdated_objs`, `objs_without_meta`, redirect info,
     `meta_is_moving`, and `last_rc`;
@@ -207,7 +209,7 @@ Use this section when implementing the formal primary end-life lane plan.
   - on retry-worthy failure, clear pending and re-add to `memEvictionList_` with `READD_COUNTER`;
   - do not actively call `Evict()` after re-adding from the lane.
 - Timeout and shutdown:
-  - remote master uses the 5s budget as the worker-side retry/deadline budget for `WorkerRemoteMasterOCApi::DeleteAllCopyMeta`;
+  - remote master uses the 3s budget as the worker-side retry/deadline budget for `WorkerRemoteMasterOCApi::DeleteAllCopyMeta`;
   - local-bypass master uses request timeout and master-side `timeoutDuration`, but this is not a transport-level forced interrupt;
   - construct `primaryEndLifeThreadPool_` with droppable shutdown if the implementation wants queued-but-not-started tasks to be discarded on worker exit;
   - reset `primaryEndLifeThreadPool_` in `WorkerOcEvictionManager` destruction before dependencies used by lane tasks can be released.

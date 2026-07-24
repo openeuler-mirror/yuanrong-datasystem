@@ -1036,8 +1036,7 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
         rc = DeleteAllCopyMetaForPrimaryEndLife(masterAddr, needDeleteMetaCandidates, failedKeys);
         elapsedMs = timer.ElapsedMilliSecond();
     }
-    const double elapsedLimit = 3;
-    if (rc.IsError() || elapsedMs > elapsedLimit) {
+    if (rc.IsError() || elapsedMs > PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS) {
         LOG(WARNING) << FormatString("Primary end-life DeleteAllCopyMeta cost %f ms, count %zu, status: %s.", elapsedMs,
                                      needDeleteMetaCandidates.size(), rc.ToString());
     }
@@ -1247,7 +1246,25 @@ Status WorkerOcEvictionManager::DeleteAllCopyMetaForPrimaryEndLife(
     ApiDeadline::Instance().Reset();
     Raii resetTimeout([] { GetRequestContext()->reqTimeoutDuration.Reset(); });
     RETURN_IF_NOT_OK(workerMasterApi->DeleteAllCopyMeta(req, rsp));
-    return CollectDeleteAllCopyMetaResult(rsp, failedKeys);
+    return CollectPrimaryEndLifeDeleteResult(rsp, failedKeys);
+}
+
+Status WorkerOcEvictionManager::CollectPrimaryEndLifeDeleteResult(
+    const master::DeleteAllCopyMetaRspPb &rsp, std::unordered_set<std::string> &failedKeys)
+{
+    Status lastRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    const bool hasReportedFailure = !rsp.failed_object_keys().empty();
+    failedKeys.insert(rsp.failed_object_keys().begin(), rsp.failed_object_keys().end());
+    for (const auto &redirectInfo : rsp.info()) {
+        failedKeys.insert(redirectInfo.change_meta_ids().begin(), redirectInfo.change_meta_ids().end());
+    }
+    if (rsp.meta_is_moving()) {
+        RETURN_STATUS(K_TRY_AGAIN, "DeleteAllCopyMeta meta is moving.");
+    }
+    if (lastRc.IsError() && !hasReportedFailure) {
+        return lastRc;
+    }
+    return Status::OK();
 }
 
 Status WorkerOcEvictionManager::CollectDeleteAllCopyMetaResult(const master::DeleteAllCopyMetaRspPb &rsp,

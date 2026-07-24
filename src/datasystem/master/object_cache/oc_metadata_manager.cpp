@@ -2010,6 +2010,11 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
             LOG(ERROR) << FormatString("[ObjectKey %s] worker delete object failed", objectKey);
             continue;
         }
+        if (delMediator.GetFailedObjs().count(objectKey) > 0) {
+            failedObjects.insert(objectKey);
+            lastErr = Status(K_TRY_AGAIN, "Object was rejected before metadata cleanup.");
+            continue;
+        }
 
         TbbMetaTable::const_accessor accessor;
         size_t shardIdx = GetShardIndex(objectKey);
@@ -2024,6 +2029,10 @@ Status OCMetadataManager::ClearMetaInfo(const std::unordered_map<std::string, De
                     globalCacheDeleteManager_->InsertDeletedObject(objectKey, UINT64_MAX, maxVersionToDel);
                 LOG_IF_ERROR(gcStatus, FormatString("[ObjectKey %s] Global cache delete enqueue failed", objectKey));
             }
+            continue;
+        } else if (delMediator.GetHashObjsWithoutMeta().count(objectKey) > 0) {
+            failedObjects.insert(objectKey);
+            lastErr = Status(K_TRY_AGAIN, "Metadata appeared during DeleteAllCopyMeta.");
             continue;
         } else if (accessor->second.meta.version() > static_cast<uint64_t>(info.second.version)) {
             VLOG(1) << "version updated, skip deletion";
@@ -2148,6 +2157,7 @@ Status OCMetadataManager::GetMetaInfoAndSetDeleting(const std::string &objectKey
         delMediator.AddHashObjsWithoutMeta(objectKey);
         return Status::OK();
     } else if (accessor->second.multiSetState == PENDING) {
+        delMediator.AddFailedDelId(objectKey);
         RETURN_STATUS_LOG_ERROR(StatusCode::K_NOT_FOUND, "Object does not exist, multi object is creating");
     }
 
