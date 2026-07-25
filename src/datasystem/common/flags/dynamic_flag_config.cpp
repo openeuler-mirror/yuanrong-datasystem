@@ -159,7 +159,7 @@ void DynamicFlagConfig::StartConfigFileHandle(const std::string &configFilePath,
     bool fileExists = false;
     auto rc = CheckFileExists(&fileExists, configFilePath);
     if (!fileExists) {
-        LOG(WARNING) << FormatString("Monitor config file does not exist: %s", configFilePath);
+        LOG_FIRST_N(WARNING, 1) << FormatString("Monitor config file does not exist: %s", configFilePath);
         return;
     }
     // Check whether the configfile has been modified.
