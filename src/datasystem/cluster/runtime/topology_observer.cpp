@@ -74,7 +74,7 @@ Status TopologyObserver::RegisterWatchEvents()
         return watchStatus;
     }
     LOG(INFO) << "CLUSTER_WATCH cluster=" << keys_.ClusterName() << " role=observer scope_count=" << watches.size()
-              << " revision=0 status=registered";
+              << " start_mode=after_revision last_processed_revision=0 status=registered";
     return Status::OK();
 }
 

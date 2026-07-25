@@ -14,6 +14,7 @@
 /**
  * Description: Test interface to ETCD
  */
+#include <algorithm>
 #include <cassert>
 #include <condition_variable>
 #include <mutex>
@@ -60,6 +61,19 @@ namespace st {
 
 class EtcdStoreTest : public ExternalClusterTest {
 protected:
+    struct WatchValueEvent {
+        std::string key;
+        std::string value;
+    };
+
+    struct WatchValueState {
+        std::mutex mutex;
+        std::condition_variable received;
+        std::vector<WatchValueEvent> events;
+    };
+
+    static constexpr auto WATCH_WRITE_RETRY_INTERVAL = std::chrono::milliseconds(100);
+
     EtcdStoreTest() : db_(nullptr), tableCreated_(false)
     {
     }
@@ -114,6 +128,109 @@ protected:
     std::string PhysicalTablePrefix() const
     {
         return "/" + FLAGS_cluster_name + tablePrefix_;
+    }
+
+    Status CompactEtcdAtRevision(int64_t revision)
+    {
+        std::unique_ptr<GrpcSession<etcdserverpb::KV>> session;
+        RETURN_IF_NOT_OK(GrpcSession<etcdserverpb::KV>::CreateSession(FLAGS_etcd_address, session));
+        etcdserverpb::CompactionRequest request;
+        request.set_revision(revision);
+        etcdserverpb::CompactionResponse response;
+        auto rc = session->SendRpc("Compact::etcd_kv_Compact", request, response,
+                                   &etcdserverpb::KV::Stub::Compact);
+        session->Shutdown();
+        return rc;
+    }
+
+    Status WriteUniqueValuesUntilObserved(const std::string &key, const std::string &valuePrefix,
+                                          const std::shared_ptr<WatchValueState> &state,
+                                          std::chrono::steady_clock::time_point deadline, std::string &observed)
+    {
+        const auto physicalKey = PhysicalTablePrefix() + "/" + key;
+        size_t attempt = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            RETURN_IF_NOT_OK(db_->Put(tableName_, key, valuePrefix + std::to_string(attempt++)));
+            std::unique_lock<std::mutex> lock(state->mutex);
+            auto findObserved = [&state, &physicalKey, &valuePrefix, &observed] {
+                auto iter = std::find_if(state->events.begin(), state->events.end(), [&](const auto &event) {
+                    return event.key == physicalKey && event.value.rfind(valuePrefix, 0) == 0;
+                });
+                if (iter == state->events.end()) {
+                    return false;
+                }
+                observed = iter->value;
+                return true;
+            };
+            if (findObserved()) {
+                return Status::OK();
+            }
+            const auto retryAt = std::min(deadline, std::chrono::steady_clock::now() + WATCH_WRITE_RETRY_INTERVAL);
+            if (state->received.wait_until(lock, retryAt, findObserved)) {
+                return Status::OK();
+            }
+        }
+        std::lock_guard<std::mutex> lock(state->mutex);
+        RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED,
+                      "Timed out waiting for ETCD watch key=" + physicalKey
+                          + ", value_prefix=" + valuePrefix
+                          + ", observed_event_count=" + std::to_string(state->events.size()));
+    }
+
+    Status BatchPutValues(const std::vector<std::pair<std::string, std::string>> &keyValues)
+    {
+        std::unordered_map<std::string, EtcdStore::BatchInfoPutToEtcd> batch;
+        for (const auto &[key, value] : keyValues) {
+            EtcdStore::BatchInfoPutToEtcd info;
+            info.etcdKey = key;
+            info.meta = value;
+            info.tableName = tableName_;
+            batch.emplace(key, std::move(info));
+        }
+        return db_->BatchPut(batch);
+    }
+
+    Status WriteUniqueBatchesUntilObserved(
+        const std::vector<std::pair<std::string, std::string>> &keyToValuePrefix,
+        const std::shared_ptr<WatchValueState> &state, std::chrono::steady_clock::time_point deadline,
+        std::vector<std::string> &observed)
+    {
+        size_t attempt = 0;
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::vector<std::pair<std::string, std::string>> keyValues;
+            keyValues.reserve(keyToValuePrefix.size());
+            for (const auto &[key, prefix] : keyToValuePrefix) {
+                keyValues.emplace_back(key, prefix + std::to_string(attempt));
+            }
+            ++attempt;
+            RETURN_IF_NOT_OK(BatchPutValues(keyValues));
+            std::unique_lock<std::mutex> lock(state->mutex);
+            auto findAllObserved = [this, &state, &keyToValuePrefix, &observed] {
+                observed.clear();
+                for (const auto &[key, prefix] : keyToValuePrefix) {
+                    const auto physicalKey = PhysicalTablePrefix() + "/" + key;
+                    auto iter = std::find_if(state->events.begin(), state->events.end(), [&](const auto &event) {
+                        return event.key == physicalKey && event.value.rfind(prefix, 0) == 0;
+                    });
+                    if (iter == state->events.end()) {
+                        return false;
+                    }
+                    observed.emplace_back(iter->value);
+                }
+                return true;
+            };
+            if (findAllObserved()) {
+                return Status::OK();
+            }
+            const auto retryAt = std::min(deadline, std::chrono::steady_clock::now() + WATCH_WRITE_RETRY_INTERVAL);
+            if (state->received.wait_until(lock, retryAt, findAllObserved)) {
+                return Status::OK();
+            }
+        }
+        std::lock_guard<std::mutex> lock(state->mutex);
+        RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED,
+                      "Timed out waiting for future events on all ETCD watch targets, observed_event_count="
+                          + std::to_string(state->events.size()));
     }
 
     void ReceivedEvents2(mvccpb::Event &&event)
@@ -668,6 +785,105 @@ TEST_F(EtcdStoreTest, ExactWatchDoesNotReceiveNeighborPrefixKey)
     ASSERT_GE(state->eventKeys.front().size(), exactKey.size());
     EXPECT_EQ(state->eventKeys.front().substr(state->eventKeys.front().size() - exactKey.size()), exactKey);
     lock.unlock();
+    DS_ASSERT_OK(db_->ShutdownEventSources());
+}
+
+TEST_F(EtcdStoreTest, WatchFromNowSkipsRetainedHistory)
+{
+    constexpr auto eventTimeout = std::chrono::seconds(5);
+    DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassively.AvoidEventCompensation", "return"));
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    const std::string key = "from-now-key";
+    const std::string oldValue = "old-value";
+    const std::string newValuePrefix = "new-";
+    DS_ASSERT_OK(db_->Put(tableName_, key, oldValue));
+    auto state = std::make_shared<WatchValueState>();
+    db_->SetEventHandler([state](mvccpb::Event &&event) {
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->events.emplace_back(WatchValueEvent{ event.kv().key(), event.kv().value() });
+        }
+        state->received.notify_all();
+    });
+
+    DS_ASSERT_OK(db_->WatchEvents({ WatchElement{ tableName_, key, WATCH_FROM_NOW, true } }));
+    std::string observed;
+    DS_ASSERT_OK(WriteUniqueValuesUntilObserved(key, newValuePrefix, state,
+                                               std::chrono::steady_clock::now() + eventTimeout, observed));
+
+    {
+        const auto physicalKey = PhysicalTablePrefix() + "/" + key;
+        std::lock_guard<std::mutex> lock(state->mutex);
+        auto oldEvent = std::find_if(state->events.begin(), state->events.end(), [&](const auto &event) {
+            return event.key == physicalKey && event.value == oldValue;
+        });
+        EXPECT_EQ(oldEvent, state->events.end());
+        EXPECT_EQ(observed.rfind(newValuePrefix, 0), 0U);
+    }
+    DS_ASSERT_OK(db_->ShutdownEventSources());
+}
+
+TEST_F(EtcdStoreTest, CompactedWatchRecoversAllTargetsAndRebuildsWholeStream)
+{
+    constexpr auto currentRecoveryTimeout = std::chrono::seconds(15);
+    constexpr auto futureEventTimeout = std::chrono::seconds(10);
+    DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassively.AvoidEventCompensation", "return"));
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    const std::string firstKey = "compacted-watch-key-a";
+    const std::string secondKey = "compacted-watch-key-b";
+    const std::string firstCurrentValue = "current-a";
+    const std::string secondCurrentValue = "current-b";
+    const std::vector<std::pair<std::string, std::string>> currentValues{
+        { firstKey, firstCurrentValue }, { secondKey, secondCurrentValue }
+    };
+    DS_ASSERT_OK(BatchPutValues(currentValues));
+    RangeSearchResult firstCurrent;
+    RangeSearchResult secondCurrent;
+    DS_ASSERT_OK(db_->Get(tableName_, firstKey, firstCurrent));
+    DS_ASSERT_OK(db_->Get(tableName_, secondKey, secondCurrent));
+    ASSERT_GT(firstCurrent.modRevision, 0);
+    ASSERT_EQ(firstCurrent.modRevision, secondCurrent.modRevision);
+    DS_ASSERT_OK(CompactEtcdAtRevision(firstCurrent.modRevision));
+    auto state = std::make_shared<WatchValueState>();
+    db_->SetEventHandler([state](mvccpb::Event &&event) {
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            state->events.emplace_back(WatchValueEvent{ event.kv().key(), event.kv().value() });
+        }
+        state->received.notify_all();
+    });
+
+    const auto staleRevision = firstCurrent.modRevision - 1;
+    const std::vector<WatchElement> watches{ { tableName_, firstKey, staleRevision, true },
+                                             { tableName_, secondKey, staleRevision, true } };
+    const auto currentRecoveryDeadline = std::chrono::steady_clock::now() + currentRecoveryTimeout;
+    DS_ASSERT_OK(db_->WatchEvents(watches));
+    {
+        std::unique_lock<std::mutex> lock(state->mutex);
+        auto allCurrentObserved = [&] {
+            return std::all_of(currentValues.begin(), currentValues.end(), [&](const auto &current) {
+                const auto physicalKey = PhysicalTablePrefix() + "/" + current.first;
+                return std::any_of(state->events.begin(), state->events.end(), [&](const auto &event) {
+                    return event.key == physicalKey && event.value == current.second;
+                });
+            });
+        };
+        ASSERT_TRUE(state->received.wait_until(lock, currentRecoveryDeadline, allCurrentObserved))
+            << "Timed out waiting for active compensation on both targets, observed_event_count="
+            << state->events.size();
+    }
+
+    const std::vector<std::pair<std::string, std::string>> futurePrefixes{
+        { firstKey, "future-a-" }, { secondKey, "future-b-" }
+    };
+    std::vector<std::string> observedFuture;
+    const auto futureEventDeadline = std::chrono::steady_clock::now() + futureEventTimeout;
+    DS_ASSERT_OK(WriteUniqueBatchesUntilObserved(futurePrefixes, state, futureEventDeadline, observedFuture));
+    ASSERT_EQ(observedFuture.size(), futurePrefixes.size());
+    EXPECT_EQ(observedFuture[0].rfind(futurePrefixes[0].second, 0), 0U);
+    EXPECT_EQ(observedFuture[1].rfind(futurePrefixes[1].second, 0), 0U);
     DS_ASSERT_OK(db_->ShutdownEventSources());
 }
 

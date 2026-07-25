@@ -215,6 +215,7 @@ void ParseWatchRsp(etcdserverpb::WatchResponse &rsp, EtcdWatchResponse &response
     response.created = rsp.created();
     response.canceled = rsp.canceled();
     response.compactRevision = rsp.compact_revision();
+    response.cancelReason = rsp.cancel_reason();
     response.events.clear();
     for (int i = 0; i < rsp.events_size(); i++) {
         response.events.push_back(rsp.events(i));
@@ -262,17 +263,26 @@ Status EtcdWatch::EventHandler()
     return Status::OK();
 }
 
-inline void EtcdWatch::StoreEvents(EtcdWatchResponse &response)
+Status EtcdWatch::StoreEvents(EtcdWatchResponse &response)
 {
-    INJECT_POINT("EtcdWatch.StoreEvents.IgnoreEvent", []() { return; });
-    LOG(INFO) << "Received an ETCD watch response, Watch ID: " << response.watchId
-              << " Compact Version: " << response.compactRevision << " revision no.: " << response.header.revision;
-    if (!response.created && !response.canceled) {
-        // Push new events for consumer thread to read
+    LOG(INFO) << "Received an ETCD watch response, watch_id=" << response.watchId
+              << " created=" << response.created << " canceled=" << response.canceled
+              << " compact_revision=" << response.compactRevision << " cancel_reason=" << response.cancelReason
+              << " header_revision=" << response.header.revision << " event_count=" << response.events.size();
+    if (response.canceled) {
+        RETURN_STATUS(K_RPC_UNAVAILABLE,
+                      "ETCD watch was canceled, watch_id=" + std::to_string(response.watchId)
+                          + ", compact_revision=" + std::to_string(response.compactRevision)
+                          + ", cancel_reason=" + response.cancelReason);
+    }
+    INJECT_POINT("EtcdWatch.StoreEvents.IgnoreEvent", []() { return Status::OK(); });
+    if (!response.created) {
+        // Push new events for consumer thread to read.
         for (auto &event : response.events) {
             etcdEventQue_.Push(std::move(event));
         }
     }
+    return Status::OK();
 }
 
 Status EtcdWatch::ProcessWatchResponse(const void *tag)
@@ -354,7 +364,11 @@ Status EtcdWatch::CreateWatch()
         if (exactKeys_.count(it.first) == 0) {
             createReq.set_range_end(it.first + "\xFF");
         }
-        createReq.set_start_revision(it.second + 1);
+        CHECK_FAIL_RETURN_STATUS(it.second >= WATCH_FROM_NOW, K_INVALID,
+                                 "ETCD watch revision is below WATCH_FROM_NOW");
+        if (it.second != WATCH_FROM_NOW) {
+            createReq.set_start_revision(it.second + 1);
+        }
         watchReq.mutable_create_request()->CopyFrom(createReq);
         stream_->Write(watchReq, (void *)WATCH_WRITE);
         Status rc = ProcessWatchResponse((void *)WATCH_WRITE);
@@ -376,15 +390,10 @@ Status EtcdWatch::ReadWatchStream()
     stream_->Read(&rspPb, (void *)WATCH_READ);
 
     // Wait for Read request to end
-    Status rc = ProcessWatchResponse((void *)WATCH_READ);
-    if (rc.IsOk()) {
-        // Normal case where we got an event.
-        // Process the response and then do another read for next event
-        ParseWatchRsp(rspPb, response);
-        StoreEvents(response);
-    }
-
-    return rc;
+    RETURN_IF_NOT_OK(ProcessWatchResponse((void *)WATCH_READ));
+    // Normal case where we got a response. Process it before reading the next response.
+    ParseWatchRsp(rspPb, response);
+    return StoreEvents(response);
 }
 
 Status EtcdWatch::WatchEvents()
@@ -548,8 +557,15 @@ Status EtcdWatch::GenerateFakePutEventIfNeeded(bool watchedFailed,
                                                std::unordered_map<std::string, VersionInfo> &copyKeyVersion,
                                                std::unordered_map<std::string, int64_t> &prefix2Revision)
 {
+    // BlockingQueue consumes this set from the back, so descending tuple order preserves ascending revision delivery.
     auto cmp = [](const mvccpb::Event &left, const mvccpb::Event &right) {
-        return left.kv().mod_revision() > right.kv().mod_revision();
+        if (left.kv().mod_revision() != right.kv().mod_revision()) {
+            return left.kv().mod_revision() > right.kv().mod_revision();
+        }
+        if (left.kv().key() != right.kv().key()) {
+            return left.kv().key() > right.kv().key();
+        }
+        return left.type() > right.type();
     };
     std::set<mvccpb::Event, decltype(cmp)> events(cmp);
     for (auto &it : *prefixMap_) {
