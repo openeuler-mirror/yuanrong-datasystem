@@ -694,7 +694,9 @@ Status WorkerOCServiceImpl::PrepareTopologyScaleInData(const std::vector<std::st
                                                        std::vector<std::string> &migrateIds,
                                                        std::vector<std::string> &waitIds,
                                                        std::vector<std::string> &l2Ids,
-                                                       const std::string &businessOperationId)
+                                                       const std::string &businessOperationId,
+                                                       std::chrono::steady_clock::time_point deadline,
+                                                       const cluster::CancellationToken &cancellation)
 {
     std::vector<std::string> copyFailures;
     GroupAndRemoveMeta(copies, master::RemoveMetaReqPb::NORMAL, copyFailures, migrateIds, waitIds, l2Ids,
@@ -702,8 +704,42 @@ Status WorkerOCServiceImpl::PrepareTopologyScaleInData(const std::vector<std::st
     std::vector<std::string> primaryFailures;
     GroupAndRemoveMeta(primaries, master::RemoveMetaReqPb::GIVEUP_PRIMARY, primaryFailures, migrateIds, waitIds, l2Ids,
                        businessOperationId);
-    CHECK_FAIL_RETURN_STATUS(copyFailures.empty() && primaryFailures.empty(), K_TRY_AGAIN,
-                             "member-wide metadata removal needs retry");
+
+    const int intervalMs = 500;
+    const int giveUpPrimaryMaxRetryTime = 10;
+    int retryTime = 0;
+    while (true) {
+        CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
+        CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                                 "topology ScaleIn deadline exceeded");
+        if (copyFailures.empty() && primaryFailures.empty()) {
+            break;
+        }
+        if (retryTime > giveUpPrimaryMaxRetryTime && !primaryFailures.empty()) {
+            LOG(WARNING) << "CLUSTER_SCALE_IN action=give_up_primary_fallback"
+                         << " operation_prefix=" << businessOperationId.substr(0, 12)
+                         << " retry_count=" << retryTime
+                         << " fallback_count=" << primaryFailures.size();
+            migrateIds.insert(migrateIds.end(), primaryFailures.begin(), primaryFailures.end());
+            primaryFailures.clear();
+        }
+        std::vector<std::string> retryCopies = std::move(copyFailures);
+        std::vector<std::string> retryPrimaries = std::move(primaryFailures);
+        copyFailures.clear();
+        primaryFailures.clear();
+        if (!retryCopies.empty()) {
+            GroupAndRemoveMeta(retryCopies, master::RemoveMetaReqPb::NORMAL, copyFailures, migrateIds, waitIds, l2Ids,
+                               businessOperationId);
+        }
+        if (!retryPrimaries.empty()) {
+            GroupAndRemoveMeta(retryPrimaries, master::RemoveMetaReqPb::GIVEUP_PRIMARY, primaryFailures, migrateIds,
+                               waitIds, l2Ids, businessOperationId);
+        }
+        const auto retryDeadline = std::min(
+            deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(intervalMs));
+        CHECK_FAIL_RETURN_STATUS(!cancellation.WaitUntil(retryDeadline), K_NOT_READY, "topology ScaleIn cancelled");
+        retryTime++;
+    }
     return Status::OK();
 }
 
@@ -723,8 +759,8 @@ Status WorkerOCServiceImpl::DrainTopologyScaleInData(const cluster::TopologyPhas
     std::vector<std::string> waitIds;
     std::vector<std::string> l2Ids;
     RETURN_IF_NOT_OK(SelectTopologyScaleInObjects(copies, primaries));
-    RETURN_IF_NOT_OK(
-        PrepareTopologyScaleInData(copies, primaries, migrateIds, waitIds, l2Ids, businessOperationId));
+    RETURN_IF_NOT_OK(PrepareTopologyScaleInData(copies, primaries, migrateIds, waitIds, l2Ids, businessOperationId,
+                                                deadline, cancellation));
     RETURN_IF_NOT_OK(MigrateData(migrateIds, action.taskId, deadline, cancellation));
     std::vector<std::string> failures;
     GroupAndRemoveMeta(migrateIds, master::RemoveMetaReqPb::NORMAL, failures, migrateIds, waitIds, l2Ids,

@@ -47,6 +47,7 @@
 #include "datasystem/common/log/logging.h"
 #include "datasystem/common/log/spdlog/provider.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/net_util.h"
@@ -62,6 +63,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/common/flags/flags.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/worker/object_cache/worker_master_oc_api.h"
 
 #define RETRY_IF_OUT_MEMORY(rc_, statement_, maxRetryCnt_)                      \
     do {                                                                        \
@@ -2648,6 +2650,52 @@ TEST_F(KVClientWriteRocksdbTest, TestVoluntaryScaleDownWaitsForCopyMetaConfirmat
 
     std::string value;
     DS_ASSERT_OK(client->Get(key, value));
+    EXPECT_EQ(value, data);
+}
+
+TEST_F(KVClientWriteRocksdbTest, EXCLUSIVE_LEVEL1_TestScaleDownFallsBackWhenEvictedCopyIsMissing)
+{
+    StartWorkerAndWaitReady({ 0, 1 },
+                            "-node_timeout_s=5 -node_dead_timeout_s=8 -enable_lossless_data_exit_mode=true "
+                            "-rocksdb_write_mode=none");
+    SetWorkerHashInjection();
+    const std::string key = GetObjectKeyHashToWorker(etcd_.get(), 0);
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(0, client, 60'000, true);
+    const std::string data = GenRandomString(128);
+    SetParam param{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
+    DS_ASSERT_OK(client->Set(key, data, param));
+
+    // Model the observable eviction race deterministically: metadata still lists worker 1 as a copy after its
+    // NONE_L2_CACHE_EVICT data has disappeared. The primary handoff therefore gets object-not-found from worker 1.
+    HostPort worker0Addr;
+    HostPort worker1Addr;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, worker0Addr));
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(1, worker1Addr));
+    ConnectOptions authOptions;
+    InitConnectOpt(1, authOptions);
+    auto akSkManager = std::make_shared<AkSkManager>();
+    DS_ASSERT_OK(akSkManager->SetClientAkSk(authOptions.accessKey, authOptions.secretKey));
+    DS_ASSERT_OK(RpcStubCacheMgr::Instance().Init(100));
+    worker::WorkerRemoteMasterOCApi masterApi(worker0Addr, worker1Addr, akSkManager);
+    DS_ASSERT_OK(masterApi.Init());
+    master::CreateCopyMetaReqPb copyReq;
+    master::CreateCopyMetaRspPb copyRsp;
+    copyReq.set_object_key(key);
+    copyReq.set_address(worker1Addr.ToString());
+    DS_ASSERT_OK(masterApi.CreateCopyMeta(copyReq, copyRsp));
+
+    std::shared_ptr<KVClient> readClient;
+    InitTestKVClient(1, readClient, 60'000, true);
+    client.reset();
+
+    VoluntaryScaleDownInject(0);
+    WaitClusterTopologyChange(
+        [&](const ClusterTopologyPb &topology) { return topology.members().count(worker0Addr.ToString()) == 0; },
+        30'000);
+
+    std::string value;
+    DS_ASSERT_OK(readClient->Get(key, value));
     EXPECT_EQ(value, data);
 }
 
