@@ -3612,6 +3612,11 @@ Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKey
         }
         return Status::OK();
     }
+    // BuildShmGroups groups keys by worker in an unordered map. Restore caller order before the transport read so its
+    // aggregate error remains the first failure in input order.
+    std::sort(remoteIdx.begin(), remoteIdx.end(), [](const auto &lhs, const auto &rhs) {
+        return lhs.second < rhs.second;
+    });
     ExecuteTransportFallback(remoteIdx, traceEnabled, objectBuffers, rc);
     return Status::OK();
 }
