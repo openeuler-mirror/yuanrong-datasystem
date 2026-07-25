@@ -5,8 +5,7 @@ metadata:
   name: datasystem-configmap
 data:
   datasystem.config: |-
-    -v={{ .Values.global.logLevel }}
-    -log_async_queue_size={{ .Values.global.log.logAsyncQueueSize }}
+    -v={{ .Values.global.log.logLevel }}
     -log_compress={{ .Values.global.log.logCompress }}
     {{- if not (kindIs "invalid" .Values.global.log.requestSampleRate) }}
     -request_sample_rate={{ .Values.global.log.requestSampleRate }}
@@ -33,4 +32,3 @@ data:
     -urma_failover_min_sample_count={{ .Values.global.performance.urmaFailoverMinSampleCount }}
     -auto_del_dead_node={{ .Values.global.reliability.autoDelDeadNode }}
     -enable_lossless_data_exit_mode={{ .Values.global.gracefulShutdown.enableLosslessDataExitMode }}
-    -enable_l2_cache_fallback={{ .Values.global.l2Cache.enableL2CacheFallback }}
