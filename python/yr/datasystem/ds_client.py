@@ -20,7 +20,7 @@ from yr.datasystem.util import Validator as validator
 from yr.datasystem.object_client import ObjectClient
 from yr.datasystem.kv_client import KVClient
 from yr.datasystem.hetero_client import HeteroClient
-from yr.datasystem.service_discovery import ServiceDiscovery
+from yr.datasystem.service_discovery import CoordinatorServiceDiscovery, ServiceDiscovery
 
 
 class DsClient:
@@ -83,7 +83,7 @@ class DsClient:
         ]
 
         if service_discovery is not None:
-            args.insert(0, ["service_discovery", service_discovery, ServiceDiscovery])
+            args.insert(0, ["service_discovery", service_discovery, ServiceDiscovery, CoordinatorServiceDiscovery])
             if host or port:
                 import warnings
                 warnings.warn("host and port are ignored when service_discovery is provided")
