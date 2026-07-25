@@ -457,6 +457,33 @@ TEST_F(KVClientTransportSetTest, RoutedMSetGroupsObjectsByMetadataOwner)
     AssertPrimaryWorker(keys[1], ROUTED_CLIENT_WORKER_INDEX);
 }
 
+TEST_F(KVClientTransportSetTest, RoutedMSetLargePayloadParallelCopyPreservesData)
+{
+    constexpr size_t parallelCopyValueSize = 512 * 1024;
+    constexpr size_t objectCount = 4;
+    std::vector<std::string> keys;
+    std::vector<std::string> values;
+    std::vector<StringView> valueViews;
+    for (size_t i = 0; i < objectCount; ++i) {
+        std::string key;
+        DS_ASSERT_OK(
+            FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_parallel_copy_" + std::to_string(i) + "_", key));
+        keys.emplace_back(std::move(key));
+        values.emplace_back(parallelCopyValueSize, static_cast<char>('a' + i));
+    }
+    for (const auto &value : values) {
+        valueViews.emplace_back(value);
+    }
+    std::vector<std::string> failedKeys;
+
+    DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
+
+    ASSERT_TRUE(failedKeys.empty());
+    for (size_t i = 0; i < objectCount; ++i) {
+        AssertValue(keys[i], values[i]);
+    }
+}
+
 // MSet N keys on the same-host worker → must use the SHM transporter (batch InvokeMultiSet),
 // not N serial TCP sets. Verifies the batch path is taken end-to-end (review 180841432).
 // MSet N keys on the same-host worker → must succeed via the routed path (batch InvokeMultiSet).

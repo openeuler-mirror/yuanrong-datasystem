@@ -45,7 +45,6 @@
 #include "datasystem/client/client_flags_monitor.h"
 #include "datasystem/client/mmap/immap_table_entry.h"
 #include "datasystem/client/routing/routing.h"
-#include "datasystem/client/transport/object_buffer_internal.h"
 #include "datasystem/client/transport/common/deadline_retry.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/client/transport/worker_snapshot.h"
@@ -5905,7 +5904,19 @@ Status ObjectClientImpl::MemoryCopyTransportMSetBuffers(
     RETURN_IF_NOT_OK(ApiDeadline::Instance().CheckApiDeadline());
     auto memoryCopy = [&](size_t start, size_t end) {
         for (size_t i = start; i < end; ++i) {
-            RETURN_IF_NOT_OK(buffers[i]->MemoryCopy(group.values[i].data(), group.values[i].size()));
+            RETURN_RUNTIME_ERROR_IF_NULL(buffers[i]);
+            const auto &value = group.values[i];
+            const int64_t bufferSize = buffers[i]->GetSize();
+            auto *bufferData = static_cast<uint8_t *>(buffers[i]->MutableData());
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(value.data() != nullptr, K_INVALID, "Can't put null pointer.");
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(bufferSize >= 0 && bufferData != nullptr, K_INVALID,
+                                                 "Buffer data is invalid.");
+            const uint64_t dataSize = static_cast<uint64_t>(bufferSize);
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(value.size() > 0 && value.size() <= dataSize, K_INVALID,
+                                                 "Data length must be in (0, buffer_size].");
+            RETURN_IF_NOT_OK(::datasystem::MemoryCopy(
+                bufferData, dataSize, reinterpret_cast<const uint8_t *>(value.data()), value.size(),
+                memoryCopyThreadPool_, memcpyParallelThreshold_));
         }
         return Status::OK();
     };

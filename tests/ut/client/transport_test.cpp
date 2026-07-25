@@ -2546,6 +2546,43 @@ TEST(ObjectReadFlowTest, ReturnsFirstInputErrorWhenAllKeysFail)
     EXPECT_EQ(flow.Run(request, result).GetCode(), K_NOT_FOUND);
 }
 
+TEST(ObjectClientTransportTest, TransportMSetParallelMemoryCopyPreservesPayload)
+{
+    constexpr size_t valueSize = 512 * 1024;
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    object_cache::ObjectClientImpl client(options);
+    client.memoryCopyThreadPool_ = std::make_shared<ThreadPool>(0, 4, "mset_memcopy_test");
+    client.memcpyParallelThreshold_ = 0;
+    client.parallismNum_ = 0;
+
+    const std::vector<std::string> values{ std::string(valueSize, 'a'), std::string(valueSize, 'b') };
+    object_cache::ObjectClientImpl::MSetRouteGroup group;
+    group.worker = MakeAddress(31501);
+    group.keys = { "parallel-copy-key-0", "parallel-copy-key-1" };
+    group.values = { values[0], values[1] };
+
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    for (size_t i = 0; i < values.size(); ++i) {
+        auto info = std::make_shared<ObjectBufferInfo>();
+        info->objectKey = group.keys[i];
+        info->dataSize = valueSize;
+        info->workerAddr = group.worker;
+        info->pointer = static_cast<uint8_t *>(calloc(valueSize + 1, 1));
+        ASSERT_NE(info->pointer, nullptr);
+        std::shared_ptr<ObjectBuffer> buffer;
+        ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+        buffers.emplace_back(std::move(buffer));
+    }
+
+    ApiDeadlineGuard deadline(5'000);
+    ASSERT_TRUE(client.MemoryCopyTransportMSetBuffers(group, buffers, valueSize * values.size()).IsOk());
+    for (size_t i = 0; i < values.size(); ++i) {
+        EXPECT_EQ(memcmp(buffers[i]->ImmutableData(), values[i].data(), valueSize), 0);
+    }
+}
+
 GetObjectRemoteRspPb MakeBatchGetResponse(StatusCode status, int64_t dataSize, DataTransferSource source);
 
 TEST(TcpTransporterTest, GetUsesGetObjectRemoteAndPreservesPayload)
