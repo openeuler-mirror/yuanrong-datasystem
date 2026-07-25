@@ -4254,6 +4254,11 @@ Status ObjectClientImpl::MaterializeTransportItem(const std::string &objectKey, 
             payloadSize += data.rpcPayloads[i].Size();
             payloadInfo->add_part_index(static_cast<uint32_t>(i));
         }
+        LOG_IF(ERROR, payloadSize != dataSize)
+            << "[TransportGet][Materialize] RPC payload size mismatch, key=" << objectKey
+            << ", responseDataSize=" << data.response.data_size() << ", payloadSize=" << payloadSize
+            << ", payloadCount=" << data.rpcPayloads.size()
+            << ", dataSource=" << static_cast<int>(data.response.data_source());
         CHECK_FAIL_RETURN_STATUS(payloadSize == dataSize, K_RUNTIME_ERROR, "Invalid object data response");
     }
     std::vector<std::shared_ptr<Buffer>> itemBuffers(1);

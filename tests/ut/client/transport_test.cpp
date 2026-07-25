@@ -227,15 +227,16 @@ public:
         }
         response.mutable_error()->set_error_code(getObjectResponseCode);
         response.set_data_size(getObjectDataSize);
-        response.set_data_source(request.has_urma_info() ? DataTransferSource::DATA_ALREADY_TRANSFERRED
-                                                        : DataTransferSource::DATA_IN_PAYLOAD);
+        response.set_data_source(request.has_urma_info() && !getObjectResponseInPayload
+                                     ? DataTransferSource::DATA_ALREADY_TRANSFERRED
+                                     : DataTransferSource::DATA_IN_PAYLOAD);
         if (getObjectStatus.IsError()) {
             return getObjectStatus;
         }
         if (request.has_urma_info() && request.data_size() != static_cast<uint64_t>(getObjectDataSize)) {
             return Status(K_OC_REMOTE_GET_NOT_ENOUGH, "receive buffer size mismatch");
         }
-        if (!request.has_urma_info() && getObjectDataSize > 0) {
+        if ((!request.has_urma_info() || getObjectResponseInPayload) && getObjectDataSize > 0) {
             RpcMessage payload;
             std::string data(static_cast<size_t>(getObjectDataSize), 'd');
             RETURN_IF_NOT_OK(payload.CopyBuffer(data.data(), data.size()));
@@ -416,6 +417,7 @@ public:
     Status existInvokeStatus = Status::OK();
     StatusCode getObjectResponseCode = K_OK;
     int64_t getObjectDataSize = 4;
+    bool getObjectResponseInPayload = false;
     std::vector<GetObjectRemoteReqPb> getObjectRequests;
     std::vector<ExistReqPb> invokedExistRequests;
     int batchGetObjectCount = 0;
@@ -2672,7 +2674,7 @@ TEST(UbTransporterTest, GetReturnsOwnerBackedExternalBuffer)
     EXPECT_NE(result.externalOwner, nullptr);
 }
 
-TEST(UbTransporterTest, GetKeepsFullReadSentinelWhenUbBufferUnavailable)
+TEST(UbTransporterTest, GetReturnsAllocationErrorWithoutRpcWhenUbBufferUnavailable)
 {
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
     rpcClient->getObjectDataSize = 8;
@@ -2681,11 +2683,37 @@ TEST(UbTransporterTest, GetKeepsFullReadSentinelWhenUbBufferUnavailable)
     UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
     DataGetResult result;
 
-    ASSERT_TRUE(transporter.Get({ "key", 8 }, result).IsOk());
+    EXPECT_EQ(transporter.Get({ "key", 8 }, result).GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(rpcClient->getObjectCount, 0);
+    EXPECT_TRUE(rpcClient->getObjectRequests.empty());
+}
+
+TEST(UbTransporterTest, GetRejectsTcpPayloadResponseForUbRequest)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    rpcClient->getObjectDataSize = 8;
+    rpcClient->getObjectResponseInPayload = true;
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetResult result;
+
+    EXPECT_EQ(transporter.Get({ "key", 8 }, result).GetCode(), K_URMA_ERROR);
     ASSERT_EQ(rpcClient->getObjectRequests.size(), 1u);
-    EXPECT_FALSE(rpcClient->getObjectRequests[0].has_urma_info());
-    EXPECT_EQ(rpcClient->getObjectRequests[0].read_size(), 0u);
-    EXPECT_EQ(result.kind, AccessTransportKind::TCP);
+    EXPECT_TRUE(rpcClient->getObjectRequests[0].has_urma_info());
+    EXPECT_EQ(result.kind, AccessTransportKind::UNKNOWN);
+}
+
+TEST(UbTransporterTest, GetRejectsUnsupportedReceiveSizeWithoutRpc)
+{
+    auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
+    auto bufferProvider = std::make_shared<FakeUbBufferProvider>();
+    UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
+    DataGetResult result;
+
+    EXPECT_EQ(transporter.Get({ "zero", 0 }, result).GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(transporter.Get({ "oversize", bufferProvider->maxGetSize + 1 }, result).GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(bufferProvider->allocateCount, 0);
+    EXPECT_EQ(rpcClient->getObjectCount, 0);
 }
 
 TEST(UbTransporterTest, GetReallocatesOnceForChangedObjectSize)
@@ -3006,7 +3034,7 @@ TEST(UbTransporterTest, BatchGetAggregateSplitsByAlignedMaxGetSizeBeforeAllocati
     }
 }
 
-TEST(UbTransporterTest, BatchGetAggregateHandlesZeroSizeInsideMixedBatch)
+TEST(UbTransporterTest, BatchGetAggregateKeepsPartialSuccessWithZeroSizeItem)
 {
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
     rpcClient->getObjectDataSize = 0;
@@ -3019,18 +3047,22 @@ TEST(UbTransporterTest, BatchGetAggregateHandlesZeroSizeInsideMixedBatch)
     UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
     DataGetBatchResult results(1);
 
-    ASSERT_TRUE(transporter.BatchGet(
-        { { "one", 8 }, { "two", 8 }, { "zero", 0 }, { "three", 8 }, { "four", 8 } }, results).IsOk());
+    ASSERT_TRUE(transporter
+                    .BatchGet({ { "one", 8 }, { "two", 8 }, { "zero", 0 }, { "three", 8 }, { "four", 8 } }, results)
+                    .IsOk());
 
     EXPECT_EQ(rpcClient->batchGetObjectCount, 2);
-    ASSERT_EQ(rpcClient->getObjectRequests.size(), 1u);
-    EXPECT_EQ(rpcClient->getObjectRequests[0].object_key(), "zero");
-    EXPECT_FALSE(rpcClient->getObjectRequests[0].has_urma_info());
+    EXPECT_EQ(rpcClient->getObjectCount, 0);
     ASSERT_EQ(results.size(), 5u);
-    EXPECT_EQ(results[2].data.kind, AccessTransportKind::TCP);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_TRUE(results[1].status.IsOk());
+    EXPECT_EQ(results[2].status.GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(results[2].data.kind, AccessTransportKind::UNKNOWN);
+    EXPECT_TRUE(results[3].status.IsOk());
+    EXPECT_TRUE(results[4].status.IsOk());
 }
 
-TEST(UbTransporterTest, BatchGetAggregateHandlesOverMaxSizeInsideMixedBatch)
+TEST(UbTransporterTest, BatchGetAggregateKeepsPartialSuccessWithOverMaxSizeItem)
 {
     auto rpcClient = std::make_shared<FakeWorkerRpcClient>();
     rpcClient->getObjectDataSize = 8;
@@ -3043,14 +3075,19 @@ TEST(UbTransporterTest, BatchGetAggregateHandlesOverMaxSizeInsideMixedBatch)
     UbTransporter transporter(rpcClient, std::make_shared<FakeUbConnection>(), bufferProvider);
     DataGetBatchResult results;
 
-    ASSERT_TRUE(transporter.BatchGet(
-        { { "one", 8 }, { "two", 8 }, { "large", 64 }, { "three", 8 }, { "four", 8 } }, results).IsOk());
+    ASSERT_TRUE(transporter
+                    .BatchGet({ { "one", 8 }, { "two", 8 }, { "large", 64 }, { "three", 8 }, { "four", 8 } }, results)
+                    .IsOk());
 
     EXPECT_EQ(rpcClient->batchGetObjectCount, 2);
-    ASSERT_EQ(rpcClient->getObjectRequests.size(), 1u);
-    EXPECT_EQ(rpcClient->getObjectRequests[0].object_key(), "large");
-    EXPECT_FALSE(rpcClient->getObjectRequests[0].has_urma_info());
-    EXPECT_EQ(results.size(), 5u);
+    EXPECT_EQ(rpcClient->getObjectCount, 0);
+    ASSERT_EQ(results.size(), 5u);
+    EXPECT_TRUE(results[0].status.IsOk());
+    EXPECT_TRUE(results[1].status.IsOk());
+    EXPECT_EQ(results[2].status.GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(results[2].data.kind, AccessTransportKind::UNKNOWN);
+    EXPECT_TRUE(results[3].status.IsOk());
+    EXPECT_TRUE(results[4].status.IsOk());
 }
 
 TEST(UbTransporterTest, BatchGetAggregateClearsStaleOutputBeforeEarlyValidationError)
@@ -3421,10 +3458,19 @@ TEST(UbTransporterTest, BatchGetAllocationPressurePreservesUnarySizeRetryAndMaxP
         }
         return Status::OK();
     };
-    ASSERT_TRUE(transporter.BatchGet({ { "oversize", 48 }, { "small-a", 16 }, { "small-b", 16 } }, results).IsOk());
-    ASSERT_FALSE(bufferProvider->allocationAttempts.empty());
-    EXPECT_TRUE(std::all_of(bufferProvider->allocationAttempts.begin(), bufferProvider->allocationAttempts.end(),
-                            [&](uint64_t size) { return size <= bufferProvider->maxGetSize; }));
+    DataGetBatchRequest request{ { "oversize", 48 }, { "small-a", 16 }, { "small-b", 16 } };
+    ASSERT_TRUE(transporter.BatchGet(request, results).IsOk());
+
+    EXPECT_EQ(bufferProvider->allocationAttempts, std::vector<uint64_t>({ bufferProvider->maxGetSize }));
+    EXPECT_EQ(rpcClient->getObjectCount, 2);
+    EXPECT_EQ(rpcClient->batchGetObjectCount, 1);
+    ASSERT_EQ(results.size(), request.size());
+    EXPECT_EQ(results[0].status.GetCode(), K_URMA_ERROR);
+    EXPECT_EQ(results[0].data.kind, AccessTransportKind::UNKNOWN);
+    EXPECT_TRUE(results[1].status.IsOk());
+    EXPECT_EQ(results[1].data.kind, AccessTransportKind::UB);
+    EXPECT_TRUE(results[2].status.IsOk());
+    EXPECT_EQ(results[2].data.kind, AccessTransportKind::UB);
 }
 
 TEST(UbTransporterTest, BatchGetAggregateCloseWaitsForRpcAndResultSetup)
