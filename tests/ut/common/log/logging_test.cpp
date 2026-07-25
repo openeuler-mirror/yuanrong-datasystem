@@ -416,6 +416,22 @@ TEST_F(LoggingTest, TestCompressFiles)
     DeleteFilesMatching(FLAGS_log_dir, gz_pattern);
 }
 
+TEST_F(LoggingTest, CompressCancellationPreservesSourceAndRemovesTemporaryOutput)
+{
+    const std::string sourceFile = FLAGS_log_dir + "/compress_cancel.log";
+    std::string gzipFile = sourceFile + ".gz";
+    std::atomic_bool cancelled{ true };
+    DS_ASSERT_OK(CreateTextFile("compress_cancel.log", 1024));
+
+    auto status = CompressFile(sourceFile, gzipFile, &cancelled);
+
+    EXPECT_EQ(status.GetCode(), StatusCode::K_INTERRUPTED);
+    EXPECT_TRUE(FileExist(sourceFile));
+    EXPECT_FALSE(FileExist(gzipFile));
+    EXPECT_FALSE(FileExist(gzipFile + ".tmp"));
+    DS_EXPECT_OK(DeleteFile(sourceFile));
+}
+
 TEST_F(LoggingTest, TestRollingFiles)
 {
     TestRollingFiles(false);
