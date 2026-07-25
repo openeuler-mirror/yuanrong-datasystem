@@ -65,7 +65,7 @@ public:
     static DeviceBackend ProbeBackend()
     {
 #ifdef USE_NPU
-        if (HasDevNode("/dev/davinci[0-16]*"))
+        if (HasDevNode("/dev/davinci[0-9]*"))
             return DeviceBackend::NPU;
 #endif
 #ifdef USE_GPU
@@ -116,7 +116,7 @@ private:
         bool hasNpu = false;
         bool hasGpu = false;
 #ifdef USE_NPU
-        hasNpu = HasDevNode("/dev/davinci[0-16]*");
+        hasNpu = HasDevNode("/dev/davinci[0-9]*");
 #endif
 #ifdef USE_GPU
         hasGpu = HasDevNode("/dev/nvidia[0-9]*") || HasNvidiaSmi();
@@ -147,7 +147,7 @@ private:
         LOG(INFO) << "No accelerator device detected. "
                       "Checked:"
 #ifdef USE_NPU
-                      " /dev/davinci[0-16]*"
+                      " /dev/davinci[0-9]*"
 #endif
 #ifdef USE_GPU
                       " /dev/nvidia[0-9]* and nvidia-smi"
