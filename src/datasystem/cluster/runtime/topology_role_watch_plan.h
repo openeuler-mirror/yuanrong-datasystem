@@ -26,7 +26,7 @@ public:
      * @param[in] role Runtime role.
      * @param[in] localAddress Canonical Worker address; empty for other roles.
      * @param[in] keys Cluster-scoped key helper.
-     * @param[in] startRevision Non-negative first revision.
+     * @param[in] startRevision Last processed revision, or WATCH_FROM_NOW; values below the sentinel are invalid.
      * @param[out] watchKeys Complete descriptors, unchanged on failure.
      * @return K_OK or K_INVALID.
      */

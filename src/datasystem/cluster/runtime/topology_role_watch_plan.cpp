@@ -16,7 +16,8 @@ Status TopologyRoleWatchPlan::Build(TopologyRuntimeRole role, const std::string 
                                     const TopologyKeyHelper &keys, int64_t startRevision,
                                     std::vector<WatchKey> &watchKeys)
 {
-    CHECK_FAIL_RETURN_STATUS(startRevision >= 0, K_INVALID, "negative cluster topology watch revision");
+    CHECK_FAIL_RETURN_STATUS(startRevision >= WATCH_FROM_NOW, K_INVALID,
+                             "cluster topology watch revision is below WATCH_FROM_NOW");
     std::vector<WatchKey> built{ { keys.TopologyTable(), TopologyKeyHelper::TopologyKey(), startRevision } };
     if (role == TopologyRuntimeRole::WORKER || role == TopologyRuntimeRole::UNIFIED_ETCD) {
         std::string notifyKey;
@@ -27,8 +28,6 @@ Status TopologyRoleWatchPlan::Build(TopologyRuntimeRole role, const std::string 
         if (role == TopologyRuntimeRole::CONTROLLER) {
             CHECK_FAIL_RETURN_STATUS(localAddress.empty(), K_INVALID, "Controller watch plan has a local address");
         }
-        built.emplace_back(WatchKey{ keys.MigrateTaskTable(), "", startRevision });
-        built.emplace_back(WatchKey{ keys.DeleteTaskTable(), "", startRevision });
         built.emplace_back(WatchKey{ keys.MembershipTable(), "", startRevision });
     } else if (role != TopologyRuntimeRole::WORKER) {
         CHECK_FAIL_RETURN_STATUS(role == TopologyRuntimeRole::OBSERVER && localAddress.empty(), K_INVALID,

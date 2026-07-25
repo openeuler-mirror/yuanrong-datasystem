@@ -62,6 +62,9 @@ struct CoordinationEvent {
 
 /**
  * @brief Existing backend watch descriptor; empty key means table prefix.
+ *
+ * startRevision is the last processed backend revision. WATCH_FROM_NOW requests backend-current watch registration;
+ * the default remains revision zero for backends whose watch protocol ignores this field.
  */
 struct WatchKey {
     std::string tableName;
