@@ -62,6 +62,15 @@ std::string ReadFile(const std::string &path)
     return buffer.str();
 }
 
+size_t CountOccurrences(const std::string &content, const std::string &target)
+{
+    size_t count = 0;
+    for (size_t pos = 0; (pos = content.find(target, pos)) != std::string::npos; pos += target.size()) {
+        ++count;
+    }
+    return count;
+}
+
 void WriteConfigFile(const std::string &path, const std::string &content)
 {
     std::ofstream out(path, std::ios::trunc);
@@ -115,17 +124,18 @@ protected:
     std::string configPath_;
 };
 
-TEST_F(FlagsConfigMonitorTest, MissingConfigFileLogsWarning)
+TEST_F(FlagsConfigMonitorTest, MissingConfigFileLogsWarningOnce)
 {
     DynamicFlagConfig flagConfig;
     const std::string missingPath = FLAGS_log_dir + "/missing-datasystem.config";
+    flagConfig.StartConfigFileHandle(missingPath, std::chrono::steady_clock::now());
     flagConfig.StartConfigFileHandle(missingPath, std::chrono::steady_clock::now());
     Provider::Instance().FlushLogs();
 
     const std::string infoLog = FLAGS_log_dir + "/" + FLAGS_log_filename + ".INFO.log";
     const std::string content = ReadFile(infoLog);
-    EXPECT_THAT(content, testing::HasSubstr("Monitor config file does not exist"));
-    EXPECT_THAT(content, testing::HasSubstr("missing-datasystem.config"));
+    EXPECT_EQ(CountOccurrences(content, "Monitor config file does not exist"), 1ul);
+    EXPECT_EQ(CountOccurrences(content, "missing-datasystem.config"), 1ul);
 
     const std::string operationLog = OperationLogger::Instance().OperationLogPath();
     if (!operationLog.empty()) {
