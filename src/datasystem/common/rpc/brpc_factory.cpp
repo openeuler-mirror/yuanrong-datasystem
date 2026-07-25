@@ -48,11 +48,36 @@ void EnsureBrpcDeliverTimeoutMs()
     });
 }
 
+// Raise brpc's global max_body_size above its 64MB default so large object
+// payloads (e.g. a 300MB cross-node Get response) are accepted by
+// input_messenger on the receiving socket instead of being rejected with
+// "too big data" -> connection close -> Host is down. Fixed at 2GB: brpc
+// rejects any single RPC body at or above this limit, so objects >= 2GB
+// surface a brpc-level error rather than succeeding silently.
+// brpc::FLAGS_max_body_size is read by input_messenger at socket-init time, so
+// it must be set before the first brpc socket is created. BrpcChannelFactory
+// ::Create is the common entry point for all brpc-outgoing paths (worker,
+// client SDK), and runs before the first channel/socket is initialized.
+// Worker server sockets set it again in RpcServer::StartBrpcServer.
+// Idempotent via std::call_once.
+void EnsureBrpcMaxBodySize()
+{
+    static std::once_flag once;
+    std::call_once(once, []() {
+        constexpr uint64_t kBrpcMaxBodySize = 2ULL * 1024 * 1024 * 1024;  // 2GB
+        const std::string value = std::to_string(kBrpcMaxBodySize);
+        const std::string prev = gflags::SetCommandLineOption("max_body_size", value.c_str());
+        LOG(INFO) << "max_body_size=" << prev << " -> " << value
+                  << " (raised for large object payloads)";
+    });
+}
+
 }  // namespace
 
 std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfig &cfg)
 {
     EnsureBrpcDeliverTimeoutMs();
+    EnsureBrpcMaxBodySize();
     auto ch = std::make_unique<brpc::Channel>();
     brpc::ChannelOptions opts;
     opts.timeout_ms = cfg.timeout_ms;
@@ -70,6 +95,10 @@ std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfi
     // P2-4: brpc-level retry. Default 3 covers transient EHOSTDOWN/ECONNREFUSED
     // without the old app-level RetryOnRPCError sleep-loop (retry storm fix).
     opts.max_retry = cfg.max_retry;
+    // NOTE: brpc::ChannelOptions has no max_body_size field; the body limit is
+    // the global brpc::FLAGS_max_body_size gflag, set in RpcServer::StartBrpcServer
+    // before the first socket is created, which also covers client-side receive
+    // sockets. No per-channel setting needed here.
     if (cfg.backup_request_ms > 0) {
         opts.backup_request_ms = cfg.backup_request_ms;
     }
