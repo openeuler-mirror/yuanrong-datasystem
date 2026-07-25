@@ -65,7 +65,7 @@ public:
      * @param[in/out] isCompress Indicates whether to perform compression.
      * @return Status::OK() if success.
      */
-    static Status DoLogFileCompress(bool &isCompressed);
+    static Status DoLogFileCompress(bool &isCompressed, const std::atomic_bool *cancelled = nullptr);
 
     /**
      * @brief Do log log monitor write , the interval depends on logProcessInterval_.
@@ -77,7 +77,7 @@ public:
      * @brief Do log background task, include log file rolling and compress.
      * @return Status::OK() if success.
      */
-    static Status DoLogBackgroundTask();
+    static Status DoLogBackgroundTask(const std::atomic_bool *cancelled = nullptr);
 
     /**
      * @brief Fetch log files need to compress and rolling.
@@ -117,6 +117,8 @@ private:
     uint32_t logProcessInterval_;
     // Thread for log background task.
     Thread backgroundThread_;
+    // Signals an in-flight compression to stop before processing another log chunk.
+    std::atomic_bool compressionCancelled_{ false };
 
     enum State { INITED = 0, RUNNING, STOPPED };
     std::atomic<State> state_ = INITED;
