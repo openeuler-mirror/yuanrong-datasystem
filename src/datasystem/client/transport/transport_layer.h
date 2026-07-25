@@ -63,7 +63,8 @@ public:
 
     explicit TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
                             uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig = {},
-                            std::shared_ptr<ThreadPool> releasePool = nullptr);
+                            std::shared_ptr<ThreadPool> releasePool = nullptr,
+                            bool enableClientDirectPipelineH2D = false, int32_t pipelineThreadNum = 64);
     ~TransportLayer();
 
     /** @brief Initialize transport runtime resources before data-plane connections are created. */
@@ -76,6 +77,10 @@ public:
      * @return K_OK on success; the error code otherwise.
      */
     Status Get(const ObjectReadRequest &input, ObjectReadResult &output);
+
+    Status ResolveMetadata(const ObjectReadRequest &input, std::vector<ObjectMetadataItem> &metadata);
+
+    Status PrepareDirectUbEndpoint(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &rpcClient);
 
     /**
      * @brief Execute Exist and rebuild the RPC connection once when the channel is unavailable.

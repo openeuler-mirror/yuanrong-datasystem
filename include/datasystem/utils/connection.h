@@ -46,6 +46,8 @@ struct ConnectOptions {
     bool enableCrossNodeConnection = false;
     bool enableLocalCache = true;
     bool enableRemoteH2D = false;
+    bool enableClientDirectPipelineH2D = false;
+    int32_t clientDirectPipelineH2DThreadNum = 64;
     std::shared_ptr<IServiceDiscovery> serviceDiscovery = nullptr;
     uint64_t fastTransportMemSize = 256 * 1024 * 1024;  // 256M
     std::string deviceId = "";

@@ -37,6 +37,8 @@ public:
     /** @brief Execute grouped metadata lookup and per-key data reads. */
     Status Run(const ObjectReadRequest &request, ObjectReadResult &result);
 
+    Status ResolveMetadata(const ObjectReadRequest &request, std::vector<ObjectMetadataItem> &metadata);
+
 private:
     std::shared_ptr<ObjectMetadataClient> metadata_;
     std::shared_ptr<ReplicaReader> replicas_;

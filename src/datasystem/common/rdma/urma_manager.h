@@ -61,6 +61,53 @@ using TbbUrmaConnectionMap = tbb::concurrent_hash_map<std::string, std::shared_p
 using TbbEventMap = tbb::concurrent_hash_map<uint64_t, std::shared_ptr<UrmaEvent>>;
 using TbbJettyMap = tbb::concurrent_hash_map<std::string, std::shared_ptr<UrmaJetty>>;
 
+/**
+ * @brief Own the local resources required by one synchronous receive-provider post.
+ *
+ * The segment accessor keeps the registered local segment alive, while the post permit prevents
+ * the shared receive Jetty from being modified or deleted until this lease is destroyed.
+ */
+class UrmaRecvTargetLease {
+public:
+    UrmaRecvTargetLease() = default;
+    ~UrmaRecvTargetLease() = default;
+
+    UrmaRecvTargetLease(const UrmaRecvTargetLease &) = delete;
+    UrmaRecvTargetLease &operator=(const UrmaRecvTargetLease &) = delete;
+    UrmaRecvTargetLease(UrmaRecvTargetLease &&) = delete;
+    UrmaRecvTargetLease &operator=(UrmaRecvTargetLease &&) = delete;
+
+    urma_target_seg_t *TargetSeg() const
+    {
+        return segmentAccessor_->second->Raw();
+    }
+
+    urma_jfr_t *TargetJfr() const
+    {
+        return targetJfr_;
+    }
+
+    urma_jetty_t *TargetJetty() const
+    {
+        return postPermit_.Raw();
+    }
+
+private:
+    friend class UrmaManager;
+
+    void Reset()
+    {
+        postPermit_ = {};
+        segmentAccessor_.release();
+        targetJfr_ = nullptr;
+    }
+
+    // Keep this declaration order: destruction releases the permit before the segment accessor.
+    UrmaLocalSegmentMap::const_accessor segmentAccessor_;
+    UrmaJetty::PostPermit postPermit_;
+    urma_jfr_t *targetJfr_ = nullptr;
+};
+
 class UrmaManager {
     friend class UrmaAsyncEventHandler;
 
@@ -148,6 +195,12 @@ public:
      * @param[in] size The size of the memory buffer.
      * @return Status of the call.
      */
+    Status EnsureClientPipelineH2DEnv();
+
+    Status RegisterClientTransportMemoryForH2D();
+
+    void UnregisterClientTransportMemoryForH2D();
+
     Status GetMemoryBufferHandle(std::shared_ptr<BufferHandle> &handle, uint64_t size);
 
     /**
@@ -183,7 +236,8 @@ public:
      * @param[in] urmaMode The transport mode, e.g. UB.
      * @param[in] transportSize The client transport mem pool size.
      */
-    static void SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t transportSize);
+    static void SetClientUrmaConfig(FastTransportMode urmaMode, uint64_t transportSize,
+                                    bool enablePipelineH2D = false);
 
     /**
      * @brief Get client id for current process; non-empty when set by SetClientUrmaConfig (client mode).
@@ -474,17 +528,15 @@ public:
     bool HasRemoteClient(ClientKey clientEntityId);
 
     /**
-     * @brief Retrieve local segment and jfr for receiving remote sender cqe.
+     * @brief Acquire the local resources required to post one synchronous receive operation.
      * @param[in] segAddress segment start address.
      * @param[in] segSize segment size.
      * @param[in] address remote sender address.
-     * @param[out] targetSeg local segment.
-     * @param[out] targetJfr local shared jfr for compatibility.
-     * @param[out] targetJetty local recv jetty for remote sender.
+     * @param[out] lease Lease that keeps the local segment, shared JFR, and receive Jetty valid.
      * @return Status.
      */
-    Status GetTargetSeg(uint64_t segAddress, uint64_t segSize, const std::string &address,
-                        urma_target_seg_t **targetSeg, urma_jfr_t **targetJfr, urma_jetty_t **targetJetty);
+    Status AcquireRecvTarget(uint64_t segAddress, uint64_t segSize, const std::string &address,
+                             UrmaRecvTargetLease &lease);
 
     /**
      * @return urma request id, start from 0.
@@ -751,6 +803,9 @@ private:
     std::string clientId_;
     static bool clientMode_;
     void *memoryBuffer_ = nullptr;
+    bool clientTransportMemoryPinned_ = false;
+    uint32_t clientTransportMemoryPinRef_ = 0;
+    std::mutex clientTransportMemoryPinMutex_;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
     static std::atomic<uint64_t> ubTransportMemSize_;  // 256 MB

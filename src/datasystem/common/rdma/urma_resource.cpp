@@ -712,7 +712,9 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
 
     constexpr uint32_t threadCount = 1;
     deleteJettyThread_ = std::make_unique<ThreadPool>(0, threadCount, "RetireJfs");
-    RETURN_IF_NOT_OK(OsXprtPipln::InitOsPiplnRH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw(), JETTY_SIZE));
+    if (SupportPipelineRH2D()) {
+        RETURN_IF_NOT_OK(InitPipelineH2DEnv());
+    }
 
     // Pre-fill the send Jetty pool to capacity (fail-fast on creation failure).
     RETURN_IF_NOT_OK(PreFillSendJettyPool());
@@ -722,6 +724,23 @@ Status UrmaResource::Init(urma_device_t *device, uint32_t eidIndex, bool isBondi
     refillNeeded_.store(false);
     refillThread_ = std::make_unique<std::thread>(&UrmaResource::RefillLoop, this);
     return Status::OK();
+}
+
+Status UrmaResource::InitPipelineH2DEnv()
+{
+    std::lock_guard<std::mutex> lock(pipelineInitMutex_);
+    if (pipelineInitialized_) {
+        return pipelineInitStatus_;
+    }
+    RETURN_RUNTIME_ERROR_IF_NULL(context_);
+    RETURN_RUNTIME_ERROR_IF_NULL(jfc_);
+    RETURN_RUNTIME_ERROR_IF_NULL(jfce_);
+    pipelineInitStatus_ =
+        OsXprtPipln::InitOsPiplnRH2DEnv(context_->Raw(), jfc_->Raw(), jfce_->Raw(), JETTY_SIZE);
+    if (pipelineInitStatus_.IsOk()) {
+        pipelineInitialized_ = true;
+    }
+    return pipelineInitStatus_;
 }
 
 urma_context_t *UrmaResource::GetContext() const

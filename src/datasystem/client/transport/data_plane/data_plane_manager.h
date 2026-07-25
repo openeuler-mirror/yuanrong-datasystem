@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_set>
@@ -46,7 +47,8 @@ class DataPlaneManager {
 public:
     explicit DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
                               BrpcChannelConfig channelConfig = {},
-                              std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider = nullptr);
+                              std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider = nullptr,
+                              bool enableClientDirectPipelineH2D = false, int32_t pipelineThreadNum = 64);
     virtual ~DataPlaneManager();
 
     /** @brief Initialize process-level resources required by UB data-plane transport. */
@@ -67,6 +69,18 @@ public:
      * @return K_OK when out is ready, or the error code.
      */
     Status GetOrCreate(const HostPort &workerAddr, TransportHint hint, std::shared_ptr<IDataTransporter> &out);
+
+    /**
+     * @brief Get or lazily create both endpoint transports from one entry lookup.
+     * @param[in] workerAddr Target worker address.
+     * @param[in] hint Transport suggestion from the advisor.
+     * @param[out] transporter Cached or newly built data transporter.
+     * @param[out] rpcClient RPC client paired with the current transporter.
+     * @return K_OK when both endpoint transports are ready; the error code otherwise.
+     */
+    Status GetOrCreateEndpoint(const HostPort &workerAddr, TransportHint hint,
+                               std::shared_ptr<IDataTransporter> &transporter,
+                               std::shared_ptr<WorkerRpcClient> &rpcClient);
 
     /**
      * @brief Run an operation while the selected data plane cannot be torn down.
@@ -154,6 +168,10 @@ private:
     BrpcChannelConfig channelConfig_;
     std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider_;
     uint64_t fastTransportMemSize_ = 0;
+    bool enableClientDirectPipelineH2D_ = false;
+    int32_t pipelineThreadNum_ = 64;
+    std::mutex lifecycleMutex_;
+    bool h2dMemoryRegistered_ = false;
     std::atomic<bool> initialized_{ false };
     std::shared_ptr<IClientWorkerCommonApi> workerApi_;
     std::shared_ptr<MmapManager> mmapManager_;

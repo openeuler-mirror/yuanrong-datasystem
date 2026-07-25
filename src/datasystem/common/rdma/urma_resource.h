@@ -796,6 +796,8 @@ public:
      */
     Status Init(urma_device_t *device, uint32_t eidIndex, bool isBondingDevice = false);
 
+    Status InitPipelineH2DEnv();
+
     /**
      * @brief Release all owned Urma resources.
      */
@@ -1066,6 +1068,9 @@ private:
     std::atomic<bool> shuttingDown_{ false };
     std::mutex postDrainMutex_;
     std::condition_variable postDrainCV_;
+    std::mutex pipelineInitMutex_;
+    bool pipelineInitialized_{ false };
+    Status pipelineInitStatus_;
 };
 
 }  // namespace datasystem

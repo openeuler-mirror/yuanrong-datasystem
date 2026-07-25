@@ -1594,6 +1594,25 @@ TEST(DataPlaneManagerTest, ReusesRpcClientWithoutCreatingTransporter)
     EXPECT_EQ(manager.transportBuildCount, 0);
 }
 
+#ifdef BUILD_PIPLN_H2D
+TEST(DataPlaneManagerTest, GetsTransporterAndRpcClientFromOneEndpointEntry)
+{
+    FakeDataPlaneManager manager;
+    std::shared_ptr<IDataTransporter> transporter;
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+
+    ASSERT_TRUE(
+        manager.GetOrCreateEndpoint(MakeAddress(1), TransportHint::UB_CANDIDATE, transporter, rpcClient).IsOk());
+    ASSERT_NE(transporter, nullptr);
+    ASSERT_NE(rpcClient, nullptr);
+    EXPECT_EQ(transporter->Kind(), AccessTransportKind::UB);
+    ASSERT_EQ(manager.rpcClientsSeen.size(), 1u);
+    EXPECT_EQ(rpcClient, manager.rpcClientsSeen.front());
+    EXPECT_EQ(manager.rpcBuildCount, 1);
+    EXPECT_EQ(manager.transportBuildCount, 1);
+}
+#endif
+
 TEST(DataPlaneManagerTest, DifferentAddressesUseIndependentEntries)
 {
     FakeDataPlaneManager manager;

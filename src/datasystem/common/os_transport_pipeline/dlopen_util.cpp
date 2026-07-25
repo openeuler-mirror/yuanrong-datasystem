@@ -22,6 +22,7 @@
 
 #include <cstdio>
 #include <mutex>
+#include <climits>
 
 static constexpr int MAX_POPEN_LINE_LENGTH = 256;
 

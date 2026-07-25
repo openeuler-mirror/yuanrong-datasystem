@@ -47,6 +47,7 @@ ds_cc_library(
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:dlutils",
         "//src/datasystem/common/util:dyn_bitmap",
+        "//src/datasystem/common/util/queue:common_util_queue",
         "//src/datasystem/protos:object_posix_cc_proto",
         "//src/datasystem/protos:worker_object_cc_proto",
         "//src/datasystem/protos:share_memory_cc_proto",
@@ -82,6 +83,7 @@ ds_cc_library(
     }),
     deps = [
         "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util/queue:common_util_queue",
         "//src/datasystem/protos:share_memory_cc_proto",
     ] + select({
         "//:enable_pipeline_h2d": [

@@ -378,11 +378,14 @@ Status ObjectMetadataClient::BuildUbInlineData(ObjectMetadataItem &item,
     return Status::OK();
 }
 
-Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items)
+Status ObjectMetadataClient::Query(const HostPort &address, const ObjectMetadataBatch &items,
+                                   bool enableInlineData)
 {
     RETURN_IF_NOT_OK(ValidateAndResetItems(items));
     InlineRequestContext context;
-    RETURN_IF_NOT_OK(InitializeInlineRequest(address, items, context));
+    if (enableInlineData) {
+        RETURN_IF_NOT_OK(InitializeInlineRequest(address, items, context));
+    }
 
     master::QueryAndGetRspPb response;
     std::vector<RpcMessage> payloads;
@@ -422,6 +425,16 @@ Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMe
         QueueRedirectBatches(redirectBatches, pending);
     }
     return Status::OK();
+}
+
+Status ObjectMetadataClient::QueryAndGet(const HostPort &address, const ObjectMetadataBatch &items)
+{
+    return Query(address, items, true);
+}
+
+Status ObjectMetadataClient::QueryMetadata(const HostPort &address, const ObjectMetadataBatch &items)
+{
+    return Query(address, items, false);
 }
 }  // namespace client
 }  // namespace datasystem

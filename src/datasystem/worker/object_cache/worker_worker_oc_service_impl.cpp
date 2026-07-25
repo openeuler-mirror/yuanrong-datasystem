@@ -1011,7 +1011,15 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl(BatchGetObjectRemoteR
     });
 
     std::vector<ParallelRes> parallelRes;
-    if (req.requests_size() > FLAGS_oc_worker_worker_parallel_min && IsFastTransportEnabled()) {
+    const bool isPipelineH2DRequest = OsXprtPipln::IsPiplnH2DRequest(req);
+    const bool useParallelBatchGet = !isPipelineH2DRequest
+                                     && req.requests_size() > FLAGS_oc_worker_worker_parallel_min
+                                     && IsFastTransportEnabled();
+    LOG(INFO) << PIPLN_LOG_PREFIX "BatchGetObjectRemote route: requestCount=" << req.requests_size()
+              << ", isPipelineH2D=" << isPipelineH2DRequest << ", useParallel=" << useParallelBatchGet
+              << ", parallelMin=" << FLAGS_oc_worker_worker_parallel_min
+              << ", parallelNums=" << FLAGS_oc_worker_worker_parallel_nums;
+    if (useParallelBatchGet) {
         RETURN_IF_NOT_OK(ParallelBatchGetObject(req, rsp, parallelRes, batchTransportContext));
     } else {
         uint32_t parallelSize = 1;
@@ -1155,6 +1163,8 @@ Status WorkerWorkerOCServiceImpl::ParallelBatchGetObject(
     BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp, std::vector<ParallelRes> &parallelRes,
     const BatchRh2dContext &batchTransportContext)
 {
+    LOG(INFO) << PIPLN_LOG_PREFIX "Enter ParallelBatchGetObject: requestCount=" << req.requests_size()
+              << ", parallelNums=" << FLAGS_oc_worker_worker_parallel_nums;
     tbb::task_arena limited;
     if (FLAGS_oc_worker_worker_parallel_nums > 0) {
         limited.initialize(FLAGS_oc_worker_worker_parallel_nums);

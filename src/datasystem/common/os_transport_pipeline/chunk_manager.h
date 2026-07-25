@@ -113,6 +113,7 @@ struct ReqInfo {
     // BaseRH2DDriver::targetSize is reused as shmSize on worker side after SetShmSize(), so it must not be
     // used to recover the last chunk's real size.
     uint64_t objectSize = 0;
+    uint64_t receiveDataSrc = 0;
     int shmFd;
     int shmOffset;
     uint32_t reqId;
@@ -125,7 +126,10 @@ struct ReqInfo {
     PiplnDoneStep doneStep = PIPLN_DONE_NO_STEP;  // prevent get from local worker again
     std::promise<bool> canceledOrDonePromise;     // if canceled, ignore following chunks
     std::shared_future<bool> canceledOrDoneFuture;
+    // Protects chunk accounting and the transition to canceled/done. Lock before promiseMutex when both are needed.
+    mutable std::mutex stateMutex;
     std::mutex promiseMutex;
+    Status ioStatus;
 };
 
 class ChunkManager {
@@ -154,6 +158,7 @@ public:
                                      int threadNum, bool needCuda);
     static void UnInitOsPiplnRH2DEnv();
     Status WaitAll();
+    void CancelReceiver(uint32_t reqId);
     void MarkCancelOrDone(uint32_t reqId, bool isDone);
     void MarkCancelOrDone(const std::string &key, bool isDone);
     void CancelAll();
@@ -175,6 +180,7 @@ public:
 
     void RegisterPipelineConsumer(std::shared_ptr<PipelineRH2DQueueConsumer> &pipelineConsumer);
     void DoPiplnStep2_ChunkConsume(uint32_t reqId, uint64_t dataSrc, ChunkTag chunkTag, uint32_t chunkSize);
+    Status DoPiplnStep2_FallbackConsume(uint32_t reqId, const void *dataSrc, size_t dataSize);
     void RemoveConsumerCallback(uint32_t reqId);
 
     void RegisterPipelineProducer(std::shared_ptr<PipelineRH2DQueueProducer> &pipelineProducer, uint32_t queueId);
@@ -201,6 +207,16 @@ private:
 
     static std::mutex reqIdToChkMgrMapMutex_;
     static std::map<uint32_t, ChunkManager *> reqIdToChkMgrMap_;
+
+    Status RegisterReceiverReqId(uint32_t reqId);
+    void UnregisterReceiverReqId(uint32_t reqId);
+    void LogCancelOrDone(uint32_t reqId, bool isDone, const ReqInfo &info, int64_t elapsedMs);
+    bool MarkStateAndGetSyncHandle(ReqInfo &info, bool isDone, void *&syncHandle);
+    void MarkCancelOrDoneLocked(uint32_t reqId, ReqInfo &info, bool isDone, void *&syncHandle);
+    void CancelSyncHandle(uint32_t reqId, void *syncHandlePtr);
+    Status DoPiplnStep2_ChunkConsumeLocked(uint32_t reqId, ReqInfo &info, uint64_t dataSrc, ChunkTag chunkTag,
+                                           size_t chunkSize, void *&syncHandle);
+    bool CheckIsRequestSuccessLocked(const ReqInfo &info) const;
 
     uint32_t queueId_;
     std::shared_ptr<PipelineRH2DQueueConsumer> pipelineConsumer_;

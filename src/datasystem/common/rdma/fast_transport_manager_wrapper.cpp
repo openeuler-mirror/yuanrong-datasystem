@@ -66,12 +66,13 @@ uint64_t GenerateReqId()
 #endif
 }
 
-void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize)
+void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t transportSize, bool enablePipelineH2D)
 {
     (void)fastTransportMode;
     (void)transportSize;
+    (void)enablePipelineH2D;
 #ifdef USE_URMA
-    UrmaManager::SetClientUrmaConfig(fastTransportMode, transportSize);
+    UrmaManager::SetClientUrmaConfig(fastTransportMode, transportSize, enablePipelineH2D);
 #endif
 }
 
