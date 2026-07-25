@@ -31,35 +31,61 @@ client.kv().delete([key])
 :::{tab-item} C++
 
 ```cpp
+#include <cstdio>
 #include "datasystem/datasystem.h"
 
-ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
-auto client = std::make_shared<DsClient>(connectOptions);
-ASSERT_TRUE(client->Init().IsOk());
+using namespace datasystem;
 
-std::string key = "testKey";
-std::string value = "Hello kv client";
-std::string value2 = "Hello modify";
-Status status = client->KV()->Set(key, value);
-ASSERT_TRUE(status.IsOk());
+int main()
+{
+    ConnectOptions connectOptions = { .host = "127.0.0.1", .port = 31501 };
+    auto client = std::make_shared<DsClient>(connectOptions);
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
 
-std::string getValue;
-status = client->KV()->Get(key, getValue);
-ASSERT_TRUE(status.IsOk());
-ASSERT_TRUE(getValue == value);
+    std::string key = "testKey";
+    std::string value = "Hello kv client";
+    std::string value2 = "Hello modify";
+    Status status = client->KV()->Set(key, value);
+    if (!status.IsOk()) {
+        fprintf(stderr, "Set failed\n");
+        return -1;
+    }
 
-status = client->KV()->Set(key, value2);
-ASSERT_TRUE(status.IsOk());
+    std::string getValue;
+    status = client->KV()->Get(key, getValue);
+    if (!status.IsOk() || getValue != value) {
+        fprintf(stderr, "Get failed\n");
+        return -1;
+    }
 
-status = client->KV()->Get(key, getValue);
-ASSERT_TRUE(status.IsOk());
-ASSERT_TRUE(getValue == value2);
+    status = client->KV()->Set(key, value2);
+    if (!status.IsOk()) {
+        fprintf(stderr, "Set failed\n");
+        return -1;
+    }
 
-status = client->KV()->Del(key);
-ASSERT_TRUE(status.IsOk());
+    status = client->KV()->Get(key, getValue);
+    if (!status.IsOk() || getValue != value2) {
+        fprintf(stderr, "Get failed\n");
+        return -1;
+    }
 
-status = client->KV()->Get(key, getValue);
-ASSERT_TRUE(status.IsError());
+    status = client->KV()->Del(key);
+    if (!status.IsOk()) {
+        fprintf(stderr, "Del failed\n");
+        return -1;
+    }
+
+    status = client->KV()->Get(key, getValue);
+    if (!status.IsError()) {
+        fprintf(stderr, "Get after delete should fail\n");
+        return -1;
+    }
+    return 0;
+}
 ```
 
 :::
@@ -69,7 +95,7 @@ ASSERT_TRUE(status.IsError());
 ## 使用限制
 
 - key 仅支持大写字母、小写字母、数字以及如下特定字符：`-_!@#%^*()+=:;`。
-- key 的最大长度为 255 字节。
+- key 的最大长度为 1024 字节。
 - value 的最大长度没有限制，但是不能超出配置的共享内存大小。
 - 未写入二级缓存的数据，不保证数据可靠性，当发生故障时数据可能会丢失。
 
@@ -82,35 +108,118 @@ KV 接口支持 Causal 级别数据读写一致性。
 
 ### 服务发现
 
-当客户端使用 `ServiceDiscovery` 连接集群时，可通过 `ServiceAffinityPolicy` 指定 worker 选择策略：
+客户端可以通过 `ConnectOptions.serviceDiscovery` 注入 `IServiceDiscovery` 实现，并通过
+`ServiceAffinityPolicy` 指定 Worker 选择策略：
 
-- `PREFERRED_SAME_NODE`（默认）：优先选择同节点 worker；若无同节点 worker，则随机选择。
-- `REQUIRED_SAME_NODE`：必须选择同节点 worker；若未匹配到同节点 worker，则返回错误。
-- `RANDOM`：随机选择 worker。
+- `PREFERRED_SAME_NODE`（默认）：优先选择同节点 Worker；若无同节点 Worker，则随机选择。
+- `REQUIRED_SAME_NODE`：必须选择同节点 Worker；若未匹配到同节点 Worker，则返回错误。
+- `RANDOM`：随机选择 Worker。
 
-使用该能力时，需要让 worker 和客户端都能读取到同一套 `host_id` 信息：
+使用节点亲和性时，需要让 Worker 和客户端都能读取同一套 `host_id` 信息：在 Worker 侧配置
+`host_id_env_name`，并在客户端服务发现配置中设置相同的 `hostIdEnvName`。
 
-1. 在 worker 侧配置 `host_id_env_name`（例如 `HOST_ID`），并在启动前注入环境变量。
-2. 在客户端 `ServiceDiscoveryOptions` 中配置相同的 `hostIdEnvName`，并按需设置 `affinityPolicy`。
-3. 如果 ETCD 启用了用户名/密码鉴权，还需要在客户端配置 `username` 和 `password`。
+#### 通过 ETCD 发现 Worker
+
+使用 `ServiceDiscovery` 从 ETCD 获取可用 Worker。如果 ETCD 启用了用户名和密码鉴权，还需要配置
+`username` 和 `password`。
+
+```cpp
+#include <cstdio>
+#include "datasystem/datasystem.h"
+
+using namespace datasystem;
+
+int main()
+{
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = "127.0.0.1:2379";
+    sdOpts.hostIdEnvName = "HOST_ID";
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    sdOpts.username = "etcd_user";
+    sdOpts.password = "etcd_password";
+
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    if (!serviceDiscovery->Init().IsOk()) {
+        fprintf(stderr, "ServiceDiscovery Init failed\n");
+        return -1;
+    }
+
+    ConnectOptions connectOptions;
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    auto client = std::make_shared<DsClient>(connectOptions);
+    if (!client->Init().IsOk()) {
+        fprintf(stderr, "Init failed\n");
+        return -1;
+    }
+    return 0;
+}
+```
+
+#### 通过 Coordinator 发现 Worker
+
+使用 `CoordinatorServiceDiscovery` 从 Coordinator 获取可用 Worker。初始化时选择并固定访问一个 Coordinator 地址。
 
 ```cpp
 #include "datasystem/datasystem.h"
 
-ServiceDiscoveryOptions sdOpts;
-sdOpts.etcdAddress = "127.0.0.1:2379";
+CoordinatorServiceDiscoveryOptions sdOpts;
+sdOpts.serviceAddress = "127.0.0.1:31511";
 sdOpts.hostIdEnvName = "HOST_ID";
 sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
-sdOpts.username = "etcd_user";
-sdOpts.password = "etcd_password";
 
-auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+auto serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(sdOpts);
 ASSERT_TRUE(serviceDiscovery->Init().IsOk());
 
 ConnectOptions connectOptions;
 connectOptions.serviceDiscovery = serviceDiscovery;
 auto client = std::make_shared<DsClient>(connectOptions);
 ASSERT_TRUE(client->Init().IsOk());
+```
+
+如果 Coordinator 地址由外部服务发现系统提供，可以实现 `ICoordinatorDiscovery` 并注入
+`CoordinatorServiceDiscoveryOptions`。Discovery 操作成功但暂无候选时可以返回空列表；当前
+`CoordinatorServiceDiscovery` 会拒绝空列表，非空列表只缓存并使用首个地址。
+
+```cpp
+class CustomCoordinatorDiscovery : public ICoordinatorDiscovery {
+public:
+    Status GetCoordinators(std::vector<std::string> &serviceList) override
+    {
+        serviceList = { "127.0.0.1:31511" };
+        return Status::OK();
+    }
+};
+
+CoordinatorServiceDiscoveryOptions sdOpts;
+sdOpts.coordinatorDiscovery = std::make_shared<CustomCoordinatorDiscovery>();
+auto serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(sdOpts);
+ASSERT_TRUE(serviceDiscovery->Init().IsOk());
+```
+
+Python KVClient 使用 `service_discovery` 参数接入服务发现，不需要预先指定 Worker 的 `host` 和 `port`。
+当同时传入 `service_discovery` 与 `host`/`port` 时，KVClient 会使用 `service_discovery` 并忽略 `host`/`port`。
+若期望同一个 KVClient 在当前连接的 Worker 故障后切换到其他已发现 Worker，需要同时设置
+`enable_cross_node_connection=True`。
+
+```python
+from yr.datasystem import (
+    CoordinatorServiceDiscovery,
+    CoordinatorServiceDiscoveryOptions,
+    KVClient,
+    ServiceAffinityPolicy,
+)
+
+options = CoordinatorServiceDiscoveryOptions()
+options.service_address = "127.0.0.1:31511"
+options.cluster_name = "cluster-a"
+options.host_id_env_name = "HOST_ID"
+options.affinity_policy = ServiceAffinityPolicy.PREFERRED_SAME_NODE
+
+service_discovery = CoordinatorServiceDiscovery(options)
+service_discovery.init()
+
+client = KVClient(service_discovery=service_discovery, enable_cross_node_connection=True)
+client.init()
 ```
 
 ### 数据溢出到磁盘
@@ -156,6 +265,16 @@ spillEnableReadahead: true
 global:
   memoryRebalance:
     enabled: true
+    # source worker 的共享内存使用率阈值（百分比），取值范围：1-100
+    rebalanceSourceUsagePercent: 70
+    # source 与 target 之间的最小使用率差值（百分比），取值范围：1-100
+    rebalanceUsageGapPercent: 20
+    # 失败或超时后的冷却时间（秒）
+    rebalanceCooldownS: 60
+    # 任务上报宽限时间（毫秒）
+    rebalanceTaskReportGraceMs: 60000
+    # 单次任务最多迁移数据量（字节），默认 1GB；超过 5 位需用字符串
+    rebalanceMaxMigrateBytesPerRound: "1073741824"
 ```
 
 当 `enabled` 为 `false` 时，master 不会调度内存均衡任务，worker 在本地共享内存不足时仍按既有驱逐、Spill 和二级缓存策略处理。开启该能力后，如果集群中没有满足条件的低使用率 worker，数据仍会继续走本地驱逐、Spill 或二级缓存流程，因此该配置不能替代 Spill 或二级缓存可靠性配置。

@@ -507,6 +507,87 @@ vllm serve $MODEL_PATH \
 | `DS_H2D_MEMCPY_POLICY`           | direct                   | Host-to-Device 内存拷贝策略                     |
 | `DS_D2H_MEMCPY_POLICY`           | direct                   | Device-to-Host 内存拷贝策略                     |
 
+对于 Ascend A2 同节点、大量 KV Block 的本地 H2D，保持 `DS_H2D_MEMCPY_POLICY=direct`，并将
+`DS_H2D_PARALLEL_WORKER_NUM` 设置为大于 `1` 可实验性地启用 Direct 描述符并行。该模式保持同步接口语义，
+将描述符聚合后交给每 Device 的有界线程池并行执行。相关调优变量如下：
+
+| 环境变量                                  | 默认值            | 说明                                      |
+| ----------------------------------------- | ----------------- | ----------------------------------------- |
+| `DS_H2D_PARALLEL_WORKER_NUM`              | 1                 | 每 Device H2D Worker 数，范围 `[1, 16]`；`1` 表示串行 |
+| `DS_H2D_PARALLEL_AGGREGATE_NUM`           | 512               | 每个 ACL Batch 的描述符数，范围 `[1, 4096]` |
+| `DS_H2D_PARALLEL_MAX_PENDING_TASK_NUM`    | `2 * worker_num`  | 每 Device 的有界等待队列长度，最大 64     |
+| `DS_H2D_PARALLEL_MIN_BYTES`               | 25165824          | 低于该总字节数（24 MiB）时回退为串行 Direct |
+| `DS_H2D_PARALLEL_MAX_INFLIGHT_BATCH_NUM`  | `worker_num + 1`  | Worker 与 caller-runs 合计 ACL 并发上限   |
+
+只有估算出的 ACL Batch 任务数不少于 Worker 数时才会进入并行路径，任务会按累计字节数尽量均衡切分；否则回退为串行
+Direct。该能力默认不启用。需要回滚时将 `DS_H2D_PARALLEL_WORKER_NUM` 恢复为 `1`。
+
+FFTS/Huge FFTS 也支持实验性的对象级并行。保持 `DS_H2D_MEMCPY_POLICY=ffts`；启用 HugeTLB 时仍由现有逻辑自动
+切换为 Huge FFTS，再通过以下变量开启多个独立 FFTS pipeline：
+
+| 环境变量                              | 默认值   | 说明                                           |
+| ------------------------------------- | -------- | ---------------------------------------------- |
+| `DS_H2D_FFTS_PARALLEL_WORKER_NUM`     | 1        | FFTS H2D Worker 数，范围 `[1, 16]`；`1` 表示关闭并行 |
+| `DS_H2D_FFTS_PARALLEL_MIN_BYTES`      | 25165824 | 低于该总字节数（24 MiB）时使用原串行 FFTS     |
+
+并行路径按完整对象进行字节均衡分片，每个分片独立持有 dispatcher、stream、notify 和两份 device staging buffer，
+不会拆分同一对象的 Blob。进入并行前会校验所有分片的 device staging 总预算；超过 `DS_DEVICE_ACL_SIZE` 时自动使用
+原串行 FFTS，避免并发分配导致 OOM。启用并行 FFTS 后，同一客户端进程中的 FFTS H2D 调用会通过调用级互斥串行进入，
+因此最多只有一个调用持有 staging 资源，单次调用最多提交 `worker_num` 个任务。
+需要回滚时将 `DS_H2D_FFTS_PARALLEL_WORKER_NUM=1`。是否真正进入并行路径，应在客户端性能日志中确认
+`TOTAL_H2D_PARALLEL_FFTS_MEMCPY`，仅出现 `ParallelFftsH2DConfig` 只能证明配置已加载。
+
+### D2H Set 并行拷贝配置
+
+`MSetD2H` 的 Direct 和 FFTS 路径支持独立的 D2H 并行配置，不与 H2D Get 参数共用。保持
+`DS_D2H_MEMCPY_POLICY=direct`，并将 `DS_D2H_PARALLEL_WORKER_NUM` 设置为大于 `1` 可启用 Direct 描述符并行。
+参数及默认值如下：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DS_D2H_PARALLEL_WORKER_NUM` | 1 | 每个 Device 的 D2H Worker 数，范围 `[1, 16]`；`1` 表示串行 |
+| `DS_D2H_PARALLEL_AGGREGATE_NUM` | 512 | 每个 ACL Batch 的描述符数，范围 `[1, 4096]` |
+| `DS_D2H_PARALLEL_MAX_PENDING_TASK_NUM` | `2 * worker_num` | 有界等待队列长度，最大 64 |
+| `DS_D2H_PARALLEL_MIN_BYTES` | 25165824 | 请求小于该字节数时回退串行 Direct |
+| `DS_D2H_PARALLEL_MAX_INFLIGHT_BATCH_NUM` | `worker_num + 1` | Worker 与 caller-runs 的 ACL 并发上限 |
+
+FFTS/Huge FFTS 保持 `DS_D2H_MEMCPY_POLICY=ffts`，通过下列变量启用对象级并行：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DS_D2H_FFTS_PARALLEL_WORKER_NUM` | 1 | FFTS D2H Worker 数，范围 `[1, 16]`；`1` 表示串行 |
+| `DS_D2H_FFTS_PARALLEL_MIN_BYTES` | 25165824 | 请求小于该字节数时使用串行 FFTS |
+
+D2H FFTS 仅按完整对象分片，不拆分同一对象的 Blob。每个分片独立持有 stream、notify 和 staging
+buffer；总 device staging 预算超过 `DS_DEVICE_ACL_SIZE` 时自动使用串行 FFTS。Direct 并行回滚时将
+`DS_D2H_PARALLEL_WORKER_NUM=1`；FFTS 并行回滚时将 `DS_D2H_FFTS_PARALLEL_WORKER_NUM=1`。运行时应分别通过
+`TOTAL_D2H_PARALLEL_MEMCPY` 和 `TOTAL_D2H_PARALLEL_FFTS_MEMCPY` 确认并行路径实际执行。
+
+### FFTS staging 内存与显存预算
+
+`DS_HOST_ACL_SIZE` 和 `DS_DEVICE_ACL_SIZE` 配置的是当前客户端进程的 FFTS staging 内存池，不包含业务侧原始
+Host Buffer，也不包含最终存放 KV Cache 的 NPU Buffer。两个变量的默认值分别为 2684354560 字节（2.5 GiB）
+和 104857600 字节（100 MiB）。
+
+设一次请求包含的对象大小为 `S[j]`。并行分片数
+`k = min(worker_num, object_count)`，第 `i` 个分片中最大对象的大小为 `M[i]`，则单次 FFTS 调用的 staging
+预算如下：
+
+| 资源 | 串行 FFTS | 并行 FFTS | 说明 |
+| --- | --- | --- | --- |
+| Device 显存池 | `2 * max(S[j])` | `2 * sum(M[i]), i=0..k-1` | 每条 pipeline 有两份 Device staging buffer；并行预算上界为 `2 * k * max(S[j])` |
+| Host 锁页内存池 | `sum(S[j])` | `sum(S[j])` | 普通 FFTS 为每个完整对象分配一份 Host staging buffer；分片不会重复对象数据 |
+
+例如 4 个并行分片的最大对象分别为 8 MiB、7 MiB、6 MiB 和 5 MiB，则需要的 Device staging 显存为
+`2 * (8 + 7 + 6 + 5) = 52 MiB`。如果一次请求的所有对象合计为 80 MiB，普通 FFTS 还需要约 80 MiB 的
+Host 锁页内存。配置时还需为内存池中的其他并发方向、分配对齐和碎片预留余量；H2D 与 D2H 同时执行时，两边的
+staging 占用需要相加。
+
+并行执行前会按实际分片计算 Device staging 预算。预算大于 `DS_DEVICE_ACL_SIZE` 时自动使用串行 FFTS；
+串行路径仍至少需要 `2 * max(S[j])` 的 Device staging 显存。普通 FFTS 的 Host staging 分配失败时，
+D2H 返回 OOM，H2D 会回退 Direct。只有 H2D、D2H 都进入 Huge FFTS 时，才会直接复用调用方的 HugeTLB
+Host Buffer，此时不分配内部 Host staging 池，`DS_HOST_ACL_SIZE` 可为 `0`。
+
 ## 功能验证
 
 服务启动后，验证部署是否成功：

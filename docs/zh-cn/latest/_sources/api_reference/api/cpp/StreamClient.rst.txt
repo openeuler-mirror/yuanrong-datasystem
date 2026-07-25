@@ -47,7 +47,7 @@ StreamClient
         创建生产者, 创建生产者时会创建流。
 
         参数：
-            - **streamName** - 指定流的名称， 用于创建生产者。 ``streamName`` 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+            - **streamName** - 指定流的名称， 用于创建生产者。 ``streamName`` 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
             - **outProducer** - 传出参数，返回 std::shared_ptr< :cpp:class:`Producer` > 用于生产数据。
             - **producerConf** - 设置参数，详见 :cpp:class:`ProducerConf` 章节。
 
@@ -59,7 +59,7 @@ StreamClient
         创建消费者，创建消费者时会创建流。
 
         参数：
-            - **streamName** - 指定流的名称， 用于创建消费者。 ``streamName`` 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+            - **streamName** - 指定流的名称， 用于创建消费者。 ``streamName`` 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
             - **config** - 设置参数，详见 :cpp:class:`SubscriptionConfig` 。
             - **outConsumer** - 传出参数，返回 std::shared_ptr< :cpp:class:`Consumer` > 用于消费数据。
             - **autoAck** - 设置参数，是否支持自动 :cpp:func:`Consumer::Ack` 功能。
@@ -72,7 +72,7 @@ StreamClient
         删除数据流，用于删除数据流。。
 
         参数：
-            - **streamName** - 键，key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节.
+            - **streamName** - 键，key的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节.
 
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示删除成功，否则返回其他错误码。
@@ -82,7 +82,7 @@ StreamClient
         指定流的名称，查询流的生产者数量。
 
         参数： 
-            - **streamName** - 指定流的名称，查询该条流有多少个生产者。 ``streamName`` 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+            - **streamName** - 指定流的名称，查询该条流有多少个生产者。 ``streamName`` 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
             - **gProducerNum** - 传出参数， 指定 ``streamName`` 对应的生产者的数量。
 
         返回：
@@ -93,7 +93,7 @@ StreamClient
         指定流的名称，查询流的消费者数量。
 
         参数：
-            - **streamName** - 指定流的名称，查询该条流有多少消费者。 ``streamName`` 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为255字节。
+            - **streamName** - 指定流的名称，查询该条流有多少消费者。 ``streamName`` 的合法字符为：英文字母（a-zA-Z）、数字以及 ``-_!@#%^*()+=:;``，最大长度为1024字节。
             - **gConsumerNum** - 传出参数， 指定 ``streamName`` 对应的消费者的数量。
 
         返回：

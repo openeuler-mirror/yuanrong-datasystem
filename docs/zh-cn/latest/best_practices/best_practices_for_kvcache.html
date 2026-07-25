@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="设计文档" href="../design_document/index.html"><link rel="prev" title="RH2D最佳实践" href="best_practices_for_rh2d.html">
         <link rel="prefetch" href="../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践 - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
@@ -354,16 +354,15 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
-<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
-<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
-<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
-<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
 </ul>
 </li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.html">yr.datasystem.hetero_client.HeteroClient</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.HeteroClient" class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" role="switch" type="checkbox"/><label for="toctree-checkbox-11"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.init.html">yr.datasystem.hetero_client.HeteroClient.init</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory.html">yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.delete.html">yr.datasystem.hetero_client.HeteroClient.delete</a></li>
@@ -376,6 +375,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.generate_key.html">yr.datasystem.hetero_client.HeteroClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.get_meta_info.html">yr.datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.batch_is_exist.html">yr.datasystem.hetero_client.HeteroClient.batch_is_exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.exist.html">yr.datasystem.hetero_client.HeteroClient.exist</a></li>
 </ul>
 </li>
@@ -422,6 +422,11 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceAffinityPolicy.html">yr.datasystem.service_discovery.ServiceAffinityPolicy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceDiscoveryOptions.html">yr.datasystem.service_discovery.ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceDiscovery.html">yr.datasystem.service_discovery.ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions.html">yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.CoordinatorServiceDiscovery.html">yr.datasystem.service_discovery.CoordinatorServiceDiscovery</a></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><input aria-label="Toggle navigation of yr.datasystem.object_client.ObjectClient" class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" role="switch" type="checkbox"/><label for="toctree-checkbox-17"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
 <li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
@@ -506,8 +511,12 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/IServiceDiscovery.html">IServiceDiscovery</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ICoordinatorDiscovery.html">ICoordinatorDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/CoordinatorServiceDiscovery.html">CoordinatorServiceDiscovery</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-CoordinatorServiceDiscoveryOptions.html">CoordinatorServiceDiscoveryOptions</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
 </ul>
 </li>
@@ -534,10 +543,14 @@ document.addEventListener('DOMContentLoaded', function() {
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/ai_development_workflow.html">AI 开发流程</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../appendix/index.html">附录</a><input aria-label="Toggle navigation of 附录" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../appendix/log_guide.html">openYuanrong datasystem 日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/cluster_log_diagnosis_guide.html">集群日志定位指南</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../appendix/client_env_guide.html">Client环境变量</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/brpc_health_probe.html">brpc 健康探针与诊断接口</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../appendix/trace_triage_methodology.html">DataSystem 慢时延与错误 Trace 分析方法论</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
@@ -1311,6 +1324,174 @@ A2 双机参数</label><div class="sd-tab-content docutils">
 </tbody>
 </table>
 </div>
+<p>对于 Ascend A2 同节点、大量 KV Block 的本地 H2D，保持 <code class="docutils literal notranslate"><span class="pre">DS_H2D_MEMCPY_POLICY=direct</span></code>，并将
+<code class="docutils literal notranslate"><span class="pre">DS_H2D_PARALLEL_WORKER_NUM</span></code> 设置为大于 <code class="docutils literal notranslate"><span class="pre">1</span></code> 可实验性地启用 Direct 描述符并行。该模式保持同步接口语义，
+将描述符聚合后交给每 Device 的有界线程池并行执行。相关调优变量如下：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>环境变量</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_PARALLEL_WORKER_NUM</span></code></p></td>
+<td><p>1</p></td>
+<td><p>每 Device H2D Worker 数，范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">16]</span></code>；<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示串行</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_PARALLEL_AGGREGATE_NUM</span></code></p></td>
+<td><p>512</p></td>
+<td><p>每个 ACL Batch 的描述符数，范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">4096]</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_PARALLEL_MAX_PENDING_TASK_NUM</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">worker_num</span></code></p></td>
+<td><p>每 Device 的有界等待队列长度，最大 64</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_PARALLEL_MIN_BYTES</span></code></p></td>
+<td><p>25165824</p></td>
+<td><p>低于该总字节数（24 MiB）时回退为串行 Direct</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_PARALLEL_MAX_INFLIGHT_BATCH_NUM</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">worker_num</span> <span class="pre">+</span> <span class="pre">1</span></code></p></td>
+<td><p>Worker 与 caller-runs 合计 ACL 并发上限</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>只有估算出的 ACL Batch 任务数不少于 Worker 数时才会进入并行路径，任务会按累计字节数尽量均衡切分；否则回退为串行
+Direct。该能力默认不启用。需要回滚时将 <code class="docutils literal notranslate"><span class="pre">DS_H2D_PARALLEL_WORKER_NUM</span></code> 恢复为 <code class="docutils literal notranslate"><span class="pre">1</span></code>。</p>
+<p>FFTS/Huge FFTS 也支持实验性的对象级并行。保持 <code class="docutils literal notranslate"><span class="pre">DS_H2D_MEMCPY_POLICY=ffts</span></code>；启用 HugeTLB 时仍由现有逻辑自动
+切换为 Huge FFTS，再通过以下变量开启多个独立 FFTS pipeline：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>环境变量</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_FFTS_PARALLEL_WORKER_NUM</span></code></p></td>
+<td><p>1</p></td>
+<td><p>FFTS H2D Worker 数，范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">16]</span></code>；<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示关闭并行</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_H2D_FFTS_PARALLEL_MIN_BYTES</span></code></p></td>
+<td><p>25165824</p></td>
+<td><p>低于该总字节数（24 MiB）时使用原串行 FFTS</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>并行路径按完整对象进行字节均衡分片，每个分片独立持有 dispatcher、stream、notify 和两份 device staging buffer，
+不会拆分同一对象的 Blob。进入并行前会校验所有分片的 device staging 总预算；超过 <code class="docutils literal notranslate"><span class="pre">DS_DEVICE_ACL_SIZE</span></code> 时自动使用
+原串行 FFTS，避免并发分配导致 OOM。启用并行 FFTS 后，同一客户端进程中的 FFTS H2D 调用会通过调用级互斥串行进入，
+因此最多只有一个调用持有 staging 资源，单次调用最多提交 <code class="docutils literal notranslate"><span class="pre">worker_num</span></code> 个任务。
+需要回滚时将 <code class="docutils literal notranslate"><span class="pre">DS_H2D_FFTS_PARALLEL_WORKER_NUM=1</span></code>。是否真正进入并行路径，应在客户端性能日志中确认
+<code class="docutils literal notranslate"><span class="pre">TOTAL_H2D_PARALLEL_FFTS_MEMCPY</span></code>，仅出现 <code class="docutils literal notranslate"><span class="pre">ParallelFftsH2DConfig</span></code> 只能证明配置已加载。</p>
+</section>
+<section id="d2h-set">
+<h3>D2H Set 并行拷贝配置<a class="headerlink" href="#d2h-set" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">MSetD2H</span></code> 的 Direct 和 FFTS 路径支持独立的 D2H 并行配置，不与 H2D Get 参数共用。保持
+<code class="docutils literal notranslate"><span class="pre">DS_D2H_MEMCPY_POLICY=direct</span></code>，并将 <code class="docutils literal notranslate"><span class="pre">DS_D2H_PARALLEL_WORKER_NUM</span></code> 设置为大于 <code class="docutils literal notranslate"><span class="pre">1</span></code> 可启用 Direct 描述符并行。
+参数及默认值如下：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>环境变量</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_PARALLEL_WORKER_NUM</span></code></p></td>
+<td><p>1</p></td>
+<td><p>每个 Device 的 D2H Worker 数，范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">16]</span></code>；<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示串行</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_PARALLEL_AGGREGATE_NUM</span></code></p></td>
+<td><p>512</p></td>
+<td><p>每个 ACL Batch 的描述符数，范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">4096]</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_PARALLEL_MAX_PENDING_TASK_NUM</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">worker_num</span></code></p></td>
+<td><p>有界等待队列长度，最大 64</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_PARALLEL_MIN_BYTES</span></code></p></td>
+<td><p>25165824</p></td>
+<td><p>请求小于该字节数时回退串行 Direct</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_PARALLEL_MAX_INFLIGHT_BATCH_NUM</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">worker_num</span> <span class="pre">+</span> <span class="pre">1</span></code></p></td>
+<td><p>Worker 与 caller-runs 的 ACL 并发上限</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>FFTS/Huge FFTS 保持 <code class="docutils literal notranslate"><span class="pre">DS_D2H_MEMCPY_POLICY=ffts</span></code>，通过下列变量启用对象级并行：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>环境变量</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_FFTS_PARALLEL_WORKER_NUM</span></code></p></td>
+<td><p>1</p></td>
+<td><p>FFTS D2H Worker 数，范围 <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">16]</span></code>；<code class="docutils literal notranslate"><span class="pre">1</span></code> 表示串行</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DS_D2H_FFTS_PARALLEL_MIN_BYTES</span></code></p></td>
+<td><p>25165824</p></td>
+<td><p>请求小于该字节数时使用串行 FFTS</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>D2H FFTS 仅按完整对象分片，不拆分同一对象的 Blob。每个分片独立持有 stream、notify 和 staging
+buffer；总 device staging 预算超过 <code class="docutils literal notranslate"><span class="pre">DS_DEVICE_ACL_SIZE</span></code> 时自动使用串行 FFTS。Direct 并行回滚时将
+<code class="docutils literal notranslate"><span class="pre">DS_D2H_PARALLEL_WORKER_NUM=1</span></code>；FFTS 并行回滚时将 <code class="docutils literal notranslate"><span class="pre">DS_D2H_FFTS_PARALLEL_WORKER_NUM=1</span></code>。运行时应分别通过
+<code class="docutils literal notranslate"><span class="pre">TOTAL_D2H_PARALLEL_MEMCPY</span></code> 和 <code class="docutils literal notranslate"><span class="pre">TOTAL_D2H_PARALLEL_FFTS_MEMCPY</span></code> 确认并行路径实际执行。</p>
+</section>
+<section id="ffts-staging">
+<h3>FFTS staging 内存与显存预算<a class="headerlink" href="#ffts-staging" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">DS_HOST_ACL_SIZE</span></code> 和 <code class="docutils literal notranslate"><span class="pre">DS_DEVICE_ACL_SIZE</span></code> 配置的是当前客户端进程的 FFTS staging 内存池，不包含业务侧原始
+Host Buffer，也不包含最终存放 KV Cache 的 NPU Buffer。两个变量的默认值分别为 2684354560 字节（2.5 GiB）
+和 104857600 字节（100 MiB）。</p>
+<p>设一次请求包含的对象大小为 <code class="docutils literal notranslate"><span class="pre">S[j]</span></code>。并行分片数
+<code class="docutils literal notranslate"><span class="pre">k</span> <span class="pre">=</span> <span class="pre">min(worker_num,</span> <span class="pre">object_count)</span></code>，第 <code class="docutils literal notranslate"><span class="pre">i</span></code> 个分片中最大对象的大小为 <code class="docutils literal notranslate"><span class="pre">M[i]</span></code>，则单次 FFTS 调用的 staging
+预算如下：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>资源</p></th>
+<th class="head"><p>串行 FFTS</p></th>
+<th class="head"><p>并行 FFTS</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Device 显存池</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">max(S[j])</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">sum(M[i]),</span> <span class="pre">i=0..k-1</span></code></p></td>
+<td><p>每条 pipeline 有两份 Device staging buffer；并行预算上界为 <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">k</span> <span class="pre">*</span> <span class="pre">max(S[j])</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p>Host 锁页内存池</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">sum(S[j])</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">sum(S[j])</span></code></p></td>
+<td><p>普通 FFTS 为每个完整对象分配一份 Host staging buffer；分片不会重复对象数据</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>例如 4 个并行分片的最大对象分别为 8 MiB、7 MiB、6 MiB 和 5 MiB，则需要的 Device staging 显存为
+<code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">(8</span> <span class="pre">+</span> <span class="pre">7</span> <span class="pre">+</span> <span class="pre">6</span> <span class="pre">+</span> <span class="pre">5)</span> <span class="pre">=</span> <span class="pre">52</span> <span class="pre">MiB</span></code>。如果一次请求的所有对象合计为 80 MiB，普通 FFTS 还需要约 80 MiB 的
+Host 锁页内存。配置时还需为内存池中的其他并发方向、分配对齐和碎片预留余量；H2D 与 D2H 同时执行时，两边的
+staging 占用需要相加。</p>
+<p>并行执行前会按实际分片计算 Device staging 预算。预算大于 <code class="docutils literal notranslate"><span class="pre">DS_DEVICE_ACL_SIZE</span></code> 时自动使用串行 FFTS；
+串行路径仍至少需要 <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">max(S[j])</span></code> 的 Device staging 显存。普通 FFTS 的 Host staging 分配失败时，
+D2H 返回 OOM，H2D 会回退 Direct。只有 H2D、D2H 都进入 Huge FFTS 时，才会直接复用调用方的 HugeTLB
+Host Buffer，此时不分配内部 Host staging 池，<code class="docutils literal notranslate"><span class="pre">DS_HOST_ACL_SIZE</span></code> 可为 <code class="docutils literal notranslate"><span class="pre">0</span></code>。</p>
 </section>
 </section>
 <section id="id9">
@@ -1671,6 +1852,8 @@ ifconfig
 <li><a class="reference internal" href="#glm-5">部署 GLM-5 模型</a><ul>
 <li><a class="reference internal" href="#id7">配置参数说明</a></li>
 <li><a class="reference internal" href="#id8">环境变量说明</a></li>
+<li><a class="reference internal" href="#d2h-set">D2H Set 并行拷贝配置</a></li>
+<li><a class="reference internal" href="#ffts-staging">FFTS staging 内存与显存预算</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#id9">功能验证</a><ul>

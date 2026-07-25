@@ -10,6 +10,7 @@
     - [资源相关配置](#资源相关配置)
     - [IPC/RPC相关配置](#ipcrpc相关配置)
     - [ETCD相关配置](#etcd相关配置)
+    - [Coordinator相关配置](#coordinator相关配置)
     - [Spill相关配置](#spill相关配置)
     - [Memory Rebalance相关配置](#memory-rebalance相关配置)
     - [日志与可观测相关配置](#日志与可观测相关配置)
@@ -154,7 +155,11 @@ global:
 | global.rpc.ocThreadNum | int | `64` | 配置服务端用于处理对象/KV缓存的业务线程数 |
 | global.rpc.zmqServerIoContext | int | `5` | ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | global.rpc.zmqClientIoContext | int | `5` | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
+| global.rpc.ioThreadNice | int | `0` | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
 | global.rpc.zmqChunkSz | int | `1048576` | 并行负载分块大小配置（以字节为单位） |
+| global.rpc.brpc.useBrpc | bool | `false` | 是否使用 brpc 替代 ZMQ 作为 RPC 通信传输。启用后 brpc 独占 worker 的 TCP 端口（与 `worker_address` 同端口，无端口偏移），ZMQ 的 TCP 端点不再创建，上述 ZMQ 专属参数（`zmqServerIoContext`、`zmqClientIoContext`、`zmqClientIoThread`、`zmqChunkSz`）在 brpc 模式下不生效。各服务的线程池参数（`rpcThreadNum`、`ocThreadNum`、`scThreadNum` 等）仍然生效 |
+| global.rpc.brpc.brpcServerNumThreads | int | `64` | brpc 服务端工作线程数（bthread 工作线程池大小） |
+| global.rpc.brpc.brpcMaxConcurrency | int | `128` | 单个 brpc 服务的最大并发在途 RPC 数，0 表示不限制。推荐值为 `brpcServerNumThreads` 的 2 倍（如 64 线程对应 128）。超过该值时 brpc 会立即向客户端返回 ELIMIT，避免慢请求耗尽 bthread 导致 OOM。该值不得小于 `brpcServerNumThreads` |
 | global.rpc.maxRpcSessionNum | int | `2048` | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | global.rpc.streamIdleTimes | int | `300` | 配置流的空闲时间。默认值为300秒（5分钟） |
 | global.rpc.remoteSendThreadNum | int | `8` | 配置服务端用于将元素发送到远程工作线程的线程数量 |
@@ -200,6 +205,28 @@ global:
     etcdCertDir: ""
     passphraseValue: ""
     etcdMetaPoolSize: 8
+```
+
+### Coordinator相关配置
+
+Coordinator 是 ETCD 的替代协调后端。当配置了 `coordinatorAddress` 时，datasystem-worker 将连接 Coordinator 服务进行集群协调（如节点发现、心跳、拓扑管理等），而不再使用 ETCD。
+
+> **注意事项：**
+>
+> - Coordinator 与 ETCD（以及 metastore）互斥，同一时间只能选择一个协调后端。当 `coordinatorAddress` 非空时，worker 会优先使用 Coordinator，ETCD 相关配置将被忽略。
+> - Coordinator 服务需独立部署（可通过 dscli 启动，参考 [dscli](../deployment/dscli.md)），Kubernetes Helm Chart 当前不包含 Coordinator 服务的部署模板。
+> - 使用 Coordinator 时，建议将 [global.etcd.etcdAddress](#etcd相关配置) 留空，并保持 [global.etcd.enableEtcdAuth](#etcd相关配置) 为 `false`，以避免不必要的 ETCD 证书挂载。
+
+| 配置项 | 类型 | 默认值 | 描述 |
+|-----|------|---------|-------------|
+| global.coordinator.coordinatorAddress | string | `""` | Coordinator 服务地址，格式为 `host:port`（例如 `127.0.0.1:31511`）。为空时使用 ETCD 作为协调后端（默认） |
+
+**样例**：
+配置 worker 连接地址为 `127.0.0.1:31511` 的 Coordinator 服务作为协调后端
+```yaml
+global:
+  coordinator:
+    coordinatorAddress: "127.0.0.1:31511"
 ```
 
 ### Spill相关配置
@@ -263,6 +290,11 @@ Memory Rebalance 用于在 worker 之间均衡 Object/KV 缓存使用的共享�
 | 配置项 | 类型 | 默认值 | 描述 |
 |-----|------|---------|-------------|
 | global.memoryRebalance.enabled | bool | `false` | 是否开启由 master 调度的内存均衡能力。设置为 `true` 后，master 会尝试将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
+| global.memoryRebalance.rebalanceSourceUsagePercent | int | `70` | source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。取值范围：1-100 |
+| global.memoryRebalance.rebalanceUsageGapPercent | int | `20` | source 与 target worker 之间的最小共享内存使用率差值（百分比）。仅当差值不小于该值时才下发迁移任务。取值范围：1-100 |
+| global.memoryRebalance.rebalanceCooldownS | int | `60` | worker 在一次失败或超时的均衡任务后的冷却时间（秒），冷却期内不再被选为均衡源 |
+| global.memoryRebalance.rebalanceTaskReportGraceMs | int | `60000` | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
+| global.memoryRebalance.rebalanceMaxMigrateBytesPerRound | string | `"1073741824"` | 单次内存均衡任务最多迁移的数据量（字节），必须大于 0，默认 1GB（1073741824）。超过 5 位的数字需配置为字符串以避免 helm 渲染为科学计数法 |
 
 **样例**：
 
@@ -270,6 +302,12 @@ Memory Rebalance 用于在 worker 之间均衡 Object/KV 缓存使用的共享�
 global:
   memoryRebalance:
     enabled: true
+    rebalanceSourceUsagePercent: 70
+    rebalanceUsageGapPercent: 20
+    rebalanceCooldownS: 60
+    rebalanceTaskReportGraceMs: 60000
+    # 超过 5 位的数字需配置为字符串以避免被渲染为科学计数法。
+    rebalanceMaxMigrateBytesPerRound: "1073741824"
 ```
 
 ### 日志与可观测相关配置
@@ -280,7 +318,7 @@ global:
 | global.log.logLevel | int | `0` | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
 | global.log.logAsync | bool | `true` | 是否开启异步刷新日志功能 |
 | global.log.logAsyncQueueSize | int | `65536` | 异步日志的消息队列大小 |
-| global.log.logCompress | bool | `true` | 是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式 |
+| global.log.logCompress | bool | `false` | 是否开启日志压缩功能，当开启时会将历史日志压缩为gzip格式 |
 | global.log.logBufSecs | int | `10` | 日志消息的最大缓冲时间（以秒为单位） |
 | global.log.logFilename | string | `""` | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
 | global.log.logRetentionDay | int | `0` | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
@@ -295,6 +333,8 @@ global:
 | global.log.slowLogProcessSlowerThan | uint64 | `2000` | 处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 `1000` 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary |
 | global.log.slowLogRpcSlowerThan | uint64 | `5000` | 跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 `2000` 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary |
 
+> **升级提示**：`global.log.logCompress` 默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 `global.log.logCompress: true`；同时建议根据不压缩场景重新评估 `global.log.maxLogFileNum` 和 `global.log.maxLogSize` 的容量设置。
+
 **样例**：
 ```yaml
 global:
@@ -308,8 +348,8 @@ global:
     logRetentionDay: 0
     logAsync: true
     logBufSecs: 10
-    # 开启日志压缩功能，历史日志将被压缩成gzip格式节约磁盘空间
-    logCompress: true
+    # 默认关闭日志压缩功能，可设置为 true 将历史日志压缩成gzip格式节约磁盘空间
+    logCompress: false
     # 日志前缀名，配置为 'openeuler_datasystem'
     logFilename: "openeuler_datasystem"
 ```
@@ -396,7 +436,6 @@ global:
 | global.reliability.nodeTimeoutS | int | `60` | 服务端节点超时最大时间间隔（单位为秒） |
 | global.reliability.nodeDeadTimeoutS | int | `300` | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `nodeTimeoutS` |
 | global.reliability.enableReconciliation | bool | `true` | 当节点重启时是否启用对账功能 |
-| global.reliability.enableHashRingSelfHealing | bool | `false` | 是否启用哈希环自愈功能，如果该值为 `true`，当哈希环状态异常时会启用自愈修复哈希环 |
 | global.reliability.livenessProbeTimeoutS | int | `150` | Kubernetes 存活探针超时时间配置（以秒为单位） |
 | global.reliability.addNodeWaitTimeS | int | `60` | 新节点加入哈希环的等待超时时间（以秒为单位） |
 | global.reliability.autoDelDeadNode | bool | `true` | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
@@ -424,7 +463,7 @@ global:
 | global.performance.enableThp | bool | `false` | 是否启用透明大页（Transparent Huge Page,THP）功能，启用透明大页可以提高性能，减少页表开销，但也可能导致 Pod 内存使用增加 |
 | global.performance.arenaPerTenant | int | `16` | 每个租户的共享内存分配器数量。多分配器可以提高第一次分配共享内存的性能，但每个分配器会多使用一个fd，导致fd资源使用量上升。取值范围：[1, 32] |
 | global.performance.memoryReclamationTimeSecond | int | `600` | 释放后的内存回收时间（以秒为单位），未回收的内存可以提供给下次分配复用，提升分配效率 |
-| global.performance.memoryAlignment | int | `64` | jemalloc分配内存使用的字节对齐大小。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
+| global.performance.memoryAlignment | int | `64` | Worker中jemalloc分配内存使用的字节对齐大小，取值必须为不超过4096的2次幂。Worker会在注册响应中返回该值，异构Client按连接缓存并用于多Blob组合对象的数据区对齐。将该值从64调整为其他值前，应先升级所有异构Client。更大的对齐可能提升性能，但也会因碎片化而增加内存占用。 |
 | global.performance.asyncDelete | bool | `false` | 是否异步删除对象，如果设置为 `true` 时，删除对象数据是个异步的过程，客户端不需要等待所有数据副本删除完成即可返回 |
 | global.performance.enableP2pTransfer | bool | `false` | 是否开启异构对象传输协议支持点对点传输 |
 | global.performance.enableWorkerWorkerBatchGet | bool | `false` | 是否开启worker到worker的对象数据批量获取，默认值为false |
@@ -436,6 +475,8 @@ global:
 | global.performance.urmaEventMode | bool | `false` | 是否使用中断模式轮询完成事件 |
 | global.performance.urmaFailoverSuccessRateRatio | double | `0.5` | 客户端 URMA 数据面成功率阈值，用于触发 worker failover 评估。取值范围 `[0.0, 1.0]`，设为 `0.0` 时禁用 URMA failover。仅在 `global.performance.enableUrma=true` 时生效 |
 | global.performance.urmaFailoverMinSampleCount | uint32 | `5` | 在每个 `client_dead_timeout_s` 窗口内进行 failover 评估所需的最小 URMA 数据面样本数，样本数不足时不触发 failover。仅在 `global.performance.enableUrma=true` 时生效 |
+| global.performance.enablePipelineH2d | bool | `false` | 是否开启 pipeline Host-to-Device（H2D）流水线传输，将主机侧数据准备与设备侧拷贝重叠以提升传输性能。仅在 `global.performance.enableUrma=true` 时生效，否则被忽略 |
+| global.performance.pipelineH2dThreadNum | int | `64` | pipeline H2D 工作线程数。取值范围 [8, 128]，超出该范围会在运行时回退为默认值 64 |
 | global.performance.enableTransportFallback | bool | `true` | 是否开启快速传输（urma/rdma）回退到tcp传输的功能，默认值为true |
 | global.performance.sharedDiskDirectory | string | `""` | 磁盘缓存数据存放目录，默认为空，表示未启用磁盘缓存 |
 | global.performance.sharedDiskSize | int | `0` | 共享磁盘的大小上限，单位为MB，默认为0，表示未启用磁盘缓存 |

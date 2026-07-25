@@ -6,7 +6,7 @@
 <link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html"><link rel="next" title="yr.datasystem.DsClient" href="yr.datasystem.DsClient.html"><link rel="prev" title="API" href="../index.html">
         <link rel="prefetch" href="../../../_static/logo-small.png" as="image">
 
-    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
+    <link rel="shortcut icon" href="../../../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>Python - openYuanrong datasystem documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
@@ -354,16 +354,15 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
-<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d</a></li>
-<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html">yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d</a></li>
-<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html">yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</a></li>
-<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html">yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</a></li>
 </ul>
 </li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.html">yr.datasystem.hetero_client.HeteroClient</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.HeteroClient" class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" role="switch" type="checkbox"/><label for="toctree-checkbox-11"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.init.html">yr.datasystem.hetero_client.HeteroClient.init</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory.html">yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.delete.html">yr.datasystem.hetero_client.HeteroClient.delete</a></li>
@@ -376,6 +375,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.generate_key.html">yr.datasystem.hetero_client.HeteroClient.generate_key</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.get_meta_info.html">yr.datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.batch_is_exist.html">yr.datasystem.hetero_client.HeteroClient.batch_is_exist</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.exist.html">yr.datasystem.hetero_client.HeteroClient.exist</a></li>
 </ul>
 </li>
@@ -422,6 +422,11 @@ document.addEventListener('DOMContentLoaded', function() {
 </li>
 <li class="toctree-l4"><a class="reference internal" href="yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
 <li class="toctree-l4"><a class="reference internal" href="yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="yr.datasystem.service_discovery.ServiceAffinityPolicy.html">yr.datasystem.service_discovery.ServiceAffinityPolicy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="yr.datasystem.service_discovery.ServiceDiscoveryOptions.html">yr.datasystem.service_discovery.ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="yr.datasystem.service_discovery.ServiceDiscovery.html">yr.datasystem.service_discovery.ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions.html">yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="yr.datasystem.service_discovery.CoordinatorServiceDiscovery.html">yr.datasystem.service_discovery.CoordinatorServiceDiscovery</a></li>
 <li class="toctree-l4 has-children"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><input aria-label="Toggle navigation of yr.datasystem.object_client.ObjectClient" class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" role="switch" type="checkbox"/><label for="toctree-checkbox-17"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
 <li class="toctree-l5"><a class="reference internal" href="yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
@@ -506,8 +511,12 @@ document.addEventListener('DOMContentLoaded', function() {
 <li class="toctree-l4"><a class="reference internal" href="../cpp/Status.html">Status</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/Future.html">Future</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/IServiceDiscovery.html">IServiceDiscovery</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/ICoordinatorDiscovery.html">ICoordinatorDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/CoordinatorServiceDiscovery.html">CoordinatorServiceDiscovery</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../cpp/struct-CoordinatorServiceDiscoveryOptions.html">CoordinatorServiceDiscoveryOptions</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
 </ul>
 </li>
@@ -534,10 +543,14 @@ document.addEventListener('DOMContentLoaded', function() {
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../contributor_guide/ai_development_workflow.html">AI 开发流程</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../../appendix/index.html">附录</a><input aria-label="Toggle navigation of 附录" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../../appendix/log_guide.html">openYuanrong datasystem 日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../appendix/cluster_log_diagnosis_guide.html">集群日志定位指南</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../appendix/client_env_guide.html">Client环境变量</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../../appendix/hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../appendix/brpc_health_probe.html">brpc 健康探针与诊断接口</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../../appendix/trace_triage_methodology.html">DataSystem 慢时延与错误 Trace 分析方法论</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../../FAQ/FAQ.html">FAQ</a></li>
@@ -656,18 +669,6 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.async_dev_delete.html"><span class="doc">yr.datasystem.DsTensorClient.async_dev_delete</span></a></p></td>
 <td><p>从数据系统删除此 key 的元数据的异步接口，删除成功后不再管理此 key 对应的 device 内存。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d.html"><span class="doc">yr.datasystem.DsTensorClient.put_page_attn_layerwise_d2d</span></a></p></td>
-<td><p>将 PagedAttention 的层级 Tensor 发布为数据系统的异构对象。发布后的异构对象可通过 get_page_attn_layerwise_d2d 获取。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d.html"><span class="doc">yr.datasystem.DsTensorClient.get_page_attn_layerwise_d2d</span></a></p></td>
-<td><p>根据 key 获取缓存在数据系统的 PagedAttention 的层级 Tensor。</p></td>
-</tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h.html"><span class="doc">yr.datasystem.DsTensorClient.mset_page_attn_blockwise_d2h</span></a></p></td>
-<td><p>将 PagedAttention 的层级 Tensor 异步写入 host 中。</p></td>
-</tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d.html"><span class="doc">yr.datasystem.DsTensorClient.mget_page_attn_blockwise_h2d</span></a></p></td>
-<td><p>从 host 中获取 PagedAttention 的层级 Tensor 并写入 device 中。</p></td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -687,44 +688,56 @@ document.addEventListener('DOMContentLoaded', function() {
 <tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.mget_h2d.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.mget_h2d</span></a></p></td>
 <td><p>从 host 中获取数据并写入 device 中。</p></td>
 </tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers</span></a></p></td>
+<td><p>通过二维地址和大小列表将 host 对象直接写入多个 device buffer。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory</span></a></p></td>
+<td><p>为 RH2D over HIXL HCCS 预注册后续 MGetH2D 使用的 device 目标内存。</p></td>
+</tr>
 <tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.mset_d2h.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.mset_d2h</span></a></p></td>
 <td><p>将 device 的数据写入到 host 中。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers</span></a></p></td>
+<td><p>通过二维地址和大小列表将多个 device buffer 写入 host 对象。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</span></a></p></td>
 <td><p>从 host 中获取数据并写入 device 中的异步接口。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</span></a></p></td>
 <td><p>将 device 的数据写入到 host 中的异步接口。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.delete.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.delete</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.delete.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.delete</span></a></p></td>
 <td><p>删除 host 中的 key，与 mget_h2d / mset_d2h 配套使用。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_publish.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_publish</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_publish.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_publish</span></a></p></td>
 <td><p>将 device 上的内存发布为数据系统的异构对象。发布后的异构对象可通过 dev_subscribe 获取。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_subscribe.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_subscribe</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_subscribe.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_subscribe</span></a></p></td>
 <td><p>订阅发布到数据系统的异构对象，并接收数据写入 data_blob_list。数据通过 device to device 通道直接传输。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_mset.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_mset</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_mset.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_mset</span></a></p></td>
 <td><p>通过数据系统缓存 device 上的数据。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_mget.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_mget</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_mget.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_mget</span></a></p></td>
 <td><p>获取 device 中的数据。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_local_delete.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_local_delete</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_local_delete.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_local_delete</span></a></p></td>
 <td><p>从数据系统删除本节点上此 key 的元数据，不再管理此 key 对应的 device 内存。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_delete.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_delete</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.dev_delete.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.dev_delete</span></a></p></td>
 <td><p>从数据系统删除此 key 的元数据，不再管理此 key 对应的 device 内存。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</span></a></p></td>
 <td><p>从数据系统删除此 key 的元数据的异步接口，删除成功后不再管理此 key 对应的 device 内存。</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.generate_key.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.generate_key</span></a></p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.generate_key.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.generate_key</span></a></p></td>
 <td><p>生成唯一的键。</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.get_meta_info.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.get_meta_info</span></a></p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.get_meta_info.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.get_meta_info</span></a></p></td>
 <td><p>获取keys 对应的元数据信息。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.batch_is_exist.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.batch_is_exist</span></a></p></td>
+<td><p>Batch-check key existence and return integer indicators.</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.hetero_client.HeteroClient.exist.html"><span class="doc">yr.datasystem.hetero_client.HeteroClient.exist</span></a></p></td>
 <td><p>检查给定的键在数据系统中是否存在。</p></td>
@@ -795,7 +808,35 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 </section>
 <section id="id2">
-<h2>对象缓存接口<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<h2>服务发现接口<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper colwidths-given docutils container">
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 30.0%" />
+<col style="width: 70.0%" />
+</colgroup>
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.service_discovery.ServiceAffinityPolicy.html"><span class="doc">yr.datasystem.service_discovery.ServiceAffinityPolicy</span></a></p></td>
+<td><p>服务发现选择 Worker 时使用的节点亲和性策略。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.service_discovery.ServiceDiscoveryOptions.html"><span class="doc">yr.datasystem.service_discovery.ServiceDiscoveryOptions</span></a></p></td>
+<td><p>通过 ETCD 发现 Worker 时使用的配置。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.service_discovery.ServiceDiscovery.html"><span class="doc">yr.datasystem.service_discovery.ServiceDiscovery</span></a></p></td>
+<td><p>通过 ETCD 获取可用 Worker。</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions.html"><span class="doc">yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions</span></a></p></td>
+<td><p>通过 Coordinator 发现 Worker 时使用的配置。</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="yr.datasystem.service_discovery.CoordinatorServiceDiscovery.html"><span class="doc">yr.datasystem.service_discovery.CoordinatorServiceDiscovery</span></a></p></td>
+<td><p>通过 Coordinator 获取可用 Worker。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id3">
+<h2>对象缓存接口<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-given docutils container">
 <table class="docutils align-default">
 <colgroup>
@@ -831,8 +872,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </table>
 </div>
 </section>
-<section id="id3">
-<h2>流缓存接口<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
+<section id="id4">
+<h2>流缓存接口<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-given docutils container">
 <table class="docutils align-default">
 <colgroup>
@@ -942,8 +983,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#tensor">Tensor接口</a></li>
 <li><a class="reference internal" href="#id1">异构对象接口</a></li>
 <li><a class="reference internal" href="#kv">KV接口</a></li>
-<li><a class="reference internal" href="#id2">对象缓存接口</a></li>
-<li><a class="reference internal" href="#id3">流缓存接口</a></li>
+<li><a class="reference internal" href="#id2">服务发现接口</a></li>
+<li><a class="reference internal" href="#id3">对象缓存接口</a></li>
+<li><a class="reference internal" href="#id4">流缓存接口</a></li>
 </ul>
 </li>
 </ul>

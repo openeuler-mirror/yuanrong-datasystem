@@ -6,7 +6,7 @@ ServiceDiscovery
     :header-file: #include <datasystem/utils/service_discovery.h>
     :namespace: datasystem
 
-    当客户端不确定具体连接哪个 Worker 时，ServiceDiscovery 通过 ETCD 自动发现集群中可用的 Worker 地址，并根据亲和性策略选择合适的 Worker。
+    :cpp:class:`IServiceDiscovery` 的 ETCD 实现。当客户端不确定具体连接哪个 Worker 时，ServiceDiscovery 通过 ETCD 自动发现集群中可用的 Worker 地址，并根据亲和性策略选择合适的 Worker。
 
     **公共函数**
 
@@ -25,7 +25,7 @@ ServiceDiscovery
         返回：
             初始化结果状态码。
 
-    .. cpp:function:: Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr)
+    .. cpp:function:: Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode = nullptr, bool *isNoAvailableWorker = nullptr)
 
         根据亲和性策略选择一个 Worker 地址。
 
@@ -37,6 +37,7 @@ ServiceDiscovery
             - **workerIp** - 传出参数。选择的 Worker IP 地址。
             - **workerPort** - 传出参数。选择的 Worker 端口号。
             - **isSameNode** - 传出参数。可选，当非空时设置为 ``true`` 表示选择的 Worker 位于同节点。
+            - **isNoAvailableWorker** - 传出参数。可选。使用 ``RANDOM``，或使用 ``PREFERRED_SAME_NODE`` 且没有同节点 Worker 时，如果全部 Worker 均不可用，则设置为 ``true``。``REQUIRED_SAME_NODE`` 下没有同节点 Worker 时返回 ``K_TRY_AGAIN``，该参数保持 ``false``。
 
         返回：
             操作结果状态码。

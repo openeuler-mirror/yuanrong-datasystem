@@ -1,0 +1,1072 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="FAQ" href="../FAQ/FAQ.html"><link rel="prev" title="brpc 健康探针与诊断接口" href="brpc_health_probe.html">
+        <link rel="prefetch" href="../_static/logo-small.png" as="image">
+
+    <link rel="shortcut icon" href="../_static/favicon.png"><!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+        <title>DataSystem 慢时延与错误 Trace 分析方法论 - openYuanrong datasystem documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/togglebutton.css?v=9c3e77be" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    <link rel="stylesheet" type="text/css" href="../_static/custom.css?v=33406c05" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  --color-brand-primary: #3498db;
+  --color-brand-content: #3498db;
+  --color-api-background: #f8f9fa;
+  --color-api-name: #2c3e50;
+  --color-api-pre-name: #2c3e50;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5dade2;
+  --color-brand-content: #5dade2;
+  --color-api-background: #2d3748;
+  --color-api-name: #e2e8f0;
+  --color-api-pre-name: #e2e8f0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  --color-brand-primary: #5dade2;
+  --color-brand-content: #5dade2;
+  --color-api-background: #2d3748;
+  --color-api-name: #e2e8f0;
+  --color-api-pre-name: #e2e8f0;
+  
+      }
+    }
+  }
+</style>
+<style>
+/* 版本切换器样式 */
+.sidebar-version-switcher {
+  padding: 10px 15px;
+  border-top: 1px solid var(--color-sidebar-border);
+  border-bottom: 1px solid var(--color-sidebar-border);
+  background-color: var(--color-sidebar-background);
+}
+
+.sidebar-version-switcher-label {
+  font-size: 0.8em;
+  color: var(--color-sidebar-caption-text);
+  margin-bottom: 5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#version-selector {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--color-brand-primary);
+  border-radius: 4px;
+  background-color: var(--color-background-primary);
+  color: var(--color-brand-primary);
+  font-size: 0.9em;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+#version-selector:hover {
+  border-color: var(--color-brand-content);
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.3);
+}
+
+#version-selector:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.5);
+}
+</style>
+</head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">openYuanrong datasystem  documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+<div class="sidebar-brand">
+  <a class="sidebar-brand-text" href="../index.html">
+    
+      <img src="../_static/logo-small.png" class="sidebar-logo" alt="Logo">
+    
+  </a>
+  <a href="https://gitcode.com/openeuler/yuanrong-datasystem" target="_blank" class="sidebar-brand-name">openYuanrong datasystem</a>
+</div>
+
+<!-- Version Switcher in Sidebar -->
+<div class="sidebar-version-switcher">
+  <select id="version-selector" onchange="switchVersion(this.value)">
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/latest/">Latest</option>
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.7.0/">0.7.0</option>
+    <option value="https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/0.6.0/">0.6.0</option>
+  </select>
+</div>
+
+<script>
+function switchVersion(url) {
+  if (url && url !== '#') {
+    // 获取当前页面路径，替换版本前缀
+    var currentPath = window.location.pathname;
+    var newUrl = url + currentPath.split('/').slice(5).join('/');
+    window.location.href = newUrl;
+  }
+}
+
+// 设置当前版本的选中状态
+document.addEventListener('DOMContentLoaded', function() {
+  var selector = document.getElementById('version-selector');
+  if (selector) {
+    var currentHref = window.location.href;
+    var options = selector.options;
+
+    for (var i = 0; i < options.length; i++) {
+      if (currentHref.includes(options[i].value)) {
+        selector.selectedIndex = i;
+        break;
+      }
+    }
+  }
+});
+</script>
+
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../index.html">概述</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../quick_start/quick_start.html">入门</a></li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../installation/index.html">安装</a><input aria-label="Toggle navigation of 安装" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../installation/installation_linux.html">安装指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/cmake_build.html">基于Cmake自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/bazel_build.html">基于 Bazel 自定义编译</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../installation/build_guide/build_for_bazel.html">Bazel二进制集成SDK</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../deployment/index.html">部署</a><input aria-label="Toggle navigation of 部署" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/deploy.html">部署指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dscli.html">dscli命令行工具</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/k8s_configuration.html">kubernetes部署配置项</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../deployment/dsbench.html">dsbench性能测试工具</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../best_practices/index.html">最佳实践</a><input aria-label="Toggle navigation of 最佳实践" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_reliabilty.html">可靠性最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_pracitces_for_ub.html">UB最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rdma.html">RDMA最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_rh2d.html">RH2D最佳实践</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../best_practices/best_practices_for_kvcache.html">vLLM Ascend使用OpenYuanrong作为多级缓存最佳实践</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../design_document/index.html">设计文档</a><input aria-label="Toggle navigation of 设计文档" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2"><a class="reference internal" href="../design_document/cluster_management.html">集群管理</a></li>
+</ul>
+</li>
+<li class="toctree-l1 has-children"><a class="reference internal" href="../api_reference/index.html">API 参考</a><input aria-label="Toggle navigation of API 参考" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api_reference/example/index.html">编程示例</a><input aria-label="Toggle navigation of 编程示例" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/hetero.html">HeteroClient编程示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/kv.html">KVClient编程示例</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../api_reference/example/object.html">ObjectClient编程示例</a></li>
+</ul>
+</li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../api_reference/api/index.html">API</a><input aria-label="Toggle navigation of API" class="toctree-checkbox" id="toctree-checkbox-7" name="toctree-checkbox-7" role="switch" type="checkbox"/><label for="toctree-checkbox-7"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/python/index.html">Python</a><input aria-label="Toggle navigation of Python" class="toctree-checkbox" id="toctree-checkbox-8" name="toctree-checkbox-8" role="switch" type="checkbox"/><label for="toctree-checkbox-8"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.html">yr.datasystem.DsClient</a><input aria-label="Toggle navigation of yr.datasystem.DsClient" class="toctree-checkbox" id="toctree-checkbox-9" name="toctree-checkbox-9" role="switch" type="checkbox"/><label for="toctree-checkbox-9"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.init.html">yr.datasystem.DsClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.hetero.html">yr.datasystem.DsClient.hetero</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.kv.html">yr.datasystem.DsClient.kv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsClient.object.html">yr.datasystem.DsClient.object</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.html">yr.datasystem.DsTensorClient</a><input aria-label="Toggle navigation of yr.datasystem.DsTensorClient" class="toctree-checkbox" id="toctree-checkbox-10" name="toctree-checkbox-10" role="switch" type="checkbox"/><label for="toctree-checkbox-10"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.init.html">yr.datasystem.DsTensorClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mset_d2h.html">yr.datasystem.DsTensorClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.mget_h2d.html">yr.datasystem.DsTensorClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_mset_d2h.html">yr.datasystem.DsTensorClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_mget_h2d.html">yr.datasystem.DsTensorClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.delete.html">yr.datasystem.DsTensorClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_send.html">yr.datasystem.DsTensorClient.dev_send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_recv.html">yr.datasystem.DsTensorClient.dev_recv</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.exist.html">yr.datasystem.DsTensorClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mset.html">yr.datasystem.DsTensorClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mget.html">yr.datasystem.DsTensorClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_mget_into_tensor.html">yr.datasystem.DsTensorClient.dev_mget_into_tensor</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_local_delete.html">yr.datasystem.DsTensorClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.dev_delete.html">yr.datasystem.DsTensorClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.DsTensorClient.async_dev_delete.html">yr.datasystem.DsTensorClient.async_dev_delete</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.html">yr.datasystem.hetero_client.HeteroClient</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.HeteroClient" class="toctree-checkbox" id="toctree-checkbox-11" name="toctree-checkbox-11" role="switch" type="checkbox"/><label for="toctree-checkbox-11"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.init.html">yr.datasystem.hetero_client.HeteroClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mget_h2d_from_multi_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory.html">yr.datasystem.hetero_client.HeteroClient.pre_register_device_memory</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers.html">yr.datasystem.hetero_client.HeteroClient.mset_d2h_from_multi_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mget_h2d.html">yr.datasystem.hetero_client.HeteroClient.async_mget_h2d</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_mset_d2h.html">yr.datasystem.hetero_client.HeteroClient.async_mset_d2h</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.delete.html">yr.datasystem.hetero_client.HeteroClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_publish.html">yr.datasystem.hetero_client.HeteroClient.dev_publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_subscribe.html">yr.datasystem.hetero_client.HeteroClient.dev_subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mset.html">yr.datasystem.hetero_client.HeteroClient.dev_mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_mget.html">yr.datasystem.hetero_client.HeteroClient.dev_mget</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_local_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_local_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.dev_delete.html">yr.datasystem.hetero_client.HeteroClient.dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.async_dev_delete.html">yr.datasystem.hetero_client.HeteroClient.async_dev_delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.generate_key.html">yr.datasystem.hetero_client.HeteroClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.get_meta_info.html">yr.datasystem.hetero_client.HeteroClient.get_meta_info</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.batch_is_exist.html">yr.datasystem.hetero_client.HeteroClient.batch_is_exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.HeteroClient.exist.html">yr.datasystem.hetero_client.HeteroClient.exist</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.html">yr.datasystem.hetero_client.Blob</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.Blob" class="toctree-checkbox" id="toctree-checkbox-12" name="toctree-checkbox-12" role="switch" type="checkbox"/><label for="toctree-checkbox-12"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.set_dev_ptr.html">yr.datasystem.hetero_client.Blob.set_dev_ptr</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Blob.set_size.html">yr.datasystem.hetero_client.Blob.set_size</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.html">yr.datasystem.hetero_client.DeviceBlobList</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.DeviceBlobList" class="toctree-checkbox" id="toctree-checkbox-13" name="toctree-checkbox-13" role="switch" type="checkbox"/><label for="toctree-checkbox-13"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.append_blob.html">yr.datasystem.hetero_client.DeviceBlobList.append_blob</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx.html">yr.datasystem.hetero_client.DeviceBlobList.set_dev_idx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.DeviceBlobList.get_blob_list.html">yr.datasystem.hetero_client.DeviceBlobList.get_blob_list</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Future.html">yr.datasystem.hetero_client.Future</a><input aria-label="Toggle navigation of yr.datasystem.hetero_client.Future" class="toctree-checkbox" id="toctree-checkbox-14" name="toctree-checkbox-14" role="switch" type="checkbox"/><label for="toctree-checkbox-14"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.Future.get.html">yr.datasystem.hetero_client.Future.get</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.hetero_client.MetaInfo.html">yr.datasystem.hetero_client.MetaInfo</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.html">yr.datasystem.kv_client.KVClient</a><input aria-label="Toggle navigation of yr.datasystem.kv_client.KVClient" class="toctree-checkbox" id="toctree-checkbox-15" name="toctree-checkbox-15" role="switch" type="checkbox"/><label for="toctree-checkbox-15"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.init.html">yr.datasystem.kv_client.KVClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.set.html">yr.datasystem.kv_client.KVClient.set</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.set_value.html">yr.datasystem.kv_client.KVClient.set_value</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mset.html">yr.datasystem.kv_client.KVClient.mset</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mcreate.html">yr.datasystem.kv_client.KVClient.mcreate</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mset_buffer.html">yr.datasystem.kv_client.KVClient.mset_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.mget_buffer.html">yr.datasystem.kv_client.KVClient.get_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.msettx.html">yr.datasystem.kv_client.KVClient.msettx</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.get_read_only_buffers.html">yr.datasystem.kv_client.KVClient.get_read_only_buffers</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.get.html">yr.datasystem.kv_client.KVClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.read.html">yr.datasystem.kv_client.KVClient.read</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.delete.html">yr.datasystem.kv_client.KVClient.delete</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.generate_key.html">yr.datasystem.kv_client.KVClient.generate_key</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.exist.html">yr.datasystem.kv_client.KVClient.exist</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.expire.html">yr.datasystem.kv_client.KVClient.expire</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.KVClient.health_check.html">yr.datasystem.kv_client.KVClient.health_check</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.html">yr.datasystem.kv_client.ReadOnlyBuffer</a><input aria-label="Toggle navigation of yr.datasystem.kv_client.ReadOnlyBuffer" class="toctree-checkbox" id="toctree-checkbox-16" name="toctree-checkbox-16" role="switch" type="checkbox"/><label for="toctree-checkbox-16"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data.html">yr.datasystem.kv_client.ReadOnlyBuffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.rlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch.html">yr.datasystem.kv_client.ReadOnlyBuffer.unrlatch</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.SetParam.html">yr.datasystem.kv_client.SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.kv_client.ReadParam.html">yr.datasystem.kv_client.ReadParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceAffinityPolicy.html">yr.datasystem.service_discovery.ServiceAffinityPolicy</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceDiscoveryOptions.html">yr.datasystem.service_discovery.ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.ServiceDiscovery.html">yr.datasystem.service_discovery.ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions.html">yr.datasystem.service_discovery.CoordinatorServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.service_discovery.CoordinatorServiceDiscovery.html">yr.datasystem.service_discovery.CoordinatorServiceDiscovery</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.html">yr.datasystem.object_client.ObjectClient</a><input aria-label="Toggle navigation of yr.datasystem.object_client.ObjectClient" class="toctree-checkbox" id="toctree-checkbox-17" name="toctree-checkbox-17" role="switch" type="checkbox"/><label for="toctree-checkbox-17"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.init.html">yr.datasystem.object_client.ObjectClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.create.html">yr.datasystem.object_client.ObjectClient.create</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.put.html">yr.datasystem.object_client.ObjectClient.put</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.get.html">yr.datasystem.object_client.ObjectClient.get</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.g_increase_ref.html">yr.datasystem.object_client.ObjectClient.g_increase_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.g_decrease_ref.html">yr.datasystem.object_client.ObjectClient.g_decrease_ref</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.query_global_ref_num.html">yr.datasystem.object_client.ObjectClient.query_global_ref_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ObjectClient.generate_object_id.html">yr.datasystem.object_client.ObjectClient.generate_object_id</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.html">yr.datasystem.object_client.Buffer</a><input aria-label="Toggle navigation of yr.datasystem.object_client.Buffer" class="toctree-checkbox" id="toctree-checkbox-18" name="toctree-checkbox-18" role="switch" type="checkbox"/><label for="toctree-checkbox-18"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.wlatch.html">yr.datasystem.object_client.Buffer.wlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.unwlatch.html">yr.datasystem.object_client.Buffer.unwlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.rlatch.html">yr.datasystem.object_client.Buffer.rlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.unrlatch.html">yr.datasystem.object_client.Buffer.unrlatch</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.mutable_data.html">yr.datasystem.object_client.Buffer.mutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.immutable_data.html">yr.datasystem.object_client.Buffer.immutable_data</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.memory_copy.html">yr.datasystem.object_client.Buffer.memory_copy</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.publish.html">yr.datasystem.object_client.Buffer.publish</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.seal.html">yr.datasystem.object_client.Buffer.seal</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.invalidate_buffer.html">yr.datasystem.object_client.Buffer.invalidate_buffer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.Buffer.get_size.html">yr.datasystem.object_client.Buffer.get_size</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.ConsistencyType.html">yr.datasystem.object_client.ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.WriteMode.html">yr.datasystem.object_client.WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.object_client.CacheType.html">yr.datasystem.object_client.CacheType</a></li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.html">yr.datasystem.stream_client.StreamClient</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.StreamClient" class="toctree-checkbox" id="toctree-checkbox-19" name="toctree-checkbox-19" role="switch" type="checkbox"/><label for="toctree-checkbox-19"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.init.html">yr.datasystem.stream_client.StreamClient.init</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.create_producer.html">yr.datasystem.stream_client.StreamClient.create_producer</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.subscribe.html">yr.datasystem.stream_client.StreamClient.subscribe</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.delete_stream.html">yr.datasystem.stream_client.StreamClient.delete_stream</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.query_global_producer_num.html">yr.datasystem.stream_client.StreamClient.query_global_producer_num</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.StreamClient.query_global_consumer_num.html">yr.datasystem.stream_client.StreamClient.query_global_consumer_num</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.html">yr.datasystem.stream_client.Producer</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.Producer" class="toctree-checkbox" id="toctree-checkbox-20" name="toctree-checkbox-20" role="switch" type="checkbox"/><label for="toctree-checkbox-20"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.send.html">yr.datasystem.stream_client.Producer.send</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Producer.close.html">yr.datasystem.stream_client.Producer.close</a></li>
+</ul>
+</li>
+<li class="toctree-l4 has-children"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.html">yr.datasystem.stream_client.Consumer</a><input aria-label="Toggle navigation of yr.datasystem.stream_client.Consumer" class="toctree-checkbox" id="toctree-checkbox-21" name="toctree-checkbox-21" role="switch" type="checkbox"/><label for="toctree-checkbox-21"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.receive.html">yr.datasystem.stream_client.Consumer.receive</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.receive_any.html">yr.datasystem.stream_client.Consumer.receive_any</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.ack.html">yr.datasystem.stream_client.Consumer.close</a></li>
+<li class="toctree-l5"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.Consumer.close.html">yr.datasystem.stream_client.Consumer.close</a></li>
+</ul>
+</li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/python/yr.datasystem.stream_client.SubconfigType.html">yr.datasystem.stream_client.SubconfigType</a></li>
+</ul>
+</li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/cpp/index.html">C++</a><input aria-label="Toggle navigation of C++" class="toctree-checkbox" id="toctree-checkbox-22" name="toctree-checkbox-22" role="switch" type="checkbox"/><label for="toctree-checkbox-22"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/KVClientConfig.html">KVClientConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/HeteroClient.html">HeteroClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-MSetParam.html">MSetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ProducerConf.html">ProducerConf</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-SubscriptionConfig.html">SubscriptionConfig</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-Blob.html">Blob</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-DeviceBlobList.html">DeviceBlobList</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-MetaInfo.html">MetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-AsyncResult.html">AsyncResult</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ObjMetaInfo.html">ObjMetaInfo</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-CacheType.html">CacheType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StreamMode.html">StreamMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-SubscriptionType.html">SubscriptionType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/SensitiveValue.html">SensitiveValue</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/StringView.html">StringView</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Optional.html">Optional</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Status.html">Status</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/Future.html">Future</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-StatusCode.html">StatusCode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/IServiceDiscovery.html">IServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ServiceDiscovery.html">ServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/ICoordinatorDiscovery.html">ICoordinatorDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/CoordinatorServiceDiscovery.html">CoordinatorServiceDiscovery</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-ServiceDiscoveryOptions.html">ServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/struct-CoordinatorServiceDiscoveryOptions.html">CoordinatorServiceDiscoveryOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/cpp/enum-ServiceAffinityPolicy.html">ServiceAffinityPolicy</a></li>
+</ul>
+</li>
+<li class="toctree-l3 has-children"><a class="reference internal" href="../api_reference/api/java/index.html">Java</a><input aria-label="Toggle navigation of Java" class="toctree-checkbox" id="toctree-checkbox-23" name="toctree-checkbox-23" role="switch" type="checkbox"/><label for="toctree-checkbox-23"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.kv.KVClient.html">KVClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.ObjectClient.html">ObjectClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.StreamClient.html">StreamClient</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Producer.html">Producer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Consumer.html">Consumer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.Buffer.html">Buffer</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.Element.html">Element</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.ConnectOptions.html">ConnectOptions</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.kv.SetParam.html">SetParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.object.CreateParam.html">CreateParam</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.Context.html">Context</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.DataSystemException.html">DataSystemException</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.WriteMode.html">WriteMode</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.ConsistencyType.html">ConsistencyType</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../api_reference/api/java/org.yuanrong.datasystem.stream.SubscriptionType.html">SubscriptionType</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/contribution.html">贡献者指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../contributor_guide/ai_development_workflow.html">AI 开发流程</a></li>
+<li class="toctree-l1 current has-children"><a class="reference internal" href="index.html">附录</a><input aria-label="Toggle navigation of 附录" checked="" class="toctree-checkbox" id="toctree-checkbox-24" name="toctree-checkbox-24" role="switch" type="checkbox"/><label for="toctree-checkbox-24"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="log_guide.html">openYuanrong datasystem 日志</a></li>
+<li class="toctree-l2"><a class="reference internal" href="cluster_log_diagnosis_guide.html">集群日志定位指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="client_env_guide.html">Client环境变量</a></li>
+<li class="toctree-l2"><a class="reference internal" href="hugepage_guide.html">大页内存配置指南</a></li>
+<li class="toctree-l2"><a class="reference internal" href="brpc_health_probe.html">brpc 健康探针与诊断接口</a></li>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">DataSystem 慢时延与错误 Trace 分析方法论</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../FAQ/FAQ.html">FAQ</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section class="tex2jax_ignore mathjax_ignore" id="datasystem-trace">
+<h1>DataSystem 慢时延与错误 Trace 分析方法论<a class="headerlink" href="#datasystem-trace" title="Link to this heading">¶</a></h1>
+<p>本文沉淀一套可自验证、可随主线演进刷新的 trace 分析流程。它适用于给定慢时延或错误日志包后，从时间、worker、访问流程、关键日志字段、breakdown 和聚合分布中定位主要延迟族或错误族。</p>
+<section id="id1">
+<h2>目标<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<p>输入可以是目录、普通日志文件、<code class="docutils literal notranslate"><span class="pre">.log.gz</span></code>，或 gzip 包裹的 tar trace 包。输出至少包含：</p>
+<ul class="simple">
+<li><p>时间维度：首尾时间、密集窗口、异常 burst。</p></li>
+<li><p>Worker 维度：入口 Worker、Provider/Data Worker、目标地址、热点 Worker。</p></li>
+<li><p>流程维度：Get、Set、Create、Publish、GetObjMetaInfo、RemotePull、BatchGetObjectRemote、Worker-Master RPC。</p></li>
+<li><p>耗时维度：access latency、client summary、worker summary、rpc slow、URMA elapsed、锁和元数据操作。</p></li>
+<li><p>Breakdown 维度：<code class="docutils literal notranslate"><span class="pre">ProcessGetObjectRequest</span></code>、QueryMeta/CreateMeta、SafeObject lock、RemotePull、URMA wait/poll/notify。</p></li>
+<li><p>错误维度：非 0 status、<code class="docutils literal notranslate"><span class="pre">RPC</span> <span class="pre">deadline</span> <span class="pre">exceeded</span></code>、<code class="docutils literal notranslate"><span class="pre">URMA_WAIT_TIMEOUT</span></code>、<code class="docutils literal notranslate"><span class="pre">Object</span> <span class="pre">in</span> <span class="pre">use</span></code>、<code class="docutils literal notranslate"><span class="pre">Key</span> <span class="pre">not</span> <span class="pre">found</span></code>、fallback rejected、Etcd 异常。</p></li>
+<li><p>源码维度：固定 <code class="docutils literal notranslate"><span class="pre">main/master</span></code> ref，并用 CodeGraph + 源码交叉校验调用链。</p></li>
+</ul>
+</section>
+<section id="id2">
+<h2>快速入口<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<p>先跑脚本生成一个带时间戳的 run 目录：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>run<span class="w"> </span>&lt;trace_dir_or_tar_gz&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--code-ref<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>main/master<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--case<span class="w"> </span>&lt;<span class="k">case</span>-name&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--scenario<span class="w"> </span>&lt;scenario&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--out<span class="w"> </span>&lt;local-run-root&gt;
+</pre></div>
+</div>
+<p>run 目录包含：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">manifest.json</span></code>：case、scenario、源码 ref、trace 时间范围、输入摘要和渲染目标。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">events.jsonl</span></code>：逐 trace 的原始证据事件和 UB 事件，带 source/member/line/raw。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">parsed_traces.json</span></code>：parse 阶段产物，供 aggregate 阶段消费。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">summary.json</span></code>：时间、worker、flow、latency、RPC、UB、error 等聚合维度。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">triage.json</span></code> / <code class="docutils literal notranslate"><span class="pre">triage.md</span></code>：分类、issue candidates、代表 trace。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">report.local.html</span></code>：本地自包含 HTML，可直接打开。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">report.site.html</span></code>：<publish-site> 站点版 HTML 草稿，供后续发布流程使用。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">site_publish.md</span></code>：发布准备清单，记录 <code class="docutils literal notranslate"><span class="pre">&lt;publish-host&gt;:&lt;publish-root&gt;/perf/*.html</span></code> 目标路径、<publish-site> URL、HTML 大小、复制命令和 HTTP 验证命令；生成该文件不代表已经发布成功。</p></li>
+</ul>
+<p>run 默认会复用缓存。缓存 key 包含脚本版本、parser 规则指纹、源码 ref、case、scenario、输入内容 hash、tar member 列表和输入身份；脚本或解析规则变化会生成新 run。需要同一输入重新生成一个新的时间目录时显式传 <code class="docutils literal notranslate"><span class="pre">--force</span></code>。</p>
+<p>读取输入失败默认中止，避免报告静默缺日志。确实需要先看部分日志时使用 <code class="docutils literal notranslate"><span class="pre">--allow-partial-inputs</span></code>，失败项会进入 <code class="docutils literal notranslate"><span class="pre">dimensions.input_failures</span></code>，报告结论必须说明缺失观测面。</p>
+<p>也可以显式分阶段执行，便于人工检查中间产物：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">run_dir</span><span class="o">=</span><span class="k">$(</span>python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>parse<span class="w"> </span>&lt;trace_dir_or_tar_gz&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--code-ref<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>main/master<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--case<span class="w"> </span>&lt;<span class="k">case</span>-name&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--scenario<span class="w"> </span>&lt;scenario&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--out<span class="w"> </span>&lt;local-run-root&gt;<span class="k">)</span>
+python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>aggregate<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$run_dir</span><span class="s2">&quot;</span>
+python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>triage<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$run_dir</span><span class="s2">&quot;</span>
+python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>render-local<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$run_dir</span><span class="s2">&quot;</span>
+python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>render-site<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$run_dir</span><span class="s2">&quot;</span>
+python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>publish-site<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$run_dir</span><span class="s2">&quot;</span><span class="w"> </span>--dry-run
+<span class="c1"># 确认 site_publish.md 后，设置 DS_TRACE_TRIAGE_PUBLISH_HOST 和 DS_TRACE_TRIAGE_PUBLISH_ROOT。</span>
+<span class="c1"># 不带 --dry-run 会先做 HTML 大小门禁，再执行 scp、curl HEAD，并校验线上 HTML 关键组件。</span>
+</pre></div>
+</div>
+<p>旧的直接摘要入口仍可用于快速检查：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>&lt;trace_dir_or_tar_gz&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--code-ref<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>git<span class="w"> </span>rev-parse<span class="w"> </span>main/master<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output-json<span class="w"> </span>&lt;local-summary-json&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output-md<span class="w"> </span>&lt;local-summary-md&gt;
+</pre></div>
+</div>
+<p>脚本支持自验证：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>verify
+python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>--self-test
+python3<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-s<span class="w"> </span>tests/scripts/test_ds_trace_triage.py<span class="w"> </span>-q
+</pre></div>
+</div>
+<p>这些命令先作为人工验证和独立 job 候选，不接入 <code class="docutils literal notranslate"><span class="pre">.gitee/ci_build.sh</span></code> 主路径，避免影响主工程构建耗时。</p>
+<p>当前自验证覆盖的契约包括：gzip-tar 识别、trace_id 归并、access us-&gt;ms 转换、<code class="docutils literal notranslate"><span class="pre">exceed</span> <span class="pre">3ms</span></code> breakdown、<code class="docutils literal notranslate"><span class="pre">latencySummary</span></code> 原始文本和值解析、RPC slow 子字段、URMA 四类 elapsed 字段、UB request id/src/target/dataSize/cpuid/status/inflight 字段、时间桶、worker/edge 聚合、目录化 run 产物、本地/站点 HTML、内联 JS 语法检查、yche 发布清单、dry-run manifest 状态、真实发布大小门禁、错误族和分类聚合。DataSystem 日志格式演进时，应同一个变更里更新 parser、fixture 和测试。</p>
+<p><publish-site> 发布默认拒绝超过 2 MiB 的 <code class="docutils literal notranslate"><span class="pre">report.site.html</span></code>，避免把临时大页面或垃圾页面发布到站点。确有必要发布大报告时，必须先人工确认报告内容和体积来源，再显式传入 <code class="docutils literal notranslate"><span class="pre">--max-site-html-mb</span> <span class="pre">&lt;N&gt;</span></code>。
+真实发布还需要显式设置 <code class="docutils literal notranslate"><span class="pre">DS_TRACE_TRIAGE_PUBLISH_HOST</span></code> 和 <code class="docutils literal notranslate"><span class="pre">DS_TRACE_TRIAGE_PUBLISH_ROOT</span></code>；<code class="docutils literal notranslate"><span class="pre">DS_TRACE_TRIAGE_PUBLISH_BASE_URL</span></code> 未设置时使用公开报告 URL 前缀。页面复制和 HTTP 校验通过只代表 HTML 可访问；完整发布还要在站点 <code class="docutils literal notranslate"><span class="pre">index.html</span></code> 中添加或更新唯一一条 <code class="docutils literal notranslate"><span class="pre">var</span> <span class="pre">P</span></code> 目录项。如果 URL 可访问但目录未注册，应标记为 copied but not catalog-registered。</p>
+<p>日志字段小步演进时，优先通过 parser 扩展点接入：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">mod</span><span class="o">.</span><span class="n">register_error_pattern</span><span class="p">(</span><span class="s2">&quot;DMA_WAIT_TIMEOUT&quot;</span><span class="p">)</span>
+<span class="n">mod</span><span class="o">.</span><span class="n">register_metric_rule</span><span class="p">(</span>
+  <span class="s2">&quot;urma_dma&quot;</span><span class="p">,</span>
+  <span class="sa">r</span><span class="s2">&quot;\[URMA_ELAPSED_DMA\].*?cost\s+([\d.]+)\s*(us|ms)&quot;</span><span class="p">,</span>
+  <span class="n">unit_group</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>新增规则必须同时验证 trace 级产物和聚合级产物，例如 <code class="docutils literal notranslate"><span class="pre">traces[*].custom_metrics_ms</span></code>、<code class="docutils literal notranslate"><span class="pre">dimensions.custom_metrics_ms</span></code>、<code class="docutils literal notranslate"><span class="pre">traces[*].errors</span></code> 和 <code class="docutils literal notranslate"><span class="pre">dimensions.errors</span></code>。这样新字段可以随 DataSystem 演进追加，而不破坏已有 run/cache/render 阶段契约。</p>
+<p>脚本虽保持单文件交付，但职责按对象拆分：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>对象</p></th>
+<th class="head"><p>职责边界</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ParserRules</span></code></p></td>
+<td><p>管理错误文本和自定义耗时指标扩展规则</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TraceInputReader</span></code></p></td>
+<td><p>读取目录、普通日志、gzip 日志和 gzip-tar 包</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TraceParser</span></code></p></td>
+<td><p>将单行日志解析为 trace-scoped facts，不做聚合</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TraceAnalyzer</span></code></p></td>
+<td><p>串联 reader/parser，并形成 trace rows 与 dimensions</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TraceReportRenderer</span></code></p></td>
+<td><p>生成 events、triage、Markdown、本地 HTML 和 site HTML</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TraceRunStore</span></code></p></td>
+<td><p>管理 run 目录、raw 保留、cache、manifest 和 artifact 读写</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TraceSitePublisher</span></code></p></td>
+<td><p>管理站点版 HTML 大小门禁、复制和 live marker 校验</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TraceRunPipeline</span></code></p></td>
+<td><p>编排 parse、aggregate、triage、render-local、render-site 阶段</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>兼容入口 <code class="docutils literal notranslate"><span class="pre">analyze_inputs</span></code>、<code class="docutils literal notranslate"><span class="pre">parse_stage</span></code>、<code class="docutils literal notranslate"><span class="pre">aggregate_stage</span></code>、<code class="docutils literal notranslate"><span class="pre">triage_stage</span></code>、<code class="docutils literal notranslate"><span class="pre">render-local</span></code>、<code class="docutils literal notranslate"><span class="pre">render-site</span></code>、<code class="docutils literal notranslate"><span class="pre">run_pipeline</span></code> 保持可用，但新增能力优先落到对应对象，再通过 wrapper 暴露。</p>
+</section>
+<section id="id3">
+<h2>当前主线校准流程<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
+<p>不要复用旧会话中的“latest”结论。每次分析先刷新并记录 ref：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>fetch<span class="w"> </span>main<span class="w"> </span>master
+git<span class="w"> </span>rev-parse<span class="w"> </span>main/master
+git<span class="w"> </span>log<span class="w"> </span>-1<span class="w"> </span>--oneline<span class="w"> </span>main/master
+</pre></div>
+</div>
+<p>需要源码因果时，在干净 worktree 上建 CodeGraph：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>--detach<span class="w"> </span>&lt;clean-main-worktree&gt;<span class="w"> </span>main/master
+<span class="nv">CODEGRAPH_BIN</span><span class="o">=</span><span class="si">${</span><span class="nv">CODEGRAPH_BIN</span><span class="k">:-$(</span><span class="nb">command</span><span class="w"> </span>-v<span class="w"> </span>codegraph<span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">true</span><span class="k">)</span><span class="si">}</span>
+<span class="nb">test</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$CODEGRAPH_BIN</span><span class="s2">&quot;</span>
+<span class="s2">&quot;</span><span class="nv">$CODEGRAPH_BIN</span><span class="s2">&quot;</span><span class="w"> </span>init<span class="w"> </span>&lt;clean-main-worktree&gt;
+<span class="s2">&quot;</span><span class="nv">$CODEGRAPH_BIN</span><span class="s2">&quot;</span><span class="w"> </span>index<span class="w"> </span>&lt;clean-main-worktree&gt;
+<span class="s2">&quot;</span><span class="nv">$CODEGRAPH_BIN</span><span class="s2">&quot;</span><span class="w"> </span>callees<span class="w"> </span>WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl<span class="w"> </span>--path<span class="w"> </span>&lt;clean-main-worktree&gt;
+</pre></div>
+</div>
+<p>CodeGraph 用于发现符号和边，结论必须回到源码验证。<code class="docutils literal notranslate"><span class="pre">.worktrees</span></code>、生成代码和动态分发会导致重复或缺边，不能把“没有边”当成“没有调用”。
+如果本机找不到 <code class="docutils literal notranslate"><span class="pre">CODEGRAPH_BIN</span></code>，本轮只能输出日志侧定位结论，并明确标记源码因果未验证；不得把日志现象直接写成源码根因。</p>
+<p>本次沉淀校准的 ref 为 <code class="docutils literal notranslate"><span class="pre">a7130ac9c3171bf3acb70601c7de99f7bc24f25a</span></code>。在该 ref 下，远端 Get 慢链路仍要关注：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">ObjectClientImpl::GetFromTransportLayer</span></code> / <code class="docutils literal notranslate"><span class="pre">GetBuffersFromWorker</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ClientWorkerRemoteApi::GetObjMetaInfo</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WorkerOcServiceGetImpl::ProcessGetObjectRequest</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WorkerRemoteWorkerOCApi::BatchGetObjectRemote</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WorkerWorkerOCServiceImpl::BatchGetObjectRemote</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WorkerWorkerOCServiceImpl::BatchGetObjectRemoteImpl</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">WaitFastTransportEvent</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">UrmaManager::WaitToFinish</span></code></p></li>
+</ul>
+<p>主线已经包含 batch/aggregate gather、send-lane lease、fallback 等分支，所以报告应描述“当前 trace 实际命中的分支”，不要把历史单一路径写死。</p>
+</section>
+<section id="id4">
+<h2>分析顺序<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
+<ol class="arabic simple">
+<li><p>解包与输入确认：<code class="docutils literal notranslate"><span class="pre">.gz</span></code> 可能是 gzip tar，先 <code class="docutils literal notranslate"><span class="pre">tar</span> <span class="pre">-tzf</span></code> 看结构；解析输出必须放到输入目录之外，避免把 <code class="docutils literal notranslate"><span class="pre">summary.json</span></code> 当 trace 再扫进去。</p></li>
+<li><p>Trace 归并：以 trace_id 为主键，保留来源文件、member、行号和精选原文。</p></li>
+<li><p>聚合先行：先给总 trace 数、时间范围、P50/P90/P99/max、worker Top、flow 分布、错误分布。</p></li>
+<li><p>延迟族分类：区分 20ms deadline、500ms/1s/2s URMA wait、rpc slow 4-8ms、锁/元数据小尾巴、无 summary 的 unknown。</p></li>
+<li><p>单 trace 证据：每个主要族选 top slow 和典型错误，保留足够日志上下文。</p></li>
+<li><p>源码校验：把日志里的 method、阶段和字段映射到当前 <code class="docutils literal notranslate"><span class="pre">main/master</span></code> 的函数和 timeout 传递。</p></li>
+<li><p>结论边界：明确 observed evidence、source-backed inference、unverified hypothesis。</p></li>
+</ol>
+</section>
+<section id="trace">
+<h2>错误 Trace 的几种切法<a class="headerlink" href="#trace" title="Link to this heading">¶</a></h2>
+<p>错误 trace 不能只按最后一条 ERROR 下结论，至少做以下几种正交切分：</p>
+<ol class="arabic simple">
+<li><p><strong>状态码 / 错误族切分</strong>：按 access log 非 0 status 和错误文本聚合，例如 <code class="docutils literal notranslate"><span class="pre">RPC</span> <span class="pre">deadline</span> <span class="pre">exceeded</span></code>、<code class="docutils literal notranslate"><span class="pre">URMA_WAIT_TIMEOUT</span></code>、<code class="docutils literal notranslate"><span class="pre">Object</span> <span class="pre">in</span> <span class="pre">use</span></code>、<code class="docutils literal notranslate"><span class="pre">Key</span> <span class="pre">not</span> <span class="pre">found</span></code>、fallback rejected、Etcd 异常。先看数量和占比，再选典型 trace。</p></li>
+<li><p><strong>Deadline budget 切分</strong>：把 client access latency、RPC slow e2e、worker 完成时间、<code class="docutils literal notranslate"><span class="pre">reqTimeoutDuration.CalcRemainingTime()</span></code> 和配置 timeout 对齐。20ms client deadline 可以和 500ms 之后的 worker slow completion 同时存在，二者不是互斥证据。</p></li>
+<li><p><strong>Worker ownership 切分</strong>：区分 client、entry worker、provider/data worker、master 和 fallback target。日志没有显式打印目标 Worker 时，只标注“目标未显式打印”，不要用 IP 或目录名强行推断。</p></li>
+<li><p><strong>Transport 切分</strong>：分开 TCP、UB、URMA/RDMA、fallback 证据。<code class="docutils literal notranslate"><span class="pre">transportType:SHM</span></code> 或 tracker 默认值不等于请求实际走 SHM/UB；需要结合 slow log、payload source、fallback 日志和源码分支。</p></li>
+<li><p><strong>URMA lifecycle 切分</strong>：分别看 <code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_TOTAL</span></code>、<code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_POLL_JFC</span></code>、<code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_NOTIFY</span></code>、<code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_THREAD_SHED</span></code>、dataSize、CPU、inflight、source chip 和 target address。总耗时慢不自动等价于 poll 慢。</p></li>
+<li><p><strong>源码演进切分</strong>：每轮都刷新 <code class="docutils literal notranslate"><span class="pre">main/master</span></code>，用 CodeGraph 找符号，再回源码验证 timeout 传递、Batch/aggregate gather、send-lane lease、fallback 等当前分支。旧 trace 会话的结论只能作为 hypothesis。</p></li>
+</ol>
+</section>
+<section id="id5">
+<h2>字段字典<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>字段</p></th>
+<th class="head"><p>含义</p></th>
+<th class="head"><p>常见判断</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>access log <code class="docutils literal notranslate"><span class="pre">cost</span></code></p></td>
+<td><p>SDK/Worker 访问耗时，单位 us</p></td>
+<td><p>用于 P50/P99 和 deadline 聚类</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">client</span> <span class="pre">summary</span></code></p></td>
+<td><p>Client 侧阶段摘要</p></td>
+<td><p>判断 metadata、buffer、response、copy 分段</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">latencySummary:{...}</span></code></p></td>
+<td><p>Client/Worker 打印的阶段耗时原文和值</p></td>
+<td><p>原文要保留，字段值用于聚合；不要重构后冒充 raw log</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">rpc</span> <span class="pre">slow</span></code> / <code class="docutils literal notranslate"><span class="pre">ZMQ_RPC_FRAMEWORK_SLOW</span></code></p></td>
+<td><p>RPC 框架分段</p></td>
+<td><p>区分 client framework、server queue/exec、network residual</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">[Get]</span> <span class="pre">Done</span> <span class="pre">exceed</span> <span class="pre">3ms</span></code></p></td>
+<td><p>Worker Get 分段</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ProcessGetObjectRequest</span></code> 常用于判断远端拉取是否主体</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">[Get/RemotePull]</span></code></p></td>
+<td><p>Entry Worker 到远端 Worker 的同步拉取</p></td>
+<td><p>和 Provider 侧 URMA 日志对齐</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_TOTAL</span></code></p></td>
+<td><p>WR/Event 到 wait 返回的总耗时</p></td>
+<td><p>大尾巴通常表示 completion wait，不等于业务 QueryMeta</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_POLL_JFC</span></code></p></td>
+<td><p>poll JFC 调用耗时</p></td>
+<td><p>判断 URMA poll 本身是否慢</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_NOTIFY</span></code></p></td>
+<td><p>poll 线程唤醒等待线程的耗时</p></td>
+<td><p>判断跨线程唤醒/调度</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_THREAD_SHED</span></code></p></td>
+<td><p>poll loop/sleep 调度间隔</p></td>
+<td><p>判断 OS scheduling/sleep gap</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">URMA_PERF</span></code></p></td>
+<td><p>URMA perf counters</p></td>
+<td><p>用于区分 write、poll gap、sleep、notify</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">transferPath:</span> <span class="pre">UB/RDMA/TCP</span></code></p></td>
+<td><p>Worker Get/RemotePull 选择的传输路径</p></td>
+<td><p>判断是否走 UB，不能和缺 URMA elapsed 混淆</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">src</span> <span class="pre">address</span></code> / <code class="docutils literal notranslate"><span class="pre">target</span> <span class="pre">address</span></code></p></td>
+<td><p>UB/RemotePull 边</p></td>
+<td><p>用于 data worker -&gt; entry worker UB write 边统计</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">request</span> <span class="pre">id</span></code></p></td>
+<td><p>URMA event 关联键</p></td>
+<td><p>同一 trace 可有多个 request id，不能简单去重</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">urma_inflight_wr_count</span></code></p></td>
+<td><p>URMA event map 大小</p></td>
+<td><p>判断 inflight 堆积和慢尾相关性</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="thread">
+<h2>八个历史 Thread 的能力沉淀<a class="headerlink" href="#thread" title="Link to this heading">¶</a></h2>
+<p>这套方法来自 8 个 trace 分析会话的共同模式，不是单次报告模板：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Thread</p></th>
+<th class="head"><p>产物/样本</p></th>
+<th class="head"><p>应沉淀能力</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">019f753c</span></code></p></td>
+<td><p>248 条 Get trace，页面 <code class="docutils literal notranslate"><span class="pre">/perf/ds-get-ub-remote-trace-rootcause-20260718.html</span></code></p></td>
+<td><p>gzip-tar 正确解包；按 trace 聚合；RemotePull、<code class="docutils literal notranslate"><span class="pre">ProcessGetObjectRequest</span></code>、<code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_TOTAL</span></code> 对齐；CodeGraph 只做发现，结论回源码</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">019f75a9</span></code></p></td>
+<td><p>硬件端口隔离后 23 条 Round2 trace</p></td>
+<td><p>把秒级 URMA 尾巴和 20ms client WorkerRpc deadline 分开；不能用旧轮次根因覆盖新轮次</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">019f7606</span></code></p></td>
+<td><p>12 条无基线噪声 trace，拓扑图</p></td>
+<td><p>20ms deadline、RemotePull、QueryMeta、日志顺序错位要分别计数；角色图要区分 Client、Entry、Meta、DataWorker</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">019f7686</span></code></p></td>
+<td><p>4-8ms ZMQRPC sampled 报告</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">rpc</span> <span class="pre">slow</span></code> 必须解析 <code class="docutils literal notranslate"><span class="pre">server_exec_us</span></code>、<code class="docutils literal notranslate"><span class="pre">network_residual_us</span></code> 等子字段；每个 trace 支持下载 breakdown 和证据</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">019f76d0</span></code></p></td>
+<td><p>273 条 Set/Create/Publish 写 trace</p></td>
+<td><p>保留原始 <code class="docutils literal notranslate"><span class="pre">latencySummary</span></code>；识别 <code class="docutils literal notranslate"><span class="pre">client.process.memory_copy</span></code> 主导；低于慢日志阈值也能通过 summary 解释</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">019f7970</span></code></p></td>
+<td><p>04:00 错误日志互动页</p></td>
+<td><p>表格/卡片筛选、当前类别下载、完整边统计、Entry/Data/Meta 角色过滤都要独立验证</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">019f79c0</span></code></p></td>
+<td><p>首页白屏修复与 Top Trace 摘要移除</p></td>
+<td><p>HTML/索引产物必须跑 inline JS <code class="docutils literal notranslate"><span class="pre">node</span> <span class="pre">--check</span></code>、quoted metadata、去重、live 首页验证；Worker tag 过滤不应制造额外误导摘要</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">019f7b27</span></code></p></td>
+<td><p>17 条 GET 失败 trace，页面 <code class="docutils literal notranslate"><span class="pre">/perf/ds-get-failure-noise-vs-clean-20260720.html</span></code>，#791-#796</p></td>
+<td><p>失败 trace 要拆成 issue-grade 家族：DataWorker UB/URMA server exec、RPC network residual、client timeout but server fast、EntryWorker late、remote_get/brpc mismatch、QueryMeta/log mixing</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>这些能力在脚本里对应为 <code class="docutils literal notranslate"><span class="pre">dimensions.latency_summary_us</span></code>、<code class="docutils literal notranslate"><span class="pre">dimensions.rpc_slow</span></code> 子字段、<code class="docutils literal notranslate"><span class="pre">dimensions.urma_elapsed</span></code>、<code class="docutils literal notranslate"><span class="pre">dimensions.classifications</span></code>、以及每条 trace 的精选原始证据。HTML 交互和 yche 发布验证保留在 skill 人工流程里，不强行塞进 parser。</p>
+</section>
+<section id="ci">
+<h2>验证与 CI 集成建议<a class="headerlink" href="#ci" title="Link to this heading">¶</a></h2>
+<p>当前不默认接入 .gitee/ci_build.sh，避免 trace triage 工具影响主工程
+ci-build、标签分流和构建时长。先把下面命令作为人工验证或 agent 自检入口：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python3<span class="w"> </span>-m<span class="w"> </span>py_compile<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>tests/scripts/test_ds_trace_triage.py
+python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>verify
+python3<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-s<span class="w"> </span>tests/scripts/test_ds_trace_triage.py<span class="w"> </span>-q
+</pre></div>
+</div>
+<p>后续如果要接 CI，建议作为候选 CI 门禁先放到独立 job 或手动触发 job，
+确认稳定后再评审是否进入主 ci-build。</p>
+<p>扩展门禁可以在后续加入真实脱敏 fixture：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python3<span class="w"> </span>scripts/ds_trace_triage.py<span class="w"> </span>tests/fixtures/trace_triage/*.tar.gz<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--code-ref<span class="w"> </span>fixture<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output-json<span class="w"> </span>&lt;fixture-summary-json&gt;
+python3<span class="w"> </span>-<span class="w"> </span><span class="s">&lt;&lt;&#39;PY&#39;</span>
+<span class="s">import json</span>
+<span class="s">data = json.load(open(&#39;&lt;fixture-summary-json&gt;&#39;))</span>
+<span class="s">assert data[&#39;trace_count&#39;] &gt; 0</span>
+<span class="s">assert &#39;time&#39; in data[&#39;dimensions&#39;]</span>
+<span class="s">assert &#39;workers&#39; in data[&#39;dimensions&#39;]</span>
+<span class="s">PY</span>
+</pre></div>
+</div>
+</section>
+<section id="id6">
+<h2>人工报告模板<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<p>每次输出报告时保持这个顺序：</p>
+<ol class="arabic simple">
+<li><p>结论摘要：主要慢/错族、比例、最大影响。</p></li>
+<li><p>聚合分布：时间、worker、flow、latency、breakdown、errors。</p></li>
+<li><p>关键 trace 证据：每个族保留精选完整日志片段。</p></li>
+<li><p>当前源码链路：pinned ref、CodeGraph 查询、源码函数。</p></li>
+<li><p>解释边界：哪些是日志直接证明，哪些是源码推断，哪些需要补采样。</p></li>
+<li><p>后续建议：补字段、隔离 Worker、调整 timeout、拆分同步 wait、增加 inflight/queue 指标等。</p></li>
+</ol>
+</section>
+<section id="id7">
+<h2>客户化报告口径<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
+<p>面向客户或一线排障时，报告不能只堆字段，应按“表象、证据、定界、建议”组织：</p>
+<ol class="arabic simple">
+<li><p><strong>先讲表象</strong>：例如“客户端看到的是 20ms WorkerRpc deadline”或“4~8ms 采样慢请求”。这句话要让非实现同学马上知道用户感知是什么。</p></li>
+<li><p><strong>再讲服务端证据</strong>：把 client access 窗口和 worker 后续完成阶段拆开。客户端 20ms 超时后，Entry/DataWorker 仍可能继续跑到 60ms、190ms、250ms；这不是矛盾，而是不同观察点。</p></li>
+<li><p><strong>给出否定性定界</strong>：明确“不是 client.process.get 主慢”、“当前证据不能归因到 QueryMeta”、“URMA total 只有 0.x ms，不能说 URMA completion 慢”等，避免误导。</p></li>
+<li><p><strong>用图表解释，而不是替代证据</strong>：每张 ECharts 图都要有 caption；图回答“分布和规模”，表格/日志回答“证据在哪一行”。</p></li>
+<li><p><strong>保留单 Trace 证据链</strong>：Top Trace 必须能分页、搜索、点击后看到 stage breakdown 和全量日志。高亮或摘要应围绕 ERROR、deadline、latencySummary、RemotePull、RPC slow、URMA elapsed。</p></li>
+<li><p><strong>建议先补观测性</strong>：当缺少 remote_get、QueryMeta、URMA 子阶段或目标 worker 字段时，不要直接给根因结论；先写“观测盲区”和建议补字段。</p></li>
+</ol>
+<p>错误分析和慢时延分析是两条正交线：</p>
+<ul class="simple">
+<li><p>错误线回答“为什么失败/谁返回失败”：status、deadline、not found、object in use、fallback、Etcd 等。</p></li>
+<li><p>慢时延线回答“时间花在哪里”：access、latencySummary、breakdown、RPC slow、URMA elapsed、UB edge。</p></li>
+<li><p>交汇点才是根因族：例如 <code class="docutils literal notranslate"><span class="pre">client_deadline_with_urma_wait</span></code>、<code class="docutils literal notranslate"><span class="pre">client_deadline_20ms</span></code>、<code class="docutils literal notranslate"><span class="pre">remote_fast_transport_wait</span></code>、<code class="docutils literal notranslate"><span class="pre">write_memory_copy_dominant</span></code>。</p></li>
+</ul>
+<p>UB/URMA 相关报告要用时序口径：</p>
+<ul class="simple">
+<li><p>RPC/bthread 发起 write 后等待 completion。</p></li>
+<li><p>polling pthread 轮询到 completion 后发布完成数据并 notify。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_TOTAL</span></code> 是等待 completion 的总窗口；<code class="docutils literal notranslate"><span class="pre">POLL_JFC</span></code>、<code class="docutils literal notranslate"><span class="pre">NOTIFY</span></code>、<code class="docutils literal notranslate"><span class="pre">THREAD_SHED</span></code> 是子证据。</p></li>
+<li><p>如果 <code class="docutils literal notranslate"><span class="pre">write</span> <span class="pre">total</span> <span class="pre">-</span> <span class="pre">sleep</span> <span class="pre">wait</span></code> 只有几十 us，说明慢主要在等待 completion，不是 wait 返回后的业务处理。</p></li>
+<li><p>DataWorker UB write 很关键，但不能只看 <code class="docutils literal notranslate"><span class="pre">URMA_ELAPSED_TOTAL</span></code>；还要看 request id、src/target、dataSize、cpuid、inflight、wake latency 和同 trace 的 EntryWorker RemotePull。</p></li>
+</ul>
+<p>有无底噪对比时，把不同运行当成两个 cohort：</p>
+<ul class="simple">
+<li><p>目录名或 tar member 路径包含 <code class="docutils literal notranslate"><span class="pre">dizao</span></code> / <code class="docutils literal notranslate"><span class="pre">底噪</span></code> 时标记为 <code class="docutils literal notranslate"><span class="pre">有底噪(dizao)</span></code>；包含 <code class="docutils literal notranslate"><span class="pre">wudizao</span></code> / <code class="docutils literal notranslate"><span class="pre">无底噪</span></code> 时标记为 <code class="docutils literal notranslate"><span class="pre">无底噪(wudizao)</span></code>。</p></li>
+<li><p>若同一次分析中已经出现底噪语义，则未包含 <code class="docutils literal notranslate"><span class="pre">dizao</span></code> 的其他运行默认作为 <code class="docutils literal notranslate"><span class="pre">无底噪(wudizao)</span></code> 对照。</p></li>
+<li><p>每个 cohort 独立统计 trace 数、根因占比、Top slow、Worker/IP 分布。</p></li>
+<li><p>对比图优先展示“同一表象下服务端阶段是否变化”，例如 CPU/内存底噪消失后，URMA 秒级 tail 是否消失，是否残留 20ms deadline。</p></li>
+<li><p>不要用旧轮次根因覆盖新轮次；同一 trace 报告中必须标注输入包、case、scenario 和 run 时间。</p></li>
+</ul>
+<p>从 <code class="docutils literal notranslate"><span class="pre">&lt;publish-root&gt;/perf</span></code> 参考报告抽取出的 HTML 组件要求：</p>
+<ul class="simple">
+<li><p>左侧固定目录：主章节 + 图/表子项，滚动时高亮当前章节。</p></li>
+<li><p>首屏：标题、输入范围、KPI cards、核心判断 panel。</p></li>
+<li><p>输入来源区：HTML 首屏必须渲染 <code class="docutils literal notranslate"><span class="pre">manifest.json</span></code> 中的 case、scenario、analysis_created_at、输入包、<code class="docutils literal notranslate"><span class="pre">inputs.md</span></code>、<code class="docutils literal notranslate"><span class="pre">raw/inputs</span></code> 和 <code class="docutils literal notranslate"><span class="pre">raw/extracted</span></code>，保证单独打开报告时也能知道这次 run 的来源。</p></li>
+<li><p>覆盖边界区：HTML 必须渲染 <code class="docutils literal notranslate"><span class="pre">dimensions.coverage.surfaces</span></code>，明确 client access、RPC slow、latencySummary、URMA elapsed、error 等观测面是 present 还是 missing。</p></li>
+<li><p>图表区：ECharts 图只回答规模/分布问题，caption 必须解释图意。</p></li>
+<li><p>Trace 区：搜索、分类/worker 过滤、分页、选中 trace 联动 breakdown、摘要和全量日志。</p></li>
+<li><p>下载区：至少支持下载当前 trace 裸日志和当前过滤证据。</p></li>
+<li><p>摘要导出区：支持下载本次分析 Markdown 摘要，包含输入来源、诊断口径、coverage、recommendations 和源码字段映射。</p></li>
+<li><p>站点版一致性：<code class="docutils literal notranslate"><span class="pre">report.site.html</span></code> 必须保留 local 版关键组件，并额外包含 <code class="docutils literal notranslate"><span class="pre">/assets/css/site.css</span></code> 与 <code class="docutils literal notranslate"><span class="pre">/assets/js/site.js</span></code>，用于 <publish-site> 发布后的站点样式/脚本集成。</p></li>
+<li><p>日志区：ERROR、deadline、latencySummary、RemotePull、BatchGetObjectRemote、URMA、&gt;=阈值耗时字段要高亮。</p></li>
+<li><p>对比区：多个输入包按 cohort 展示 trace_count、errors、classifications、access latency 和 top workers。</p></li>
+<li><p>流程图区：<code class="docutils literal notranslate"><span class="pre">summary.json</span></code> 必须输出 <code class="docutils literal notranslate"><span class="pre">dimensions.flow_stages</span></code>，用节点/边表达 Client、EntryWorker、MetaWorker、DataWorker、UB/URMA，并为每条边标注证据覆盖状态。</p></li>
+<li><p>诊断区：<code class="docutils literal notranslate"><span class="pre">summary.json</span></code> 必须输出 <code class="docutils literal notranslate"><span class="pre">dimensions.diagnosis</span></code>，包含错误线、慢时延线、证据边界、客户表达。HTML 只负责渲染，不应在前端临时重新推导客户话术。</p></li>
+<li><p>建议区：<code class="docutils literal notranslate"><span class="pre">summary.json</span></code> 必须输出 <code class="docutils literal notranslate"><span class="pre">dimensions.recommendations</span></code>，覆盖源码复核、观测性补齐、多输入 cohort 对比、UB/URMA 时序定界、deadline 拆分等后续动作。</p></li>
+<li><p>代码附录：<code class="docutils literal notranslate"><span class="pre">summary.json</span></code> 必须输出 <code class="docutils literal notranslate"><span class="pre">dimensions.source_appendix</span></code>，把 access log、latencySummary、RPC slow、RemotePull/BatchGetObjectRemote、URMA_ELAPSED_TOTAL、CreateBuffer/Publish 映射到读写流程分段、源码复核点、CodeGraph 校验方式和客户解释口径。</p></li>
+</ul>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="../FAQ/FAQ.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">FAQ</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="brpc_health_probe.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">brpc 健康探针与诊断接口</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2026, openEuler openYuanrong datasystem
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">DataSystem 慢时延与错误 Trace 分析方法论</a><ul>
+<li><a class="reference internal" href="#id1">目标</a></li>
+<li><a class="reference internal" href="#id2">快速入口</a></li>
+<li><a class="reference internal" href="#id3">当前主线校准流程</a></li>
+<li><a class="reference internal" href="#id4">分析顺序</a></li>
+<li><a class="reference internal" href="#trace">错误 Trace 的几种切法</a></li>
+<li><a class="reference internal" href="#id5">字段字典</a></li>
+<li><a class="reference internal" href="#thread">八个历史 Thread 的能力沉淀</a></li>
+<li><a class="reference internal" href="#ci">验证与 CI 集成建议</a></li>
+<li><a class="reference internal" href="#id6">人工报告模板</a></li>
+<li><a class="reference internal" href="#id7">客户化报告口径</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=6dbb43f8"></script>
+    <script>let toggleHintShow = 'Click to show';</script>
+    <script>let toggleHintHide = 'Click to hide';</script>
+    <script>let toggleOpenOnPrint = 'true';</script>
+    <script src="../_static/togglebutton.js?v=b8b12719"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    <script>var togglebuttonSelector = '.toggle, .admonition.dropdown';</script>
+    <script src="../_static/custom.js?v=f6e2bf52"></script>
+    </body>
+</html>

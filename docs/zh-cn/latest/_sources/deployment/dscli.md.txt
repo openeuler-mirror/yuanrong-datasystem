@@ -10,7 +10,8 @@
     - [安装自定义版本](#安装自定义版本)
     - [源码编译安装](#源码编译安装)
 - [dscli使用教程](#dscli使用教程)
-    - [openYuanrong datasystem集群部署](#openyuanrong-datasystem集群部署)
+    - [openYuanrong datasystem集群使用ETCD部署](#openyuanrong-datasystem集群使用etcd部署)
+    - [openYuanrong datasystem集群使用Coordinator部署](#openyuanrong-datasystem集群使用coordinator部署)
     - [生成Helm Chart模板](#生成helm-chart模板)
     - [生成Cpp样例代码](#生成cpp样例代码)
     - [日志收集](#日志收集)
@@ -25,6 +26,7 @@
     - [dscli generate_cpp_template](#dscli-generate_cpp_template)
     - [dscli generate_config](#dscli-generate_config)
     - [dscli collect_log](#dscli-collect_log)
+    - [dscli query](#dscli-query)
 - [配置项说明](#配置项说明)
     - [集群配置项](#集群配置项)
     - [命令行参数配置项](#命令行参数配置项)
@@ -42,7 +44,7 @@ dscli 系统环境依赖如下：
 |-------|----|----|
 | openEuler | 22.03 | 运行openYuanrong datasystem的操作系统 |
 | [Python](#安装python) | 3.9-3.11 | openYuanrong datasystem dscli的使用依赖Python环境 |
-| [ETCD](#安装并部署etcd) | 3.5 | openYuanrong datasystem集群管理依赖组件 |
+| [ETCD](#安装并部署etcd) | 3.5 | 使用 ETCD 集群管理方式时的依赖组件；使用 Coordinator 或 Metastore 时无需部署 |
 | [SSH互信配置](#ssh互信配置) |- | 仅多机部署需要，配置SSH互信用于机器间互相访问 |
 
 下面给出以上依赖的安装方法。
@@ -77,6 +79,8 @@ python --version
 ```
 
 ### 安装并部署ETCD
+
+本节仅适用于使用 ETCD 进行集群管理的场景。使用 Coordinator 进行集群管理时无需安装或部署 ETCD，可跳过本节。
 
 1. 下载 ETCD 二进制文件
 
@@ -225,21 +229,21 @@ pip install https://ms-release.obs.cn-north-4.myhuaweicloud.com/${version}/yr_da
 
 本节包含 dscli 的使用场景与教程。
 
-### openYuanrong datasystem集群部署
+### openYuanrong datasystem集群使用ETCD部署
 
-openYuanrong datasystem集群管理依赖ETCD，在部署openYuanrong datasystem集群前请确保ETCD集群处于可用状态。ETCD部署教程可参考：[ETCD集群部署](../deployment/deploy.md#安装并部署etcd)。
+本节介绍使用 ETCD 进行集群管理时的单机和多机部署方式。部署 Worker 前请确保 ETCD 集群可用，具体操作参见[安装并部署ETCD](#安装并部署etcd)。
 
 #### 单机部署
 
-openYuanrong datasystem单机部署依赖 [dscli start](#dscli-start) 命令：
+openYuanrong datasystem 单机部署依赖 [dscli start](#dscli-start) 命令。
 
 - 快速部署：
 
-    [dscli start -w](#dscli-start) 命令可在后面添加 datasystem_worker 初始化启动命令行参数，快速部署至少需要指定以下两个命令行参数：
+    [dscli start -w](#dscli-start) 命令可在后面添加 datasystem_worker 初始化启动参数。使用 ETCD 时至少需要指定以下两个参数：
 
     | 命令行参数 | 类型 | 说明 |
     |-----------|------|------|
-    | [--worker_address](#ipcrpc相关配置) | string | datasystem_worker IP地址与监听端口号 |
+    | [--worker_address](#ipcrpc相关配置) | string | datasystem_worker IP 地址与监听端口号 |
     | [--etcd_address](#etcd相关配置) | string | ETCD 服务端访问地址 |
 
     ```bash
@@ -247,37 +251,56 @@ openYuanrong datasystem单机部署依赖 [dscli start](#dscli-start) 命令：
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
     ```
 
-    输出OK说明部署成功。默认情况下，datasystem_worker 最大可使用 1GB 共享内存空间用于缓存数据，如果需要调整共享内存大小，可以通过 `--shared_memory_size_mb` 参数进行调整：
+    输出 OK 说明部署成功。默认情况下，datasystem_worker 最大可使用 1GB 共享内存空间用于缓存数据；如需调整，可以指定 `--shared_memory_size_mb`：
 
     ```bash
     dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379" --shared_memory_size_mb 4096
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
     ```
 
-    更多 datasystem_worker 命令行参数详细说明请参考：[命令行参数配置项](#命令行参数配置项)。
+    更多 datasystem_worker 参数说明参见[命令行参数配置项](#命令行参数配置项)。
 
 - 通过配置项部署：
 
-    在当前目录生成配置模板文件：
+    在当前目录生成配置模板：
 
     ```bash
     dscli generate_config -o ./
-    # [INFO] Cluster configuration file has been generated to /home/sn/cluster_config.json
-    # [INFO] Worker configuration file has been generated to /home/sn/worker_config.json
+    # [INFO] Configuration file cluster_config.json has been generated to /home/sn/cluster_config.json
+    # [INFO] Configuration file worker_config.json has been generated to /home/sn/worker_config.json
+    # [INFO] Configuration file coordinator_config.json has been generated to /home/sn/coordinator_config.json
     # [INFO] Configuration generation completed successfully
     ```
 
-    `worker_config.json` 内置了 datasystem_worker 相关的命令行参数配置项，无需修改任何配置项即可部署，默认会占用端口号 31501：
+    修改 `worker_config.json`，配置 ETCD 地址，并确保 `coordinator_address` 和 `metastore_address` 为空：
+
+    ```json
+    {
+      "service_type": {
+          "value": "worker",
+          "description": "Service type. Valid values: coordinator or worker. Empty or missing means worker. This field is used by dscli and is not passed to the service process."
+      },
+      "worker_address": {
+          "value": "127.0.0.1:31501",
+          "description": "Address of worker in 'host:port' format (e.g., \"127.0.0.1:31501\"). The value cannot be empty."
+      },
+      "etcd_address": {
+          "value": "127.0.0.1:2379",
+          "description": "Address of ETCD server, (such as \"192.168.0.1:10001,192.168.0.2:10001,192.168.0.3:10001\")."
+      }
+    }
+    ```
+
+    启动 Worker：
 
     ```bash
     dscli start -f ./worker_config.json
     # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
     ```
 
-    输出OK说明部署成功。默认情况下，datasystem_worker 最大可使用 1GB 共享内存空间用于缓存数据，如果需要调整共享内存大小，可以通过 `shared_memory_size_mb` 配置项进行调整：
+    输出 OK 说明部署成功。默认情况下，datasystem_worker 最大可使用 1GB 共享内存空间用于缓存数据；如需调整，可以修改 `shared_memory_size_mb`：
 
     ```json
-    // worker_config.json
     {
         "shared_memory_size_mb": {
             "value": "4096",
@@ -286,13 +309,13 @@ openYuanrong datasystem单机部署依赖 [dscli start](#dscli-start) 命令：
     }
     ```
 
-    更多 `worker_config.json` 的详细说明请参考：[命令行参数配置项](#命令行参数配置项)。
+    更多 `worker_config.json` 配置说明参见[命令行参数配置项](#命令行参数配置项)。
 
 #### 单机卸载
 
-openYuanrong datasystem单机卸载依赖 [dscli stop](#dscli-stop) 命令：
+openYuanrong datasystem 单机卸载依赖 [dscli stop](#dscli-stop) 命令。
 
-- 卸载通过快速部署方式部署的集群：
+- 卸载通过快速部署方式部署的 Worker：
 
     此种方式需要通过 `--worker_address` 命令行参数指定 datasystem_worker 的 IP 地址。
 
@@ -303,7 +326,7 @@ openYuanrong datasystem单机卸载依赖 [dscli stop](#dscli-stop) 命令：
 
     输出OK说明卸载成功。
 
-- 卸载通过配置项部署方式部署的集群：
+- 卸载通过配置项部署方式部署的 Worker：
 
     此种方式需要指定 `worker_config.json` 文件。
 
@@ -312,22 +335,23 @@ openYuanrong datasystem单机卸载依赖 [dscli stop](#dscli-stop) 命令：
     # [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100
     ```
 
-    输出OK说明卸载成功。
+输出 OK 说明卸载成功。
 
 #### 多机部署
 
 - 通过执行 [dscli up](#dscli-up) 命令部署：
 
-    1. 在当前目录生成 `worker_config.json` 和 `cluster_config.json` 文件：
+    1. 在当前目录生成配置模板：
 
         ```bash
         dscli generate_config -o ./
-        # [INFO] Cluster configuration file has been generated to /home/sn
-        # [INFO] Worker configuration file has been generated to /home/sn
+        # [INFO] Configuration file cluster_config.json has been generated to /home/sn/cluster_config.json
+        # [INFO] Configuration file worker_config.json has been generated to /home/sn/worker_config.json
+        # [INFO] Configuration file coordinator_config.json has been generated to /home/sn/coordinator_config.json
         # [INFO] Configuration generation completed successfully
         ```
 
-        编辑 `cluster_config.json` 文件：
+    2. 编辑 `cluster_config.json`：
 
         ```json
         {
@@ -346,12 +370,16 @@ openYuanrong datasystem单机卸载依赖 [dscli stop](#dscli-stop) 命令：
         }
         ```
 
-        `cluster_config.json` 用于配置SSH互信以及 datasystem_worker 部署节点等信息，更多详细说明请参考：[集群配置项](#集群配置项)。
+        `cluster_config.json` 用于配置 SSH 互信和 Worker 部署节点，更多说明参见[集群配置项](#集群配置项)。
 
-        编辑 `worker_config.json` 文件，默认情况下 datasystem_worker 最大可使用 1GB 共享内存空间用于缓存数据，如果需要调整共享内存大小，可以通过 `shared_memory_size_mb` 配置项进行调整：
+    3. 编辑 `worker_config.json`，配置所有 Worker 使用的 ETCD 地址，并确保 `coordinator_address` 和 `metastore_address` 为空：
 
         ```json
         {
+            "etcd_address": {
+                "value": "127.0.0.1:2379",
+                "description": "Address of ETCD server, (such as \"192.168.0.1:10001,192.168.0.2:10001,192.168.0.3:10001\")."
+            },
             "shared_memory_size_mb": {
                 "value": "4096",
                 "description": "Upper limit of the shared memory, the unit is mb, must be greater than 0."
@@ -359,13 +387,13 @@ openYuanrong datasystem单机卸载依赖 [dscli stop](#dscli-stop) 命令：
         }
         ```
 
-        `worker_config.json` 用于配置 datasystem_worker 相关的命令行参数配置项，更多详细说明请参考：[命令行参数配置项](#命令行参数配置项)。
+        `worker_config.json` 用于配置 datasystem_worker 启动参数，更多说明参见[命令行参数配置项](#命令行参数配置项)。
 
         > **注意事项：**
         >
-        > `cluster_config.json` 文件中的 `worker_nodes` 以及 `worker_port` 配置项会覆盖 `worker_config.json` 中 `worker_address` 配置项。
+        > `cluster_config.json` 中的 `worker_nodes` 和 `worker_port` 会覆盖 `worker_config.json` 中的 `worker_address`。
 
-    2. 部署集群：
+    4. 部署 Worker 集群：
 
         ```bash
         dscli up -f ./cluster_config.json
@@ -373,37 +401,37 @@ openYuanrong datasystem单机卸载依赖 [dscli stop](#dscli-stop) 命令：
         # [INFO] Start worker service @ 127.0.0.2:31501 success.
         ```
 
-        当输出如上信息时说明集群部署成功。
+        当输出如上信息时，说明集群部署成功。
 
-    > 注意事项：
+    > **注意事项：**
     >
-    > - 多机集群部署依赖多机之间配置SSH互信，请参考：[SSH互信配置](#ssh互信配置)。
-    > - 所有待部署的机器上都需要安装dscli，dscli安装可参考：[dscli安装教程](#dscli安装教程)。
+    > - 多机部署依赖节点间的 SSH 互信，具体操作参见[SSH互信配置](#ssh互信配置)。
+    > - 所有待部署节点都需要安装 dscli，安装方法参见[dscli安装教程](#dscli安装教程)。
 
-- 通过在多个机器执行 [dscli start](#dscli-start) 命令部署，假设在 127.0.0.1 和 127.0.0.2 部署一个两节点的数据系统集群：
+- 通过在多个节点执行 [dscli start](#dscli-start) 命令部署。以下示例在 127.0.0.1 和 127.0.0.2 部署两个 Worker：
 
-    1. 在 127.0.0.1 机器上执行：
+    1. 在 127.0.0.1 节点执行：
 
         ```bash
         dscli start -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
         # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38100
         ```
 
-    2. 在 127.0.0.2 机器上执行：
+    2. 在 127.0.0.2 节点执行：
 
         ```bash
         dscli start -w --worker_address "127.0.0.2:31501" --etcd_address "127.0.0.1:2379"
         # [INFO] [  OK  ] Start worker service @ 127.0.0.2:31501 success, PID: 38101
         ```
 
-    > **注意事项**：
+    > **注意事项：**
     >
-    > - 在不同节点执行 dscli start 命令时，需要保证连接的是同一个ETCD，即 `--etcd_address` 的值需要保持一致。
-    > - 如果涉及到需要指定 cluster name 的情况，即需要传 `--cluster_name` 参数，那么 `--cluster_name` 的值也需要保持一致。
+    > - 所有 Worker 必须连接同一个 ETCD，即 `--etcd_address` 的值必须一致。
+    > - 如果指定 `--cluster_name`，所有 Worker 的 `--cluster_name` 也必须一致。
 
 #### 多机卸载
 
-- 通过执行 [dscli down](#dscli-down) 命令卸载集群：
+- 通过执行 [dscli down](#dscli-down) 命令卸载 Worker 集群：
 
     ```bash
     dscli down -f ./cluster_config.json
@@ -413,36 +441,275 @@ openYuanrong datasystem单机卸载依赖 [dscli stop](#dscli-stop) 命令：
 
     当输出如上信息时说明集群卸载成功。
 
-- 通过执行 [dscli stop](#dscli-stop) 命令卸载集群，假设在 127.0.0.1 和 127.0.0.2 部署了一个两节点的数据系统集群需要卸载：
+- 通过执行 [dscli stop](#dscli-stop) 命令分别停止 Worker：
 
-    1. 在 127.0.0.1 机器上执行：
+    ```bash
+    dscli stop --worker_address "127.0.0.1:31501"
+    dscli stop --worker_address "127.0.0.2:31501"
+    ```
 
-        ```bash
-        dscli stop --worker_address "127.0.0.1:31501"
-        # [INFO] [  OK  ] Stop worker service @ 127.0.0.1:31501 normally, PID: 38100
-        ```
-
-    2. 在 127.0.0.2 机器上执行：
-
-        ```bash
-        dscli stop --worker_address "127.0.0.2:31501"
-        # [INFO] [  OK  ] Stop worker service @ 127.0.0.2:31501 normally, PID: 38101
-        ```
+当所有 Worker 均停止后，说明集群卸载成功。
 
 #### 部署问题汇总
 
-1. 默认路径过长导致 dscli start 执行失败
+1. 默认路径过长导致 `dscli start` 执行失败
 
-    dscli start 默认使用当前目录作为 home 目录。如果当前目录路径过长，可能导致 datasystem_worker 进程启动失败。
+    `dscli start` 默认使用当前目录作为 home 目录。如果当前目录路径过长，可能导致 datasystem_worker 启动失败。
 
-    解决方案：
-
-    使用 `--datasystem_home_dir`（短参数：`-d`）明确指定 datasystem home 目录，以规避路径过长问题：
+    使用 `--datasystem_home_dir`（短参数：`-d`）明确指定较短的 datasystem home 目录：
 
     ```bash
     dscli start -f ~/worker_config.json -d /home/usr1/dscli
+    dscli start -d /home/usr1/dscli -w --worker_address "127.0.0.1:31501" --etcd_address "127.0.0.1:2379"
+    ```
 
-    dscli start -d /home/usr1/dscli -w --worker_address 127.0.0.1:31501 --etcd_address 127.0.0.1:2379
+### openYuanrong datasystem集群使用Coordinator部署
+
+使用 Coordinator 进行集群管理时无需安装或部署 ETCD。部署 Worker 前，需要先启动一个所有 Worker 均可访问的 Coordinator。
+
+#### Coordinator部署
+
+Coordinator 支持快速部署和通过配置项部署两种方式。
+
+- 快速部署：
+
+    ```bash
+    dscli start --coordinator_args --coordinator_address "127.0.0.1:31511"
+    # [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100
+    ```
+
+    应在所有 Worker 停止后再停止 Coordinator：
+
+    ```bash
+    dscli stop --coordinator_address "127.0.0.1:31511"
+    ```
+
+- 通过配置项部署：
+
+    在当前目录生成配置模板：
+
+    ```bash
+    dscli generate_config -o ./
+    # [INFO] Configuration file cluster_config.json has been generated to /home/sn/cluster_config.json
+    # [INFO] Configuration file worker_config.json has been generated to /home/sn/worker_config.json
+    # [INFO] Configuration file coordinator_config.json has been generated to /home/sn/coordinator_config.json
+    # [INFO] Configuration generation completed successfully
+    ```
+
+    按需修改 `coordinator_config.json`。其中 `service_type` 必须为 `coordinator`：
+
+    ```json
+    {
+      "service_type": {
+        "value": "coordinator",
+        "description": "Service type. Valid values: coordinator or worker. This field is used by dscli and is not passed to the service process."
+      },
+      "coordinator_address": {
+        "value": "127.0.0.1:31511",
+        "description": "Address of coordinator in 'host:port' format (e.g., \"127.0.0.1:31511\"). The value cannot be empty."
+      }
+    }
+    ```
+
+    启动 Coordinator：
+
+    ```bash
+    dscli start -f ./coordinator_config.json
+    # [INFO] [  OK  ] Start coordinator service @ 127.0.0.1:31511 success, PID: 38100
+    ```
+
+    应在所有 Worker 停止后，使用同一配置文件停止 Coordinator：
+
+    ```bash
+    dscli stop -f ./coordinator_config.json
+    ```
+
+更多 Coordinator 配置说明参见[Coordinator配置项](#coordinator配置项)。
+
+#### 单机部署
+
+Coordinator 启动后，可以单独启动 Worker，也可以使用一条命令依次启动 Coordinator 和 Worker。
+
+- 快速部署 Worker：
+
+    ```bash
+    dscli start --worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
+    # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38101
+    ```
+
+    默认情况下，datasystem_worker 最大可使用 1GB 共享内存空间；如需调整，可以指定 `--shared_memory_size_mb`：
+
+    ```bash
+    dscli start --worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511" --shared_memory_size_mb 4096
+    ```
+
+- 统一启动 Coordinator 和 Worker：
+
+    如果尚未启动 Coordinator，可以通过一条命令先启动 Coordinator，再启动 Worker：
+
+    ```bash
+    dscli start --coordinator_worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
+    ```
+
+    如果 Worker 启动失败，`dscli` 会停止本次命令已经启动的 Coordinator。
+
+- 通过配置项部署 Worker：
+
+    如果尚未生成配置模板，先执行 `dscli generate_config -o ./`。修改 `worker_config.json`，配置 Coordinator 地址，并确保 `etcd_address` 和 `metastore_address` 为空：
+
+    ```json
+    {
+      "service_type": {
+        "value": "worker",
+        "description": "Service type. Valid values: coordinator or worker. Empty or missing means worker. This field is used by dscli and is not passed to the service process."
+      },
+      "worker_address": {
+        "value": "127.0.0.1:31501",
+        "description": "Address of worker in 'host:port' format (e.g., \"127.0.0.1:31501\"). The value cannot be empty."
+      },
+      "coordinator_address": {
+        "value": "127.0.0.1:31511",
+        "description": "Address of datasystem coordinator service. Empty means coordinator mode is disabled."
+      },
+      "shared_memory_size_mb": {
+        "value": "4096",
+        "description": "Upper limit of the shared memory, the unit is mb, must be greater than 0."
+      }
+    }
+    ```
+
+    启动 Worker：
+
+    ```bash
+    dscli start -f ./worker_config.json
+    # [INFO] [  OK  ] Start worker service @ 127.0.0.1:31501 success, PID: 38101
+    ```
+
+更多 datasystem_worker 参数说明参见[命令行参数配置项](#命令行参数配置项)。
+
+#### 单机卸载
+
+- 通过地址停止 Worker 和 Coordinator。两个地址同时指定时，`dscli` 会先停止 Worker，再停止 Coordinator：
+
+    ```bash
+    dscli stop --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
+    ```
+
+- 使用配置文件时，先停止 Worker，再停止 Coordinator：
+
+    ```bash
+    dscli stop -f ./worker_config.json
+    dscli stop -f ./coordinator_config.json
+    ```
+
+当 Worker 和 Coordinator 均停止后，说明单机集群卸载成功。
+
+#### 多机部署
+
+多机部署只批量启动 Worker。请先按照[Coordinator部署](#coordinator部署)启动一个所有 Worker 均可访问的 Coordinator。
+
+- 通过执行 [dscli up](#dscli-up) 命令部署：
+
+    1. 如果尚未生成配置模板，执行：
+
+        ```bash
+        dscli generate_config -o ./
+        # [INFO] Configuration file cluster_config.json has been generated to /home/sn/cluster_config.json
+        # [INFO] Configuration file worker_config.json has been generated to /home/sn/worker_config.json
+        # [INFO] Configuration file coordinator_config.json has been generated to /home/sn/coordinator_config.json
+        # [INFO] Configuration generation completed successfully
+        ```
+
+    2. 编辑 `cluster_config.json`：
+
+        ```json
+        {
+            "ssh_auth": {
+                "ssh_private_key": "~/.ssh/id_rsa",
+                "ssh_user_name": "sn"
+            },
+            "worker_config_path": "./worker_config.json",
+            "worker_nodes": [
+                "127.0.0.1",
+                "127.0.0.2"
+            ],
+            "worker_port": 31501
+        }
+        ```
+
+    3. 编辑 `worker_config.json`，配置所有 Worker 使用的 Coordinator 地址，并确保 `etcd_address` 和 `metastore_address` 为空：
+
+        ```json
+        {
+            "coordinator_address": {
+                "value": "127.0.0.1:31511",
+                "description": "Address of datasystem coordinator service. Empty means coordinator mode is disabled."
+            }
+        }
+        ```
+
+        > **注意事项：**
+        >
+        > `cluster_config.json` 中的 `worker_nodes` 和 `worker_port` 会覆盖 `worker_config.json` 中的 `worker_address`。
+
+    4. 部署 Worker 集群：
+
+        ```bash
+        dscli up -f ./cluster_config.json
+        # [INFO] Start worker service @ 127.0.0.1:31501 success.
+        # [INFO] Start worker service @ 127.0.0.2:31501 success.
+        ```
+
+    > **注意事项：**
+    >
+    > - `dscli up` 只部署 Worker，不会启动 Coordinator。
+    > - 多机部署依赖节点间的 SSH 互信，具体操作参见[SSH互信配置](#ssh互信配置)。
+    > - 所有待部署节点都需要安装 dscli，安装方法参见[dscli安装教程](#dscli安装教程)。
+
+- 通过在多个节点执行 [dscli start](#dscli-start) 命令部署。以下示例在 127.0.0.1 和 127.0.0.2 部署两个 Worker：
+
+    ```bash
+    # 在 127.0.0.1 节点执行
+    dscli start --worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
+
+    # 在 127.0.0.2 节点执行
+    dscli start --worker_args --worker_address "127.0.0.2:31501" --coordinator_address "127.0.0.1:31511"
+    ```
+
+    所有 Worker 必须连接同一个 Coordinator。如果指定 `--cluster_name`，所有 Worker 的 `--cluster_name` 也必须一致。
+
+#### 多机卸载
+
+卸载时先停止所有 Worker，最后停止 Coordinator。
+
+- 通过执行 [dscli down](#dscli-down) 命令停止 Worker，然后停止 Coordinator：
+
+    ```bash
+    dscli down -f ./cluster_config.json
+    dscli stop --coordinator_address "127.0.0.1:31511"
+    ```
+
+- 通过地址分别停止 Worker，然后停止 Coordinator：
+
+    ```bash
+    dscli stop --worker_address "127.0.0.1:31501"
+    dscli stop --worker_address "127.0.0.2:31501"
+    dscli stop --coordinator_address "127.0.0.1:31511"
+    ```
+
+当所有 Worker 和 Coordinator 均停止后，说明集群卸载成功。
+
+#### 部署问题汇总
+
+1. 默认路径过长导致 `dscli start` 执行失败
+
+    `dscli start` 默认使用当前目录作为 home 目录。如果当前目录路径过长，可能导致 datasystem_worker 启动失败。
+
+    使用 `--datasystem_home_dir`（短参数：`-d`）明确指定较短的 datasystem home 目录：
+
+    ```bash
+    dscli start -f ~/worker_config.json -d /home/usr1/dscli
+    dscli start -d /home/usr1/dscli --worker_args --worker_address "127.0.0.1:31501" --coordinator_address "127.0.0.1:31511"
     ```
 
 ### 生成Helm Chart模板
@@ -540,7 +807,7 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 3. 使用 dscli runscript 命令执行脚本：
 
     ```bash
-    dscli runscript -f ./cluster.config install.sh
+    dscli runscript -f ./cluster_config.json install.sh
     ```
 
 更多关于 dscli runscript 命令的使用请参考：[dscli runscript](#dscli-runscript)。
@@ -567,6 +834,12 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--membind|-m | 强制仅允许从指定 NUMA 节点分配内存；若这些节点内存不足，分配将失败  |
 |--localalloc|-l | 将内存分配限制在当前 CPU 所在的 NUMA 节点（本地节点），若本地节点内存不足，内核会退至邻近节点 |
 |--enable_ums| 无 | 启用ums后，datasystem worker之间的rpc消息将通过 ub 传输 |
+
+> **配置文件启动注意事项**：
+>
+> - `dscli start -f` 根据配置文件中的 `service_type` 选择启动 Coordinator 或 Worker。
+> - `service_type` 为 `coordinator` 时启动 Coordinator，为 `worker` 时启动 Worker；字段缺失或值为空时按 Worker 处理。
+> - 其他取值会导致命令失败。`service_type` 仅由 `dscli` 使用，不会传递给 Coordinator 或 Worker 进程。
 
 > **绑核配置项注意事项**：
 >
@@ -604,6 +877,12 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--config_path &lt;FILE&gt;|-f &lt;FILE&gt;| 通过使用配置文件（JSON格式）停止worker或coordinator。`--worker_config_path` 保留为兼容别名 |
 |--worker_address <ADDR>    |-w &lt;...&gt; | 通过指定worker地址（IP:PORT格式，如127.0.0.1:31501）来停止worker |
 |--coordinator_address <ADDR>|无| 通过指定coordinator地址（IP:PORT格式，如127.0.0.1:31511）来停止coordinator。与 `--worker_address` 同时指定时会先停止worker，再停止coordinator |
+
+> **配置文件停止注意事项**：
+>
+> - `dscli stop -f` 根据配置文件中的 `service_type` 选择停止 Coordinator 或 Worker。
+> - `service_type` 为 `coordinator` 时停止 Coordinator，为 `worker` 时停止 Worker；字段缺失或值为空时按 Worker 处理。
+> - 其他取值会导致命令失败。`service_type` 仅由 `dscli` 使用，不会传递给 Coordinator 或 Worker 进程。
 
 `dscli stop` 会先向 worker 发送 `SIGTERM`，等待超时后再发送 `SIGKILL`。等待超时时间按以下公式动态计算（单位：秒）：
 
@@ -683,6 +962,96 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 |--log_path &lt;PATH&gt;            |-d &lt;PATH&gt; | 对于每个需要采集日志的集群节点，指定存放日志的远程路径                  |
 |--output_path &lt;...&gt;          |-o &lt;...&gt;  | 存储日志的本地目录，默认路径为当前目录下名为'log_\<timestamp\>'的文件夹 |
 
+### dscli query
+
+`dscli query` 通过只读接口查询协调后端，并在命令行进程本地完成拓扑解码、健康状态派生、
+哈希区间计算和 key 路由。命令不会读取 `worker_config.json`，也不会自动探测后端类型；
+用户必须显式传入 ETCD 或 Coordinator 地址。
+Coordinator 地址使用 ZMQ 服务端口。整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
+当前 ETCD 查询仅支持未启用认证和 TLS 的集群。
+
+查询 ETCD 集群节点：
+
+```bash
+dscli query cluster \
+  --etcd_address 192.0.2.10:2379,192.0.2.11:2379 \
+  --cluster_name cluster-a
+```
+
+成功输出示例：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "cluster-a",
+  "status": "OK",
+  "topology_version": 7,
+  "nodes": [
+    {
+      "worker_address": "192.0.2.20:31501",
+      "health": "HEALTHY",
+      "state": "ACTIVE",
+      "hash_ranges": ["(3000000000,1000000000]"]
+    },
+    {
+      "worker_address": "192.0.2.21:31501",
+      "health": "DRAINING",
+      "state": "PRE_LEAVING",
+      "hash_ranges": ["(1000000000,3000000000]"]
+    }
+  ]
+}
+```
+
+哈希区间采用左开右闭 `(start,end]`。当 `start > end` 时表示跨越 `UINT32_MAX` 到 `0` 的环回区间；
+单 token 全环固定输出 `[0,4294967295]`。`INITIAL`、`JOINING` 和 `FAILED` 节点不拥有 committed 区间。
+
+查询一批 key 当前路由到的 Worker：
+
+```bash
+dscli query route \
+  --coordinator_address 192.0.2.10:31511 \
+  --keys key-1 key-2 key-1
+```
+
+成功输出按 Worker 地址分组，同一组内保留输入顺序和重复 key：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "",
+  "status": "OK",
+  "topology_version": 7,
+  "routes": [
+    {
+      "worker_address": "192.0.2.20:31501",
+      "keys": ["key-1", "key-1"],
+      "health": "HEALTHY"
+    },
+    {
+      "worker_address": "192.0.2.21:31501",
+      "keys": ["key-2"],
+      "health": "HEALTHY"
+    }
+  ]
+}
+```
+
+一次最多 100000 个 key，单 key 最大 1 MiB，总 key 数据最大 4 MiB。
+
+失败时不输出不完整的节点或路由，只输出最小错误对象并返回退出码 1：
+
+```json
+{
+  "schema_version": "1.0",
+  "cluster_name": "",
+  "status": "RPC unavailable",
+  "error": "failed to connect to coordination backend"
+}
+```
+
+查询不会猜测或输出部分节点、部分路由。只有 `status=OK` 且退出码为 0 的结果可用于自动化。
+
 ## 配置项说明
 
 ### 集群配置项
@@ -699,7 +1068,45 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 
 ### 命令行参数配置项
 
-命令行参数相关配置项位于 `worker_config.json` 文件中，包含 datasystem_worker 的命令行参数相关的配置项
+服务启动配置项分别位于 `worker_config.json` 和 `coordinator_config.json`。两个配置文件都包含仅供 `dscli`
+识别的 `service_type`：取值为 `coordinator` 时处理 Coordinator，取值为 `worker` 时处理 Worker；字段缺失或
+值为空时按 Worker 处理。`service_type` 不会作为命令行参数传递给服务进程。
+
+#### Coordinator配置项
+
+`coordinator_config.json` 包含 Coordinator 启动参数。可以使用 `dscli start -f ./coordinator_config.json` 启动，
+使用 `dscli stop -f ./coordinator_config.json` 停止。
+
+| 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
+|-----|------|---------|-----|-------------|
+| service_type | string | `"coordinator"` | 否 | 供 `dscli` 识别服务类型，不传递给 Coordinator 进程 |
+| coordinator_address | string | `"127.0.0.1:31511"` | 否 | Coordinator 服务地址，格式为 `host:port`，不能为空 |
+| coordinator_rpc_stub_cache_size | int | `2048` | 否 | Coordinator RPC Stub 缓存数量上限 |
+| watch_event_dispatch_thread | int | `4` | 否 | Coordinator 分发 Watch 事件的线程数 |
+| rpc_thread_num | int | `64` | 否 | Coordinator RPC 服务线程数 |
+| log_dir | string | `"./datasystem/logs"` | 否 | Coordinator 日志目录 |
+| log_filename | string | `"datasystem_coordinator"` | 否 | Coordinator 日志文件名前缀 |
+| minloglevel | int | `0` | 是 | 最低日志级别，低于该级别的日志不会被记录 |
+| log_async_queue_size | int | `2048` | 否 | 异步日志消息队列最大容量 |
+| max_log_size | int | `400` | 否 | 单个日志文件最大大小，单位为 MB |
+| max_log_file_num | int | `25` | 是 | 每个日志级别最多保留的日志文件数；为 `0` 时不限制数量 |
+| log_retention_day | int | `0` | 否 | 日志保留天数；为 `0` 时不按时间删除日志 |
+| log_async | bool | `true` | 否 | 是否异步写入日志文件 |
+| log_compress | bool | `false` | 是 | 是否将滚动生成的历史日志压缩为 gzip 格式 |
+| logbufsecs | int | `0` | 否 | 日志消息最大缓冲时长，单位为秒 |
+| logfile_mode | int | `416` | 否 | 日志文件模式/权限 |
+| log_only_write_info_file | bool | `true` | 否 | 是否只生成 INFO 日志文件；INFO 文件始终包含所有级别的日志 |
+| use_brpc | bool | `false` | 否 | 是否使用 brpc 进行 RPC 通信；也可通过环境变量 `DATASYSTEM_USE_BRPC` 设置 |
+| brpc_server_num_threads | int | `64` | 否 | brpc Server 工作线程数 |
+| brpc_max_concurrency | int | `128` | 否 | 每个 brpc Server 允许的最大并发 RPC 数；为 `0` 时不限制，且不能小于 `brpc_server_num_threads` |
+| request_sample_rate | double | `1.0` | 是 | 请求日志主采样率，取值范围为 `[0.0, 1.0]` |
+| access_sample_rate | double | `1.0` | 是 | Access 日志补采样率，取值范围为 `[0.0, 1.0]` |
+| diagnostic_sample_rate | double | `1.0` | 是 | Diagnostic 日志补采样率，取值范围为 `[0.0, 1.0]` |
+
+Coordinator 日志和采样配置的详细语义参见[日志与可观测相关配置](#日志与可观测相关配置)。
+
+`worker_config.json` 包含 datasystem_worker 的命令行参数相关配置项。启动 Worker 时，必须在
+`coordinator_address`、`etcd_address`、`metastore_address` 中配置且仅配置一个集群管理后端。
 
 > **注意事项：**
 >
@@ -720,6 +1127,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | shared_memory_worker_port | int | `0` | 否 | 指定用于共享内存 FD 传输的 SCMTCP 监听端口；当值为非 0 时，datasystem-worker 会在该端口监听连接 ，要求内核支持 SCMTCP 且端口未被占用，否则 worker 启动失败。客户端与 worker 在同一节点时，客户端会使用该通道传递共享内存描述符。 |
 | unix_domain_socket_dir | string | `"./datasystem/uds"` | 否 | 配置 Unix Domain Socket (UDS) 文件的存储目录。UDS 路径总长度受内核限制，建议目录路径不超过80个字符。该目录将挂载到宿主机同名目录，请确保容器具备宿主机同名目录的操作权限 |
 | worker_address | string | `"127.0.0.1:31501"` | 否 | datasystem_worker IP地址，格式为：ip:port, 例如：127.0.0.1:31501 |
+| coordinator_address | string | `""` | 否 | Coordinator 服务地址，格式为 `host:port`；使用 Coordinator 集群管理方式时必须配置 |
+| kv_events_config | string | `""` | 否 | KV event publisher JSON 配置。为空表示关闭该功能；非空时需要填写 JSON 对象字符串，字段说明参见[表1](#table_kv_events_config)。例如：`{"bind_endpoint":"tcp://0.0.0.0:5557","backend_id":"worker-0"}` |
 | enable_curve_zmq | bool | `false` | 否 | 是否开启服务端组件间认证鉴权功能 |
 | curve_key_dir | string | `""` | 否 | 用于查找 ZMQ Curve 密钥文件的目录，启用 ZMQ 认证时必须指定该路径 |
 | oc_worker_worker_direct_port | int | `0` | 否 | 对象/KV缓存datasystem-worker之间用于数据传输的TCP通道，0表示禁用该功能；当指定为一个非0值时，datasystem-worker将会建立一条单独用于数据传输的TCP通道，用于加速节点间数据的传输速度，降低数据传输时延 |
@@ -730,11 +1139,31 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | zmq_server_io_context | int | `5` | 否 | ZMQ服务端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | zmq_client_io_context | int | `5` | 否 | ZMQ客户端性能优化参数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
 | zmq_client_io_thread | int | `1` | 否 | ZMQ客户端IO线程数，其数值与系统吞吐量正相关，取值范围：[1, 32] |
-| io_thread_nice | int | `-15` | 否 | 指定部分 IO 线程的 nice 值，并通过 `setpriority` 生效，取值范围：[-20, 19]。值越小表示调度优先级越高，设置负值通常需要额外权限 |
+| io_thread_nice | int | `0` | 否 | 指定部分 IO 线程的 nice 值，取值范围：[-20, 19]。0 表示跳过 nice 调整并保留线程继承的 nice 值；仅非 0 值调用 `setpriority`；设置负值通常需要相应权限 |
+| enable_sched_runtime | bool | `true` | 否 | 是否允许指定 worker 线程设置 Linux 调度 runtime。当前仅用于 URMA JFC poll 线程；设置为 `false` 时保留线程继承的调度参数且不调用 `sched_setattr`。 |
 | zmq_chunk_sz | int | `1048576` | 否 | 并行负载分块大小配置（以字节为单位） |
 | max_rpc_session_num | int | `2048` | 否 | 单个datasystem-worker最大可缓存会话数，取值范围：[512, 10,000] |
 | remote_send_thread_num | int | `8` | 否 | 配置服务端用于将元素发送到远程工作线程的线程数量 |
 | stream_idle_time_s | int | `300` | 否 | 配置流的空闲时间。默认值为300秒（5分钟） |
+
+> **升级提示：** `io_thread_nice` 的新默认值 `0` 仅影响新生成的配置文件，或启动时未显式传入该参数的场景。已有 `worker_config.json` 中的 `-15` 仍会作为显式配置在后续启动时使用；如需停用 nice 调整，请在启动 worker 前手动将其改为 `0`。
+
+**表1** `kv_events_config` JSON 字段说明<a id="table_kv_events_config"></a>
+
+| JSON 字段 | 类型 | 默认值 | 是否必填 | 描述 |
+|---|---|---|---|---|
+| bind_endpoint | string | `""` | 是 | ZMQ PUB 套接字的绑定地址，必须为非空字符串，例如 `tcp://0.0.0.0:5557`。 |
+| model_name | string | `""` | 否 | 事件中的模型名称；空字符串在事件中编码为 `null`。 |
+| backend_id | string | `""` | 是 | 事件中的后端实例标识，必须为非空字符串。 |
+| tenant_id | string | `"default"` | 否 | 事件中的租户标识；当对象 key 未携带租户前缀时使用该值。 |
+| additional_salt | string | `""` | 否 | 事件中的附加 salt；空字符串在事件中编码为 `null`。 |
+| lora_name | string | `""` | 否 | 事件中的 LoRA 名称；空字符串在事件中编码为 `null`。 |
+| block_size | uint32 | `0` | 否 | 事件中的 KV block 大小；值为 `0` 时在事件中编码为 `null`。 |
+| dp_rank | uint32 | `0` | 否 | 数据并行 rank，同时写入事件和批次载荷。 |
+| emit_legacy_compat_fields | bool | `true` | 否 | 是否输出兼容字段 `type`、`block_hashes` 和 `parent_block_hash`。 |
+| queue_capacity | uint32 | `65536` | 否 | 待发布事件队列的最大事件数，必须大于 `0`；队列满时新增事件会被丢弃。 |
+
+`kv_events_config` 为空时 KV event publisher 保持关闭。配置为非空 JSON 对象时，字段类型、必填字段和取值校验全部通过后自动启用；校验失败时保持关闭并记录错误日志。`enabled` 是内部派生状态，不是 JSON 配置字段。
 
 #### ETCD相关配置
 
@@ -770,6 +1199,17 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | spill_high_watermark_ratio | double | `0.8` | 否 | Spill 目录占用率高水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.02-1.0，须大于 spill_low_watermark_ratio |
 | spill_low_watermark_ratio | double | `0.6` | 否 | Spill 目录占用率低水位（相对 spill_size_limit 的比例 0.0-1.0）。有效范围 0.01-0.99，须小于 spill_high_watermark_ratio |
 
+#### Memory Rebalance相关配置
+
+| 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
+|-----|------|---------|-----|-------------|
+| enable_memory_rebalance | bool | `false` | 否 | 是否开启由 master 调度的内存均衡能力。开启后，master 会将高共享内存使用率 worker 上的对象迁移到低使用率 worker，以均衡集群内 object cache 的共享内存压力 |
+| rebalance_source_usage_percent | uint32 | `70` | 否 | source worker 的共享内存使用率阈值（百分比）。使用率达到或超过该值的 ready worker 才会被选为内存均衡迁移源。取值范围：1-100 |
+| rebalance_usage_gap_percent | uint32 | `20` | 否 | source 与 target worker 之间的最小共享内存使用率差值（百分比）。仅当差值不小于该值时才下发迁移任务。取值范围：1-100 |
+| rebalance_cooldown_s | uint32 | `60` | 否 | worker 在一次失败或超时的均衡任务后的冷却时间（秒），冷却期内不再被选为均衡源 |
+| rebalance_task_report_grace_ms | uint32 | `60000` | 否 | 均衡任务上报的宽限时间（毫秒），超过该时间未上报则任务视为超时并触发重试 |
+| rebalance_max_migrate_bytes_per_round | uint64 | `1073741824` | 否 | 单次内存均衡任务最多迁移的数据量（字节），必须大于 0，默认 1GB（1073741824） |
+
 #### 日志与可观测相关配置
 
 | 配置项 | 类型 | 默认值 | 是否支持动态修改 | 描述 |
@@ -778,15 +1218,15 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | v | int | `0` | 是 | 冗余日志级别，0表示不开启冗余日志，取值范围：[0, 3] |
 | log_async | bool | `true` | 否 | 是否开启异步刷新日志功能 |
 | log_async_queue_size | int | `65536` | 否 | 异步日志的消息队列最大容量（消息条数） |
-| log_compress | bool | `true` | 是 | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
+| log_compress | bool | `false` | 是 | 控制是否启用日志压缩功能。启用时，历史日志将自动压缩为gzip格式存储 |
 | logbufsecs | int | `10` | 否 | 日志消息最多缓冲时长（以秒为单位） |
 | log_filename | string | `""` | 否 | 日志前缀名，当值为空时前缀名为 `datasystem_worker` |
 | log_retention_day | int | `0` | 否 | 日志保留天数，当该值大于0时，最后修改时间早于 `logRetentionDay` 的日志文件将会被删除；当该值为0时表示禁用该功能 |
 | max_log_file_num | int | `5` | 是 | 最大日志文件个数，当日志文件个数超过该值时，会将最旧的日志文件删除，通过日志滚动机制保证日志文件最大个数小于等于该值 |
 | max_log_size | int | `400` | 否 | 单个日志文件最大大小（以MB为单位） |
-| request_sample_rate | double | `1.0` | 是 | 请求日志采样率（0.0–1.0）。1.0=全量保留；0.0=丢弃请求级 INFO/VLOG，请求级 ERROR/WARNING/PLOG 由 diagnostic_sample_rate 控制 |
-| access_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | 接口日志采样率（0.0–1.0）。1.0=全量保留 |
-| diagnostic_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | 诊断日志采样率（0.0–1.0）。控制请求级 ERROR/WARNING/PLOG 的补充采样（请求未 sampled-in 时）；1.0=全量保留；FATAL/CHECK 无条件保留不受此参数影响 |
+| request_sample_rate | double | `1.0` | 是 | 请求日志主采样率（[0.0–1.0]）。1.0=全量保留（所有请求采中→access/diagnostic也强制输出）；0.0=丢弃请求级 INFO/VLOG，请求级 ERROR/WARNING/SLOW_LOG 由 diagnostic补采样率 控制 |
+| access_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | access日志**补采样率**（[0.0–1.0]）。仅在请求未被request采中时生效；请求采中时access日志无条件输出。实际保留率=request采中率+(1−采中率)×此值，通常高于此值。1.0=未采中请求全量保留 |
+| diagnostic_sample_rate | double | `1.0` (未显式设置时支持派生) | 是 | diagnostic日志**补采样率**（[0.0–1.0]）。仅在请求未sampled-in时生效，控制请求级 ERROR/WARNING/SLOW_LOG的补充采样；请求采中时diagnostic无条件输出。FATAL/CHECK无条件保留不受此参数影响。实际保留率=request采中率+(1−采中率)×此值。1.0=未采中请求全量保留 |
 | slow_log_process_slower_than | uint64 | `2000` | 是 | 处理阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认2000μs(2ms)。填写正整数（如 `1000` 表示 1ms 阶段）。设为0可禁用。启用后，处理阶段耗时（总耗时减去子RPC耗时）超过此阈值的请求将在access log中输出latencySummary |
 | slow_log_rpc_slower_than | uint64 | `5000` | 是 | 跨进程RPC阶段时延阈值（微秒），用于慢日志和latencySummary输出。默认5000μs(5ms)。填写正整数（如 `2000` 表示 2ms 阶段）。设为0可禁用。启用后，RPC子阶段耗时超过此阈值的请求将在access log中输出latencySummary |
 
@@ -794,15 +1234,20 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 > - `access_sample_rate = min(1.0, request_sample_rate × 3)`
 > - `diagnostic_sample_rate = min(1.0, request_sample_rate × 4)`
 > 一旦 `access_sample_rate` 或 `diagnostic_sample_rate` 被显式设置，派生规则即失效，此后使用各自独立的值。显式设置 `1.0` 与默认 `1.0` 具有不同语义：前者阻止派生，后者允许派生。
+>
+> **补采样率与整体保留率的区别**：`access_sample_rate` 和 `diagnostic_sample_rate` 是补采样率，不是该类日志的整体保留率。
+> 例如 `request=0.5, access=0.3` 时，access实际保留率是 65%（50%采中强制输出 + 50%未采中×30%补采样），远高于 `access_sample_rate=0.3`。
 | log_only_write_info_file | bool | `true` | 否 | INFO日志文件始终写入所有级别日志。该值为`true`时不额外生成WARNING/ERROR日志文件；为`false`时会额外生成WARNING/ERROR日志文件，高级别日志会按等级写入多个日志文件。 |
-| log_monitor | bool | `true` | 是 | 是否开启接口性能与资源观测日志（`resource.log`、INFO `metrics_summary` 等）；与 `json_log_monitor` 独立，详见 [日志指南](../appendix/log_guide.md) |
-| json_log_monitor | bool | `true` | 是 | 是否开启 `kv_resource.log` 与 `kv_metrics.log` JSON-Lines 观测日志；与 `log_monitor` 独立，字段格式见 [日志指南](../appendix/log_guide.md) |
+| log_monitor | bool | `true` | 是 | 是否开启接口性能与资源观测日志 |
+| json_log_monitor | bool | `true` | 是 | 是否开启 `kv_resource.log` 与 `kv_metrics.log` JSON-Lines 观测日志 |
 | monitor_config_file | string | `./datasystem/config/datasystem.config` | 否 | 配置worker监控配置文件的路径 |
 | log_monitor_exporter | string | `"harddisk"` | 否 | 指定观测日志导出类型，当前仅支持按 `harddisk` 类型导出观测数据，即将观测数据保存到 `logDir` 路径下 |
 | log_monitor_interval_ms | int | `10000` | 否 | 观测日志收集导出的间隔时间（以毫秒为单位） |
 | minloglevel | int | `0` | 是 | 设置记录冗余日志的最低级别，低于这个级别的日志不会被记录 |
 | logfile_mode | int | `416` | 否 | 设置日志文件模式/权限，值为八进制数 |
 | enable_perf_trace_log | bool | `false` | 否 | 是否打开性能trace日志 |
+
+> **升级提示**：日志压缩默认关闭后，新部署或升级集群的历史日志不会再自动压缩，日志磁盘占用可能增加且滚动更快。如需保持历史压缩行为，请显式配置 `log_compress` 为 `true`；同时建议根据不压缩场景重新评估 `max_log_file_num` 和 `max_log_size` 的容量设置。
 
 #### 二级缓存相关配置
 
@@ -847,7 +1292,6 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 | node_timeout_s | int | `60` | 否 | 服务端节点超时最大时间间隔（单位为秒）, node_timeout_s >= 1 |
 | node_dead_timeout_s | int | `300` | 是 | 服务端节点存活检测最大时间间隔（单位为秒），当节点超过存活检测最大时间间隔后仍未恢复心跳，会被标记为死亡节点，该值必须大于 `node_timeout_s` |
 | enable_reconciliation | bool | `true` | 否 | 当节点重启时是否启用对账功能 |
-| enable_hash_ring_self_healing | bool | `false` | 否 | 是否启用哈希环自愈功能，如果该值为 `true`，当哈希环状态异常时会启用自愈修复哈希环 |
 | add_node_wait_time_s | int | `60` | 是 | 新节点加入哈希环的等待超时时间 |
 | auto_del_dead_node | bool | `true` | 是 | 是否启用死亡节点自动清理功能，当该值为 `true` 时，会将死亡节点剔除出集群管理，并触发被动缩容 |
 | enable_distributed_master | bool | `true` | 否 | 是否启用分布式主节点，默认值为true |
