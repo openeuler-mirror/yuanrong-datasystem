@@ -24,6 +24,7 @@
 
 #include <bthread/bthread.h>
 
+#include "datasystem/common/flags/common_flags.h"
 #include "gtest/gtest.h"
 
 namespace datasystem {
@@ -41,12 +42,22 @@ namespace datasystem {
 
 class RequestContextTest : public ::testing::Test {
 protected:
+    void SetUp() override
+    {
+        oldUseBrpc_ = FLAGS_use_brpc;
+        FLAGS_use_brpc = true;
+    }
+
     void TearDown() override
     {
         // Ensure no dangling stack pointer remains in the bthread key
         // when the test's stack-allocated contexts go out of scope.
         SetRequestContext(nullptr);
+        FLAGS_use_brpc = oldUseBrpc_;
     }
+
+private:
+    bool oldUseBrpc_ = false;
 };
 
 // ============================================================================
@@ -90,6 +101,67 @@ TEST_F(RequestContextTest, SetDifferentContextOnSameBthread)
 
     SetRequestContext(&ctx2);
     ASSERT_EQ(GetRequestContext(), &ctx2);
+}
+
+TEST_F(RequestContextTest, ApiDeadlineUsesActiveRequestContext)
+{
+    InitRequestContext();
+    RequestContext liveCtx;
+    RequestContext expiredCtx;
+
+    SetRequestContext(&liveCtx);
+    ApiDeadline::Instance().InitUs(5 * 1000 * 1000);
+    ASSERT_TRUE(ApiDeadline::Instance().CheckApiDeadline().IsOk());
+
+    SetRequestContext(&expiredCtx);
+    ApiDeadline::Instance().InitUs(0);
+    ASSERT_EQ(ApiDeadline::Instance().CheckApiDeadline().GetCode(), K_RPC_DEADLINE_EXCEEDED);
+
+    SetRequestContext(&liveCtx);
+    EXPECT_TRUE(ApiDeadline::Instance().CheckApiDeadline().IsOk());
+}
+
+TEST_F(RequestContextTest, FirstScopedContextInheritsFallbackDeadlineWithoutGuardStack)
+{
+    InitRequestContext();
+    SetRequestContext(nullptr);
+    ApiDeadline::Instance().Reset();
+    ApiDeadline::Instance().InitUs(5 * 1000 * 1000);
+    ApiDeadline::Instance().Push();
+    ApiDeadline::Instance().InitUs(3 * 1000 * 1000);
+
+    {
+        ScopedRequestContext scoped;
+        EXPECT_TRUE(ApiDeadline::Instance().IsInitialized());
+        EXPECT_GT(ApiDeadline::Instance().ApiRemainingUs(), 0);
+        ApiDeadline::Instance().Pop();
+        EXPECT_FALSE(ApiDeadline::Instance().IsInitialized());
+    }
+
+    ApiDeadline::Instance().Pop();
+    ApiDeadline::Instance().Reset();
+}
+
+TEST_F(RequestContextTest, NestedScopedContextInheritsApiDeadlineState)
+{
+    InitRequestContext();
+    ScopedRequestContext outer;
+    ApiDeadline::Instance().InitUs(5 * 1000 * 1000);
+    ApiDeadline::Instance().Push();
+    ApiDeadline::Instance().InitUs(3 * 1000 * 1000);
+
+    {
+        ScopedRequestContext inner;
+        EXPECT_TRUE(ApiDeadline::Instance().IsInitialized());
+        EXPECT_GT(ApiDeadline::Instance().ApiRemainingUs(), 0);
+        ApiDeadline::Instance().Pop();
+        EXPECT_GT(ApiDeadline::Instance().ApiRemainingUs(), 3 * 1000 * 1000);
+    }
+
+    EXPECT_TRUE(ApiDeadline::Instance().IsInitialized());
+    EXPECT_GT(ApiDeadline::Instance().ApiRemainingUs(), 0);
+    EXPECT_LE(ApiDeadline::Instance().ApiRemainingUs(), 3 * 1000 * 1000);
+    ApiDeadline::Instance().Pop();
 }
 
 // ============================================================================
@@ -304,18 +376,20 @@ void* BthreadMNWorkerFn(void* raw)
     auto* arg = static_cast<BthreadMNArg*>(raw);
     RequestContext myCtx;
     SetRequestContext(&myCtx);
+    ApiDeadline::Instance().InitUs(5 * 1000 * 1000);
     // duration=10 >= TimeCost::timeThreshold_(3) so Append records it.
     GetWorkerTimeCost().Append(arg->marker.c_str(), 10);
 
     constexpr int ROUNDS = 100;
     for (int i = 0; i < ROUNDS; i++) {
         RequestContext* seen = GetRequestContext();
-        if (seen != &myCtx) {
+        if (seen != &myCtx || &ApiDeadline::Instance() != &myCtx.apiDeadline) {
             arg->violations->fetch_add(1, std::memory_order_relaxed);
             continue;
         }
         std::string info = GetWorkerTimeCost().GetInfo();
-        if (info.find(arg->marker) == std::string::npos) {
+        if (info.find(arg->marker) == std::string::npos
+            || ApiDeadline::Instance().CheckApiDeadline().IsError()) {
             arg->violations->fetch_add(1, std::memory_order_relaxed);
         }
         // Yield forces the brpc scheduler to swap to another bthread.

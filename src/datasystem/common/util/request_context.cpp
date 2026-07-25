@@ -56,6 +56,15 @@ static std::once_flag g_initFlag;
 // intentionally do NOT call GetRequestContext() here, because its NEVER-nullptr
 // contract would always return a (fallback) Trace and make the nullptr signal
 // impossible to express.
+ApiDeadline *GetBthreadApiDeadline()
+{
+    if (!FLAGS_use_brpc || g_requestContextKey == INVALID_BTHREAD_KEY) {
+        return nullptr;
+    }
+    auto *ctx = static_cast<RequestContext *>(bthread_getspecific(g_requestContextKey));
+    return ctx == nullptr || ctx->isFallbackContext ? nullptr : &ctx->apiDeadline;
+}
+
 Trace* GetBthreadTrace()
 {
     // ZMQ mode (usercode_in_pthread=true): handlers run on plain pthreads, not bthreads.
@@ -125,6 +134,7 @@ RequestContext* GetRequestContext(const char* file, int line)
     // use per-pthread fallback.  ZMQ uses usercode_in_pthread=true, so each handler
     // has a dedicated pthread and thread_local is safe.
     static thread_local RequestContext fallbackCtx;
+    fallbackCtx.isFallbackContext = true;
     return &fallbackCtx;
 }
 
