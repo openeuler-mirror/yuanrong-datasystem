@@ -61,13 +61,17 @@ class BenchTestCase:
 
     def generate_env(self):
         """Generates the environment variables for the benchmark task."""
-        return {
+        env = {
             "DATASYSTEM_CLIENT_LOG_DIR": f"{self.bench_args.log_dir}/{self.name}",
             "DATASYSTEM_MIN_LOG_LEVEL": str(self.bench_args.args.min_log_level),
             "DATASYSTEM_LOG_MONITOR_ENABLE": str(
                 self.bench_args.args.log_monitor_enable
             ).lower(),
         }
+        use_brpc = os.environ.get("DATASYSTEM_USE_BRPC")
+        if use_brpc is not None:
+            env["DATASYSTEM_USE_BRPC"] = use_brpc
+        return env
 
     def run(self):
         """Iterate through all tasks, execute each one, and then handle its output."""
