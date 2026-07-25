@@ -225,7 +225,7 @@ private:
     std::unique_ptr<Signature> signature_{ nullptr };
     std::shared_ptr<ClientWorkerApi> clientWorkerApi_;
     std::unique_ptr<MmapManager> mmapManager_;
-    std::function<void()> callBack_;      // Fail callback handle, if worker disconnect this function would be call.
+    std::function<Status(client::WorkerRecoveryReason)> callBack_;  // Worker recovery callback.
     std::shared_timed_mutex clearMutex_;  // Protect producers_ and consumers_.
     std::unordered_map<std::string, std::weak_ptr<Producer>>
         producers_;  // Ensure that the producer can be automatically destroyed. Key is producerId.

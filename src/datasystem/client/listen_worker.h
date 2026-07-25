@@ -50,6 +50,13 @@ enum class SwitchTriggerReason : uint8_t {
     URMA_DATA_PLANE_FAILURE,
 };
 
+enum class WorkerRecoveryReason : uint8_t {
+    WORKER_REBOOT = 0,
+    CLIENT_REMOVED,
+    CONNECTION_BROKEN,
+    RETRY_PENDING,
+};
+
 class FdReleaseHelper {
 public:
     void SetReleaseFdCallBack(std::function<void(const std::vector<int64_t> &fds)> callBack)
@@ -121,6 +128,13 @@ public:
      * @param[in] callback Callback function invoked when the worker is faulty.
      */
     void AddCallBackFunc(void *pointer, std::function<void()> callback);
+
+    /**
+     * @brief Set a worker recovery callback whose status controls request admission.
+     * @param[in] pointer Object pointer.
+     * @param[in] callback Callback that completes all mandatory recovery work before returning OK.
+     */
+    void AddRecoveryCallback(void *pointer, std::function<Status(WorkerRecoveryReason)> callback);
 
     /**
      * @brief Remove the callback function.
@@ -219,7 +233,12 @@ private:
     /**
      * @brief Run all client lost handler.
      */
-    void RunAllCallback();
+    Status RunAllCallback(WorkerRecoveryReason reason);
+
+    /**
+     * @brief Retry client resource recovery after a successful heartbeat.
+     */
+    void TryRecoverClientResources(WorkerRecoveryReason reason);
 
     void CleanInvalidCallback();
 
@@ -303,7 +322,7 @@ private:
     std::string clientId_;
 
     // Worker fail handle callback function.
-    std::unordered_map<void *, std::function<void()>> callBackTable_;
+    std::unordered_map<void *, std::function<Status(WorkerRecoveryReason)>> callBackTable_;
     std::shared_timed_mutex callbackMutex_;  // Protect 'callBackTable_'.
     std::unordered_set<void *> deletedCallbacks_;
     std::shared_timed_mutex deletedCallbackMutex_;  // Protect 'deletedCallbacks'
@@ -313,6 +332,9 @@ private:
     std::atomic<bool> isLocalWorker_{ true };
 
     std::unique_ptr<WaitPost> waitPost_{ nullptr };  // wait for some second to check rpc type heartbeat timeout
+
+    // Accessed only by the RPC heartbeat thread. A successful heartbeat must not reopen request admission while true.
+    bool recoveryPending_{ false };
 
     std::atomic<bool> firstHeartbeatReceived_{ false };  // wait for first heartbeat
     std::unique_ptr<WaitPost> firstHeartbeatWaitPost_{ nullptr };

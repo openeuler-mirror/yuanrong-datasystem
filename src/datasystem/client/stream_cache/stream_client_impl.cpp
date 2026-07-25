@@ -129,8 +129,12 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
     mmapManager_ = std::make_unique<datasystem::client::MmapManager>(
         std::dynamic_pointer_cast<IClientWorkerCommonApi>(clientWorkerApi_), false);
     listenWorker_ = std::make_shared<ListenWorker>(clientWorkerApi_, HeartbeatType::RPC_HEARTBEAT);
-    callBack_ = [this]() {
-        LOG(INFO) << "Disconnected from worker, clear mmap and try to reconnect...";
+    callBack_ = [this](client::WorkerRecoveryReason reason) -> Status {
+        if (reason == client::WorkerRecoveryReason::RETRY_PENDING) {
+            VLOG(1) << "Retry stream client resource recovery.";
+        } else {
+            LOG(INFO) << "Disconnected from worker, clear mmap and try to reconnect...";
+        }
         if (reportWorkerLost_) {
             workerWasLost_ = true;
         }
@@ -138,15 +142,20 @@ Status StreamClientImpl::Init(const std::string &ip, const int &port, bool &need
         mmapManager_->CleanInvalidMmapTable();
         Status reconnectStatus = clientWorkerApi_->Reconnect();
         if (reconnectStatus.IsError()) {
-            LOG(ERROR) << "Reconnect to worker failed, please check network and worker status and restart client."
-                       << reconnectStatus.ToString();
-            return;
+            constexpr int logInterval = 10;
+            LOG_EVERY_T(ERROR, logInterval)
+                << "Reconnect to worker failed, please check network and worker status and restart client."
+                << reconnectStatus.ToString();
+            return reconnectStatus;
         }
-        listenWorker_->SetWorkerAvailable(true);
+        if (reason == client::WorkerRecoveryReason::CONNECTION_BROKEN) {
+            listenWorker_->SetWorkerAvailable(true);
+        }
         LOG(INFO) << "Reconnect to worker success";
+        return Status::OK();
     };
     listenWorker_->StartListenWorker();
-    listenWorker_->AddCallBackFunc(this, callBack_);
+    listenWorker_->AddRecoveryCallback(this, callBack_);
     listenWorker_->SetReleaseFdCallBack(
         [this](const std::vector<int64_t> &fds) { mmapManager_->ClearExpiredFds(fds); });
     reportWorkerLost_ = reportWorkerLost;

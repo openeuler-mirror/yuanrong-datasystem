@@ -44,6 +44,7 @@ ds_cc_library(
         "//src/datasystem/common/util:rpc_diagnostic",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/protos:share_memory_cc_proto",
+        "@com_github_apache_brpc//:brpc",
         "@tbb",
     ],
 )

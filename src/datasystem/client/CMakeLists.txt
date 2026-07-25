@@ -97,6 +97,7 @@ list(APPEND CLIENT_DEPEND_LIBS
         cluster_topology_keyspace
         dl
         client_mmap_static
+        ${BRPC_LIBRARIES}
         gRPC::grpc++
         common_etcd_client
         worker_transport_api

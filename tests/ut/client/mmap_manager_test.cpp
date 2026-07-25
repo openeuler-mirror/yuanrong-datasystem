@@ -192,6 +192,50 @@ TEST_F(MmapManagerTest, TestLookupUnitsAndMmapFdsConcurrentSameFdOnlyTransfersOn
 #endif
 }
 
+TEST_F(MmapManagerTest, TestWorkerFdReuseAfterCleanupMapsNewMemfd)
+{
+#if defined(__linux__)
+    const int mmapSize = 4096;
+    constexpr int workerFd = 903;
+    constexpr char oldValue = 'A';
+    constexpr char newValue = 'B';
+    int oldMemfd = static_cast<int>(syscall(SYS_memfd_create, "mmap_mgr_old_worker", MFD_ALLOW_SEALING));
+    int newMemfd = static_cast<int>(syscall(SYS_memfd_create, "mmap_mgr_new_worker", MFD_ALLOW_SEALING));
+    ASSERT_GE(oldMemfd, 0);
+    ASSERT_GE(newMemfd, 0);
+    ASSERT_EQ(0, ftruncate(oldMemfd, mmapSize));
+    ASSERT_EQ(0, ftruncate(newMemfd, mmapSize));
+    ASSERT_EQ(1, pwrite(oldMemfd, &oldValue, 1, 0));
+    ASSERT_EQ(1, pwrite(newMemfd, &newValue, 1, 0));
+
+    auto api = std::make_shared<MmapUtFakeWorkerApi>(HostPort("127.0.0.1", 1));
+    MmapManager mmapManager(api, false);
+    api->SetTestMemfd(oldMemfd);
+    auto oldUnit = std::make_shared<ShmUnitInfo>(workerFd, static_cast<uint64_t>(mmapSize));
+    ASSERT_TRUE(mmapManager.LookupUnitsAndMmapFd("tenant_ut", oldUnit).IsOk());
+    auto oldEntry = mmapManager.GetMmapEntryByFd(workerFd);
+    ASSERT_NE(oldEntry, nullptr);
+    EXPECT_EQ(*static_cast<char *>(oldUnit->pointer), oldValue);
+
+    mmapManager.CleanInvalidMmapTable();
+    EXPECT_EQ(mmapManager.GetMmapEntryByFd(workerFd), nullptr);
+
+    api->SetTestMemfd(newMemfd);
+    auto newUnit = std::make_shared<ShmUnitInfo>(workerFd, static_cast<uint64_t>(mmapSize));
+    ASSERT_TRUE(mmapManager.LookupUnitsAndMmapFd("tenant_ut", newUnit).IsOk());
+    auto newEntry = mmapManager.GetMmapEntryByFd(workerFd);
+    ASSERT_NE(newEntry, nullptr);
+    EXPECT_NE(newEntry, oldEntry);
+    EXPECT_EQ(*static_cast<char *>(newUnit->pointer), newValue);
+    EXPECT_EQ(*oldEntry->Pointer(), oldValue);
+
+    ASSERT_EQ(0, close(oldMemfd));
+    ASSERT_EQ(0, close(newMemfd));
+#else
+    GTEST_SKIP() << "Linux memfd + ShmMmapTable path only";
+#endif
+}
+
 // UC6 / review fix #3/#4: per-shm_id scoped reclaim must not cross workers.
 TEST_F(MmapManagerTest, TestClearExpiredByShmIdDoesNotCrossWorker)
 {

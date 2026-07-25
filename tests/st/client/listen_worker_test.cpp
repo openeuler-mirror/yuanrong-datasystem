@@ -19,10 +19,14 @@
  */
 
 #include "datasystem/client/listen_worker.h"
+#include <atomic>
+#include <chrono>
 #include <thread>
 #include "datasystem/client/client_worker_common_api.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/util/timer.h"
+#include "datasystem/common/util/wait_post.h"
 
 #include "common.h"
 
@@ -145,6 +149,47 @@ TEST_F(ListenWorkerTest, TestRPCHeartheat)
     DS_ASSERT_OK(cluster_->StartWorkers());
     sleep(1);  // Wait until the client is successfully reconnected.
     ASSERT_TRUE(called);
+    DS_ASSERT_OK(listenWorker.CheckWorkerAvailable());
+}
+
+TEST_F(ListenWorkerTest, TestRecoveryFailureKeepsAdmissionClosedAndRetries)
+{
+    auto workerApi = std::make_shared<ClientWorkerRemoteCommonApi>(workerHostPort_, RpcCredential(),
+                                                                  HeartbeatType::RPC_HEARTBEAT, "", signature_.get());
+    DS_ASSERT_OK(workerApi->Init(initTimeoutMs, initTimeoutMs));
+    ListenWorker listenWorker(workerApi, workerApi->heartbeatType_);
+    DS_ASSERT_OK(listenWorker.StartListenWorker());
+
+    std::atomic<int> attempts{ 0 };
+    std::atomic<int> firstReason{ -1 };
+    std::atomic<int> retryReason{ -1 };
+    WaitPost firstAttemptEntered;
+    WaitPost finishFirstAttempt;
+    listenWorker.AddRecoveryCallback(workerApi.get(), [&](WorkerRecoveryReason reason) {
+        int attempt = ++attempts;
+        if (attempt == 1) {
+            firstReason = static_cast<int>(reason);
+            firstAttemptEntered.Set();
+            finishFirstAttempt.WaitFor(3'000);
+            return Status(StatusCode::K_RUNTIME_ERROR, "injected first recovery failure");
+        }
+        retryReason = static_cast<int>(reason);
+        return Status::OK();
+    });
+
+    DS_ASSERT_OK(inject::Set("listen_worker.reboot", "call()"));
+    firstAttemptEntered.WaitFor(3'000);
+    EXPECT_EQ(firstReason.load(), static_cast<int>(WorkerRecoveryReason::WORKER_REBOOT));
+    DS_ASSERT_NOT_OK(listenWorker.CheckWorkerAvailable());
+    DS_ASSERT_OK(inject::Clear("listen_worker.reboot"));
+    finishFirstAttempt.Set();
+
+    Timer timer;
+    while (listenWorker.CheckWorkerAvailable().IsError() && timer.ElapsedMilliSecond() < 3'000) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    ASSERT_GE(attempts.load(), 2);
+    EXPECT_EQ(retryReason.load(), static_cast<int>(WorkerRecoveryReason::RETRY_PENDING));
     DS_ASSERT_OK(listenWorker.CheckWorkerAvailable());
 }
 
