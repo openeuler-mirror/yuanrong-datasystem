@@ -125,6 +125,7 @@ private:
                        const std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
                        const std::vector<bool> &tcpPayload, const TransportSetParam &param,
                        uint64_t fallbackBytes, TransportMSetResult &result);
+    Status PrepareReceiveBuffer(const std::string &objectKey, uint64_t expectedSize, UbReceiveBuffer &buffer);
     Status GetLocked(const DataGetRequest &input, DataGetResult &output);
     Status GetOnce(const DataGetRequest &input, uint64_t expectedSize, DataGetResult &output, uint64_t &actualSize);
     Status BuildMCreateBuffers(const HostPort &workerAddr, const std::vector<std::string> &keys,

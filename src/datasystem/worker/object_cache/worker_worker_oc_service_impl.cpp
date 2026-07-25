@@ -252,9 +252,11 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
     const std::string callerAddress = GetRemoteAddressForLog(req);
-    LOG(INFO) << AppendSrcDstForLog(FormatString("Processing pull object[%s] offset[%ld] size[%ld]", req.object_key(),
-                                                 req.read_offset(), req.read_size()),
-                                    callerAddress, FLAGS_worker_address);
+    LOG(INFO) << AppendSrcDstForLog(
+        FormatString(
+            "Processing pull object[%s] offset[%ld] size[%ld], expectedDataSize[%ld], version[%ld], hasUrmaInfo[%d]",
+            req.object_key(), req.read_offset(), req.read_size(), req.data_size(), req.version(), req.has_urma_info()),
+        callerAddress, FLAGS_worker_address);
     std::vector<uint64_t> eventKeys;
     RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys, nullptr, nullptr, nullptr,
                                             nullptr, isQueryAndGet));

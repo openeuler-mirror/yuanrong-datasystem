@@ -144,7 +144,14 @@ Status UbTransporter::GetLocked(const DataGetRequest &input, DataGetResult &outp
     }
     uint64_t actualSize = input.expectedSize;
     Status rc = GetOnce(input, input.expectedSize, output, actualSize);
-    if (rc.GetCode() != K_OC_REMOTE_GET_NOT_ENOUGH || actualSize == 0 || actualSize == input.expectedSize) {
+    const bool retryWithActualSize = rc.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH && actualSize > 0
+                                     && actualSize != input.expectedSize;
+    LOG_IF(WARNING, input.expectedSize == 0 || rc.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH)
+        << "[TransportGet][UB] First Get result, key=" << input.objectKey << ", expectedSize=" << input.expectedSize
+        << ", actualSize=" << actualSize << ", status=" << rc.ToString()
+        << ", dataSource=" << static_cast<int>(output.response.data_source())
+        << ", payloadCount=" << output.rpcPayloads.size() << ", retryWithActualSize=" << retryWithActualSize;
+    if (!retryWithActualSize) {
         return rc;
     }
     return GetOnce(input, actualSize, output, actualSize);
@@ -213,9 +220,6 @@ Status UbTransporter::BatchGet(const DataGetBatchRequest &inputs, DataGetBatchRe
         if (end - begin == 1 && preserveUnary) {
             DataGetItemResult item;
             Status status = GetLocked(inputs[begin], item.data);
-            if (status.IsError() && static_cast<StatusCode>(item.data.response.error().error_code()) == K_OK) {
-                return status;
-            }
             item.status = status;
             pendingOutputs[begin] = std::move(item);
         } else {
@@ -466,28 +470,53 @@ Status UbTransporter::BatchGetAggregateOnce(const DataGetBatchRequest &inputs,
     return Status::OK();
 }
 
+Status UbTransporter::PrepareReceiveBuffer(const std::string &objectKey, uint64_t expectedSize,
+                                           UbReceiveBuffer &buffer)
+{
+    const uint64_t maxGetSize = bufferProvider_->MaxGetSize();
+    Status causeRc;
+    if (expectedSize == 0) {
+        causeRc = Status(K_INVALID, "UB Get expected size is zero");
+    } else if (expectedSize > maxGetSize) {
+        causeRc = Status(K_OUT_OF_RANGE, "UB Get expected size exceeds the receive buffer limit");
+    } else {
+        causeRc = bufferProvider_->Allocate(expectedSize, buffer);
+        if (causeRc.IsOk()
+            && (buffer.data == nullptr || buffer.owner == nullptr || buffer.size < expectedSize
+                || buffer.transportInstanceId.empty())) {
+            causeRc = Status(K_RUNTIME_ERROR, "UB receive buffer is invalid");
+        }
+    }
+    if (causeRc.IsOk()) {
+        return Status::OK();
+    }
+
+    Status prepareRc(K_URMA_ERROR, "UB receive buffer preparation failed: " + causeRc.ToString());
+    LOG(ERROR) << "[TransportGet][UB] Receive buffer preparation failed, key=" << objectKey
+               << ", expectedSize=" << expectedSize << ", maxGetSize=" << maxGetSize
+               << ", causeStatus=" << causeRc.ToString() << ", returnStatus=" << prepareRc.ToString()
+               << ", bufferSize=" << buffer.size << ", dataValid=" << (buffer.data != nullptr)
+               << ", ownerValid=" << (buffer.owner != nullptr)
+               << ", instanceIdEmpty=" << buffer.transportInstanceId.empty();
+    return prepareRc;
+}
+
 Status UbTransporter::GetOnce(const DataGetRequest &input, uint64_t expectedSize, DataGetResult &output,
                               uint64_t &actualSize)
 {
     output = DataGetResult{};
+    output.kind = AccessTransportKind::UNKNOWN;
+    UbReceiveBuffer buffer;
+    RETURN_IF_NOT_OK(PrepareReceiveBuffer(input.objectKey, expectedSize, buffer));
+
     GetObjectRemoteReqPb request;
     request.set_object_key(input.objectKey);
     request.set_data_size(expectedSize);
     request.set_try_lock(true);
-
-    UbReceiveBuffer buffer;
-    bool useUb = expectedSize > 0 && expectedSize <= bufferProvider_->MaxGetSize();
-    if (useUb) {
-        Status allocRc = bufferProvider_->Allocate(expectedSize, buffer);
-        useUb = allocRc.IsOk() && buffer.data != nullptr && buffer.owner != nullptr && buffer.size >= expectedSize
-                && !buffer.transportInstanceId.empty();
-    }
-    if (useUb) {
-        request.set_read_offset(0);
-        request.set_read_size(expectedSize);
-        *request.mutable_urma_info() = buffer.remoteAddr;
-        request.set_urma_instance_id(buffer.transportInstanceId);
-    }
+    request.set_read_offset(0);
+    request.set_read_size(expectedSize);
+    *request.mutable_urma_info() = buffer.remoteAddr;
+    request.set_urma_instance_id(buffer.transportInstanceId);
 
     Status rpcRc = rpcClient_->InvokeGetObject(request, output.response, output.rpcPayloads);
     actualSize = output.response.data_size() < 0 ? 0 : static_cast<uint64_t>(output.response.data_size());
@@ -495,11 +524,11 @@ Status UbTransporter::GetOnce(const DataGetRequest &input, uint64_t expectedSize
     Status responseStatus(static_cast<StatusCode>(output.response.error().error_code()),
                           output.response.error().error_msg());
     RETURN_IF_NOT_OK(responseStatus);
-    if (!useUb || output.response.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
-        CHECK_FAIL_RETURN_STATUS(output.response.data_source() == DataTransferSource::DATA_IN_PAYLOAD,
-                                 K_RUNTIME_ERROR, "GetObjectRemote returned data outside the selected transport");
-        output.kind = AccessTransportKind::TCP;
-        return Status::OK();
+    if (output.response.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
+        LOG(ERROR) << "[TransportGet][UB] Unexpected TCP payload response, key=" << input.objectKey
+                   << ", expectedSize=" << expectedSize << ", actualSize=" << actualSize
+                   << ", payloadCount=" << output.rpcPayloads.size();
+        RETURN_STATUS(K_URMA_ERROR, "UB GetObjectRemote unexpectedly returned TCP payload");
     }
     CHECK_FAIL_RETURN_STATUS(output.response.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED,
                              K_RUNTIME_ERROR, "UB GetObjectRemote returned an invalid data source");
