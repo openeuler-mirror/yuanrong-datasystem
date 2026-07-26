@@ -627,23 +627,71 @@ Status Read(FILE *f, uint8_t *buf, size_t *pSize)
     return Status::OK();
 }
 
-Status CompressFile(const std::string &src, std::string &dest)
+bool IsCompressionCancelled(const std::atomic_bool *cancelled)
 {
+    return cancelled != nullptr && cancelled->load(std::memory_order_acquire);
+}
+
+void CloseCompressionFiles(FILE *file, gzFile gzf, const std::string &tmpDest)
+{
+    (void)gzclose(gzf);
+    (void)fclose(file);
+    (void)DeleteFile(tmpDest);
+}
+
+Status GetGzipWriteError(gzFile gzf, const std::string &tmpDest)
+{
+    int err;
+    const char *errStr = gzerror(gzf, &err);
+    std::stringstream ss("Unable to write to gzip output", std::ios_base::ate);
+    if (errStr != nullptr) {
+        ss << ": " << errStr;
+    }
+    (void)gzclose(gzf);
+    Status status = DeleteFile(tmpDest);
+    RETURN_STATUS(status.IsOk() ? StatusCode::K_RUNTIME_ERROR : status.GetCode(), ss.str() + status.GetMsg());
+}
+
+Status CommitCompressedFile(const std::string &tmpDest, const std::string &dest)
+{
+    mode_t permission = 0440;
+    Status status = ChangeFileMod(tmpDest.c_str(), permission);
+    if (!status.IsOk()) {
+        (void)DeleteFile(tmpDest);
+        return status;
+    }
+    status = RenameFile(tmpDest, dest);
+    if (!status.IsOk()) {
+        (void)DeleteFile(tmpDest);
+    }
+    return status;
+}
+
+Status CompressFile(const std::string &src, std::string &dest, const std::atomic_bool *cancelled)
+{
+    if (IsCompressionCancelled(cancelled)) {
+        RETURN_STATUS(StatusCode::K_INTERRUPTED, "Log compression cancelled");
+    }
     FILE *file = fopen(src.c_str(), "r");
     RETURN_RUNTIME_ERROR_IF_NULL(file);
-    gzFile gzf = gzopen(dest.c_str(), "w");
+    const std::string tmpDest = dest + ".tmp";
+    gzFile gzf = gzopen(tmpDest.c_str(), "w");
     if (gzf == nullptr) {
         fclose(file);
-        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR, FormatString("The destination gz file: %s pointer is null.", dest));
+        RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
+                      FormatString("The destination gz file: %s pointer is null.", tmpDest));
     }
 
     size_t size = 32 * 1024ul;  // Just represent 32KB, ugly CI!
     uint8_t buf[size];
     while (true) {
+        if (IsCompressionCancelled(cancelled)) {
+            CloseCompressionFiles(file, gzf, tmpDest);
+            RETURN_STATUS(StatusCode::K_INTERRUPTED, "Log compression cancelled");
+        }
         Status status = Read(file, buf, &size);
         if (!status.IsOk()) {
-            (void)gzclose(gzf);
-            (void)fclose(file);
+            CloseCompressionFiles(file, gzf, tmpDest);
             return status;
         }
         if (size == 0) {
@@ -651,31 +699,23 @@ Status CompressFile(const std::string &src, std::string &dest)
         }
         int n = gzwrite(gzf, buf, size);
         if (n == 0) {
-            int err;
-            const char *errStr = gzerror(gzf, &err);
-            std::stringstream ss("Unable to write to gzip output", std::ios_base::ate);
-            if (errStr != nullptr) {
-                ss << ": " << errStr;
-            }
-            (void)gzclose(gzf);
             (void)fclose(file);
-            status = DeleteFile(dest);
-            RETURN_STATUS(status.IsOk() ? StatusCode::K_RUNTIME_ERROR : status.GetCode(), ss.str() + status.GetMsg());
+            return GetGzipWriteError(gzf, tmpDest);
         } else if (n != static_cast<int>(size)) {
             (void)gzclose(gzf);
             (void)fclose(file);
-            status = DeleteFile(dest);
+            status = DeleteFile(tmpDest);
             RETURN_STATUS(status.IsOk() ? StatusCode::K_RUNTIME_ERROR : status.GetCode(),
-                          FormatString("The gz file: %s is not fully written. %s.", dest, status.GetMsg()));
+                          FormatString("The gz file: %s is not fully written. %s.", tmpDest, status.GetMsg()));
         }
     }
     (void)gzclose(gzf);
     (void)fclose(file);
-    // Change mode to 0440, we only allow the read permission. And we
-    // will never check the return even the chmod operation is failed.
-    mode_t permission = 0440;  // Change permission to 0440.
-    RETURN_IF_NOT_OK(ChangeFileMod(dest.c_str(), permission));
-    return Status::OK();
+    if (IsCompressionCancelled(cancelled)) {
+        (void)DeleteFile(tmpDest);
+        RETURN_STATUS(StatusCode::K_INTERRUPTED, "Log compression cancelled");
+    }
+    return CommitCompressedFile(tmpDest, dest);
 }
 
 Status ValidateFD(const std::string &pathname, int fileDescriptor)
