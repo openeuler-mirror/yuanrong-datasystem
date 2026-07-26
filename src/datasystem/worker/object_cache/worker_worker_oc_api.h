@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_WORKER_OC_API_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_WORKER_OC_API_H
 
+#include <chrono>
 #include <string>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
@@ -150,6 +151,13 @@ public:
      */
     Status Init() override;
 
+    /**
+     * @brief Initialize the remote Worker API within a control-path absolute deadline.
+     * @param[in] deadline Absolute deadline for RPC stub cache retry waits.
+     * @return Status of the call.
+     */
+    Status Init(std::chrono::steady_clock::time_point deadline);
+
     std::string Address() const
     {
         return hostPort_.ToString();
@@ -202,7 +210,13 @@ public:
      */
     Status GetClusterStateAsyncWrite(GetClusterStateReqPb &req, int32_t timeoutMs, int64_t &tag);
 
-    Status GetClusterStateAsyncRead(int64_t tag, GetClusterStateRspPb &rsp);
+    Status GetClusterStateAsyncRead(int64_t tag, GetClusterStateRspPb &rsp, RpcRecvFlags flags = RpcRecvFlags::NONE);
+
+    /**
+     * @brief Release one unread cluster-state async tag while allowing its in-flight callback to finish safely.
+     * @param[in] tag Async response tag.
+     */
+    void ForgetClusterStateRequest(int64_t tag);
 
     Status MigrateData(MigrateDataReqPb &req, const std::vector<MemView> &payloads, MigrateDataRspPb &rsp);
 

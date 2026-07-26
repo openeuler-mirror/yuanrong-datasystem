@@ -56,6 +56,21 @@ bool IsTransientReconcileStatus(StatusCode code)
     return code == K_TRY_AGAIN || code == K_NOT_READY;
 }
 
+const Member *FailureProbeTargetOwnedBy(const TopologySnapshot &latest, const std::string &localAddress)
+{
+    const auto &committed = latest.CommittedMembers();
+    const auto local =
+        std::find_if(committed.begin(), committed.end(), [&](const Member *member) {
+            return member->identity.address == localAddress;
+        });
+    if (local == committed.end()) {
+        return nullptr;
+    }
+    // A target's canonical successor is its only reporter; viewed locally, that target is our predecessor.
+    const auto localIndex = static_cast<size_t>(std::distance(committed.begin(), local));
+    return committed[(localIndex + committed.size() - 1) % committed.size()];
+}
+
 Status BuildMemberId(const MembershipRecord &membership, std::string &memberId)
 {
     const auto seed = std::to_string(membership.address.size()) + ":" + membership.address + ":"
@@ -145,10 +160,11 @@ void LogMemberTransition(const std::string &clusterName, const char *action, siz
 bool TopologyControllerOptions::IsValid() const noexcept
 {
     return nodeDeadTimeout.count() > 0 && failureBatchWindow.count() > 0 && ordinaryBatchWindow.count() > 0
-           && reconcileTick.count() > 0 && maxDerivedOperationsPerTick > 0 && maxMembersPerBatch > 0
-           && maxProgressReadsPerTick > 0 && now
+           && reconcileTick.count() > 0 && failureProbeTimeout.count() > 0 && maxDerivedOperationsPerTick > 0
+           && maxMembersPerBatch > 0 && maxProgressReadsPerTick > 0 && now
            && scaleInCollectWindow.count() >= 0
            && scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
+           && (!memberLivenessProbe || !localAddress.empty())
            && (eventSourceMode == TopologyEventSourceMode::SELF_MANAGED
                || eventSourceMode == TopologyEventSourceMode::EXTERNAL);
 }
@@ -467,10 +483,14 @@ Status TopologyController::RecoverFromLatestTopology()
     std::shared_ptr<const TopologySnapshot> latest;
     auto readStatus = reader.Read(CONTROLLER_READ_TIMEOUT_MS, latest);
     if (readStatus.GetCode() == K_NOT_FOUND) {
-        RETURN_IF_NOT_OK(EnsureTopologyAuthority());
-        RETURN_IF_NOT_OK(reader.Read(CONTROLLER_READ_TIMEOUT_MS, latest));
-    } else {
-        RETURN_IF_NOT_OK(readStatus);
+        readStatus = EnsureTopologyAuthority();
+        if (readStatus.IsOk()) {
+            readStatus = reader.Read(CONTROLLER_READ_TIMEOUT_MS, latest);
+        }
+    }
+    if (readStatus.IsError()) {
+        failureClassifier_.Pause(options_.now());
+        return readStatus;
     }
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
@@ -578,18 +598,10 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
                   << " state=" << MemberStateName(observed.state)
                   << " action=missing_resolved missing_ms=" << observed.missingMs;
     }
-    for (const auto &observed : classification.confirmedMissing) {
-        LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
-                     << " version=" << latest.Version() << " address=" << observed.identity.address
-                     << " member_id_prefix=" << MemberIdForLog(observed.identity.id)
-                     << " state=" << MemberStateName(observed.state)
-                     << " action=confirmed missing_ms=" << observed.missingMs
-                     << " node_dead_timeout_ms="
-                     << std::chrono::duration_cast<std::chrono::milliseconds>(options_.nodeDeadTimeout).count();
-    }
     if (AllMembersExiting(latest, memberships)) {
         return CommitClusterShutdown(latest);
     }
+    RETURN_IF_NOT_OK(ConfirmMissingMembersUnreachable(latest, classification));
     if (!classification.confirmedFailure.empty()) {
         return CommitConfirmedFailures(latest, classification);
     }
@@ -597,6 +609,108 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
         return CommitUncommittedCleanup(latest, classification);
     }
     return CommitMembershipFacts(latest, memberships);
+}
+
+Status TopologyController::ConfirmMissingMembersUnreachable(const TopologySnapshot &latest,
+                                                            FailureClassification &classification)
+{
+    if (!options_.memberLivenessProbe || classification.confirmedMissing.empty()) {
+        return Status::OK();
+    }
+    std::vector<const MemberAbsenceObservation *> owned;
+    const auto *ownedMember = FailureProbeTargetOwnedBy(latest, options_.localAddress);
+    if (ownedMember != nullptr) {
+        const auto ownedObservation =
+            std::find_if(classification.confirmedMissing.begin(), classification.confirmedMissing.end(),
+                         [&](const MemberAbsenceObservation &observed) {
+                             return observed.identity.address == ownedMember->identity.address;
+                         });
+        if (ownedObservation != classification.confirmedMissing.end()) {
+            owned.push_back(&*ownedObservation);
+        }
+    }
+    std::vector<MemberIdentity> targets;
+    targets.reserve(owned.size());
+    for (const auto *entry : owned) {
+        const auto &observed = *entry;
+        targets.push_back(observed.identity);
+        LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+                     << " address=" << observed.identity.address
+                     << " member_id_prefix=" << MemberIdForLog(observed.identity.id)
+                     << " state=" << MemberStateName(observed.state)
+                     << " action=absence_timeout missing_ms=" << observed.missingMs << " node_dead_timeout_ms="
+                     << std::chrono::duration_cast<std::chrono::milliseconds>(options_.nodeDeadTimeout).count();
+    }
+
+    std::vector<ControlBackendObservation> observations;
+    if (!targets.empty()) {
+        try {
+            observations =
+                options_.memberLivenessProbe(targets, std::chrono::steady_clock::now() + options_.failureProbeTimeout);
+        } catch (const std::exception &error) {
+            RETURN_STATUS(K_RUNTIME_ERROR, std::string("member liveness probe threw: ") + error.what());
+        } catch (...) {
+            RETURN_STATUS(K_RUNTIME_ERROR, "member liveness probe threw an unknown exception");
+        }
+    }
+
+    std::unordered_map<std::string, const ControlBackendObservation *> observationsByAddress;
+    observationsByAddress.reserve(observations.size());
+    for (const auto &observation : observations) {
+        observationsByAddress.emplace(observation.reporter.address, &observation);
+    }
+    std::unordered_set<std::string> directlyUnreachable;
+    directlyUnreachable.reserve(targets.size());
+    const auto unreachableConfirmationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               options_.nodeDeadTimeout + options_.failureProbeTimeout)
+                                               .count();
+    for (size_t index = 0; index < targets.size(); ++index) {
+        const auto &target = targets[index];
+        const auto observed = observationsByAddress.find(target.address);
+        if (observed == observationsByAddress.end()) {
+            if (owned[index]->missingMs < unreachableConfirmationMs) {
+                LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
+                             << " version=" << latest.Version() << " address=" << target.address
+                             << " member_id_prefix=" << MemberIdForLog(target.id)
+                             << " action=direct_probe_retry missing_ms="
+                             << owned[index]->missingMs
+                             << " confirmation_ms=" << unreachableConfirmationMs;
+                continue;
+            }
+            directlyUnreachable.emplace(target.address);
+            LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+                         << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
+                         << " action=direct_probe_unreachable";
+            continue;
+        }
+        const auto &evidence = *observed->second;
+        const auto now = std::chrono::steady_clock::now();
+        const bool matchingEvidence = evidence.reporter.id == target.id && evidence.topologyVersion == latest.Version()
+                                      && evidence.topologyRevision == latest.AuthorityRevision()
+                                      && evidence.topologyDigest == latest.CanonicalDigest()
+                                      && evidence.observedAt != std::chrono::steady_clock::time_point{}
+                                      && evidence.observedAt <= now
+                                      && now - evidence.observedAt <= options_.failureProbeTimeout;
+        failureClassifier_.ResetMissing(target.address);
+        LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+                     << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
+                     << " action=" << (matchingEvidence ? "direct_probe_reachable" : "direct_probe_inconclusive")
+                     << " evidence_version=" << evidence.topologyVersion
+                     << " evidence_revision=" << evidence.topologyRevision;
+    }
+
+    classification.confirmedFailure.erase(
+        std::remove_if(classification.confirmedFailure.begin(), classification.confirmedFailure.end(),
+                       [&](const MemberIdentity &identity) {
+                           if (directlyUnreachable.count(identity.address) > 0) {
+                               return false;
+                           }
+                           const Member *member = nullptr;
+                           return latest.FindMemberByAddress(identity.address, member).IsError()
+                                  || member->state != MemberState::FAILED;
+                       }),
+        classification.confirmedFailure.end());
+    return Status::OK();
 }
 
 Status TopologyController::CommitClusterShutdown(const TopologySnapshot &latest)

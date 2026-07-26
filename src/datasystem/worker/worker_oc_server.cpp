@@ -30,6 +30,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 #include <unistd.h>
 #include <fcntl.h>
@@ -245,36 +246,93 @@ struct PendingControlBackendProbe {
     cluster::MemberIdentity peer;
     std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
     int64_t tag{ -1 };
+
+    PendingControlBackendProbe() = default;
+    ~PendingControlBackendProbe()
+    {
+        Forget();
+    }
+    PendingControlBackendProbe(const PendingControlBackendProbe &) = delete;
+    PendingControlBackendProbe &operator=(const PendingControlBackendProbe &) = delete;
+    PendingControlBackendProbe(PendingControlBackendProbe &&other) noexcept
+        : peer(std::move(other.peer)), api(std::move(other.api)), tag(std::exchange(other.tag, -1))
+    {
+    }
+    PendingControlBackendProbe &operator=(PendingControlBackendProbe &&) = delete;
+
+    void Forget() noexcept
+    {
+        if (tag < 0 || api == nullptr) {
+            return;
+        }
+        try {
+            api->ForgetClusterStateRequest(tag);
+        } catch (const std::exception &error) {
+            LOG(ERROR) << "CLUSTER_BACKEND_PROBE_CLEANUP_FAILED reason=exception error=" << error.what();
+        } catch (...) {
+            LOG(ERROR) << "CLUSTER_BACKEND_PROBE_CLEANUP_FAILED reason=unknown_exception";
+        }
+        tag = -1;
+    }
 };
+
+bool WaitForBrpcSocketUntil(const HostPort &address, std::chrono::steady_clock::time_point deadline)
+{
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (WaitForBrpcSocketAvailable(address, 1, 0)) {
+            return true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) {
+            break;
+        }
+        std::this_thread::sleep_until(
+            std::min(deadline, now + std::chrono::microseconds(kBrpcConnRetryIntervalUs)));
+    }
+    return false;
+}
 
 Status StartControlBackendProbe(const HostPort &localAddress, const std::shared_ptr<AkSkManager> &akSkManager,
                                 const cluster::MemberIdentity &peer, std::chrono::steady_clock::time_point deadline,
                                 PendingControlBackendProbe &pending)
 {
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "cluster-state probe deadline exceeded");
+    HostPort peerAddress;
+    RETURN_IF_NOT_OK(peerAddress.ParseString(peer.address));
+    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
+    api = std::make_shared<object_cache::WorkerRemoteWorkerOCApi>(peerAddress, localAddress, akSkManager);
+    RETURN_IF_NOT_OK(api->Init(deadline));
+    if (FLAGS_use_brpc) {
+        CHECK_FAIL_RETURN_STATUS(
+            WaitForBrpcSocketUntil(HostPort(peerAddress.Host(), peerAddress.Port() + kBrpcPortOffset), deadline),
+            K_RPC_UNAVAILABLE, "cluster-state brpc connection unavailable");
+    }
     const auto now = std::chrono::steady_clock::now();
     CHECK_FAIL_RETURN_STATUS(now < deadline, K_RPC_DEADLINE_EXCEEDED, "cluster-state probe deadline exceeded");
     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
     const auto timeout =
         static_cast<int32_t>(std::min<int64_t>(std::numeric_limits<int32_t>::max(), std::max<int64_t>(remaining, 1)));
-    std::shared_ptr<object_cache::WorkerRemoteWorkerOCApi> api;
-    RETURN_IF_NOT_OK(object_cache::CreateRemoteWorkerApi(peer.address, localAddress, akSkManager, api));
+    pending.peer = peer;
+    pending.api = std::move(api);
     GetClusterStateReqPb request;
-    int64_t tag = -1;
-    RETURN_IF_NOT_OK(api->GetClusterStateAsyncWrite(request, timeout, tag));
-    pending = { peer, std::move(api), tag };
+    RETURN_IF_NOT_OK(pending.api->GetClusterStateAsyncWrite(request, timeout, pending.tag));
     return Status::OK();
 }
 
-Status FinishControlBackendProbe(const PendingControlBackendProbe &pending,
-                                 std::chrono::steady_clock::time_point deadline,
-                                 cluster::ControlBackendObservation &observation)
+Status FinishControlBackendProbe(PendingControlBackendProbe &pending, cluster::ControlBackendObservation &observation)
 {
-    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
-                             "cluster-state probe deadline exceeded");
     GetClusterStateRspPb response;
-    RETURN_IF_NOT_OK(pending.api->GetClusterStateAsyncRead(pending.tag, response));
-    return object_cache::FillControlBackendObservationFromGetClusterStateRspPb(pending.peer.address, response,
-                                                                               observation);
+    auto rc = pending.api->GetClusterStateAsyncRead(pending.tag, response, RpcRecvFlags::DONTWAIT);
+    if (rc.GetCode() == K_TRY_AGAIN) {
+        return rc;
+    }
+    if (rc.IsError()) {
+        return rc;
+    }
+    pending.tag = -1;
+    return object_cache::FillControlBackendObservationFromGetClusterStateRspPb(
+        pending.peer.address, response, observation);
 }
 
 std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
@@ -283,25 +341,51 @@ std::vector<cluster::ControlBackendObservation> ProbeControlBackendPeers(
 {
     std::vector<PendingControlBackendProbe> pending;
     pending.reserve(peers.size());
+    std::vector<cluster::ControlBackendObservation> observations;
+    observations.reserve(peers.size());
     for (const auto &peer : peers) {
         PendingControlBackendProbe probe;
         auto rc = StartControlBackendProbe(localAddress, akSkManager, peer, deadline, probe);
         if (rc.IsError()) {
             VLOG(1) << "Cluster-state probe start failed for " << peer.address << ": " << rc.ToString();
-            return {};
+            if (!IsRpcTimeout(rc)) {
+                observations.push_back(
+                    { peer, cluster::ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() });
+            }
+            continue;
         }
         pending.push_back(std::move(probe));
     }
-    std::vector<cluster::ControlBackendObservation> observations;
-    observations.reserve(pending.size());
-    for (const auto &probe : pending) {
-        cluster::ControlBackendObservation observation;
-        auto rc = FinishControlBackendProbe(probe, deadline, observation);
-        if (rc.IsError()) {
-            VLOG(1) << "Cluster-state probe read failed for " << probe.peer.address << ": " << rc.ToString();
-            return {};
+    std::vector<bool> finished(pending.size(), false);
+    size_t remaining = pending.size();
+    while (remaining > 0 && std::chrono::steady_clock::now() < deadline) {
+        bool madeProgress = false;
+        for (size_t index = 0; index < pending.size(); ++index) {
+            if (finished[index]) {
+                continue;
+            }
+            cluster::ControlBackendObservation observation;
+            auto rc = FinishControlBackendProbe(pending[index], observation);
+            if (rc.GetCode() == K_TRY_AGAIN) {
+                continue;
+            }
+            finished[index] = true;
+            --remaining;
+            madeProgress = true;
+            if (rc.IsError()) {
+                VLOG(1) << "Cluster-state probe read failed for " << pending[index].peer.address << ": "
+                        << rc.ToString();
+                if (!IsRpcTimeout(rc)) {
+                    observations.push_back({ pending[index].peer, cluster::ControlBackendState::UNKNOWN, 0, 0, "",
+                                             std::chrono::steady_clock::now() });
+                }
+                continue;
+            }
+            observations.push_back(std::move(observation));
         }
-        observations.push_back(std::move(observation));
+        if (!madeProgress && remaining > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
     return observations;
 }

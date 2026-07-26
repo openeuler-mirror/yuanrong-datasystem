@@ -105,7 +105,9 @@ message TopologyTaskSummaryPb {
 
 message GetClusterStateRspPb {
   bool coordinator_available = 1;
-  string node_id = 2;
+  // Binary topology member identity. Deploy this schema cluster-wide before relying on ETCD-outage degradation:
+  // legacy readers declare this field as string and cannot parse every possible 16-byte identity.
+  bytes node_id = 2;
   int64 topology_version = 3;
   int64 topology_revision = 4;
   string topology_digest = 5;

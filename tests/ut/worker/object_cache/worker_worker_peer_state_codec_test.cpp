@@ -39,7 +39,7 @@ class WorkerWorkerPeerStateCodecTest : public CommonTest {
 TEST_F(WorkerWorkerPeerStateCodecTest, ControlBackendObservationRoundTrip)
 {
     cluster::ControlBackendObservation observation;
-    observation.reporter.id = std::string(kWorkerIdSize, 'a');
+    observation.reporter.id = std::string(kWorkerIdSize, '\xff');
     observation.reporter.address = "127.0.0.1:10001";
     observation.state = cluster::ControlBackendState::UNAVAILABLE;
     observation.topologyVersion = kTopologyVersion;
@@ -56,14 +56,41 @@ TEST_F(WorkerWorkerPeerStateCodecTest, ControlBackendObservationRoundTrip)
     EXPECT_EQ(rsp.topology_revision(), observation.topologyRevision);
     EXPECT_EQ(rsp.topology_digest(), observation.topologyDigest);
 
+    std::string wire;
+    ASSERT_TRUE(rsp.SerializeToString(&wire));
+    GetClusterStateRspPb decoded;
+    ASSERT_TRUE(decoded.ParseFromString(wire));
+
     cluster::ControlBackendObservation converted;
     DS_ASSERT_OK(object_cache::FillControlBackendObservationFromGetClusterStateRspPb(
-        observation.reporter.address, rsp, converted));
+        observation.reporter.address, decoded, converted));
     EXPECT_EQ(converted.reporter, observation.reporter);
     EXPECT_EQ(converted.state, observation.state);
     EXPECT_EQ(converted.topologyVersion, observation.topologyVersion);
     EXPECT_EQ(converted.topologyRevision, observation.topologyRevision);
     EXPECT_EQ(converted.topologyDigest, observation.topologyDigest);
+}
+
+TEST_F(WorkerWorkerPeerStateCodecTest, UnknownControlBackendEvidenceIsAReachableNotReadyResponse)
+{
+    cluster::ControlBackendObservation observation;
+    observation.state = cluster::ControlBackendState::UNKNOWN;
+    GetClusterStateRspPb rsp;
+    rsp.set_coordinator_available(true);
+    rsp.set_ready(true);
+    rsp.set_node_id("stale");
+
+    DS_ASSERT_OK(object_cache::FillGetClusterStateRspPbFromControlBackendObservation(observation, rsp));
+    EXPECT_TRUE(rsp.coordinator_available());
+    EXPECT_FALSE(rsp.ready());
+    EXPECT_TRUE(rsp.node_id().empty());
+
+    cluster::ControlBackendObservation converted;
+    converted.reporter.id = "unchanged";
+    EXPECT_EQ(object_cache::FillControlBackendObservationFromGetClusterStateRspPb(
+                  "127.0.0.1:10001", rsp, converted).GetCode(),
+              K_NOT_READY);
+    EXPECT_EQ(converted.reporter.id, "unchanged");
 }
 
 TEST_F(WorkerWorkerPeerStateCodecTest, RejectsStaleOrMalformedControlBackendEvidenceWithoutMutation)
