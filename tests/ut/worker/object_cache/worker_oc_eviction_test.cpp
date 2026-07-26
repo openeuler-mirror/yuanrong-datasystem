@@ -86,6 +86,33 @@ private:
     RemoveMetaHandler handler_;
 };
 
+class FakeDeleteAllCopyMetaMasterApi final : public worker::WorkerLocalMasterOCApi {
+public:
+    using DeleteAllCopyMetaHandler =
+        std::function<Status(master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &)>;
+
+    FakeDeleteAllCopyMetaMasterApi(const HostPort &localAddress, DeleteAllCopyMetaHandler handler)
+        : WorkerLocalMasterOCApi(nullptr, localAddress, nullptr), handler_(std::move(handler))
+    {
+    }
+
+    ~FakeDeleteAllCopyMetaMasterApi() override = default;
+
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
+    Status DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb &request,
+                             master::DeleteAllCopyMetaRspPb &response) override
+    {
+        return handler_(request, response);
+    }
+
+private:
+    DeleteAllCopyMetaHandler handler_;
+};
+
 class EvictionManagerTest : public CommonTest, public EvictionManagerCommon {
 public:
     void SetUp() override
@@ -125,6 +152,15 @@ public:
         DS_ASSERT_OK(DeleteObject("id1"));
         DS_ASSERT_OK(DeleteObject("id2"));
         DS_ASSERT_OK(DeleteObject("id3"));
+    }
+
+    void InsertNoneL2EvictableMetadata(const std::string &objectKey)
+    {
+        auto object = std::make_unique<object_cache::ObjCacheShmUnit>();
+        object->SetLifeState(ObjectLifeState::OBJECT_SEALED);
+        object->modeInfo.SetWriteMode(WriteMode::NONE_L2_CACHE_EVICT);
+        object->modeInfo.SetCacheType(CacheType::MEMORY);
+        DS_ASSERT_OK(objectTable_->Insert(objectKey, std::move(object)));
     }
 
     void TestEvictionRemoveMetaRequestRespectsRedirectPolicy()
@@ -207,6 +243,392 @@ public:
         ASSERT_EQ(failedObjects.size(), 1U);
         EXPECT_EQ(failedObjects.at(objectKey), 1U);
         EXPECT_EQ(lastRc.GetCode(), K_TRY_AGAIN);
+    }
+
+    void TestPrimaryEndLifeRedirectForwardsOnceAndPreservesRequest()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31502);
+        const HostPort targetMaster("127.0.0.1", 31503);
+        const HostPort workerAddress("127.0.0.1", 31501);
+        const std::string objectKey = "primary-end-life-redirect";
+        constexpr uint64_t objectVersion = 101;
+        size_t sourceCalls = 0;
+        size_t targetCalls = 0;
+
+        auto sourceApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            sourceMaster, [&](master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &response) {
+                ++sourceCalls;
+                EXPECT_TRUE(request.redirect());
+                EXPECT_TRUE(request.async_delete());
+                EXPECT_EQ(request.address(), workerAddress.ToString());
+                EXPECT_EQ(request.ids_with_version_size(), 1);
+                if (request.ids_with_version_size() == 1) {
+                    EXPECT_EQ(request.ids_with_version(0).id(), objectKey);
+                    EXPECT_EQ(request.ids_with_version(0).version(), objectVersion);
+                }
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(targetMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                redirectInfo->set_topology_version(7);
+                response.mutable_last_rc()->set_error_code(K_RPC_DEADLINE_EXCEEDED);
+                response.mutable_last_rc()->set_error_msg("source owner changed before completion");
+                return Status::OK();
+            });
+        auto targetApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            targetMaster, [&](master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &) {
+                ++targetCalls;
+                EXPECT_FALSE(request.redirect());
+                EXPECT_TRUE(request.async_delete());
+                EXPECT_EQ(request.address(), workerAddress.ToString());
+                EXPECT_EQ(request.ids_with_version_size(), 1);
+                if (request.ids_with_version_size() == 1) {
+                    EXPECT_EQ(request.ids_with_version(0).id(), objectKey);
+                    EXPECT_EQ(request.ids_with_version(0).version(), objectVersion);
+                }
+                return Status::OK();
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Invoke(
+                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                    master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                    return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
+                }));
+
+        WorkerOcEvictionManager manager(objectTable_, workerAddress, sourceMaster, GetTestMetadataRoute());
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates{
+            { { objectKey, objectVersion, CacheType::MEMORY }, nullptr }
+        };
+        std::unordered_set<std::string> failedKeys;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        RELEASE_STUBS
+
+        DS_ASSERT_OK(rc);
+        EXPECT_EQ(sourceCalls, 1U);
+        EXPECT_EQ(targetCalls, 1U);
+        EXPECT_TRUE(failedKeys.empty());
+    }
+
+    void TestPrimaryEndLifeSecondRedirectStopsAtTarget()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31502);
+        const HostPort targetMaster("127.0.0.1", 31503);
+        const HostPort workerAddress("127.0.0.1", 31501);
+        const std::string objectKey = "primary-end-life-second-redirect";
+        size_t sourceCalls = 0;
+        size_t targetCalls = 0;
+
+        auto sourceApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            sourceMaster, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &response) {
+                ++sourceCalls;
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(targetMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                return Status::OK();
+            });
+        auto targetApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            targetMaster, [&](master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &response) {
+                ++targetCalls;
+                EXPECT_FALSE(request.redirect());
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(sourceMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                return Status::OK();
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Invoke(
+                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                    master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                    return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
+                }));
+
+        WorkerOcEvictionManager manager(objectTable_, workerAddress, sourceMaster, GetTestMetadataRoute());
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates{
+            { { objectKey, 102, CacheType::MEMORY }, nullptr }
+        };
+        std::unordered_set<std::string> failedKeys;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        RELEASE_STUBS
+
+        DS_ASSERT_OK(rc);
+        EXPECT_EQ(sourceCalls, 1U);
+        EXPECT_EQ(targetCalls, 1U);
+        EXPECT_EQ(failedKeys, std::unordered_set<std::string>{ objectKey });
+    }
+
+    void TestPrimaryEndLifeMixedRedirectResultOnlyReaddsFailedKeys()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31502);
+        const HostPort targetMaster("127.0.0.1", 31503);
+        const HostPort workerAddress("127.0.0.1", 31501);
+        const std::string acceptedKey = "primary-end-life-accepted";
+        const std::string sourceFailedKey = "primary-end-life-source-failed";
+        const std::string targetAcceptedKey = "primary-end-life-target-accepted";
+        const std::string targetFailedKey = "primary-end-life-target-failed";
+        size_t sourceCalls = 0;
+        size_t targetCalls = 0;
+
+        auto sourceApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            sourceMaster, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &response) {
+                ++sourceCalls;
+                response.add_failed_object_keys(sourceFailedKey);
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(targetMaster.ToString());
+                redirectInfo->add_change_meta_ids(targetAcceptedKey);
+                redirectInfo->add_change_meta_ids(targetFailedKey);
+                response.mutable_last_rc()->set_error_code(K_RUNTIME_ERROR);
+                response.mutable_last_rc()->set_error_msg("partial source failure");
+                return Status::OK();
+            });
+        auto targetApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            targetMaster, [&](master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &response) {
+                ++targetCalls;
+                EXPECT_FALSE(request.redirect());
+                EXPECT_EQ(request.ids_with_version_size(), 2);
+                if (request.ids_with_version_size() == 2) {
+                    EXPECT_EQ(request.ids_with_version(0).id(), targetAcceptedKey);
+                    EXPECT_EQ(request.ids_with_version(0).version(), 103U);
+                    EXPECT_EQ(request.ids_with_version(1).id(), targetFailedKey);
+                    EXPECT_EQ(request.ids_with_version(1).version(), 104U);
+                }
+                response.add_failed_object_keys(targetFailedKey);
+                response.mutable_last_rc()->set_error_code(K_RUNTIME_ERROR);
+                response.mutable_last_rc()->set_error_msg("partial target failure");
+                return Status::OK();
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Invoke(
+                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                    master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                    return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
+                }));
+
+        WorkerOcEvictionManager manager(objectTable_, workerAddress, sourceMaster, GetTestMetadataRoute());
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates{
+            { { acceptedKey, 101, CacheType::MEMORY }, nullptr },
+            { { sourceFailedKey, 102, CacheType::MEMORY }, nullptr },
+            { { targetAcceptedKey, 103, CacheType::MEMORY }, nullptr },
+            { { targetFailedKey, 104, CacheType::MEMORY }, nullptr }
+        };
+        std::unordered_set<std::string> failedKeys;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        RELEASE_STUBS
+
+        DS_ASSERT_OK(rc);
+        EXPECT_EQ(sourceCalls, 1U);
+        EXPECT_EQ(targetCalls, 1U);
+        EXPECT_EQ(failedKeys, (std::unordered_set<std::string>{ sourceFailedKey, targetFailedKey }));
+    }
+
+    void TestPrimaryEndLifeRedirectTargetTimeoutDoesNotForceDelete()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31502);
+        const HostPort targetMaster("127.0.0.1", 31503);
+        const HostPort workerAddress("127.0.0.1", 31501);
+        const std::string objectKey = "primary-end-life-target-timeout";
+        size_t sourceCalls = 0;
+        size_t targetCalls = 0;
+
+        auto sourceApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            sourceMaster, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &response) {
+                ++sourceCalls;
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(targetMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                return Status::OK();
+            });
+        auto targetApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            targetMaster, [&](master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &) {
+                ++targetCalls;
+                EXPECT_FALSE(request.redirect());
+                return Status(K_RPC_DEADLINE_EXCEEDED, "redirect target timeout");
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Invoke(
+                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                    master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                    return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
+                }));
+
+        WorkerOcEvictionManager manager(objectTable_, workerAddress, sourceMaster, GetTestMetadataRoute());
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates{
+            { { objectKey, 105, CacheType::MEMORY }, nullptr }
+        };
+        std::unordered_set<std::string> failedKeys;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        RELEASE_STUBS
+
+        DS_ASSERT_OK(rc);
+        EXPECT_EQ(sourceCalls, 1U);
+        EXPECT_EQ(targetCalls, 1U);
+        EXPECT_EQ(failedKeys, std::unordered_set<std::string>{ objectKey });
+    }
+
+    void TestPrimaryEndLifeMalformedRedirectFailsClosed()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31502);
+        const HostPort workerAddress("127.0.0.1", 31501);
+        const std::string objectKey = "primary-end-life-malformed-redirect";
+        size_t sourceCalls = 0;
+        auto sourceApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            sourceMaster, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &response) {
+                ++sourceCalls;
+                response.add_info()->set_redirect_meta_address("127.0.0.1:31503");
+                return Status::OK();
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Return(sourceApi));
+
+        WorkerOcEvictionManager manager(objectTable_, workerAddress, sourceMaster, GetTestMetadataRoute());
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates{
+            { { objectKey, 106, CacheType::MEMORY }, nullptr }
+        };
+        std::unordered_set<std::string> failedKeys;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        RELEASE_STUBS
+
+        DS_ASSERT_OK(rc);
+        EXPECT_EQ(sourceCalls, 1U);
+        EXPECT_EQ(failedKeys, std::unordered_set<std::string>{ objectKey });
+    }
+
+    void TestPrimaryEndLifeSourceTimeoutKeepsThreeAttemptForceDeletePolicy()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31502);
+        const HostPort workerAddress("127.0.0.1", 31501);
+        const std::string objectKey = "primary-end-life-source-timeout";
+        size_t sourceCalls = 0;
+        auto sourceApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            sourceMaster, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &) {
+                ++sourceCalls;
+                return Status(K_RPC_DEADLINE_EXCEEDED, "source timeout");
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Return(sourceApi));
+
+        WorkerOcEvictionManager manager(objectTable_, workerAddress, sourceMaster, GetTestMetadataRoute());
+        std::vector<WorkerOcEvictionManager::PrimaryEndLifeCandidate> candidates{
+            { { objectKey, 106, CacheType::MEMORY }, nullptr }
+        };
+        std::unordered_set<std::string> failedKeys;
+        Status rc = manager.DeletePrimaryEndLifeMetadata(sourceMaster, candidates, failedKeys);
+        RELEASE_STUBS
+
+        DS_ASSERT_OK(rc);
+        EXPECT_EQ(sourceCalls, 3U);
+        EXPECT_TRUE(failedKeys.empty());
+    }
+
+    void TestNoneL2FallbackRedirectForwardsOnce()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31500);
+        const HostPort targetMaster("127.0.0.1", 31503);
+        const std::string objectKey = "none-l2-fallback-redirect";
+        size_t sourceCalls = 0;
+        size_t targetCalls = 0;
+        auto sourceApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            sourceMaster, [&](master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &response) {
+                ++sourceCalls;
+                EXPECT_TRUE(request.redirect());
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(targetMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                return Status::OK();
+            });
+        auto targetApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            targetMaster, [&](master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &) {
+                ++targetCalls;
+                EXPECT_FALSE(request.redirect());
+                EXPECT_EQ(request.object_keys_size(), 1);
+                if (request.object_keys_size() == 1) {
+                    EXPECT_EQ(request.object_keys(0), objectKey);
+                }
+                return Status::OK();
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Invoke(
+                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                    master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                    return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
+                }));
+
+        InsertNoneL2EvictableMetadata(objectKey);
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), sourceMaster,
+                                        GetTestMetadataRoute());
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+        DS_ASSERT_OK(entry->WLock());
+        Status rc = manager.DeleteNoneL2CacheEvictableObject(ObjectKV(objectKey, *entry));
+        entry->WUnlock();
+        RELEASE_STUBS
+
+        DS_ASSERT_OK(rc);
+        EXPECT_EQ(sourceCalls, 1U);
+        EXPECT_EQ(targetCalls, 1U);
+        EXPECT_FALSE(objectTable_->Contains(objectKey));
+    }
+
+    void TestNoneL2FallbackSecondRedirectKeepsLocalObject()
+    {
+        const HostPort sourceMaster("127.0.0.1", 31500);
+        const HostPort targetMaster("127.0.0.1", 31503);
+        const std::string objectKey = "none-l2-fallback-second-redirect";
+        size_t sourceCalls = 0;
+        size_t targetCalls = 0;
+        auto sourceApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            sourceMaster, [&](master::DeleteAllCopyMetaReqPb &, master::DeleteAllCopyMetaRspPb &response) {
+                ++sourceCalls;
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(targetMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                return Status::OK();
+            });
+        auto targetApi = std::make_shared<FakeDeleteAllCopyMetaMasterApi>(
+            targetMaster, [&](master::DeleteAllCopyMetaReqPb &request, master::DeleteAllCopyMetaRspPb &response) {
+                ++targetCalls;
+                EXPECT_FALSE(request.redirect());
+                auto *redirectInfo = response.add_info();
+                redirectInfo->set_redirect_meta_address(sourceMaster.ToString());
+                redirectInfo->add_change_meta_ids(objectKey);
+                return Status::OK();
+            });
+
+        BINEXPECT_CALL(&worker::WorkerMasterOCApi::CreateWorkerMasterOCApi,
+                       (testing::_, testing::_, testing::_, testing::_))
+            .WillRepeatedly(testing::Invoke(
+                [&](const HostPort &masterAddress, const HostPort &, std::shared_ptr<AkSkManager>,
+                    master::MasterOCServiceImpl *) -> std::shared_ptr<worker::WorkerMasterOCApi> {
+                    return masterAddress.ToString() == targetMaster.ToString() ? targetApi : sourceApi;
+                }));
+
+        InsertNoneL2EvictableMetadata(objectKey);
+        WorkerOcEvictionManager manager(objectTable_, HostPort("127.0.0.1", 31501), sourceMaster,
+                                        GetTestMetadataRoute());
+        std::shared_ptr<SafeObjType> entry;
+        DS_ASSERT_OK(objectTable_->Get(objectKey, entry));
+        DS_ASSERT_OK(entry->WLock());
+        Status rc = manager.DeleteNoneL2CacheEvictableObject(ObjectKV(objectKey, *entry));
+        entry->WUnlock();
+        RELEASE_STUBS
+
+        EXPECT_EQ(rc.GetCode(), K_TRY_AGAIN);
+        EXPECT_EQ(sourceCalls, 1U);
+        EXPECT_EQ(targetCalls, 1U);
+        EXPECT_TRUE(objectTable_->Contains(objectKey));
+        DS_ASSERT_OK(DeleteObject(objectKey));
     }
 
     static constexpr uint64_t TEST_DATA_SIZE = 10 * 1024 * 1024;
@@ -308,6 +730,46 @@ TEST_F(EvictionManagerTest, EvictionRemoveMetaRequestRespectsRedirectPolicy)
 TEST_F(EvictionManagerTest, EvictionRedirectStopsAtForwardedTarget)
 {
     TestEvictionRedirectStopsAtForwardedTarget();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeRedirectForwardsOnceAndPreservesRequest)
+{
+    TestPrimaryEndLifeRedirectForwardsOnceAndPreservesRequest();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeSecondRedirectStopsAtTarget)
+{
+    TestPrimaryEndLifeSecondRedirectStopsAtTarget();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeMixedRedirectResultOnlyReaddsFailedKeys)
+{
+    TestPrimaryEndLifeMixedRedirectResultOnlyReaddsFailedKeys();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeRedirectTargetTimeoutDoesNotForceDelete)
+{
+    TestPrimaryEndLifeRedirectTargetTimeoutDoesNotForceDelete();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeMalformedRedirectFailsClosed)
+{
+    TestPrimaryEndLifeMalformedRedirectFailsClosed();
+}
+
+TEST_F(EvictionManagerTest, PrimaryEndLifeSourceTimeoutKeepsThreeAttemptForceDeletePolicy)
+{
+    TestPrimaryEndLifeSourceTimeoutKeepsThreeAttemptForceDeletePolicy();
+}
+
+TEST_F(EvictionManagerTest, NoneL2FallbackRedirectForwardsOnce)
+{
+    TestNoneL2FallbackRedirectForwardsOnce();
+}
+
+TEST_F(EvictionManagerTest, NoneL2FallbackSecondRedirectKeepsLocalObject)
+{
+    TestNoneL2FallbackSecondRedirectKeepsLocalObject();
 }
 
 TEST_F(EvictionManagerTest, AddTracksObjectTableAndEvictionCounters)
