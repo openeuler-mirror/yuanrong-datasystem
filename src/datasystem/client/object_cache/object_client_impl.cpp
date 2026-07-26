@@ -112,6 +112,7 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
 #include "datasystem/object/buffer.h"
+static constexpr int SHM_FALLBACK_LOG_RATE = 100;
 
 DS_DECLARE_bool(log_monitor);
 
@@ -4414,6 +4415,11 @@ Status ObjectClientImpl::ExecuteShmGroup(const std::shared_ptr<IClientWorkerApi>
     if (shmRc.IsError()) {
         // Do NOT move nullptr shmBuffers into objectBuffers — let the transport fallback fill these
         // slots. Carrying the original indices keeps the mapping correct for duplicate keys.
+        LOG_EVERY_N(INFO, SHM_FALLBACK_LOG_RATE)
+            << "Same-host shm Get failed for worker, degrading keys to transport fallback: "
+                               << shmRc.ToString();
+        METRIC_ADD(metrics::KvMetricId::CLIENT_SHM_GET_DEGRADE_TO_TRANSPORT_TOTAL,
+                   static_cast<uint64_t>(kidx.size()));
         for (const auto &p : kidx) {
             remoteIdx.emplace_back(p.first, p.second);
         }

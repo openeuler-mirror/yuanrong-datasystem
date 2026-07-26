@@ -151,6 +151,12 @@ enum class KvMetricId : uint16_t {
     // REUSABLE means jemalloc OOM without observing either failure in this allocation attempt.
     WORKER_SHM_FRESH_EXTENT_OOM_TOTAL,
     WORKER_SHM_REUSABLE_EXTENT_OOM_TOTAL,
+    // SHM transporter observability — appended at the end to preserve existing numeric IDs (review 181252307).
+    CLIENT_SHM_MMAP_SUCCESS_TOTAL,
+    CLIENT_SHM_MMAP_FALLBACK_TOTAL,
+    CLIENT_SHM_ZERO_COPY_SET_TOTAL,
+    CLIENT_SHM_PAYLOAD_FALLBACK_SET_TOTAL,
+    CLIENT_SHM_GET_DEGRADE_TO_TRANSPORT_TOTAL,
     KV_METRIC_END
 };
 
