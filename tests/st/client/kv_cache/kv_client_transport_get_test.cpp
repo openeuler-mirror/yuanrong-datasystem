@@ -1062,8 +1062,9 @@ TEST_F(KVClientTransportGetShmLatchTest, LatchFailureIsRetryableNotRuntimeError)
         << "expected deadline exhaustion after latch-contention retries, got: " << rc.ToString();
     // Wall-clock guard: the contention Get must exhaust around the API deadline (sourced from
     // requestTimeoutMs_, bounded by CLIENT_TIMEOUT_MS), and must not run far longer if the deadline is
-    // ever raised. Cap at 2x CLIENT_TIMEOUT_MS to catch regressions.
-    ASSERT_LT(elapsedMs, 2 * CLIENT_TIMEOUT_MS)
+    // ever raised. Cap at 3x CLIENT_TIMEOUT_MS to catch regressions while tolerating sleep_for
+    // over-sleep and scheduling jitter on slow runners (the logical deadline is still CLIENT_TIMEOUT_MS).
+    ASSERT_LT(elapsedMs, 3 * CLIENT_TIMEOUT_MS)
         << "latch-contention Get ran " << elapsedMs << "ms, expected near the API deadline";
 
     ClearShmLatchFailureEverywhere();

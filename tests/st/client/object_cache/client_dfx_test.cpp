@@ -306,9 +306,20 @@ TEST_F(WorkerDfxTest, TestWorkerCrashRecovery)
     for (int i = 0; i < workerNum; i++) {
         DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, i));
     }
-    sleep(2);
-
-    DS_ASSERT_OK(client1->GDecreaseRef(objectKeys, failedObjectKeys));
+    // GRef metadata is replayed to master asynchronously after restart. GDecreaseRef rolls back
+    // failed keys (object_client_impl.cpp GDecreaseRefRollback), so it is safe to retry until all
+    // keys succeed. Polling Get was too strict (data-plane readiness lags control-plane), so retry
+    // the operation under test itself.
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&]() {
+            failedObjectKeys.clear();
+            Status rc = client1->GDecreaseRef(objectKeys, failedObjectKeys);
+            if (rc.IsOk() && failedObjectKeys.empty()) {
+                return Status::OK();
+            }
+            return Status(K_NOT_READY, "GDecreaseRef not yet converged");
+        },
+        30, K_OK));
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 

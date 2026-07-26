@@ -16,6 +16,7 @@
  */
 #include "ut/common.h"
 #include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include <algorithm>
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/master/object_cache/oc_metadata_manager.h"
 #include "datasystem/worker/object_cache/async_update_location_manager.h"
@@ -133,13 +134,40 @@ TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
     std::string worker1 = "127.0.0.1:2001";
     std::string worker2 = "127.0.0.1:2002";
     std::unordered_map<std::string, std::vector<std::pair<std::string, master::AckState>>> objLocMap;
+    // LoadObjectLocations fills objLocMap with every worker_ObjectKey row in RocksDB, so an empty
+    // check is satisfied by stale rows from a prior block. Verify the specific (objectKey, worker)
+    // we just wrote is present instead.
+    auto locationVisible = [&](const std::string &objectKey, const std::string &workerAddr) -> bool {
+        auto it = objLocMap.find(objectKey);
+        if (it == objLocMap.end()) {
+            return false;
+        }
+        return std::any_of(it->second.begin(), it->second.end(),
+                           [&](const std::pair<std::string, master::AckState> &entry) {
+                               return entry.first == workerAddr;
+                           });
+    };
 
     // validate the load location with AddObjectLocations and UNACK
     std::unordered_map<std::string, std::string> keyLocations = {{key1, worker1}, {key2, worker1}};
     objectStore_->AddObjectLocations(keyLocations, "0");
     inject::Set("OCMetadataManager.GetValidTopologyWorkers", "return(127.0.0.1:2001)"); // return worker1
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    ocMetaManager->CallLoadObjectLocations(true, objLocMap);
+    // RocksDB BatchPut may run asynchronously; poll LoadObjectLocations until the just-written
+    // rows are visible instead of a fixed sleep that races the async write on slow runners.
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        bool loaded = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            objLocMap.clear();
+            if (ocMetaManager->CallLoadObjectLocations(true, objLocMap).IsOk()
+                && locationVisible(key1, worker1) && locationVisible(key2, worker1)) {
+                loaded = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        ASSERT_TRUE(loaded) << "locations not visible to LoadObjectLocations after AddObjectLocations";
+    }
     ocMetaManager->InsertObjectKey(key1);
     ocMetaManager->InsertObjectKey(key2);
     ocMetaManager->CallRecoverObjectLocations(objLocMap);
@@ -155,8 +183,20 @@ TEST_F(AsyncUpdateLocationTest, AddAndLoadLocations)
     objLocMap.clear();
     inject::Set("OCMetadataManager.GetValidTopologyWorkers", "return(127.0.0.1:2002)"); // return worker2
     objectStore_->AddObjectLocation(key3, worker2, "");
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    ocMetaManager->CallLoadObjectLocations(true, objLocMap);
+    {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        bool loaded = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            objLocMap.clear();
+            if (ocMetaManager->CallLoadObjectLocations(true, objLocMap).IsOk()
+                && locationVisible(key3, worker2)) {
+                loaded = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        ASSERT_TRUE(loaded) << "location not visible to LoadObjectLocations after AddObjectLocation";
+    }
     ocMetaManager->InsertObjectKey(key3);
     ocMetaManager->CallRecoverObjectLocations(objLocMap);
     master::AckState ackState3;
