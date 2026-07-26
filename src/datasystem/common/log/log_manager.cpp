@@ -50,6 +50,7 @@ namespace datasystem {
 using namespace std::chrono;
 
 const int PER_OPERATION_NUM = 3;
+const int FILEBEAT_POLL_INTERVAL_MS = 1000;
 
 LogManager::~LogManager()
 {
@@ -60,9 +61,11 @@ Status LogManager::Start()
 {
     LOG(INFO) << "Start Log Manager thread.";
     CHECK_FAIL_RETURN_STATUS(state_ == INITED, StatusCode::K_RUNTIME_ERROR, "State is not INITED");
+    compressionCancelled_.store(false, std::memory_order_release);
     state_ = RUNNING;
 
-    backgroundThread_ = Thread(&LogManager::RunTimerTask, this, DoLogBackgroundTask, logProcessInterval_);
+    backgroundThread_ = Thread(&LogManager::RunTimerTask, this,
+                               [this] { return DoLogBackgroundTask(&compressionCancelled_); }, logProcessInterval_);
     backgroundThread_.set_name("LogBackgroundTask");
     return Status::OK();
 }
@@ -72,6 +75,7 @@ Status LogManager::Stop()
     {
         CHECK_FAIL_RETURN_STATUS(state_ == RUNNING, StatusCode::K_RUNTIME_ERROR, "State is not RUNNING");
         LOG(INFO) << "Stop Log Manager thread begin.";
+        compressionCancelled_.store(true, std::memory_order_release);
         state_ = STOPPED;
     }
 
@@ -104,10 +108,13 @@ void LogManager::RunTimerTask(const std::function<Status(void)> &func, int64_t w
     LOG(INFO) << "RunTimerTask thread ready to exit.";
 }
 
-Status LogManager::DoLogBackgroundTask()
+Status LogManager::DoLogBackgroundTask(const std::atomic_bool *cancelled)
 {
     bool isCompressed = false;
-    RETURN_IF_NOT_OK(DoLogFileCompress(isCompressed));
+    RETURN_IF_NOT_OK(DoLogFileCompress(isCompressed, cancelled));
+    if (cancelled != nullptr && cancelled->load(std::memory_order_acquire)) {
+        return Status::OK();
+    }
     RETURN_IF_NOT_OK(DoLogFileRolling());
     RETURN_IF_NOT_OK(DoLogMonitorWrite());
     return Status::OK();
@@ -251,13 +258,16 @@ Status LogManager::DoLogFileRolling()
     return Status::OK();
 }
 
-Status LogManager::DoLogFileCompress(bool &isCompressed)
+Status LogManager::DoLogFileCompress(bool &isCompressed, const std::atomic_bool *cancelled)
 {
     if (!FLAGS_log_compress) {
         return Status::OK();
     }
 
     for (int i = 0; i < NUM_SEVERITIES; ++i) {
+        if (cancelled != nullptr && cancelled->load(std::memory_order_acquire)) {
+            return Status::OK();
+        }
         // 1st: get log files based on regular expressions.
         std::vector<std::string> files;
         // log filename format: <program name>.<severity level>.<timestamp>.log
@@ -274,13 +284,15 @@ Status LogManager::DoLogFileCompress(bool &isCompressed)
 
         if (!files.empty()) {
             // Avoid filebeat lost log. Since the filebeat polling cycle is 1s, the interval here is 1s.
-            auto interval = std::chrono::milliseconds(1000);
-            std::this_thread::sleep_for(interval);
+            std::this_thread::sleep_for(std::chrono::milliseconds(FILEBEAT_POLL_INTERVAL_MS));
         }
 
         // 2nd: compress these file in '.gz' format
         int num = 0;
         for (const auto &file : files) {
+            if (cancelled != nullptr && cancelled->load(std::memory_order_acquire)) {
+                return Status::OK();
+            }
             // e.g: datasystem_worker.INFO.{TIME}.log -> datasystem_worker.INFO.{TIME}.log.gz
             std::string gzFile = file + ".gz";
             if (FileExist(gzFile)) {
@@ -289,7 +301,12 @@ Status LogManager::DoLogFileCompress(bool &isCompressed)
 
             // Compress the file and delete the origin file, we just need the compress files!
             isCompressed = true;
-            RETURN_IF_NOT_OK(CompressFile(file, gzFile));
+            auto status = CompressFile(file, gzFile, cancelled);
+            if (status.GetCode() == StatusCode::K_INTERRUPTED) {
+                return Status::OK();
+            }
+            RETURN_IF_NOT_OK(status);
+            // A successfully renamed gzip must be paired with deleting its source, even if shutdown started meanwhile.
             RETURN_IF_NOT_OK(DeleteFile(file));
             if (++num == PER_OPERATION_NUM) {
                 break;

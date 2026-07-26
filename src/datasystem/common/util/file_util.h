@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_UTIL_FILE_UTIL_H
 #define DATASYSTEM_COMMON_UTIL_FILE_UTIL_H
 
+#include <atomic>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -215,9 +216,10 @@ Status Glob(const std::string &pathPattern, std::vector<std::string> &paths);
  * @brief Compress file into .gz format.
  * @param[in] src Source filename.
  * @param[in] dest Destination filename.
+ * @param[in] cancelled Optional flag to cancel between gzip chunks.
  * @return Status of the call.
  */
-Status CompressFile(const std::string &src, std::string &dest);
+Status CompressFile(const std::string &src, std::string &dest, const std::atomic_bool *cancelled = nullptr);
 
 /**
  * @brief Validate a file Descriptor.
