@@ -15,6 +15,7 @@
 #include <thread>
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
+#include "datasystem/cluster/control/topology_plan_builder.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
@@ -191,6 +192,105 @@ TEST(TopologyDfxTest, FailureExecutorCrashReplansWithoutExtendingTheSharedWindow
     EXPECT_TRUE(WaitDfxTopology(repository, [](const auto &latest) {
         return !latest.activeBatch.has_value() && latest.members.size() == 1
                && latest.members.front().identity.address == "127.0.0.1:3";
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + DFX_WAIT));
+}
+
+TEST(TopologyDfxTest, TwoScaleInCrashesFinishFailureAndResumeRemainingScaleIn)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("scalein-two-crashes", keys));
+    TopologyRepository repository(backend, *keys);
+    TopologyState stable;
+    stable.version = 4;
+    stable.clusterHasInit = true;
+    stable.members = {
+        Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::PRE_LEAVING, { 10, 110 } },
+        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::PRE_LEAVING, { 30, 130 } },
+        Member{ { std::string(16, 'c'), "127.0.0.1:3" }, MemberState::PRE_LEAVING, { 50, 150 } },
+        Member{ { std::string(16, 'd'), "127.0.0.1:4" }, MemberState::ACTIVE, { 70, 170 } },
+        Member{ { std::string(16, 'e'), "127.0.0.1:5" }, MemberState::ACTIVE, { 90, 190 } },
+    };
+    HashAlgorithm algorithm;
+    TopologyPlanBuilder builder(algorithm);
+    TopologyPlan scaleIn;
+    DS_ASSERT_OK(builder.BuildScaleInStart(
+        stable, { stable.members[0].identity, stable.members[1].identity, stable.members[2].identity }, scaleIn));
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), scaleIn.next);
+    PutDfxMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::EXITING);
+    PutDfxMembership(backend, *keys, "127.0.0.1:4", MemberLifecycleState::READY);
+    PutDfxMembership(backend, *keys, "127.0.0.1:5", MemberLifecycleState::READY);
+    CoordinationEventDispatcher dispatcher(DFX_QUEUE_CAPACITY);
+    auto options = FastFailureOptions();
+    options.failureBatchWindow = std::chrono::seconds(30);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+    EXPECT_TRUE(WaitDfxTopology(repository, [](const auto &latest) {
+        return latest.activeBatch.has_value() && latest.activeBatch->type == TopologyChangeType::SCALE_IN
+               && std::count_if(latest.members.begin(), latest.members.end(),
+                                [](const auto &member) { return member.state == MemberState::LEAVING; })
+                      == 1
+               && latest.members.size() == 3;
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + DFX_WAIT));
+}
+
+TEST(TopologyDfxTest, MixedScaleOutAndPendingScaleInUsesStateSpecificCrashPaths)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("mixed-state-crashes", keys));
+    TopologyRepository repository(backend, *keys);
+    TopologyState stable;
+    stable.version = 4;
+    stable.clusterHasInit = true;
+    stable.members = {
+        Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 10, 110 } },
+        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 60, 160 } },
+        Member{ { std::string(16, 'c'), "127.0.0.1:3" }, MemberState::PRE_LEAVING, { 30, 130 } },
+        Member{ { std::string(16, 'd'), "127.0.0.1:4" }, MemberState::PRE_LEAVING, { 90, 190 } },
+        Member{ { std::string(16, 'e'), "127.0.0.1:5" }, MemberState::INITIAL, {} },
+        Member{ { std::string(16, 'f'), "127.0.0.1:6" }, MemberState::INITIAL, {} },
+    };
+    HashAlgorithm algorithm;
+    TopologyPlanBuilder builder(algorithm);
+    TopologyPlan scaleOut;
+    DS_ASSERT_OK(
+        builder.BuildScaleOutStart(stable, { stable.members[4].identity, stable.members[5].identity }, scaleOut));
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), scaleOut.next);
+    PutDfxMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+    PutDfxMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    PutDfxMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::EXITING);
+    PutDfxMembership(backend, *keys, "127.0.0.1:4", MemberLifecycleState::EXITING);
+    PutDfxMembership(backend, *keys, "127.0.0.1:6", MemberLifecycleState::READY);
+    CoordinationEventDispatcher dispatcher(DFX_QUEUE_CAPACITY);
+    auto options = FastFailureOptions();
+    options.failureBatchWindow = std::chrono::seconds(30);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(WaitDfxTopology(repository, [](const auto &latest) {
+        const bool crashedJoiningRemoved =
+            std::none_of(latest.members.begin(), latest.members.end(),
+                         [](const auto &member) { return member.identity.address == "127.0.0.1:5"; });
+        return crashedJoiningRemoved && latest.members.size() == 5 && latest.activeBatch.has_value()
+               && latest.activeBatch->type == TopologyChangeType::SCALE_OUT;
+    }));
+    DS_ASSERT_OK(backend.Delete(keys->MembershipTable(), "127.0.0.1:3"));
+    EXPECT_TRUE(WaitDfxTopology(repository, [](const auto &latest) {
+        const auto hasMemberInState = [&](const std::string &address, MemberState state) {
+            return std::any_of(latest.members.begin(), latest.members.end(), [&](const auto &member) {
+                return member.identity.address == address && member.state == state;
+            });
+        };
+        const bool crashedMembersRemoved =
+            std::none_of(latest.members.begin(), latest.members.end(), [](const auto &member) {
+                return member.identity.address == "127.0.0.1:3" || member.identity.address == "127.0.0.1:5";
+            });
+        return crashedMembersRemoved && latest.members.size() == 4 && latest.activeBatch.has_value()
+               && latest.activeBatch->type == TopologyChangeType::SCALE_OUT
+               && hasMemberInState("127.0.0.1:4", MemberState::PRE_LEAVING)
+               && hasMemberInState("127.0.0.1:6", MemberState::JOINING);
     }));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + DFX_WAIT));
 }

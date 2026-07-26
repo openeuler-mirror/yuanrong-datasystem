@@ -142,7 +142,9 @@ Status ValidateOwnerChange(const TopologySnapshot &latest, TopologyChangeType ty
         CHECK_FAIL_RETURN_STATUS(committed(source->state) && target->state == MemberState::JOINING, K_INVALID,
                                  "ScaleOut target is not joining");
     } else if (type == TopologyChangeType::FAILURE) {
-        CHECK_FAIL_RETURN_STATUS(source->state == expectedSource && target->state == MemberState::ACTIVE, K_INVALID,
+        CHECK_FAIL_RETURN_STATUS(source->state == expectedSource, K_INVALID,
+                                 "Failure owner change source is not failed");
+        CHECK_FAIL_RETURN_STATUS(target->state == MemberState::ACTIVE, K_INVALID,
                                  "Failure owner change target is not active");
     } else {
         CHECK_FAIL_RETURN_STATUS(source->state == expectedSource && committed(target->state), K_INVALID,

@@ -8,13 +8,21 @@
  */
 #include "datasystem/cluster/control/topology_task_materializer.h"
 
+#include <set>
+
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
+#include "datasystem/cluster/control/topology_plan_builder.h"
 #include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "gtest/gtest.h"
 #include "ut/common.h"
 
 namespace datasystem::cluster {
 namespace {
+
+Member MakeMaterializerMember(char id, uint32_t port, MemberState state, std::vector<uint32_t> tokens)
+{
+    return { { std::string(16, id), "127.0.0.1:" + std::to_string(port) }, state, std::move(tokens) };
+}
 
 TEST(TopologyTaskMaterializerTest, BuildsStableOneExecutorTasksAndCompleteNotifies)
 {
@@ -86,6 +94,111 @@ TEST(TopologyTaskMaterializerTest, RebuildsEmptyRecoverySetWhenNoCommittedTarget
     DS_ASSERT_OK(materializer.RebuildExpected(*snapshot, algorithm, expected));
     EXPECT_TRUE(expected.tasks.empty());
     EXPECT_TRUE(expected.notifiesByAddress.empty());
+}
+
+TEST(TopologyTaskMaterializerTest, RebuildsFailureTasksForTwoCrashedScaleInMembers)
+{
+    HashAlgorithm algorithm;
+    TopologyPlanBuilder builder(algorithm);
+    TopologyState scaleIn;
+    scaleIn.version = 4;
+    scaleIn.clusterHasInit = true;
+    scaleIn.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_IN, 4 };
+    scaleIn.members = {
+        MakeMaterializerMember('a', 1, MemberState::LEAVING, { 10, 110 }),
+        MakeMaterializerMember('b', 2, MemberState::LEAVING, { 30, 130 }),
+        MakeMaterializerMember('c', 3, MemberState::LEAVING, { 50, 150 }),
+        MakeMaterializerMember('d', 4, MemberState::ACTIVE, { 70, 170 }),
+        MakeMaterializerMember('e', 5, MemberState::ACTIVE, { 90, 190 }),
+    };
+    const std::set<std::string> confirmed{ scaleIn.members[0].identity.address, scaleIn.members[1].identity.address };
+    TopologyPlan failure;
+    DS_ASSERT_OK(builder.BuildFailureStartOrReplan(
+        scaleIn, { scaleIn.members[0].identity, scaleIn.members[1].identity }, failure));
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(failure.next, 1, std::string(64, 'a'), snapshot));
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState first;
+    auto rc = materializer.RebuildExpected(*snapshot, algorithm, first);
+    ASSERT_TRUE(rc.IsOk()) << rc.ToString();
+    ASSERT_FALSE(first.tasks.empty());
+    std::set<std::string> taskSources;
+    for (const auto &task : first.tasks) {
+        ASSERT_TRUE(std::holds_alternative<TopologyDeleteTask>(task));
+        const auto &deletion = std::get<TopologyDeleteTask>(task);
+        EXPECT_EQ(confirmed.count(deletion.failedAddress), 1);
+        taskSources.insert(deletion.failedAddress);
+        const Member *executor = nullptr;
+        DS_ASSERT_OK(snapshot->FindMemberByAddress(deletion.executorAddress, executor));
+        ASSERT_NE(executor, nullptr);
+        EXPECT_EQ(executor->state, MemberState::ACTIVE);
+    }
+    EXPECT_EQ(taskSources, confirmed);
+
+    ExpectedDerivedState second;
+    DS_ASSERT_OK(materializer.RebuildExpected(*snapshot, algorithm, second));
+    ASSERT_EQ(first.tasks.size(), second.tasks.size());
+    for (size_t index = 0; index < first.tasks.size(); ++index) {
+        const auto taskId = [](const auto &task) {
+            return std::visit([](const auto &value) { return value.taskId; }, task);
+        };
+        EXPECT_EQ(taskId(first.tasks[index]), taskId(second.tasks[index]));
+    }
+    ASSERT_EQ(first.notifiesByAddress.size(), second.notifiesByAddress.size());
+    for (const auto &[address, notify] : first.notifiesByAddress) {
+        const auto iter = second.notifiesByAddress.find(address);
+        ASSERT_NE(iter, second.notifiesByAddress.end());
+        EXPECT_EQ(iter->second.type, notify.type);
+        EXPECT_EQ(iter->second.taskIds, notify.taskIds);
+    }
+}
+
+TEST(TopologyTaskMaterializerTest, ReportsFailureSourceStateViolation)
+{
+    TopologyState state;
+    state.version = 5;
+    state.clusterHasInit = true;
+    state.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 5 };
+    state.members = {
+        MakeMaterializerMember('a', 1, MemberState::FAILED, { 10 }),
+        MakeMaterializerMember('b', 2, MemberState::ACTIVE, { 50 }),
+        MakeMaterializerMember('c', 3, MemberState::PRE_LEAVING, { 100 }),
+        MakeMaterializerMember('d', 4, MemberState::LEAVING, { 150 }),
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    TopologyPlan plan;
+    plan.next = state;
+    plan.ownerChanges.push_back({ state.members[3].identity, state.members[1].identity, { { 0, 20 } } });
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    const auto rc = materializer.BuildExpected(*snapshot, plan, expected);
+    EXPECT_EQ(rc.GetCode(), K_INVALID);
+    EXPECT_NE(rc.GetMsg().find("Failure owner change source is not failed"), std::string::npos) << rc.GetMsg();
+}
+
+TEST(TopologyTaskMaterializerTest, ReportsFailureTargetStateViolation)
+{
+    TopologyState state;
+    state.version = 5;
+    state.clusterHasInit = true;
+    state.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 5 };
+    state.members = {
+        MakeMaterializerMember('a', 1, MemberState::FAILED, { 10 }),
+        MakeMaterializerMember('b', 2, MemberState::ACTIVE, { 50 }),
+        MakeMaterializerMember('c', 3, MemberState::PRE_LEAVING, { 100 }),
+        MakeMaterializerMember('d', 4, MemberState::LEAVING, { 150 }),
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    TopologyPlan plan;
+    plan.next = state;
+    plan.ownerChanges.push_back({ state.members[0].identity, state.members[2].identity, { { 0, 20 } } });
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    const auto rc = materializer.BuildExpected(*snapshot, plan, expected);
+    EXPECT_EQ(rc.GetCode(), K_INVALID);
+    EXPECT_NE(rc.GetMsg().find("Failure owner change target is not active"), std::string::npos) << rc.GetMsg();
 }
 
 TEST(TopologyTaskMaterializerTest, SplitsLargeCanonicalScopeAtTaskRangeLimit)
