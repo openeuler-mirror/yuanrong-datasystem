@@ -586,13 +586,10 @@ TEST_F(KVClientTransportSetTest, NotReadyMultiPublishReroutesGroup)
     std::string secondKey;
     DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_not_ready_publish_a_", firstKey));
     DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_not_ready_publish_b_", secondKey));
-#ifdef USE_URMA
+    // SHM and UB MSet both publish through a single InvokeMultiSet RPC (ad9e274e changed the SHM
+    // path from N serial InvokeSet calls to one InvokeMultiSet). Fail that first RPC with
+    // K_NOT_READY so the whole group is rerouted to the alternate worker and succeeds there.
     DS_ASSERT_OK(inject::Set(MULTI_PUBLISH_INJECT, "1*return(K_NOT_READY)"));
-#else
-    // SHM MSet publishes each buffer through InvokeSet instead of InvokeMultiSet. Fail every key in the first
-    // group so MSet returns K_NOT_READY and the complete group is rerouted to the alternate worker.
-    DS_ASSERT_OK(inject::Set(PUBLISH_INJECT, "2*return(K_NOT_READY)"));
-#endif
     const std::vector<std::string> keys{ firstKey, secondKey };
     const std::vector<std::string> values{ std::string(VALUE_SIZE, 'm'), std::string(VALUE_SIZE, 'n') };
     const std::vector<StringView> valueViews{ values[0], values[1] };
@@ -600,11 +597,7 @@ TEST_F(KVClientTransportSetTest, NotReadyMultiPublishReroutesGroup)
 
     DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
 
-#ifdef USE_URMA
     EXPECT_EQ(inject::GetExecuteCount(MULTI_PUBLISH_INJECT), 1u);
-#else
-    EXPECT_EQ(inject::GetExecuteCount(PUBLISH_INJECT), keys.size());
-#endif
     EXPECT_TRUE(failedKeys.empty());
     AssertValue(keys[0], values[0]);
     AssertValue(keys[1], values[1]);
