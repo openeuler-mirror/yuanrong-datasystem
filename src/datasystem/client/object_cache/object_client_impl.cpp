@@ -1594,6 +1594,12 @@ bool ObjectClientImpl::RecoverPreferredLocalWorker()
     if (rc.IsError()) {
         return false;
     }
+    if (!WaitStandbyWorkerReady(localWorkerApi)) {
+        LOG(ERROR) << FormatString("[Switch] client %s wait for preferred local worker %s ready failed, keep fallback",
+                                   GetClientId(), localAddress.ToString());
+        localListenWorker->StopListenWorker(true);
+        return false;
+    }
     if (!CommitPreferredLocalWorker(oldNode, localAddress, localWorkerApi, std::move(localMmapManager),
                                     localListenWorker)) {
         return false;
