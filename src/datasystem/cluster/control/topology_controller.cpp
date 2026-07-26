@@ -147,6 +147,8 @@ bool TopologyControllerOptions::IsValid() const noexcept
     return nodeDeadTimeout.count() > 0 && failureBatchWindow.count() > 0 && ordinaryBatchWindow.count() > 0
            && reconcileTick.count() > 0 && maxDerivedOperationsPerTick > 0 && maxMembersPerBatch > 0
            && maxProgressReadsPerTick > 0 && now
+           && scaleInCollectWindow.count() >= 0
+           && scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
            && (eventSourceMode == TopologyEventSourceMode::SELF_MANAGED
                || eventSourceMode == TopologyEventSourceMode::EXTERNAL);
 }
@@ -1038,6 +1040,7 @@ Status TopologyController::TryStartNextBatch(const TopologySnapshot &latest,
                                              const std::vector<MembershipRecord> &memberships)
 {
     if (latest.GetActiveBatch().has_value()) {
+        ClearScaleInCollectState("active_batch");
         return Status::OK();
     }
     std::vector<MemberIdentity> leaving;
@@ -1048,12 +1051,67 @@ Status TopologyController::TryStartNextBatch(const TopologySnapshot &latest,
         return CommitBootstrapBatchStart(latest, state, joining);
     }
     if (!joining.empty()) {
+        ClearScaleInCollectState("scale_out_priority");
         return CommitOrdinaryBatchStart(latest, state, joining, TopologyChangeType::SCALE_OUT);
     }
     if (!leaving.empty()) {
+        return TryStartScaleInBatchAfterCollection(latest, state, leaving);
+    }
+    ClearScaleInCollectState("no_candidate");
+    return Status::OK();
+}
+
+Status TopologyController::TryStartScaleInBatchAfterCollection(const TopologySnapshot &latest,
+                                                               const TopologyState &state,
+                                                               const std::vector<MemberIdentity> &leaving)
+{
+    // 0ms disables coalescing: start immediately, preserving the legacy one-reconcile admission path.
+    if (options_.scaleInCollectWindow.count() == 0) {
         return CommitOrdinaryBatchStart(latest, state, leaving, TopologyChangeType::SCALE_IN);
     }
-    return Status::OK();
+    const auto now = options_.now();
+    if (!scaleInCollectDeadline_.has_value()) {
+        scaleInCollectDeadline_ = now + options_.scaleInCollectWindow;
+        scaleInCollectStarted_ = false;
+    }
+    if (!scaleInCollectStarted_) {
+        scaleInCollectStarted_ = true;
+        const auto windowMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(options_.scaleInCollectWindow).count();
+        const auto remainingMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(*scaleInCollectDeadline_ - now).count();
+        LOG(INFO) << "CLUSTER_CHANGE_BATCH cluster=" << keys_.ClusterName()
+                  << " action=scalein_collect_start window_ms=" << windowMs << " deadline_in_ms=" << remainingMs
+                  << " candidate_count=" << leaving.size() << " sample=" << MemberIdentitySample(leaving)
+                  << " topology_version=" << latest.Version();
+    }
+    if (now < *scaleInCollectDeadline_) {
+        return Status::OK();
+    }
+    // Deadline reached. Log finish once, then drop the window state so a CAS loss (K_TRY_AGAIN) below
+    // cannot leave a stale deadline for the next reconcile.
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - (*scaleInCollectDeadline_ - options_.scaleInCollectWindow)).count();
+    LOG(INFO) << "CLUSTER_CHANGE_BATCH cluster=" << keys_.ClusterName()
+              << " action=scalein_collect_finish elapsed_ms=" << elapsedMs
+              << " participant_count=" << leaving.size() << " sample=" << MemberIdentitySample(leaving)
+              << " topology_version=" << latest.Version();
+    scaleInCollectDeadline_.reset();
+    scaleInCollectStarted_ = false;
+    return CommitOrdinaryBatchStart(latest, state, leaving, TopologyChangeType::SCALE_IN);
+}
+
+void TopologyController::ClearScaleInCollectState(const char *reason)
+{
+    if (!scaleInCollectDeadline_.has_value() && !scaleInCollectStarted_) {
+        return;
+    }
+    if (scaleInCollectStarted_) {
+        LOG(INFO) << "CLUSTER_CHANGE_BATCH cluster=" << keys_.ClusterName()
+                  << " action=scalein_collect_cancel reason=" << reason;
+    }
+    scaleInCollectDeadline_.reset();
+    scaleInCollectStarted_ = false;
 }
 
 void TopologyController::CollectNextBatchCandidates(const TopologySnapshot &latest,

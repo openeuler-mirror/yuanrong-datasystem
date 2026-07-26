@@ -101,6 +101,10 @@ DS_DEFINE_double(spill_low_watermark_ratio, 0.6,
                  "Spill directory usage low watermark (ratio of spill_size_limit, 0.0-1.0). Valid range: 0.01-0.99. "
                  "Must be less than spill_high_watermark_ratio.");
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
+DS_DEFINE_uint32(scale_in_collect_window_ms, 1000,
+                 "ordinary SCALE_IN batch coalescing window in milliseconds. When non-zero, the first PRE_LEAVING "
+                 "candidate opens a short collect window so members exiting within it land in the same epoch; "
+                 "0 disables coalescing (legacy immediate-batch behavior). Hard upper bound 5000ms.");
 DS_DEFINE_uint64(stream_idle_time_s, 5 * 60, "stream idle time. default 300s (5 minutes)");
 DS_DEFINE_int64(payload_nocopy_threshold, 1048576L * 100L, "minimum payload size to trigger no memory copy");
 DS_DEFINE_bool(enable_multi_stubs, false, "deprecated");

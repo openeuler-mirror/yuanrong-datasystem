@@ -29,6 +29,8 @@
 
 namespace datasystem::cluster {
 
+inline constexpr int64_t MAX_SCALE_IN_COLLECT_WINDOW_MS = 5'000;
+
 enum class TopologyEventSourceMode : uint8_t { SELF_MANAGED, EXTERNAL };
 
 /**
@@ -39,6 +41,7 @@ struct TopologyControllerOptions {
     std::chrono::seconds failureBatchWindow{ 30 };
     std::chrono::minutes ordinaryBatchWindow{ 3 };
     std::chrono::milliseconds reconcileTick{ 1'000 };
+    std::chrono::milliseconds scaleInCollectWindow{ 1'000 };
     size_t maxMembersPerBatch{ 2'500 };
     size_t maxDerivedOperationsPerTick{ 256 };
     size_t maxProgressReadsPerTick{ 256 };
@@ -333,6 +336,27 @@ private:
      */
     Status TryStartNextBatch(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
+    /**
+     * @brief Admit the ordinary SCALE_IN batch through the coalescing collect window.
+     *
+     * When scaleInCollectWindow is non-zero, the first PRE_LEAVING candidate opens a deadline (now + window) and the
+     * batch is started only after the deadline expires, so that members exiting within the window land in the same
+     * epoch. Returns without starting a batch while the deadline is pending, and clears the deadline when the window
+     * is superseded by an active batch or a scale-out candidate.
+     * @param[in] latest Snapshot.
+     * @param[in] state Derived topology state for the next batch.
+     * @param[in] leaving Pre-collected PRE_LEAVING candidates, already bounded by maxMembersPerBatch.
+     * @return Operation status.
+     */
+    Status TryStartScaleInBatchAfterCollection(const TopologySnapshot &latest, const TopologyState &state,
+                                               const std::vector<MemberIdentity> &leaving);
+
+    /**
+     * @brief Drop the in-progress SCALE_IN collect window and log the reason once.
+     * @param[in] reason Short reason token emitted in the cancel log.
+     */
+    void ClearScaleInCollectState(const char *reason);
+
     void CollectNextBatchCandidates(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships,
                                     std::vector<MemberIdentity> &leaving,
                                     std::vector<MemberIdentity> &joining) const;
@@ -387,6 +411,11 @@ private:
     uint64_t deadlineBatchEpoch_{ 0 };
     uint64_t loggedExpiredBatchEpoch_{ 0 };
     uint64_t loggedScaleInWaitEpoch_{ 0 };
+    // State-thread-owned, in-process and non-persistent collect deadline for ordinary SCALE_IN coalescing.
+    // Not written to topology, not part of CAS, not shared across Controller instances or restarts.
+    std::optional<std::chrono::steady_clock::time_point> scaleInCollectDeadline_;
+    // De-duplicates scalein_collect_start/scalein_collect_finish/scalein_collect_cancel logs per collect window.
+    bool scaleInCollectStarted_{ false };
     size_t admissionCursor_{ 0 };
     uint64_t derivedBatchEpoch_{ 0 };
     size_t progressReadCursor_{ 0 };

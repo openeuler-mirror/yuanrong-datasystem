@@ -1,0 +1,10 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 1111111..2222222 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -300,7 +300,7 @@ set(DYNAMIC_LIB
+     ${CMAKE_THREAD_LIBS_INIT}
+     ${THRIFT_LIB}
+     dl
+-    z)
++    ${ZLIB_LIB})
