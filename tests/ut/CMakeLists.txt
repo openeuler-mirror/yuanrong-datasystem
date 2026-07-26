@@ -103,6 +103,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_engine_test\\.cpp$
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_runtime_composition_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_task_janitor_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_dfx_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_diagnostics_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_shutdown_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/testing/fake_coordination_backend\\.cpp$)
 
@@ -212,6 +213,7 @@ add_executable(cluster_topology_contract_ut
         cluster/topology_runtime_composition_test.cpp
         cluster/topology_task_janitor_test.cpp
         cluster/topology_dfx_test.cpp
+        cluster/topology_diagnostics_test.cpp
         cluster/topology_shutdown_test.cpp
         cluster/testing/fake_coordination_backend.cpp
         cluster/topology_key_helper_test.cpp

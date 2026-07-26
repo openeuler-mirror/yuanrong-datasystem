@@ -36,7 +36,10 @@
 - Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and
   queue overflow/coalescing, membership observations with bounded samples and digests, member join/leave/failure
   transitions, batch start/deadline/finalization, task notify/callback/progress, and Worker/Observer snapshot
-  publication.
+  publication. Member samples print all members up to the current operational bound of 32 and mark larger future
+  topologies as truncated. Task lifecycle logs carry `stage`/`stage_event`, executor/source/target/failed identities,
+  and the exact closed `hash_ranges`. Correlate cross-thread work by batch epoch, task prefix, and business-operation
+  prefix rather than assuming one trace spans the Controller and callback threads.
 
   | Keyword | Main source | Trigger and useful fields |
   | --- | --- | --- |
@@ -52,8 +55,8 @@
   | `CLUSTER_MEMBER_LEAVE_SUMMARY` | Controller scale-in/failure commit | summarized leaving or failed members in a removal batch. |
   | `CLUSTER_CHANGE` | Controller decisions | scale-in wait, completion, abort, or no-op decisions with version and batch context. |
   | `CLUSTER_RECONCILE` | Controller serialized loop | successful reconciliation after queued events or commits; includes elapsed time and queue counters. |
-  | `CLUSTER_RING` | Controller topology publication | ring build/publication diagnostics with topology version and membership counts. |
-  | `CLUSTER_TASK` | Materializer/executor | task materialization, notify, callback submission/finish/failure, and progress outcomes. |
+  | `CLUSTER_RING` | Controller/Worker/Observer topology publication | newly committed or locally published version, membership counts, and per-member `committed_ring`/`prospective_ring` ranges. |
+  | `CLUSTER_TASK` | Materializer/executor | task materialization, notify, stage start/finish/failure, exact participants/ranges, cleanup, and progress outcomes. |
 - Foreground routing uses `PlacementFacade` and one immutable snapshot per single-key or batch decision. Batch-level
   failures leave the output unchanged; one item vector returns each per-key status beside its decision so successful
   results from the same snapshot survive without an extra aligned-vector allocation. Routing never performs backend IO
@@ -75,7 +78,10 @@
   was legal before a later Snapshot publication; Apply may finish afterward, remains idempotent under the preserved
   LEAVING/FAILED member fact, and must complete before ScaleIn progress allows final member removal. Worker callbacks
   install their remaining budget in the repository `ApiDeadline`; metadata-removal batches cap their thread-local RPC
-  budget by that remaining deadline instead of restarting the default RPC timeout for every batch.
+  budget by that remaining deadline instead of restarting the default RPC timeout for every batch. Operationally,
+  `CLUSTER_SCALE_IN action=metadata_done checkpoint_scope=task` describes one persisted task marker; `source_gate`
+  distinguishes waiting from all-metadata-ready. Data drain is source-Worker scoped, so `target_role=trigger` marks the
+  shared participant-scope `target` as the per-task trigger instead of implying that one target owns the whole drain.
 - `WorkerOCServer` owns only the `TopologyEngine` composition root plus the Store/Proxy and callback resources borrowed
   by it. Shutdown drains business RPC ingress and calls Engine once. In ETCD mode Engine closes the shared watch and
   keepalive event sources once, drains Worker execution, stops the externally-fed Controller/Janitor, and fully shuts

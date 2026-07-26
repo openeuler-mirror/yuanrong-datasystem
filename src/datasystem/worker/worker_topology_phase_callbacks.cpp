@@ -17,6 +17,7 @@
 #include "datasystem/worker/worker_topology_phase_callbacks.h"
 
 #include <algorithm>
+#include <sstream>
 #include <utility>
 
 #include "datasystem/cluster/model/topology_diagnostics.h"
@@ -84,14 +85,24 @@ Status EraseFailedWorkerWorkerStub(const cluster::TopologyPhaseAction &action)
     return rc;
 }
 
-void LogCallbackResult(const std::string &phase, const cluster::TopologyCallbackContext &context,
+std::string CallbackScopeForLog(const cluster::TopologyCallbackContext &context)
+{
+    std::ostringstream out;
+    out << "task_prefix=" << cluster::TopologyDiagnosticPrefix(context.action.taskId)
+        << " operation_prefix=" << cluster::TopologyDiagnosticPrefix(context.businessOperationId)
+        << " "
+        << cluster::TopologyParticipantScopeForLog(context.action.executor, context.action.source,
+                                                   context.action.target, context.action.failed);
+    return out.str();
+}
+
+void LogCallbackResult(const char *phase, const char *stage, const cluster::TopologyCallbackContext &context,
                        std::chrono::steady_clock::time_point start, const Status &status)
 {
-    LOG(INFO) << "CLUSTER_TASK_CALLBACK phase=" << phase << " batch_epoch=" << context.action.batchEpoch
-              << " task_prefix=" << cluster::TopologyDiagnosticPrefix(context.action.taskId)
-              << " source=" << (context.action.source.has_value() ? context.action.source->address : "")
-              << " target=" << (context.action.target.has_value() ? context.action.target->address : "")
-              << " failed=" << (context.action.failed.has_value() ? context.action.failed->address : "")
+    LOG(INFO) << "CLUSTER_TASK_CALLBACK phase=" << phase << " stage=" << stage << " stage_event=finish"
+              << " topology_version=" << context.action.topologyVersion
+              << " batch_epoch=" << context.action.batchEpoch
+              << " " << CallbackScopeForLog(context)
               << " elapsed_ms=" << cluster::DurationMs(start, std::chrono::steady_clock::now())
               << " status=" << status.ToString();
 }
@@ -115,7 +126,9 @@ Status WorkerTopologyPhaseCallbacks::OnScaleOut(const cluster::TopologyCallbackC
         ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
         rc = MigrateMetadata(context);
     }
-    LogCallbackResult("scale_out", context, start, rc);
+    LogCallbackResult("scale_out",
+                      cluster::TopologyCallbackStageName(cluster::TopologyCallbackPhase::SCALE_OUT, false),
+                      context, start, rc);
     return rc;
 }
 
@@ -127,7 +140,9 @@ Status WorkerTopologyPhaseCallbacks::OnScaleIn(const cluster::TopologyCallbackCo
         ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
         rc = MigrateMetadata(context);
     }
-    LogCallbackResult("scale_in_metadata", context, start, rc);
+    LogCallbackResult("scale_in_metadata",
+                      cluster::TopologyCallbackStageName(cluster::TopologyCallbackPhase::SCALE_IN, false),
+                      context, start, rc);
     return rc;
 }
 
@@ -150,7 +165,9 @@ Status WorkerTopologyPhaseCallbacks::OnScaleInDataDrain(const cluster::TopologyC
             rc = DrainScaleInData(context, *objectCacheService);
         }
     }
-    LogCallbackResult("scale_in_data_drain", context, start, rc);
+    LogCallbackResult("scale_in_data_drain",
+                      cluster::TopologyCallbackStageName(cluster::TopologyCallbackPhase::SCALE_IN, true),
+                      context, start, rc);
     return rc;
 }
 
@@ -173,7 +190,9 @@ Status WorkerTopologyPhaseCallbacks::PrepareScaleInCleanup(const cluster::Topolo
     if (rc.IsOk()) {
         prepared = std::make_unique<cluster::TopologyPreparedCleanup>(std::move(authorize), std::move(apply));
     }
-    LogCallbackResult("scale_in_cleanup_prepare", context, start, rc);
+    LogCallbackResult("scale_in_cleanup_prepare",
+                      cluster::TopologyCallbackStageName(cluster::TopologyCallbackPhase::SCALE_IN_CLEANUP, false),
+                      context, start, rc);
     return rc;
 }
 
@@ -185,7 +204,9 @@ Status WorkerTopologyPhaseCallbacks::OnFailure(const cluster::TopologyCallbackCo
         ApiDeadlineGuard deadlineGuard(RemainingCallbackBudgetUs(context.deadline), InUs{});
         rc = RunFailureBestEffort(context);
     }
-    LogCallbackResult("failure", context, start, rc);
+    LogCallbackResult("failure",
+                      cluster::TopologyCallbackStageName(cluster::TopologyCallbackPhase::FAILURE, false),
+                      context, start, rc);
     return rc;
 }
 
@@ -236,25 +257,18 @@ Status WorkerTopologyPhaseCallbacks::AcquireScaleInDrain(const cluster::Topology
 }
 
 void WorkerTopologyPhaseCallbacks::CompleteScaleInDrain(const cluster::TopologyCallbackContext &context,
-                                                        const Status &status)
+                                                         const Status &status)
 {
-    const auto &source = context.action.source;
     {
         std::lock_guard<std::mutex> lock(scaleInDrainMutex_);
         scaleInDrainState_.running = false;
         scaleInDrainState_.complete = status.IsOk();
     }
     scaleInDrainChanged_.notify_all();
-    LOG(INFO) << "CLUSTER_SCALE_IN action=data_drain"
+    LOG(INFO) << "CLUSTER_SCALE_IN action=data_drain stage=data_drain stage_event=finish"
+              << " drain_scope=source_worker target_role=trigger"
               << " epoch=" << context.action.batchEpoch
-              << " source=" << (source.has_value() ? source->address : "")
-              << " source_id_prefix=" << (source.has_value() ? cluster::MemberIdForLog(source->id) : "")
-              << " target=" << (context.action.target.has_value() ? context.action.target->address : "")
-              << " target_id_prefix="
-              << (context.action.target.has_value() ? cluster::MemberIdForLog(context.action.target->id) : "")
-              << " executor=" << context.action.executor.address
-              << " operation_prefix=" << cluster::TopologyDiagnosticPrefix(context.businessOperationId)
-              << " task_prefix=" << cluster::TopologyDiagnosticPrefix(context.action.taskId)
+              << " " << CallbackScopeForLog(context)
               << " status=" << status.ToString();
 }
 
@@ -266,6 +280,10 @@ Status WorkerTopologyPhaseCallbacks::DrainScaleInData(
     if (!leader) {
         return Status::OK();
     }
+    LOG(INFO) << "CLUSTER_SCALE_IN action=data_drain stage=data_drain stage_event=start"
+              << " drain_scope=source_worker target_role=trigger"
+              << " epoch=" << context.action.batchEpoch
+              << " " << CallbackScopeForLog(context);
     auto status = objectCacheService.DrainTopologyScaleInData(
         context.action, context.businessOperationId, context.deadline, context.cancellation);
     CompleteScaleInDrain(context, status);

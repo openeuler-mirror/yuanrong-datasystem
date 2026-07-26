@@ -153,7 +153,8 @@ Status TopologyObserver::Reload(bool fullRebuildAllowed)
                   << " batch_type=" << batchType << " batch_epoch=" << batchEpoch
                   << " member_count=" << snapshot->Members().size()
                   << " active_count=" << snapshot->ActiveMembers().size()
-                  << " failed_count=" << snapshot->FailedMembers().size();
+                  << " failed_count=" << snapshot->FailedMembers().size()
+                  << " " << TopologyRingViewsForLog(*snapshot);
     }
     return Status::OK();
 }
