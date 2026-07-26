@@ -32,6 +32,30 @@
   Workers use the Worker-owned `EtcdStore` and one unified watch stream for exact topology/local notify plus membership;
   Engine routes physical-key doorbells to the Worker and Controller dispatchers, and a topology event wakes both.
   Coordinator keeps role-specific backend watch registrations. Observer watches exact topology only.
+- When unified ETCD loses write quorum or becomes unreachable after a last-good snapshot exists, Engine publishes
+  `CONTROL_DEGRADED` without revoking business admission and keeps that immutable snapshot authoritative. The Controller
+  treats ETCD membership absence as suspicion rather than proof of Worker failure: only members continuously absent for
+  `nodeDeadTimeout` are direct-probed. Canonical committed-member order assigns each target to its fixed successor, so
+  exactly one Controller owns that target's probe and each Controller owns at most one target. This ownership changes
+  only after a new authoritative topology is committed; local membership timers cannot create extra reporters. A
+  responding member starts a new absence window, and a target not owned or not probed by this Controller cannot enter
+  its Failure plan. The peer RPC reads the cached control-backend observation and never synchronously queries ETCD
+  inside the bounded liveness probe. A reachable peer with temporarily unavailable backend evidence therefore returns a
+  successful `ready=false` response, so transport reachability remains distinguishable from authoritative topology
+  evidence. Its protobuf carries the 16-byte binary member identity as `bytes`, so BRPC never rejects non-UTF-8
+  identities. The `string`-to-`bytes` correction preserves protobuf wire type and lets upgraded readers consume
+  successfully serialized legacy responses, but a legacy reader cannot consume every binary response from an upgraded
+  Worker. Deploy or roll back this behavior cluster-wide; an ETCD outage during a mixed-version rolling upgrade is
+  outside this contract.
+  BRPC stub acquisition and channel establishment share this low-frequency probe's absolute deadline;
+  default business-RPC stub lookup semantics remain unchanged. An absent direct response remains retryable until the same
+  membership absence has continued through
+  `nodeDeadTimeout` plus one
+  `failureProbeTimeout`; only then is the member eligible for the existing Failure plan. Backend-unreadable intervals
+  observed while reading either topology or membership do not consume the continuous-absence budget. Coordinator mode
+  retains its original quorum-confirmed degradation versus local-isolation behavior.
+- Repeated expected backend-access failures while already in `CONTROL_DEGRADED` still refresh the diagnostic
+  `lastError`, but the warning log is sampled. State transitions and unexpected runtime failures remain unsampled.
 - Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and
   queue overflow/coalescing, membership observations with bounded samples and digests, member join/leave/failure
   transitions, batch start/deadline/finalization, task notify/callback/progress, and Worker/Observer snapshot
@@ -54,6 +78,7 @@
   | `CLUSTER_MEMBER_LEAVE_SUMMARY` | Controller scale-in/failure commit | summarized leaving or failed members in a removal batch. |
   | `CLUSTER_CHANGE` | Controller decisions | scale-in wait, completion, abort, or no-op decisions with version and batch context. |
   | `CLUSTER_RECONCILE` | Controller serialized loop | successful reconciliation after queued events or commits; includes elapsed time and queue counters. |
+  | `CLUSTER_DEGRADED` | Worker Engine | business-admission level and reason transitions during backend loss and recovery. |
   | `CLUSTER_RING` | Controller/Worker/Observer topology publication | newly committed or locally published version, membership counts, and per-member `committed_ring`/`prospective_ring` ranges. |
   | `CLUSTER_TASK` | Materializer/executor | task materialization, notify, stage start/finish/failure, exact participants/ranges, cleanup, and progress outcomes. |
 - Foreground routing uses `PlacementFacade` and one immutable snapshot per single-key or batch decision. Batch-level
@@ -121,6 +146,9 @@
   remains zero because `WatchRange` ignores the field and returns `initial_kvs` plus a RESET doorbell. `K_NOT_FOUND` and
   `K_NOT_READY` allow bootstrap waiting; other reload errors fail before any `WatchRange` call. A successful reload
   synchronously publishes the Snapshot before watches are registered.
+- Unified-ETCD recovery reuses the normal exact topology reload. The membership lease recreates its key before
+  `IsKeepAliveTimeout()` becomes false. A transient recovery ordering where another Controller still sees the key absent
+  is covered by the same direct Worker liveness check; it cannot remove a responding member from topology.
 - Coordinator watches bind both `CoordinatorId` and `watch_id`. Watch registration uses a client registration ID so an
   ambiguous WatchRange result retries idempotently. Initial/recreated membership invalidates both Worker and Controller
   role plans using O(1) RESET doorbells; lease threads never wait for watch-registration RPCs.
@@ -165,6 +193,13 @@
   local snapshot authority.
 - Normal scale-out/scale-in must keep business traffic lossless. Data or metadata loss is accepted only after confirmed
   member Failure.
+- The unified-ETCD traffic-preservation contract covers a topology-stable normal -> backend fault -> normal sequence.
+  A Worker failure, scale operation, restart, active batch, or non-`ACTIVE` topology member during the backend fault is
+  outside that contract: the Worker safely retains last-good routing and remains `CONTROL_DEGRADED`, but control-plane
+  progress and automatic return to `NORMAL` are not guaranteed until the conflicting operation is resolved.
+- The request-level zero-failure contract covers ordinary in-memory routing and RPC connection checks, including
+  `NONE_L2_CACHE_EVICT` objects. It does not cover a Get that must recover object metadata directly from ETCD through
+  `oc_io_from_l2cache_need_metadata`; that L2 metadata fallback remains backend-dependent.
 - Temporary endpoint observations stay process local. Only confirmed Failure enters the authoritative topology.
 - At most one change type is active at a time; one batch may contain many members. Failure has highest priority and may
   preempt ordinary work. Scale-in waits for an already-running scale-out batch to finish.
@@ -194,6 +229,10 @@
   multi-crash scale-in, mixed scale-out/pending-scale-in, cascading Failure replans, and source/target diagnostics.
 - State machine, CAS/fence, crash points, retry, resource limits, and Shutdown belong in UT/LLT/component tests. ST only
   proves representative process, ETCD watch/lease, network, and real callback wiring.
+- ETCD availability release validation uses a real three-member ETCD cluster and release-package Workers. A continuous
+  client loop must observe zero failed `Set`/`Get`/`Del` requests while losing one member, losing write quorum (two
+  members), losing all members, and after each restoration. Do not substitute Coordinator-backed Engine tests for this
+  unified-ETCD path.
 
 ## Update Triggers
 

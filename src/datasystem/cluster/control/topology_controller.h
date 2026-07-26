@@ -42,6 +42,10 @@ struct TopologyControllerOptions {
     std::chrono::minutes ordinaryBatchWindow{ 3 };
     std::chrono::milliseconds reconcileTick{ 1'000 };
     std::chrono::milliseconds scaleInCollectWindow{ 1'000 };
+    // One bounded direct probe must not stall the Controller reconcile thread.
+    std::chrono::seconds failureProbeTimeout{ 2 };
+    // Existing Worker identity used to deterministically assign one cluster-wide probe owner per missing member.
+    std::string localAddress;
     size_t maxMembersPerBatch{ 2'500 };
     size_t maxDerivedOperationsPerTick{ 256 };
     size_t maxProgressReadsPerTick{ 256 };
@@ -51,6 +55,15 @@ struct TopologyControllerOptions {
      * @brief Host hook for a newly observed RESTARTING member process.
      */
     std::function<Status(const std::string &, int64_t)> membershipRestartHandler;
+
+    /**
+     * @brief Directly probe only members whose membership absence has reached nodeDeadTimeout.
+     * @return One observation for each reachable target. An omitted target is treated as unreachable; an exception
+     *         aborts the reconcile tick without changing topology.
+     */
+    std::function<std::vector<ControlBackendObservation>(const std::vector<MemberIdentity> &,
+                                                         std::chrono::steady_clock::time_point)>
+        memberLivenessProbe;
 
     /**
      * @brief Semantic policy clock; production uses steady time and tests may inject virtual time.
@@ -216,6 +229,14 @@ private:
      * @return Operation status.
      */
     Status TryConfirmFailures(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
+
+    /**
+     * @brief Remove directly reachable or not-yet-probed members from this tick's failure candidates.
+     * @param[in] latest Snapshot that supplied the candidate identities.
+     * @param[in,out] classification Failure candidates to narrow to directly unreachable members.
+     * @return K_OK after bounded probing; K_RUNTIME_ERROR if an injected probe throws.
+     */
+    Status ConfirmMissingMembersUnreachable(const TopologySnapshot &latest, FailureClassification &classification);
 
     /**
      * @brief Commit the cluster-shutdown special path.

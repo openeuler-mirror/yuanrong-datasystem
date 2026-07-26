@@ -437,8 +437,9 @@ Status EtcdStore::RunKeepAliveTask(Timer &keepAliveTimeoutTimer, Timer &deathTim
         LOG(INFO) << "Creating new lease KeepAlive object for lease " << leaseId_
                   << " with heartbeat interval timeout: " << leaseKeepAlive_->GetLeaseRenewIntervalMs();
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(leaseKeepAlive_->Init(GetAuthToken()), "Could not initialize lease keepalive");
-        keepAliveTimeout_ = false;
         RETURN_IF_NOT_OK(AutoCreate());
+        // The lease is usable only after its membership key has been recreated successfully.
+        keepAliveTimeout_ = false;
         // Now invoke keep alive thread main loop
         auto traceId = Trace::Instance().GetTraceID();
         fStatus = keepAlivePool_->Submit([this, traceId, &keepAliveTimeoutTimer] {
