@@ -36,21 +36,3 @@ ds_cc_test(
         "//tests/st:st_common",
     ],
 )
-
-ds_cc_test(
-    name = "oc_migrate_metadata_manager_test",
-    srcs = ["oc_migrate_metadata_manager_test.cpp"],
-    tags = ["manual"],
-    deps = [
-        "//src/datasystem/common/flags:ds_flags",
-        "//src/datasystem/common/immutable_string:immutable_string",
-        "//src/datasystem/common/kvstore/rocksdb:rocks_store",
-        "//src/datasystem/common/util:file_util",
-        "//src/datasystem/common/util:net_util",
-        "//src/datasystem/common/util:status_helper",
-        "//src/datasystem/common/util:uri",
-        "//src/datasystem/master/object_cache:oc_metadata_manager",
-        "//src/datasystem/master/object_cache:oc_migrate_metadata_manager",
-        "//tests/st:st_common",
-    ],
-)

@@ -490,17 +490,23 @@ class TestKVClientMethods(unittest.TestCase):
         """
         Context.set_trace_id("test_m_set_value")
         client1 = KVClient(self.host, self.port)
+        client2 = KVClient(self.host, self.port)
         client1.init()
+        client2.init()
 
-        key_num = 10
+        key_num = 4
         key_list = [self.random_str(15) for _ in range(key_num)]
-        val_list1 = [self.random_str(20) for _ in range(key_num)]
+        old_vals = [self.random_str(20) for _ in range(2)]
+        client1.set(key_list[0], old_vals[0])
+        client1.set(key_list[1], old_vals[1])
+
+        new_vals = [self.random_str(20) for _ in range(key_num)]
         write_mode = WriteMode.NONE_L2_CACHE
         existence_opt = ExistenceOpt.NX
-        expected_msg = r"The MSet with NX existence option is not supported in distributed master mode"
-        with self.assertRaisesRegex(RuntimeError, expected_msg):
-            client1.mset(key_list, val_list1, write_mode, 0, existence_opt)
+        self.assertEqual(client2.mset(key_list, new_vals, write_mode, 0, existence_opt), [])
 
+        get_vals = client1.get(key_list, True)
+        self.assertListEqual([old_vals[0], old_vals[1], new_vals[2], new_vals[3]], get_vals)
         self.assertEqual(client1.delete(key_list), [])
 
     def test_generate_key(self):

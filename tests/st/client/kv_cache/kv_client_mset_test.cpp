@@ -303,7 +303,7 @@ TEST_F(KVClientMSetTest, MsetNtxNxExistingKeySameValueNoFailedKeys)
     ASSERT_EQ(valueGet, presetValue);
 }
 
-TEST_F(KVClientMSetTest, LEVEL1_MsetNtxNxAddLocationAfterOwnerWorkerDown)
+TEST_F(KVClientMSetTest, MsetNtxNxExistingDoesNotAddLocation)
 {
     MSetParam param;
     param.existence = ExistenceOpt::NX;
@@ -315,36 +315,17 @@ TEST_F(KVClientMSetTest, LEVEL1_MsetNtxNxAddLocationAfterOwnerWorkerDown)
     std::vector<std::string> rawVals{ presetValue };
     std::vector<StringView> values{ rawVals[0] };
     std::vector<std::string> failedKeys;
-    DS_ASSERT_OK(client2_->MSet(keys, values, failedKeys, param));
-    ASSERT_TRUE(failedKeys.empty());
-
-    HostPort worker2Addr;
-    DS_ASSERT_OK(cluster_->GetWorkerAddr(2, worker2Addr));
     constexpr size_t centralMasterWorkerIdx = 0;
-    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, centralMasterWorkerIdx, "master.select_location",
-                                           "return(" + worker2Addr.ToString() + ")"));
-    DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 1));
-    std::string valueGet;
-    Status rc = Status::OK();
-    int retryTimes = 20;
-    int waitMs = 200;
-    for (int i = 0; i < retryTimes; ++i) {
-        rc = client0_->Get(key, valueGet);
-        if (rc.IsOk()) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
-    }
-    Status clearInjectRc = Status::OK();
-    for (int i = 0; i < 5; ++i) {
-        clearInjectRc = cluster_->ClearInjectAction(WORKER, centralMasterWorkerIdx, "master.select_location");
-        if (clearInjectRc.IsOk()) {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    }
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, centralMasterWorkerIdx, "ObjectMetaStore.AddObjectLocation",
+                                           "1*return(K_RUNTIME_ERROR)"));
+    Status rc = client2_->MSet(keys, values, failedKeys, param);
+    Status clearInjectRc = cluster_->ClearInjectAction(WORKER, centralMasterWorkerIdx, "ObjectMetaStore.AddObjectLocation");
     DS_ASSERT_OK(clearInjectRc);
     DS_ASSERT_OK(rc);
+    ASSERT_TRUE(failedKeys.empty());
+
+    std::string valueGet;
+    DS_ASSERT_OK(client0_->Get(key, valueGet));
     ASSERT_EQ(valueGet, presetValue);
 }
 

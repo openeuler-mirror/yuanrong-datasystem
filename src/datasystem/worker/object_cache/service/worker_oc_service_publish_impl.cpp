@@ -426,6 +426,11 @@ Status WorkerOcServicePublishImpl::PublishObjectWithLock(const std::string &obje
     auto rc = PublishObject(objectKV, params, payloads);
     INJECT_POINT("publish.sleep");
     if (rc.IsError()) {
+        if (req.existence() == ExistenceOptPb::NX && rc.GetCode() == K_OC_KEY_ALREADY_EXIST) {
+            LOG_IF_ERROR(TryDeleteObjFromEvictionAndSpillFile(objectKV, isInsert),
+                         "Rollback local object for remote NX conflict failed");
+            return Status::OK();
+        }
         if ((*entry)->GetShmUnit() == nullptr) {
             LOG_IF_ERROR(TryDeleteObjFromEvictionAndSpillFile(objectKV, isInsert), "Try delete obj from evict fail");
         }

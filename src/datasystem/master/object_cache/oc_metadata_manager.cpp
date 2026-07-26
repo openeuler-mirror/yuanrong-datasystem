@@ -837,11 +837,7 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
             objsFirst.emplace_back(objectKey);
         }
         if (status.GetCode() == K_OC_KEY_ALREADY_EXIST && req.existence() == ExistenceOptPb::NX) {
-            auto rc = AddLocationForExistingKeyOnNx(objectKey, req.address());
-            if (rc.IsError()) {
-                rsp.add_failed_object_keys(objectKey);
-                lastRc = rc;
-            }
+            rsp.add_existing_object_keys(objectKey);
             continue;
         }
         if (status.IsError()) {
@@ -874,38 +870,6 @@ Status OCMetadataManager::CreateMultiMetaNtx(const CreateMultiMetaReqPb &req, Cr
     rsp.mutable_last_rc()->set_error_code(lastRc.GetCode());
     rsp.set_version(version);
     return Status::OK();
-}
-
-Status OCMetadataManager::AddLocationForExistingKeyOnNx(const std::string &objectKey, const std::string &address)
-{
-    bool needStoreLocation = false;
-    {
-    size_t shardIdx = GetShardIndex(objectKey);
-    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-        TbbMetaTable::accessor accessor;
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            metaShards_[shardIdx].table.find(accessor, objectKey), K_NOT_FOUND,
-            FormatString("[ObjectKey %s] The object key not exists in metaTable_", objectKey));
-        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
-            accessor->second.multiSetState != PENDING, K_TRY_AGAIN,
-            FormatString("update meta failed, multi meta objectKey(%s) is creating, wait and try again", objectKey));
-        auto [iter, inserted] = accessor->second.locations.emplace(address, AckState::ACK);
-        if (!inserted) {
-            iter->second = AckState::ACK;
-            return Status::OK();
-        }
-        needStoreLocation = true;
-    }
-    auto rc = objectStore_->AddObjectLocation(objectKey, address, "");
-    if (rc.IsError() && needStoreLocation) {
-    size_t shardIdx = GetShardIndex(objectKey);
-    std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-        TbbMetaTable::accessor accessor;
-        if (metaShards_[shardIdx].table.find(accessor, objectKey)) {
-            (void)accessor->second.locations.erase(address);
-        }
-    }
-    return rc;
 }
 
 Status OCMetadataManager::CreateMultiMetaTx(const CreateMultiMetaReqPb &req, CreateMultiMetaRspPb &rsp)
@@ -1016,18 +980,7 @@ Status OCMetadataManager::CreateMeta(const CreateMetaReqPb &request, CreateMetaR
     bool firstOne = false;
     auto status = CreateMeta(request.meta(), request.address(), nestedObjectKeys, version, firstOne);
     if (status.GetCode() == K_OC_KEY_ALREADY_EXIST && request.meta().existence() == ExistenceOptPb::NX) {
-        status = AddLocationForExistingKeyOnNx(objectKey, address);
-        if (status.IsOk()) {
-        size_t shardIdx = GetShardIndex(objectKey);
-        std::shared_lock<std::shared_timed_mutex> lck(metaShards_[shardIdx].mutex);
-            TbbMetaTable::const_accessor accessor;
-            if (metaShards_[shardIdx].table.find(accessor, objectKey)) {
-                version = accessor->second.meta.version();
-            } else {
-                LOG(WARNING) << FormatString("[ObjectKey %s] Add location success but failed to query version",
-                                             objectKey);
-            }
-        }
+        return status;
     }
     RETURN_IF_NOT_OK(status);
     response.set_version(version);

@@ -86,6 +86,9 @@ message CreateMultiMetaRspPb {
   ErrorInfoPb last_rc = 3;
   repeated RedirectMetaInfo info = 4;
   bool meta_is_moving = 5;
+  // Keys skipped because CreateMultiMetaReqPb.existence is NX and valid metadata already exists.
+  // These keys are successful from the client API view and must not be exposed as failed keys.
+  repeated string existing_object_keys = 6;
 }
 
 
