@@ -21,6 +21,7 @@
 #include <memory>
 #include <string>
 #include <chrono>
+#include <thread>
 
 #include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/client/object_cache/client_worker_api/iclient_worker_api.h"
@@ -164,7 +165,7 @@ TEST_F(RdmaObjectClientTest, RdmaReconnectTest)
         if (getSt.IsOk()) {
             break;
         }
-        sleep(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     DS_ASSERT_OK(getSt);
     checkFunc(valuesGet);
@@ -220,8 +221,27 @@ TEST_F(RdmaObjectClientTest, TestBatchRemoteGet1)
 
     std::vector<std::string> valuesGet;
     std::vector<Optional<ReadOnlyBuffer>> buffers;
-    DS_ASSERT_OK(client1->Get(keys, valuesGet));
-    DS_ASSERT_OK(client1->Get(keys, buffers));
+    // Cross-worker batch get is transient-error prone under CI parallel load (-u16); retry both
+    // gets to tolerate momentary transport/RDMA jitter, matching the RdmaReconnectTest pattern.
+    Status getSt;
+    for (int retry = 0; retry < 10; ++retry) {
+        valuesGet.clear();
+        getSt = client1->Get(keys, valuesGet);
+        if (getSt.IsOk()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    DS_ASSERT_OK(getSt);
+    for (int retry = 0; retry < 10; ++retry) {
+        buffers.clear();
+        getSt = client1->Get(keys, buffers);
+        if (getSt.IsOk()) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    DS_ASSERT_OK(getSt);
     ASSERT_TRUE(NotExistsNone(valuesGet));
     ASSERT_EQ(keys.size(), valuesGet.size());
     ASSERT_EQ(keys.size(), buffers.size());

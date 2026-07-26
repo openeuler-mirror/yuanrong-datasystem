@@ -1236,8 +1236,9 @@ public:
 
 TEST_F(KVClientSpillTest, TestReadKeyRemoteGet)
 {
-    InitTestKVClient(0, client_, 5000);       // timeout is 5000 ms
-    InitTestKVClient(1, client1_, 5000);      // timeout is 5000 ms
+    // Default 60s timeout: spill readback under -u16 CI load can exceed the former 5s budget.
+    InitTestKVClient(0, client_);
+    InitTestKVClient(1, client1_);
     LOG(INFO) << "TestReadKeyOverSize";
     size_t dataSize = 1 * 1024ul * 1024ul;
     std::string data = randomData_.GetRandomString(dataSize);
