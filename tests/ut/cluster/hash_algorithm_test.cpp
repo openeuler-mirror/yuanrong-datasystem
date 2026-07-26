@@ -8,6 +8,7 @@
  */
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 
+#include <array>
 #include <chrono>
 #include <set>
 
@@ -25,6 +26,26 @@ MemberIdentity MakeIndexedIdentity(uint32_t index, uint32_t portBase)
     std::string id(16, '\0');
     std::copy_n(reinterpret_cast<const char *>(&index), sizeof(index), id.begin());
     return { std::move(id), "127.0.0.1:" + std::to_string(portBase + index) };
+}
+
+Member MakePlanningMember(char id, uint32_t port, MemberState state, std::vector<uint32_t> tokens)
+{
+    return { { std::string(16, id), "127.0.0.1:" + std::to_string(port) }, state, std::move(tokens) };
+}
+
+void ExpectFailureOwnerContract(const TopologyPlan &plan, const std::set<std::string> &failedAddresses)
+{
+    ASSERT_FALSE(plan.ownerChanges.empty());
+    for (const auto &change : plan.ownerChanges) {
+        ASSERT_TRUE(change.source.has_value());
+        EXPECT_EQ(failedAddresses.count(change.source->address), 1);
+        const auto target = std::find_if(plan.next.members.begin(), plan.next.members.end(),
+                                         [&](const auto &member) { return member.identity == change.target; });
+        ASSERT_NE(target, plan.next.members.end());
+        EXPECT_EQ(target->state, MemberState::ACTIVE);
+        EXPECT_EQ(failedAddresses.count(target->identity.address), 0);
+        EXPECT_FALSE(change.ranges.empty());
+    }
 }
 
 TEST(HashAlgorithmTest, LocatesCommittedOwnerWithRingWrapAndSkipsJoining)
@@ -108,6 +129,58 @@ TEST(HashAlgorithmTest, PlansScaleInAndFailureWithoutChangingCurrentCommittedTok
     EXPECT_EQ(failure.next.members.back().state, MemberState::FAILED);
     EXPECT_EQ(failure.next.members.back().tokens, current.members.back().tokens);
     EXPECT_FALSE(failure.ownerChanges.empty());
+}
+
+TEST(HashAlgorithmTest, FailureOwnerChangesOnlyUseSelectedCommittedSourcesForEveryUnrelatedState)
+{
+    constexpr std::array<MemberState, 3> selectedStates{ MemberState::ACTIVE, MemberState::PRE_LEAVING,
+                                                         MemberState::LEAVING };
+    constexpr std::array<MemberState, 5> unrelatedStates{ MemberState::INITIAL, MemberState::JOINING,
+                                                          MemberState::ACTIVE, MemberState::PRE_LEAVING,
+                                                          MemberState::LEAVING };
+    HashAlgorithm algorithm;
+    for (const auto selectedState : selectedStates) {
+        for (const auto unrelatedState : unrelatedStates) {
+            SCOPED_TRACE(::testing::Message() << "selected_state=" << static_cast<int>(selectedState)
+                                              << " unrelated_state=" << static_cast<int>(unrelatedState));
+            TopologyState current;
+            current.clusterHasInit = true;
+            current.version = 1;
+            current.members = {
+                MakePlanningMember('a', 1, MemberState::ACTIVE, { 10, 110 }),
+                MakePlanningMember('b', 2, MemberState::ACTIVE, { 60, 160 }),
+                MakePlanningMember('c', 3, selectedState, { 30, 130 }),
+                MakePlanningMember('d', 4, unrelatedState,
+                                   unrelatedState == MemberState::INITIAL ? std::vector<uint32_t>{}
+                                                                          : std::vector<uint32_t>{ 90, 190 }),
+            };
+            TopologyPlan plan;
+            DS_ASSERT_OK(algorithm.PlanFailure({ current, { current.members[2].identity } }, plan));
+            ExpectFailureOwnerContract(plan, { current.members[2].identity.address });
+            EXPECT_EQ(plan.next.members[2].state, MemberState::FAILED);
+            EXPECT_EQ(plan.next.members[3].state, unrelatedState);
+        }
+    }
+}
+
+TEST(HashAlgorithmTest, PlansMultipleFailuresWithoutOrdinaryOwnerSources)
+{
+    HashAlgorithm algorithm;
+    TopologyState current;
+    current.clusterHasInit = true;
+    current.version = 1;
+    current.members = {
+        MakePlanningMember('a', 1, MemberState::ACTIVE, { 10, 110 }),
+        MakePlanningMember('b', 2, MemberState::ACTIVE, { 60, 160 }),
+        MakePlanningMember('c', 3, MemberState::ACTIVE, { 30, 130 }),
+        MakePlanningMember('d', 4, MemberState::LEAVING, { 90, 190 }),
+        MakePlanningMember('e', 5, MemberState::PRE_LEAVING, { 45, 145 }),
+    };
+    TopologyPlan plan;
+    DS_ASSERT_OK(
+        algorithm.PlanFailure({ current, { current.members[2].identity, current.members[3].identity } }, plan));
+    ExpectFailureOwnerContract(plan, { current.members[2].identity.address, current.members[3].identity.address });
+    EXPECT_EQ(plan.next.members[4].state, MemberState::PRE_LEAVING);
 }
 
 TEST(HashAlgorithmTest, LocatesOneThousandMemberSnapshotWithoutPerLookupRebuild)
