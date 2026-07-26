@@ -82,6 +82,21 @@ ds_cc_test(
         "//tests/st/client/object_cache:oc_client_common",
     ],
 )
+
+ds_cc_test(
+    name="evict_primary_redirect_scale_test",
+    srcs=["evict_primary_redirect_scale_test.cpp"],
+    # CMake registers the LEVEL1_ case in regular level1 CI. Keep the standalone Bazel target manual because
+    # ExternalCluster starts host-installed worker binaries that are not provided through Bazel runfiles.
+    tags=["manual", "level1"],
+    deps=[
+        "//src/datasystem/client:datasystem",
+        "//src/datasystem/common/log:common_log",
+        "//tests/st:st_common",
+        "//tests/st/client/object_cache:oc_client_common",
+    ],
+)
+
 ds_cc_test(
     name="worker_populate_startup_test",
     srcs=["worker_populate_startup_test.cpp"],

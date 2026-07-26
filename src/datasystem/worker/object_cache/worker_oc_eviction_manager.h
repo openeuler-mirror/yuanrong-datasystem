@@ -61,6 +61,7 @@ class SpillEvictionTest;
 namespace datasystem {
 
 namespace master {
+class DeleteAllCopyMetaReqPb;
 class DeleteAllCopyMetaRspPb;
 class MasterOCServiceImpl;
 class RemoveMetaReqPb;
@@ -320,6 +321,28 @@ private:
         std::shared_ptr<SafeObjType> entry;
     };
 
+    struct PrimaryEndLifeRedirectGroup {
+        HostPort masterAddress;
+        uint64_t topologyVersion{ 0 };
+        std::vector<PrimaryEndLifeCandidate> candidates;
+    };
+
+    struct PrimaryEndLifeRedirectChoice {
+        HostPort masterAddress;
+        uint64_t topologyVersion{ 0 };
+    };
+
+    struct PrimaryEndLifeSourceClassification {
+        std::unordered_set<std::string> candidateKeys;
+        std::unordered_set<std::string> reportedFailures;
+        std::unordered_set<std::string> terminalKeys;
+        std::unordered_map<std::string, PrimaryEndLifeRedirectChoice> redirectByKey;
+        std::unordered_set<std::string> invalidRedirectKeys;
+        size_t unknownResponseKeys{ 0 };
+        bool hasKnownRedirect{ false };
+        bool malformedRedirectResponse{ false };
+    };
+
     using EvictFailedList = std::vector<std::pair<std::string, uint8_t>>;
 
     /**
@@ -573,15 +596,91 @@ private:
     uint64_t GetPrimaryEndLifeReleaseBudget(CacheType cacheType, uint64_t needSize);
 
     /**
-     * @brief Delete all-copy metadata for locked primary end-life candidates on one master.
+     * @brief Delete all-copy metadata for validated primary end-life candidates on one master.
      * @param[in] masterAddr The owner master address for this batch.
-     * @param[in] candidates The locked candidates to delete from metadata.
+     * @param[in] candidates Candidates whose object locks were released before this RPC path.
      * @param[out] failedKeys Keys that must not be locally erased and should be readded.
      * @return Status of the metadata delete operation.
      */
     Status DeleteAllCopyMetaForPrimaryEndLife(const HostPort &masterAddr,
                                               const std::vector<PrimaryEndLifeCandidate> &candidates,
                                               std::unordered_set<std::string> &failedKeys);
+
+    /**
+     * @brief Send one DeleteAllCopyMeta request to a metadata owner.
+     * @param[in] masterAddr The metadata owner address.
+     * @param[in] req The prepared delete request.
+     * @param[out] rsp The delete response.
+     * @return Status of API initialization or the RPC.
+     */
+    Status DeleteAllCopyMetaOnce(const HostPort &masterAddr, master::DeleteAllCopyMetaReqPb &req,
+                                 master::DeleteAllCopyMetaRspPb &rsp);
+
+    /**
+     * @brief Build the versioned DeleteAllCopyMeta request used by the primary end-life lane.
+     * @param[in] candidates Candidates sent to one metadata owner.
+     * @param[in] allowRedirect Whether this owner may redirect the request.
+     * @return The prepared request.
+     */
+    master::DeleteAllCopyMetaReqPb BuildPrimaryEndLifeDeleteReq(
+        const std::vector<PrimaryEndLifeCandidate> &candidates, bool allowRedirect) const;
+
+    /**
+     * @brief Classify the source-owner response and group valid redirects by target owner.
+     * @param[in] sourceMaster The initially contacted metadata owner.
+     * @param[in] candidates Candidates in the source request.
+     * @param[in] rsp The source-owner response.
+     * @param[out] failedKeys Keys that must remain local.
+     * @param[out] redirectGroups Redirected candidates grouped by target metadata owner.
+     * @return Status for an unclassified whole-batch source failure.
+     */
+    static Status CollectPrimaryEndLifeSourceResult(
+        const HostPort &sourceMaster, const std::vector<PrimaryEndLifeCandidate> &candidates,
+        const master::DeleteAllCopyMetaRspPb &rsp, std::unordered_set<std::string> &failedKeys,
+        std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups);
+
+    /**
+     * @brief Classify explicit failures and terminal keys in a source-owner response.
+     * @param[in] candidates Candidates in the source request.
+     * @param[in] rsp The source-owner response.
+     * @param[out] failedKeys Explicitly failed candidate keys.
+     * @param[out] classification Accumulated source response classification.
+     */
+    static void CollectPrimaryEndLifeSourceKeyResults(
+        const std::vector<PrimaryEndLifeCandidate> &candidates, const master::DeleteAllCopyMetaRspPb &rsp,
+        std::unordered_set<std::string> &failedKeys, PrimaryEndLifeSourceClassification &classification);
+
+    /**
+     * @brief Validate and classify redirects returned by the source metadata owner.
+     * @param[in] sourceMaster The initially contacted metadata owner.
+     * @param[in] rsp The source-owner response.
+     * @param[out] failedKeys Redirect keys that cannot be followed safely.
+     * @param[out] classification Accumulated source response classification.
+     */
+    static void CollectPrimaryEndLifeRedirectResults(
+        const HostPort &sourceMaster, const master::DeleteAllCopyMetaRspPb &rsp,
+        std::unordered_set<std::string> &failedKeys, PrimaryEndLifeSourceClassification &classification);
+
+    /**
+     * @brief Group valid source redirects by target metadata owner.
+     * @param[in] candidates Candidates in the source request.
+     * @param[in] classification Classified source-owner response.
+     * @param[out] redirectGroups Redirected candidates grouped by target metadata owner.
+     */
+    static void BuildPrimaryEndLifeRedirectGroups(
+        const std::vector<PrimaryEndLifeCandidate> &candidates,
+        const PrimaryEndLifeSourceClassification &classification,
+        std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups);
+
+    /**
+     * @brief Forward valid primary end-life redirects once with redirect disabled.
+     * @param[in] sourceMaster The initially contacted metadata owner.
+     * @param[in] redirectGroups Redirected candidates grouped by target owner.
+     * @param[out] failedKeys Keys rejected by, or not safely classified at, the target owner.
+     */
+    void ForwardPrimaryEndLifeRedirectGroups(const HostPort &sourceMaster,
+                                             const std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups,
+                                             std::unordered_set<std::string> &failedKeys);
 
     /**
      * @brief Collect primary end-life failures while treating no-meta and outdated versions as completed.

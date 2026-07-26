@@ -135,6 +135,48 @@ TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailin
     EXPECT_EQ(response.success_ids_size(), 0);
 }
 
+TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaDoesNotQueueRedirectedKeys)
+{
+    cluster::TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_IN, 2 };
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), LOCAL_ADDRESS }, cluster::MemberState::LEAVING,
+                         { std::numeric_limits<uint32_t>::max() } },
+        cluster::Member{ { std::string(16, 'b'), TARGET_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, &placement, nullptr,
+                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
+    const std::string objectKey = "async_delete_redirected_key";
+    DeleteAllCopyMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_redirect(true);
+    request.set_async_delete(true);
+    auto *objectVersion = request.add_ids_with_version();
+    objectVersion->set_id(objectKey);
+    objectVersion->set_version(1);
+    DeleteAllCopyMetaRspPb response;
+
+    DS_ASSERT_OK(manager.DeleteAllCopyMeta(request, response));
+
+    ASSERT_EQ(response.info_size(), 1);
+    EXPECT_EQ(response.info(0).redirect_meta_address(), TARGET_ADDRESS);
+    EXPECT_EQ(response.info(0).topology_version(), 2U);
+    ASSERT_EQ(response.info(0).change_meta_ids_size(), 1);
+    EXPECT_EQ(response.info(0).change_meta_ids(0), objectKey);
+    EXPECT_EQ(response.failed_object_keys_size(), 0);
+    EXPECT_EQ(manager.expiredObjectManager_->GetExpiredObject().count(objectKey), 0U);
+}
+
 TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteMetadataThatReappeared)
 {
     OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,

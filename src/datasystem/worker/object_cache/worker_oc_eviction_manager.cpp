@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <thread>
@@ -1343,24 +1344,256 @@ Status WorkerOcEvictionManager::DeleteAllCopyMetaForPrimaryEndLife(
     const HostPort &masterAddr, const std::vector<PrimaryEndLifeCandidate> &candidates,
     std::unordered_set<std::string> &failedKeys)
 {
+    auto req = BuildPrimaryEndLifeDeleteReq(candidates, true);
+    master::DeleteAllCopyMetaRspPb rsp;
+    GetRequestContext()->reqTimeoutDuration.Init(PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS);
+    ApiDeadline::Instance().Reset();
+    Raii resetTimeout([] { GetRequestContext()->reqTimeoutDuration.Reset(); });
+    RETURN_IF_NOT_OK(DeleteAllCopyMetaOnce(masterAddr, req, rsp));
+
+    std::vector<PrimaryEndLifeRedirectGroup> redirectGroups;
+    RETURN_IF_NOT_OK(CollectPrimaryEndLifeSourceResult(masterAddr, candidates, rsp, failedKeys, redirectGroups));
+    ForwardPrimaryEndLifeRedirectGroups(masterAddr, redirectGroups, failedKeys);
+    return Status::OK();
+}
+
+Status WorkerOcEvictionManager::DeleteAllCopyMetaOnce(const HostPort &masterAddr,
+                                                      master::DeleteAllCopyMetaReqPb &req,
+                                                      master::DeleteAllCopyMetaRspPb &rsp)
+{
+    CHECK_FAIL_RETURN_STATUS(!masterAddr.Empty(), K_NOT_FOUND, "Cannot find master for DeleteAllCopyMeta.");
     auto workerMasterApi =
         worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_, masterOc_);
     RETURN_IF_NOT_OK(workerMasterApi->Init());
+    return workerMasterApi->DeleteAllCopyMeta(req, rsp);
+}
+
+master::DeleteAllCopyMetaReqPb WorkerOcEvictionManager::BuildPrimaryEndLifeDeleteReq(
+    const std::vector<PrimaryEndLifeCandidate> &candidates, bool allowRedirect) const
+{
     master::DeleteAllCopyMetaReqPb req;
     req.set_address(localAddress_.ToString());
-    req.set_redirect(true);
+    req.set_redirect(allowRedirect);
     req.set_async_delete(true);
     for (const auto &candidate : candidates) {
         auto *objKeyVersionPb = req.add_ids_with_version();
         objKeyVersionPb->set_id(candidate.task.objectKey);
         objKeyVersionPb->set_version(candidate.task.version);
     }
-    master::DeleteAllCopyMetaRspPb rsp;
-    GetRequestContext()->reqTimeoutDuration.Init(PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS);
-    ApiDeadline::Instance().Reset();
-    Raii resetTimeout([] { GetRequestContext()->reqTimeoutDuration.Reset(); });
-    RETURN_IF_NOT_OK(workerMasterApi->DeleteAllCopyMeta(req, rsp));
-    return CollectPrimaryEndLifeDeleteResult(rsp, failedKeys);
+    return req;
+}
+
+Status WorkerOcEvictionManager::CollectPrimaryEndLifeSourceResult(
+    const HostPort &sourceMaster, const std::vector<PrimaryEndLifeCandidate> &candidates,
+    const master::DeleteAllCopyMetaRspPb &rsp, std::unordered_set<std::string> &failedKeys,
+    std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups)
+{
+    if (rsp.info().empty()) {
+        return CollectPrimaryEndLifeDeleteResult(rsp, failedKeys);
+    }
+    if (rsp.meta_is_moving()) {
+        RETURN_STATUS(K_TRY_AGAIN, "DeleteAllCopyMeta meta is moving.");
+    }
+
+    PrimaryEndLifeSourceClassification classification;
+    CollectPrimaryEndLifeSourceKeyResults(candidates, rsp, failedKeys, classification);
+    CollectPrimaryEndLifeRedirectResults(sourceMaster, rsp, failedKeys, classification);
+    if (classification.malformedRedirectResponse) {
+        for (const auto &candidate : candidates) {
+            failedKeys.emplace(candidate.task.objectKey);
+        }
+        LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=redirect_classify, source_master=" << sourceMaster.ToString()
+                     << ", batch_keys=" << candidates.size() << ", event=malformed_redirect";
+        return Status::OK();
+    }
+
+    BuildPrimaryEndLifeRedirectGroups(candidates, classification, redirectGroups);
+    Status lastRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    if (lastRc.IsError() && classification.reportedFailures.empty()) {
+        if (!classification.hasKnownRedirect) {
+            return lastRc;
+        }
+        for (const auto &candidate : candidates) {
+            const auto &objectKey = candidate.task.objectKey;
+            bool classified = classification.terminalKeys.count(objectKey) > 0
+                              || classification.invalidRedirectKeys.count(objectKey) > 0
+                              || classification.redirectByKey.count(objectKey) > 0;
+            if (!classified) {
+                failedKeys.emplace(objectKey);
+            }
+        }
+    }
+    if (classification.unknownResponseKeys > 0) {
+        LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=redirect_classify, source_master=" << sourceMaster.ToString()
+                     << ", batch_keys=" << candidates.size()
+                     << ", unknown_response_keys=" << classification.unknownResponseKeys;
+    }
+    return Status::OK();
+}
+
+void WorkerOcEvictionManager::CollectPrimaryEndLifeSourceKeyResults(
+    const std::vector<PrimaryEndLifeCandidate> &candidates, const master::DeleteAllCopyMetaRspPb &rsp,
+    std::unordered_set<std::string> &failedKeys, PrimaryEndLifeSourceClassification &classification)
+{
+    classification.candidateKeys.reserve(candidates.size());
+    for (const auto &candidate : candidates) {
+        classification.candidateKeys.emplace(candidate.task.objectKey);
+    }
+
+    classification.reportedFailures.reserve(rsp.failed_object_keys().size());
+    for (const auto &objectKey : rsp.failed_object_keys()) {
+        if (classification.candidateKeys.count(objectKey) == 0) {
+            ++classification.unknownResponseKeys;
+            continue;
+        }
+        classification.reportedFailures.emplace(objectKey);
+        failedKeys.emplace(objectKey);
+    }
+
+    classification.terminalKeys.reserve(rsp.objs_without_meta().size() + rsp.outdated_objs().size());
+    auto collectTerminalKeys = [&classification](const auto &objectKeys) {
+        for (const auto &objectKey : objectKeys) {
+            if (classification.candidateKeys.count(objectKey) > 0) {
+                classification.terminalKeys.emplace(objectKey);
+            } else {
+                ++classification.unknownResponseKeys;
+            }
+        }
+    };
+    collectTerminalKeys(rsp.objs_without_meta());
+    collectTerminalKeys(rsp.outdated_objs());
+}
+
+void WorkerOcEvictionManager::CollectPrimaryEndLifeRedirectResults(
+    const HostPort &sourceMaster, const master::DeleteAllCopyMetaRspPb &rsp,
+    std::unordered_set<std::string> &failedKeys, PrimaryEndLifeSourceClassification &classification)
+{
+    classification.redirectByKey.reserve(classification.candidateKeys.size());
+    for (const auto &redirectInfo : rsp.info()) {
+        if (redirectInfo.change_meta_ids().empty()) {
+            classification.malformedRedirectResponse = true;
+            continue;
+        }
+        HostPort redirectMaster;
+        Status parseRc = redirectMaster.ParseString(redirectInfo.redirect_meta_address());
+        bool validTarget = parseRc.IsOk() && !redirectMaster.Empty() && redirectMaster != sourceMaster;
+        for (const auto &objectKey : redirectInfo.change_meta_ids()) {
+            if (classification.candidateKeys.count(objectKey) == 0) {
+                ++classification.unknownResponseKeys;
+                classification.malformedRedirectResponse = true;
+                continue;
+            }
+            classification.hasKnownRedirect = true;
+            if (classification.reportedFailures.count(objectKey) > 0) {
+                continue;
+            }
+            if (!validTarget || classification.terminalKeys.count(objectKey) > 0) {
+                classification.invalidRedirectKeys.emplace(objectKey);
+                classification.redirectByKey.erase(objectKey);
+                failedKeys.emplace(objectKey);
+                continue;
+            }
+            auto [it, inserted] = classification.redirectByKey.emplace(
+                objectKey, PrimaryEndLifeRedirectChoice{ redirectMaster, redirectInfo.topology_version() });
+            if (!inserted && it->second.masterAddress != redirectMaster) {
+                classification.invalidRedirectKeys.emplace(objectKey);
+                classification.redirectByKey.erase(it);
+                failedKeys.emplace(objectKey);
+            } else if (!inserted) {
+                it->second.topologyVersion = std::max(it->second.topologyVersion, redirectInfo.topology_version());
+            }
+        }
+    }
+}
+
+void WorkerOcEvictionManager::BuildPrimaryEndLifeRedirectGroups(
+    const std::vector<PrimaryEndLifeCandidate> &candidates,
+    const PrimaryEndLifeSourceClassification &classification,
+    std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups)
+{
+    std::map<HostPort, PrimaryEndLifeRedirectGroup> groupsByTarget;
+    for (const auto &candidate : candidates) {
+        const auto &objectKey = candidate.task.objectKey;
+        if (classification.reportedFailures.count(objectKey) > 0
+            || classification.invalidRedirectKeys.count(objectKey) > 0
+            || classification.terminalKeys.count(objectKey) > 0) {
+            continue;
+        }
+        auto redirectIt = classification.redirectByKey.find(objectKey);
+        if (redirectIt == classification.redirectByKey.end()) {
+            continue;
+        }
+        auto &group = groupsByTarget[redirectIt->second.masterAddress];
+        group.masterAddress = redirectIt->second.masterAddress;
+        group.topologyVersion = std::max(group.topologyVersion, redirectIt->second.topologyVersion);
+        group.candidates.emplace_back(candidate);
+    }
+    redirectGroups.reserve(groupsByTarget.size());
+    for (auto &item : groupsByTarget) {
+        redirectGroups.emplace_back(std::move(item.second));
+    }
+}
+
+void WorkerOcEvictionManager::ForwardPrimaryEndLifeRedirectGroups(
+    const HostPort &sourceMaster, const std::vector<PrimaryEndLifeRedirectGroup> &redirectGroups,
+    std::unordered_set<std::string> &failedKeys)
+{
+    for (const auto &group : redirectGroups) {
+        auto markGroupFailed = [&group, &failedKeys] {
+            for (const auto &candidate : group.candidates) {
+                failedKeys.emplace(candidate.task.objectKey);
+            }
+        };
+        auto req = BuildPrimaryEndLifeDeleteReq(group.candidates, false);
+        master::DeleteAllCopyMetaRspPb rsp;
+        Status rc = DeleteAllCopyMetaOnce(group.masterAddress, req, rsp);
+        size_t failedBefore = failedKeys.size();
+        if (rc.IsError()) {
+            markGroupFailed();
+        } else {
+            std::unordered_set<std::string> groupKeys;
+            groupKeys.reserve(group.candidates.size());
+            for (const auto &candidate : group.candidates) {
+                groupKeys.emplace(candidate.task.objectKey);
+            }
+            bool malformedRedirect = false;
+            for (const auto &redirectInfo : rsp.info()) {
+                if (redirectInfo.change_meta_ids().empty()) {
+                    malformedRedirect = true;
+                    break;
+                }
+                for (const auto &objectKey : redirectInfo.change_meta_ids()) {
+                    if (groupKeys.count(objectKey) == 0) {
+                        malformedRedirect = true;
+                        break;
+                    }
+                }
+                if (malformedRedirect) {
+                    break;
+                }
+            }
+            std::unordered_set<std::string> targetFailedKeys;
+            Status collectRc = CollectPrimaryEndLifeDeleteResult(rsp, targetFailedKeys);
+            if (collectRc.IsError() || malformedRedirect) {
+                rc = collectRc.IsError()
+                         ? collectRc
+                         : Status(K_TRY_AGAIN, "Forwarded DeleteAllCopyMeta returned invalid redirect.");
+                markGroupFailed();
+            } else {
+                for (const auto &objectKey : targetFailedKeys) {
+                    if (groupKeys.count(objectKey) > 0) {
+                        failedKeys.emplace(objectKey);
+                    }
+                }
+            }
+        }
+        VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=redirect_forward, source_master="
+                              << sourceMaster.ToString() << ", target_master=" << group.masterAddress.ToString()
+                              << ", topology_version=" << group.topologyVersion
+                              << ", batch_keys=" << group.candidates.size()
+                              << ", failed_keys=" << (failedKeys.size() - failedBefore)
+                              << ", status=" << rc.ToString();
+    }
 }
 
 Status WorkerOcEvictionManager::CollectPrimaryEndLifeDeleteResult(
@@ -1650,16 +1883,59 @@ Status WorkerOcEvictionManager::DeleteNoneL2CacheEvictableObject(const ObjectKV 
     HostPort masterAddr;
     RETURN_IF_NOT_OK(metadataRoute_.ResolveOwner(objectKey, masterAddr));
 
-    auto workerMasterApi = worker::WorkerMasterOCApi::CreateWorkerMasterOCApi(masterAddr, localAddress_, akSkManager_,
-                                                                              masterOc_);
-    RETURN_IF_NOT_OK(workerMasterApi->Init());
-    master::DeleteAllCopyMetaReqPb req;
-    req.add_object_keys(objectKey);
-    req.set_address(localAddress_.ToString());
-    req.set_redirect(true);
+    auto buildReq = [this, &objectKey](bool allowRedirect) {
+        master::DeleteAllCopyMetaReqPb request;
+        request.add_object_keys(objectKey);
+        request.set_address(localAddress_.ToString());
+        request.set_redirect(allowRedirect);
+        return request;
+    };
+    auto req = buildReq(true);
     master::DeleteAllCopyMetaRspPb rsp;
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(workerMasterApi->DeleteAllCopyMeta(req, rsp),
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(DeleteAllCopyMetaOnce(masterAddr, req, rsp),
                                      FormatString("DeleteAllCopyMeta failed, objectKey %s.", objectKey));
+
+    if (!rsp.info().empty()) {
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            !rsp.meta_is_moving() && rsp.failed_object_keys().empty() && rsp.outdated_objs().empty()
+                && rsp.objs_without_meta().empty(),
+            K_TRY_AGAIN, "DeleteAllCopyMeta redirect response contains conflicting result.");
+        HostPort redirectMaster;
+        uint64_t topologyVersion = 0;
+        size_t redirectKeyCount = 0;
+        for (const auto &redirectInfo : rsp.info()) {
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!redirectInfo.change_meta_ids().empty(), K_TRY_AGAIN,
+                                                 "DeleteAllCopyMeta returned an empty redirect.");
+            for (const auto &redirectKey : redirectInfo.change_meta_ids()) {
+                CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(redirectKey == objectKey, K_TRY_AGAIN,
+                                                     "DeleteAllCopyMeta redirect response contains unknown key.");
+                ++redirectKeyCount;
+                CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(redirectKeyCount == 1, K_TRY_AGAIN,
+                                                     "DeleteAllCopyMeta returned ambiguous redirects.");
+                RETURN_IF_NOT_OK_PRINT_ERROR_MSG(redirectMaster.ParseString(redirectInfo.redirect_meta_address()),
+                                                 "Parse DeleteAllCopyMeta redirect target failed.");
+                topologyVersion = redirectInfo.topology_version();
+            }
+        }
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(redirectKeyCount == 1 && !redirectMaster.Empty()
+                                                 && redirectMaster != masterAddr,
+                                             K_TRY_AGAIN, "DeleteAllCopyMeta returned invalid redirect target.");
+
+        auto redirectReq = buildReq(false);
+        master::DeleteAllCopyMetaRspPb redirectRsp;
+        Status redirectRc = DeleteAllCopyMetaOnce(redirectMaster, redirectReq, redirectRsp);
+        VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=redirect_forward, source_master="
+                              << masterAddr.ToString() << ", target_master=" << redirectMaster.ToString()
+                              << ", topology_version=" << topologyVersion << ", batch_keys=1"
+                              << ", status=" << redirectRc.ToString();
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(redirectRc, "Forwarded DeleteAllCopyMeta failed.");
+        for (const auto &redirectInfo : redirectRsp.info()) {
+            CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!redirectInfo.change_meta_ids().empty(), K_TRY_AGAIN,
+                                                 "Forwarded DeleteAllCopyMeta returned an empty redirect.");
+        }
+        rsp = std::move(redirectRsp);
+    }
+
     std::unordered_set<std::string> failedKeys;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CollectDeleteAllCopyMetaResult(rsp, failedKeys), "Delete from master failed.");
     if (!failedKeys.empty()) {
