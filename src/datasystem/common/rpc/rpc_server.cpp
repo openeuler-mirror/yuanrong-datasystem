@@ -112,13 +112,20 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
     // disable the limit (brpc treats 0 as unlimited). When exceeded, brpc returns
     // ELIMIT to the client immediately, which the caller can retry on another worker.
     options.max_concurrency = FLAGS_brpc_max_concurrency;
-    // NOTE: brpc's built-in max_body_size (brpc::FLAGS_max_body_size, default
-    // 64MB) rejects large object payloads (>64MB). It is a global gflag read by
-    // input_messenger at socket-init time. There is no datasystem flag wired to
-    // it yet — raising it requires either setting -max_body_size on the worker
-    // command line (brpc's own gflag) or assigning brpc::FLAGS_max_body_size
-    // before the first brpc socket is created. Wiring a datasystem flag for
-    // this is deferred (the big-buffer ST is skipped under brpc meanwhile).
+    // Raise brpc's per-message body limit above the 64MB default so large
+    // object payloads (e.g. a 300MB cross-node Get pull) are not rejected by
+    // input_messenger with "too big data" -> connection close -> Host is down.
+    // Fixed at 2GB: this brpc build exposes max_body_size only as the global
+    // gflag (brpc::FLAGS_max_body_size, declared in brpc/protocol.h) — there is
+    // no max_body_size field on ServerOptions — so set the gflag directly.
+    // brpc's input_messenger reads FLAGS_max_body_size at socket-init time, and
+    // BrpcChannelFactory::Create sets the same gflag on the client side. brpc
+    // itself rejects any single RPC body at or above this limit, so objects
+    // >= 2GB surface a brpc-level error rather than succeeding silently.
+    constexpr uint64_t kBrpcMaxBodySize = 2ULL * 1024 * 1024 * 1024;  // 2GB
+    if (brpc::FLAGS_max_body_size < kBrpcMaxBodySize) {
+        brpc::FLAGS_max_body_size = kBrpcMaxBodySize;
+    }
     butil::EndPoint ep;
     if (!addr.empty()) {
         butil::str2ip(addr.c_str(), &ep.ip);

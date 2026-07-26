@@ -262,6 +262,30 @@ TEST_F(OCClientGetTest, GetRemoteObjectShmError)
     DS_ASSERT_OK(client1->GDecreaseRef(objectKeys, failedObjectKeys));
 }
 
+// Repro for "Runtime error. Invalid object data response" observed in brpc + SHM
+// cross-node Get (client on worker0 reads an object sealed on worker1). A small payload
+// passes under brpc; the failure is specific to large cross-node payloads (matches the
+// two brpc-skipped cases GetRemoteObjectShmError/TestMultiRemoteGet "real failure under
+// brpc"). Expected RED pre-fix; GREEN post-fix.
+TEST_F(OCClientGetTest, GetRemoteObjectBrpcShmInvalidDataResponse)
+{
+    std::shared_ptr<ObjectClient> client0;
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(0, client0);
+    InitTestClient(1, client1);
+    std::string objKey = NewObjectKey();
+    int64_t size = (int64_t)300 * 1024 * 1024;
+    std::string data = GenPartRandomString(size);
+    CreateAndSealObject(client1, objKey, data);
+    std::vector<Optional<Buffer>> dataList;
+    DS_ASSERT_OK(client0->Get({ objKey }, 60000, dataList));
+    ASSERT_TRUE(NotExistsNone(dataList));
+    AssertBufferEqual(*dataList[0], data);
+    std::vector<std::string> objectKeys{ objKey };
+    std::vector<std::string> failedObjectKeys;
+    DS_ASSERT_OK(client1->GDecreaseRef(objectKeys, failedObjectKeys));
+}
+
 TEST_F(OCClientGetTest, GetRemoteSingleClientToSingleWorkerConcurringlyTest)
 {
     std::shared_ptr<ObjectClient> cliRemote;
