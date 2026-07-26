@@ -542,8 +542,9 @@ Status WorkerRemoteMasterOCApi::DeleteAllCopyMeta(master::DeleteAllCopyMetaReqPb
             return rc;
         },
         []() { return Status::OK(); },
-        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED,
-          StatusCode::K_RPC_UNAVAILABLE });
+        // K_RPC_UNAVAILABLE (master-down: ECONNREFUSED / E112 Host is down) is not retried; other
+        // codes (K_TRY_AGAIN, K_RPC_CANCELLED, K_RPC_DEADLINE_EXCEEDED) remain retried.
+        { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED });
     return WithRpcDiag(status, "DeleteAllCopyMeta", localHostPort_, hostPort_);
 }
 
