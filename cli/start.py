@@ -691,7 +691,11 @@ class Command(BaseCommand):
         for k, v in params.items():
             if k in excluded or not str(v).strip():
                 continue
-            yield util.validate_no_injection(k), util.validate_no_injection(v)
+            if k == self._KV_EVENTS_CONFIG_PARAM:
+                validated_value = self.validate_worker_param_value(k, v)
+            else:
+                validated_value = util.validate_no_injection(v)
+            yield util.validate_no_injection(k), validated_value
 
     def build_command(
         self,
@@ -743,8 +747,6 @@ class Command(BaseCommand):
         cmd.append(worker_bin)
 
         for k, v in self.process_params(params):
-            if k == self._KV_EVENTS_CONFIG_PARAM:
-                v = self.validate_worker_param_value(k, v)
             cmd.append(f"--{k}={v}")
         cmd_str = " ".join(cmd)
         if use_numactl:
