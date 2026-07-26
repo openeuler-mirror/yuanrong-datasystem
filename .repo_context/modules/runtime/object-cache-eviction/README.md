@@ -34,7 +34,8 @@
   - `GetObjectNextAction` 根据 primary copy、cache type、spill 状态、L2 是否可用、远端迁移能力和本地 spill 能力选择 `DELETE`、`FREE_MEMORY`、`SPILL`、`MIGRATE`、`END_LIFE` 或 `RETAIN`。
   - `DELETE` 路径本地擦除 object table 后异步批量 `RemoveMeta`。
   - `DeleteNoneL2CacheEvictableObject` 仍同步调用 master `DeleteAllCopyMeta`，该路径仅保留给
-    `EvictSpilledObjects` 和 `SpillImpl` no-space fallback。
+    `EvictSpilledObjects` 和 `SpillImpl` no-space fallback；初始 owner 可重定向一次，转发请求设置
+    `redirect=false`，目标再次重定向或失败时保留本地对象并重试。
   - 当前分支已将 memory eviction 主 loop 中的所有 `Action::END_LIFE` 投递到
     `primaryEndLifeThreadPool_`；Worker 的 drain 线程同步发起 `DeleteAllCopyMeta` RPC，不创建独立 RPC
     线程。primary end-life 请求设置 `async_delete=true`，Master 将 key 加入 `ExpiredObjectManager` 后
@@ -42,9 +43,11 @@
     fallback 仍保持同步。
   - primary end-life lane 使用 `objectKey -> entry->GetCreateTime()` pending 去重，pending 上限使用源码内固定常量，不新增用户可见配置。正常路径等待 Master 接受删除；同一 batch 连续三次 RPC 通信失败后，可用性策略允许强制本地 erase。
   - primary end-life lane 需要 drain 内部 queue，并将同一个 master 的 key 聚合为 batch `DeleteAllCopyMeta`；不同 master 必须拆成不同请求，batch 使用 repeated `ids_with_version`。
-  - primary end-life 复用现有 `DeleteAllCopyMeta` 响应；Master 异步入队成功即表示接受，仅
-    `failed_object_keys` 和 redirect key 做逐 key 重试，`meta_is_moving` 或无法归因到具体 key 的
-    `last_rc` 错误才整批重试。每次 Worker RPC 调用使用 1s API 总超时预算。
+  - primary end-life 复用现有 `DeleteAllCopyMeta` 响应；Master 异步入队成功即表示接受。
+    `failed_object_keys` 做逐 key 重试，redirect key 按目标 master 聚合后转发一次，转发保留
+    `address`、`ids_with_version` 和 `async_delete=true`，并设置 `redirect=false`。目标再次重定向、
+    `meta_is_moving`、RPC 失败或无法分类的错误只回填对应 target group，不递归转发，也不触发源 owner 的
+    三次超时强制删除。每个逻辑 attempt 的源请求和全部首跳转发共享 1s API 总超时预算。
   - Master 不新增结果协议，只保证创建中 key 进入 `failed_object_keys`，且初次 no-meta 后 metadata 回生或
     key 已被提前判失败时不再执行 metadata cleanup。
   - pending 上限只限制 key 数，不限制对象字节数；primary lane 必须在发送 `DeleteAllCopyMeta` 前用触发本次
@@ -57,8 +60,8 @@
   - `eviction_thread_num` 已删除；`MemEvictionThread` 固定为内部单线程，`isDone_` 门闩仍保证同一 manager 同时只有一个 `EvictionTask` 运行。
   - 删除 `eviction_thread_num` 时必须同步清理 dscli 默认配置、k8s deployment、k8s daemonset Helm values/template、部署文档和示例，避免部署继续传递未知 flag。
 - Verified in current branch:
-  - primary end-life lane 已实现，并已通过 focused UT 覆盖 pending 上限、low watermark 跳过和
-    `DeleteAllCopyMeta` per-key 失败解析。
+  - primary end-life lane 已实现，并已通过 focused UT 覆盖 pending 上限、low watermark 跳过、
+    `DeleteAllCopyMeta` per-key 失败解析、一跳 redirect、目标超时、二次 redirect 截断和同步 fallback。
 
 ## Companion Docs
 
@@ -139,10 +142,12 @@
   - `ctest -R EvictionManagerTest`
   - `ctest -R SpillEvictionTest`
   - `ctest -R KVCacheClientEvictTest`
+  - `ctest -R EvictPrimaryRedirectScaleTest`
 - Representative tests:
   - `tests/ut/worker/object_cache/worker_oc_eviction_test.cpp`
   - `tests/ut/worker/object_cache/worker_oc_spill_eviction_test.cpp`
   - `tests/st/client/kv_cache/kv_cache_client_evict_test.cpp`
+  - `tests/st/worker/object_cache/evict_primary_redirect_scale_test.cpp`
 
 ## Review And Bugfix Notes
 
@@ -160,19 +165,25 @@
     `async_delete=true` 的 `DeleteAllCopyMeta`；Master 入队成功返回后，Worker 重新获取对象锁并复核
     version，再做本地 erase。该方案不引入前台可见 pending 状态，也不改变 spill eviction 和 spill
     no-space fallback 的同步语义。
+  - 初始 owner 的 redirect 响应不会直接回填下一轮；Worker 在同一 logical attempt 内按 target 聚合并
+    转发一次。源响应同时携带 `last_rc` 和 redirect 时仍先处理可归因的 redirect；无法归因的非 redirect
+    key 保守回填。目标失败只回填该组，不能进入源 owner 的三次超时强制删除策略。
 - Important invariants:
   - 对象被选为候选后必须先取得对象写锁；拿不到锁时从 eviction list 暂时移除并以 `READD_COUNTER` 回填。
   - `IsObjectEvictable` 必须确认对象仍在 eviction list 且 binary 对象仍有 shm。
   - `SPILL` 成功后才释放内存并标记 spill state；重加锁失败时需要回滚 spill 文件。
   - spill eviction 只删除 write-through、write-back 且 writeback done、或 `NONE_L2_CACHE_EVICT` 对象。
-  - master metadata 或路由失败的对象回到 eviction list；仅同一 batch 的 `DeleteAllCopyMeta` 连续三次
-    返回 RPC 通信错误时，打印 force-delete ERROR 日志并强制释放本地对象。
-  - eviction `RemoveMeta` 只允许初始 metadata owner 重定向一次；转发请求使用 `redirect=false`，目标若仍返回
-    redirect、`meta_is_moving` 或 failed ids，则相关对象保留重试资格，不继续递归转发。
+  - master metadata 或路由失败的对象回到 eviction list；仅初始 owner 的 `DeleteAllCopyMeta` 连续三次
+    返回 RPC 通信错误时，打印 force-delete ERROR 日志并强制释放本地对象。redirect target 的 RPC
+    错误只回填该 target group。
+  - eviction `RemoveMeta`、primary end-life `DeleteAllCopyMeta` 和同步 fallback 都只允许初始 metadata
+    owner 重定向一次；转发请求使用 `redirect=false`，目标若仍返回 redirect、`meta_is_moving` 或 failed
+    ids，则相关对象保留重试资格，不继续递归转发。
 - Observability or debugging hooks:
   - Logs: `Eviction start`, `Evict is going on`, `EvictionList size before/after evict`, `Spill eviction list size before/after evict`。
   - Worker primary end-life 使用 `PRIMARY_END_LIFE_DIAG` 标记 `eviction_summary`、`dequeue`、`route_group`、
-    `prepare`、`rpc_attempt`、`local_cleanup` 和 `drain_batch`。正常阶段使用 `VLOG(1)`；阶段耗时或
+    `prepare`、`rpc_attempt`、`redirect_forward`、`local_cleanup` 和 `drain_batch`。正常阶段使用
+    `VLOG(1)`；阶段耗时或
     queue wait 达到 100 ms、RPC 返回错误或 per-key 失败时使用 `LOG(WARNING)`。
   - `eviction_summary`、`route_group`、`prepare`、`rpc_attempt` 和 `local_cleanup` 同时记录
     `event=start/complete`，最后一条 start 没有对应 complete 时可直接定位停留阶段；
