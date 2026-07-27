@@ -173,7 +173,7 @@ public:
      * @brief Renew an existing lease repeatedly upto ttl seconds.
      * @param[in] tableName The table on which watch will be set.
      * @param[in] key The starting key of the key range on which watch will observe events.
-     * @param[in] startRevision startRevision is an optional revision to watch from (inclusive).
+     * @param[in] startRevision Last processed revision, or WATCH_FROM_NOW to omit the ETCD start revision.
      * @return Status of the call.
      */
     Status WatchEvents(const std::string &tableName, const std::string &key, int64_t startRevision);

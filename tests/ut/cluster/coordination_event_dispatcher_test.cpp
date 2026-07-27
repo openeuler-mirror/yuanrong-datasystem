@@ -74,33 +74,60 @@ TEST(TopologyRoleWatchPlanTest, BuildsOnlyRoleRequiredExactAndPrefixWatches)
     EXPECT_EQ(watches[1].tableName, keys->NotifyTable());
     EXPECT_EQ(watches[1].key, "127.0.0.1:1");
     DS_ASSERT_OK(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::CONTROLLER, "", *keys, 7, watches));
-    EXPECT_EQ(watches.size(), 4);
-    EXPECT_TRUE(
-        std::all_of(watches.begin() + 1, watches.end(), [](const WatchKey &watch) { return watch.key.empty(); }));
+    ASSERT_EQ(watches.size(), 2);
+    EXPECT_EQ(watches[0].tableName, keys->TopologyTable());
+    EXPECT_EQ(watches[1].tableName, keys->MembershipTable());
+    EXPECT_TRUE(watches[1].key.empty());
 }
 
-TEST(TopologyRoleWatchPlanTest, BuildsOneUnifiedEtcdWatchPlan)
+TEST(TopologyRoleWatchPlanTest, PropagatesAuthorityRevisionToAllCurrentUnifiedEtcdTargets)
+{
+    constexpr int64_t authorityRevision = 9;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("watch", keys));
+    std::vector<WatchKey> watches;
+
+    DS_ASSERT_OK(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::UNIFIED_ETCD, "127.0.0.1:1", *keys,
+                                              authorityRevision, watches));
+
+    ASSERT_EQ(watches.size(), 3);
+    EXPECT_EQ(watches[0].tableName, keys->TopologyTable());
+    EXPECT_EQ(watches[0].key, TopologyKeyHelper::TopologyKey());
+    EXPECT_EQ(watches[1].tableName, keys->NotifyTable());
+    EXPECT_EQ(watches[1].key, "127.0.0.1:1");
+    EXPECT_EQ(watches[2].tableName, keys->MembershipTable());
+    EXPECT_TRUE(watches[2].key.empty());
+    EXPECT_TRUE(std::all_of(watches.begin(), watches.end(), [authorityRevision](const WatchKey &watch) {
+        return watch.startRevision == authorityRevision;
+    }));
+}
+
+TEST(TopologyRoleWatchPlanTest, PropagatesFromNowAndRejectsRevisionBelowSentinel)
 {
     std::unique_ptr<TopologyKeyHelper> keys;
     DS_ASSERT_OK(TopologyKeyHelper::Create("watch", keys));
     std::vector<WatchKey> watches;
 
     DS_ASSERT_OK(
-        TopologyRoleWatchPlan::Build(TopologyRuntimeRole::UNIFIED_ETCD, "127.0.0.1:1", *keys, 9, watches));
-
-    ASSERT_EQ(watches.size(), 5);
+        TopologyRoleWatchPlan::Build(TopologyRuntimeRole::UNIFIED_ETCD, "127.0.0.1:1", *keys, WATCH_FROM_NOW, watches));
+    ASSERT_EQ(watches.size(), 3);
     EXPECT_EQ(watches[0].tableName, keys->TopologyTable());
-    EXPECT_EQ(watches[0].key, TopologyKeyHelper::TopologyKey());
     EXPECT_EQ(watches[1].tableName, keys->NotifyTable());
-    EXPECT_EQ(watches[1].key, "127.0.0.1:1");
-    EXPECT_EQ(watches[2].tableName, keys->MigrateTaskTable());
-    EXPECT_TRUE(watches[2].key.empty());
-    EXPECT_EQ(watches[3].tableName, keys->DeleteTaskTable());
-    EXPECT_TRUE(watches[3].key.empty());
-    EXPECT_EQ(watches[4].tableName, keys->MembershipTable());
-    EXPECT_TRUE(watches[4].key.empty());
+    EXPECT_EQ(watches[2].tableName, keys->MembershipTable());
     EXPECT_TRUE(std::all_of(watches.begin(), watches.end(), [](const WatchKey &watch) {
-        return watch.startRevision == 9;
+        return watch.startRevision == WATCH_FROM_NOW;
+    }));
+    const auto accepted = watches;
+
+    EXPECT_EQ(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::UNIFIED_ETCD, "127.0.0.1:1", *keys,
+                                          WATCH_FROM_NOW - 1, watches)
+                  .GetCode(),
+              K_INVALID);
+    EXPECT_EQ(watches.size(), accepted.size());
+    EXPECT_TRUE(std::equal(watches.begin(), watches.end(), accepted.begin(), [](const WatchKey &left,
+                                                                               const WatchKey &right) {
+        return left.tableName == right.tableName && left.key == right.key
+               && left.startRevision == right.startRevision;
     }));
 }
 
