@@ -115,5 +115,11 @@ struct Config {
 // Parse "8MB" -> 8388608, "512KB" -> 524288, "1024" -> 1024
 uint64_t ParseSize(const std::string &str);
 
-// Load config from JSON file. Returns true on success.
-bool LoadConfig(const std::string &path, Config &cfg);
+/**
+ * @brief Load kvtest configuration from a JSON file.
+ * @param[in] path Configuration file path.
+ * @param[out] cfg Parsed configuration.
+ * @param[in] outputDirOverride Optional resolved output directory inherited by a benchmark child.
+ * @return True on success.
+ */
+bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputDirOverride = "");

@@ -102,7 +102,7 @@ uint64_t ParseSize(const std::string &str) {
     return static_cast<uint64_t>(val * multiplier);
 }
 
-bool LoadConfig(const std::string &path, Config &cfg) {
+bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputDirOverride) {
     std::ifstream f(path);
     if (!f.is_open()) {
         SLOG_ERROR("Cannot open config file: " << path);
@@ -279,6 +279,10 @@ bool LoadConfig(const std::string &path, Config &cfg) {
                 return false;
             }
             cfg.mixedKeyStrategy = parsed.value();
+        }
+
+        if (!outputDirOverride.empty()) {
+            cfg.outputDir = outputDirOverride;
         }
 
         // Generate output directory: metrics_{ip}_{timestamp}

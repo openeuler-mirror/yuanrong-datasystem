@@ -116,6 +116,18 @@ TEST(LoadConfig_OutputDir) {
     std::remove(path.c_str());
 }
 
+TEST(LoadConfig_OutputDirOverride) {
+    auto path = WriteTempConfig(
+        R"({"etcd_address":"x:1","listen_port":9000,"output_dir":"ignored"})");
+    std::string outputDir = "/tmp/kvtest_output_override_" + std::to_string(getpid());
+    Config cfg;
+    ASSERT_TRUE(LoadConfig(path, cfg, outputDir));
+    ASSERT_EQ(cfg.outputDir, outputDir);
+    ASSERT_EQ(cfg.metricsFile, outputDir + "/latency_timeseries.csv");
+    CleanupDir(outputDir);
+    std::remove(path.c_str());
+}
+
 TEST(LoadConfig_MetricsFile_Default) {
     auto path = WriteTempConfig(R"({"etcd_address":"x:1","listen_port":9000})");
     Config cfg;
