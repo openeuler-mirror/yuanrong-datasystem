@@ -32,6 +32,7 @@
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
+#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/protos/master_object.pb.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/worker/client_manager/client_manager.h"
@@ -438,7 +439,16 @@ Status WorkerOcServiceCrudCommonApi::RemoveMetadataFromRedirectMaster(
         Status result = RemoveMeta(redirectIds, redirectWorkerMasterApi, removeCause, UINT64_MAX, false, localAddress,
                                    batchKeyVersions, redirectRsp, topologyOperationId);
         // save the result to rsp and payload
-        if (result.IsError()) {
+        const bool isMissingTopologyMember =
+            removeCause == master::RemoveMetaReqPb::GIVEUP_PRIMARY && !topologyOperationId.empty()
+            && result.GetCode() == K_NOT_FOUND
+            && result.GetMsg().find("member address not found") != std::string::npos;
+        if (isMissingTopologyMember) {
+            LOG(WARNING) << "CLUSTER_SCALE_IN action=missing_member_fast_fallback"
+                         << " operation_prefix=" << cluster::TopologyDiagnosticPrefix(topologyOperationId)
+                         << " fallback_count=" << redirectIds.size() << " status=" << result.ToString();
+            needMigrateIds.insert(needMigrateIds.end(), redirectIds.begin(), redirectIds.end());
+        } else if (result.IsError()) {
             LOG(WARNING) << "remove meta failed: " << result.ToString();
             failedIds.insert(failedIds.end(), redirectIds.begin(), redirectIds.end());
         } else {

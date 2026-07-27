@@ -679,13 +679,20 @@ void WorkerOCServiceImpl::RegisterAsyncTasksDoneChecker(AsyncTasksDoneChecker ch
 Status WorkerOCServiceImpl::SelectTopologyScaleInObjects(std::vector<std::string> &copies,
                                                          std::vector<std::string> &primaries) const
 {
+    size_t skippedEmptyObjects = 0;
     for (const auto &entryPair : *objectTable_) {
         const auto &entry = entryPair.second;
-        RETURN_IF_NOT_OK_APPEND_MSG(entry->TryRLock(), "member-wide object selection needs retry");
+        RETURN_IF_NOT_OK_APPEND_MSG(entry->TryRLock(true), "member-wide object selection needs retry");
         Raii unlock([&entry]() { entry->RUnlock(); });
+        if (entry->Get() == nullptr) {
+            ++skippedEmptyObjects;
+            continue;
+        }
         auto &destination = (*entry)->stateInfo.IsPrimaryCopy() ? primaries : copies;
         destination.emplace_back(entryPair.first);
     }
+    LOG_IF(WARNING, skippedEmptyObjects > 0)
+        << "CLUSTER_SCALE_IN action=skip_empty_local_objects count=" << skippedEmptyObjects;
     return Status::OK();
 }
 
@@ -706,34 +713,28 @@ Status WorkerOCServiceImpl::PrepareTopologyScaleInData(const std::vector<std::st
                        businessOperationId);
 
     const int intervalMs = 500;
-    const int giveUpPrimaryMaxRetryTime = 10;
     int retryTime = 0;
     while (true) {
         CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology ScaleIn cancelled");
         CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
                                  "topology ScaleIn deadline exceeded");
-        if (copyFailures.empty() && primaryFailures.empty()) {
-            break;
-        }
-        if (retryTime > giveUpPrimaryMaxRetryTime && !primaryFailures.empty()) {
+        if (!primaryFailures.empty()) {
             LOG(WARNING) << "CLUSTER_SCALE_IN action=give_up_primary_fallback"
                          << " operation_prefix=" << businessOperationId.substr(0, 12)
                          << " retry_count=" << retryTime
-                         << " fallback_count=" << primaryFailures.size();
+                         << " fallback_count=" << primaryFailures.size()
+                         << " policy=immediate_data_migration";
             migrateIds.insert(migrateIds.end(), primaryFailures.begin(), primaryFailures.end());
             primaryFailures.clear();
         }
+        if (copyFailures.empty()) {
+            break;
+        }
         std::vector<std::string> retryCopies = std::move(copyFailures);
-        std::vector<std::string> retryPrimaries = std::move(primaryFailures);
         copyFailures.clear();
-        primaryFailures.clear();
         if (!retryCopies.empty()) {
             GroupAndRemoveMeta(retryCopies, master::RemoveMetaReqPb::NORMAL, copyFailures, migrateIds, waitIds, l2Ids,
                                businessOperationId);
-        }
-        if (!retryPrimaries.empty()) {
-            GroupAndRemoveMeta(retryPrimaries, master::RemoveMetaReqPb::GIVEUP_PRIMARY, primaryFailures, migrateIds,
-                               waitIds, l2Ids, businessOperationId);
         }
         const auto retryDeadline = std::min(
             deadline, std::chrono::steady_clock::now() + std::chrono::milliseconds(intervalMs));
