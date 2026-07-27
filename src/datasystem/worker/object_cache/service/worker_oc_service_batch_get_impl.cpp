@@ -193,6 +193,11 @@ void WorkerOcServiceGetImpl::HandleGetFailureHelper(const std::string &objectKey
     (void)isInsert;
     LOG(WARNING) << "Get object from remote failed, start to remove location from master";
     (void)RemoveLocation(objectKey, version);
+    CleanupGetFailureOnLock(entry);
+}
+
+void WorkerOcServiceGetImpl::CleanupGetFailureOnLock(std::shared_ptr<SafeObjType> &entry)
+{
     auto obj = entry->Get();
     if (obj == nullptr) {
         return;
@@ -200,7 +205,7 @@ void WorkerOcServiceGetImpl::HandleGetFailureHelper(const std::string &objectKey
     if (obj->GetShmUnit() != nullptr) {
         obj->GetShmUnit()->SetHardFreeMemory();
     }
-    obj->FreeResources();
+    LOG_IF_ERROR(obj->FreeResources(), "Free resources after remote get failure failed");
     obj->SetLifeState(ObjectLifeState::OBJECT_INVALID);
     obj->stateInfo.SetCacheInvalid(true);
 }

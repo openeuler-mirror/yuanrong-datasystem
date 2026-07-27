@@ -1007,6 +1007,8 @@ private:
     void HandleGetFailureHelper(const std::string &objectKey, uint64_t version, std::shared_ptr<SafeObjType> &entry,
                                 bool isInsert);
 
+    void CleanupGetFailureOnLock(std::shared_ptr<SafeObjType> &entry);
+
     /**
      * @brief Checks if an object exists locally and is valid.
      * @param[in] key The object key to check.
@@ -1038,7 +1040,8 @@ private:
         std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
         std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
         std::map<std::string, uint64_t> &unconfirmedObjectVersions,
-        std::unordered_set<std::string> &failedConfirmationOwners);
+        std::unordered_set<std::string> &failedConfirmationOwners,
+        std::unordered_map<std::string, uint64_t> &failedKeyVersions);
 
     void PostProcessRemoteGetInNotificationImpl(
         std::map<ReadKey, LockedEntity> &lockedEntries,
@@ -1065,6 +1068,9 @@ private:
 
     void FreeAndUnlockUnconfirmedNotifyRemoteGetObjects(const std::map<std::string, uint64_t> &objectVersions,
                                                         std::map<ReadKey, LockedEntity> &lockedEntries);
+
+    void CleanupFailedRemoteGetMetas(const std::vector<std::list<GetObjectInfo>> &failedMetas,
+                                     std::unordered_map<std::string, uint64_t> &failedKeyVersions);
 
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
