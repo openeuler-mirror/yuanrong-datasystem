@@ -213,25 +213,21 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
-
-    if (rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED
-        || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER
-        || rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload({}, FLAGS_oc_worker_worker_direct_port > 0),
-                                         "GetObjectRemote send payload error");
-    } else if (rsp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
-        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
-                                         "GetObjectRemote send payload error");
-    }
-
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SendGetObjectRemotePayload(serverApi, rsp, payload),
+                                     "GetObjectRemote send payload error");
     pointImpl.Record();
     const auto elapsedUs = static_cast<uint64_t>(timer.ElapsedMicroSecond());
     const double elapsedMs = static_cast<double>(elapsedUs) / US_PER_MS;
+    const char *requestTransport =
+        req.has_urma_info() ? "UB" : (req.has_ucp_info() ? "RDMA" : "RPC_PAYLOAD");
     SLOW_LOG_IF_OR_VLOG(
         INFO, config.processSlowerThanUs > 0 && elapsedUs >= config.processSlowerThanUs, 1,
-        AppendSrcDstForLog(FormatString("[GetObjectRemote] finish, objectKey: %s, payload size: %zu, cost: %.3fms",
-                                        req.object_key(), payload.size(), elapsedMs),
-                           GetRemoteAddressForLog(req), FLAGS_worker_address));
+        AppendSrcDstForLog(
+            FormatString("[GetObjectRemote] finish, objectKey: %s, requestTransport: %s, dataSource: %d, "
+                         "payloadCount: %zu, cost: %.3fms",
+                         req.object_key(), requestTransport, static_cast<int>(rsp.data_source()), payload.size(),
+                         elapsedMs),
+            GetRemoteAddressForLog(req), FLAGS_worker_address));
     point.Record();
     return Status::OK();
 }
@@ -260,6 +256,22 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, Get
     std::vector<uint64_t> eventKeys;
     RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys, nullptr, nullptr, nullptr,
                                             nullptr, isQueryAndGet));
+    return Status::OK();
+}
+
+Status WorkerWorkerOCServiceImpl::SendGetObjectRemotePayload(
+    std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi,
+    const GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload)
+{
+    const bool tagPayload = FLAGS_oc_worker_worker_direct_port > 0;
+    if (rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED
+        || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER
+        || rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META) {
+        return serverApi->SendAndTagPayload({}, tagPayload);
+    }
+    if (rsp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
+        return serverApi->SendAndTagPayload(payload, tagPayload);
+    }
     return Status::OK();
 }
 

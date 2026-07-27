@@ -412,6 +412,17 @@ private:
      */
     Status CheckConnectionStable(const GetObjectRemoteReqPb &req);
 
+    /**
+     * @brief Send the remote get payload based on the response data source.
+     * @param[in] serverApi The server side WriterReader holding the unary rpc socket.
+     * @param[in] rsp Remote get response carrying the data source selector.
+     * @param[in] payload Payload to send when data source is DATA_IN_PAYLOAD.
+     * @return Status of the call.
+     */
+    Status SendGetObjectRemotePayload(
+        std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi,
+        const GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload);
+
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
     std::shared_ptr<AkSkManager> akSkManager_;
     const cluster::MembershipEndpointView &membership_;

@@ -20,6 +20,7 @@
 
 #include <utility>
 
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -42,6 +43,9 @@ Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &o
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
     RETURN_RUNTIME_ERROR_IF_NULL(transporter);
     Status rc = operation(*transporter);
+    VLOG(1) << "[TransportGet][DataPlane] Operation completed, worker: " << workerAddr.ToString()
+            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
+            << ", attempt: 1, status: " << rc.ToString();
     if (rc.GetCode() == K_URMA_NEED_CONNECT) {
         VLOG(1) << "[TransportGet][Connection] Rebuild data plane, worker: " << workerAddr.ToString()
                 << ", status: " << rc.ToString();
@@ -55,7 +59,11 @@ Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &o
     }
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
     RETURN_RUNTIME_ERROR_IF_NULL(transporter);
-    return operation(*transporter);
+    rc = operation(*transporter);
+    VLOG(1) << "[TransportGet][DataPlane] Operation completed, worker: " << workerAddr.ToString()
+            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
+            << ", attempt: 2, status: " << rc.ToString();
+    return rc;
 }
 }  // namespace client
 }  // namespace datasystem
