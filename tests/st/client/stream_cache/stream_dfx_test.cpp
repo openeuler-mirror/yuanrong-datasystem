@@ -30,11 +30,13 @@
 #include "common/stream_cache/stream_common.h"
 #include "sc_client_common.h"
 #include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/metrics/res_metric_collector.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/stream/consumer.h"
 #include "datasystem/stream/producer.h"
 #include "datasystem/stream_client.h"
@@ -139,20 +141,51 @@ protected:
     }
 
     Status WaitForCount(const std::shared_ptr<StreamClient> &client, const std::string &streamName,
-                        uint64_t expectedProducerCount, uint64_t expectedConsumerCount)
+                        int expectedProducerCount, int expectedConsumerCount, int timeoutSec)
     {
         auto waitCount = [&client, &streamName, expectedProducerCount, expectedConsumerCount]() {
-            uint64_t producerCount = 0;
-            uint64_t consumerCount = 0;
-            RETURN_IF_NOT_OK(client->QueryGlobalProducersNum(streamName, producerCount));
-            RETURN_IF_NOT_OK(client->QueryGlobalConsumersNum(streamName, consumerCount));
-            CHECK_FAIL_RETURN_STATUS(
-                producerCount == expectedProducerCount && consumerCount == expectedConsumerCount, K_NOT_READY,
-                "Global stream metadata has not converged, producers: " + std::to_string(producerCount)
-                    + ", consumers: " + std::to_string(consumerCount));
+            if (expectedProducerCount >= 0) {
+                uint64_t producerCount = 0;
+                RETURN_IF_NOT_OK(client->QueryGlobalProducersNum(streamName, producerCount));
+                CHECK_FAIL_RETURN_STATUS(
+                    producerCount == static_cast<uint64_t>(expectedProducerCount), K_NOT_READY,
+                    "Global producer metadata has not converged, expected: " + std::to_string(expectedProducerCount)
+                        + ", actual: " + std::to_string(producerCount));
+            }
+            if (expectedConsumerCount >= 0) {
+                uint64_t consumerCount = 0;
+                RETURN_IF_NOT_OK(client->QueryGlobalConsumersNum(streamName, consumerCount));
+                CHECK_FAIL_RETURN_STATUS(
+                    consumerCount == static_cast<uint64_t>(expectedConsumerCount), K_NOT_READY,
+                    "Global consumer metadata has not converged, expected: " + std::to_string(expectedConsumerCount)
+                        + ", actual: " + std::to_string(consumerCount));
+            }
             return Status::OK();
         };
-        return cluster_->WaitForExpectedResult(waitCount, waitNodeTimeout, K_OK);
+        return cluster_->WaitForExpectedResult(waitCount, timeoutSec, K_OK);
+    }
+
+    Status WaitForFailureFinalized(uint32_t failedWorkerIndex, int timeoutSec)
+    {
+        std::pair<HostPort, HostPort> etcdAddrs;
+        RETURN_IF_NOT_OK(cluster_->GetEtcdAddrs(0, etcdAddrs));
+        EtcdStore topologyDb(etcdAddrs.first.ToString());
+        RETURN_IF_NOT_OK(topologyDb.Init());
+        RETURN_IF_NOT_OK(RegisterTopologyTables(topologyDb));
+        HostPort failedWorkerAddress;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(failedWorkerIndex, failedWorkerAddress));
+        auto waitFailureFinalized = [&topologyDb, &failedWorkerAddress]() {
+            std::string topologyBytes;
+            RETURN_IF_NOT_OK(topologyDb.Get(GetTopologyTableName(), "", topologyBytes));
+            ClusterTopologyPb topology;
+            CHECK_FAIL_RETURN_STATUS(topology.ParseFromString(topologyBytes), K_RUNTIME_ERROR,
+                                     "Failed to parse cluster topology");
+            CHECK_FAIL_RETURN_STATUS(
+                topology.members().count(failedWorkerAddress.ToString()) == 0 && !topology.has_active_batch(),
+                K_NOT_READY, "Failure topology batch has not finalized");
+            return Status::OK();
+        };
+        return cluster_->WaitForExpectedResult(waitFailureFinalized, timeoutSec, K_OK);
     }
 
     void CreateElement(size_t elementSize, Element &element, std::vector<uint8_t> &writeElement)
@@ -776,7 +809,7 @@ TEST_F(StreamDfxWorkerCrashTest, DISABLED_LEVEL1_TestOneWorkerCrash)
     DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 0, ""));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0));
     // The health probe may become ready before asynchronous stream metadata reconciliation finishes.
-    DS_ASSERT_OK(WaitForCount(client2, streamName, 2, 2));
+    DS_ASSERT_OK(WaitForCount(client2, streamName, 2, 2, waitNodeTimeout));
     CheckCount(client2, streamName, 2, 2);
     CheckCount(client3, streamName, 2, 2);
 
@@ -1447,25 +1480,34 @@ TEST_F(StreamDfxHeartbeatTest, LEVEL1_TestWorkerCrashTimeout)
         CreateProducerAndConsumer(client2, { { streamName, 1 } }, producers, { { streamName, "sub2" } }, consumers));
 
     CheckCount(client1, streamName, 2, 2);
-    cluster_->QuicklyShutdownWorker(0);
+    DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(0));
 
-    // sleep until master clear the worker metadata.
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeDead));
-    CheckCount(client2, streamName, -1, 1);
+    // Allow one node timeout for lease expiry, one for missing-member confirmation, the direct probe and the bounded
+    // Failure batch window. waitNodeTimeout is scheduling/polling slack, not a fixed sleep.
+    // Keep these aligned with the TopologyControllerOptions defaults.
+    constexpr int failureBatchWindowSec = 30;
+    constexpr int failureProbeTimeoutSec = 2;
+    const int failureFinalizationWaitSec =
+        (2 * nodeTimeout) + failureProbeTimeoutSec + failureBatchWindowSec + waitNodeTimeout;
+    // Stream cleanup runs inside the Failure batch; do not restart the removed worker before the batch is finalized.
+    DS_ASSERT_OK(WaitForFailureFinalized(0, failureFinalizationWaitSec));
+    DS_ASSERT_OK(WaitForCount(client2, streamName, -1, 1, waitNodeTimeout));
 
     const int K_TWO = 2;
     ThreadPool pool(K_TWO);
-    cluster_->QuicklyShutdownWorker(1);
+    DS_ASSERT_OK(cluster_->QuicklyShutdownWorker(1));
     DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 1, ""));
     DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 0, ""));
     auto fut1 = pool.Submit([this]() { DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 0)); });
     auto fut2 = pool.Submit([this]() { DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 1)); });
     fut1.get();
     fut2.get();
-    std::this_thread::sleep_for(std::chrono::seconds(waitNodeTimeout));
-    CheckCount(client2, streamName, -1, 0);
+    // Process readiness does not imply that asynchronous stream metadata reconciliation or SDK reconnection has
+    // finished. Query through both pre-existing clients before issuing a state-changing Subscribe request.
+    DS_ASSERT_OK(WaitForCount(client1, streamName, -1, 0, waitNodeDead));
+    DS_ASSERT_OK(WaitForCount(client2, streamName, -1, 0, waitNodeDead));
 
-    // sleep until node times out, and check that consumer can still be created
+    // Verify both recovered clients can create consumers after their previous subscriptions were cleaned up.
     std::shared_ptr<Consumer> consumer1;
     std::shared_ptr<Consumer> consumer2;
     DS_ASSERT_OK(CreateConsumer(client1, streamName, "sub1", consumer1));
