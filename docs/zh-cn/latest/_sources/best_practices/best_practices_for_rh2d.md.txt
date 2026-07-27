@@ -24,6 +24,38 @@ openYuanrong datasystem 支持 RH2D over P2P-Transfer RoCE（RDMA over Converged
 6. HIXL HCCS 在未设置 `HCCL_INTRA_ROCE_ENABLE` 时使用 buffer-pool relay。如需启用 HIXL RoCE 直连模式，Worker 和 Client 进程均需在启动前设置 `HCCL_INTRA_ROCE_ENABLE=1`，并确保 RoCE 网络可达。
 7. HCCS 当前在单个进程内串行执行 HIXL `TransferSync()`；需要提高并发度时，建议使用多个 Client 进程。
 
+## Client 无本地 Worker 的 Pipeline H2D
+
+Client-direct Pipeline H2D 允许 Client 所在节点不部署本地 Worker。Client 复用普通 Get 的元数据查询和
+副本选择流程，直接连接对象所在 Worker；Client 侧使用 fast transport 内存池作为接收内存，并在初始化时
+一次性完成 Host 内存注册，避免在每次 `MGetH2D` 中重复注册。
+
+C++ 配置示例：
+
+```cpp
+ConnectOptions options;
+options.host = "192.168.1.10";
+options.port = 18481;
+options.deviceId = "0";
+options.fastTransportMemSize = 1024ULL * 1024 * 1024;
+options.enableClientDirectPipelineH2D = true;
+options.clientDirectPipelineH2DThreadNum = 64;
+
+KVClient client(options);
+RETURN_IF_NOT_OK(client.Init());
+```
+
+配置与运行规则：
+
+1. `enableClientDirectPipelineH2D` 默认值为 `false`；仅在显式开启时初始化 Client-direct Pipeline H2D 资源。
+2. `clientDirectPipelineH2DThreadNum` 默认值为 `64`，仅在上述开关开启时生效；有效范围为 `[8, 128]`，
+   配置超出该范围时使用默认值 `64`。
+3. 如果 Client 可连接本地 Worker，即使开启 Client-direct 能力，也优先使用原有本地 Worker RH2D 路径。
+4. 对象大小小于等于默认分片长度 2 MiB 时，不启动 MLCacheDirect，直接通过一次 URMA write 写入 Client
+   接收内存并执行 H2D；大于 2 MiB 时使用 MLCacheDirect 分片传输。
+5. 大对象的 MLCacheDirect receiver 启动失败时，自动回退到一次 URMA write 后执行 H2D。
+6. 请求超时、失败 key 和副本重试语义与普通 Get 保持一致。
+
 ## 源码编译安装
 
 源码编译安装前请确保编译环境中在正常编译依赖的基础上具备如下软件依赖：

@@ -588,21 +588,10 @@ document.addEventListener('DOMContentLoaded', function() {
         <article role="main" id="furo-main-content">
           <section class="tex2jax_ignore mathjax_ignore" id="id1">
 <h1>集群日志定位指南<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
-<p>本文面向日志平台检索、事故复盘和开发排障，说明如何用 <code class="docutils literal notranslate"><span class="pre">CLUSTER_</span></code> 日志定位集群初始化、重启、扩容、缩容、节点故障、coordination backend 降级、过程中失败和全集群退出。</p>
-<p>示例环境：</p>
-<ul class="simple">
-<li><p>集群名：<code class="docutils literal notranslate"><span class="pre">AZ</span></code>。</p></li>
-<li><p>worker：<code class="docutils literal notranslate"><span class="pre">127.0.0.1:31501</span></code>、<code class="docutils literal notranslate"><span class="pre">127.0.0.2:31501</span></code>、<code class="docutils literal notranslate"><span class="pre">127.0.0.3:31501</span></code>、<code class="docutils literal notranslate"><span class="pre">127.0.0.4:31501</span></code>。</p></li>
-<li><p>真实环境检索时把 <code class="docutils literal notranslate"><span class="pre">AZ</span></code> 替换成目标集群名，或使用日志平台已有的 cluster prefix 字段过滤。</p></li>
-</ul>
+<p>本文面向日志检索、事故复盘和开发排障，说明如何使用 <code class="docutils literal notranslate"><span class="pre">CLUSTER_</span></code> 日志定位集群拓扑发布、扩容、缩容和故障恢复问题。</p>
 <section id="id2">
-<h2>日志格式<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
-<p>每条日志分为 prefix 和 message：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>&lt;time&gt; | &lt;severity&gt; | &lt;file:line&gt; | &lt;host&gt; | &lt;pid:tid&gt; | &lt;trace&gt; | &lt;cluster&gt; | &lt;message&gt;
-</pre></div>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">severity</span></code>、trace 和 cluster 都在 prefix 中。message 内不会再重复打印 <code class="docutils literal notranslate"><span class="pre">severity=</span></code>、<code class="docutils literal notranslate"><span class="pre">trace_id=</span></code> 或 <code class="docutils literal notranslate"><span class="pre">cluster=</span></code>。高层集群变更事件的 trace 形如 <code class="docutils literal notranslate"><span class="pre">cluster;&lt;uuid_suffix&gt;</span></code>，例如 <code class="docutils literal notranslate"><span class="pre">cluster;f4a91c7e2b30</span></code>；同一轮扩容、缩容或故障处理应使用同一个 trace。</p>
-<p>常用字段：</p>
+<h2>关联一轮拓扑变更<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<p>集群控制器、任务执行器和业务回调运行在不同线程，不能假设一轮变更始终使用同一个 trace。定位时优先使用以下字段关联：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -611,304 +600,195 @@ document.addEventListener('DOMContentLoaded', function() {
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">flow</span></code></p></td>
-<td><p>事件类型：<code class="docutils literal notranslate"><span class="pre">bootstrap</span></code>、<code class="docutils literal notranslate"><span class="pre">restart</span></code>、<code class="docutils literal notranslate"><span class="pre">scale_out</span></code>、<code class="docutils literal notranslate"><span class="pre">scale_in</span></code>、<code class="docutils literal notranslate"><span class="pre">failure</span></code>、<code class="docutils literal notranslate"><span class="pre">backend</span></code>、<code class="docutils literal notranslate"><span class="pre">shutdown</span></code>、<code class="docutils literal notranslate"><span class="pre">membership</span></code>、<code class="docutils literal notranslate"><span class="pre">watch</span></code>。</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">cluster</span></code></p></td>
+<td><p>集群名。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">action</span></code></p></td>
-<td><p>当前阶段，例如 <code class="docutils literal notranslate"><span class="pre">start</span></code>、<code class="docutils literal notranslate"><span class="pre">task_created</span></code>、<code class="docutils literal notranslate"><span class="pre">notify</span></code>、<code class="docutils literal notranslate"><span class="pre">data_drain</span></code>、<code class="docutils literal notranslate"><span class="pre">finish</span></code>。</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">batch_type</span></code> / <code class="docutils literal notranslate"><span class="pre">type_name</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">SCALE_OUT</span></code>、<code class="docutils literal notranslate"><span class="pre">SCALE_IN</span></code> 或 <code class="docutils literal notranslate"><span class="pre">FAILURE</span></code>。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">component</span></code></p></td>
-<td><p>责任边界：<code class="docutils literal notranslate"><span class="pre">controller</span></code>、<code class="docutils literal notranslate"><span class="pre">materializer</span></code>、<code class="docutils literal notranslate"><span class="pre">executor</span></code>、<code class="docutils literal notranslate"><span class="pre">callback</span></code>、<code class="docutils literal notranslate"><span class="pre">backend</span></code>、<code class="docutils literal notranslate"><span class="pre">worker_runtime</span></code>、<code class="docutils literal notranslate"><span class="pre">observer</span></code>。</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">epoch</span></code></p></td>
-<td><p>内部 topology batch/version 编号。优先使用 prefix trace 收敛同一轮事件，<code class="docutils literal notranslate"><span class="pre">epoch</span></code> 用于区分内部批次。</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">members</span></code></p></td>
-<td><p>controller 当前看到的完整 membership 列表。</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">participants</span></code></p></td>
-<td><p>本轮扩容、缩容、故障、bootstrap 或 shutdown 涉及的节点列表。</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">source</span></code> / <code class="docutils literal notranslate"><span class="pre">target</span></code></p></td>
-<td><p>metadata 或 data 迁移方向。</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">executor</span></code></p></td>
-<td><p>实际执行 task 或 callback 的 worker。</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">operation_prefix</span></code></p></td>
-<td><p>业务操作短 id，用于串联 metadata、data drain 和 primary handoff。</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">batch_epoch</span></code> / <code class="docutils literal notranslate"><span class="pre">epoch</span></code></p></td>
+<td><p>一轮拓扑变更的稳定编号。</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">task_prefix</span></code></p></td>
-<td><p>task 短 id，用于在同一 epoch 内定位单个 task。</p></td>
+<td><p>epoch 内的单个迁移或恢复任务。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">timeout_ms</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">node_timeout_s</span> <span class="pre">*</span> <span class="pre">1000</span></code>，节点进入 lost/missing 的阈值。</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">operation_prefix</span></code></p></td>
+<td><p>跨重试稳定的业务操作编号。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">dead_ms</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">node_dead_timeout_s</span> <span class="pre">*</span> <span class="pre">1000</span></code>，节点确认 dead 的阈值。</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">stage</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">metadata_migration</span></code>、<code class="docutils literal notranslate"><span class="pre">data_drain</span></code>、<code class="docutils literal notranslate"><span class="pre">cleanup</span></code>、<code class="docutils literal notranslate"><span class="pre">failure_recovery</span></code> 或 <code class="docutils literal notranslate"><span class="pre">task_completion</span></code>。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">flow_duration_ms</span></code></p></td>
-<td><p>从 flow start 到当前终点或等待日志的总耗时。</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">stage_event</span></code></p></td>
+<td><p>阶段的 <code class="docutils literal notranslate"><span class="pre">start</span></code> 或 <code class="docutils literal notranslate"><span class="pre">finish</span></code>。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">phase_duration_ms</span></code></p></td>
-<td><p>单阶段耗时，例如 data drain 或 backend outage 持续时间。</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">executor</span></code></p></td>
+<td><p>实际执行任务的 worker。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">result</span></code></p></td>
-<td><p>阶段结果：<code class="docutils literal notranslate"><span class="pre">pending</span></code>、<code class="docutils literal notranslate"><span class="pre">accepted</span></code>、<code class="docutils literal notranslate"><span class="pre">waiting</span></code>、<code class="docutils literal notranslate"><span class="pre">success</span></code>、<code class="docutils literal notranslate"><span class="pre">failed</span></code>。</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">source</span></code> / <code class="docutils literal notranslate"><span class="pre">target</span></code> / <code class="docutils literal notranslate"><span class="pre">failed</span></code></p></td>
+<td><p>迁移源、迁移目标或故障节点。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">reason</span></code></p></td>
-<td><p>归类后的原因，便于检索和统计。</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">range_count</span></code> / <code class="docutils literal notranslate"><span class="pre">hash_ranges</span></code></p></td>
+<td><p>本任务覆盖的闭区间数量和具体范围。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">status</span></code></p></td>
-<td><p>原样完整错误信息，本轮不清洗、不截断。</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">status</span></code> / <code class="docutils literal notranslate"><span class="pre">outcome</span></code></p></td>
+<td><p>阶段结果、重试或持久化结果。</p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p>推荐从 controller 的批次开始日志获取 epoch，再逐层下钻：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>CLUSTER_CHANGE_BATCH AND action=start
+CLUSTER_CHANGE_BATCH AND action=replan
+CLUSTER_TASK AND epoch=&lt;epoch&gt;
+CLUSTER_TASK AND task_prefix=&lt;task_prefix&gt;
+CLUSTER_TASK_CALLBACK AND operation_prefix=&lt;operation_prefix&gt;
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">sample</span></code> 默认完整打印当前支持的32个节点。若未来成员数超过32，末尾会出现
+<code class="docutils literal notranslate"><span class="pre">...(truncated,total=&lt;member_count&gt;)</span></code>，不能把截断后的列表当作完整成员集合。</p>
 </section>
 <section id="id3">
-<h2>通用定位步骤<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
-<ol class="arabic simple">
-<li><p>拉取集群拓扑历史：</p></li>
-</ol>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>AZ AND CLUSTER_
+<h2>范围和哈希环格式<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
+<p>任务迁移范围使用闭区间：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>range_count=2 hash_ranges=[[0,1023],[4096,8191]]
 </pre></div>
 </div>
-<ol class="arabic simple" start="2">
-<li><p>按场景缩小范围：</p></li>
-</ol>
-<div class="table-wrapper colwidths-auto docutils container">
-<table class="docutils align-default">
-<thead>
-<tr class="row-odd"><th class="head"><p>场景</p></th>
-<th class="head"><p>检索入口</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>初始化</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AZ</span> <span class="pre">AND</span> <span class="pre">CLUSTER_</span> <span class="pre">AND</span> <span class="pre">flow=bootstrap</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>重启恢复</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AZ</span> <span class="pre">AND</span> <span class="pre">CLUSTER_</span> <span class="pre">AND</span> <span class="pre">flow=restart</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p>扩容</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AZ</span> <span class="pre">AND</span> <span class="pre">CLUSTER_</span> <span class="pre">AND</span> <span class="pre">flow=scale_out</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>缩容</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AZ</span> <span class="pre">AND</span> <span class="pre">CLUSTER_</span> <span class="pre">AND</span> <span class="pre">flow=scale_in</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p>节点故障</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AZ</span> <span class="pre">AND</span> <span class="pre">CLUSTER_</span> <span class="pre">AND</span> <span class="pre">flow=failure</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>backend 降级/恢复</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AZ</span> <span class="pre">AND</span> <span class="pre">CLUSTER_</span> <span class="pre">AND</span> <span class="pre">flow=backend</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p>全集群退出</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AZ</span> <span class="pre">AND</span> <span class="pre">CLUSTER_</span> <span class="pre">AND</span> <span class="pre">flow=shutdown</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>失败事件</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AZ</span> <span class="pre">AND</span> <span class="pre">CLUSTER_</span> <span class="pre">AND</span> <span class="pre">result=failed</span></code></p></td>
-</tr>
-</tbody>
-</table>
+<p>哈希环范围使用 <code class="docutils literal notranslate"><span class="pre">(previous_token,current_token]</span></code>。起点大于终点表示跨越 <code class="docutils literal notranslate"><span class="pre">uint32</span></code> 环尾，例如
+<code class="docutils literal notranslate"><span class="pre">(300,100]</span></code>；单 token 环打印为 <code class="docutils literal notranslate"><span class="pre">full</span></code>。</p>
+<p>新 topology 版本提交或在本地发布时，<code class="docutils literal notranslate"><span class="pre">CLUSTER_RING</span></code> 打印：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">committed_ring</span></code>：当前对业务请求生效的 owner ring。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">prospective_ring</span></code>：当前普通批次完成后将生效的 owner ring；没有普通批次或处于故障批次时与
+<code class="docutils literal notranslate"><span class="pre">committed_ring</span></code> 相同。</p></li>
+</ul>
+<p>每个 ring 字段包含节点地址、成员 id 前缀、成员状态和该节点对应的全部范围：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>CLUSTER_RING role=worker status=published version=18 batch_type=SCALE_OUT batch_epoch=18 \
+committed_ring=[{address=&lt;worker-a&gt;,id_prefix=&lt;id&gt;,state=ACTIVE,ranges=[(300,100]]},\
+{address=&lt;worker-b&gt;,id_prefix=&lt;id&gt;,state=JOINING,ranges=[]}] \
+prospective_ring=[{address=&lt;worker-a&gt;,id_prefix=&lt;id&gt;,state=ACTIVE,ranges=[(200,100]]},\
+{address=&lt;worker-b&gt;,id_prefix=&lt;id&gt;,state=JOINING,ranges=[(100,200]]}]
+</pre></div>
 </div>
-<ol class="arabic simple" start="3">
-<li><p>从 <code class="docutils literal notranslate"><span class="pre">CLUSTER_FLOW</span> <span class="pre">action=start</span></code> 复制高层变更的 prefix trace，例如 <code class="docutils literal notranslate"><span class="pre">cluster;f4a91c7e2b30</span></code>，再按 trace、节点、<code class="docutils literal notranslate"><span class="pre">epoch</span></code>、<code class="docutils literal notranslate"><span class="pre">operation_prefix</span></code> 或 <code class="docutils literal notranslate"><span class="pre">task_prefix</span></code> 二次过滤。<code class="docutils literal notranslate"><span class="pre">CLUSTER_MEMBERSHIP</span> <span class="pre">action=lease_update</span></code> 是触发输入事实，可能使用不同 trace。</p></li>
-<li><p>输出结论时说明：事件类型、目标节点、起点、最后一个有效阶段、终点、耗时、失败原因、是否被故障抢占、是否恢复。</p></li>
-</ol>
+<p>完整 ring 只在 controller CAS 成功或 Worker/Observer 确实发布新版本时以 INFO 打印；重复读取同一版本只保留
+VLOG 摘要。单次输出量与成员数和 token 总数线性相关；默认每节点 4 个 token，32 节点时每个 ring 视图包含
+128 个范围。使用非默认 token 数时，应按实际 token 总数评估单次日志行长度和磁盘容量；为保证拓扑故障可还原，
+INFO 日志仍保留全部节点及其范围。</p>
 </section>
 <section id="id4">
-<h2>扩容示例<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
-<p>场景：<code class="docutils literal notranslate"><span class="pre">127.0.0.3:31501</span></code> 和 <code class="docutils literal notranslate"><span class="pre">127.0.0.4:31501</span></code> 同时加入原 2 节点集群。</p>
-<p>检索入口：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>AZ AND CLUSTER_ AND flow=scale_out
+<h2>扩容<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
+<p>扩容的正常阶段顺序：</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_CHANGE_BATCH</span> <span class="pre">action=start</span> <span class="pre">batch_type=SCALE_OUT</span></code>：topology CAS 已成功，新节点进入 <code class="docutils literal notranslate"><span class="pre">JOINING</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=callback_submitted</span> <span class="pre">stage=metadata_migration</span> <span class="pre">stage_event=start</span></code>：迁移任务开始。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=callback_finished</span> <span class="pre">stage=metadata_migration</span> <span class="pre">stage_event=finish</span></code>：业务回调结束。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=progress</span> <span class="pre">stage=task_completion</span> <span class="pre">stage_event=finish</span></code>：任务范围已持久化为完成。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_CHANGE_BATCH</span> <span class="pre">action=finalized</span> <span class="pre">batch_type=SCALE_OUT</span></code>：最终 topology 已提交，新节点进入 <code class="docutils literal notranslate"><span class="pre">ACTIVE</span></code>。</p></li>
+</ol>
+<p>任务日志包含实际迁移方向和范围：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>CLUSTER_TASK action=callback_submitted stage=metadata_migration stage_event=start type_name=SCALE_OUT \
+epoch=&lt;epoch&gt; task_prefix=&lt;task&gt; operation_prefix=&lt;operation&gt; executor=&lt;source-worker&gt; \
+source=&lt;source-worker&gt; target=&lt;joining-worker&gt; range_count=2 hash_ranges=[[0,1023],[4096,8191]]
 </pre></div>
 </div>
-<p>关键日志：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T10:20:00.000101 | I | etcd_coordination_backend.cpp:118 | 127.0.0.3 | 7447:7447 | cluster;7f50d1200a33 | AZ | CLUSTER_MEMBERSHIP flow=membership action=lease_update component=backend role=worker node=127.0.0.3:31501 state=READY result=success reason=finished status=OK
-2026-07-21T10:20:00.001101 | I | etcd_coordination_backend.cpp:118 | 127.0.0.4 | 7447:7447 | cluster;41c2a88b5e10 | AZ | CLUSTER_MEMBERSHIP flow=membership action=lease_update component=backend role=worker node=127.0.0.4:31501 state=READY result=success reason=finished status=OK
-2026-07-21T10:20:00.018512 | I | topology_controller.cpp:704 | 127.0.0.1 | 7447:7447 | cluster;88e3d12ca561 | AZ | CLUSTER_MEMBERSHIP_OBSERVED flow=membership action=view component=controller role=controller topology_version=71 member_count=4 state_counts=initial=2,joining=0,active=2,pre_leaving=0,leaving=0,failed=0 members=[127.0.0.1:31501/ACTIVE,127.0.0.2:31501/ACTIVE,127.0.0.3:31501/INITIAL,127.0.0.4:31501/INITIAL] result=changed
-2026-07-21T10:20:00.038742 | I | topology_controller.cpp:819 | 127.0.0.1 | 7447:7447 | cluster;f4a91c7e2b30 | AZ | CLUSTER_FLOW flow=scale_out action=start component=controller role=controller epoch=72 participant_count=2 participants=[127.0.0.3:31501/JOINING,127.0.0.4:31501/JOINING] result=accepted
-2026-07-21T10:20:00.045100 | I | topology_task_materializer.cpp:291 | 127.0.0.1 | 7447:7447 | cluster;f4a91c7e2b30 | AZ | CLUSTER_TASK flow=scale_out action=task_created component=materializer role=controller epoch=72 topology_version=72 task_count=2 notify_count=2 pending_count=2 result=success
-2026-07-21T10:20:00.052204 | I | topology_task_executor.cpp:315 | 127.0.0.3 | 7447:7450 | cluster;f4a91c7e2b30 | AZ | CLUSTER_TASK flow=scale_out action=notify component=executor role=worker epoch=72 executor=127.0.0.3:31501 task_count=1 task_prefix=4c91 result=accepted
-2026-07-21T10:20:00.052811 | I | topology_task_executor.cpp:315 | 127.0.0.4 | 7447:7450 | cluster;f4a91c7e2b30 | AZ | CLUSTER_TASK flow=scale_out action=notify component=executor role=worker epoch=72 executor=127.0.0.4:31501 task_count=1 task_prefix=9d12 result=accepted
-2026-07-21T10:20:18.255480 | I | topology_controller.cpp:875 | 127.0.0.1 | 7447:7447 | cluster;f4a91c7e2b30 | AZ | CLUSTER_FLOW flow=scale_out action=finish component=controller role=controller epoch=72 participant_count=2 participants=[127.0.0.3:31501/ACTIVE,127.0.0.4:31501/ACTIVE] flow_duration_ms=18216 result=success
-</pre></div>
-</div>
-<p>解读：</p>
-<ul class="simple">
-<li><p>两个新节点都先发布 READY，controller 随后在 membership view 中看到两个 <code class="docutils literal notranslate"><span class="pre">INITIAL</span></code> topology member。</p></li>
-<li><p>controller 在 <code class="docutils literal notranslate"><span class="pre">CLUSTER_FLOW</span> <span class="pre">action=start</span></code> 的 <code class="docutils literal notranslate"><span class="pre">cluster;f4a91c7e2b30</span></code> trace 下生成一轮 <code class="docutils literal notranslate"><span class="pre">scale_out</span></code>，<code class="docutils literal notranslate"><span class="pre">participant_count=2</span></code> 证明这是多 worker 批次。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">task_created</span></code> 后两个 executor 都收到 notify，说明任务生成和分发正常。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">finish</span> <span class="pre">result=success</span> <span class="pre">flow_duration_ms=18216</span></code> 表示扩容耗时约 18.2 秒。</p></li>
-</ul>
+<p>若只有 batch start 而没有 callback submitted，按相同 epoch 检查 notify、任务读取和 backend 日志。若 callback
+finished 成功但没有 progress，优先检查 <code class="docutils literal notranslate"><span class="pre">MarkTaskScopeFinished</span></code> 对应的 repository 状态。</p>
 </section>
 <section id="id5">
-<h2>缩容示例<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h2>
-<p>场景：<code class="docutils literal notranslate"><span class="pre">127.0.0.3:31501</span></code> 和 <code class="docutils literal notranslate"><span class="pre">127.0.0.4:31501</span></code> 同时退出 4 节点集群。</p>
-<p>检索入口：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>AZ AND CLUSTER_ AND flow=scale_in
+<h2>缩容<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h2>
+<p>缩容的正常阶段顺序：</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_CHANGE_BATCH</span> <span class="pre">action=start</span> <span class="pre">batch_type=SCALE_IN</span></code>：topology CAS 已成功，退出节点进入 <code class="docutils literal notranslate"><span class="pre">LEAVING</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">callback_submitted/finished</span> <span class="pre">stage=metadata_migration</span></code>：单个 task 的元数据迁移开始和结束。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_SCALE_IN</span> <span class="pre">action=metadata_done</span> <span class="pre">checkpoint=persisted</span> <span class="pre">checkpoint_scope=task</span></code>：该 task 的
+metadata-done marker 已持久化。</p></li>
+<li><p>同一 source 的所有 metadata task 完成后，<code class="docutils literal notranslate"><span class="pre">source_gate=ready</span></code>；未完成时为 <code class="docutils literal notranslate"><span class="pre">source_gate=waiting</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_SCALE_IN</span> <span class="pre">action=data_drain</span> <span class="pre">stage=data_drain</span> <span class="pre">stage_event=start|finish</span> <span class="pre">drain_scope=source_worker</span></code>：退出 worker 的数据清理开始和结束。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=cleanup_submitted|cleanup_finished</span> <span class="pre">stage=cleanup</span></code>：Snapshot fence 授权后的本地清理。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=progress</span> <span class="pre">stage=task_completion</span> <span class="pre">stage_event=finish</span></code>：任务最终完成。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_CHANGE_BATCH</span> <span class="pre">action=finalized</span> <span class="pre">batch_type=SCALE_IN</span></code>：退出节点从 topology 删除。</p></li>
+</ol>
+<p><code class="docutils literal notranslate"><span class="pre">metadata_done</span></code> 是 task 级持久化 checkpoint，不代表整个 source 已完成。应结合以下字段判断：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>CLUSTER_SCALE_IN action=metadata_done checkpoint=persisted checkpoint_scope=task \
+source_gate=waiting epoch=&lt;epoch&gt; task_prefix=&lt;task&gt; operation_prefix=&lt;operation&gt; \
+executor=&lt;leaving-worker&gt; source=&lt;leaving-worker&gt; target=&lt;target-worker&gt; \
+range_count=1 hash_ranges=[[1024,2047]]
 </pre></div>
 </div>
-<p>关键日志：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T10:30:00.000101 | I | etcd_coordination_backend.cpp:134 | 127.0.0.3 | 7447:7447 | cluster;6ad9280bb312 | AZ | CLUSTER_MEMBERSHIP flow=membership action=lease_update component=backend role=worker node=127.0.0.3:31501 state=EXITING result=success reason=finished status=OK
-2026-07-21T10:30:00.000220 | I | etcd_coordination_backend.cpp:134 | 127.0.0.4 | 7447:7447 | cluster;90ee1b447af8 | AZ | CLUSTER_MEMBERSHIP flow=membership action=lease_update component=backend role=worker node=127.0.0.4:31501 state=EXITING result=success reason=finished status=OK
-2026-07-21T10:30:00.018512 | I | topology_controller.cpp:704 | 127.0.0.1 | 7447:7447 | cluster;5b39e74a8031 | AZ | CLUSTER_MEMBERSHIP_OBSERVED flow=membership action=view component=controller role=controller topology_version=79 member_count=4 state_counts=initial=0,joining=0,active=2,pre_leaving=2,leaving=0,failed=0 members=[127.0.0.1:31501/ACTIVE,127.0.0.2:31501/ACTIVE,127.0.0.3:31501/PRE_LEAVING,127.0.0.4:31501/PRE_LEAVING] result=changed
-2026-07-21T10:30:00.038742 | I | topology_controller.cpp:819 | 127.0.0.1 | 7447:7447 | cluster;a0d2c8e91754 | AZ | CLUSTER_FLOW flow=scale_in action=start component=controller role=controller epoch=80 participant_count=2 participants=[127.0.0.3:31501/LEAVING,127.0.0.4:31501/LEAVING] result=accepted
-2026-07-21T10:30:00.045100 | I | topology_task_materializer.cpp:291 | 127.0.0.1 | 7447:7447 | cluster;a0d2c8e91754 | AZ | CLUSTER_TASK flow=scale_in action=task_created component=materializer role=controller epoch=80 topology_version=80 task_count=4 notify_count=2 pending_count=4 result=success
-2026-07-21T10:30:20.088880 | I | worker_topology_phase_callbacks.cpp:195 | 127.0.0.3 | 7447:7450 | cluster;a0d2c8e91754 | AZ | CLUSTER_SCALE_IN flow=scale_in action=data_drain component=callback role=worker epoch=80 source=127.0.0.3:31501 target=127.0.0.1:31501 executor=127.0.0.3:31501 operation_prefix=bf18 task_prefix=0e51 callback_phase=data_drain phase_duration_ms=19057 result=success reason=finished status=OK
-2026-07-21T10:30:21.031204 | I | worker_topology_phase_callbacks.cpp:58 | 127.0.0.3 | 7447:7450 | cluster;a0d2c8e91754 | AZ | CLUSTER_SCALE_IN flow=scale_in action=metadata_handoff component=callback role=worker epoch=80 source=127.0.0.3:31501 target=127.0.0.1:31501 executor=127.0.0.3:31501 operation_prefix=bf18 task_prefix=0e51 callback_phase=metadata_handoff phase_duration_ms=942 result=success reason=finished status=OK
-2026-07-21T10:30:21.062118 | I | topology_controller.cpp:766 | 127.0.0.1 | 7447:7447 | cluster;a0d2c8e91754 | AZ | CLUSTER_FLOW flow=scale_in action=wait component=controller role=controller epoch=80 topology_version=80 participant_count=2 participants=[127.0.0.3:31501/LEAVING,127.0.0.4:31501/LEAVING] flow_duration_ms=21023 result=waiting reason=external_termination
-2026-07-21T10:30:24.900118 | I | topology_controller.cpp:875 | 127.0.0.1 | 7447:7447 | cluster;a0d2c8e91754 | AZ | CLUSTER_FLOW flow=scale_in action=finish component=controller role=controller epoch=80 participant_count=2 participants=[127.0.0.3:31501/REMOVED,127.0.0.4:31501/REMOVED] flow_duration_ms=24862 result=success
-</pre></div>
-</div>
-<p>解读：</p>
-<ul class="simple">
-<li><p>当前实现的回调顺序是先 data drain 再 metadata handoff；该样例中 data drain 阶段耗时约 19 秒，metadata handoff 随后快速完成。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">wait</span> <span class="pre">reason=external_termination</span></code> 表示迁移任务已经完成，但 controller 仍在等待退出节点的外部终止事实。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">finish</span> <span class="pre">result=success</span> <span class="pre">flow_duration_ms=24862</span></code> 表示本轮缩容整体耗时约 24.9 秒。</p></li>
-</ul>
+<p>data drain 扫描的是 source worker 的本地数据，不是只迁移到日志中的一个 target。日志因此使用
+<code class="docutils literal notranslate"><span class="pre">drain_scope=source_worker</span> <span class="pre">target_role=trigger</span></code>，其中通用 <code class="docutils literal notranslate"><span class="pre">target</span></code> 字段仅表示触发当前 task 的目标，避免把它
+误解为整个数据清理的唯一目标。</p>
 </section>
 <section id="id6">
-<h2>节点故障示例<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
-<p>场景：<code class="docutils literal notranslate"><span class="pre">127.0.0.3:31501</span></code> 和 <code class="docutils literal notranslate"><span class="pre">127.0.0.4:31501</span></code> 同时故障。</p>
-<p>检索入口：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>AZ AND CLUSTER_ AND flow=failure
+<h2>故障恢复<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<p>故障恢复的正常阶段顺序：</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_FAILURE</span> <span class="pre">action=plan</span> <span class="pre">outcome=start_pending|replan_pending</span></code>：controller 已生成候选计划，尚未确认
+topology CAS。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_CHANGE_BATCH</span> <span class="pre">action=start|replan</span> <span class="pre">batch_type=FAILURE</span></code>：CAS 和精确回读成功，故障批次已明确开始。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=callback_submitted</span> <span class="pre">stage=failure_recovery</span> <span class="pre">stage_event=start</span></code>：恢复任务开始。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=callback_finished</span> <span class="pre">stage=failure_recovery</span> <span class="pre">stage_event=finish</span></code>：best-effort 恢复回调结束。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=progress</span> <span class="pre">stage=task_completion</span> <span class="pre">stage_event=finish</span></code>：恢复范围进度已持久化。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_CHANGE_BATCH</span> <span class="pre">action=finalized</span> <span class="pre">batch_type=FAILURE</span></code>：最终 topology 已提交，故障节点被删除。</p></li>
+</ol>
+<p>故障任务使用 <code class="docutils literal notranslate"><span class="pre">executor</span></code> 和 <code class="docutils literal notranslate"><span class="pre">failed</span></code> 表达参与者，并打印恢复范围：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>CLUSTER_TASK action=callback_submitted stage=failure_recovery stage_event=start type_name=FAILURE \
+epoch=&lt;epoch&gt; executor=&lt;surviving-worker&gt; failed=&lt;failed-worker&gt; \
+range_count=1 hash_ranges=[[2048,4095]]
 </pre></div>
 </div>
-<p>关键日志：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T10:40:05.230742 | W | topology_controller.cpp:583 | 127.0.0.1 | 7447:7447 | cluster;c83a2fe014aa | AZ | CLUSTER_FLOW flow=failure action=start component=controller role=controller epoch=91 topology_version=90 participant_count=2 participants=[127.0.0.3:31501/FAILED,127.0.0.4:31501/FAILED] result=accepted reason=dead_timeout
-2026-07-21T10:40:05.245100 | I | topology_task_materializer.cpp:291 | 127.0.0.1 | 7447:7447 | cluster;c83a2fe014aa | AZ | CLUSTER_TASK flow=failure action=task_created component=materializer role=controller epoch=91 topology_version=91 task_count=2 notify_count=2 pending_count=2 result=success
-2026-07-21T10:40:17.899118 | I | topology_controller.cpp:858 | 127.0.0.1 | 7447:7447 | cluster;c83a2fe014aa | AZ | CLUSTER_FAILURE flow=failure action=finalizing component=controller role=controller epoch=91 topology_version=91 participant_count=2 participants=[127.0.0.3:31501/FAILED,127.0.0.4:31501/FAILED] result=pending
-2026-07-21T10:40:17.900118 | I | topology_controller.cpp:866 | 127.0.0.1 | 7447:7447 | cluster;c83a2fe014aa | AZ | CLUSTER_FLOW flow=failure action=finish component=controller role=controller epoch=91 participant_count=2 participants=[127.0.0.3:31501/REMOVED,127.0.0.4:31501/REMOVED] flow_duration_ms=12669 result=success
-</pre></div>
-</div>
-<p>解读：</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">action=start</span> <span class="pre">reason=dead_timeout</span></code> 表示 controller 已确认故障并生成 failure flow。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">action=finalizing</span> <span class="pre">result=pending</span></code> 表示 failure final topology 正在提交；<code class="docutils literal notranslate"><span class="pre">action=finish</span> <span class="pre">result=success</span></code> 才是终点。</p></li>
-<li><p>两个节点都进入同一轮 failure flow，<code class="docutils literal notranslate"><span class="pre">participant_count=2</span></code> 说明是多 worker 故障处理。</p></li>
-</ul>
-</section>
-<section id="backend">
-<h2>backend 降级与恢复示例<a class="headerlink" href="#backend" title="Link to this heading">¶</a></h2>
-<p>检索入口：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>AZ AND CLUSTER_ AND flow=backend
-</pre></div>
-</div>
-<p>关键日志：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T10:50:00.000101 | W | topology_engine.cpp:502 | 127.0.0.2 | 7447:7450 | cluster;be37a91c0d55 | AZ | CLUSTER_BACKEND flow=backend action=access_failed component=backend role=worker backend=coordination backend_state=unavailable result=failed reason=backend_access_failed
-2026-07-21T10:50:00.020101 | W | topology_engine.cpp:542 | 127.0.0.2 | 7447:7450 | cluster;be37a91c0d55 | AZ | CLUSTER_DEGRADED flow=backend action=state_change component=backend role=worker previous_level=NORMAL level=CONTROL_DEGRADED result=success reason=control_backend_unavailable
-2026-07-21T10:50:05.120101 | I | topology_engine.cpp:457 | 127.0.0.2 | 7447:7450 | cluster;be37a91c0d55 | AZ | CLUSTER_BACKEND flow=backend action=recovered component=backend role=worker backend=coordination backend_state=available topology_version=63 topology_revision=10020 digest_prefix=cc9011 result=success
-2026-07-21T10:50:05.121101 | I | topology_engine.cpp:542 | 127.0.0.2 | 7447:7450 | cluster;be37a91c0d55 | AZ | CLUSTER_DEGRADED flow=backend action=state_change component=backend role=worker previous_level=CONTROL_DEGRADED level=NORMAL result=success reason=backend_recovered
-</pre></div>
-</div>
-<p>解读：同一时间窗口内如果扩缩容没有推进，先看是否存在 <code class="docutils literal notranslate"><span class="pre">backend_state=unavailable</span></code> 或 watch resync。backend 恢复后再继续看 task/callback 是否恢复推进。</p>
+<p>故障可能抢占扩容或缩容。此时先按时间找到 <code class="docutils literal notranslate"><span class="pre">batch_type=FAILURE</span> <span class="pre">action=start|replan</span></code>，再用旧普通批次 epoch
+确认其最后一条 task/progress 日志；不要仅凭抢占前的 <code class="docutils literal notranslate"><span class="pre">callback_finished</span></code> 判断普通批次已经 finalized。</p>
 </section>
 <section id="id7">
-<h2>过程中失败示例<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
-<p>检索入口：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>AZ AND CLUSTER_ AND result=failed
-</pre></div>
-</div>
-<p>缩容 metadata handoff 或 data drain 失败：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T11:00:06.048880 | W | worker_topology_phase_callbacks.cpp:57 | 127.0.0.4 | 7447:7450 | cluster;d0c18a4f92b7 | AZ | CLUSTER_SCALE_IN flow=scale_in action=metadata_handoff component=callback role=worker epoch=70 source=127.0.0.4:31501 target=127.0.0.2:31501 executor=127.0.0.4:31501 operation_prefix=bf18 task_prefix=0e51 callback_phase=metadata_handoff phase_duration_ms=5019 result=failed reason=metadata_failed status=K_RUNTIME_ERROR:Node exiting, change primary copy failed
-2026-07-21T11:00:06.050980 | W | worker_topology_phase_callbacks.cpp:195 | 127.0.0.4 | 7447:7450 | cluster;d0c18a4f92b7 | AZ | CLUSTER_SCALE_IN flow=scale_in action=data_drain component=callback role=worker epoch=70 source=127.0.0.4:31501 target=127.0.0.2:31501 executor=127.0.0.4:31501 operation_prefix=bf18 task_prefix=0e51 callback_phase=data_drain phase_duration_ms=5019 result=failed reason=callback_failed status=K_RUNTIME_ERROR:Node exiting, change primary copy failed
-2026-07-21T11:00:06.061010 | W | topology_task_executor.cpp:741 | 127.0.0.4 | 7447:7450 | cluster;d0c18a4f92b7 | AZ | CLUSTER_TASK flow=scale_in action=progress component=executor role=worker epoch=70 executor=127.0.0.4:31501 task_prefix=0e51 operation_prefix=bf18 result=failed reason=callback_failed retry=scheduled status=K_RUNTIME_ERROR:Node exiting, change primary copy failed
-</pre></div>
-</div>
-<p>解读：<code class="docutils literal notranslate"><span class="pre">component=callback</span></code> 和 <code class="docutils literal notranslate"><span class="pre">component=executor</span></code> 使用相同 <code class="docutils literal notranslate"><span class="pre">operation_prefix</span></code>、<code class="docutils literal notranslate"><span class="pre">task_prefix</span></code>，并保留原始 <code class="docutils literal notranslate"><span class="pre">status</span></code>。这说明卡点在 metadata/data drain 回调执行链路，不是 controller 没有启动缩容。</p>
-<p>扩容超时：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T11:05:30.038742 | W | topology_controller.cpp:899 | 127.0.0.1 | 7447:7447 | cluster;e2c66ddf9011 | AZ | CLUSTER_FLOW flow=scale_out action=finish component=controller role=controller epoch=73 topology_version=73 participant_count=2 participants=[127.0.0.3:31501/JOINING,127.0.0.4:31501/JOINING] flow_duration_ms=30000 result=failed reason=scaleout_timeout
-</pre></div>
-</div>
-<p>解读：本轮扩容到达 batch deadline 后失败，<code class="docutils literal notranslate"><span class="pre">participants</span></code> 保留仍未进入 ACTIVE 的 JOINING 节点。</p>
-<p>controller 提交冲突：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T11:06:01.038742 | W | topology_controller.cpp:1016 | 127.0.0.1 | 7447:7447 | cluster;e2c66ddf9011 | AZ | CLUSTER_CHANGE flow=scale_out action=commit component=controller role=controller expected_version=72 desired_version=73 observed_version=73 active_flow=scale_out active_epoch=73 member_count=4 state_counts=initial=0,joining=2,active=2,pre_leaving=0,leaving=0,failed=0 members=[127.0.0.1:31501/ACTIVE,127.0.0.2:31501/ACTIVE,127.0.0.3:31501/JOINING,127.0.0.4:31501/JOINING] cas_result=conflict result=failed reason=cas_conflict status=K_TRY_AGAIN:topology CAS lost to another Controller
-</pre></div>
-</div>
-<p>解读：controller 已感知并尝试提交本轮变更，但 topology CAS 输给了另一个 controller 或更新者。先按同一时间窗口检索 <code class="docutils literal notranslate"><span class="pre">CLUSTER_CHANGE</span> <span class="pre">action=commit</span></code>，确认哪一个提交最终 <code class="docutils literal notranslate"><span class="pre">result=success</span></code>。</p>
-</section>
-<section id="id8">
-<h2>初始化、重启与退出示例<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h2>
-<p>初始化：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T09:00:00.018512 | I | topology_controller.cpp:942 | 127.0.0.1 | 7447:7447 | cluster;b71e23a9c018 | AZ | CLUSTER_FLOW flow=bootstrap action=start component=controller role=controller topology_version=1 participant_count=4 participants=[127.0.0.1:31501/INITIAL,127.0.0.2:31501/INITIAL,127.0.0.3:31501/INITIAL,127.0.0.4:31501/INITIAL] result=accepted reason=initial_placement
-2026-07-21T09:00:00.024512 | I | topology_controller.cpp:995 | 127.0.0.1 | 7447:7447 | cluster;b71e23a9c018 | AZ | CLUSTER_CHANGE flow=bootstrap action=commit component=controller role=controller expected_version=0 committed_version=1 active_flow=none active_epoch=0 member_count=4 state_counts=initial=0,joining=0,active=4,pre_leaving=0,leaving=0,failed=0 members=[127.0.0.1:31501/ACTIVE,127.0.0.2:31501/ACTIVE,127.0.0.3:31501/ACTIVE,127.0.0.4:31501/ACTIVE] topology_revision=9001 digest_prefix=1d8f67 cas_result=committed result=success
-2026-07-21T09:00:00.026512 | I | topology_controller.cpp:875 | 127.0.0.1 | 7447:7447 | cluster;b71e23a9c018 | AZ | CLUSTER_FLOW flow=bootstrap action=finish component=controller role=controller epoch=1 participant_count=4 participants=[127.0.0.1:31501/ACTIVE,127.0.0.2:31501/ACTIVE,127.0.0.3:31501/ACTIVE,127.0.0.4:31501/ACTIVE] flow_duration_ms=8 result=success
-</pre></div>
-</div>
-<p>重启恢复：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T09:10:00.000101 | I | etcd_coordination_backend.cpp:111 | 127.0.0.2 | 7447:7447 | cluster;9ac3b1178e44 | AZ | CLUSTER_MEMBERSHIP flow=restart action=lease_update component=backend role=worker node=127.0.0.2:31501 state=RESTARTING result=success reason=finished status=OK
-2026-07-21T09:10:03.800101 | I | etcd_coordination_backend.cpp:145 | 127.0.0.2 | 7447:7447 | cluster;9ac3b1178e44 | AZ | CLUSTER_FLOW flow=restart action=reconciliation_done component=backend role=worker node=127.0.0.2:31501 result=success reason=finished status=OK
-2026-07-21T09:10:03.810101 | I | etcd_coordination_backend.cpp:146 | 127.0.0.2 | 7447:7447 | cluster;9ac3b1178e44 | AZ | CLUSTER_MEMBERSHIP flow=restart action=lease_update component=backend role=worker node=127.0.0.2:31501 state=READY result=success reason=finished status=OK
-</pre></div>
-</div>
-<p>全集群退出：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>2026-07-21T11:20:00.018512 | I | topology_controller.cpp:478 | 127.0.0.1 | 7447:7447 | cluster;a9e1027cb681 | AZ | CLUSTER_FLOW flow=shutdown action=start component=controller role=controller participant_count=4 participants=[127.0.0.1:31501/LEAVING,127.0.0.2:31501/LEAVING,127.0.0.3:31501/LEAVING,127.0.0.4:31501/LEAVING] result=accepted
-2026-07-21T11:20:00.068512 | I | topology_controller.cpp:478 | 127.0.0.1 | 7447:7447 | cluster;a9e1027cb681 | AZ | CLUSTER_SHUTDOWN flow=shutdown action=finish component=controller role=controller participant_count=4 participants=[127.0.0.1:31501/REMOVED,127.0.0.2:31501/REMOVED,127.0.0.3:31501/REMOVED,127.0.0.4:31501/REMOVED] flow_duration_ms=50 result=success
-</pre></div>
-</div>
-</section>
-<section id="id9">
-<h2>开发定位模板<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h2>
-<p>先用场景入口找到 prefix trace，再按 component 下钻：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>cluster;&lt;uuid_suffix&gt; AND component=controller
-cluster;&lt;uuid_suffix&gt; AND component=materializer
-cluster;&lt;uuid_suffix&gt; AND component=executor
-cluster;&lt;uuid_suffix&gt; AND component=callback
-cluster;&lt;uuid_suffix&gt; AND component=backend
-</pre></div>
-</div>
-<p>交接给开发时建议保留：</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>trace：cluster;&lt;uuid_suffix&gt;
-flow/action：&lt;flow&gt;/&lt;last_action&gt;
-component：&lt;last_component&gt;
-topology：version=&lt;topology_version&gt;, revision=&lt;topology_revision&gt;, digest_prefix=&lt;digest_prefix&gt;
-batch：epoch=&lt;epoch&gt;, active_flow=&lt;flow&gt;, previous_flow=&lt;flow or none&gt;
-task：task_prefix=&lt;id&gt;, task_count=&lt;n&gt;, notify_count=&lt;n&gt;, pending_count=&lt;n&gt;, retry=&lt;scheduled|exhausted&gt;
-callback：callback_phase=&lt;phase&gt;, operation_prefix=&lt;id&gt;, attempt=&lt;n&gt;, next_backoff_ms=&lt;ms&gt;, deadline_ms=&lt;ms&gt;
-backend：backend=coordination, backend_state=&lt;state&gt;
-error：result=&lt;result&gt;, reason=&lt;reason&gt;, status=&lt;raw status&gt;
-判断：&lt;controller/materializer/executor/callback/backend 哪一层最可疑，以及证据&gt;
-</pre></div>
-</div>
-</section>
-<section id="id10">
-<h2>常见判断<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h2>
+<h2>常见定位判断<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
 <tr class="row-odd"><th class="head"><p>现象</p></th>
-<th class="head"><p>优先看什么</p></th>
+<th class="head"><p>优先检查</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>没有 flow start</p></td>
-<td><p>看 <code class="docutils literal notranslate"><span class="pre">CLUSTER_MEMBERSHIP</span> <span class="pre">action=lease_update</span></code> 是否已发布 READY/EXITING，以及 <code class="docutils literal notranslate"><span class="pre">CLUSTER_MEMBERSHIP_OBSERVED</span></code> 是否已看到 INITIAL/PRE_LEAVING/FAILED。</p></td>
+<tr class="row-even"><td><p>没有 batch start</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_MEMBERSHIP_OBSERVED</span></code>、<code class="docutils literal notranslate"><span class="pre">CLUSTER_FAILURE_DETECT</span></code> 和 CAS 冲突。</p></td>
 </tr>
-<tr class="row-odd"><td><p>有 start 没有 task_created</p></td>
-<td><p>看 <code class="docutils literal notranslate"><span class="pre">component=controller</span></code> 的 <code class="docutils literal notranslate"><span class="pre">CLUSTER_CHANGE</span></code> 是否 CAS 成功。</p></td>
+<tr class="row-odd"><td><p>有 batch start，没有 notify</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=materialize</span></code> 的 task/notify 数量以及 watch/backend 状态。</p></td>
 </tr>
-<tr class="row-even"><td><p>有 task_created 没有 notify</p></td>
-<td><p>看 <code class="docutils literal notranslate"><span class="pre">CLUSTER_TASK</span> <span class="pre">action=task_created</span></code> 的 <code class="docutils literal notranslate"><span class="pre">notify_count</span></code> 和 watch/backend 日志。</p></td>
+<tr class="row-even"><td><p>有 notify，没有 callback start</p></td>
+<td><p>本地 task 读取、execution fence 和 callback queue。</p></td>
 </tr>
-<tr class="row-odd"><td><p>有 notify 没有 progress</p></td>
-<td><p>看 executor 节点是否存活，以及同 trace 下是否有 <code class="docutils literal notranslate"><span class="pre">CLUSTER_BACKEND</span></code> 降级。</p></td>
+<tr class="row-odd"><td><p>callback finish 失败</p></td>
+<td><p>同 <code class="docutils literal notranslate"><span class="pre">operation_prefix</span></code> 的 <code class="docutils literal notranslate"><span class="pre">callback_failed</span></code>、<code class="docutils literal notranslate"><span class="pre">retry_scheduled</span></code> 和原始 <code class="docutils literal notranslate"><span class="pre">status</span></code>。</p></td>
 </tr>
-<tr class="row-even"><td><p>缩容 metadata 快但 data 慢</p></td>
-<td><p>看 <code class="docutils literal notranslate"><span class="pre">CLUSTER_SCALE_IN</span> <span class="pre">action=data_drain</span> <span class="pre">phase_duration_ms</span></code>。</p></td>
+<tr class="row-even"><td><p>缩容 metadata_done 反复 waiting</p></td>
+<td><p>同 <code class="docutils literal notranslate"><span class="pre">source</span></code>、<code class="docutils literal notranslate"><span class="pre">epoch</span></code> 下是否仍有其他 task 未打印 metadata_done。</p></td>
 </tr>
-<tr class="row-odd"><td><p>缩容出现 <code class="docutils literal notranslate"><span class="pre">Node</span> <span class="pre">exiting,</span> <span class="pre">change</span> <span class="pre">primary</span> <span class="pre">copy</span> <span class="pre">failed</span></code></p></td>
-<td><p>按 <code class="docutils literal notranslate"><span class="pre">operation_prefix</span></code> 和 <code class="docutils literal notranslate"><span class="pre">task_prefix</span></code> 串 <code class="docutils literal notranslate"><span class="pre">component=callback</span></code> 与 <code class="docutils literal notranslate"><span class="pre">component=executor</span></code>。</p></td>
+<tr class="row-odd"><td><p>缩容 metadata 完成但 data drain 未开始</p></td>
+<td><p>最后一条 metadata_done 是否为 <code class="docutils literal notranslate"><span class="pre">source_gate=ready</span></code>，以及 worker readiness。</p></td>
 </tr>
-<tr class="row-even"><td><p>故障处理打断扩缩容</p></td>
-<td><p>看同一时间窗口内 <code class="docutils literal notranslate"><span class="pre">flow=failure</span> <span class="pre">action=start</span></code>，再回查前一轮 <code class="docutils literal notranslate"><span class="pre">scale_out</span></code> 或 <code class="docutils literal notranslate"><span class="pre">scale_in</span></code> 的最后一条 <code class="docutils literal notranslate"><span class="pre">CLUSTER_FLOW</span></code>。</p></td>
+<tr class="row-even"><td><p>data drain 完成但任务不结束</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">cleanup_submitted</span></code>、<code class="docutils literal notranslate"><span class="pre">cleanup_finished</span></code>、Snapshot fence 和 repository progress。</p></td>
 </tr>
-<tr class="row-odd"><td><p>result 是 pending</p></td>
-<td><p>表示当前阶段已经开始但还不是终态，例如 failure finalizing 正在提交。</p></td>
+<tr class="row-odd"><td><p>ring 与预期迁移方向不一致</p></td>
+<td><p>对比同 version 的 <code class="docutils literal notranslate"><span class="pre">committed_ring</span></code>、<code class="docutils literal notranslate"><span class="pre">prospective_ring</span></code> 和 task <code class="docutils literal notranslate"><span class="pre">hash_ranges</span></code>。</p></td>
+</tr>
+<tr class="row-even"><td><p>故障计划存在但没有明确开始</p></td>
+<td><p>查找 topology CAS 失败；只有 `CLUSTER_CHANGE_BATCH action=start</p></td>
 </tr>
 </tbody>
 </table>
+</div>
+<p>交接给开发时至少保留：</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>cluster：&lt;cluster&gt;
+batch：type=&lt;type&gt;, epoch=&lt;epoch&gt;, topology_version=&lt;version&gt;
+task：task_prefix=&lt;task&gt;, operation_prefix=&lt;operation&gt;
+stage：&lt;stage&gt;/&lt;stage_event&gt;
+participants：executor=&lt;executor&gt;, source=&lt;source&gt;, target=&lt;target&gt;, failed=&lt;failed&gt;
+scope：range_count=&lt;count&gt;, hash_ranges=&lt;ranges&gt;
+ring：committed_ring=&lt;ring&gt;, prospective_ring=&lt;ring&gt;
+result：outcome=&lt;outcome&gt;, status=&lt;raw status&gt;
+</pre></div>
 </div>
 </section>
 </section>
@@ -969,16 +849,12 @@ error：result=&lt;result&gt;, reason=&lt;reason&gt;, status=&lt;raw status&gt;
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">集群日志定位指南</a><ul>
-<li><a class="reference internal" href="#id2">日志格式</a></li>
-<li><a class="reference internal" href="#id3">通用定位步骤</a></li>
-<li><a class="reference internal" href="#id4">扩容示例</a></li>
-<li><a class="reference internal" href="#id5">缩容示例</a></li>
-<li><a class="reference internal" href="#id6">节点故障示例</a></li>
-<li><a class="reference internal" href="#backend">backend 降级与恢复示例</a></li>
-<li><a class="reference internal" href="#id7">过程中失败示例</a></li>
-<li><a class="reference internal" href="#id8">初始化、重启与退出示例</a></li>
-<li><a class="reference internal" href="#id9">开发定位模板</a></li>
-<li><a class="reference internal" href="#id10">常见判断</a></li>
+<li><a class="reference internal" href="#id2">关联一轮拓扑变更</a></li>
+<li><a class="reference internal" href="#id3">范围和哈希环格式</a></li>
+<li><a class="reference internal" href="#id4">扩容</a></li>
+<li><a class="reference internal" href="#id5">缩容</a></li>
+<li><a class="reference internal" href="#id6">故障恢复</a></li>
+<li><a class="reference internal" href="#id7">常见定位判断</a></li>
 </ul>
 </li>
 </ul>

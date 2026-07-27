@@ -635,6 +635,36 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><p>HCCS 当前在单个进程内串行执行 HIXL <code class="docutils literal notranslate"><span class="pre">TransferSync()</span></code>；需要提高并发度时，建议使用多个 Client 进程。</p></li>
 </ol>
 </section>
+<section id="client-worker-pipeline-h2d">
+<h2>Client 无本地 Worker 的 Pipeline H2D<a class="headerlink" href="#client-worker-pipeline-h2d" title="Link to this heading">¶</a></h2>
+<p>Client-direct Pipeline H2D 允许 Client 所在节点不部署本地 Worker。Client 复用普通 Get 的元数据查询和
+副本选择流程，直接连接对象所在 Worker；Client 侧使用 fast transport 内存池作为接收内存，并在初始化时
+一次性完成 Host 内存注册，避免在每次 <code class="docutils literal notranslate"><span class="pre">MGetH2D</span></code> 中重复注册。</p>
+<p>C++ 配置示例：</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">ConnectOptions</span><span class="w"> </span><span class="n">options</span><span class="p">;</span>
+<span class="n">options</span><span class="p">.</span><span class="n">host</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;192.168.1.10&quot;</span><span class="p">;</span>
+<span class="n">options</span><span class="p">.</span><span class="n">port</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">18481</span><span class="p">;</span>
+<span class="n">options</span><span class="p">.</span><span class="n">deviceId</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;0&quot;</span><span class="p">;</span>
+<span class="n">options</span><span class="p">.</span><span class="n">fastTransportMemSize</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1024ULL</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1024</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1024</span><span class="p">;</span>
+<span class="n">options</span><span class="p">.</span><span class="n">enableClientDirectPipelineH2D</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
+<span class="n">options</span><span class="p">.</span><span class="n">clientDirectPipelineH2DThreadNum</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">64</span><span class="p">;</span>
+
+<span class="n">KVClient</span><span class="w"> </span><span class="nf">client</span><span class="p">(</span><span class="n">options</span><span class="p">);</span>
+<span class="n">RETURN_IF_NOT_OK</span><span class="p">(</span><span class="n">client</span><span class="p">.</span><span class="n">Init</span><span class="p">());</span>
+</pre></div>
+</div>
+<p>配置与运行规则：</p>
+<ol class="arabic simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">enableClientDirectPipelineH2D</span></code> 默认值为 <code class="docutils literal notranslate"><span class="pre">false</span></code>；仅在显式开启时初始化 Client-direct Pipeline H2D 资源。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">clientDirectPipelineH2DThreadNum</span></code> 默认值为 <code class="docutils literal notranslate"><span class="pre">64</span></code>，仅在上述开关开启时生效；有效范围为 <code class="docutils literal notranslate"><span class="pre">[8,</span> <span class="pre">128]</span></code>，
+配置超出该范围时使用默认值 <code class="docutils literal notranslate"><span class="pre">64</span></code>。</p></li>
+<li><p>如果 Client 可连接本地 Worker，即使开启 Client-direct 能力，也优先使用原有本地 Worker RH2D 路径。</p></li>
+<li><p>对象大小小于等于默认分片长度 2 MiB 时，不启动 MLCacheDirect，直接通过一次 URMA write 写入 Client
+接收内存并执行 H2D；大于 2 MiB 时使用 MLCacheDirect 分片传输。</p></li>
+<li><p>大对象的 MLCacheDirect receiver 启动失败时，自动回退到一次 URMA write 后执行 H2D。</p></li>
+<li><p>请求超时、失败 key 和副本重试语义与普通 Get 保持一致。</p></li>
+</ol>
+</section>
 <section id="id2">
 <h2>源码编译安装<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
 <p>源码编译安装前请确保编译环境中在正常编译依赖的基础上具备如下软件依赖：</p>
@@ -1370,6 +1400,7 @@ RegisterHostMemory Failed</label><div class="sd-tab-content docutils">
             <ul>
 <li><a class="reference internal" href="#">RH2D最佳实践</a><ul>
 <li><a class="reference internal" href="#id1">链路选择与约束</a></li>
+<li><a class="reference internal" href="#client-worker-pipeline-h2d">Client 无本地 Worker 的 Pipeline H2D</a></li>
 <li><a class="reference internal" href="#id2">源码编译安装</a><ul>
 <li><a class="reference internal" href="#id3">下载源码</a></li>
 <li><a class="reference internal" href="#id4">编译</a></li>
