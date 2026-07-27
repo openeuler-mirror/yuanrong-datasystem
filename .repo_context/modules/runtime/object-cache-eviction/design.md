@@ -23,7 +23,7 @@
   - `oc_metadata_manager.cpp`
   - `master_object.proto`
 - Last verified against source:
-  - `2026-06-03`
+  - `2026-07-26`
 - Related context docs:
   - `.repo_context/modules/runtime/object-cache-eviction/README.md`
   - `.repo_context/modules/runtime/worker-runtime.md`
@@ -501,6 +501,10 @@ Failure-sensitive steps:
   - `RemoveMetaFromMasterForEviction` 在 `AsyncMasterTask` 内最多重试 3 次。
   - eviction metadata cleanup 的单次 pass 最多执行初始 owner 请求和每个首跳 redirect target 的一次转发；
     转发请求禁用 redirect，目标再次返回 redirect 时将该组对象留待下一次 pass，禁止递归形成 A/B 循环。
+  - primary end-life 的初始 owner transport timeout 保留三次调用和最终强制本地删除策略；redirect target
+    timeout、API 初始化失败或业务错误只回填该 target group，不能升级为源 owner 强制删除。
+  - primary end-life 的同一 logical attempt 只初始化一次 1s request deadline，源 owner 和所有首跳 target
+    顺序共享剩余预算；不会为每个 target 重新获得完整 1s。
   - master `AsyncDeleteByExpired` 对已删除中的对象把 `K_TRY_AGAIN` 视为成功。
   - lock/version 失败的 spill task 会回滚或重试。
 - What must remain true after failure:
@@ -516,8 +520,8 @@ Failure-sensitive steps:
   - remote migrate batch threshold 512。
 - Timeout, circuit-breaker, and backpressure strategy:
   - source-visible timeout mainly在 RPC layer；primary end-life lane 使用固定 pending 上限，每次
-    `DeleteAllCopyMeta` 调用使用 1s API 总预算，RPC 通信错误最多调用三轮，但没有新增用户可见队列超时
-    或熔断 flag。
+    logical attempt 的源 `DeleteAllCopyMeta` 与全部首跳转发共享 1s API 总预算。只有初始 owner 的 RPC
+    通信错误最多调用三轮；redirect target 的错误按 key 回填，但没有新增用户可见队列超时或熔断 flag。
 - Dependency failure handling:
   - master metadata cleanup失败日志记录并对部分路径重试；
   - spill no-space 对 none-L2-evict 可降级为 end-life delete；
@@ -641,19 +645,24 @@ Failure-sensitive steps:
     `needSize`；已达低水位时不得 erase 本地对象，也不主动调用 `Evict()`。
   - `DeleteAllCopyMeta` batch 使用 repeated `ids_with_version` 并设置 `async_delete=true`；Master 入队成功
     即表示接受。同一 batch 只对 RPC 通信错误立即重试，最多调用三次；第三次仍失败时强制本地删除。
-    metadata owner 路由失败、`failed_object_keys`、redirect info、`meta_is_moving` 和 Master 业务错误
-    保持保守失败，不触发强制删除。
+    该三次策略仅适用于初始 metadata owner；`failed_object_keys`、`meta_is_moving`、Master 业务错误和
+    redirect target 错误保持保守失败，不触发强制删除。初始 owner 的 redirect info 按 target 聚合后在
+    同一 logical attempt 内转发一次，转发保留原 worker address、每 key version 和 `async_delete=true`，
+    同时设置 `redirect=false`；目标再次 redirect 的 key 留待下一轮。
   - Master 侧只增加与该语义直接相关的保护：`PENDING` 必须标记为失败，已失败 key 和初次 no-meta 后回生
     的 metadata 都不得继续 cleanup；不增加版本下界判断或新的逐 key response。
   - `GetMetaAddress()` 已知 master 不可达或路由不可解析时快速跳过，不发 RPC；`K_RPC_UNAVAILABLE` 归类为 master/connection unavailable，`K_NOT_FOUND` 归类为 route/meta-address unavailable。
-  - remote master 每次 RPC 调用由 1s API 总预算约束，通信失败最多进行三轮调用；local-bypass master
-    通过 request timeout 和 master-side `timeoutDuration` 传递预算，但不是传输层强制中断。
+  - remote master 每个 logical attempt 由 1s API 总预算约束，源请求和首跳 target 共享该预算；源通信
+    失败最多进行三轮调用。local-bypass master 通过 request timeout 和 master-side `timeoutDuration`
+    传递预算，但不是传输层强制中断。
   - primary end-life 的 `DeleteAllCopyMetaReqPb` 设置 `async_delete=true`；Master 使用请求中的 version
     将 key 加入 `ExpiredObjectManager`，入队成功即回复，后台继续做引用检查、通知和 metadata cleanup。
   - 三轮 RPC 通信失败后记录 ERROR，重新锁住对象并复核 version 后强制本地删除；其他失败清 pending，
     并用 `READD_COUNTER` 回补 `memEvictionList_`。lane 不主动调用 `Evict()`。
   - `primaryEndLifeThreadPool_` shutdown 需要在 manager 析构中显式 reset；若要丢弃未开始任务，需要使用 `ThreadPool` droppable 模式，否则默认线程池会 drain 队列。
-  - `EvictSpilledObjects` 和 `SpillImpl` no-space fallback 继续保持同步，不属于本方案范围。
+  - `EvictSpilledObjects` 和 `SpillImpl` no-space fallback 继续保持同步并持有对象 WLock；其初始
+    `DeleteAllCopyMeta` 允许一次 redirect，转发请求使用 `object_keys` 和 `redirect=false`，目标失败或再次
+    redirect 时不删除本地对象。
 - Candidate 2: release object lock around RPC with version recheck.
   - RPC 前记录 version 并标记 intent，释放锁后调用 master，成功后重拿锁校验版本再 erase。
   - 若单独采用该候选，可缩短锁持有时间，但主 eviction task 仍同步等 RPC；只能缓解对象级阻塞，不能提升主 loop 吞吐。
@@ -673,10 +682,12 @@ Failure-sensitive steps:
   - `ctest -R EvictionManagerTest`
   - `ctest -R SpillEvictionTest`
   - `ctest -R KVCacheClientEvictTest`
+  - `ctest -R EvictPrimaryRedirectScaleTest`
 - Representative unit, integration, and system tests:
   - `tests/ut/worker/object_cache/worker_oc_eviction_test.cpp`
   - `tests/ut/worker/object_cache/worker_oc_spill_eviction_test.cpp`
   - `tests/st/client/kv_cache/kv_cache_client_evict_test.cpp`
+  - `tests/st/worker/object_cache/evict_primary_redirect_scale_test.cpp`
 - Recommended validation for risky changes:
   - object allocation pressure with and without spill；
   - stream-triggered object eviction；
@@ -700,6 +711,7 @@ Failure-sensitive steps:
 | EV-RPC-001 | DeleteAllCopyMeta timeout/failure | 验证有界重试和可用性兜底 | inject worker/master RPC failure | evict none-L2-evict primary | each call is bounded to 1s; after three communication failures, local erase still rechecks object version |
 | EV-RPC-002 | slow master and large primary objects | 验证 low watermark 复查避免过度释放 | small memory, mixed local and large none-L2 primary objects | delay master delete, let local eviction reduce pressure, then recover master | queued primary end-life does not continue after low watermark is reached; no obvious over-evict |
 | EV-RPC-003 | batch DeleteAllCopyMeta by master | 验证同 master 聚合和跨 master 拆分 | multi-master or injectable routing | evict multiple none-L2 primary keys mapped to same and different masters | same-master keys are sent in batch, different-master keys are split, partial failures do not erase failed keys |
+| EV-RPC-004 | DeleteAllCopyMeta one-hop redirect | 验证扩缩容期间不形成 owner 环 | injectable source and target APIs | source redirects mixed versioned keys, target succeeds/fails/times out or redirects again | target is called once with `redirect=false`; only unresolved keys are re-added; target failure never triggers source force-delete |
 
 ## Common Change Scenarios
 

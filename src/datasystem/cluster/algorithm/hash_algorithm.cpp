@@ -358,6 +358,12 @@ Status HashAlgorithm::PlanFailure(const FailurePlanInput &input, TopologyPlan &p
     RETURN_IF_NOT_OK(BuildOwners(input.current.members, false, {}, fromOwners));
     RETURN_IF_NOT_OK(BuildOwners(input.current.members, false, excluded, toOwners, true));
     RETURN_IF_NOT_OK(DiffOwners(fromOwners, toOwners, built.ownerChanges));
+    built.ownerChanges.erase(std::remove_if(built.ownerChanges.begin(), built.ownerChanges.end(),
+                                            [&](const auto &change) {
+                                                return !change.source.has_value()
+                                                       || excluded.count(change.source->address) == 0;
+                                            }),
+                             built.ownerChanges.end());
     plan = std::move(built);
     return Status::OK();
 }

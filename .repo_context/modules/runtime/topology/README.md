@@ -169,6 +169,9 @@
 - Worker startup selects the coordination backend once: a non-null `ICoordinatorDiscovery` selects Coordinator mode, while a null pointer selects ETCD/metastore. All Worker composition branches use that constructor-selected pointer instead of independently re-reading `coordinator_address`.
 - At most one change type is active at a time; one batch may contain many members. Failure has highest priority and may
   preempt ordinary work. Scale-in waits for an already-running scale-out batch to finish.
+- Every Failure owner change must source from a member selected into that Failure batch, whose committed state becomes
+  `FAILED`, and must target an `ACTIVE` member. Preserved `PRE_LEAVING`/`LEAVING` facts from preempted ordinary work
+  must not become Failure task sources; `INITIAL`/`JOINING` crashes remain uncommitted-member cleanup.
 - All callbacks must be deadline-aware, cooperatively cancellable, idempotent by operation ID, and safe under duplicate
   delivery. Process termination is supplied by Kubernetes or the process manager after bounded drain.
 - Worker task notifications are derived, idempotent records. A notification observed after its active batch finalizes,
@@ -188,6 +191,8 @@
 - Business adapter coverage lives in `ds_ut_object`, `ds_ut_stream`, and selected Worker/object/stream ST binaries.
 - Operator-query coverage includes `CoordinatorStoreTest` raw RPC cases, `ClusterQueryProjectorTest`, Python
   `test_cli_query.py`, and a packaged-wheel real-backend smoke test.
+- Failure-preemption coverage in `cluster_topology_contract_ut` exhausts unrelated member states and includes
+  multi-crash scale-in, mixed scale-out/pending-scale-in, cascading Failure replans, and source/target diagnostics.
 - State machine, CAS/fence, crash points, retry, resource limits, and Shutdown belong in UT/LLT/component tests. ST only
   proves representative process, ETCD watch/lease, network, and real callback wiring.
 
