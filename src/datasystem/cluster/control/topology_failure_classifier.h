@@ -84,6 +84,12 @@ public:
     void Pause(std::chrono::steady_clock::time_point now) noexcept;
 
     /**
+     * @brief Require a new continuous-absence window after direct liveness evidence.
+     * @param[in] address Canonical member address whose missing timer must be cleared.
+     */
+    void ResetMissing(const std::string &address) noexcept;
+
+    /**
      * @brief Clear all process-local timers.
      */
     void Reset() noexcept;

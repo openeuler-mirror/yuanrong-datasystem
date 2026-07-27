@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
@@ -122,6 +123,31 @@ TEST_F(RpcStubCacheMgrTest, TestCacheFullAndCannotEvict)
     std::shared_ptr<RpcStubBase> rpcStub2;
     auto rc = RpcStubCacheMgrForTest::Instance().GetStub(hostPort2, StubType::TEST_TYPE_1, rpcStub2);
     ASSERT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+}
+
+TEST_F(RpcStubCacheMgrTest, CachePressureHonorsAbsoluteDeadline)
+{
+    constexpr int cacheNum = 1;
+    constexpr auto deadlineBudget = std::chrono::milliseconds(20);
+    // Keep this below the cache's 100 ms retry interval so the test fails if GetStub sleeps for one full retry.
+    constexpr auto schedulingTolerance = std::chrono::milliseconds(80);
+    DS_ASSERT_OK(RpcStubCacheMgrForTest::Instance().InitForTest(cacheNum));
+    std::shared_ptr<RpcStubBase> heldStub;
+    DS_ASSERT_OK(RpcStubCacheMgrForTest::Instance().GetStub(
+        HostPort("127.0.0.1", 1), StubType::TEST_TYPE_1, heldStub));
+
+    std::shared_ptr<RpcStubBase> unavailableStub;
+    const auto start = std::chrono::steady_clock::now();
+    const auto rc = RpcStubCacheMgrForTest::Instance().GetStub(
+        HostPort("127.0.0.1", 2), StubType::TEST_TYPE_1, unavailableStub, start + deadlineBudget);
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_LT(std::chrono::steady_clock::now() - start, schedulingTolerance);
+    EXPECT_EQ(RpcStubCacheMgrForTest::Instance().Size(), 1);
+    std::shared_ptr<RpcStubBase> observedHeldStub;
+    DS_ASSERT_OK(RpcStubCacheMgrForTest::Instance().GetStub(
+        HostPort("127.0.0.1", 1), StubType::TEST_TYPE_1, observedHeldStub));
+    EXPECT_NE(observedHeldStub, nullptr);
+    EXPECT_EQ(RpcStubCacheMgrForTest::Instance().Size(), 1);
 }
 
 TEST_F(RpcStubCacheMgrTest, TestParallelGetStub)

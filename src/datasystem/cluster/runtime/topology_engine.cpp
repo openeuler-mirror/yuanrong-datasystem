@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <csignal>
 #include <exception>
+#include <iterator>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -33,6 +34,7 @@ namespace datasystem::cluster {
 namespace {
 constexpr auto BACKEND_EVIDENCE_MAX_AGE = std::chrono::seconds(5);
 constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
+constexpr int CONTROL_DEGRADED_ERROR_LOG_INTERVAL = 60;
 
 Status RegisterEtcdTopologyTables(EtcdStore &store, const TopologyKeyHelper &keys)
 {
@@ -281,8 +283,8 @@ Status TopologyEngine::Builder::Validate() const
                                  && !config_->backendSelectionInvalid,
                              K_INVALID, "invalid cluster topology Engine Builder settings");
     if (config_->backendKind == Config::BackendKind::ETCD) {
-        CHECK_FAIL_RETURN_STATUS(config_->memberStore != nullptr, K_INVALID,
-                                 "ETCD topology Engine requires one shared Store resource");
+        CHECK_FAIL_RETURN_STATUS(config_->memberStore != nullptr && config_->controlBackendProbe != nullptr, K_INVALID,
+                                 "ETCD topology Engine requires one shared Store and one Worker liveness probe");
     } else if (config_->backendKind == Config::BackendKind::COORDINATOR) {
         CHECK_FAIL_RETURN_STATUS(config_->coordinatorProxy != nullptr && config_->ingress.bind != nullptr
                                      && config_->ingress.unbindAndDrain != nullptr,
@@ -395,7 +397,33 @@ Status TopologyEngine::InitializeOwnedComponents(
     runtimeOptions.clusterName = options_.clusterName;
     runtimeOptions.controller.nodeDeadTimeout = nodeDeadTimeout;
     runtimeOptions.controller.scaleInCollectWindow = scaleInCollectWindow;
+    runtimeOptions.controller.failureProbeTimeout = options_.scopeProbeDeadline;
+    runtimeOptions.controller.localAddress = options_.localAddress;
     runtimeOptions.controller.membershipRestartHandler = std::move(membershipRestartHandler);
+    if (options_.unifiedEtcdWatch && options_.controlBackendProbe) {
+        runtimeOptions.controller.memberLivenessProbe =
+            [probe = options_.controlBackendProbe, localAddress = options_.localAddress](
+                const std::vector<MemberIdentity> &targets, std::chrono::steady_clock::time_point deadline) {
+                std::vector<MemberIdentity> remoteTargets;
+                std::vector<ControlBackendObservation> observations;
+                remoteTargets.reserve(targets.size());
+                observations.reserve(targets.size());
+                for (const auto &target : targets) {
+                    if (target.address == localAddress) {
+                        observations.push_back(
+                            { target, ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() });
+                    } else {
+                        remoteTargets.push_back(target);
+                    }
+                }
+                if (!remoteTargets.empty()) {
+                    auto remote = probe({}, remoteTargets, deadline);
+                    observations.insert(observations.end(), std::make_move_iterator(remote.begin()),
+                                        std::make_move_iterator(remote.end()));
+                }
+                return observations;
+            };
+    }
     runtimeOptions.controller.eventSourceMode =
         options_.unifiedEtcdWatch ? TopologyEventSourceMode::EXTERNAL : TopologyEventSourceMode::SELF_MANAGED;
     runtimeOptions.janitor = TopologyTaskJanitorOptions{};
@@ -1044,6 +1072,10 @@ Status TopologyEngine::HandleBackendUnavailable()
         SetAvailability(TopologyAvailabilityLevel::NOT_READY, "backend_unavailable_without_snapshot");
         return Status::OK();
     }
+    if (options_.unifiedEtcdWatch) {
+        SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "control_backend_unavailable");
+        return Status::OK();
+    }
     return ReevaluateFailureScope();
 }
 
@@ -1162,6 +1194,11 @@ void TopologyEngine::RecordError(const Status &status)
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         lastError_ = status.ToString();
+    }
+    if (availability_.load() == TopologyAvailabilityLevel::CONTROL_DEGRADED && IsBackendAccessFailure(status)) {
+        LOG_EVERY_N(WARNING, CONTROL_DEGRADED_ERROR_LOG_INTERVAL)
+            << "CLUSTER_RUNTIME_OPERATION_FAILED status=" << status.ToString();
+        return;
     }
     LOG(WARNING) << "CLUSTER_RUNTIME_OPERATION_FAILED status=" << status.ToString();
 }

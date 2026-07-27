@@ -18,6 +18,7 @@
 #define DATASYSTEM_COMMON_RPC_ZMQ_STUB_CACHE_MGR_H
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -203,6 +204,17 @@ public:
      * @return Status of the call.
      */
     Status GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub);
+
+    /**
+     * @brief Get a stub without retrying cache pressure past an absolute deadline.
+     * @param[in] hostPort The host and port of the stub.
+     * @param[in] type The type of the stub.
+     * @param[out] rpcStub Obtained stub.
+     * @param[in] deadline Absolute deadline for cache retry waits.
+     * @return Status of the call.
+     */
+    Status GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub,
+                   std::chrono::steady_clock::time_point deadline);
 
     /**
      * @brief Verify the cached brpc stub's underlying socket is still alive; evict if stale.

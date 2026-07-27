@@ -71,7 +71,9 @@ int64_t ZmqStubImpl::Insert(std::shared_ptr<ZmqMsgQueRef> mQue, const std::strin
 
 void ZmqStubImpl::ForgetRequest(int64_t tag)
 {
-    Remove(tag);
+    // Cleanup is intentionally idempotent: an AsyncRead error may or may not have consumed the transport tag.
+    std::lock_guard<std::mutex> lock(mux_);
+    asyncCallBack_.erase(tag);
 }
 
 Status ZmqStubImpl::GetStreamPeer(const std::string &svcName, int32_t methodIndex, const RpcOptions &opts,

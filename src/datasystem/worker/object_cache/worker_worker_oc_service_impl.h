@@ -44,8 +44,8 @@ public:
      * @param[in] clientSvc The implementation of worker service.
      * @param[in] akSkManager Used to do AK/SK authenticate.
      * @param[in] membership Read-only topology membership view.
-     * @param[in] coordinationAvailable Callback returning local coordination health.
-     * @param[in] backendObservationProvider Callback returning current local backend evidence.
+     * @param[in] coordinationAvailable Callback used by the legacy synchronous coordination-health RPC.
+     * @param[in] backendObservationProvider Callback returning cached local backend evidence for bounded peer probes.
      */
     WorkerWorkerOCServiceImpl(std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc,
                               std::shared_ptr<AkSkManager> akSkManager,

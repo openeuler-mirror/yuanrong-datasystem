@@ -852,14 +852,9 @@ Status WorkerWorkerOCServiceImpl::GetClusterState(const GetClusterStateReqPb &re
 {
     ScopedRequestContext ctx;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
-    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(coordinationAvailable_), K_NOT_READY,
-                             "Coordination availability provider is not initialized.");
-    bool isCoordinationAvailable = coordinationAvailable_();
-    rsp.set_coordinator_available(isCoordinationAvailable);
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(backendObservationProvider_), K_NOT_READY,
                              "Control-backend observation provider is not initialized.");
     RETURN_IF_NOT_OK(FillGetClusterStateRspPbFromControlBackendObservation(backendObservationProvider_(), rsp));
-    LOG_IF(INFO, isCoordinationAvailable) << "Coordination backend is available";
     return Status::OK();
 }
 
