@@ -21,6 +21,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 
@@ -331,8 +332,12 @@ Status TopologySnapshot::ValidateMigrationFence(const TopologyMigrationFence &fe
     const bool scaleOut = type == TopologyChangeType::SCALE_OUT && IsCommitted(source->state)
                           && target->state == MemberState::JOINING;
     const bool scaleIn = type == TopologyChangeType::SCALE_IN && source->state == MemberState::LEAVING
-                         && target->state == MemberState::ACTIVE && !(source->identity == target->identity);
-    CHECK_FAIL_RETURN_STATUS(scaleOut || scaleIn, K_INVALID, "migration fence participants do not match batch");
+                         && (target->state == MemberState::ACTIVE || target->state == MemberState::PRE_LEAVING)
+                         && !(source->identity == target->identity);
+    CHECK_FAIL_RETURN_STATUS(
+        scaleOut || scaleIn, K_INVALID,
+        FormatString("migration fence participants do not match batch, type: %s, source state: %s, target state: %s",
+                     TopologyChangeTypeName(type), MemberStateName(source->state), MemberStateName(target->state)));
     return Status::OK();
 }
 
