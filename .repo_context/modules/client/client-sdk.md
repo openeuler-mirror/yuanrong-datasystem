@@ -52,6 +52,8 @@
     TCP Set path publishes an RPC payload, while its UB Set path writes the payload through URMA and publishes an empty
     payload, with bounded TCP fallback on UB write failure. `ObjectClientImpl::Put` uses these primitives for the
     non-SHM routed Set path and keeps one worker address fixed across Create, payload transfer, and Publish.
+    Transport-owned BRPC channels use the SDK request and connection timeouts; foreground RPCs further clamp the
+    per-call timeout to the remaining API deadline.
   - `client::TransportLayer` also provides internal same-worker `MCreate`/`MSet` primitives. TCP MCreate allocates local
     buffers and MSet sends one positional MultiPublish payload; UB MCreate uses one MultiCreate RPC, MSet pipelines
     non-blocking per-object URMA writes in bounded groups, and failed writes use bounded TCP payload fallback in the
