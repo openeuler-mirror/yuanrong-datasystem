@@ -20,7 +20,8 @@ set(brpc_EXTRA_MSGS
     ${gflags_ROOT}
     ${leveldb_ROOT}
     ${Protobuf_ROOT}
-    ${OPENSSL_ROOT_DIR})
+    ${OPENSSL_ROOT_DIR}
+    ${ZLIB_ROOT})
 
 # Tell brpc's cmake to find the project's own third-party installs of gflags/leveldb/protobuf/openssl
 # so brpc links against the exact same versions as the rest of the project (avoid ABI mismatches).
@@ -80,6 +81,7 @@ set(brpc_CMAKE_OPTIONS
     -DGFLAGS_ROOT:PATH=${gflags_ROOT}
     -DLEVELDB_INCLUDE_PATH:PATH=${leveldb_INCLUDE_DIR}
     -DLEVELDB_LIB:FILEPATH=${leveldb_LIBRARY}
+    -DZLIB_LIB:FILEPATH=${ZLIB_LIBRARIES}
     -DCMAKE_PREFIX_PATH:PATH="${_BRPC_PREFIX_PATH}"
     -DProtobuf_DIR:PATH=${_BRPC_PROTOBUF_CMAKE_DIR}
     -Dabsl_DIR:PATH=${absl_PKG_PATH}
@@ -107,19 +109,20 @@ set(brpc_CMAKE_OPTIONS
     # brpc's pthread mutex hook resolves the real pthread symbols with RTLD_NEXT.
     # datasystem_worker can load libpthread before libbrpc, which makes that
     # lookup skip the real implementation and fail during process startup.
-    "-DCMAKE_CPP_FLAGS:STRING=-I${absl_INCLUDE_DIR} -DNO_PTHREAD_MUTEX_HOOK")
+    "-DCMAKE_CPP_FLAGS:STRING=-I${absl_INCLUDE_DIR} -I${ZLIB_INCLUDE_DIRS} -DNO_PTHREAD_MUTEX_HOOK")
 
 # brpc's CMakeLists.txt unconditionally overwrites CMAKE_CXX_FLAGS (line 149), so passing -I for
 # absl via CMAKE_CXX_FLAGS would be discarded. Instead, pass it via CMAKE_CPP_FLAGS which brpc
-# accumulates into its final CMAKE_CXX_FLAGS (lines 136-175). absl is needed because protobuf 4.25.5
-# headers transitively include absl/strings/string_view.h.
+# accumulates into its final CMAKE_CXX_FLAGS (lines 136-175). absl and zlib are needed because
+# protobuf 4.25.5 headers transitively include absl/strings/string_view.h and zlib.h.
 set(brpc_CXX_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 set(brpc_C_FLAGS ${THIRDPARTY_SAFE_FLAGS})
 
 set(brpc_PATCHES
     ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/fix-boringssl-compat.patch
     ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/avoid-glog-flag-conflicts.patch
-    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/link-pthread-runtime.patch)
+    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/link-pthread-runtime.patch
+    ${CMAKE_SOURCE_DIR}/third_party/patches/brpc/link-configured-zlib.patch)
 
 # brpc's build runs the project's protoc which dlopen-s libprotoc.so.<ver> at runtime.
 # Without LD_LIBRARY_PATH the protoc invocation fails with "cannot open shared object file".

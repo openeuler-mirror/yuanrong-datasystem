@@ -43,5 +43,23 @@ bool WorkerValidateNodeDeadTimeoutS(const uint32_t value);
  * @param[in] value Change heartbeat_interval_ms to this value.
  */
 bool WorkerValidateHeartbeatIntervalMs(const uint32_t value);
+
+/**
+ * @brief Check whether the value of scale_in_collect_window_ms is valid.
+ * Valid range is [0, 5000]; 0 disables coalescing. Values outside the range are clamped to it.
+ *
+ * Note: scale_in_collect_window_ms is a static gflag, so it is not updated at runtime and this
+ * validator is not wired into WorkerFlagValidateSpecial. Runtime protection is provided by the
+ * startup-time AdjustScaleInCollectWindowMs clamp and by TopologyControllerOptions::IsValid().
+ * This function is exposed for unit testing and for a future switch to a dynamic flag.
+ * @param[in] value Change scale_in_collect_window_ms to this value.
+ * @return True when value is within [0, 5000]; false otherwise.
+ */
+bool WorkerValidateScaleInCollectWindowMs(const uint32_t value);
+
+/**
+ * @brief Clamp scale_in_collect_window_ms into [0, 5000] at startup.
+ */
+void AdjustScaleInCollectWindowMs();
 }  // namespace datasystem
 #endif

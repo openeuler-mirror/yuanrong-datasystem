@@ -152,6 +152,13 @@ public:
         Builder &SetNodeDeadTimeout(std::chrono::seconds timeout);
 
         /**
+         * @brief Bind the ordinary SCALE_IN coalescing window.
+         * @param[in] window Coalescing window; 0 disables (legacy immediate-batch behavior).
+         * @return This Builder.
+         */
+        Builder &SetScaleInCollectWindow(std::chrono::milliseconds window);
+
+        /**
          * @brief Validate once, exact-read restart state, and construct every role component.
          * @param[out] engine Complete Engine; unchanged on failure.
          * @return K_OK on success; validation, read, or construction status otherwise.
@@ -343,7 +350,7 @@ private:
      */
     Status InitializeOwnedComponents(
         std::function<Status(const std::string &, int64_t)> membershipRestartHandler,
-        std::chrono::seconds nodeDeadTimeout);
+        std::chrono::seconds nodeDeadTimeout, std::chrono::milliseconds scaleInCollectWindow);
 
     /**
      * @brief Route one Coordinator watch event to its unique role backend.

@@ -154,6 +154,7 @@ struct TopologyEngine::Builder::Config {
     std::function<Status(const std::string &, int64_t)> membershipRestartHandler;
     std::function<void(std::shared_ptr<const TopologySnapshot>)> snapshotPublishedHandler;
     std::chrono::seconds nodeDeadTimeout{ TopologyControllerOptions{}.nodeDeadTimeout };
+    std::chrono::milliseconds scaleInCollectWindow{ TopologyControllerOptions{}.scaleInCollectWindow };
     bool buildAttempted{ false };
     bool backendSelectionInvalid{ false };
     bool isRestart{ false };
@@ -263,10 +264,20 @@ TopologyEngine::Builder &TopologyEngine::Builder::SetNodeDeadTimeout(std::chrono
     return *this;
 }
 
+TopologyEngine::Builder &TopologyEngine::Builder::SetScaleInCollectWindow(std::chrono::milliseconds window)
+{
+    if (config_ != nullptr) {
+        config_->scaleInCollectWindow = window;
+    }
+    return *this;
+}
+
 Status TopologyEngine::Builder::Validate() const
 {
     CHECK_FAIL_RETURN_STATUS(config_ != nullptr && IsCanonicalAddress(config_->localAddress)
                                  && config_->callbacks != nullptr && config_->nodeDeadTimeout.count() > 0
+                                 && config_->scaleInCollectWindow.count() >= 0
+                                 && config_->scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
                                  && !config_->backendSelectionInvalid,
                              K_INVALID, "invalid cluster topology Engine Builder settings");
     if (config_->backendKind == Config::BackendKind::ETCD) {
@@ -335,8 +346,10 @@ Status TopologyEngine::Builder::Build(std::unique_ptr<TopologyEngine> &engine)
         RETURN_IF_NOT_OK(ReadRestartFact());
         auto restartHandler = std::move(config_->membershipRestartHandler);
         const auto nodeDeadTimeout = config_->nodeDeadTimeout;
+        const auto scaleInCollectWindow = config_->scaleInCollectWindow;
         auto candidate = std::unique_ptr<TopologyEngine>(new TopologyEngine(std::move(config_)));
-        RETURN_IF_NOT_OK(candidate->InitializeOwnedComponents(std::move(restartHandler), nodeDeadTimeout));
+        RETURN_IF_NOT_OK(candidate->InitializeOwnedComponents(std::move(restartHandler), nodeDeadTimeout,
+                                                              scaleInCollectWindow));
         engine = std::move(candidate);
     } catch (const std::exception &error) {
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("construct cluster topology Engine failed: ") + error.what());
@@ -375,11 +388,13 @@ TopologyEngine::TopologyEngine(std::unique_ptr<Builder::Config> config)
 }
 
 Status TopologyEngine::InitializeOwnedComponents(
-    std::function<Status(const std::string &, int64_t)> membershipRestartHandler, std::chrono::seconds nodeDeadTimeout)
+    std::function<Status(const std::string &, int64_t)> membershipRestartHandler,
+    std::chrono::seconds nodeDeadTimeout, std::chrono::milliseconds scaleInCollectWindow)
 {
     TopologyControllerRuntime::Options runtimeOptions;
     runtimeOptions.clusterName = options_.clusterName;
     runtimeOptions.controller.nodeDeadTimeout = nodeDeadTimeout;
+    runtimeOptions.controller.scaleInCollectWindow = scaleInCollectWindow;
     runtimeOptions.controller.membershipRestartHandler = std::move(membershipRestartHandler);
     runtimeOptions.controller.eventSourceMode =
         options_.unifiedEtcdWatch ? TopologyEventSourceMode::EXTERNAL : TopologyEventSourceMode::SELF_MANAGED;
