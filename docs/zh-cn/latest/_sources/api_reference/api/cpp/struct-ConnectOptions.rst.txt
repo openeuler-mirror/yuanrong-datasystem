@@ -63,6 +63,18 @@ ConnectOptions
         
         如果为 true，开启 RH2D 功能，该功能需要服务端同步开启 ``enable_remote_h2d`` 能力。默认值：false
 
+    .. cpp:member:: bool enableClientDirectPipelineH2D = false;
+
+        是否开启 Client 无本地 Worker 场景的 Pipeline H2D 能力。默认值：``false``。开启后，Client 可复用
+        fast transport 内存池直接接收远端 Worker 数据并执行 H2D；如果本地 Worker 可用，仍优先使用原有
+        Client-Local-Worker RH2D 路径。
+
+    .. cpp:member:: int32_t clientDirectPipelineH2DThreadNum = 64;
+
+        Client-direct Pipeline H2D 使用的 MLCacheDirect 线程数。默认值：``64``。该参数仅在
+        ``enableClientDirectPipelineH2D`` 为 ``true`` 时生效，有效范围为 ``[8, 128]``；配置超出该范围时使用
+        默认值 ``64``。
+
     .. cpp:member:: std::shared_ptr<IServiceDiscovery> serviceDiscovery = nullptr;
 
         Worker 服务发现实现。可以配置基于 ETCD 的 :cpp:class:`ServiceDiscovery`、基于 Coordinator 的

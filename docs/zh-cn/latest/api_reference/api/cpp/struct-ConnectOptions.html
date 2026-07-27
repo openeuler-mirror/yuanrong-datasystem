@@ -678,6 +678,22 @@ document.addEventListener('DOMContentLoaded', function() {
 </dd></dl>
 
 <dl class="cpp member">
+<dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions29enableClientDirectPipelineH2DE">
+<span id="_CPPv3N14ConnectOptions29enableClientDirectPipelineH2DE"></span><span id="_CPPv2N14ConnectOptions29enableClientDirectPipelineH2DE"></span><span id="ConnectOptions::enableClientDirectPipelineH2D__b"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">enableClientDirectPipelineH2D</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions29enableClientDirectPipelineH2DE" title="Link to this definition">¶</a><br /></dt>
+<dd><p>是否开启 Client 无本地 Worker 场景的 Pipeline H2D 能力。默认值：<code class="docutils literal notranslate"><span class="pre">false</span></code>。开启后，Client 可复用
+fast transport 内存池直接接收远端 Worker 数据并执行 H2D；如果本地 Worker 可用，仍优先使用原有
+Client-Local-Worker RH2D 路径。</p>
+</dd></dl>
+
+<dl class="cpp member">
+<dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions32clientDirectPipelineH2DThreadNumE">
+<span id="_CPPv3N14ConnectOptions32clientDirectPipelineH2DThreadNumE"></span><span id="_CPPv2N14ConnectOptions32clientDirectPipelineH2DThreadNumE"></span><span id="ConnectOptions::clientDirectPipelineH2DThreadNum__int32_t"></span><span class="n"><span class="pre">int32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">clientDirectPipelineH2DThreadNum</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">64</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions32clientDirectPipelineH2DThreadNumE" title="Link to this definition">¶</a><br /></dt>
+<dd><p>Client-direct Pipeline H2D 使用的 MLCacheDirect 线程数。默认值：<code class="docutils literal notranslate"><span class="pre">64</span></code>。该参数仅在
+<code class="docutils literal notranslate"><span class="pre">enableClientDirectPipelineH2D</span></code> 为 <code class="docutils literal notranslate"><span class="pre">true</span></code> 时生效，有效范围为 <code class="docutils literal notranslate"><span class="pre">[8,</span> <span class="pre">128]</span></code>；配置超出该范围时使用
+默认值 <code class="docutils literal notranslate"><span class="pre">64</span></code>。</p>
+</dd></dl>
+
+<dl class="cpp member">
 <dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions16serviceDiscoveryE">
 <span id="_CPPv3N14ConnectOptions16serviceDiscoveryE"></span><span id="_CPPv2N14ConnectOptions16serviceDiscoveryE"></span><span id="ConnectOptions::serviceDiscovery__std::shared_ptr:IServiceDiscovery:"></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="IServiceDiscovery.html#_CPPv417IServiceDiscovery" title="IServiceDiscovery"><span class="n"><span class="pre">IServiceDiscovery</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">serviceDiscovery</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">nullptr</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions16serviceDiscoveryE" title="Link to this definition">¶</a><br /></dt>
 <dd><p>Worker 服务发现实现。可以配置基于 ETCD 的 <a class="reference internal" href="ServiceDiscovery.html#_CPPv416ServiceDiscovery" title="ServiceDiscovery"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ServiceDiscovery</span></code></a>、基于 Coordinator 的
@@ -781,6 +797,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions8tenantIdE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::tenantId</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions25enableCrossNodeConnectionE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableCrossNodeConnection</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions15enableRemoteH2DE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableRemoteH2D</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N14ConnectOptions29enableClientDirectPipelineH2DE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableClientDirectPipelineH2D</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N14ConnectOptions32clientDirectPipelineH2DThreadNumE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::clientDirectPipelineH2DThreadNum</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions16serviceDiscoveryE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::serviceDiscovery</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions20fastTransportMemSizeE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::fastTransportMemSize</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions11SetAkSkAuthERKNSt6stringERK14SensitiveValueRKNSt6stringE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::SetAkSkAuth()</span></code></a></li>
