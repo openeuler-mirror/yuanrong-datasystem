@@ -1591,6 +1591,7 @@ static urma_status_t PostJettyRw(const std::shared_ptr<UrmaJetty> &jetty, urma_o
         base->user_ctx = userCtx;
         base->rw = { .src = src, .dst = dst, .target_hint = 0, .notify_data = 0 };
         base->next = nullptr;
+        base->flag.bs.has_drv_ext = 1;
         bondp_wr.src_chip_id = src_chip_id;
         bondp_wr.dst_chip_id = dst_chip_id;
 
