@@ -73,8 +73,14 @@ WorkerRemoteWorkerOCApi::WorkerRemoteWorkerOCApi(HostPort hostPort, HostPort loc
 
 Status WorkerRemoteWorkerOCApi::Init()
 {
+    return Init(std::chrono::steady_clock::time_point::max());
+}
+
+Status WorkerRemoteWorkerOCApi::Init(std::chrono::steady_clock::time_point deadline)
+{
     std::shared_ptr<RpcStubBase> rpcStub;
-    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().GetStub(hostPort_, StubType::WORKER_WORKER_OC_SVC, rpcStub));
+    RETURN_IF_NOT_OK(
+        RpcStubCacheMgr::Instance().GetStub(hostPort_, StubType::WORKER_WORKER_OC_SVC, rpcStub, deadline));
     if (FLAGS_use_brpc) {
         brpcSession_ = std::dynamic_pointer_cast<WorkerWorkerOCService_BrpcGenericStub>(rpcStub);
         RETURN_RUNTIME_ERROR_IF_NULL(brpcSession_);
@@ -213,12 +219,21 @@ Status WorkerRemoteWorkerOCApi::GetClusterStateAsyncWrite(GetClusterStateReqPb &
     return Status::OK();
 }
 
-Status WorkerRemoteWorkerOCApi::GetClusterStateAsyncRead(int64_t tag, GetClusterStateRspPb &rsp)
+Status WorkerRemoteWorkerOCApi::GetClusterStateAsyncRead(int64_t tag, GetClusterStateRspPb &rsp, RpcRecvFlags flags)
 {
     CHECK_FAIL_RETURN_STATUS(rpcSession_ != nullptr || brpcSession_ != nullptr, K_RUNTIME_ERROR, "Rpc session is null");
-    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->GetClusterStateAsyncRead(tag, rsp)
-                                  : rpcSession_->GetClusterStateAsyncRead(tag, rsp));
+    RETURN_IF_NOT_OK(brpcSession_ ? brpcSession_->GetClusterStateAsyncRead(tag, rsp, flags)
+                                  : rpcSession_->GetClusterStateAsyncRead(tag, rsp, flags));
     return Status::OK();
+}
+
+void WorkerRemoteWorkerOCApi::ForgetClusterStateRequest(int64_t tag)
+{
+    if (brpcSession_ != nullptr) {
+        brpcSession_->ForgetRequest(tag);
+    } else if (rpcSession_ != nullptr) {
+        rpcSession_->ForgetRequest(tag);
+    }
 }
 
 Status WorkerRemoteWorkerOCApi::MigrateData(MigrateDataReqPb &req, const std::vector<MemView> &payloads,

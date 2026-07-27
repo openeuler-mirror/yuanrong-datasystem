@@ -94,6 +94,11 @@ void TopologyFailureClassifier::Pause(std::chrono::steady_clock::time_point now)
     }
 }
 
+void TopologyFailureClassifier::ResetMissing(const std::string &address) noexcept
+{
+    missingSince_.erase(address);
+}
+
 void TopologyFailureClassifier::Reset() noexcept
 {
     missingSince_.clear();

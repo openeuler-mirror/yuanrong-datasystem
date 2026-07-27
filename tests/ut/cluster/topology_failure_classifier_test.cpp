@@ -93,5 +93,28 @@ TEST(TopologyFailureClassifierTest, ExcludesUnreadableIntervalsFromMissingBudget
     EXPECT_EQ(classification.confirmedFailure.front().address, "127.0.0.1:1");
 }
 
+TEST(TopologyFailureClassifierTest, ReachableMissingMemberRequiresANewContinuousAbsenceWindow)
+{
+    TopologyState state;
+    state.version = 1;
+    state.clusterHasInit = true;
+    state.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    std::shared_ptr<const TopologySnapshot> topology;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), topology));
+    TopologyFailureClassifier classifier(std::chrono::seconds(5));
+    FailureClassification classification;
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+
+    DS_ASSERT_OK(classifier.Observe(*topology, {}, start, classification));
+    DS_ASSERT_OK(classifier.Observe(*topology, {}, start + std::chrono::seconds(5), classification));
+    ASSERT_EQ(classification.confirmedFailure.size(), 1);
+
+    classifier.ResetMissing("127.0.0.1:1");
+    DS_ASSERT_OK(classifier.Observe(*topology, {}, start + std::chrono::seconds(9), classification));
+    EXPECT_TRUE(classification.confirmedFailure.empty());
+    DS_ASSERT_OK(classifier.Observe(*topology, {}, start + std::chrono::seconds(14), classification));
+    ASSERT_EQ(classification.confirmedFailure.size(), 1);
+}
+
 }  // namespace
 }  // namespace datasystem::cluster

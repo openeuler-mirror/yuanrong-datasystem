@@ -17,7 +17,9 @@
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 
+#include <algorithm>
 #include <mutex>
+#include <thread>
 
 #include <brpc/channel.h>
 
@@ -409,6 +411,14 @@ void RpcStubCacheMgr::MaybeEvictStaleBrpcStub(const HostPort &hostPort, StubType
 
 Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub)
 {
+    return GetStub(hostPort, type, rpcStub, std::chrono::steady_clock::time_point::max());
+}
+
+Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::shared_ptr<RpcStubBase> &rpcStub,
+                                std::chrono::steady_clock::time_point deadline)
+{
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "Get RPC stub deadline exceeded");
     Timer timer;
     int64_t lookupElapsedMs = 0;
     int64_t getDataElapsedMs = 0;
@@ -430,6 +440,8 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
                 MaybeEvictStaleBrpcStub(hostPort, type, rpcStub);
             }
             if (rpcStub != nullptr) {
+                CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                                         "Get RPC stub deadline exceeded");
                 LogStubGetEvent("SLOW_RPC_STUB_GET", hostPort, type, cacheHit, lookupElapsedMs, getDataElapsedMs,
                                 accessElapsedMs, createElapsedMs, 0);
                 return Status::OK();
@@ -457,7 +469,13 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
             if (rc.GetCode() == K_TRY_AGAIN) {
                 attempts++;
                 if (attempts < maxRetries) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(retryIntervalMs));
+                    const auto now = std::chrono::steady_clock::now();
+                    CHECK_FAIL_RETURN_STATUS(now < deadline, K_RPC_DEADLINE_EXCEEDED,
+                                             "Get RPC stub deadline exceeded");
+                    std::this_thread::sleep_until(
+                        std::min(deadline, now + std::chrono::milliseconds(retryIntervalMs)));
+                    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline,
+                                             K_RPC_DEADLINE_EXCEEDED, "Get RPC stub deadline exceeded");
                 } else {
                     RETURN_STATUS_LOG_ERROR(K_RUNTIME_ERROR, "Get error after retry: " + rc.GetMsg());
                 }
@@ -477,6 +495,8 @@ Status RpcStubCacheMgr::GetStub(const HostPort &hostPort, StubType type, std::sh
         }
         newEncapsulatedData->SetDataWithoutLck(rpcStub);
     }
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "Get RPC stub deadline exceeded");
     if (FLAGS_use_brpc) {
         HostPort brpcAddr(hostPort.Host(), hostPort.Port() + kBrpcPortOffset);
         (void)WaitForBrpcSocketAvailable(brpcAddr, 1, 0);

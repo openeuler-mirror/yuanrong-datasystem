@@ -58,8 +58,14 @@ Status ValidateCanonicalAddress(const std::string &address)
 Status FillGetClusterStateRspPbFromControlBackendObservation(const cluster::ControlBackendObservation &observation,
                                                              GetClusterStateRspPb &rsp)
 {
-    CHECK_FAIL_RETURN_STATUS(observation.state != cluster::ControlBackendState::UNKNOWN, K_NOT_READY,
-                             "cluster control-backend evidence is unknown");
+    if (observation.state == cluster::ControlBackendState::UNKNOWN) {
+        const bool coordinatorAvailable = rsp.coordinator_available();
+        GetClusterStateRspPb candidate;
+        candidate.set_coordinator_available(coordinatorAvailable);
+        candidate.set_ready(false);
+        rsp = std::move(candidate);
+        return Status::OK();
+    }
     CHECK_FAIL_RETURN_STATUS(observation.topologyVersion <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
                              K_INVALID, "cluster topology evidence version exceeds peer RPC range");
     RETURN_IF_NOT_OK(ValidateCanonicalAddress(observation.reporter.address));
