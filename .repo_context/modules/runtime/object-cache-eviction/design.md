@@ -623,11 +623,14 @@ Failure-sensitive steps:
   - batch 内多个对象 WLock 必须按稳定顺序获取，建议按 object key 排序；不得在 pending/queue mutex 下获取对象 WLock 或发送 RPC。
   - low watermark 复查应发生在获取 master 地址或至少发送 `DeleteAllCopyMeta` 前，且必须包含本次前台分配的
     `needSize`；已达低水位时不得 erase 本地对象，也不主动调用 `Evict()`。
-  - `DeleteAllCopyMeta` batch 使用 repeated `ids_with_version`，并按 `outdated_objs`、`failed_object_keys`、
-    `objs_without_meta`、redirect info、`meta_is_moving`、`last_rc` 决定每个 key 是否本地 erase；RPC 失败、
-    `meta_is_moving` 或 `last_rc` 非 OK 时 batch 内 key 保守失败。
+  - `DeleteAllCopyMeta` batch 使用 repeated `ids_with_version`；`objs_without_meta` 和 `outdated_objs` 说明
+    当前 incarnation 的 metadata 已无需删除，按幂等完成处理；`failed_object_keys` 和 redirect info 只阻止
+    对应 key 本地 erase。RPC 失败、`meta_is_moving` 或无法归因到具体 failed key 的 `last_rc` 错误才让整批
+    key 保守失败。
+  - Master 侧只增加与该语义直接相关的保护：`PENDING` 必须标记为失败，已失败 key 和初次 no-meta 后回生
+    的 metadata 都不得继续 cleanup；不增加版本下界判断或新的逐 key response。
   - `GetMetaAddress()` 已知 master 不可达或路由不可解析时快速跳过，不发 RPC；`K_RPC_UNAVAILABLE` 归类为 master/connection unavailable，`K_NOT_FOUND` 归类为 route/meta-address unavailable。
-  - remote master RPC 卡顿由 5s API 总预算约束；local-bypass master 通过 request timeout 和 master-side `timeoutDuration` 传递预算，但不是传输层强制中断。
+  - remote master RPC 卡顿由 3s API 总预算约束；local-bypass master 通过 request timeout 和 master-side `timeoutDuration` 传递预算，但不是传输层强制中断。
   - 失败或版本变化后清 pending，并统一用 `READD_COUNTER` 回补 `memEvictionList_`；lane 不主动调用 `Evict()`，避免故障 master 场景 tight retry。
   - `primaryEndLifeThreadPool_` shutdown 需要在 manager 析构中显式 reset；若要丢弃未开始任务，需要使用 `ThreadPool` droppable 模式，否则默认线程池会 drain 队列。
   - `EvictSpilledObjects` 和 `SpillImpl` no-space fallback 继续保持同步，不属于本方案范围。
