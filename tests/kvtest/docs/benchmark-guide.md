@@ -283,6 +283,7 @@ Benchmark 模式通过 ServiceDiscovery 连接 etcd 发现 Worker。以下参数
     "request_timeout_ms": 50,
     "enable_cross_node_connection": true,
     "enable_local_cache": true,
+    "data_placement_policy": "PREFERRED_SAME_NODE",
     "fast_transport_mem_size": "1GB"
   }
 }
@@ -294,6 +295,7 @@ Benchmark 模式通过 ServiceDiscovery 连接 etcd 发现 Worker。以下参数
 | `request_timeout_ms` | 20 | 请求超时（毫秒） |
 | `enable_cross_node_connection` | `true` | 允许跨节点 Get 拉取，**跨节点模式必须为 `true`** |
 | `enable_local_cache` | `true` | 启用 SDK 客户端本地缓存，设为 `false` 走 Transport 层 |
+| `data_placement_policy` | `PREFERRED_SAME_NODE` | Set/MSet 数据放置策略 |
 | `fast_transport_mem_size` | "512MB" | 快速传输内存大小 |
 
 ### Key 数量计算

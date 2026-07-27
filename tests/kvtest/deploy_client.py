@@ -1020,6 +1020,7 @@ def cmd_gen_config(args):
             'request_timeout_ms': 20,
             'enable_cross_node_connection': True,
             'enable_local_cache': args.enable_local_cache,
+            'data_placement_policy': args.data_placement_policy,
             'fast_transport_mem_size': '512MB',
         },
     }
@@ -1218,6 +1219,10 @@ def _add_gen_config_args(p):
                    metavar='BOOL',
                    help='Enable SDK client local cache (default: true; bare flag = true). '
                         'Pass false to make Get go through the Transport layer.')
+    p.add_argument('--data-placement-policy',
+                   choices=['PREFERRED_SAME_NODE', 'REQUIRED_SAME_NODE', 'PREFERRED_META_OWNER'],
+                   default='PREFERRED_SAME_NODE', dest='data_placement_policy',
+                   help='Set/MSet data placement policy (default: PREFERRED_SAME_NODE).')
     # Runtime environment (applies to all modes)
     p.add_argument('--use-brpc', action='store_true', dest='use_brpc',
                    help='Use brpc RPC backend: sets DATASYSTEM_USE_BRPC=true env var '

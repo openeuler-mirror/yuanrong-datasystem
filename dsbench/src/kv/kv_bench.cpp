@@ -50,6 +50,41 @@ Status KVBench::WarmUp()
     return Status::OK();
 }
 
+Status KVBench::ApplyDataPlacementPolicy(ConnectOptions &connectOptions) const
+{
+    if (args_.dataPlacementPolicy.empty()) {
+        return Status::OK();
+    }
+    if (args_.dataPlacementPolicy == "PREFERRED_SAME_NODE") {
+        connectOptions.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_SAME_NODE;
+    } else if (args_.dataPlacementPolicy == "REQUIRED_SAME_NODE") {
+        connectOptions.dataPlacementPolicy = DataPlacementPolicy::REQUIRED_SAME_NODE;
+    } else if (args_.dataPlacementPolicy == "PREFERRED_META_OWNER") {
+        connectOptions.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
+    } else {
+        RETURN_STATUS(K_INVALID, "Invalid data placement policy: " + args_.dataPlacementPolicy);
+    }
+    return Status::OK();
+}
+
+Status KVBench::InitClients()
+{
+    ConnectOptions connectOptions;
+    RETURN_IF_NOT_OK(bench::StrToHostPort(args_.workerAddress, connectOptions.host, connectOptions.port));
+    connectOptions.accessKey = args_.accessKey;
+    connectOptions.secretKey = args_.secretKey;
+    connectOptions.enableLocalCache = args_.enableLocalCache;
+    RETURN_IF_NOT_OK(ApplyDataPlacementPolicy(connectOptions));
+    clients_.clear();
+    clients_.reserve(args_.clientNum);
+    for (size_t i = 0; i < args_.clientNum; ++i) {
+        auto client = std::make_unique<KVClient>(connectOptions);
+        RETURN_IF_NOT_OK(client->Init());
+        clients_.emplace_back(std::move(client));
+    }
+    return Status::OK();
+}
+
 Status KVBench::Prepare()
 {
     if (!args_.ownerWorker.empty()) {
@@ -87,19 +122,7 @@ Status KVBench::Prepare()
         }
     }
 
-    ConnectOptions connectOptions;
-    RETURN_IF_NOT_OK(bench::StrToHostPort(args_.workerAddress, connectOptions.host, connectOptions.port));
-    connectOptions.accessKey = args_.accessKey;
-    connectOptions.secretKey = args_.secretKey;
-    clients_.clear();
-    clients_.reserve(args_.clientNum);
-    for (size_t i = 0; i < args_.clientNum; ++i) {
-        auto client = std::make_unique<KVClient>(connectOptions);
-        RETURN_IF_NOT_OK(client->Init());
-        clients_.emplace_back(std::move(client));
-    }
-
-    return Status::OK();
+    return InitClients();
 }
 
 void KVBench::GenerateSetKeys(std::vector<std::string> &keys) const

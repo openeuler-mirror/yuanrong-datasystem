@@ -95,10 +95,15 @@ class KVBenchTestCase(BenchTestCase):
         args = self.bench_args.args
         perf_path = self._get_relative_path("perf.log")
 
-        raw_workers = f"{args.set_worker_addresses},{args.get_worker_addresses}"
-        unique_workers = (
-            sorted(list(set(raw_workers.split(",")))) if raw_workers else []
-        )
+        unique_workers = set()
+        for addresses in (
+            args.set_worker_addresses,
+            args.get_worker_addresses,
+        ):
+            for address in addresses.split(","):
+                if address:
+                    unique_workers.add(address)
+        unique_workers = sorted(unique_workers)
         perf_workers = ",".join(unique_workers)
 
         command_args = {
@@ -115,6 +120,10 @@ class KVBenchTestCase(BenchTestCase):
             "secret_key": args.secret_key,
             "numa": args.numa,
             "skip_local": args.skip_local,
+            "enable_local_cache": args.enable_local_cache,
+            "data_placement_policy": (
+                args.data_placement_policy if args.operation in ("all", "set") else None
+            ),
         }
         return command_args
 
@@ -196,7 +205,11 @@ class KVBenchTestCase(BenchTestCase):
 
     def add_set_task(self, kv_args: KVArgs):
         """Adds 'set' tasks for all configured 'set' worker nodes, sorted by worker_address."""
-        set_workers = sorted(self.bench_args.args.set_worker_addresses.split(","))
+        set_workers = sorted(
+            worker
+            for worker in self.bench_args.args.set_worker_addresses.split(",")
+            if worker
+        )
         set_tasks = []
         for index, worker_address in enumerate(set_workers):
             command_args = self.to_base_command_args(kv_args)
@@ -215,7 +228,11 @@ class KVBenchTestCase(BenchTestCase):
 
     def add_prefill_task(self, kv_args: KVArgs):
         """Adds 'prefill' tasks for all configured 'set' worker nodes, sorted by worker_address."""
-        set_workers = sorted(self.bench_args.args.set_worker_addresses.split(","))
+        set_workers = sorted(
+            worker
+            for worker in self.bench_args.args.set_worker_addresses.split(",")
+            if worker
+        )
         set_tasks = []
         for index, worker_address in enumerate(set_workers):
             command_args = self.to_base_command_args(kv_args)
@@ -242,13 +259,29 @@ class KVBenchTestCase(BenchTestCase):
 
     def add_get_task(self, kv_args: KVArgs):
         """Adds 'get' tasks for all configured 'get' worker nodes, sorted by worker_address."""
-        set_workers = sorted(self.bench_args.args.set_worker_addresses.split(","))
-        get_workers = sorted(self.bench_args.args.get_worker_addresses.split(","))
+        set_workers = sorted(
+            worker
+            for worker in self.bench_args.args.set_worker_addresses.split(",")
+            if worker
+        )
+        get_workers = sorted(
+            worker
+            for worker in self.bench_args.args.get_worker_addresses.split(",")
+            if worker
+        )
+        source_worker_num = (
+            self.bench_args.args.source_worker_num
+            if (
+                self.bench_args.args.operation in ("get", "del")
+                and self.bench_args.args.source_worker_num is not None
+            )
+            else len(set_workers)
+        )
         get_tasks = []
         for worker_address in get_workers:
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "get"
-            command_args["worker_num"] = len(set_workers)
+            command_args["worker_num"] = source_worker_num
             # For --skip_local in get, worker_index must map to the same-address worker in set_worker_addresses.
             command_args["worker_index"] = self._get_worker_index(worker_address, set_workers)
             command_args["worker_address"] = worker_address
@@ -263,8 +296,16 @@ class KVBenchTestCase(BenchTestCase):
 
     def add_concurrent_task(self, kv_args: KVArgs):
         """Adds concurrent 'set' and 'get' tasks and runs them in parallel."""
-        set_workers = sorted(self.bench_args.args.set_worker_addresses.split(","))
-        get_workers = sorted(self.bench_args.args.get_worker_addresses.split(","))
+        set_workers = sorted(
+            worker
+            for worker in self.bench_args.args.set_worker_addresses.split(",")
+            if worker
+        )
+        get_workers = sorted(
+            worker
+            for worker in self.bench_args.args.get_worker_addresses.split(",")
+            if worker
+        )
         concurrent_tasks = []
 
         for index, worker_address in enumerate(set_workers):
@@ -276,7 +317,6 @@ class KVBenchTestCase(BenchTestCase):
             if task:
                 concurrent_tasks.append(task)
 
-        set_workers_count = len(self.bench_args.args.set_worker_addresses.split(","))
         for worker_address in get_workers:
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "get"
@@ -294,11 +334,28 @@ class KVBenchTestCase(BenchTestCase):
 
     def add_del_task(self, kv_args: KVArgs):
         """Adds 'del' tasks for the first configured 'del' worker node."""
-        del_workers = self.bench_args.args.get_worker_addresses.split(",")
+        del_workers = [
+            worker
+            for worker in self.bench_args.args.get_worker_addresses.split(",")
+            if worker
+        ]
+        set_workers = [
+            worker
+            for worker in self.bench_args.args.set_worker_addresses.split(",")
+            if worker
+        ]
+        source_worker_num = (
+            self.bench_args.args.source_worker_num
+            if (
+                self.bench_args.args.operation in ("get", "del")
+                and self.bench_args.args.source_worker_num is not None
+            )
+            else len(set_workers)
+        )
         for worker_index, worker_address in enumerate(del_workers):
             command_args = self.to_base_command_args(kv_args)
             command_args["action"] = "del"
-            command_args["worker_num"] = len(self.bench_args.args.set_worker_addresses.split(","))
+            command_args["worker_num"] = source_worker_num
             command_args["worker_address"] = worker_address
             task = self.add_task_from_command_args(command_args)
             if task:

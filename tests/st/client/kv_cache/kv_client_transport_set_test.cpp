@@ -47,7 +47,6 @@
 
 DS_DECLARE_bool(use_brpc);
 DS_DECLARE_string(sdk_data_placement_policy);
-
 namespace datasystem {
 namespace st {
 namespace {
@@ -97,9 +96,7 @@ public:
     void SetUp() override
     {
         previousUseBrpc_ = FLAGS_use_brpc;
-        previousPlacementPolicy_ = FLAGS_sdk_data_placement_policy;
         FLAGS_use_brpc = true;
-        FLAGS_sdk_data_placement_policy = "PREFERRED_META_OWNER";
         ASSERT_EQ(setenv(HOST_ID_ENV_NAME, HOST_ID_VALUE, 1), 0);
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         ExternalClusterTest::SetUp();
@@ -128,23 +125,23 @@ public:
         ExternalClusterTest::TearDown();
         (void)unsetenv(HOST_ID_ENV_NAME);
         FLAGS_use_brpc = previousUseBrpc_;
-        FLAGS_sdk_data_placement_policy = previousPlacementPolicy_;
     }
 
 protected:
-    void InitRoutedClient()
+    virtual void InitRoutedClient()
     {
         ConnectOptions options;
         InitConnectOpt(ROUTED_CLIENT_WORKER_INDEX, options);
         options.enableLocalCache = false;
+        options.dataPlacementPolicy = routedDataPlacementPolicy_;
         routedClient_ = std::make_shared<KVClient>(options);
         DS_ASSERT_OK(routedClient_->Init());
     }
 
-    void ReinitRoutedClient(const std::string &policy)
+    void ReinitRoutedClient(DataPlacementPolicy policy)
     {
         routedClient_.reset();
-        FLAGS_sdk_data_placement_policy = policy;
+        routedDataPlacementPolicy_ = policy;
         InitRoutedClient();
     }
 
@@ -325,7 +322,7 @@ protected:
     std::vector<std::unique_ptr<worker::WorkerRemoteMasterOCApi>> masterApis_;
     std::string queryAddress_;
     bool previousUseBrpc_ = false;
-    std::string previousPlacementPolicy_;
+    DataPlacementPolicy routedDataPlacementPolicy_ = DataPlacementPolicy::PREFERRED_META_OWNER;
 };
 
 TEST_F(KVClientTransportSetTest, RoutedSetPublishesDataAndMetadata)
@@ -366,7 +363,7 @@ TEST_F(KVClientTransportSetTest, U1U2DirectWriteReadAtMetadataOwner)
 
 TEST_F(KVClientTransportSetTest, DefaultPolicyRoutesSetAndMSetToSameNodeWorkers)
 {
-    ReinitRoutedClient("PREFERRED_SAME_NODE");
+    ReinitRoutedClient(DataPlacementPolicy::PREFERRED_SAME_NODE);
     std::string setKey;
     HostPort setMetaOwner;
     HostPort setPreferredWorker;
@@ -381,6 +378,9 @@ TEST_F(KVClientTransportSetTest, DefaultPolicyRoutesSetAndMSetToSameNodeWorkers)
     DS_ASSERT_OK(routedClient_->Set(setKey, setValue));
     AssertValue(setKey, setValue);
     AssertPrimaryWorker(setKey, setPreferredWorkerIndex);
+    std::string setActual;
+    DS_ASSERT_OK(routedClient_->Get(setKey, setActual));
+    ASSERT_EQ(setActual, setValue);
 
     std::string msetKey;
     HostPort msetMetaOwner;
@@ -395,6 +395,73 @@ TEST_F(KVClientTransportSetTest, DefaultPolicyRoutesSetAndMSetToSameNodeWorkers)
     uint32_t msetPreferredWorkerIndex = 0;
     DS_ASSERT_OK(FindWorkerIndex(msetPreferredWorker, msetPreferredWorkerIndex));
     AssertPrimaryWorker(msetKey, msetPreferredWorkerIndex);
+    std::string msetActual;
+    DS_ASSERT_OK(routedClient_->Get(msetKey, msetActual));
+    ASSERT_EQ(msetActual, msetValue);
+}
+
+class KVClientTransportSetConnectOptionsTest : public KVClientTransportSetTest {
+protected:
+    void InitRoutedClient() override
+    {
+        const std::string previousPolicy = FLAGS_sdk_data_placement_policy;
+        Raii restorePolicy([previousPolicy]() { FLAGS_sdk_data_placement_policy = previousPolicy; });
+        FLAGS_sdk_data_placement_policy = "PREFERRED_SAME_NODE";
+        ConnectOptions options;
+        InitConnectOpt(ROUTED_CLIENT_WORKER_INDEX, options);
+        options.enableLocalCache = false;
+        options.dataPlacementPolicy = DataPlacementPolicy::PREFERRED_META_OWNER;
+        routedClient_ = std::make_shared<KVClient>(options);
+        DS_ASSERT_OK(routedClient_->Init());
+    }
+};
+
+TEST_F(KVClientTransportSetConnectOptionsTest, MetaOwnerPolicyRoutesWritesToMetadataOwner)
+{
+    std::string key;
+    HostPort metaOwner;
+    HostPort preferredWorker;
+    DS_ASSERT_OK(FindSameNodeDivergentRouteKey("routing_explicit_meta_owner_", key, metaOwner, preferredWorker));
+    ASSERT_NE(metaOwner, preferredWorker);
+
+    const std::string value(VALUE_SIZE, 'e');
+    DS_ASSERT_OK(routedClient_->Set(key, value));
+    uint32_t metaOwnerIndex = 0;
+    uint32_t preferredWorkerIndex = 0;
+    DS_ASSERT_OK(FindWorkerIndex(metaOwner, metaOwnerIndex));
+    DS_ASSERT_OK(FindWorkerIndex(preferredWorker, preferredWorkerIndex));
+    AssertPrimaryWorker(key, metaOwnerIndex);
+    const std::string previousPolicy = FLAGS_sdk_data_placement_policy;
+    Raii restorePolicy([previousPolicy]() { FLAGS_sdk_data_placement_policy = previousPolicy; });
+    FLAGS_sdk_data_placement_policy = "PREFERRED_SAME_NODE";
+    ConnectOptions readOptions;
+    InitConnectOpt(preferredWorkerIndex, readOptions);
+    readOptions.enableLocalCache = false;
+    KVClient readClient(readOptions);
+    DS_ASSERT_OK(readClient.Init());
+
+    std::string actual;
+    DS_ASSERT_OK(readClient.Get(key, actual));
+    ASSERT_EQ(actual, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    std::vector<std::string> actualValues;
+    DS_ASSERT_OK(readClient.Get({ key }, actualValues));
+    ASSERT_EQ(actualValues, std::vector<std::string>{ value });
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+}
+
+TEST_F(KVClientTransportSetTest, InvalidConnectOptionsPolicyIsRejected)
+{
+    ConnectOptions options;
+    InitConnectOpt(ROUTED_CLIENT_WORKER_INDEX, options);
+    options.enableLocalCache = false;
+    options.dataPlacementPolicy = static_cast<DataPlacementPolicy>(255);
+    KVClient client(options);
+
+    const Status status = client.Init();
+
+    ASSERT_EQ(status.GetCode(), K_INVALID);
+    ASSERT_NE(status.GetMsg().find("Invalid data placement policy"), std::string::npos);
 }
 
 TEST_F(KVClientTransportSetTest, RequiredSameNodeRejectsBeforeBusinessRpc)

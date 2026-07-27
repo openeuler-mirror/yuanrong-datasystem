@@ -71,19 +71,26 @@ class KVCommand(BenchmarkBaseCommand):
     def pre_run(self) -> bool:
         """Logs hardware and software configuration summary before running tests."""
 
-        raw_workers = (
-            f"{self.args.set_worker_addresses},{self.args.get_worker_addresses}"
-        )
-        all_worker_addresses = sorted(list(set(raw_workers.split(","))))
+        all_worker_addresses = set()
+        for addresses in (
+            self.args.set_worker_addresses,
+            self.args.get_worker_addresses,
+        ):
+            for address in addresses.split(","):
+                if address:
+                    all_worker_addresses.add(address)
+        all_worker_addresses = sorted(all_worker_addresses)
 
         if not all_worker_addresses:
             self.logger.info(
                 "  * No worker addresses are configured. Configuration check completed."
             )
             return True
-        ip_to_address_map = {addr.split(":")[0]: addr for addr in all_worker_addresses}
-        # Get unique IP list from all worker addresses
-        unique_ips = sorted(list(set(addr.split(":")[0] for addr in all_worker_addresses)))
+        ip_to_address_map = {}
+        for address in all_worker_addresses:
+            ip_address = address.split(":")[0]
+            ip_to_address_map[ip_address] = address
+        unique_ips = sorted(ip_to_address_map)
         # Print node information table
         self._print_node_info_table(unique_ips, ip_to_address_map)
 
@@ -261,23 +268,46 @@ class KVCommand(BenchmarkBaseCommand):
             help="Skip local worker data when executing get operations. "
             "When enabled, each get task skips keys written by the same-address worker in set_worker_addresses.",
         )
+        parser.add_argument(
+            "--operation",
+            choices=("all", "set", "get", "del"),
+            default="all",
+            help="Run the complete flow or one Set/Get/Del operation (default: all).",
+        )
+        parser.add_argument(
+            "--source_worker_num",
+            type=int,
+            default=None,
+            help="Number of Set shards whose keys a standalone Get/Del should access.",
+        )
+        parser.add_argument(
+            "--enable_local_cache",
+            choices=("true", "false"),
+            default="true",
+            help="Select the legacy worker-mediated path (true) or routing/transport path (false).",
+        )
+        parser.add_argument(
+            "--data_placement_policy",
+            choices=("PREFERRED_SAME_NODE", "REQUIRED_SAME_NODE", "PREFERRED_META_OWNER"),
+            default="PREFERRED_SAME_NODE",
+            help="SDK write placement policy (default: PREFERRED_SAME_NODE).",
+        )
 
     def _add_cluster_config_arguments(self, parser: argparse.ArgumentParser):
         """Adds arguments related to cluster setup, authentication, and tools."""
         parser.add_argument(
             "-S",
             "--set_worker_addresses",
-            required=True,
+            default="",
             help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2) for executing set operations. "
-                 "dsbench will create a task for each worker to write test data. (required)",
+                 "Required by --operation=set/all.",
         )
         parser.add_argument(
             "-G",
             "--get_worker_addresses",
-            required=True,
+            default="",
             help="Comma-separated list of worker addresses (e.g., ip1:port1,ip2:port2) for executing get operations. "
-                 "dsbench will create a task for each worker to read test data, and use the first worker "
-                 "to delete test data. (required)",
+                 "Required by --operation=get/del/all.",
         )
         parser.add_argument("--access_key", type=str, default="", metavar="", help="Access key (default: empty)")
         parser.add_argument("--secret_key", type=str, default="", metavar="", help="Secret key (default: empty)")

@@ -59,10 +59,9 @@
     cache disabled, public key/value `ObjectClientImpl::MSet` groups keys with the configured data-placement policy
     and sends each same-worker group through these primitives; with local cache enabled it preserves the legacy
     client-worker batch path.
-  - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing`; Set selects a worker through
-    `sdk_data_placement_policy` (`PREFERRED_SAME_NODE` by default), while transport Get always resolves the metadata
-    owner. The policy is read once at routing initialization. This default changes non-local-cache Set/MSet placement
-    from legacy metadata-owner routing to same-node preference; set `PREFERRED_META_OWNER` to preserve the old behavior.
+  - With `enableLocalCache=false`, `ObjectClientImpl` initializes `client::Routing`; Set/MSet select workers through
+    the per-client `ConnectOptions::dataPlacementPolicy`, which defaults to `PREFERRED_SAME_NODE`. The option does not
+    change Get/MGet routing.
     Unavailable workers are excluded during bounded pre-Publish retries. With local cache enabled, both APIs preserve
     the legacy current-worker path and do not initialize the direct transport runtime.
   - Routed transport requests carry the gateway client id, token snapshot, thread tenant context, and shared transport
@@ -153,7 +152,8 @@
   - connection and request timeout controls
   - token auth, curve key fields, AK/SK fields, tenant id
   - cross-node and exclusive connection toggles
-  - local-cache routing toggle; `enableLocalCache=false` routes Set according to `sdk_data_placement_policy`
+  - local-cache routing toggle; `enableLocalCache=false` routes Set according to
+    `ConnectOptions::dataPlacementPolicy`
     and supports single- and multi-key full-object `Get`, with per-key partial results and without L2 loading or RH2D
   - remote H2D toggle
   - optional `IServiceDiscovery`; the public implementations are ETCD-backed `ServiceDiscovery` and coordinator-backed `CoordinatorServiceDiscovery`

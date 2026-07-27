@@ -313,6 +313,13 @@ struct AsyncMSetD2HState {
 };
 
 namespace object_cache {
+static_assert(static_cast<uint8_t>(datasystem::DataPlacementPolicy::PREFERRED_SAME_NODE)
+                  == static_cast<uint8_t>(client::DataPlacementPolicy::PREFERRED_SAME_NODE)
+              && static_cast<uint8_t>(datasystem::DataPlacementPolicy::REQUIRED_SAME_NODE)
+                     == static_cast<uint8_t>(client::DataPlacementPolicy::REQUIRED_SAME_NODE)
+              && static_cast<uint8_t>(datasystem::DataPlacementPolicy::PREFERRED_META_OWNER)
+                     == static_cast<uint8_t>(client::DataPlacementPolicy::PREFERRED_META_OWNER),
+              "Public and internal data placement policies must stay aligned");
 namespace {
 void NotifySwitchToExpectedWorker(const HostPort &target)
 {
@@ -367,6 +374,7 @@ ObjectClientImpl::ObjectClientImpl(const ConnectOptions &connectOptions1)
     signature_ = std::make_unique<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     enableCrossNodeConnection_ = connectOptions.enableCrossNodeConnection;
     enableLocalCache_ = connectOptions.enableLocalCache;
+    dataPlacementPolicy_ = static_cast<client::DataPlacementPolicy>(connectOptions.dataPlacementPolicy);
     transportSignature_ = std::make_shared<Signature>(connectOptions.accessKey, connectOptions.secretKey);
     (void)authKeys_.SetClientPublicKey(connectOptions.clientPublicKey);
     (void)authKeys_.SetClientPrivateKey(connectOptions.clientPrivateKey);
@@ -587,6 +595,26 @@ Status ObjectClientImpl::ApplyRoutingWorkerSnapshot(uint64_t ringVersion,
     return transportLayer_->ApplyWorkerSnapshot(std::move(snapshot));
 }
 
+Status ObjectClientImpl::InitDataPlacementPolicy()
+{
+    const char *policyName = nullptr;
+    switch (dataPlacementPolicy_) {
+        case client::DataPlacementPolicy::PREFERRED_SAME_NODE:
+            policyName = "PREFERRED_SAME_NODE";
+            break;
+        case client::DataPlacementPolicy::REQUIRED_SAME_NODE:
+            policyName = "REQUIRED_SAME_NODE";
+            break;
+        case client::DataPlacementPolicy::PREFERRED_META_OWNER:
+            policyName = "PREFERRED_META_OWNER";
+            break;
+        default:
+            RETURN_STATUS(K_INVALID, "Invalid data placement policy in ConnectOptions");
+    }
+    LOG(INFO) << "Data placement policy initialized: " << policyName;
+    return Status::OK();
+}
+
 Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal)
 {
     if (std::atomic_load(&routing_) != nullptr) {
@@ -594,7 +622,7 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
     }
     CHECK_FAIL_RETURN_STATUS(!initialWorker.Empty(), K_NOT_READY,
                              "Initial worker address is unavailable for routing initialization");
-    RETURN_IF_NOT_OK(client::ParseDataPlacementPolicy(FLAGS_sdk_data_placement_policy, dataPlacementPolicy_));
+    RETURN_IF_NOT_OK(InitDataPlacementPolicy());
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
     BrpcChannelConfig channelConfig;
     channelConfig.timeout_ms = requestTimeoutMs_;

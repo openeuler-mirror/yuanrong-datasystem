@@ -54,6 +54,10 @@ def check_duplicate_args(args: Any):
         "--access_key",
         "--secret_key",
         "--concurrent",
+        "--operation",
+        "--source_worker_num",
+        "--enable_local_cache",
+        "--data_placement_policy",
         "-w",
         "--worker_address_list",
     ]
@@ -94,6 +98,10 @@ def validate_range_arguments(args: Any):
         logger.error(f"num must be greater than 0.")
         return False
 
+    if args.source_worker_num is not None and args.source_worker_num <= 0:
+        logger.error("source_worker_num must be greater than 0.")
+        return False
+
     return True
 
 
@@ -129,10 +137,14 @@ def validate_format_arguments(args: Any):
 
     # Validate worker addresses format
     worker_address_pattern = r"^([a-zA-Z0-9.]+:\d+)(,[a-zA-Z0-9.]+:\d+)*$"
-    if not re.match(worker_address_pattern, args.set_worker_addresses):
+    if args.set_worker_addresses and not re.match(
+        worker_address_pattern, args.set_worker_addresses
+    ):
         logger.error(f"set_worker_addresses format is incorrect.")
         return False
-    if not re.match(worker_address_pattern, args.get_worker_addresses):
+    if args.get_worker_addresses and not re.match(
+        worker_address_pattern, args.get_worker_addresses
+    ):
         logger.error(f"get_worker_addresses format is incorrect.")
         return False
 
@@ -170,6 +182,12 @@ def validate_mutex_arguments(args: Any):
         )
         return False
 
+    if args.operation != "all" and (args.all or args.testcase_file):
+        logger.error(
+            "--operation can only select an individual operation in single-test mode."
+        )
+        return False
+
     # Define a set of arguments that conflict with --all and --testcase_file
     conflicting_run_args = {"client_num", "thread_num", "batch_num", "num", "size"}
 
@@ -189,6 +207,72 @@ def validate_mutex_arguments(args: Any):
     if args.testcase_file and _is_any_conflicting_arg_set():
         logger.error(
             f"When using --testcase_file, cannot specify client_num, thread_num, batch_num, num, or size."
+        )
+        return False
+
+    if args.concurrent and args.operation != "all":
+        logger.error("--concurrent can only be used with --operation=all.")
+        return False
+
+    if getattr(args, "skip_local", False) and args.operation not in ("all", "get"):
+        logger.error("--skip_local can only be used with Get operations.")
+        return False
+
+    if args.source_worker_num is not None and args.operation not in ("get", "del"):
+        logger.error("--source_worker_num can only be used with standalone Get/Del operations.")
+        return False
+
+    if (
+        getattr(args, "skip_local", False)
+        and args.operation == "get"
+        and not args.set_worker_addresses
+    ):
+        logger.error(
+            "--skip_local with standalone Get requires --set_worker_addresses "
+            "to identify the local source shard."
+        )
+        return False
+
+    if (
+        args.operation in ("get", "del")
+        and args.source_worker_num is not None
+        and args.set_worker_addresses
+    ):
+        source_workers = [
+            worker for worker in args.set_worker_addresses.split(",") if worker
+        ]
+        if args.source_worker_num != len(source_workers):
+            logger.error(
+                "--source_worker_num must match the number of --set_worker_addresses "
+                "when both are provided."
+            )
+            return False
+
+    if (
+        args.operation in ("all", "set")
+        and args.data_placement_policy != "PREFERRED_SAME_NODE"
+        and args.enable_local_cache != "false"
+    ):
+        logger.error(
+            "--data_placement_policy requires --enable_local_cache=false."
+        )
+        return False
+
+    if args.operation in ("all", "set") and not args.set_worker_addresses:
+        logger.error("--set_worker_addresses is required for Set operations.")
+        return False
+
+    if args.operation in ("all", "get", "del") and not args.get_worker_addresses:
+        logger.error("--get_worker_addresses is required for Get/Del operations.")
+        return False
+
+    if (
+        args.operation in ("get", "del")
+        and not args.set_worker_addresses
+        and args.source_worker_num is None
+    ):
+        logger.error(
+            "Standalone Get/Del requires --set_worker_addresses or --source_worker_num."
         )
         return False
 

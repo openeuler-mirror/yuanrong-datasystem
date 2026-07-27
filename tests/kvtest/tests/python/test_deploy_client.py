@@ -458,6 +458,34 @@ class TestGenConfig(unittest.TestCase):
         with self.assertRaises(SystemExit):
             parser.parse_args(['--enable-local-cache', 'maybe'])
 
+    def test_data_placement_policy_default_emitted(self):
+        """gen-config should emit the SDK default write placement policy."""
+        _, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+        ])
+        self.assertEqual(
+            config['connect_options']['data_placement_policy'],
+            'PREFERRED_SAME_NODE')
+
+    def test_data_placement_policy_override_emitted(self):
+        """gen-config should emit an explicitly selected write placement policy."""
+        _, config = self._run_gen_config([
+            '--nodes', '127.0.0.1:9000',
+            '--data-placement-policy', 'PREFERRED_META_OWNER',
+        ])
+        self.assertEqual(
+            config['connect_options']['data_placement_policy'],
+            'PREFERRED_META_OWNER')
+
+    def test_data_placement_policy_invalid_rejected(self):
+        """argparse choices must reject an unknown write placement policy."""
+        import argparse
+        from deploy_client import _add_gen_config_args
+        parser = argparse.ArgumentParser()
+        _add_gen_config_args(parser)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(['--data-placement-policy', 'INVALID'])
+
     # --- Runtime environment: --use-brpc ---
 
     def test_use_brpc_default_no_env(self):

@@ -35,7 +35,9 @@ KVArgs::KVArgs(const std::string &command)
       batchNum(1),
       workerNum(0),
       workerIndex(0),
-      skipLocal(false)
+      skipLocal(false),
+      enableLocalCache(true),
+      dataPlacementPolicy("PREFERRED_SAME_NODE")
 {
 }
 
@@ -60,6 +62,9 @@ std::string KVArgs::Usage(const std::string &argv0)
     ss << "  -W --worker_num      Worker number, used for key range fetching (default: 0)\n";
     ss << "  -I --worker_index    Worker index, used for key generation (default: 0)\n";
     ss << "  --skip_local         Skip local worker data during get operations (default: false)\n";
+    ss << "  --enable_local_cache Enable the legacy worker-mediated path: true/false (default: true)\n";
+    ss << "  --data_placement_policy SDK routing policy: PREFERRED_SAME_NODE, REQUIRED_SAME_NODE, "
+          "or PREFERRED_META_OWNER (default: PREFERRED_SAME_NODE)\n";
     ss << "  -h                   Show help\n";
     return ss.str();
 }
@@ -82,13 +87,18 @@ std::string KVArgs::ToString()
     ss << "  -K --secret_key:     " << secretKey << "\n";
     ss << "  -W --worker_num:     " << workerNum << "\n";
     ss << "  -I --worker_index:   " << workerIndex << "\n";
-    ss << "  --skip_local:     " << (skipLocal ? "true" : "false");
+    ss << "  --skip_local:     " << (skipLocal ? "true" : "false") << "\n";
+    ss << "  --enable_local_cache: " << (enableLocalCache ? "true" : "false") << "\n";
+    ss << "  --data_placement_policy: "
+       << dataPlacementPolicy;
     return ss.str();
 }
 
 Status KVArgs::Parse(int argc, char *argv[])
 {
-    const int SKIP_LOCAL = 1;
+    const int skipLocalOption = 1;
+    const int enableLocalCacheOption = 2;
+    const int dataPlacementPolicyOption = 3;
     // clang-format off
     static const struct option longOptions[] = {
         { "action", required_argument, nullptr, 'a' },       { "worker_address", required_argument, nullptr, 'w' },
@@ -100,7 +110,10 @@ Status KVArgs::Parse(int argc, char *argv[])
         { "perf_workers", required_argument, nullptr, 'P' }, { "access_key", required_argument, nullptr, 'k' },
         { "secret_key", required_argument, nullptr, 'K' },   { "version", no_argument, nullptr, 'v' },
         { "worker_num", required_argument, nullptr, 'W' },   { "worker_index", required_argument, nullptr, 'I' },
-        { "skip_local", no_argument, nullptr, SKIP_LOCAL },  { "help", no_argument, nullptr, 'h' }
+        { "skip_local", no_argument, nullptr, skipLocalOption },
+        { "enable_local_cache", required_argument, nullptr, enableLocalCacheOption },
+        { "data_placement_policy", required_argument, nullptr, dataPlacementPolicyOption },
+        { "help", no_argument, nullptr, 'h' }
     };
     // clang-format on
     while (true) {
@@ -155,8 +168,25 @@ Status KVArgs::Parse(int argc, char *argv[])
             case 'I':
                 rc = StrToInt(optarg, workerIndex);
                 break;
-            case SKIP_LOCAL:
+            case skipLocalOption:
                 skipLocal = true;
+                break;
+            case enableLocalCacheOption:
+                if (std::string(optarg) == "true") {
+                    enableLocalCache = true;
+                } else if (std::string(optarg) == "false") {
+                    enableLocalCache = false;
+                } else {
+                    rc = Status(K_INVALID, "enable_local_cache must be true or false");
+                }
+                break;
+            case dataPlacementPolicyOption:
+                dataPlacementPolicy = optarg;
+                if (dataPlacementPolicy != "PREFERRED_SAME_NODE" &&
+                    dataPlacementPolicy != "REQUIRED_SAME_NODE" &&
+                    dataPlacementPolicy != "PREFERRED_META_OWNER") {
+                    rc = Status(K_INVALID, "unsupported data_placement_policy");
+                }
                 break;
             default:
                 std::cout << Usage(argv[0]);
@@ -186,6 +216,13 @@ Status KVArgs::Parse(int argc, char *argv[])
 
     if (threadNum == 0) {
         std::cerr << "Error: thread_num must be greater than 0\n";
+        std::cerr << "Please refer to the usage below:\n";
+        std::cerr << Usage(argv[0]);
+        return Status(K_INVALID, "");
+    }
+
+    if (dataPlacementPolicy != "PREFERRED_SAME_NODE" && enableLocalCache) {
+        std::cerr << "Error: data_placement_policy requires enable_local_cache=false\n";
         std::cerr << "Please refer to the usage below:\n";
         std::cerr << Usage(argv[0]);
         return Status(K_INVALID, "");

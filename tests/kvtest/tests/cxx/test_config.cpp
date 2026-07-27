@@ -360,6 +360,7 @@ TEST(LoadConfig_ConnectOptions) {
             "request_timeout_ms":50,
             "enable_cross_node_connection":false,
             "enable_local_cache":false,
+            "data_placement_policy":"PREFERRED_META_OWNER",
             "fast_transport_mem_size":1073741824
         }
     })");
@@ -369,8 +370,19 @@ TEST(LoadConfig_ConnectOptions) {
     ASSERT_EQ(cfg.requestTimeoutMs, 50);
     ASSERT_EQ(cfg.enableCrossNodeConnection, false);
     ASSERT_EQ(cfg.enableLocalCache, false);
+    ASSERT_EQ(cfg.dataPlacementPolicy, datasystem::DataPlacementPolicy::PREFERRED_META_OWNER);
     ASSERT_EQ(cfg.fastTransportMemSize, 1073741824);
     CleanupDir(cfg.outputDir);
+    std::remove(path.c_str());
+}
+
+TEST(LoadConfig_InvalidDataPlacementPolicy) {
+    auto path = WriteTempConfig(R"({
+        "etcd_address":"x:1","listen_port":9000,
+        "connect_options":{"data_placement_policy":"INVALID"}
+    })");
+    Config cfg;
+    ASSERT_FALSE(LoadConfig(path, cfg));
     std::remove(path.c_str());
 }
 
