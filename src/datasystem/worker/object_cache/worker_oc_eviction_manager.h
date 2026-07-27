@@ -312,6 +312,7 @@ private:
         uint64_t needSize{ 0 };
         // True when master metadata was already deleted and only local cleanup should be retried.
         bool metaDeleted{ false };
+        uint64_t queuedAtMs{ 0 };
     };
 
     struct PrimaryEndLifeCandidate {
@@ -494,6 +495,47 @@ private:
      * @param[in] tasks The primary end-life tasks routed to the same master.
      */
     void ProcessPrimaryEndLifeMasterBatch(const HostPort &masterAddr, std::vector<PrimaryEndLifeTask> tasks);
+
+    /**
+     * @brief Delete primary end-life metadata with bounded RPC retries.
+     * @param[in] masterAddr The metadata owner.
+     * @param[in] needDeleteMetaCandidates Candidates that still need metadata deletion.
+     * @param[out] failedKeys Keys rejected by the Master.
+     * @return K_OK after Master acceptance or three RPC failures; a non-RPC error otherwise.
+     */
+    Status DeletePrimaryEndLifeMetadata(const HostPort &masterAddr,
+                                        const std::vector<PrimaryEndLifeCandidate> &needDeleteMetaCandidates,
+                                        std::unordered_set<std::string> &failedKeys);
+
+    /**
+     * @brief Get a snapshot of primary end-life queue and drain pressure.
+     * @return A single-line pressure description.
+     */
+    std::string GetPrimaryEndLifePressure();
+
+    /**
+     * @brief Log primary end-life stage latency and queue pressure.
+     * @param[in] stage The stage name.
+     * @param[in] elapsedMs The stage elapsed time in milliseconds.
+     * @param[in] batchKeys The number of keys in the stage.
+     * @param[in] queueWaitMs The oldest task queue wait in milliseconds.
+     * @param[in] event The stage event, either start or complete.
+     */
+    void LogPrimaryEndLifeStage(const char *stage, double elapsedMs, size_t batchKeys, uint64_t queueWaitMs = 0,
+                                const char *event = "complete");
+
+    /**
+     * @brief Log one primary end-life metadata RPC attempt.
+     * @param[in] masterAddr The metadata owner.
+     * @param[in] attempt The current attempt number.
+     * @param[in] attemptElapsedMs The current attempt elapsed time.
+     * @param[in] totalElapsedMs The cumulative RPC elapsed time.
+     * @param[in] batchKeys The number of keys in the RPC.
+     * @param[in] failedKeys The number of keys rejected by the Master.
+     * @param[in] rc The RPC or response status.
+     */
+    void LogPrimaryEndLifeRpcAttempt(const HostPort &masterAddr, uint32_t attempt, double attemptElapsedMs,
+                                     double totalElapsedMs, size_t batchKeys, size_t failedKeys, const Status &rc);
 
     /**
      * @brief Revalidate tasks, acquire object write locks, and select candidates within the release budget.

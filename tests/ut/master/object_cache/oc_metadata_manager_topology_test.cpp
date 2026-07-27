@@ -17,6 +17,7 @@
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/routing/placement_facade.h"
+#include "datasystem/master/object_cache/expired_object_manager.h"
 #include "ut/common.h"
 
 #define private public
@@ -188,6 +189,28 @@ TEST_F(OCMetadataManagerTopologyTest, DeleteAllCopyMetaDoesNotDeleteObjectAlread
     TbbMetaTable::const_accessor accessor;
     std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
     EXPECT_TRUE(shard.table.find(accessor, objectKey));
+}
+
+TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaQueuesRequestVersion)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.expiredObjectManager_ = std::make_unique<ExpiredObjectManager>(LOCAL_ADDRESS, &manager);
+    const std::string objectKey = "async_delete_request_version";
+    DeleteAllCopyMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_async_delete(true);
+    auto *objectVersion = request.add_ids_with_version();
+    objectVersion->set_id(objectKey);
+    objectVersion->set_version(1);
+    DeleteAllCopyMetaRspPb response;
+
+    DS_ASSERT_OK(manager.DeleteAllCopyMeta(request, response));
+
+    EXPECT_EQ(response.failed_object_keys_size(), 0);
+    auto expiredObjects = manager.expiredObjectManager_->GetExpiredObject();
+    ASSERT_TRUE(expiredObjects.count(objectKey) > 0);
+    EXPECT_EQ(expiredObjects.at(objectKey), uint64_t(1));
 }
 }  // namespace
 }  // namespace datasystem::master

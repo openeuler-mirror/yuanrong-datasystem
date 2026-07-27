@@ -39,6 +39,7 @@
 #include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/format.h"
 #include "datasystem/common/util/raii.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/rpc/api_deadline.h"
@@ -66,10 +67,6 @@ constexpr uint32_t MASTER_TASK_THREAD_NUM = 8;
 
 constexpr uint32_t SPILL_EVICT_THREAD_NUM = 1;
 constexpr uint32_t MEM_EVICT_THREAD_NUM = 1;
-// Number of concurrent drain workers for primary end-life tasks. End-life involves
-// master RPC (DeleteAllCopyMeta) which is the eviction throughput bottleneck under
-// high write load (issue #750). Multiple workers drain the queue in parallel so the
-// pending set (limit 64) turns over fast enough to keep up with EvictionTask.
 constexpr uint32_t PRIMARY_END_LIFE_THREAD_NUM = 4;
 
 namespace datasystem {
@@ -80,7 +77,9 @@ static constexpr int BATCH_DELETE_META_MAX_DELAY_MS = 10;
 static constexpr size_t PRIMARY_END_LIFE_PENDING_LIMIT = 1024;
 static constexpr size_t PRIMARY_END_LIFE_BATCH_LIMIT = 64;
 static constexpr int PRIMARY_END_LIFE_BATCH_MAX_DELAY_MS = 10;
-static constexpr int64_t PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS = 3000;
+static constexpr int64_t PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS = 1000;
+static constexpr int64_t PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS = 100;
+static constexpr uint32_t PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES = 3;
 static constexpr uint32_t PRIMARY_END_LIFE_LOCK_RETRY_TIMES = 3;
 static constexpr int PRIMARY_END_LIFE_LOCK_RETRY_INTERVAL_MS = 1;
 
@@ -565,6 +564,7 @@ bool WorkerOcEvictionManager::IsAboveLowWaterMark(uint64_t needSize, size_t pend
 
 void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheType)
 {
+    Timer evictionTaskTimer;
     EvictFailedList evictFailedIds;
     // IMPORTANT — declaration order:
     // evictionAggregator MUST be declared before spillTasks.
@@ -592,6 +592,8 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
         deletedObjectsFlushTimer.Reset();
     };
     LOG(INFO) << "EvictionList size before evict: " << memEvictionList_.Size();
+    VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=start, eviction_list_size="
+                          << memEvictionList_.Size() << ", pressure=" << GetPrimaryEndLifePressure();
     size_t pendingSpillSize = 0;
     // The size of low water mark memory usage is not fixed. It varies on the size of shared memory available.
     // Share memory release is delayed due to asynchronous spill, so the pending spill data size needs to be counted to
@@ -672,6 +674,17 @@ void WorkerOcEvictionManager::EvictionTask(uint64_t needSize, CacheType cacheTyp
     isDone_ = true;
     LOG(INFO) << "EvictionList size after evict:" << memEvictionList_.Size()
               << ", failed size:" << evictFailedIds.size();
+    auto evictionElapsedMs = evictionTaskTimer.ElapsedMilliSecond();
+    if (evictionElapsedMs >= PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS) {
+        LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=complete, elapsed_ms="
+                     << evictionElapsedMs << ", eviction_list_size=" << memEvictionList_.Size()
+                     << ", failed_keys=" << evictFailedIds.size() << ", pressure=" << GetPrimaryEndLifePressure();
+    } else {
+        VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=eviction_summary, event=complete, elapsed_ms="
+                              << evictionElapsedMs << ", eviction_list_size=" << memEvictionList_.Size()
+                              << ", failed_keys=" << evictFailedIds.size()
+                              << ", pressure=" << GetPrimaryEndLifePressure();
+    }
 }
 
 Status WorkerOcEvictionManager::TryEvictObject(std::shared_ptr<SafeObjType> &entry,
@@ -772,6 +785,7 @@ Status WorkerOcEvictionManager::SubmitPrimaryEndLifeTask(const ObjectKV &objectK
 {
     const auto &objectKey = objectKV.GetObjKey();
     PrimaryEndLifeTask task{ objectKey, objectKV.GetObjEntry()->GetCreateTime(), cacheType, needSize };
+    task.queuedAtMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
     RETURN_IF_NOT_OK(ReservePrimaryEndLifeTask(task, accepted));
     if (!accepted) {
         VLOG(DEBUG_LOG_LEVEL) << FormatString("[ObjectKey %s] Primary end-life task already pending.", objectKey);
@@ -894,6 +908,56 @@ void WorkerOcEvictionManager::ReaddPrimaryEndLifeTasks(const std::vector<Primary
     }
 }
 
+std::string WorkerOcEvictionManager::GetPrimaryEndLifePressure()
+{
+    size_t pendingSize;
+    size_t queueSize;
+    int activeDrainWorkers;
+    {
+        std::lock_guard<std::mutex> lock(primaryEndLifeMutex_);
+        pendingSize = pendingPrimaryEndLifeObjects_.size();
+        queueSize = primaryEndLifeQueue_.size();
+        activeDrainWorkers = activeDrainWorkers_;
+    }
+    return FormatString("pending=%zu,queued=%zu,active_drains=%d,pending_limit=%zu", pendingSize, queueSize,
+                        activeDrainWorkers, PRIMARY_END_LIFE_PENDING_LIMIT);
+}
+
+void WorkerOcEvictionManager::LogPrimaryEndLifeStage(const char *stage, double elapsedMs, size_t batchKeys,
+                                                     uint64_t queueWaitMs, const char *event)
+{
+    if (elapsedMs >= PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS
+        || queueWaitMs >= static_cast<uint64_t>(PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS)) {
+        LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=" << stage << ", elapsed_ms=" << elapsedMs
+                     << ", event=" << event << ", queue_wait_ms=" << queueWaitMs << ", batch_keys=" << batchKeys
+                     << ", pressure=" << GetPrimaryEndLifePressure();
+        return;
+    }
+    VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=" << stage << ", elapsed_ms=" << elapsedMs
+                          << ", event=" << event << ", queue_wait_ms=" << queueWaitMs << ", batch_keys=" << batchKeys
+                          << ", pressure=" << GetPrimaryEndLifePressure();
+}
+
+void WorkerOcEvictionManager::LogPrimaryEndLifeRpcAttempt(const HostPort &masterAddr, uint32_t attempt,
+                                                          double attemptElapsedMs, double totalElapsedMs,
+                                                          size_t batchKeys, size_t failedKeys, const Status &rc)
+{
+    if (rc.IsError() || failedKeys > 0 || attemptElapsedMs >= PRIMARY_END_LIFE_SLOW_LOG_THRESHOLD_MS) {
+        LOG(WARNING) << "PRIMARY_END_LIFE_DIAG stage=rpc_attempt, event=complete, master=" << masterAddr.ToString()
+                     << ", attempt=" << attempt << "/" << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES
+                     << ", elapsed_ms=" << attemptElapsedMs << ", total_elapsed_ms=" << totalElapsedMs
+                     << ", batch_keys=" << batchKeys << ", failed_keys=" << failedKeys
+                     << ", status=" << rc.ToString() << ", pressure=" << GetPrimaryEndLifePressure();
+        return;
+    }
+    VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=rpc_attempt, event=complete, master="
+                          << masterAddr.ToString() << ", attempt=" << attempt << "/"
+                          << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES << ", elapsed_ms=" << attemptElapsedMs
+                          << ", total_elapsed_ms=" << totalElapsedMs << ", batch_keys=" << batchKeys
+                          << ", failed_keys=" << failedKeys << ", status=" << rc.ToString()
+                          << ", pressure=" << GetPrimaryEndLifePressure();
+}
+
 void WorkerOcEvictionManager::DrainPrimaryEndLifeTasks()
 {
     std::this_thread::sleep_for(std::chrono::milliseconds(PRIMARY_END_LIFE_BATCH_MAX_DELAY_MS));
@@ -903,6 +967,11 @@ void WorkerOcEvictionManager::DrainPrimaryEndLifeTasks()
             OnDrainWorkerIdle();
             return;
         }
+        auto nowMs = static_cast<uint64_t>(GetSteadyClockTimeStampMs());
+        auto queuedAtMs = tasks.front().queuedAtMs;
+        auto queueWaitMs = queuedAtMs != 0 && nowMs > queuedAtMs ? nowMs - queuedAtMs : 0;
+        LogPrimaryEndLifeStage("dequeue", 0, tasks.size(), queueWaitMs);
+        Timer batchTimer;
         try {
             ProcessPrimaryEndLifeTasks(tasks);
         } catch (const std::exception &e) {
@@ -913,6 +982,7 @@ void WorkerOcEvictionManager::DrainPrimaryEndLifeTasks()
             LOG(ERROR) << FormatString("ProcessPrimaryEndLifeTasks exception: %s", e.what());
             ReaddPrimaryEndLifeTasks(tasks);
         }
+        LogPrimaryEndLifeStage("drain_batch", batchTimer.ElapsedMilliSecond(), tasks.size());
     }
 }
 
@@ -973,9 +1043,10 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(const std::vector<Prima
         objectKeys.emplace_back(task.objectKey);
         taskByKey.emplace(task.objectKey, task);
     }
+    LogPrimaryEndLifeStage("route_group", 0, tasks.size(), 0, "start");
+    Timer routeTimer;
     auto grouped = metadataRoute_.GroupOwners(objectKeys);
-    auto &groupedKeys = grouped.groups;
-
+    LogPrimaryEndLifeStage("route_group", routeTimer.ElapsedMilliSecond(), tasks.size());
     std::unordered_set<std::string> routeFailedKeys;
     for (const auto &item : grouped.failures) {
         LOG(WARNING) << FormatString("[ObjectKey %s] Skip primary end-life, master unavailable: %s.", item.first,
@@ -992,7 +1063,7 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(const std::vector<Prima
     }
     ReaddPrimaryEndLifeTasks(failedTasks);
 
-    for (const auto &item : groupedKeys) {
+    for (const auto &item : grouped.groups) {
         HostPort masterAddr = item.first;
         std::vector<PrimaryEndLifeTask> masterTasks;
         masterTasks.reserve(item.second.size());
@@ -1015,6 +1086,8 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeTasks(const std::vector<Prima
 void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &masterAddr,
                                                                std::vector<PrimaryEndLifeTask> tasks)
 {
+    LogPrimaryEndLifeStage("prepare", 0, tasks.size(), 0, "start");
+    Timer prepareTimer;
     std::sort(tasks.begin(), tasks.end(),
               [](const auto &lhs, const auto &rhs) { return lhs.objectKey < rhs.objectKey; });
     std::vector<PrimaryEndLifeCandidate> candidates;
@@ -1023,10 +1096,9 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
                  "Prepare primary end-life candidates failed.");
     ReaddPrimaryEndLifeTasks(skippedTasks);
     if (candidates.empty()) {
+        LogPrimaryEndLifeStage("prepare", prepareTimer.ElapsedMilliSecond(), tasks.size());
         return;
     }
-    // Release W-lock before the master RPC so concurrent Get RLocks are not blocked for the
-    // RPC duration. Drain-vs-drain exclusion uses pendingPrimaryEndLifeObjects_ + single-thread pool.
     std::vector<PrimaryEndLifeCandidate> needDeleteMetaCandidates;
     needDeleteMetaCandidates.reserve(candidates.size());
     for (const auto &candidate : candidates) {
@@ -1034,22 +1106,55 @@ void WorkerOcEvictionManager::ProcessPrimaryEndLifeMasterBatch(const HostPort &m
             needDeleteMetaCandidates.emplace_back(candidate);
         }
     }
-    // Phase 1: Unlock → master RPC (unlocked).
+    // Release W-lock before the master RPC so concurrent Get RLocks are not blocked for the RPC duration.
     UnlockPrimaryEndLifeCandidates(candidates);
+    LogPrimaryEndLifeStage("prepare", prepareTimer.ElapsedMilliSecond(), tasks.size());
     std::unordered_set<std::string> failedKeys;
-    Status rc;
-    double elapsedMs = 0;
-    if (!needDeleteMetaCandidates.empty()) {
-        Timer timer;
-        rc = DeleteAllCopyMetaForPrimaryEndLife(masterAddr, needDeleteMetaCandidates, failedKeys);
-        elapsedMs = timer.ElapsedMilliSecond();
-    }
-    if (rc.IsError() || elapsedMs > PRIMARY_END_LIFE_DELETE_ALL_COPY_TIMEOUT_MS) {
-        LOG(WARNING) << FormatString("Primary end-life DeleteAllCopyMeta cost %f ms, count %zu, status: %s.", elapsedMs,
-                                     needDeleteMetaCandidates.size(), rc.ToString());
-    }
-    // Phase 2: Re-acquire WLock per candidate for local Erase only.
+    Status rc = DeletePrimaryEndLifeMetadata(masterAddr, needDeleteMetaCandidates, failedKeys);
+    // Re-acquire WLock per candidate for local erase only.
+    LogPrimaryEndLifeStage("local_cleanup", 0, candidates.size(), 0, "start");
+    Timer localCleanupTimer;
     ProcessPrimaryEndLifeLocalErase(candidates, rc, failedKeys);
+    LogPrimaryEndLifeStage("local_cleanup", localCleanupTimer.ElapsedMilliSecond(), candidates.size());
+}
+
+Status WorkerOcEvictionManager::DeletePrimaryEndLifeMetadata(
+    const HostPort &masterAddr, const std::vector<PrimaryEndLifeCandidate> &needDeleteMetaCandidates,
+    std::unordered_set<std::string> &failedKeys)
+{
+    if (needDeleteMetaCandidates.empty()) {
+        return Status::OK();
+    }
+    Timer rpcTotalTimer;
+    Status rc;
+    for (uint32_t attempt = 1; attempt <= PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES; ++attempt) {
+        failedKeys.clear();
+        VLOG(DEBUG_LOG_LEVEL) << "PRIMARY_END_LIFE_DIAG stage=rpc_attempt, event=start, master="
+                              << masterAddr.ToString() << ", attempt=" << attempt << "/"
+                              << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES
+                              << ", batch_keys=" << needDeleteMetaCandidates.size()
+                              << ", pressure=" << GetPrimaryEndLifePressure();
+        Timer rpcAttemptTimer;
+        rc = DeleteAllCopyMetaForPrimaryEndLife(masterAddr, needDeleteMetaCandidates, failedKeys);
+        auto attemptElapsedMs = rpcAttemptTimer.ElapsedMilliSecond();
+        LogPrimaryEndLifeRpcAttempt(masterAddr, attempt, attemptElapsedMs, rpcTotalTimer.ElapsedMilliSecond(),
+                                    needDeleteMetaCandidates.size(), failedKeys.size(), rc);
+        if (rc.IsOk() || !IsRpcTimeout(rc)) {
+            return rc;
+        }
+    }
+    std::vector<std::string> forceDeleteKeys;
+    forceDeleteKeys.reserve(needDeleteMetaCandidates.size());
+    for (const auto &candidate : needDeleteMetaCandidates) {
+        forceDeleteKeys.emplace_back(candidate.task.objectKey);
+    }
+    LOG(ERROR) << "Force deleting primary END_LIFE objects after DeleteAllCopyMeta RPC failed "
+               << PRIMARY_END_LIFE_DELETE_ALL_COPY_RETRY_TIMES << " times, master=" << masterAddr.ToString()
+               << ", total_elapsed_ms=" << rpcTotalTimer.ElapsedMilliSecond()
+               << ", object_keys=" << JoinKeys(forceDeleteKeys) << ", last_status=" << rc.ToString()
+               << ", pressure=" << GetPrimaryEndLifePressure();
+    failedKeys.clear();
+    return Status::OK();
 }
 
 void WorkerOcEvictionManager::ProcessPrimaryEndLifeLocalErase(std::vector<PrimaryEndLifeCandidate> &candidates,
@@ -1244,6 +1349,7 @@ Status WorkerOcEvictionManager::DeleteAllCopyMetaForPrimaryEndLife(
     master::DeleteAllCopyMetaReqPb req;
     req.set_address(localAddress_.ToString());
     req.set_redirect(true);
+    req.set_async_delete(true);
     for (const auto &candidate : candidates) {
         auto *objKeyVersionPb = req.add_ids_with_version();
         objKeyVersionPb->set_id(candidate.task.objectKey);

@@ -61,8 +61,10 @@
 
 Note:
 
-- 当前正式 primary end-life 异步化方案已经确定。实现该方案时不要重新扩大范围到 `EvictSpilledObjects`
-  或 `SpillImpl` fallback，也不要引入锁外 RPC 或前台可见 pending 状态，除非先形成新的设计结论。
+- 当前 primary end-life lane 已在短锁校验后释放对象锁，由 drain 线程同步发送带
+  `async_delete=true` 的 RPC；Master 入队成功返回后重新锁住对象并复核 version。不要重新扩大范围到
+  `EvictSpilledObjects` 或 `SpillImpl` fallback，也不要引入前台可见 pending 状态，除非先形成新的设计
+  结论。
 
 ## Preconditions
 
@@ -153,7 +155,8 @@ Use this section when implementing the formal primary end-life lane plan.
   - keep `EvictSpilledObjects` synchronous;
   - keep `SpillImpl` none-L2 no-space fallback synchronous.
 - Threading:
-  - add independent fixed-1 `primaryEndLifeThreadPool_`;
+  - use the source-fixed `PRIMARY_END_LIFE_THREAD_NUM=4` `primaryEndLifeThreadPool_`;
+  - let the drain task send `DeleteAllCopyMeta` synchronously; do not add a separate RPC pool or a second RPC task;
   - implement an internal queue/drain model for primary end-life tasks; do not submit one lambda per key that immediately sends a single-key RPC, because the formal plan requires same-master batch aggregation;
   - do not reuse `masterTaskThreadPool_`;
   - do not add user-visible thread-count or pending-limit flags.
@@ -170,7 +173,7 @@ Use this section when implementing the formal primary end-life lane plan.
   - do not call `asyncSendManager_.Remove(objectKey)` in the main loop after pending reserve; pending accepted only means
     the lane may try end-life later, not that local deletion is guaranteed;
   - for `WRITE_BACK_L2_CACHE_EVICT`, call `asyncSendManager_.Remove(objectKey)` only after the lane has locked the
-    object, `DeleteAllCopyMeta` succeeded for the key, and local deletion succeeded;
+    object and local deletion succeeded, either after Master acceptance or after three RPC communication failures;
   - if `DeleteAllCopyMeta` succeeded but local cleanup failed, remember the key/version as metadata-deleted and retry
     local cleanup without sending another `DeleteAllCopyMeta`;
   - do not call `asyncSendManager_.Remove(objectKey)` on pending duplicate, pending full, enqueue failure, low-watermark
@@ -194,39 +197,60 @@ Use this section when implementing the formal primary end-life lane plan.
     `READD_COUNTER`, and do not actively call `Evict()`;
   - while building a batch, account for each candidate's expected released size, preferably `entry->GetDataSize() + entry->GetMetadataSize()` adjusted to the actual local-memory release semantics; avoid adding more keys once the batch would clearly exceed the current space above low watermark, except that one oversized object may still be selected to make progress;
   - use repeated `ids_with_version` for batch `DeleteAllCopyMeta`; do not use `object_keys` in the new eviction lane;
-  - set a 3s total API budget per batch through `reqTimeoutDuration` with RAII reset;
+  - set `async_delete=true`; the Master must preserve the request version when it inserts the key into
+    `ExpiredObjectManager` and return after enqueue succeeds;
+  - set a 1s total API budget per Worker RPC call through `reqTimeoutDuration` with RAII reset;
   - treat `GetMetaAddress()` unavailable errors as fast skip without sending RPC; classify `K_RPC_UNAVAILABLE` as
     master/connection unavailable and `K_NOT_FOUND` as route or meta-address unavailable rather than always calling it a failed master;
-  - process the existing batch response without adding a new master result field: treat `objs_without_meta` and
-    `outdated_objs` as idempotent completion for that incarnation, retry only `failed_object_keys` and redirect keys,
-    and fail the whole batch only for RPC failure, `meta_is_moving`, or a non-OK `last_rc` with no specific failed key;
+  - for `async_delete=true`, treat successful Master enqueue as acceptance and retry `failed_object_keys` and redirect
+    keys; RPC failure, `meta_is_moving`, or a non-OK `last_rc` without specific failed keys fails the whole batch;
   - on the Master, make `PENDING` an explicit failed key and prevent cleanup after a key was already rejected or after
     metadata reappeared following the initial no-meta lookup; do not add a reverse version-bound check;
   - do not add a new dependency on `DeleteAllCopyMetaRspPb.delete_result`; current master delete paths communicate the
     relevant failure/version result through `failed_object_keys`, `outdated_objs`, `objs_without_meta`, redirect info,
     `meta_is_moving`, and `last_rc`;
   - on success only, delete spill file if needed, clear spill state, and erase object table;
-  - on retry-worthy failure, clear pending and re-add to `memEvictionList_` with `READD_COUNTER`;
+  - retry the same batch immediately only when `DeleteAllCopyMeta` returns an RPC communication error, with at most
+    three Worker RPC calls and no cross-round or per-key failure counter;
+  - after the third RPC communication error, log an ERROR, reacquire the object WLock, revalidate version, and force
+    local deletion;
+  - route failures, Master per-key failures, `meta_is_moving`, and non-RPC batch errors remain conservative failures:
+    clear pending and re-add to `memEvictionList_` with `READD_COUNTER`;
   - do not actively call `Evict()` after re-adding from the lane.
 - Timeout and shutdown:
-  - remote master uses the 3s budget as the worker-side retry/deadline budget for `WorkerRemoteMasterOCApi::DeleteAllCopyMeta`;
+  - remote master uses a 1s budget for each `WorkerRemoteMasterOCApi::DeleteAllCopyMeta` call and performs at most
+    three calls for RPC communication errors;
   - local-bypass master uses request timeout and master-side `timeoutDuration`, but this is not a transport-level forced interrupt;
   - construct `primaryEndLifeThreadPool_` with droppable shutdown if the implementation wants queued-but-not-started tasks to be discarded on worker exit;
   - reset `primaryEndLifeThreadPool_` in `WorkerOcEvictionManager` destruction before dependencies used by lane tasks can be released.
+- Observability:
+  - use `PRIMARY_END_LIFE_DIAG` stages for eviction summary, dequeue, route grouping, candidate prepare, RPC attempt,
+    local cleanup, and complete drain batch;
+  - pair `event=start/complete` for the main eviction summary, route grouping, candidate prepare, RPC attempt, and
+    local cleanup so the last unmatched start identifies the stalled stage;
+  - record the full `EvictionTask` elapsed time in the completed eviction summary to distinguish main-loop stalls from
+    primary end-life lane backlog;
+  - use `VLOG(1)` for normal completion and `LOG(WARNING)` when stage latency or oldest queue wait reaches 100 ms,
+    or when an RPC/per-key result is unsuccessful;
+  - include pending, queued, active drain, and pending limit in the pressure snapshot;
+  - record master, attempt number, single-attempt latency, and cumulative latency for `DeleteAllCopyMeta`;
+  - take the queue snapshot under `primaryEndLifeMutex_`, but format and emit logs after releasing the mutex.
 - Locking:
-  - do not shorten object WLock time in this plan;
+  - release object WLock before the RPC and reacquire it with version validation before local erase;
   - do not add foreground-visible `END_LIFE_PENDING` / `OBJECT_DELETING` state.
 
 ## Guardrails
 
 - Must preserve:
-  - `NONE_L2_CACHE_EVICT` primary copy cannot be locally erased before master end-life succeeds；
+  - `NONE_L2_CACHE_EVICT` primary copy normally waits for Master end-life acceptance; the explicit availability
+    override permits forced local erase after three RPC communication failures in the same batch；
   - write-back objects are only treated as L2-existing after writeback done；
   - async spill revalidates version before freeing shm；
   - failed candidates return to an eviction list unless object no longer exists；
   - 如果修改 eviction end-life 的异步、重试或队列行为，需要使用 create-time/version 防止误删新 incarnation。
   - primary end-life lane 入队成功只表示任务已接管；实际内存释放必须等 lane 成功 erase。
-  - primary end-life lane 失败回补 eviction list 后统一使用 `READD_COUNTER`，且不主动调用 `Evict()`。
+  - primary end-life lane 的路由或 Master 业务失败回补 eviction list 时使用 `READD_COUNTER`，且不主动调用
+    `Evict()`；仅同一 batch 连续三次 RPC 通信失败进入强制本地删除。
 - Must not change without explicit review:
   - `isDone_` single-task gate；
   - memory eviction 线程数、单任务门闩或等价运行时并发配置；
@@ -284,7 +308,7 @@ Use this section when implementing the formal primary end-life lane plan.
 ## Open Questions
 
 - 是否需要新增专门的 ST 覆盖 master RPC 慢/失败时 primary end-life lane 隔离主 eviction loop 的效果。
-- 是否需要后续独立方案支持 `EvictSpilledObjects` 异步化或锁外 RPC。
+- 是否需要后续独立方案支持 `EvictSpilledObjects` 异步化或锁外 RPC；当前锁外 RPC 只覆盖 primary lane。
 - batch `DeleteAllCopyMeta` 已纳入当前正式 primary end-life lane 方案。
 
 ## Pending Verification
