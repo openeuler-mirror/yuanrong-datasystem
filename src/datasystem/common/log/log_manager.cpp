@@ -52,6 +52,16 @@ using namespace std::chrono;
 const int PER_OPERATION_NUM = 3;
 const int FILEBEAT_POLL_INTERVAL_MS = 1000;
 
+namespace {
+
+Status CollectFilesForPattern(const std::string &pattern, bool includeCompressed, std::vector<std::string> &files)
+{
+    RETURN_IF_NOT_OK(Glob(pattern, files));
+    return includeCompressed ? Glob(pattern + "\\.gz", files) : Status::OK();
+}
+
+}  // namespace
+
 LogManager::~LogManager()
 {
     (void)Stop();
@@ -132,55 +142,21 @@ Status LogManager::DoLogMonitorWrite()
 
 Status LogManager::FetchLogWithPattern(std::vector<std::string> &files, bool isRolling)
 {
-    std::string pattern;
-    std::string suffix = "";
-    if (FLAGS_log_compress && isRolling) {
-        suffix = "\\.gz";
+    const std::string prefix = FLAGS_log_dir + "/";
+    const std::vector<std::string> patterns = {
+        prefix + ACCESS_LOG_NAME + "\\.*[0-9]\\.log",
+        prefix + REQUEST_OUT_LOG_NAME + "\\.*[0-9]\\.log",
+        prefix + CLIENT_ACCESS_LOG_NAME + "\\.*[0-9]\\.log",
+        prefix + CLIENT_ACCESS_LOG_NAME + "_[0-9]*\\.*[0-9]\\.log",
+        prefix + RESOURCE_LOG_NAME + "\\.*[0-9]\\.log",
+        prefix + KV_RESOURCE_LOG_NAME + "\\.*[0-9]\\.log",
+        prefix + KV_METRICS_LOG_NAME + "\\.*[0-9]\\.log",
+        prefix + FLAGS_log_filename + "_operation\\.*[0-9]\\.log"
+    };
+    const bool includeCompressed = FLAGS_log_compress && isRolling;
+    for (const auto &pattern : patterns) {
+        RETURN_IF_NOT_OK(CollectFilesForPattern(pattern, includeCompressed, files));
     }
-
-    std::stringstream accessRecorderFile;
-    accessRecorderFile << FLAGS_log_dir.c_str() << "/" << ACCESS_LOG_NAME << "\\." << "*[0-9]\\.log" << suffix;
-    pattern = accessRecorderFile.str();
-    RETURN_IF_NOT_OK(Glob(pattern, files));
-
-    std::stringstream requestOutFile;
-    requestOutFile << FLAGS_log_dir.c_str() << "/" << REQUEST_OUT_LOG_NAME << "\\." << "*[0-9]\\.log" << suffix;
-    pattern = requestOutFile.str();
-    RETURN_IF_NOT_OK(Glob(pattern, files));
-
-    std::stringstream dsClientAccessFile;
-    dsClientAccessFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "\\." << "*[0-9]\\.log"
-                       << suffix;
-    pattern = dsClientAccessFile.str();
-    RETURN_IF_NOT_OK(Glob(pattern, files));
-
-    std::stringstream dsClientAccessPidFile;
-    dsClientAccessPidFile << FLAGS_log_dir.c_str() << "/" << CLIENT_ACCESS_LOG_NAME << "_[0-9]*\\." << "*[0-9]\\.log"
-                          << suffix;
-    pattern = dsClientAccessPidFile.str();
-    RETURN_IF_NOT_OK(Glob(pattern, files));
-
-    std::stringstream resourceFile;
-    resourceFile << FLAGS_log_dir.c_str() << "/" << RESOURCE_LOG_NAME << "\\." << "*[0-9]\\.log" << suffix;
-    pattern = resourceFile.str();
-    RETURN_IF_NOT_OK(Glob(pattern, files));
-
-    std::stringstream kvResourceFile;
-    kvResourceFile << FLAGS_log_dir.c_str() << "/" << KV_RESOURCE_LOG_NAME << "\\." << "*[0-9]\\.log" << suffix;
-    pattern = kvResourceFile.str();
-    RETURN_IF_NOT_OK(Glob(pattern, files));
-
-    std::stringstream kvMetricsFile;
-    kvMetricsFile << FLAGS_log_dir.c_str() << "/" << KV_METRICS_LOG_NAME << "\\." << "*[0-9]\\.log" << suffix;
-    pattern = kvMetricsFile.str();
-    RETURN_IF_NOT_OK(Glob(pattern, files));
-
-    std::stringstream operationFile;
-    operationFile << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.c_str() << "_operation\\." << "*[0-9]\\.log"
-                  << suffix;
-    pattern = operationFile.str();
-    RETURN_IF_NOT_OK(Glob(pattern, files));
-
     return Status::OK();
 }
 
@@ -190,10 +166,7 @@ Status LogManager::CollectLogFilesForSeverity(int severity, std::vector<std::str
     std::stringstream ss;
     ss << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.c_str() << "\\." << severityName
        << "\\." << "*[0-9]\\.log";
-    if (FLAGS_log_compress) {
-        ss << "\\.gz";
-    }
-    RETURN_IF_NOT_OK(Glob(ss.str(), files));
+    RETURN_IF_NOT_OK(CollectFilesForPattern(ss.str(), FLAGS_log_compress, files));
 
     // Also match log files without PID suffix for backward compatibility
     // (e.g., files created before PID was enabled).
@@ -204,10 +177,7 @@ Status LogManager::CollectLogFilesForSeverity(int severity, std::vector<std::str
             std::stringstream ssBase;
             ssBase << FLAGS_log_dir.c_str() << "/" << FLAGS_log_filename.substr(0, underscorePos) << "\\."
                    << severityName << "\\." << "*[0-9]\\.log";
-            if (FLAGS_log_compress) {
-                ssBase << "\\.gz";
-            }
-            RETURN_IF_NOT_OK(Glob(ssBase.str(), files));
+            RETURN_IF_NOT_OK(CollectFilesForPattern(ssBase.str(), FLAGS_log_compress, files));
         }
     }
 
@@ -225,7 +195,7 @@ Status LogManager::DoLogFileRolling()
         }
 
         // 2nd: calculate the total size of the log files and get their timestamp.
-        std::map<int64_t, FileUnit> fileMap;
+        std::multimap<int64_t, FileUnit> fileMap;
         for (auto &file : files) {
             auto size = FileSize(file);
             CHECK_FAIL_RETURN_STATUS(size >= 0, K_RUNTIME_ERROR, "Get file size failed");
