@@ -743,6 +743,8 @@ Status EtcdStore::WatchEvents(const std::vector<WatchElement> &watchKeys)
         const auto &tableName = watchKey.tableName;
         const auto &key = watchKey.key;
         auto startRevision = watchKey.startRevision;
+        CHECK_FAIL_RETURN_STATUS(startRevision >= WATCH_FROM_NOW, K_INVALID,
+                                 "ETCD watch revision is below WATCH_FROM_NOW");
         {
             std::shared_lock<std::shared_timed_mutex> lck(mutex_);
             TableMap::const_iterator iter = tableMap_.find(tableName);

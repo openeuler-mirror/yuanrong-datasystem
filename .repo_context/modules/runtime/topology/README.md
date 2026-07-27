@@ -29,10 +29,9 @@
 - `cluster_topology.proto` owns these topology records under protobuf package `datasystem`; coordinator and other
   unrelated protobuf contracts remain separate schemas.
 - `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop. ETCD
-  Workers use the Worker-owned `EtcdStore` and one unified watch stream for exact topology/local notify plus membership
-  and derived task directories; Engine routes physical-key doorbells to the Worker and Controller dispatchers, and a
-  topology event wakes both. Coordinator keeps role-specific backend watch registrations. Observer watches exact
-  topology only.
+  Workers use the Worker-owned `EtcdStore` and one unified watch stream for exact topology/local notify plus membership;
+  Engine routes physical-key doorbells to the Worker and Controller dispatchers, and a topology event wakes both.
+  Coordinator keeps role-specific backend watch registrations. Observer watches exact topology only.
 - Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and
   queue overflow/coalescing, membership observations with bounded samples and digests, member join/leave/failure
   transitions, batch start/deadline/finalization, task notify/callback/progress, and Worker/Observer snapshot
@@ -110,9 +109,24 @@
   reconstructs deterministic work. The in-memory Coordinator backend recovers only the latest topology from Workers;
   task/notify records are treated as absent and regenerated. Candidate arbitration is cluster-scoped and resource
   bounded; conflicting same-version digests block only that cluster until membership/evidence changes.
+- Worker startup calls membership keepalive initialization and then performs one synchronous `ReloadTopology(true)`
+  before building or registering watch plans. Coordinator performs its first membership Put synchronously inside
+  `InitKeepAlive`; ETCD `InitKeepAlive` starts the keepalive monitor and returns, so its first lease grant and membership
+  Put may run concurrently with the bootstrap Reload. ETCD startup uses the published Snapshot authority revision as the
+  last processed revision for all unified targets and starts each target at the following revision. If the reload reports
+  `K_NOT_FOUND` or `K_NOT_READY`, ETCD registers in explicit `WATCH_FROM_NOW` mode and may miss the first topology
+  creation in the read-watch window; later topology events or passive compensation converge state. Other reload errors
+  fail startup through the existing cleanup behavior. No second synchronous startup reload runs after watch registration.
+- Coordinator uses the same keepalive-init-then-single-reload-before-watch call order. Its watch descriptor revision
+  remains zero because `WatchRange` ignores the field and returns `initial_kvs` plus a RESET doorbell. `K_NOT_FOUND` and
+  `K_NOT_READY` allow bootstrap waiting; other reload errors fail before any `WatchRange` call. A successful reload
+  synchronously publishes the Snapshot before watches are registered.
 - Coordinator watches bind both `CoordinatorId` and `watch_id`. Watch registration uses a client registration ID so an
   ambiguous WatchRange result retries idempotently. Initial/recreated membership invalidates both Worker and Controller
   role plans using O(1) RESET doorbells; lease threads never wait for watch-registration RPCs.
+- An ETCD canceled watch, including compaction cancellation, exits the producer and enters the existing whole-stream
+  `WatchRun` recovery path. Active compensation reads current state, advances every unified target revision, and the
+  stream is rebuilt as one unit rather than recreating an individual watcher.
 - Task cleanup first CASes the exact task value to a repository-internal deletion tombstone, then performs physical
   deletion. The tombstone is never exposed as a task and temporarily fences same-ID rematerialization, closing the
   conditional-cleanup/delete race without extending `ICoordinationBackend`. The same janitor pass also removes stale
@@ -160,6 +174,10 @@
 - Worker task notifications are derived, idempotent records. A notification observed after its active batch finalizes,
   or while a different batch is authoritative, is a stale no-op rather than a runtime failure.
 - Background reconciliation must remain resource bounded and must always converge to a state that permits a later batch.
+- Topology Engine and Observer watch-registration logs identify `start_mode` (`from_now` or `after_revision`) and
+  `last_processed_revision` (`none` or the numeric revision). Observer keeps its existing revision-zero watch behavior
+  and reports `start_mode=after_revision last_processed_revision=0`; logs must not imply revision zero for every
+  backend.
 
 ## Tests
 

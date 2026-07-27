@@ -100,7 +100,7 @@
 
 - Upstream callers:
   - Worker topology composition creates exact cluster-scoped tables, initializes one membership keepalive, and sends
-    the union of Worker/Controller watch targets over one Store-owned watch stream.
+    the unified topology, local-notify, and membership targets over one Store-owned watch stream.
   - `TopologyRepository` reads/writes topology records through CAS and responds to backend watch events.
   - object-cache metadata modules store metadata/location/global-cache records under ETCD metadata prefixes.
   - CLI and tests use ETCD store helpers for inspection and fault scenarios.
@@ -185,23 +185,36 @@ Important nuance:
 ### Watch And Event Compensation
 
 1. `EtcdStore::WatchEvents` converts table/key pairs to physical targets and starts one `EtcdWatch` stream. Worker
-   topology passes five logical targets in one call; ETCD creates one watch ID per target on that stream.
-2. Exact targets omit `range_end`; collection targets use `range_end = prefix + "\xFF"`; both start at
-   `start_revision + 1`.
-3. The producer reads the ETCD watch stream and queues events.
-4. The consumer filters stale events using local `keyVersion_`, runs the RocksDB cluster-info update callback, then calls the runtime event handler.
-5. DELETE events under a membership `/cluster/` key are ignored if the backend is not writable.
-6. When the watch stream fails, `ReInitWatch` first calls `RetrieveEventActively`, then reopens the stream.
-7. A passive compensation thread periodically searches ETCD and filters exact targets before generating fake PUT/DELETE
+   topology passes exact topology/local-notify plus the membership prefix in one call; ETCD creates one watch ID per
+   target on that stream.
+2. Topology startup synchronously reloads authority before registering the stream. A successful reload supplies the
+   published `TopologySnapshot::AuthorityRevision()` as the last processed revision for every unified target, and ETCD
+   receives `start_revision = last_processed_revision + 1`.
+3. If the bootstrap reload reports `K_NOT_FOUND` or `K_NOT_READY`, topology may register in `WATCH_FROM_NOW` mode. This
+   omits protobuf `start_revision`; the first topology creation in the read-watch window may be missed, and later
+   topology events or passive compensation provide convergence.
+4. Exact targets omit `range_end`; collection targets use `range_end = prefix + "\xFF"`.
+5. The producer reads the ETCD watch stream and queues events. A response records created/canceled state, compact
+   revision, cancel reason, header revision, watch ID, and event count.
+6. A canceled response is a producer error. `EtcdStore::WatchRun` uses the existing whole-stream recovery path:
+   `ReInitWatch` first calls `RetrieveEventActively`, updates every target revision from the range reads, and then reopens
+   the unified stream. Active compensation orders events by revision, key, and event type so one transaction's distinct
+   same-revision keys are all retained. Recovery does not rebuild only the canceled watcher.
+7. The consumer filters stale events using local `keyVersion_`, runs the RocksDB cluster-info update callback, then calls
+   the runtime event handler.
+8. DELETE events under a membership `/cluster/` key are ignored if the backend is not writable.
+9. A passive compensation thread periodically searches ETCD and filters exact targets before generating fake PUT/DELETE
    events for missed state.
-8. `TopologyKeyHelper` classifies physical keys from the unified stream, and `TopologyEngine` applies role-delivery
-   policy: topology wakes Worker and Controller, local notify wakes Worker, and membership/task keys wake Controller.
-   Topology/task/notify payloads are discarded before bounded doorbell dispatch; membership values are retained for
-   restart-generation observation.
+10. `TopologyKeyHelper` classifies physical keys from the unified stream, and `TopologyEngine` applies role-delivery
+    policy: topology wakes Worker and Controller, local notify wakes Worker, and membership wakes Controller.
+    Topology/notify payloads are discarded before bounded doorbell dispatch; membership values are retained for
+    restart-generation observation.
 
 Important nuance:
 
 - Watch is not a pure subscription layer. It actively compares ETCD state against local `keyVersion_` and can synthesize events.
+- `WATCH_FROM_NOW` is distinct from revision zero: it leaves protobuf `start_revision` unset instead of deriving a value
+  through arithmetic.
 - Fake PUT events may be delayed when the observed version suggests an intermediate event may still arrive.
 
 ### Authentication, TLS, And Session Behavior
@@ -244,12 +257,14 @@ Important nuance:
   - changing ETCD table prefixes changes persisted key layout and watch routing;
   - changing CAS retry behavior directly affects topology scale operations;
   - changing keepalive state strings affects restart, reconciliation, voluntary exit, and passive deletion;
-  - changing watch filtering or compensation can duplicate, suppress, or reorder cluster events;
+  - changing bootstrap revisions, canceled-watch handling, filtering, or compensation can duplicate, suppress, or
+    reorder cluster events;
   - changing Metastore transaction or history behavior can diverge from external ETCD behavior.
 - Important invariants:
   - cluster-table worker keys must be lease-bound;
   - CAS compares ETCD key version unless the alternate value-based overload is used;
   - watch local `keyVersion_` must advance only after event handlers process the event;
+  - canceled watches must leave the producer and use whole-stream active compensation before re-registration;
   - DELETE cluster events are actionable only when the backend is writable;
   - `GetBackendAddress()` favors `metastore_address` when present.
 - Observability or debugging hooks:

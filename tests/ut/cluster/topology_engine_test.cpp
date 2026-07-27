@@ -341,6 +341,57 @@ TEST(TopologyEngineTest, BuilderExactReadSetsRestartWithoutStartingRuntimeSideEf
     EXPECT_EQ(builder.Build(engine).GetCode(), K_INVALID);
 }
 
+TEST(TopologyEngineTest, CoordinatorBootstrapReadFailurePreventsWatchRegistration)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "bootstrap-read-failure";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
+
+    EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);
+    EXPECT_TRUE(proxy.WatchCalls().empty());
+    EXPECT_FALSE(ingress.IsBound());
+    EXPECT_EQ(engine->GetState(), TopologyEngineState::STOPPED);
+}
+
+TEST(TopologyEngineTest, CoordinatorMissingTopologyContinuesToWatchAndStart)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    auto engine = BuildEngine(proxy, ingress, callbacks, "missing-bootstrap");
+    ASSERT_NE(engine, nullptr);
+
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_EQ(engine->GetState(), TopologyEngineState::RUNNING);
+    EXPECT_TRUE(ingress.IsBound());
+    EXPECT_GE(proxy.WatchCalls().size(), 2U);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, CoordinatorNotReadyTopologyContinuesToWatchAndStart)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "not-ready-bootstrap";
+    auto keys = MakeKeys(clusterName);
+    auto engine = BuildEngine(proxy, ingress, callbacks, clusterName);
+    ASSERT_NE(engine, nullptr);
+    proxy.FailNextRangeForKey(TopologyStorageKey(*keys), K_NOT_READY);
+
+    DS_ASSERT_OK(engine->Start());
+    EXPECT_EQ(engine->GetState(), TopologyEngineState::RUNNING);
+    EXPECT_TRUE(ingress.IsBound());
+    EXPECT_GE(proxy.WatchCalls().size(), 2U);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyEngineTest, StartPublishesCapabilitiesAndShutdownDrainsOwnedRoles)
 {
     testing::FakeCoordinatorServiceProxy proxy;

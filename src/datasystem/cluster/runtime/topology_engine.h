@@ -199,7 +199,8 @@ public:
     TopologyEngine &operator=(const TopologyEngine &) = delete;
 
     /**
-     * @brief Establish Worker watches/lease, exact-read topology and start one state thread once.
+     * @brief Start Worker membership keepalive, synchronously reload topology, register watches, and start one state
+     *        thread once.
      * @return K_OK on successful startup; a backend, validation, or thread-start error otherwise.
      * @note A failed or stopped Engine cannot be restarted because backend event-source shutdown is one-shot.
      */

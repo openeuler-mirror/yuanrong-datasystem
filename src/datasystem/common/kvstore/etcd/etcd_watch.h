@@ -36,6 +36,12 @@
 #include "datasystem/common/util/wait_post.h"
 
 namespace datasystem {
+
+/**
+ * @brief Start a watch at the backend's current revision instead of replaying retained history.
+ */
+inline constexpr int64_t WATCH_FROM_NOW = -1;
+
 struct EtcdWatchResponseHeader {
     // ID of the cluster which sent the response.
     uint64_t clusterId = 0;
@@ -66,8 +72,11 @@ struct EtcdWatchResponse {
     // Set to true if the response is for a cancel watch request.
     bool canceled = false;
 
-    //  set to the minimum historical revision available to etcd if a watcher tries watching at a compacted revision.
+    // Set to the minimum historical revision available to etcd if a watcher tries watching at a compacted revision.
     int64_t compactRevision = 0;
+
+    // Explains why etcd canceled the watch, when available.
+    std::string cancelReason;
 
     // A list of new events in sequence corresponding to the given watch ID.
     std::vector<mvccpb::Event> events;
@@ -250,10 +259,11 @@ public:
 private:
 
     /**
-     * @brief Store read/write events in an event queue.
-     * @param[in] response The response received from the watch events
+     * @brief Store read/write events in an event queue or report a canceled watch.
+     * @param[in] response The response received from the watch events.
+     * @return K_OK after handling a normal response; an error for a canceled watch.
      */
-    inline void StoreEvents(EtcdWatchResponse &response);
+    Status StoreEvents(EtcdWatchResponse &response);
 
     /**
      * @brief Gets status of Async calls from GRPC completion queue
