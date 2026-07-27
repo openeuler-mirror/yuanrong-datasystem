@@ -116,7 +116,7 @@ private:
     static bool HasNpuDevice()
     {
 #ifdef USE_NPU
-        return HasDevNode("/dev/davinci[0-16]*");
+        return HasDevNode("/dev/davinci[0-9]*");
 #else
         return false;
 #endif
@@ -174,7 +174,7 @@ private:
         LOG(INFO) << "No accelerator device detected. "
                      "Checked:"
 #ifdef USE_NPU
-                     " /dev/davinci[0-16]*"
+                     " /dev/davinci[0-9]*"
 #endif
 #ifdef USE_GPU
                      " /dev/nvidia[0-9]* and nvidia-smi"
