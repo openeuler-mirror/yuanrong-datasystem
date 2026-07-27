@@ -27,12 +27,14 @@ DS_DECLARE_int32(heartbeat_interval_ms);
 DS_DECLARE_string(worker_address);
 DS_DECLARE_uint32(node_timeout_s);
 DS_DECLARE_uint32(node_dead_timeout_s);
+DS_DECLARE_uint32(scale_in_collect_window_ms);
 
 namespace {
 constexpr uint32_t kMinNodeTimeoutS = 3;
 constexpr uint32_t kMinNodeDeadTimeoutS = 5;
 constexpr uint32_t kMaxLeaseRenewIntervalMs = 60 * MS_PER_SECOND;
 constexpr uint32_t kLeaseRenewRetryTimes = 4;
+constexpr uint32_t kMaxScaleInCollectWindowMs = 5'000;
 
 uint32_t AdjustNodeDeadTimeoutS(uint32_t value)
 {
@@ -98,6 +100,7 @@ void AdjustNodeTimeoutFlags()
     if (FLAGS_node_dead_timeout_s < kMinNodeDeadTimeoutS) {
         FLAGS_node_dead_timeout_s = kMinNodeDeadTimeoutS;
     }
+    AdjustScaleInCollectWindowMs();
     uint32_t maxHeartbeatIntervalMs = MaxHeartbeatIntervalMs();
     if (static_cast<uint32_t>(FLAGS_heartbeat_interval_ms) > maxHeartbeatIntervalMs) {
         LOG(WARNING) << "Adjust heartbeat_interval_ms from " << FLAGS_heartbeat_interval_ms << " to "
@@ -137,5 +140,24 @@ bool WorkerValidateHeartbeatIntervalMs(const uint32_t value)
         return false;
     }
     return true;
+}
+
+bool WorkerValidateScaleInCollectWindowMs(const uint32_t value)
+{
+    if (value > kMaxScaleInCollectWindowMs) {
+        LOG(ERROR) << "The value of scale_in_collect_window_ms must be no greater than " << kMaxScaleInCollectWindowMs
+                   << ". current value: " << value;
+        return false;
+    }
+    return true;
+}
+
+void AdjustScaleInCollectWindowMs()
+{
+    if (FLAGS_scale_in_collect_window_ms > kMaxScaleInCollectWindowMs) {
+        LOG(WARNING) << "Adjust scale_in_collect_window_ms from " << FLAGS_scale_in_collect_window_ms << " to "
+                     << kMaxScaleInCollectWindowMs << " (hard upper bound)";
+        FLAGS_scale_in_collect_window_ms = kMaxScaleInCollectWindowMs;
+    }
 }
 }  // namespace datasystem

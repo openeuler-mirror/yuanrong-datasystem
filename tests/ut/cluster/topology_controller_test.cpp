@@ -187,6 +187,8 @@ TEST(TopologyControllerTest, ConvertsExitingMembershipToOneScaleInBatch)
     CoordinationEventDispatcher dispatcher(32);
     TopologyControllerOptions options;
     options.reconcileTick = std::chrono::milliseconds(1);
+    // 0ms disables coalescing: legacy immediate-batch admission within one reconcile.
+    options.scaleInCollectWindow = std::chrono::milliseconds(0);
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
     TopologyState latest;
     latest.version = 1;
@@ -277,6 +279,283 @@ TEST(TopologyControllerTest, PreservesRestartGenerationAcrossDoorbellCoalescing)
     }
     EXPECT_EQ(restartCalls.load(), 1);
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// Shared initial state for scale-in coalescing tests: two ACTIVE members, first one exiting.
+TopologyState MakeTwoActiveMembersScaleInInitialState()
+{
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
+    return latest;
+}
+
+// A third READY member keeps multi-member scale-in tests out of the cluster-shutdown path.
+TopologyState MakeThreeActiveMembersScaleInInitialState()
+{
+    TopologyState latest = MakeTwoActiveMembersScaleInInitialState();
+    latest.members.push_back(Member{ { std::string(16, 'c'), "127.0.0.1:3" }, MemberState::ACTIVE, { 3 } });
+    return latest;
+}
+
+// Wait until topology reports no active batch or the deadline elapses.
+bool WaitForNoActiveBatch(TopologyRepository &repository, std::chrono::steady_clock::time_point deadline)
+{
+    return WaitForTopology(repository, deadline, [](const auto &state) { return !state.activeBatch.has_value(); });
+}
+
+bool ActiveScaleInBatchHasLeavingCount(TopologyRepository &repository,
+                                       std::chrono::steady_clock::time_point deadline, size_t leavingCount)
+{
+    return WaitForTopology(repository, deadline, [leavingCount](const auto &state) {
+        if (!state.activeBatch.has_value() || state.activeBatch->type != TopologyChangeType::SCALE_IN) {
+            return false;
+        }
+        return static_cast<size_t>(std::count_if(state.members.begin(), state.members.end(),
+                                                  [](const auto &m) { return m.state == MemberState::LEAVING; }))
+               == leavingCount;
+    });
+}
+
+// 1. Default window: batch is not started before the collect deadline elapses.
+TEST(TopologyControllerTest, ScaleInCollectWindowHoldsBatchBeforeDeadline)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-hold", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(10);
+    options.scaleInCollectWindow = std::chrono::milliseconds(500);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTwoActiveMembersScaleInInitialState());
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+    // Within a window shorter than the collect deadline, no SCALE_IN batch must be started.
+    EXPECT_TRUE(WaitForNoActiveBatch(repository, std::chrono::steady_clock::now() + std::chrono::milliseconds(200)));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// 2. After the deadline elapses, a single-node SCALE_IN batch is started.
+TEST(TopologyControllerTest, ScaleInCollectWindowStartsSingleBatchAfterDeadline)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-finish-single", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(10);
+    options.scaleInCollectWindow = std::chrono::milliseconds(50);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTwoActiveMembersScaleInInitialState());
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, deadline, 1));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// The collect deadline wakes the controller instead of waiting for the full reconcile tick.
+TEST(TopologyControllerTest, ScaleInCollectWindowDeadlinePreemptsReconcileTick)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-deadline-wakeup", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(500);
+    options.scaleInCollectWindow = std::chrono::milliseconds(50);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTwoActiveMembersScaleInInitialState());
+    DS_ASSERT_OK(controller.Start());
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    // The old fixed-tick loop needs about 1s after the event; deadline-aware waiting finishes in about 550ms.
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, std::chrono::steady_clock::now() + std::chrono::milliseconds(750),
+                                                  1));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// 3. Two members exiting within the window land in the same SCALE_IN epoch.
+TEST(TopologyControllerTest, ScaleInCollectWindowCoalescesTwoMembersInSameEpoch)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-coalesce-two", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(10);
+    options.scaleInCollectWindow = std::chrono::milliseconds(200);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeThreeActiveMembersScaleInInitialState());
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+    // While the first EXITING is being collected, the second member exits too.
+    ASSERT_TRUE(WaitForNoActiveBatch(repository, std::chrono::steady_clock::now() + std::chrono::milliseconds(50)));
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::EXITING);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, deadline, 2));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// 4. A member exiting only after the batch is committed does not join the running epoch.
+TEST(TopologyControllerTest, ScaleInCollectWindowDoesNotAdmitLateMember)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-late-member", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(10);
+    options.scaleInCollectWindow = std::chrono::milliseconds(50);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeThreeActiveMembersScaleInInitialState());
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+    // Wait for the first member's batch to commit, then exit the second member.
+    ASSERT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, std::chrono::steady_clock::now() + std::chrono::seconds(2),
+                                                 1));
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::EXITING);
+    // The second member becomes PRE_LEAVING but stays out of the already-committed batch.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
+        return state.activeBatch.has_value() && state.activeBatch->type == TopologyChangeType::SCALE_IN
+               && std::any_of(state.members.begin(), state.members.end(), [](const auto &member) {
+                      return member.identity.address == "127.0.0.1:2" && member.state == MemberState::PRE_LEAVING;
+                  });
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// 5. 0ms disables coalescing (covered by ConvertsExitingMembershipToOneScaleInBatch above).
+TEST(TopologyControllerTest, ScaleInCollectWindowZeroDisablesCoalescing)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-zero", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.scaleInCollectWindow = std::chrono::milliseconds(0);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTwoActiveMembersScaleInInitialState());
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, std::chrono::steady_clock::now() + std::chrono::seconds(1),
+                                                  1));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// 6. A scale-out candidate during the window clears the collect state and keeps scale-out priority.
+TEST(TopologyControllerTest, ScaleInCollectWindowClearedByScaleOutCandidate)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-scaleout-interrupt", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(10);
+    options.scaleInCollectWindow = std::chrono::milliseconds(500);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    TopologyState latest = MakeTwoActiveMembersScaleInInitialState();
+    // Second member is INITIAL (joining) instead of ACTIVE; its READY membership makes it a scale-out candidate.
+    latest.members[1].state = MemberState::INITIAL;
+    latest.members[1].tokens = {};
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+    // Scale-out must start immediately despite the long collect window.
+    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + std::chrono::seconds(1),
+                                [](const auto &state) {
+                                    return state.activeBatch.has_value()
+                                           && state.activeBatch->type == TopologyChangeType::SCALE_OUT;
+                                }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// 7. maxMembersPerBatch caps participants even within the collect window.
+TEST(TopologyControllerTest, ScaleInCollectWindowRespectsMaxMembersPerBatch)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-max-batch", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(10);
+    options.scaleInCollectWindow = std::chrono::milliseconds(50);
+    options.maxMembersPerBatch = 1;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeThreeActiveMembersScaleInInitialState());
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::EXITING);
+    PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+    // Both exit within the window, but only one is admitted to this batch.
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, std::chrono::steady_clock::now() + std::chrono::seconds(2),
+                                                  1));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// 8. No PRE_LEAVING candidate means the collect window is never opened; no batch is started.
+TEST(TopologyControllerTest, ScaleInCollectWindowNeverOpenedWithoutCandidate)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-no-candidate", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(10);
+    options.scaleInCollectWindow = std::chrono::milliseconds(50);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    // No PRE_LEAVING member and no EXITING membership: collect is never opened.
+    TopologyState latest = MakeTwoActiveMembersScaleInInitialState();
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+    EXPECT_TRUE(WaitForNoActiveBatch(repository, std::chrono::steady_clock::now() + std::chrono::milliseconds(300)));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+// 9. IsValid rejects values above the hard upper bound and accepts 0 and the bound.
+TEST(TopologyControllerTest, ScaleInCollectWindowIsValidBounds)
+{
+    TopologyControllerOptions options;
+    EXPECT_TRUE(options.IsValid());
+    options.scaleInCollectWindow = std::chrono::milliseconds(0);
+    EXPECT_TRUE(options.IsValid());
+    options.scaleInCollectWindow = std::chrono::milliseconds(5'000);
+    EXPECT_TRUE(options.IsValid());
+    options.scaleInCollectWindow = std::chrono::milliseconds(5'001);
+    EXPECT_FALSE(options.IsValid());
 }
 
 }  // namespace

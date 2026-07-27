@@ -328,6 +328,17 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "scale_in_collect_window_flag_test",
+    srcs = ["scale_in_collect_window_flag_test.cpp"],
+    deps = [
+        "//src/datasystem/common/flags:ds_flags",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker:worker_update_flag_check",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "dyn_bitmap_test",
     srcs = ["dyn_bitmap_test.cpp"],
     deps = [
@@ -339,6 +350,7 @@ test_suite(
     name = "all_util_tests",
     tests = [
         "watermark_flag_parse_test",
+        "scale_in_collect_window_flag_test",
         "blocking_queue_test",
         "request_context_test",
         "event_subscribers_test",
