@@ -713,6 +713,7 @@ private:
     void LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
                                     uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
                                     uint64_t wakeSchedLatencyUs, const Status &waitRc) const;
+    void LogUrmaLateCompletionElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event) const;
     uint64_t pollLastStartUs_{ 0 };
     uint64_t pollLastEndUs_{ 0 };
 

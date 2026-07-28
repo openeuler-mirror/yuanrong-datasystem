@@ -275,7 +275,7 @@ bazel test //tests/ut/client:urma_jetty_gate_test --config=test --config=urma --
 - Manual URMA local send-Jetty fault coverage:
   - `//tests/ut/client:urma_send_jetty_fault_test` is a separate Bazel `manual` target. It covers manager-level
     pool exhaustion, repeated recoverable status-9 CQEs, non-recoverable CQE no-rebuild/no-leak behavior, async
-    `JETTY_ERR`, and repeated timeout retirement. Refill/capacity assertions use unique registry Jetty identities;
+    `JETTY_ERR`, and in-flight timeout CQE-drain/release behavior. Refill/capacity assertions use unique registry Jetty identities;
     retirement now installs one pending record synchronously rather than maintaining overlapping counters.
     The non-recoverable case creates and seals a real event,
     then drives the production failed-event release/notify/wait-delete sequence before reacquiring the same Jetty.

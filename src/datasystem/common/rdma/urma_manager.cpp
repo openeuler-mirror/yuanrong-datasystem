@@ -837,8 +837,15 @@ Status UrmaManager::CheckAndNotify(const UrmaWriteTrace &pollTrace)
             }
             ReleaseEventLane(event);
             // Notify everyone who are waiting on the event
-            event->NotifyAll();
-            // delete the event and
+            const bool waitTimedOut = event->NotifyAllAndGetWaitTimedOut();
+            if (waitTimedOut) {
+                // The waiter already returned its timeout, so emit the same completion trace from the polling path.
+                LogUrmaLateCompletionElapsed(requestId, event);
+                // The waiter already returned its timeout. The completion thread now owns the final
+                // event-map cleanup after releasing the lane for the late CQE.
+                DeleteEvent(requestId);
+            }
+            // Normal waiters delete their event on return; timed-out waiters were deleted by the completion path above.
             VLOG(1) << "[UrmaEventHandler] Notifying the request id: " << requestId;
             // remove request id from finishedRequests_ set
             // we dont need lock for finishedRequests_ as its accessed only by single thread
@@ -1029,6 +1036,17 @@ void UrmaManager::LogUrmaWaitToFinishElapsed(uint64_t requestId, const std::shar
             << ", suggest: " << URMA_ELAPSED_TOTAL_SUGGEST);
 }
 
+void UrmaManager::LogUrmaLateCompletionElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event) const
+{
+    const auto completionUs = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
+    const auto createUs = event->GetCreateTimeUs();
+    const auto totalElapsedUs = completionUs >= createUs ? completionUs - createUs : 0;
+    constexpr double US_TO_MS = 1000.0;
+    const auto totalElapsedMs = static_cast<double>(totalElapsedUs) / US_TO_MS;
+    LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, 0, 0,
+                               Status(K_URMA_WAIT_TIMEOUT, "CQE completed after upper-layer wait timeout"));
+}
+
 Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
 {
     PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
@@ -1046,19 +1064,29 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     // use this unique request id as key to wait
     // wait until timeout
 
-    Raii deleteEvent([this, &requestId]() { DeleteEvent(requestId); });
-    if (timeoutMs < 0) {
+    bool deleteEventOnExit = true;
+    Raii deleteEvent([this, &requestId, &deleteEventOnExit]() {
+        if (deleteEventOnExit) {
+            DeleteEvent(requestId);
+        }
+    });
+    auto timeoutStatus = [&](double elapsedMs, const std::string &reason) {
+        if (event->MarkWaitTimedOut()) {
+            deleteEventOnExit = false;
+        }
         const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-        LOG_IF_ERROR(RetireEventLane(event), FormatString("Failed to retire URMA lane for request: %s",
-                                                          requestIdStr.c_str()));
         const auto srcAddress = localUrmaInfo_.localAddress.ToString();
-        RETURN_STATUS_LOG_ERROR(
-            K_URMA_WAIT_TIMEOUT,
-            FormatString("[URMA_WAIT_TIMEOUT] timedout waiting for request: %s, srcAddress=%s, targetAddress=%s, "
-                         "remoteInstanceId=%s, dataSize=%zu, op=%s",
-                         requestIdStr.c_str(), srcAddress.c_str(), event->GetRemoteAddress().c_str(),
-                         event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
-                         UrmaEvent::OperationTypeName(event->GetOperationType())));
+        const auto message = FormatString(
+            "[URMA_WAIT_TIMEOUT] timedout waiting for requestId=%s, elapsedMs=%f, srcAddress=%s, "
+            "targetAddress=%s, remoteInstanceId=%s, dataSize=%zu, op=%s, reason=%s",
+            requestIdStr.c_str(), elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
+            event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
+            UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
+        LOG(WARNING) << message;
+        return Status(K_URMA_WAIT_TIMEOUT, message);
+    };
+    if (timeoutMs < 0) {
+        return timeoutStatus(0, "request deadline already expired");
     }
 
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
@@ -1079,15 +1107,7 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     const bool isUrmaWaitTimeout = waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT
                                    || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
     if (isUrmaWaitTimeout) {
-        LOG_IF_ERROR(RetireEventLane(event), FormatString("Failed to retire URMA lane for request: %zu", requestId));
-        const auto srcAddress = localUrmaInfo_.localAddress.ToString();
-        return Status(K_URMA_WAIT_TIMEOUT,
-                      FormatString("urma write deadline exceeded: %fms, requestId=%zu, srcAddress=%s, "
-                                   "targetAddress=%s, remoteInstanceId=%s, dataSize=%zu, op=%s, %s",
-                                   totalElapsedMs, requestId, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
-                                   event->GetRemoteInstanceId().c_str(),
-                                   static_cast<size_t>(event->GetDataSize()),
-                                   UrmaEvent::OperationTypeName(event->GetOperationType()), waitRc.GetMsg()));
+        return timeoutStatus(totalElapsedMs, waitRc.GetMsg());
     }
     LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs, wakeSchedLatencyUs,
                                waitRc);

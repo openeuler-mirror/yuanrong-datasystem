@@ -113,8 +113,10 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA write chunking is capped by the smaller of device capability and `urma_max_write_size_mb`; the flag defaults
     to `4` MB and is validated in the range `[1, 2048]` MB.
   - URMA send-side Jetty reuse is managed by a process-level send Jetty pool under `src/datasystem/common/rdma`.
-    `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; timeout/error retirement is
-    bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap is `200 + 200`.
+    `urma_send_jetty_lane_pool_size` is the target active pool size and must be positive; explicit provider/error
+    retirement is bounded by `urma_send_jetty_lane_refill_extra_size`, so the intended live-plus-retiring default cap
+    is `200 + 200`. An upper-layer timeout keeps the in-flight Event/Lane until CQE completion and then releases the
+    valid Jetty without triggering refill.
     Every provider post first acquires a shared `UrmaJetty::PostPermit`. The Jetty uses one atomic gate word for
     `closing`, retire-finalizer arming/scheduling, and the active provider-call count: concurrent posts remain allowed,
     while retire closes admission and waits for already-admitted provider calls before `modify(ERROR)`.

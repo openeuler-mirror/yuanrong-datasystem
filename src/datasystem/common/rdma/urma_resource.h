@@ -224,7 +224,31 @@ public:
     }
 
     /**
-     * @brief Mark this event as settled by timeout or local retirement.
+     * @brief Record that the waiter timed out while the provider completion is still pending.
+     * @return True if the timeout owns the in-flight handoff; false if completion already won the race.
+     */
+    bool MarkWaitTimedOut()
+    {
+        std::lock_guard<std::mutex> lock(eventMutex_);
+        if (ready_) {
+            return false;
+        }
+        waitTimedOut_ = true;
+        return true;
+    }
+
+    /**
+     * @brief Check whether the waiter returned before this event was completed.
+     * @return True if the completion thread owns the delayed event-map cleanup.
+     */
+    bool IsWaitTimedOut() const
+    {
+        std::lock_guard<std::mutex> lock(eventMutex_);
+        return waitTimedOut_;
+    }
+
+    /**
+     * @brief Mark this event as settled by an explicit local/provider failure.
      * @return Lane action to execute if this was the final event in the request lease.
      */
     UrmaSendLaneLease::SettleAction MarkLaneRetired()
@@ -259,8 +283,13 @@ public:
                                 FormatString("Timed out waiting for request: %s", requestIdStr.c_str()));
     }
 
-    void NotifyAll() override
+    /**
+     * @brief Mark the event ready, notify its waiters, and return whether the upper-layer wait already timed out.
+     * @return The wait-timeout state captured while holding eventMutex_ with the ready-state update.
+     */
+    bool NotifyAllAndGetWaitTimedOut()
     {
+        bool waitTimedOut;
         {
             std::unique_lock<std::mutex> lock(eventMutex_);
             notifyTimeUs_ = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
@@ -268,11 +297,18 @@ public:
                 writeTrace_.notifyUs = notifyTimeUs_;
             }
             ready_ = true;
+            waitTimedOut = waitTimedOut_;
         }
         if (waiter_) {
             waiter_->Notify(shared_from_this());
         }
         cv_.notify_all();
+        return waitTimedOut;
+    }
+
+    void NotifyAll() override
+    {
+        (void)NotifyAllAndGetWaitTimedOut();
     }
 
 private:
@@ -315,6 +351,7 @@ private:
     UrmaWriteTrace writeTrace_;
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
     std::atomic<bool> laneEventSettled_{ false };
+    bool waitTimedOut_{ false };
 };
 
 class UrmaContext {
@@ -916,7 +953,7 @@ public:
     Status ReCreateJetty(const std::shared_ptr<UrmaJetty> &failedJetty);
 
     /**
-     * @brief Retire a timed-out Jetty: mark invalid, remove from pool, trigger background
+     * @brief Retire an explicitly failed Jetty: mark invalid, remove from pool, trigger background
      *        refill, and asynchronously move to error state.
      *        Late completions for the old Jetty will be safely discarded.
      * @param[in] jetty The Jetty to retire.
