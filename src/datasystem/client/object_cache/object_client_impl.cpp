@@ -562,9 +562,12 @@ Status ObjectClientImpl::InitTransportLayer()
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
     RETURN_RUNTIME_ERROR_IF_NULL(asyncGetRPCPool_);
     RETURN_RUNTIME_ERROR_IF_NULL(asyncReleasePool_);
+    BrpcChannelConfig channelConfig;
+    channelConfig.timeout_ms = requestTimeoutMs_;
+    channelConfig.connect_timeout_ms = connectTimeoutMs_;
     auto transportLayer =
         std::make_unique<client::TransportLayer>(transportSignature_, asyncGetRPCPool_, fastTransportMemSize_,
-                                                 BrpcChannelConfig{}, asyncReleasePool_,
+                                                 std::move(channelConfig), asyncReleasePool_,
                                                  enableClientDirectPipelineH2D_, clientDirectPipelineH2DThreadNum_);
     RETURN_IF_NOT_OK(transportLayer->Init());
     // Inject shm dependencies (workerApi for GetClientFd fd-passing, mmapManager for mmap)
