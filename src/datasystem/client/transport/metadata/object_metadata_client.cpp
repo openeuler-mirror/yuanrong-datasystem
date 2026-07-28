@@ -18,6 +18,7 @@
 
 #include "datasystem/client/transport/metadata/object_metadata_client.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -25,6 +26,7 @@
 #include <utility>
 
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -42,6 +44,19 @@ struct PendingMetadataBatch {
 };
 
 using RedirectTargets = std::unordered_map<std::string, std::deque<HostPort>>;
+
+// Recoverable degradation/retry events can fire on every request during sustained faults (UB resource pressure,
+// metadata migration). Sample them so a persistent failure mode cannot flood the log. Terminal failures stay
+// unsampled (see Query failed without retry).
+constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
+
+void LogMetadataQueryResult(const HostPort &address, size_t attempt, const master::QueryAndGetRspPb &response,
+                            size_t payloadCount)
+{
+    VLOG(1) << "[TransportGet][Metadata] Query returned, meta owner: " << address.ToString()
+            << ", attempt: " << attempt << ", result count: " << response.results_size()
+            << ", payload count: " << payloadCount;
+}
 
 Status ValidateAndResetItems(const ObjectMetadataBatch &items)
 {
@@ -156,8 +171,9 @@ Status ObjectMetadataClient::PrepareUbInlineRequest(const HostPort &address, con
     std::shared_ptr<IDataTransporter> transporter;
     Status connectionRc = manager_->GetOrCreate(address, TransportHint::UB_CANDIDATE, transporter);
     if (connectionRc.IsError()) {
-        VLOG(1) << "[TransportGet][Metadata] Disable UB inline data because the connection is unavailable: "
-                << connectionRc.ToString();
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "[TransportGet][Metadata] Disable UB inline data, meta owner: " << address.ToString()
+            << ", reason: connection unavailable, status: " << connectionRc.ToString();
         return Status::OK();
     }
 
@@ -177,8 +193,13 @@ Status ObjectMetadataClient::AllocateUbInlineBuffers(const ObjectMetadataBatch &
         Status allocRc = ubBufferProvider_->Allocate(ubBufferSize_, buffer);
         if (allocRc.IsError() || buffer.data == nullptr || buffer.owner == nullptr || buffer.size < ubBufferSize_
             || buffer.transportInstanceId.empty()) {
-            VLOG(1) << "[TransportGet][Metadata] Disable UB inline data because receive-buffer preparation failed: "
-                    << allocRc.ToString();
+            LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+                << "[TransportGet][Metadata] Disable UB inline data, reason: receive buffer unavailable"
+                << ", requested size: " << ubBufferSize_ << ", allocated size: " << buffer.size
+                << ", data valid: " << (buffer.data != nullptr)
+                << ", owner valid: " << (buffer.owner != nullptr)
+                << ", instance id empty: " << buffer.transportInstanceId.empty()
+                << ", status: " << allocRc.ToString();
             context.DisableInlineData();
             RETURN_STATUS(K_NOT_READY, "UB inline receive-buffer preparation failed");
         }
@@ -237,8 +258,9 @@ Status ObjectMetadataClient::InvokeQueryAndGet(const HostPort &address, master::
             // Once sent, RPC failures retain UB mode and follow the normal retry policy.
             return leaseRc;
         }
-        VLOG(1) << "[TransportGet][Metadata] UB inline connection is unavailable for " << address.ToString()
-                << ", query metadata only: " << leaseRc.ToString();
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "[TransportGet][Metadata] UB inline lease unavailable, meta owner: " << address.ToString()
+            << ", downgrade to metadata-only query, status: " << leaseRc.ToString();
         // The RPC was not sent, so permanently downgrade this request chain to metadata-only mode.
         context.DisableInlineData();
         request.clear_data_request();
@@ -273,16 +295,22 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
         payloads.clear();
         VLOG(1) << "[TransportGet][Metadata] Query, meta owner: " << address.ToString()
                 << ", key count: " << items.size() << ", redirect: " << allowRedirect
-                << ", attempt: " << attempt;
+                << ", inline mode: " << static_cast<int>(context.mode) << ", attempt: " << attempt
+                << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
         Status rc = InvokeQueryAndGet(address, request, response, payloads, context);
+        if (rc.IsOk() && !response.meta_is_moving()) {
+            LogMetadataQueryResult(address, attempt, response, payloads.size());
+        }
         if (rc.IsError()) {
             if (!retry_->IsRetryableRpcError(rc)) {
-                VLOG(1) << "[TransportGet][Metadata] Query failed without retry, meta owner: "
-                        << address.ToString() << ", status: " << rc.ToString();
+                LOG(ERROR) << "[TransportGet][Metadata] Query failed without retry, meta owner: "
+                           << address.ToString() << ", attempt: " << attempt << ", status: " << rc.ToString();
                 return rc;
             }
-            VLOG(1) << "[TransportGet][Metadata] Retrying query, meta owner: " << address.ToString()
-                    << ", status: " << rc.ToString();
+            LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+                << "[TransportGet][Metadata] Retry query, meta owner: " << address.ToString()
+                << ", attempt: " << attempt << ", backoff ms: " << backoffMs
+                << ", status: " << rc.ToString();
             if (rc.GetCode() == K_RPC_UNAVAILABLE && manager_ != nullptr) {
                 manager_->Teardown(address);
             }
@@ -292,8 +320,9 @@ Status ObjectMetadataClient::QueryWithRetry(const HostPort &address, const Objec
         if (!response.meta_is_moving()) {
             return Status::OK();
         }
-        VLOG(1) << "[TransportGet][Metadata] Metadata is moving, meta owner: " << address.ToString()
-                << ", key count: " << items.size();
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "[TransportGet][Metadata] Metadata is moving, meta owner: " << address.ToString()
+            << ", key count: " << items.size() << ", attempt: " << attempt << ", backoff ms: " << backoffMs;
         RETURN_IF_NOT_OK(retry_->Backoff(backoffMs));
     }
 }
@@ -317,6 +346,8 @@ Status ObjectMetadataClient::ApplyResult(ObjectMetadataItem &item, const master:
     const auto &location = result.location();
     if (location.object_locations_size() == 0) {
         item.status = Status(K_NOT_FOUND, "Object was not found");
+        LOG(ERROR) << "[TransportGet][Metadata] Object was not found, key: " << item.objectKey
+                   << ", status: " << item.status.ToString();
         return Status::OK();
     }
     item.status = Status::OK();
@@ -415,7 +446,8 @@ Status ObjectMetadataClient::Query(const HostPort &address, const ObjectMetadata
         }
         if (rc.IsOk()) {
             VLOG(1) << "[TransportGet][Metadata] Query resolved, meta owner: " << current.address.ToString()
-                    << ", local keys: " << localItems.size() << ", redirect groups: " << redirectBatches.size();
+                    << ", local keys: " << localItems.size()
+                    << ", redirect groups: " << redirectBatches.size();
             rc = ApplyResults(localItems, response, payloads, context);
         }
         if (rc.IsError()) {

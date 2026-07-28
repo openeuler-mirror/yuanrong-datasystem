@@ -327,12 +327,17 @@
     window, allowing teardown to proceed between large-batch write groups without permitting the active connection to
     be closed during a write or publish operation. During rolling upgrade, workers must support routed MultiCreate and
     MultiPublish authentication before clients enable routed MSet traffic.
-  - transport-layer Get records redirect-follow events at INFO level with the target endpoint and key count so
-    scale-transition routing can be diagnosed. Other flow-stage summaries plus endpoint, retry, and replica details
-    remain in `[TransportGet]` debug logs. Like the gateway Get path, it does not remap existing status codes; when every
-    key fails, it returns the first failure in input order without logging that user-visible error again.
-    Transport-specific route, location, missing-result, and data-response errors use concise messages. Partial success
-    still returns `K_OK`.
+  - `TransportLayer::Get` owns `[TransportGet]` request boundaries and prints `ObjectReadResult::actualKind` as the
+    successful request's SHM/UB/TCP transport. Redirect-follow events and successful transport requests use `INFO`;
+    recoverable retry, fallback, degradation, metadata movement, and replica switching use `WARNING`;
+    terminal route, metadata, data-plane, deadline, replica, missing-result, and materialization failures use `ERROR`.
+    Data-plane dispatch logs each selected transporter at `INFO` before sending, and metadata warnings and errors are
+    emitted for every occurrence. Other repeated degradation and per-key failure sites are sampled where needed, while
+    normal route, metadata, replica, chunk, and payload details remain in `VLOG(1)`. Because `enableLocalCache=true`
+    does not enter `TransportLayer::Get`, its gateway Get logging remains unchanged. Neither path remaps existing status
+    codes; when every key fails, Get returns the first failure in input order. Partial success still returns `K_OK`.
+    `MasterOCServiceImpl::QueryAndGet` logs authenticated handler entry at `INFO`, terminal handler failures at `ERROR`,
+    and successful completion through `SLOW_LOG_IF_OR_VLOG` using the configured server process threshold.
   - when the existing client latency trace is enabled for a request, transport-layer Get contributes
     `client.process.direct_route`, `client.rpc.direct_query_and_get`, `client.rpc.direct_get_data`, and
     `client.process.direct_materialize` to the request `latencySummary`. The two RPC-class phases are parent-thread wall

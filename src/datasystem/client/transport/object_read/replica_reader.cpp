@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
@@ -38,6 +39,7 @@ namespace client {
 namespace {
 constexpr size_t MAX_BATCH_OBJECT_COUNT = 1024;
 constexpr uint64_t MAX_BATCH_EXPECTED_BYTES = 100ULL * 1024ULL * 1024ULL;
+constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 
 struct ReadState {
     const master::ObjectLocationInfoPb *location = nullptr;
@@ -161,6 +163,33 @@ Status ReplicaReader::Backoff(int64_t &backoffMs) const
     return retry_->Backoff(backoffMs);
 }
 
+Status ReplicaReader::ReadReplicaOnce(const master::ObjectLocationInfoPb &location, int replicaIndex, size_t round,
+                                      ObjectReadItemResult &result, const HostPort &workerAddr)
+{
+    VLOG(1) << "[TransportGet][Data] Read replica, key: " << location.object_key()
+            << ", worker: " << workerAddr.ToString() << ", replica index: " << replicaIndex
+            << ", replica count: " << location.object_locations_size() << ", expected size: " << location.object_size()
+            << ", round: " << round << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
+    DataGetResult data;
+    DataGetRequest request{ location.object_key(), location.object_size() };
+    Status rc = executor_->Execute(workerAddr, [&request, &data](IDataTransporter &transporter) {
+        return transporter.Get(request, data);
+    });
+    if (rc.IsError()) {
+        return rc;
+    }
+    result.objectKey = location.object_key();
+    result.data = std::move(data);
+    VLOG(1) << "[TransportGet][Data] Read succeeded, key: " << location.object_key()
+            << ", worker: " << workerAddr.ToString()
+            << ", transport: " << AccessTransportTracker::KindToName(result.data.kind)
+            << ", expected size: " << location.object_size()
+            << ", actual size: " << result.data.response.data_size()
+            << ", payload count: " << result.data.rpcPayloads.size()
+            << ", external size: " << result.data.externalSize << ", round: " << round;
+    return Status::OK();
+}
+
 Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(executor_);
@@ -171,36 +200,38 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
     Status lastError(K_NOT_FOUND, "Cannot get objects from worker");
     while (true) {
         ++round;
-        for (const auto &address : location.object_locations()) {
-            RETURN_IF_NOT_OK(retry_->CheckDeadline());
+        for (int replicaIndex = 0; replicaIndex < location.object_locations_size(); ++replicaIndex) {
+            Status deadlineStatus = retry_->CheckDeadline();
+            if (deadlineStatus.IsError()) {
+                LOG(ERROR) << "[TransportGet][Data] Replica read deadline exceeded, key: "
+                           << location.object_key() << ", round: " << round
+                           << ", status: " << deadlineStatus.ToString();
+                return deadlineStatus;
+            }
             HostPort workerAddr;
-            RETURN_IF_NOT_OK(workerAddr.ParseString(address));
-            VLOG(1) << "[TransportGet][Data] Read replica, key: " << location.object_key()
-                    << ", worker: " << workerAddr.ToString() << ", round: " << round;
-            DataGetResult data;
-            DataGetRequest request{ location.object_key(), location.object_size() };
-            Status rc = executor_->Execute(workerAddr, [&request, &data](IDataTransporter &transporter) {
-                return transporter.Get(request, data);
-            });
+            RETURN_IF_NOT_OK(workerAddr.ParseString(location.object_locations(replicaIndex)));
+            Status rc = ReadReplicaOnce(location, replicaIndex, round, result, workerAddr);
             if (rc.IsOk()) {
-                result.objectKey = location.object_key();
-                result.data = std::move(data);
-                VLOG(1) << "[TransportGet][Data] Read succeeded, key: " << location.object_key()
-                        << ", worker: " << workerAddr.ToString() << ", round: " << round;
                 return Status::OK();
             }
             const bool retryable = IsRetryableLocationError(rc);
-            VLOG(1) << "[TransportGet][Data] Replica read failed, key: " << location.object_key()
-                    << ", worker: " << workerAddr.ToString() << ", round: " << round
-                    << ", retryable: " << retryable << ", status: " << rc.ToString();
             if (!retryable) {
+                LOG(ERROR) << "[TransportGet][Data] Replica read failed without retry, key: "
+                           << location.object_key() << ", worker: " << workerAddr.ToString()
+                           << ", round: " << round << ", status: " << rc.ToString();
                 return rc;
             }
+            LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+                << "[TransportGet][Data] Replica read failed, try another replica, key: "
+                << location.object_key() << ", worker: " << workerAddr.ToString()
+                << ", round: " << round << ", status: " << rc.ToString();
             lastError = rc;
         }
         Status backoffRc = retry_->Backoff(backoffMs);
         if (backoffRc.IsError()) {
             backoffRc.AppendMsg(lastError.GetMsg());
+            LOG(ERROR) << "[TransportGet][Data] Stop retrying replica read, key: " << location.object_key()
+                       << ", round: " << round << ", status: " << backoffRc.ToString();
             return backoffRc;
         }
     }

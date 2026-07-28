@@ -111,8 +111,6 @@
 #include "datasystem/utils/status.h"
 #include "datasystem/utils/string_view.h"
 #include "datasystem/object/buffer.h"
-static constexpr int SHM_FALLBACK_LOG_RATE = 100;
-
 DS_DECLARE_bool(log_monitor);
 
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
@@ -132,6 +130,7 @@ namespace datasystem {
 namespace {
 constexpr size_t MIN_SHUFFLE_CANDIDATE_COUNT = 2;
 constexpr size_t SET_ROUTE_MAX_ATTEMPTS = 3;
+constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 const std::unordered_set<std::string> NON_GFLAG_KV_CLIENT_CONFIG_KEYS = {
     "client_access_log_filename",
     "client_log_without_pid",
@@ -4199,6 +4198,8 @@ void ObjectClientImpl::BuildTransportReadRequest(const std::vector<std::string> 
     auto routing = std::atomic_load(&routing_);
     if (routing == nullptr) {
         std::fill(itemStatuses.begin(), itemStatuses.end(), Status(K_NOT_READY, "Object route is not ready"));
+        LOG_EVERY_N(ERROR, TRANSPORT_DIAG_LOG_RATE)
+            << "[TransportGet][Route] Route is not ready, key count: " << objectKeys.size();
         return;
     }
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
@@ -4206,6 +4207,8 @@ void ObjectClientImpl::BuildTransportReadRequest(const std::vector<std::string> 
         routing->SelectWorkers(objectKeys, client::DataPlacementPolicy::PREFERRED_META_OWNER, groupedKeys);
     if (routeStatus.IsError()) {
         std::fill(itemStatuses.begin(), itemStatuses.end(), routeStatus);
+        LOG(ERROR) << "[TransportGet][Route] Route selection failed, key count: " << objectKeys.size()
+                   << ", status: " << routeStatus.ToString();
         return;
     }
     std::unordered_map<std::string, HostPort> metaOwners;
@@ -4219,33 +4222,40 @@ void ObjectClientImpl::BuildTransportReadRequest(const std::vector<std::string> 
         auto owner = metaOwners.find(objectKeys[i]);
         if (owner == metaOwners.end()) {
             itemStatuses[i] = Status(K_RUNTIME_ERROR, "Batch route result is incomplete");
+            LOG_EVERY_N(ERROR, TRANSPORT_DIAG_LOG_RATE)
+                << "[TransportGet][Route] Route result is incomplete, key: " << objectKeys[i]
+                << ", request index: " << i << ", status: " << itemStatuses[i].ToString();
             continue;
         }
         itemStatuses[i] = Status::OK();
         request.items.push_back({ i, objectKeys[i], owner->second });
     }
+    const size_t routed = request.items.size();
+    const size_t failed = objectKeys.size() >= routed ? objectKeys.size() - routed : 0;
+    VLOG(1) << "[TransportGet][Route] Route selection completed, key count: " << objectKeys.size()
+            << ", routed: " << routed << ", failed: " << failed << ", meta owner count: " << groupedKeys.size();
 }
 
-Status ObjectClientImpl::MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
-                                                  std::shared_ptr<Buffer> &buffer)
+Status ObjectClientImpl::BuildTransportGetResponse(
+    client::ObjectReadItemResult &item, GetRspPb &response,
+    std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos, uint64_t &payloadSize)
 {
-    CHECK_FAIL_RETURN_STATUS(item.objectKey == objectKey, K_RUNTIME_ERROR, "Invalid object data response");
     auto &data = item.data;
     const uint64_t dataSize = data.externalOwner != nullptr
                                   ? data.externalSize
                                   : static_cast<uint64_t>(std::max<int64_t>(data.response.data_size(), 0));
-    GetRspPb response;
+    payloadSize = 0;
     auto *payloadInfo = response.add_payload_info();
     payloadInfo->set_object_key(item.objectKey);
     payloadInfo->set_object_index(0);
     payloadInfo->set_data_size(static_cast<int64_t>(dataSize));
-    std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> ubBufferInfos;
     if (data.externalOwner != nullptr) {
-        CHECK_FAIL_RETURN_STATUS(data.response.data_size() >= 0
-                                     && static_cast<uint64_t>(data.response.data_size()) == data.externalSize,
-                                 K_RUNTIME_ERROR, "Invalid object data response");
-        CHECK_FAIL_RETURN_STATUS(data.externalData != nullptr || dataSize == 0, K_RUNTIME_ERROR,
-                                 "Invalid object data response");
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+            data.response.data_size() >= 0
+                && static_cast<uint64_t>(data.response.data_size()) == data.externalSize,
+            K_RUNTIME_ERROR, "Invalid object data response");
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(data.externalData != nullptr || dataSize == 0, K_RUNTIME_ERROR,
+                                             "Invalid object data response");
         FullParam param;
         auto bufferInfo = MakeObjectBufferInfo(item.objectKey,
                                                const_cast<uint8_t *>(data.externalData), dataSize, 0, param, false, 0);
@@ -4253,29 +4263,47 @@ Status ObjectClientImpl::MaterializeTransportItem(const std::string &objectKey, 
         ubBufferInfos.emplace(item.objectKey, std::move(bufferInfo));
         payloadInfo->add_part_index(0);
         data.rpcPayloads.emplace_back();
-    } else {
-        CHECK_FAIL_RETURN_STATUS(data.externalData == nullptr && data.externalSize == 0, K_RUNTIME_ERROR,
-                                 "Invalid object data response");
-        uint64_t payloadSize = 0;
-        for (size_t i = 0; i < data.rpcPayloads.size(); ++i) {
-            CHECK_FAIL_RETURN_STATUS(payloadSize <= UINT64_MAX - data.rpcPayloads[i].Size(), K_RUNTIME_ERROR,
-                                     "Invalid object data response");
-            payloadSize += data.rpcPayloads[i].Size();
-            payloadInfo->add_part_index(static_cast<uint32_t>(i));
-        }
-        LOG_IF(ERROR, payloadSize != dataSize)
-            << "[TransportGet][Materialize] RPC payload size mismatch, key=" << objectKey
-            << ", responseDataSize=" << data.response.data_size() << ", payloadSize=" << payloadSize
-            << ", payloadCount=" << data.rpcPayloads.size()
-            << ", dataSource=" << static_cast<int>(data.response.data_source());
-        CHECK_FAIL_RETURN_STATUS(payloadSize == dataSize, K_RUNTIME_ERROR, "Invalid object data response");
+        return Status::OK();
     }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(data.externalData == nullptr && data.externalSize == 0, K_RUNTIME_ERROR,
+                                         "Invalid object data response");
+    for (size_t i = 0; i < data.rpcPayloads.size(); ++i) {
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(payloadSize <= UINT64_MAX - data.rpcPayloads[i].Size(), K_RUNTIME_ERROR,
+                                             "Invalid object data response");
+        payloadSize += data.rpcPayloads[i].Size();
+        payloadInfo->add_part_index(static_cast<uint32_t>(i));
+    }
+    LOG_IF(ERROR, payloadSize != dataSize)
+        << "[TransportGet][Materialize] RPC payload size mismatch, key=" << item.objectKey
+        << ", responseDataSize=" << data.response.data_size() << ", payloadSize=" << payloadSize
+        << ", payloadCount=" << data.rpcPayloads.size()
+        << ", dataSource=" << static_cast<int>(data.response.data_source());
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(payloadSize == dataSize, K_RUNTIME_ERROR, "Invalid object data response");
+    return Status::OK();
+}
+
+Status ObjectClientImpl::MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
+                                                  std::shared_ptr<Buffer> &buffer)
+{
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(item.objectKey == objectKey, K_RUNTIME_ERROR,
+                                         "Invalid object data response");
+    GetRspPb response;
+    std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> ubBufferInfos;
+    uint64_t payloadSize = 0;
+    RETURN_IF_NOT_OK(BuildTransportGetResponse(item, response, ubBufferInfos, payloadSize));
+    auto &data = item.data;
+    const uint64_t dataSize = static_cast<uint64_t>(response.payload_info(0).data_size());
+    VLOG(1) << "[TransportGet][Materialize] Materialize object, key: " << objectKey
+            << ", transport: " << AccessTransportTracker::KindToName(data.kind) << ", data size: " << dataSize
+            << ", payload size: " << payloadSize << ", payload count: " << data.rpcPayloads.size()
+            << ", external size: " << data.externalSize
+            << ", data source: " << static_cast<int>(data.response.data_source());
     std::vector<std::shared_ptr<Buffer>> itemBuffers(1);
     std::vector<std::string> failedKeys;
     RETURN_IF_NOT_OK(ProcessGetResponse({ item.objectKey }, {}, response, 0, data.rpcPayloads, itemBuffers, failedKeys,
                                         ubBufferInfos));
-    CHECK_FAIL_RETURN_STATUS(failedKeys.empty() && itemBuffers.front() != nullptr, K_NOT_FOUND,
-                             "Cannot get objects from worker");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(failedKeys.empty() && itemBuffers.front() != nullptr, K_NOT_FOUND,
+                                         "Cannot get objects from worker");
     buffer = std::move(itemBuffers.front());
     return Status::OK();
 }
@@ -4284,17 +4312,16 @@ Status ObjectClientImpl::ApplyTransportReadResult(const std::vector<std::string>
                                                   const client::ObjectReadRequest &request,
                                                   client::ObjectReadResult &result, const Status &transportStatus,
                                                   std::vector<std::shared_ptr<Buffer>> &buffers,
-                                                  std::vector<Status> &itemStatuses,
-                                                  AccessTransportKind &actualKind)
+                                                  std::vector<Status> &itemStatuses, AccessTransportKind &actualKind)
 {
     std::vector<bool> returned(objectKeys.size(), false);
     for (auto &item : result.items) {
-        CHECK_FAIL_RETURN_STATUS(item.requestIndex < objectKeys.size(), K_RUNTIME_ERROR,
-                                 "Invalid response while getting objects");
-        CHECK_FAIL_RETURN_STATUS(!returned[item.requestIndex], K_RUNTIME_ERROR,
-                                 "Invalid response while getting objects");
-        CHECK_FAIL_RETURN_STATUS(item.objectKey == objectKeys[item.requestIndex], K_RUNTIME_ERROR,
-                                 "Invalid response while getting objects");
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(item.requestIndex < objectKeys.size(), K_RUNTIME_ERROR,
+                                             "Invalid response while getting objects");
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!returned[item.requestIndex], K_RUNTIME_ERROR,
+                                             "Invalid response while getting objects");
+        CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(item.objectKey == objectKeys[item.requestIndex], K_RUNTIME_ERROR,
+                                             "Invalid response while getting objects");
         returned[item.requestIndex] = true;
         itemStatuses[item.requestIndex] = item.status;
         if (item.status.IsOk()) {
@@ -4311,7 +4338,20 @@ Status ObjectClientImpl::ApplyTransportReadResult(const std::vector<std::string>
             itemStatuses[item.requestIndex] = transportStatus.IsError()
                                                   ? transportStatus
                                                   : Status(K_RUNTIME_ERROR, "Cannot get objects from worker");
+            LOG_EVERY_N(ERROR, TRANSPORT_DIAG_LOG_RATE)
+                << "[TransportGet][Result] Object result is missing, key: " << item.objectKey
+                << ", request index: " << item.requestIndex
+                << ", status: " << itemStatuses[item.requestIndex].ToString();
         }
+    }
+    if (VLOG_IS_ON(1)) {
+        const auto succeeded = std::count_if(itemStatuses.begin(), itemStatuses.end(),
+                                             [](const Status &status) { return status.IsOk(); });
+        VLOG(1) << "[TransportGet][Result] Apply result completed, requested: " << objectKeys.size()
+                << ", routed: " << request.items.size() << ", returned: "
+                << std::count(returned.begin(), returned.end(), true) << ", succeeded: " << succeeded
+                << ", failed: " << itemStatuses.size() - succeeded
+                << ", actual transport: " << AccessTransportTracker::KindToName(actualKind);
     }
     return Status::OK();
 }
@@ -4339,6 +4379,9 @@ Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKey
     // transport for cross-host workers (codeCheck G.FUN.01: extracted from Get to bound its size).
     auto routing = std::atomic_load(&routing_);
     if (routing == nullptr) {
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "[TransportGet][SDK] Routing is unavailable, use transport for all keys, key count: "
+            << objectKeys.size();
         rc = GetFromTransportLayer(objectKeys, objectBuffers, traceEnabled);
         return Status::OK();
     }
@@ -4346,6 +4389,14 @@ Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKey
         shmGroups;
     std::vector<std::pair<std::string, size_t>> remoteIdx;
     RETURN_IF_NOT_OK(BuildShmGroups(objectKeys, shmGroups, remoteIdx));
+    if (VLOG_IS_ON(1)) {
+        const auto shmKeyCount = std::accumulate(
+            shmGroups.begin(), shmGroups.end(), size_t{ 0 },
+            [](size_t count, const auto &group) { return count + group.second.size(); });
+        VLOG(1) << "[TransportGet][SDK] Route by client transport, key count: " << objectKeys.size()
+                << ", shm group count: " << shmGroups.size() << ", shm key count: " << shmKeyCount
+                << ", transport key count: " << remoteIdx.size();
+    }
     for (auto &[workerApi, kidx] : shmGroups) {
         auto shmErr = ExecuteShmGroup(workerApi, kidx, subTimeoutMs, queryL2Cache, isRH2DSupported,
                                       objectBuffers, remoteIdx);
@@ -4374,9 +4425,14 @@ Status ObjectClientImpl::BuildShmGroups(const std::vector<std::string> &objectKe
     std::vector<std::pair<std::string, size_t>> &remoteIdx)
 {
     auto routing = std::atomic_load(&routing_);
-    CHECK_FAIL_RETURN_STATUS(routing != nullptr, K_NOT_READY, "Routing is not initialized");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(routing != nullptr, K_NOT_READY, "Routing is not initialized");
     std::unordered_map<HostPort, std::vector<std::string>> groupedKeys;
-    RETURN_IF_NOT_OK(routing->SelectWorkers(objectKeys, dataPlacementPolicy_, groupedKeys));
+    Status routeStatus = routing->SelectWorkers(objectKeys, dataPlacementPolicy_, groupedKeys);
+    if (routeStatus.IsError()) {
+        LOG(ERROR) << "[TransportGet][Route] Client transport route failed, key count: " << objectKeys.size()
+                   << ", status: " << routeStatus.ToString();
+        return routeStatus;
+    }
     // Index-based mapping: record every position a key occupies (duplicate keys are valid) and
     // consume in SelectWorkers order. Avoids std::find (only the first duplicate) and fills every slot.
     std::unordered_map<std::string, std::vector<size_t>> keyIndices;
@@ -4390,7 +4446,12 @@ Status ObjectClientImpl::BuildShmGroups(const std::vector<std::string> &objectKe
     };
     for (auto &[worker, keys] : groupedKeys) {
         SetRouteContext routeContext;
-        RETURN_IF_NOT_OK(BuildSetRouteContext(worker, routeContext));
+        Status contextStatus = BuildSetRouteContext(worker, routeContext);
+        if (contextStatus.IsError()) {
+            LOG(ERROR) << "[TransportGet][Route] Build route context failed, worker: " << worker.ToString()
+                       << ", key count: " << keys.size() << ", status: " << contextStatus.ToString();
+            return contextStatus;
+        }
         bool shmEnabled = routeContext.directWorkerApi != nullptr && routeContext.directWorkerApi->IsShmEnable();
         std::vector<std::pair<std::string, size_t>> kidx;
         kidx.reserve(keys.size());
@@ -4428,9 +4489,10 @@ Status ObjectClientImpl::ExecuteShmGroup(const std::shared_ptr<IClientWorkerApi>
     if (shmRc.IsError()) {
         // Do NOT move nullptr shmBuffers into objectBuffers — let the transport fallback fill these
         // slots. Carrying the original indices keeps the mapping correct for duplicate keys.
-        LOG_EVERY_N(INFO, SHM_FALLBACK_LOG_RATE)
-            << "Same-host shm Get failed for worker, degrading keys to transport fallback: "
-                               << shmRc.ToString();
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "[TransportGet][Data] Same-host SHM Get failed, degrade to transport, key count: "
+            << kidx.size() << ", worker: " << workerApi->hostPort_.ToString()
+            << ", status: " << shmRc.ToString();
         METRIC_ADD(metrics::KvMetricId::CLIENT_SHM_GET_DEGRADE_TO_TRANSPORT_TOTAL,
                    static_cast<uint64_t>(kidx.size()));
         for (const auto &p : kidx) {
@@ -4441,7 +4503,8 @@ Status ObjectClientImpl::ExecuteShmGroup(const std::shared_ptr<IClientWorkerApi>
     for (size_t i = 0; i < kidx.size(); i++) {
         objectBuffers[kidx[i].second] = std::move(shmBuffers[i]);
     }
-    VLOG(1) << "[TransportGet][Data] SHM group read succeeded, transport: SHM, key count: " << kidx.size();
+    VLOG(1) << "[TransportGet][Data] SHM group read succeeded, transport: SHM, key count: " << kidx.size()
+            << ", worker: " << workerApi->hostPort_.ToString();
     return Status::OK();
 }
 
@@ -4468,9 +4531,9 @@ void ObjectClientImpl::ExecuteTransportFallback(const std::vector<std::pair<std:
 Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &objectKeys,
                                                std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled)
 {
-    CHECK_FAIL_RETURN_STATUS(transportLayer_ != nullptr, K_NOT_READY, "Object service is not ready");
-    CHECK_FAIL_RETURN_STATUS(objectKeys.size() == buffers.size(), K_RUNTIME_ERROR,
-                             "Failed to prepare object Get request");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(transportLayer_ != nullptr, K_NOT_READY, "Object service is not ready");
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() == buffers.size(), K_RUNTIME_ERROR,
+                                         "Failed to prepare object Get request");
     ApiDeadlineGuard deadlineGuard(requestTimeoutMs_);
     client::ObjectReadRequest request;
     request.traceEnabled = traceEnabled;

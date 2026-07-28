@@ -35,7 +35,9 @@
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/transport_advisor.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uri.h"
@@ -129,7 +131,17 @@ Status TransportLayer::PrepareDirectUbEndpoint(const HostPort &workerAddr,
 Status TransportLayer::Get(const ObjectReadRequest &input, ObjectReadResult &output)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(objectRead_);
-    return objectRead_->Run(input, output);
+    VLOG(1) << "[TransportGet][TransportLayer] Start Get, key count: " << input.items.size()
+            << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
+    Status status = objectRead_->Run(input, output);
+    if (status.IsError()) {
+        LOG(ERROR) << "[TransportGet][TransportLayer] Get failed, key count: " << input.items.size()
+                   << ", status: " << status.ToString();
+    } else {
+        VLOG(1) << "[TransportGet][TransportLayer] Finish Get, key count: " << input.items.size()
+                << ", transport: " << AccessTransportTracker::KindToName(output.actualKind);
+    }
+    return status;
 }
 
 Status TransportLayer::Exist(const HostPort &workerAddr, const TransportExistRequest &input,
