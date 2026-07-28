@@ -1265,7 +1265,7 @@ std::string StreamResponseParam::ToString() const
     return ss.str();
 }
 
-const char* AccessTransportTracker::KindToName(AccessTransportKind kind)
+const char *AccessTransportTracker::KindToName(AccessTransportKind kind)
 {
     switch (kind) {
         case AccessTransportKind::UB:

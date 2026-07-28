@@ -76,8 +76,12 @@ public:
     static void Record(AccessTransportKind kind);
     static std::string ToString();
 
-private:
-    static const char* KindToName(AccessTransportKind kind);
+    /**
+     * @brief Convert a client transport kind to its log field name.
+     * @param[in] kind Client transport kind.
+     * @return Static transport name.
+     */
+    static const char *KindToName(AccessTransportKind kind);
 };
 
 struct RequestParam {

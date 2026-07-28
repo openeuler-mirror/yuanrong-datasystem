@@ -4438,6 +4438,7 @@ Status ObjectClientImpl::ExecuteShmGroup(const std::shared_ptr<IClientWorkerApi>
     for (size_t i = 0; i < kidx.size(); i++) {
         objectBuffers[kidx[i].second] = std::move(shmBuffers[i]);
     }
+    VLOG(1) << "[TransportGet][Data] SHM group read succeeded, transport: SHM, key count: " << kidx.size();
     return Status::OK();
 }
 
