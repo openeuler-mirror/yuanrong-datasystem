@@ -42,7 +42,7 @@ struct TopologyControllerOptions {
     std::chrono::minutes ordinaryBatchWindow{ 3 };
     std::chrono::milliseconds reconcileTick{ 1'000 };
     std::chrono::milliseconds scaleInCollectWindow{ 1'000 };
-    // One bounded direct probe must not stall the Controller reconcile thread.
+    // Absolute budget for one memberLivenessProbe call, including all targets and cleanup.
     std::chrono::seconds failureProbeTimeout{ 2 };
     // Existing Worker identity used to deterministically assign one cluster-wide probe owner per missing member.
     std::string localAddress;
@@ -57,9 +57,10 @@ struct TopologyControllerOptions {
     std::function<Status(const std::string &, int64_t)> membershipRestartHandler;
 
     /**
-     * @brief Directly probe only members whose membership absence has reached nodeDeadTimeout.
-     * @return One observation for each reachable target. An omitted target is treated as unreachable; an exception
-     *         aborts the reconcile tick without changing topology.
+     * @brief Directly probe all supplied members before the absolute deadline.
+     * @return One observation for each target that returned a direct response. An omitted target is treated as
+     *         unreachable; incomplete evidence still proves transport reachability; an exception aborts the current
+     *         reconcile tick without changing topology and is retried safely by a later tick.
      */
     std::function<std::vector<ControlBackendObservation>(const std::vector<MemberIdentity> &,
                                                          std::chrono::steady_clock::time_point)>

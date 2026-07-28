@@ -104,6 +104,7 @@ message TopologyTaskSummaryPb {
 }
 
 message GetClusterStateRspPb {
+  // Authoritative only when ready is true; a reachable not-ready response may leave this legacy field false.
   bool coordinator_available = 1;
   // Binary topology member identity. Deploy this schema cluster-wide before relying on ETCD-outage degradation:
   // legacy readers declare this field as string and cannot parse every possible 16-byte identity.

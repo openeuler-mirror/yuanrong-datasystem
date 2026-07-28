@@ -464,7 +464,10 @@ TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetFailed)
     ASSERT_EQ(objMetas.size(), 0);
     // one master (worker 0) down, another (worker 1 local) success
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this]() { return CheckWorkerRemoved(0); }, 10, K_OK));
+    // Failure finalization includes the bounded direct-liveness confirmation after membership expiry.
+    constexpr int failureFinalizationWaitSec = 15;
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [this]() { return CheckWorkerRemoved(0); }, failureFinalizationWaitSec, K_OK));
     objMetas.clear();
     DS_ASSERT_OK(client1->GetObjMetaInfo("", { objectKey1, objectKey0 }, objMetas));
     ASSERT_EQ(objMetas.at(0).objSize, size1);
