@@ -277,7 +277,7 @@ TopologyEngine::Builder &TopologyEngine::Builder::SetScaleInCollectWindow(std::c
 Status TopologyEngine::Builder::Validate() const
 {
     CHECK_FAIL_RETURN_STATUS(config_ != nullptr && IsCanonicalAddress(config_->localAddress)
-                                 && config_->callbacks != nullptr && config_->nodeDeadTimeout.count() > 0
+                                 && config_->callbacks != nullptr && config_->nodeDeadTimeout.count() >= 0
                                  && config_->scaleInCollectWindow.count() >= 0
                                  && config_->scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
                                  && !config_->backendSelectionInvalid,

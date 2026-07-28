@@ -37,6 +37,10 @@ enum class TopologyEventSourceMode : uint8_t { SELF_MANAGED, EXTERNAL };
  * @brief Fixed Controller budgets and bounded work limits.
  */
 struct TopologyControllerOptions {
+    /**
+     * Extra continuous absence after membership key deletion before confirmed failure.
+     * Zero confirms on the first successful observation (lease TTL already gated liveness).
+     */
     std::chrono::seconds nodeDeadTimeout{ 300 };
     std::chrono::seconds failureBatchWindow{ 30 };
     std::chrono::minutes ordinaryBatchWindow{ 3 };

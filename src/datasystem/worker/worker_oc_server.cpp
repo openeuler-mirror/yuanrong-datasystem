@@ -160,6 +160,7 @@ DS_DEFINE_bool(start_metastore_service, false,
 DS_DEFINE_bool_dynamic(async_delete, false, "Master notify workers to delete objects asynchronously.");
 DS_DEFINE_uint32(memory_reclamation_time_second, 600, "The memory reclamation time after free.");
 DS_DECLARE_uint32(node_timeout_s);
+DS_DECLARE_uint32(node_dead_timeout_s);
 DS_DECLARE_uint32(scale_in_collect_window_ms);
 DS_DEFINE_bool(cross_cluster_get_data_from_worker, true,
                "[DEPRECATED] Cross-cluster data access from workers has been removed. This flag is kept for "
@@ -1151,10 +1152,15 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         coordinatorWatchSvc_ = std::make_unique<coordinator::CoordinatorWatchServiceImpl>(hostPort_);
     }
     cluster::TopologyEngine::Builder builder;
+    // Membership lease TTL already equals FLAGS_node_timeout_s. Classifier waits only the remaining
+    // budget so confirmed failure aligns with FLAGS_node_dead_timeout_s (not 2x node_timeout_s).
+    const uint32_t classifierAbsenceS = FLAGS_node_dead_timeout_s > FLAGS_node_timeout_s
+                                            ? FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s
+                                            : 0U;
     builder.SetClusterName(FLAGS_cluster_name)
         .SetLocalAddress(hostPort_.ToString())
         .SetPhaseCallbacks(*topologyTaskCallbacks_)
-        .SetNodeDeadTimeout(std::chrono::seconds(FLAGS_node_timeout_s))
+        .SetNodeDeadTimeout(std::chrono::seconds(classifierAbsenceS))
         .SetScaleInCollectWindow(std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms))
         .SetMembershipRestartHandler([this](const std::string &address, int64_t timestamp) {
             return HandleMembershipRestart(address, timestamp);

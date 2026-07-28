@@ -64,7 +64,9 @@ Status TopologyFailureClassifier::Observe(const TopologySnapshot &topology,
             const auto missingMs = inserted ? 0 : DurationMs(iter->second, now);
             if (inserted) {
                 observed.newlyMissing.push_back({ member.identity, member.state, missingMs });
-            } else if (now - iter->second >= nodeDeadTimeout_) {
+            }
+            // timeout==0: confirm on the first successful observation after membership key absence.
+            if (now - iter->second >= nodeDeadTimeout_) {
                 observed.confirmedMissing.push_back({ member.identity, member.state, missingMs });
                 observed.confirmedFailure.push_back(member.identity);
             }

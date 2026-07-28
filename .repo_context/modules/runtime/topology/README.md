@@ -107,7 +107,10 @@
   distinguishes waiting from all-metadata-ready. Data drain is source-Worker scoped, so `target_role=trigger` marks the
   shared participant-scope `target` as the per-task trigger instead of implying that one target owns the whole drain.
 - `WorkerOCServer` owns only the `TopologyEngine` composition root plus the Store/Proxy and callback resources borrowed
-  by it. Shutdown drains business RPC ingress and calls Engine once. In ETCD mode Engine closes the shared watch and
+  by it. `ConstructTopologyRuntime` sets classifier `nodeDeadTimeout` to
+  `max(0, FLAGS_node_dead_timeout_s - FLAGS_node_timeout_s)` so confirmed failure tracks wall-clock
+  `node_dead_timeout_s` after lease expiry (`node_timeout_s`), not a second full `node_timeout_s`. A zero budget
+  confirms on the first successful membership-absence observation. Shutdown drains business RPC ingress and calls Engine once. In ETCD mode Engine closes the shared watch and
   keepalive event sources once, drains Worker execution, stops the externally-fed Controller/Janitor, and fully shuts
   down the Store once. Coordinator mode unbinds ingress and preserves role-specific event-source shutdown. A deadline
   failure preserves Engine and every borrowed dependency for retry. Engine Start is one-shot;
