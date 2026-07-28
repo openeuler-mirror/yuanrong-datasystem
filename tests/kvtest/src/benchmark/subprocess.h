@@ -9,8 +9,11 @@
 #include <datasystem/utils/connection.h>
 #include <datasystem/utils/service_discovery.h>
 
+#include <fcntl.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <cerrno>
+#include <climits>
 #include <cstdlib>
 #include <csignal>
 #include <chrono>
@@ -27,6 +30,10 @@
 enum ChildCmd : int32_t { CMD_EXIT = 0, CMD_RUN_SET = 1, CMD_RUN_GET = 2,
                           CMD_RUN_DEL = 3, CMD_RUN_MSET = 4, CMD_RUN_MGET = 5 };
 enum ChildRole : int32_t { ROLE_SET = 0, ROLE_GET = 1, ROLE_DEL = 2 };
+
+constexpr char BENCHMARK_CHILD_MODE[] = "--benchmark-child";
+constexpr int BENCHMARK_CHILD_ARG_COUNT = 7;
+constexpr int BENCHMARK_CHILD_EXEC_FAILURE_EXIT_CODE = 127;
 
 struct CmdMsg {
     int32_t cmd = 0;
@@ -88,6 +95,52 @@ struct ChildProcess {
     ChildRole role{};
     bool initOk = false;
 };
+
+/**
+ * @brief Get the stable benchmark child role name.
+ * @param[in] role Child role.
+ * @return Role name.
+ */
+inline const char *GetChildRoleName(ChildRole role) {
+    switch (role) {
+        case ROLE_SET:
+            return "set";
+        case ROLE_GET:
+            return "get";
+        case ROLE_DEL:
+            return "del";
+    }
+    return "unknown";
+}
+
+/**
+ * @brief Redirect kvtest output to the role-specific child log.
+ * @param[in] outputDir Benchmark output directory.
+ * @param[in] role Child role.
+ */
+inline void RedirectChildLogs(const std::string &outputDir, ChildRole role) {
+    static std::ofstream childLog(
+        outputDir + "/child_" + GetChildRoleName(role) + ".log", std::ios::app);
+    if (childLog.is_open()) {
+        std::cout.rdbuf(childLog.rdbuf());
+        std::cerr.rdbuf(childLog.rdbuf());
+    }
+}
+
+/**
+ * @brief Configure whether a file descriptor closes across exec.
+ * @param[in] fd File descriptor.
+ * @param[in] enabled Whether close-on-exec is enabled.
+ * @return True on success.
+ */
+inline bool SetCloseOnExec(int fd, bool enabled) {
+    int flags = fcntl(fd, F_GETFD);
+    if (flags < 0) {
+        return false;
+    }
+    int updated = enabled ? (flags | FD_CLOEXEC) : (flags & ~FD_CLOEXEC);
+    return fcntl(fd, F_SETFD, updated) == 0;
+}
 
 // --- Determine connection type from role + testMode ---
 
@@ -260,16 +313,7 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
     signal(SIGINT, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 
-    const char *roleName = (role == ROLE_SET) ? "set" :
-                           (role == ROLE_GET) ? "get" : "del";
-
-    // Redirect logs to child-specific file
-    std::string logPath = cfg.outputDir + "/child_" + std::string(roleName) + ".log";
-    static std::ofstream childLog(logPath, std::ios::app);
-    if (childLog.is_open()) {
-        std::cout.rdbuf(childLog.rdbuf());
-        std::cerr.rdbuf(childLog.rdbuf());
-    }
+    const char *roleName = GetChildRoleName(role);
 
     SLOG_INFO("Child process started, role=" << roleName << ", pid=" << getpid());
 
@@ -360,15 +404,96 @@ inline void ChildProcessMain(int readFd, int writeFd, const Config &cfg, ChildRo
     exit(0);
 }
 
+/**
+ * @brief Check whether argv selects the internal benchmark child entrypoint.
+ * @param[in] argc Argument count.
+ * @param[in] argv Argument values.
+ * @return True for a valid benchmark child invocation shape.
+ */
+inline bool IsBenchmarkChildInvocation(int argc, char *argv[]) {
+    return argc == BENCHMARK_CHILD_ARG_COUNT && std::string(argv[1]) == BENCHMARK_CHILD_MODE;
+}
+
+/**
+ * @brief Parse one integer argument passed to a benchmark child.
+ * @param[in] text Argument text.
+ * @param[out] value Parsed integer.
+ * @return True on success.
+ */
+inline bool ParseChildIntArg(const char *text, int &value) {
+    errno = 0;
+    char *end = nullptr;
+    long parsed = std::strtol(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || parsed < INT_MIN || parsed > INT_MAX) {
+        return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+}
+
+/**
+ * @brief Report benchmark child initialization failure to the parent.
+ * @param[in] writeFd Child-to-parent pipe descriptor.
+ * @param[in] message Failure detail.
+ */
+inline void SendChildInitFailure(int writeFd, const std::string &message) {
+    InitMsg init{};
+    init.ok = 0;
+    snprintf(init.errorMsg, sizeof(init.errorMsg), "%s", message.c_str());
+    (void)WriteExact(writeFd, &init, sizeof(init));
+}
+
+/**
+ * @brief Run the re-executed benchmark child entrypoint.
+ * @param[in] argc Argument count.
+ * @param[in] argv Argument values.
+ * @return Process exit code.
+ */
+inline int RunBenchmarkChild(int argc, char *argv[]) {
+    int roleValue = -1;
+    int readFd = -1;
+    int writeFd = -1;
+    if (!IsBenchmarkChildInvocation(argc, argv)
+        || !ParseChildIntArg(argv[2], roleValue)
+        || !ParseChildIntArg(argv[3], readFd)
+        || !ParseChildIntArg(argv[4], writeFd)
+        || roleValue < ROLE_SET || roleValue > ROLE_DEL || readFd < 0 || writeFd < 0) {
+        return 1;
+    }
+
+    auto role = static_cast<ChildRole>(roleValue);
+    std::string outputDir = argv[6];
+    RedirectChildLogs(outputDir, role);
+
+    Config cfg;
+    if (!LoadConfig(argv[5], cfg, outputDir)) {
+        SendChildInitFailure(writeFd, "Failed to load benchmark child config");
+        return 1;
+    }
+    ChildProcessMain(readFd, writeFd, cfg, role);
+    return 1;
+}
+
 // --- Parent-side helpers ---
 
-inline ChildProcess SpawnChild(const Config &cfg, ChildRole role) {
+inline ChildProcess SpawnChild(const Config &cfg, ChildRole role, const std::string &configPath) {
     ChildProcess cp;
-    int toChild[2];    // [0]=child reads, [1]=parent writes
-    int fromChild[2];  // [0]=parent reads, [1]=child writes
+    int toChild[2] = {-1, -1};    // [0]=child reads, [1]=parent writes
+    int fromChild[2] = {-1, -1};  // [0]=parent reads, [1]=child writes
 
     if (pipe(toChild) != 0 || pipe(fromChild) != 0) {
         SLOG_ERROR("pipe() failed: " << strerror(errno));
+        if (toChild[0] >= 0) close(toChild[0]);
+        if (toChild[1] >= 0) close(toChild[1]);
+        if (fromChild[0] >= 0) close(fromChild[0]);
+        if (fromChild[1] >= 0) close(fromChild[1]);
+        return cp;
+    }
+    if (!SetCloseOnExec(toChild[0], true) || !SetCloseOnExec(toChild[1], true)
+        || !SetCloseOnExec(fromChild[0], true) || !SetCloseOnExec(fromChild[1], true)) {
+        SLOG_ERROR("Failed to set close-on-exec for child pipes: " << strerror(errno));
+        close(toChild[0]); close(toChild[1]);
+        close(fromChild[0]); close(fromChild[1]);
         return cp;
     }
 
@@ -384,9 +509,18 @@ inline ChildProcess SpawnChild(const Config &cfg, ChildRole role) {
         // Child
         close(toChild[1]);    // close parent write end
         close(fromChild[0]);  // close parent read end
-        ChildProcessMain(toChild[0], fromChild[1], cfg, role);
-        // ChildProcessMain calls _exit(), never returns
-        _exit(1);
+        if (!SetCloseOnExec(toChild[0], false) || !SetCloseOnExec(fromChild[1], false)) {
+            SendChildInitFailure(fromChild[1], "Failed to preserve benchmark child pipes across exec");
+            _exit(BENCHMARK_CHILD_EXEC_FAILURE_EXIT_CODE);
+        }
+        std::string roleArg = std::to_string(static_cast<int>(role));
+        std::string readFdArg = std::to_string(toChild[0]);
+        std::string writeFdArg = std::to_string(fromChild[1]);
+        execl("/proc/self/exe", "kvtest", BENCHMARK_CHILD_MODE, roleArg.c_str(), readFdArg.c_str(),
+              writeFdArg.c_str(), configPath.c_str(), cfg.outputDir.c_str(), static_cast<char *>(nullptr));
+        int execErrno = errno;
+        SendChildInitFailure(fromChild[1], "Failed to exec benchmark child: " + std::string(strerror(execErrno)));
+        _exit(BENCHMARK_CHILD_EXEC_FAILURE_EXIT_CODE);
     }
 
     // Parent

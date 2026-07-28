@@ -138,7 +138,9 @@ Set 通过 localClient 写入 Worker A，Get 通过 remoteClient 从 Worker B �
 
 ### mixed_* — 混合读写模式
 
-混合模式采用**双 child 进程**架构：fork 出独立的 setChild（执行 Set）和 getChild（执行 Get），各自持有独立 KVClient，通过 OS 级进程并发实现真正的 Set/Get 并行。
+混合模式采用**双 child 进程**架构：父进程通过 fork + exec 启动独立的 setChild（执行 Set）和
+getChild（执行 Get），各自持有独立 KVClient，通过 OS 级进程并发实现真正的 Set/Get 并行。exec
+确保每个子进程重新初始化 SDK 日志运行时，避免继承父进程 PID 后将 SDK 运行日志降级到 stderr。
 
 4 种模式覆盖不同的客户端-Worker 拓扑（本地/远端/跨节点），通过连接矩阵控制：
 
@@ -318,6 +320,13 @@ Round N:
 ```
 
 所有线程共享同一个 setClient/getClient 实例，通过 ThreadKeyRange 分配各自的 key 范围。线程间使用 Barrier 同步，确保所有线程完成当前阶段后统一进入下一阶段。
+
+### Benchmark 日志
+
+父进程的 kvtest 日志写入 `<output_dir>/run.log`，各角色的 kvtest 子进程日志分别写入
+`<output_dir>/child_set.log`、`child_get.log` 和 `child_del.log`。SDK 运行日志、access 日志和 operation
+日志仍写入 `DATASYSTEM_CLIENT_LOG_DIR`；每个 benchmark 子进程通过 exec 独立初始化 SDK，因此
+`ds_client_<pid>.INFO.log` 会正常记录该子进程的 SDK 运行日志。
 
 ### 运行时长控制
 

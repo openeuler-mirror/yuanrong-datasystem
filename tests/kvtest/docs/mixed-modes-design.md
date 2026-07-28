@@ -6,7 +6,9 @@ Mixed 模式用于在 benchmark 中同时执行 Set 和 Get 操作，测量并�
 
 ## 1. 架构：双子进程并发模型
 
-Mixed 模式采用 **双 child 进程** 架构——fork 出独立的 setChild 和 getChild，各自持有独立的 KVClient，通过 OS 级进程并发实现真正的 Set/Get 并行。
+Mixed 模式采用 **双 child 进程** 架构——父进程通过 fork + exec 启动独立的 setChild 和 getChild，
+各自持有独立的 KVClient，通过 OS 级进程并发实现真正的 Set/Get 并行。exec 还会让每个子进程重新
+初始化 SDK 日志运行时，避免普通运行日志因 fork PID 保护而只写入 stderr。
 
 ```mermaid
 graph TB
@@ -30,8 +32,8 @@ graph TB
         WB[Worker B<br/>远端/Standby]
     end
 
-    RL -->|"fork()"| setChild
-    RL -->|"fork()"| getChild
+    RL -->|"fork() + exec()"| setChild
+    RL -->|"fork() + exec()"| getChild
     RL -->|"pipe write<br/>CMD_RUN_SET"| SC_TH
     RL -->|"pipe write<br/>CMD_RUN_GET"| GC_TH
     SC_KV -.->|"SD 或 direct"| WA

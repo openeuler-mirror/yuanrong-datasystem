@@ -91,7 +91,7 @@ classDiagram
         +vector~string~ pipeline, notifyPipeline
         +int keyPoolSize, numSetThreads
         +bool enableJitter
-        +LoadConfig(path, cfg) bool
+        +LoadConfig(path, cfg, outputDirOverride="") bool
     }
 
     KVWorker --> Config : reads

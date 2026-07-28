@@ -35,7 +35,7 @@ static void SignalHandler(int sig) {
     gRunning = false;
 }
 
-static int RunBenchmarkMode(Config &cfg) {
+static int RunBenchmarkMode(Config &cfg, const std::string &configPath) {
     SLOG_INFO("Benchmark mode: test_mode=" << static_cast<int>(cfg.testMode));
     std::signal(SIGTERM, SignalHandler);
     std::signal(SIGINT, SignalHandler);
@@ -85,7 +85,7 @@ static int RunBenchmarkMode(Config &cfg) {
     size_t delChildIdx = SIZE_MAX;
 
     // setChild: always needed
-    children.push_back(SpawnChild(cfg, ROLE_SET));
+    children.push_back(SpawnChild(cfg, ROLE_SET, configPath));
     if (children.back().pid <= 0) {
         SLOG_ERROR("Failed to spawn setChild");
         return 1;
@@ -94,7 +94,7 @@ static int RunBenchmarkMode(Config &cfg) {
 
     // getChild: only if setClient != getClient (cross-node modes)
     if ((isGetMode || isMixedMode || isMGetMode) && NeedsSeparateGetChild(cfg.testMode)) {
-        children.push_back(SpawnChild(cfg, ROLE_GET));
+        children.push_back(SpawnChild(cfg, ROLE_GET, configPath));
         if (children.back().pid <= 0) {
             SLOG_ERROR("Failed to spawn getChild");
             KillAllChildren(children);
@@ -105,7 +105,7 @@ static int RunBenchmarkMode(Config &cfg) {
 
     // delChild: only if cleanup method is "del"
     if (cfg.cleanupMethod == "del") {
-        children.push_back(SpawnChild(cfg, ROLE_DEL));
+        children.push_back(SpawnChild(cfg, ROLE_DEL, configPath));
         if (children.back().pid <= 0) {
             SLOG_ERROR("Failed to spawn delChild");
             KillAllChildren(children);
@@ -537,6 +537,10 @@ static int StopMode(const Config &cfg) {
 }
 
 int main(int argc, char *argv[]) {
+    if (IsBenchmarkChildInvocation(argc, argv)) {
+        return RunBenchmarkChild(argc, argv);
+    }
+
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--version" || arg == "-v") {
@@ -585,7 +589,7 @@ int main(int argc, char *argv[]) {
         // This printf goes to the original fd 1, not the redirected rdbuf
         fprintf(stderr, "[INFO] Entering benchmark mode, detailed logs: %s/run.log\n",
                 cfg.outputDir.c_str());
-        return RunBenchmarkMode(cfg);
+        return RunBenchmarkMode(cfg, configPath);
     }
 
     return RunServerMode(cfg);
