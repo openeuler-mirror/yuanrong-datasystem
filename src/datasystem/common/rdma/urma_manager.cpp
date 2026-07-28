@@ -43,6 +43,7 @@
 #include "datasystem/common/perf/perf_manager.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rdma/urma_dlopen_util.h"
+#include "datasystem/common/rpc/bthread_utils.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/flags/common_flags.h"
@@ -1142,6 +1143,25 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     if (timeoutMs < 0) {
         return timeoutStatus(0, "request deadline already expired");
     }
+
+    // Test-only: simulate a real UB link-down (URMA completion never arrives).
+    // Sleep a FIXED 2000ms (NOT timeoutMs: the worker's reqTimeoutDuration remaining
+    // time can be tens of seconds, which would extend the sleep past teardown and
+    // crash). 2000ms exceeds the test client's 1s RPC deadline so the client's brpc
+    // RPC times out (E1008 slow failure) -> feeds the circuit breaker; the worker
+    // returns K_URMA_WAIT_TIMEOUT shortly after (response discarded). Uses the
+    // `return()` action so WaitToFinish returns here without running event->WaitFor/
+    // HandleUrmaEvent: by now the client's brpc RPC has already timed out and been
+    // cancelled (the worker's response is discarded), and event->WaitFor would block
+    // on a URMA completion that never arrives (simulated link-down), racing teardown.
+    // Bthread-friendly via SleepCurrentFor. Default inactive.
+    INJECT_POINT("UrmaManager.UrmaWaitNoCompletionHang", [this, &event]() {
+        constexpr int64_t hangMs = 2000;
+        SleepCurrentFor(std::chrono::milliseconds(hangMs));
+        LOG_IF_ERROR(RetireEventLane(event), "Failed to retire URMA lane for no-completion-hang inject");
+        return Status(K_URMA_WAIT_TIMEOUT,
+                      FormatString("[URMA_WAIT_TIMEOUT] inject no-completion hang (link down): %ldms", hangMs));
+    });
 
     PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
     Timer waitTimer;

@@ -72,12 +72,33 @@ void EnsureBrpcMaxBodySize()
     });
 }
 
+// Bound the brpc circuit-breaker isolation duration. brpc default
+// circuit_breaker_max_isolation_duration_ms=30000 (30s) keeps a transiently-
+// faulty socket isolated long after the fault clears (e.g. UB/URMA link-down
+// recovers ~10s but the socket stays isolated up to 30s, escalating via the
+// doubling min->max). 3000 (3s) caps recovery so business resumes within 3s
+// of the fault clearing. Set exactly once before any brpc channel is created.
+// Only effective when CB is enabled (FLAGS_brpc_enable_circuit_breaker=true).
+void EnsureBrpcCircuitBreakerIsolationCap()
+{
+    static std::once_flag once;
+    std::call_once(once, []() {
+        constexpr int64_t kCbMaxIsolationMs = 3000;  // 3s; bounds CB isolation for fast UB recovery
+        const std::string value = std::to_string(kCbMaxIsolationMs);
+        const std::string prev = gflags::SetCommandLineOption(
+            "circuit_breaker_max_isolation_duration_ms", value.c_str());
+        LOG(INFO) << "circuit_breaker_max_isolation_duration_ms=" << prev
+                  << " -> " << value << " (bound CB isolation to 3s; brpc default 30000/30s)";
+    });
+}
+
 }  // namespace
 
 std::unique_ptr<brpc::Channel> BrpcChannelFactory::Create(const BrpcChannelConfig &cfg)
 {
     EnsureBrpcDeliverTimeoutMs();
     EnsureBrpcMaxBodySize();
+    EnsureBrpcCircuitBreakerIsolationCap();
     auto ch = std::make_unique<brpc::Channel>();
     brpc::ChannelOptions opts;
     opts.timeout_ms = cfg.timeout_ms;

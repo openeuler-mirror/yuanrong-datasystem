@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <gflags/gflags.h>
 #include <memory>
 #include <string>
 #include <thread>
@@ -757,6 +758,171 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_LocalFailRemoteFailThenSwitchBack)
     WaitClientTrafficReady(client, 0);
     ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 1, "chain_local_after_recover");
+}
+
+// Regression guard for the brpc circuit-breaker 3s isolation cap fix.
+// brpc default circuit_breaker_max_isolation_duration_ms=30000 (30s) keeps a
+// transiently-faulty socket isolated long after the fault clears (UB/URMA link-down
+// recovers ~10s but the socket stays isolated up to 30s, escalating via the doubling
+// min->max). The fix (BrpcChannelFactory::EnsureBrpcCircuitBreakerIsolationCap) caps
+// it at 3000 (3s). This test enables CB globally (PR1523 default off), drives 3 slow
+// E1008 failures via the UrmaManager.UrmaWaitNoCompletionHang inject on the serving
+// worker, asserts CB isolates the client->worker socket (positive control), then
+// asserts recovery within ~3s + health-check (the cap bounds it; without the fix up to
+// 30s), and asserts the max gflag is 3000.
+TEST_F(KVClientUrmaFailoverTest, LEVEL1_CircuitBreaker3sIsolationCap)
+{
+    LOG(INFO) << "[Regress] CB 3s cap: enable CB -> inject hang -> isolate -> recover <=~6s";
+    // Enable CB globally (PR1523 FLAGS_brpc_enable_circuit_breaker defaults false). Must
+    // be set before the client's first RPC so the client->worker OC channel gets CB on.
+    // Capture pre-test CB gflag values and restore at scope end. Do NOT restore
+    // circuit_breaker_max_isolation_duration_ms -- set once by the fix, must stay 3000.
+    struct CbFlagRestore {
+        bool cbEnabled;
+        std::string shortWin, longWin, minIso;
+        CbFlagRestore() : cbEnabled(FLAGS_brpc_enable_circuit_breaker)
+        {
+            gflags::GetCommandLineOption("circuit_breaker_short_window_size", &shortWin);
+            gflags::GetCommandLineOption("circuit_breaker_long_window_size", &longWin);
+            gflags::GetCommandLineOption("circuit_breaker_min_isolation_duration_ms", &minIso);
+        }
+        ~CbFlagRestore()
+        {
+            FLAGS_brpc_enable_circuit_breaker = cbEnabled;
+            gflags::SetCommandLineOption("circuit_breaker_short_window_size", shortWin.c_str());
+            gflags::SetCommandLineOption("circuit_breaker_long_window_size", longWin.c_str());
+            gflags::SetCommandLineOption("circuit_breaker_min_isolation_duration_ms", minIso.c_str());
+        }
+    } _cbRestore;
+    // FLAGS_brpc_enable_circuit_breaker is a DS_DEFINE_bool (datasystem custom flag registered
+    // with FlagManager, NOT a google gflag), so gflags::SetCommandLineOption cannot set it
+    // (silently no-ops). Use direct assignment. The circuit_breaker_* below are brpc DEFINE_*
+    // google gflags, so gflags::SetCommandLineOption works for them.
+    FLAGS_brpc_enable_circuit_breaker = true;
+    // Lower the CB threshold so 3 slow failures isolate (init window: short=20*10%=2,
+    // long=40*5%=2 -> 3rd error isolates). min=3000 for deterministic 3s isolation.
+    gflags::SetCommandLineOption("circuit_breaker_short_window_size", "20");
+    gflags::SetCommandLineOption("circuit_breaker_long_window_size", "40");
+    gflags::SetCommandLineOption("circuit_breaker_min_isolation_duration_ms", "3000");
+
+    // SDK uses brpc (default) so client->worker is a brpc channel whose CB the fix caps.
+    struct UseBrpcRestore {
+        bool oldVal;
+        UseBrpcRestore() : oldVal(FLAGS_use_brpc) {}
+        ~UseBrpcRestore() { FLAGS_use_brpc = oldVal; }
+    } _useBrpcRestore;
+    FLAGS_use_brpc = true;
+
+    // Set 8MB data on worker2 while it is the ONLY live worker (worker0+1 are shut
+    // by InitRemoteFallbackClientWithSingleLiveRemote). With only w2 in the hash ring
+    // the object primary lands on w2, so the later Get served by w2 is a local read +
+    // UB write-back (the path whose UrmaManager::WaitToFinish the inject hangs). Setting
+    // while only w2 is live avoids the master routing CreateMeta to a dead worker's
+    // hash range (which would E112 the Set/Get).
+    std::shared_ptr<KVClient> setClient;
+    InitRemoteFallbackClientWithSingleLiveRemote(setClient, 2);  // shut w0+w1, keep w2
+    GetTrafficData data;
+    PrepareGetKeys(setClient, 1, "cb_3s_cap", data, 8 * 1024 * 1024UL);
+    std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
+
+    // get-client: local to w0 (already down) -> service discovery routes to the only
+    // live remote worker (w2). Short 1s RPC timeout so each hang Get is a ~1s slow
+    // failure (E1008 feeds the circuit breaker). enableCrossNodeConnection forces the
+    // cross-node UB path. Its client_worker_remote OC channel keeps the default
+    // cfg.enable_circuit_breaker=true, so with FLAGS_brpc_enable_circuit_breaker=true
+    // (set above) CB is ON for this channel.
+    ServiceDiscoveryOptions sdOpts;
+    sdOpts.etcdAddress = cluster_->GetEtcdAddrs();
+    sdOpts.clusterName = GetTestClusterName();
+    sdOpts.hostIdEnvName = GetHostIdEnvName(0);
+    sdOpts.affinityPolicy = ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    auto serviceDiscovery = std::make_shared<ServiceDiscovery>(sdOpts);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+    ConnectOptions connectOptions;
+    connectOptions.connectTimeoutMs = CONNECT_TIMEOUT_MS;
+    connectOptions.requestTimeoutMs = 1000;  // 1s -> each hang Get times out at ~1s (E1008)
+    connectOptions.accessKey = DUMMY_ACCESS_KEY;
+    connectOptions.secretKey = DUMMY_SECRET_KEY;
+    connectOptions.enableCrossNodeConnection = true;
+    connectOptions.serviceDiscovery = serviceDiscovery;
+    std::shared_ptr<KVClient> client = std::make_shared<KVClient>(connectOptions);
+    DS_ASSERT_OK(client->Init());
+
+    // Readiness: confirm the get-client reaches w2 over UB and the 8MB Get succeeds
+    // (inject not set yet, so UrmaManager::WaitToFinish runs the normal path). This
+    // also pre-establishes the connection so the first hang Get is a clean E1008.
+    {
+        std::string r;
+        DS_ASSERT_OK(client->Get(data.keys[0], r));
+        ASSERT_EQ(r.size(), data.value.size());
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
+
+    // Drive hang Gets. 3*return() fires exactly 3 times (3 E1008 slow failures ->
+    // CB isolates at the 3rd per the init-window threshold), then auto-exhausts so
+    // subsequent Gets do NOT hang (the CB-isolated socket returns E112 instead).
+    // Avoids ClearInjectAction (races with the saturated worker brpc post-isolation).
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 2, "UrmaManager.UrmaWaitNoCompletionHang", "3*return()"));
+    bool sawIsolated = false;
+    int timeouts = 0;
+    for (int i = 0; i < 6; ++i) {
+        std::string r;
+        Status rc = client->Get(data.keys[0], r);
+        const std::string &m = rc.GetMsg();
+        LOG(INFO) << "[Regress] hang Get[" << i << "] rc=" << rc.GetCode() << " msg=" << m;
+        // E1008 = brpc RPC timeout (slow failure, feeds CB); after isolation the socket
+        // is unavailable -> E112 "Host is down / Not connected" (the CB-isolated symptom;
+        // "isolated by circuit breaker" itself is a brpc LOG, not the RPC error text). The
+        // E1008->E112 transition == CB isolated the socket.
+        if (rc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED
+            || m.find("timed out") != std::string::npos) {
+            ++timeouts;
+        }
+        if (timeouts > 0 && (m.find("Host is down") != std::string::npos
+                             || m.find("Not connected") != std::string::npos)) {
+            sawIsolated = true;
+            break;  // CB isolated; subsequent Gets return E112 (no need to drive more)
+        }
+    }
+    LOG(INFO) << "[Regress] drove hang Gets, E1008 timeouts=" << timeouts
+              << " sawIsolated=" << sawIsolated;
+    // Positive control: CB must isolate (proves CB is enabled + slow E1008 trips it).
+    EXPECT_TRUE(sawIsolated) << "CB must isolate after slow E1008 failures (CB enabled); "
+                             << "timeouts=" << timeouts;
+
+    // Drain the in-flight 2s-sleeping Get bthreads so they don't race with teardown.
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+
+    // Recovery poll: the socket was isolated (min=3000 -> 3s). After 3s isolation +
+    // brpc health-check (3s interval) the socket is Reset()+probed -> available.
+    // Poll Get every 100ms up to 10s (CI load margin); assert recovery (Get OK) within
+    // the window. Only w2 is live so the client cannot switch away -- recovery must come
+    // from the CB un-isolating w2's socket (the fix bounds this to <=3s).
+    bool recovered = false;
+    auto pollStart = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100; ++i) {  // up to 10s (CI load margin)
+        std::string r;
+        Status rc = client->Get(data.keys[0], r);
+        if (rc.IsOk()) {
+            recovered = true;
+            LOG(INFO) << "[Regress] recovered at poll " << i << " rc=" << rc.ToString();
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    auto pollElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - pollStart).count();
+    LOG(INFO) << "[Regress] recovered=" << recovered << " pollElapsedMs=" << pollElapsedMs;
+    EXPECT_TRUE(recovered) << "socket must recover within ~6s (3s isolation + 3s health-check); "
+                           << "pollElapsedMs=" << pollElapsedMs;
+
+    // Config assert: the fix must have set the brpc gflag to 3000.
+    std::string maxCap;
+    gflags::GetCommandLineOption("circuit_breaker_max_isolation_duration_ms", &maxCap);
+    EXPECT_EQ(maxCap, "3000") << "EnsureBrpcCircuitBreakerIsolationCap must set "
+                              << "circuit_breaker_max_isolation_duration_ms=3000; got: " << maxCap;
+    LOG(INFO) << "[Regress] sawIsolated=" << sawIsolated << " recovered=" << recovered
+              << " maxCap=" << maxCap;
 }
 }  // namespace st
 }  // namespace datasystem
