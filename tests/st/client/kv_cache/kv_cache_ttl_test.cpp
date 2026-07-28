@@ -378,7 +378,8 @@ TEST_F(CentralizedKVCacheTtlTest, WorkerDead)
     // Shutdown worker.
     // Master notify worker delete, worker1 may rpc unavailable, make the real delete time > 5s
     cluster_->ShutdownNode(ClusterNodeType::WORKER, 1);
-    constexpr int failureFinalizationWaitSec = 15;
+    // Reserve the bounded direct-liveness confirmation window before the Failure batch finalizes.
+    constexpr int failureFinalizationWaitSec = 20;
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
         [&topologyDb, &failedWorkerAddress]() {
             std::string topologyBytes;

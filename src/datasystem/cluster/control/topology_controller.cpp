@@ -687,6 +687,7 @@ Status TopologyController::ConfirmMissingMembersUnreachable(const TopologySnapsh
                                       && evidence.observedAt != std::chrono::steady_clock::time_point{}
                                       && evidence.observedAt <= now
                                       && now - evidence.observedAt <= options_.failureProbeTimeout;
+        // Any direct response proves transport reachability, even when its backend evidence is stale or unavailable.
         failureClassifier_.ResetMissing(target.address);
         LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
                      << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
