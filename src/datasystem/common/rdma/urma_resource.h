@@ -101,9 +101,6 @@ public:
           operationType_(operationType),
           srcChipInflightCounter_(srcChipInflightCounter)
     {
-        if (laneLease_ != nullptr) {
-            laneLease_->AddEvent();
-        }
         if (srcChipInflightCounter_ != nullptr) {
             srcChipInflightCounter_->fetch_add(1, std::memory_order_relaxed);
         }
@@ -182,7 +179,8 @@ public:
      */
     std::weak_ptr<UrmaJetty> GetJetty() const
     {
-        return laneLease_ == nullptr ? std::weak_ptr<UrmaJetty>() : std::weak_ptr<UrmaJetty>(laneLease_->GetJetty());
+        auto laneLease = laneLease_.lock();
+        return laneLease == nullptr ? std::weak_ptr<UrmaJetty>() : std::weak_ptr<UrmaJetty>(laneLease->GetJetty());
     }
 
     /**
@@ -214,48 +212,6 @@ public:
         return operationType_;
     }
 
-    /**
-     * @brief Mark this event as settled by normal completion.
-     * @return Lane action to execute if this was the final event in the request lease.
-     */
-    UrmaSendLaneLease::SettleAction MarkLaneReleased()
-    {
-        return MarkLaneSettled(false);
-    }
-
-    /**
-     * @brief Record that the waiter timed out while the provider completion is still pending.
-     * @return True if the timeout owns the in-flight handoff; false if completion already won the race.
-     */
-    bool MarkWaitTimedOut()
-    {
-        std::lock_guard<std::mutex> lock(eventMutex_);
-        if (ready_) {
-            return false;
-        }
-        waitTimedOut_ = true;
-        return true;
-    }
-
-    /**
-     * @brief Check whether the waiter returned before this event was completed.
-     * @return True if the completion thread owns the delayed event-map cleanup.
-     */
-    bool IsWaitTimedOut() const
-    {
-        std::lock_guard<std::mutex> lock(eventMutex_);
-        return waitTimedOut_;
-    }
-
-    /**
-     * @brief Mark this event as settled by an explicit local/provider failure.
-     * @return Lane action to execute if this was the final event in the request lease.
-     */
-    UrmaSendLaneLease::SettleAction MarkLaneRetired()
-    {
-        return MarkLaneSettled(true);
-    }
-
     static const char *OperationTypeName(OperationType type)
     {
         switch (type) {
@@ -283,13 +239,8 @@ public:
                                 FormatString("Timed out waiting for request: %s", requestIdStr.c_str()));
     }
 
-    /**
-     * @brief Mark the event ready, notify its waiters, and return whether the upper-layer wait already timed out.
-     * @return The wait-timeout state captured while holding eventMutex_ with the ready-state update.
-     */
-    bool NotifyAllAndGetWaitTimedOut()
+    void NotifyAll() override
     {
-        bool waitTimedOut;
         {
             std::unique_lock<std::mutex> lock(eventMutex_);
             notifyTimeUs_ = static_cast<uint64_t>(GetSteadyClockTimeStampUs());
@@ -297,18 +248,11 @@ public:
                 writeTrace_.notifyUs = notifyTimeUs_;
             }
             ready_ = true;
-            waitTimedOut = waitTimedOut_;
         }
         if (waiter_) {
             waiter_->Notify(shared_from_this());
         }
         cv_.notify_all();
-        return waitTimedOut;
-    }
-
-    void NotifyAll() override
-    {
-        (void)NotifyAllAndGetWaitTimedOut();
     }
 
 private:
@@ -329,17 +273,10 @@ private:
         wakeSchedLatencyUs_.store(nowUs >= notifyTimeUs_ ? nowUs - notifyTimeUs_ : 0, std::memory_order_relaxed);
     }
 
-    UrmaSendLaneLease::SettleAction MarkLaneSettled(bool retire)
-    {
-        bool expected = false;
-        if (!laneEventSettled_.compare_exchange_strong(expected, true) || laneLease_ == nullptr) {
-            return UrmaSendLaneLease::SettleAction::NONE;
-        }
-        return retire ? laneLease_->MarkEventRetired() : laneLease_->MarkEventReleased();
-    }
-
     int statusCode_{ 0 };
-    std::shared_ptr<UrmaSendLaneLease> laneLease_;
+    // Event lifetime is business-owned. The resource-level active-lane registry owns
+    // transport drain after a waiter times out.
+    std::weak_ptr<UrmaSendLaneLease> laneLease_;
     std::string remoteAddress_;
     std::string remoteInstanceId_;
     uint64_t dataSize_{ 0 };
@@ -350,8 +287,6 @@ private:
     std::atomic<uint64_t> wakeSchedLatencyUs_{ 0 };
     UrmaWriteTrace writeTrace_;
     std::atomic<int> *srcChipInflightCounter_{ nullptr };
-    std::atomic<bool> laneEventSettled_{ false };
-    bool waitTimedOut_{ false };
 };
 
 class UrmaContext {
@@ -518,8 +453,8 @@ public:
         ACTIVE,        // Provider handle admits new post permits and may be leased from its pool.
         QUIESCING,     // Admission is closed; already admitted synchronous posts are draining.
         MODIFYING,     // The exactly-once finalizer is executing provider modify(ERROR).
-        WAIT_FLUSH,    // Modify succeeded; waiting for this Jetty's FLUSH_ERR_DONE.
-        DELETE_READY,  // Flush was observed and provider delete is now permitted.
+        WAIT_FLUSH,    // Modify succeeded; waiting for FLUSH_ERR_DONE.
+        DELETE_READY,  // FLUSH_ERR_DONE was observed and provider delete is permitted.
         DELETING,      // The exactly-once delete operation has been claimed.
         DESTROYED,     // Provider delete succeeded; raw_ is null and the lifecycle is terminal.
         QUARANTINED,   // A control operation failed; never reopen or implicitly delete this Jetty.
@@ -554,7 +489,10 @@ public:
 
     UrmaJetty(urma_jetty_t *raw, std::shared_ptr<UrmaJfr> sharedJfr, UrmaResource *resource,
               JettyType type = JettyType::SEND)
-        : raw_(raw), sharedJfr_(std::move(sharedJfr)), resource_(resource), type_(type)
+        : raw_(raw),
+          sharedJfr_(std::move(sharedJfr)),
+          resource_(resource),
+          type_(type)
     {
         counter_.fetch_add(1);
     }
@@ -938,26 +876,18 @@ public:
 
     /**
      * @brief Return a local send Jetty to the process-level pool.
-     *        If the Jetty has been marked invalid (by ReCreateJetty or RetireJetty), it has
+     *        If the Jetty has been marked invalid by RetireJetty, it has
      *        already been removed from the pool; the call is a no-op.
      * @param[in] jetty Jetty to release.
      */
     void ReleaseJetty(const std::shared_ptr<UrmaJetty> &jetty);
 
     /**
-     * @brief Handle a failed Jetty: atomically close post admission, remove it from the pool,
-     *        install its retire record, and trigger background refill. The failed Jetty is
-     *        asynchronously moved to error state after admitted provider posts have drained.
+     * @brief Retire a Jetty: atomically close post admission, remove it from the pool, install its
+     *        retire record, trigger background refill for a send Jetty, and asynchronously move it
+     *        to error state after admitted provider posts have drained.
      *        Only the caller that wins BeginRetire proceeds.
-     * @param[in] failedJetty The Jetty that observed a CQE/AE failure.
-     * @return Status of the call.
-     */
-    Status ReCreateJetty(const std::shared_ptr<UrmaJetty> &failedJetty);
-
-    /**
-     * @brief Retire an explicitly failed Jetty: mark invalid, remove from pool, trigger background
-     *        refill, and asynchronously move to error state.
-     *        Late completions for the old Jetty will be safely discarded.
+     *        `FLUSH_ERR_DONE` permits provider delete directly; it does not carry a usable WR user_ctx.
      * @param[in] jetty The Jetty to retire.
      * @return Status of the call.
      */
@@ -991,11 +921,19 @@ public:
         return providerCleanupDeferred_.load(std::memory_order_acquire);
     }
 
-    /**
-     * @brief Asynchronously delete a Jetty that has been detached from service.
-     * @param[in] jettyId Urma-assigned Jetty id.
-     */
-    void AsyncDeleteJetty(uint32_t jettyId);
+    // `FLUSH_ERR_DONE` is a Jetty-level notification with fake user_ctx. It only advances a
+    // pending delete record; normal WR accounting is completed from ordinary CQEs.
+    Status HandleFlushErrDone(uint32_t jettyId);
+
+    // ---- Active send lane registry ----
+    // One in-use SEND Jetty has exactly one strong lane owner. The map keeps the lane alive after
+    // its business Events are deleted on timeout.
+    Status RegisterActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+    Status CompleteActiveSendLane(uint32_t jettyId);
+    Status CancelActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+    Status SealActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+    Status RequestRetireActiveSendLane(const std::shared_ptr<UrmaSendLaneLease> &laneLease);
+    Status RetireActiveSendLane(uint32_t jettyId);
 
     /**
      * @brief Register a Jetty in the resource-level registry for AE lookup.
@@ -1043,6 +981,8 @@ private:
     Status RetireJettyInternal(const std::shared_ptr<UrmaJetty> &jetty);
     void ScheduleDeleteJetty(const std::shared_ptr<UrmaJetty> &jetty);
     void QuarantineJetty(const std::shared_ptr<UrmaJetty> &jetty);
+    Status ApplyActiveSendLaneAction(const std::shared_ptr<UrmaSendLaneLease> &laneLease,
+                                     UrmaSendLaneLease::SettleAction action);
 
     /**
      * @brief Pre-fill the send Jetty pool to FLAGS_urma_send_jetty_lane_pool_size at Init time.
@@ -1096,6 +1036,8 @@ private:
     std::shared_timed_mutex deleteJettyThreadMutex_;
     std::mutex jettyRegistryMutex_;
     std::unordered_map<uint32_t, std::weak_ptr<UrmaJetty>> jettyRegistry_;
+    std::mutex activeSendLaneMutex_;
+    std::unordered_map<uint32_t, std::shared_ptr<UrmaSendLaneLease>> activeSendLanes_;
     std::mutex sharedJettyJfrMutex_;
     std::shared_ptr<UrmaJfr> sharedJettyJfr_;
     std::mutex sharedRecvJettyMutex_;

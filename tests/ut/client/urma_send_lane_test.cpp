@@ -141,21 +141,21 @@ TEST(SendJettyPoolTest, RemoveInUseJettyKeepsOtherIdleJettys)
     EXPECT_FALSE(pool.PopIdle(acquired));
 }
 
-TEST(SendLaneLeaseTest, ReleaseWaitsForSealAndLastEvent)
+TEST(SendLaneLeaseTest, ReleaseWaitsForSealAndLastWr)
 {
-    // A request-level lease can have multiple chunk events. The lane is returned only after the request is sealed and
-    // the last outstanding event completes, preventing later chunks from racing with an early release.
+    // A request-level lease can have multiple chunk WRs. The lane is returned only after the request is sealed and
+    // the last outstanding WR completes, preventing later chunks from racing with an early release.
     auto jetty = MakeOpaqueJetty();
     UrmaSendLaneLease lease(jetty);
-    lease.AddEvent();
-    lease.AddEvent();
+    lease.AddWr();
+    lease.AddWr();
 
-    EXPECT_EQ(lease.MarkEventReleased(), UrmaSendLaneLease::SettleAction::NONE);
-    EXPECT_EQ(lease.GetPendingEventCount(), 1u);
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_EQ(lease.GetPendingWrCount(), 1u);
     EXPECT_EQ(lease.Seal(), UrmaSendLaneLease::SettleAction::NONE);
     EXPECT_FALSE(lease.IsSettled());
 
-    EXPECT_EQ(lease.MarkEventReleased(), UrmaSendLaneLease::SettleAction::RELEASE);
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::RELEASE);
     EXPECT_TRUE(lease.IsSettled());
     EXPECT_EQ(lease.Seal(), UrmaSendLaneLease::SettleAction::NONE);
 }
@@ -166,44 +166,43 @@ TEST(SendLaneLeaseTest, CompletionBeforeSealDoesNotReleaseEarly)
     // work but cannot settle the lane until Seal marks the request submission boundary.
     auto jetty = MakeOpaqueJetty();
     UrmaSendLaneLease lease(jetty);
-    lease.AddEvent();
+    lease.AddWr();
 
-    EXPECT_EQ(lease.MarkEventReleased(), UrmaSendLaneLease::SettleAction::NONE);
-    EXPECT_EQ(lease.GetPendingEventCount(), 0u);
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_EQ(lease.GetPendingWrCount(), 0u);
     EXPECT_FALSE(lease.IsSettled());
 
-    lease.AddEvent();
+    lease.AddWr();
     EXPECT_EQ(lease.Seal(), UrmaSendLaneLease::SettleAction::NONE);
-    EXPECT_EQ(lease.MarkEventReleased(), UrmaSendLaneLease::SettleAction::RELEASE);
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::RELEASE);
 }
 
 TEST(SendLaneLeaseTest, RetireWinsAndIsIdempotent)
 {
-    // Any chunk-level failure should retire the shared lane when the request drains. Later duplicate completions must be
-    // no-ops so cleanup is applied exactly once.
+    // A fatal provider error retires the shared lane immediately. Later completion accounting must not claim release.
     auto jetty = MakeOpaqueJetty();
     UrmaSendLaneLease lease(jetty);
-    lease.AddEvent();
-    lease.AddEvent();
+    lease.AddWr();
+    lease.AddWr();
 
-    EXPECT_EQ(lease.MarkEventRetired(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_EQ(lease.Retire(), UrmaSendLaneLease::SettleAction::RETIRE);
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::NONE);
     EXPECT_EQ(lease.Seal(), UrmaSendLaneLease::SettleAction::NONE);
-    EXPECT_EQ(lease.MarkEventReleased(), UrmaSendLaneLease::SettleAction::RETIRE);
-    EXPECT_EQ(lease.MarkEventRetired(), UrmaSendLaneLease::SettleAction::NONE);
+    EXPECT_EQ(lease.Retire(), UrmaSendLaneLease::SettleAction::NONE);
 }
 
-TEST(SendLaneLeaseTest, RequestRetireDoesNotConsumePreviouslySubmittedEvents)
+TEST(SendLaneLeaseTest, RequestRetireDoesNotConsumePreviouslySubmittedWrs)
 {
-    // A later chunk can fail before it has an event, while earlier chunks are still in flight. Marking that failure
-    // must preserve the earlier event count and convert the final settlement to RETIRE rather than RELEASE.
+    // A later chunk can fail before it has a submitted WR, while earlier chunks are still in flight. Marking that
+    // failure must preserve the earlier submitted WR count and convert the final settlement to RETIRE rather than RELEASE.
     auto jetty = MakeOpaqueJetty();
     UrmaSendLaneLease lease(jetty);
-    lease.AddEvent();
+    lease.AddWr();
 
     EXPECT_EQ(lease.RequestRetire(), UrmaSendLaneLease::SettleAction::NONE);
-    EXPECT_EQ(lease.GetPendingEventCount(), 1u);
+    EXPECT_EQ(lease.GetPendingWrCount(), 1u);
     EXPECT_EQ(lease.Seal(), UrmaSendLaneLease::SettleAction::NONE);
-    EXPECT_EQ(lease.MarkEventReleased(), UrmaSendLaneLease::SettleAction::RETIRE);
+    EXPECT_EQ(lease.CompleteWr(), UrmaSendLaneLease::SettleAction::RETIRE);
     EXPECT_TRUE(lease.IsSettled());
 }
 

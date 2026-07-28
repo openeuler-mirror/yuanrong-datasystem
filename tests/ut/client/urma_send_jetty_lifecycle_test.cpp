@@ -95,7 +95,7 @@ TEST(UrmaSendJettyLifecycleTest, PreFillsAcquiresReusesAndRefillsAfterFailure)
 
     // A real failure invalidates and removes the acquired Jetty. Refill must create a different valid Jetty while
     // the old Jetty is retired asynchronously; ReleaseJetty(old) must remain a no-op after invalidation.
-    ASSERT_TRUE(resource.ReCreateJetty(reusedJetty).IsOk());
+    ASSERT_TRUE(resource.RetireJetty(reusedJetty).IsOk());
     EXPECT_FALSE(reusedJetty->IsValid());
     resource.ReleaseJetty(reusedJetty);
     ASSERT_TRUE(WaitUntil([&resource] {
