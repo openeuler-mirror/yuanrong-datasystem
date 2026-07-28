@@ -176,21 +176,23 @@ Status UrmaAsyncEventHandler::HandleJettyErrAsyncEvent(urma_jetty_t *rawJetty)
     const uint32_t jettyId = rawJetty->jetty_id.id;
     LOG(WARNING) << "[URMA_AE_JETTY_ERR] jettyId=" << jettyId;
 
-    std::shared_ptr<UrmaJetty> failedJetty;
-    auto lookupRc = urmaResource_->GetJettyById(jettyId, failedJetty);
-    if (lookupRc.IsError() || failedJetty == nullptr) {
-        LOG(WARNING) << "[URMA_AE_JETTY_ERR] Jetty " << jettyId
-                     << " not found in registry, may have already been cleaned up";
-        return Status::OK();
+    auto retireRc = urmaResource_->RetireActiveSendLane(jettyId);
+    if (retireRc.GetCode() == K_NOT_FOUND) {
+        // Idle and receive Jettys have no active lane. Preserve their existing registry path.
+        std::shared_ptr<UrmaJetty> failedJetty;
+        auto lookupRc = urmaResource_->GetJettyById(jettyId, failedJetty);
+        if (lookupRc.IsError() || failedJetty == nullptr) {
+            LOG(WARNING) << "[URMA_AE_JETTY_ERR] Jetty " << jettyId
+                         << " not found in active lane or registry, may have already been cleaned up";
+            return Status::OK();
+        }
+        retireRc = urmaResource_->RetireJetty(failedJetty);
     }
-
-    LOG(WARNING) << "[URMA_AE_JETTY_ERR] Triggering ReCreateJetty for jettyId=" << jettyId;
-    auto recreateRc = urmaResource_->ReCreateJetty(failedJetty);
-    if (recreateRc.IsError()) {
-        LOG(ERROR) << "[URMA_AE_JETTY_ERR] ReCreateJetty failed for jettyId=" << jettyId << ": "
-                   << recreateRc.ToString();
+    if (retireRc.IsError()) {
+        LOG(ERROR) << "[URMA_AE_JETTY_ERR] RetireJetty failed for jettyId=" << jettyId << ": "
+                   << retireRc.ToString();
     } else {
-        LOG(INFO) << "[URMA_AE_JETTY_ERR] ReCreateJetty succeeded for jettyId=" << jettyId;
+        LOG(INFO) << "[URMA_AE_JETTY_ERR] RetireJetty succeeded for jettyId=" << jettyId;
     }
     INJECT_POINT("UrmaManager.HandleJettyErrAsyncEvent");
     return Status::OK();

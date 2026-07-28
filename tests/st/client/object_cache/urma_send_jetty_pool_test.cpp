@@ -55,6 +55,7 @@ constexpr char kPoolExhaustedInject[] = "UrmaManager.AcquireSendLaneFromConnecti
 constexpr char kBatchGetAfterAcquireInject[] = "WorkerWorkerOCServiceImpl.BatchGetAfterAcquireSendLane";
 constexpr char kCqeStatusInject[] = "UrmaManager.CheckCompletionRecordStatus";
 constexpr char kInFlightTimeoutInject[] = "UrmaManager.UrmaWaitInFlightTimeout";
+constexpr char kDeleteEventInject[] = "UrmaManager.DeleteEvent";
 constexpr char kAsyncDeleteCompleteInject[] = "urma.SendJettyAsyncDeleteComplete";
 constexpr char kRegistryUnregisterInject[] = "urma.SendJettyRegistryUnregister";
 constexpr char kRefillAddedInject[] = "urma.SendJettyPoolRefillAdded";
@@ -364,8 +365,11 @@ protected:
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kModifyJettyInject, "8*call()"));
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kRefillAddedInject, "8*call()"));
         std::vector<bool> requestResults;
+        bool timeoutEventsDeletedBeforeCqe = true;
+        uint64_t timeoutEventDeleteCount = 0;
+        Status clearCompletionPause = Status::OK();
         auto runWave = [&](uint32_t requestOffset, uint32_t requestCount, bool observeHeldLanes = false,
-                           uint32_t expectedHeldLanes = 0) {
+                           uint32_t expectedHeldLanes = 0, bool observeTimedOutEventDeletes = false) {
             ThreadPool threadPool(requestCount);
             std::promise<void> start;
             const auto startFuture = start.get_future().share();
@@ -389,6 +393,14 @@ protected:
                 heldLanesObserved = ObserveWorkerInjectExecuteCount(
                     kSourceWorker, kBatchGetAfterAcquireInject, expectedCount, acquiredCount, 10000);
             }
+            if (observeTimedOutEventDeletes) {
+                // The completion hook is paused. Observe the four timeout-owned deletions before releasing CQE
+                // classification, then always clear the pause before joining the request futures.
+                timeoutEventsDeletedBeforeCqe = ObserveWorkerInjectExecuteCount(
+                    kSourceWorker, kDeleteEventInject, kFaultCount, timeoutEventDeleteCount, 10000);
+                clearCompletionPause =
+                    cluster_->ClearInjectAction(WORKER, kSourceWorker, kCqeStatusInject);
+            }
             for (auto &future : futures) {
                 requestResults.emplace_back(future.get());
             }
@@ -400,7 +412,7 @@ protected:
         bool timeoutReleasesObserved = true;
         uint64_t timeoutReleaseCount = 0;
         Status clearTimeoutRelease = Status::OK();
-        Status clearCompletionPause = Status::OK();
+        Status clearTimeoutEventDelete = Status::OK();
         if (faultInject == kCqeStatusInject) {
             // The CQE hook executes once per poll batch and rewrites only record[0]. Use four isolated rounds so one
             // batched poll cannot consume all four actions or map multiple status=9 records to the same shared lane.
@@ -422,20 +434,21 @@ protected:
             }
             DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, kSourceWorker, kAsyncDeleteCompleteInject));
         } else {
-            // A successful CQE can otherwise release a fast event between GetEvent and the injected timeout. Pause the
-            // existing completion-status hook for the first poll batch so four timed-out leases remain in flight until
-            // their CQEs arrive. The timeout must not retire these leases; the completion path must release them.
-            DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kCqeStatusInject, "1*sleep(5000)"));
+            // A successful CQE can otherwise complete a fast WR between GetEvent and the injected timeout. Pause the
+            // existing completion-status hook for the first poll batch so four timed-out lanes remain in flight until
+            // their CQEs arrive. The timeout must not retire these lanes; CQE/transport-owned lane completion releases them.
+            DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kCqeStatusInject, "1*pause()"));
             DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kSendLaneReleaseInject, "8*call()"));
             DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kBatchGetAfterAcquireInject, "8*call()"));
+            DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, kDeleteEventInject, "8*call()"));
             DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, kSourceWorker, faultInject, faultAction));
-            timeoutWaveHeldFaultLanes = runWave(0, kConcurrentRequests, true, kFaultCount);
+            timeoutWaveHeldFaultLanes = runWave(0, kConcurrentRequests, true, kFaultCount, true);
             timeoutReleasesObserved = ObserveWorkerInjectExecuteCount(
                 kSourceWorker, kSendLaneReleaseInject, kFaultCount, timeoutReleaseCount, 10000);
             clearFault = cluster_->ClearInjectAction(WORKER, kSourceWorker, faultInject);
             DS_ASSERT_OK(cluster_->ClearInjectAction(WORKER, kSourceWorker, kBatchGetAfterAcquireInject));
-            clearCompletionPause = cluster_->ClearInjectAction(WORKER, kSourceWorker, kCqeStatusInject);
             clearTimeoutRelease = cluster_->ClearInjectAction(WORKER, kSourceWorker, kSendLaneReleaseInject);
+            clearTimeoutEventDelete = cluster_->ClearInjectAction(WORKER, kSourceWorker, kDeleteEventInject);
         }
 
         uint64_t modifyCount = 0;
@@ -497,10 +510,17 @@ protected:
 
         ASSERT_TRUE(clearFault.IsOk()) << clearFault.ToString();
         ASSERT_TRUE(timeoutWaveHeldFaultLanes) << "timeout wave did not hold four distinct fault lanes before Wait";
+        if (faultInject != kCqeStatusInject) {
+            ASSERT_TRUE(timeoutEventsDeletedBeforeCqe)
+                << "only " << timeoutEventDeleteCount << " timed-out Events were deleted while CQE polling was paused";
+            ASSERT_EQ(timeoutEventDeleteCount, kFaultCount)
+                << "an Event outside the four injected timeouts was deleted before CQE polling resumed";
+        }
         ASSERT_TRUE(timeoutReleasesObserved)
-            << "only " << timeoutReleaseCount << " completion-owned releases drained the timeout wave";
+            << "only " << timeoutReleaseCount << " CQE/transport-owned lane releases drained the timeout wave";
         ASSERT_TRUE(clearCompletionPause.IsOk()) << clearCompletionPause.ToString();
         ASSERT_TRUE(clearTimeoutRelease.IsOk()) << clearTimeoutRelease.ToString();
+        ASSERT_TRUE(clearTimeoutEventDelete.IsOk()) << clearTimeoutEventDelete.ToString();
         for (bool result : requestResults) {
             ASSERT_TRUE(result) << "a concurrent request was corrupted by another lane's injected fault";
         }
@@ -528,7 +548,7 @@ protected:
         ASSERT_EQ(recoveryReleaseCount, recoveryAcquireCount)
             << "recovery Batch Get attempts did not release exactly the lanes they acquired";
         if (faultInject == kCqeStatusInject) {
-            ASSERT_EQ(finalModifyCount, kFaultCount) << "fault storm retired more than the four injected one-event lanes";
+            ASSERT_EQ(finalModifyCount, kFaultCount) << "fault storm retired more than the four injected single-WR lanes";
             ASSERT_EQ(finalRefillAddedCount, kFaultCount) << "refill created more replacements than retired lanes";
         } else {
             ASSERT_EQ(finalModifyCount, 0U) << "timeout storm unexpectedly retired a Jetty";

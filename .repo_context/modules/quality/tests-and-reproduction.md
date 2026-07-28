@@ -252,7 +252,7 @@ DS_URMA_DEV_NAME=<device> \
 
 - Manual URMA local send-Jetty lifecycle coverage:
   - `//tests/ut/client:urma_send_jetty_lifecycle_test` is a separate Bazel `manual` target. It verifies real
-    send-Jetty pre-fill, acquire/release reuse and pool exhaustion, then triggers `ReCreateJetty` and observes a
+    send-Jetty pre-fill, acquire/release reuse and pool exhaustion, then triggers `RetireJetty` and observes a
     replacement Jetty created by the background refill thread.
   - It needs the same URMA SDK/runtime and configured device:
 
@@ -274,11 +274,10 @@ bazel test //tests/ut/client:urma_jetty_gate_test --config=test --config=urma --
 
 - Manual URMA local send-Jetty fault coverage:
   - `//tests/ut/client:urma_send_jetty_fault_test` is a separate Bazel `manual` target. It covers manager-level
-    pool exhaustion, repeated recoverable status-9 CQEs, non-recoverable CQE no-rebuild/no-leak behavior, async
-    `JETTY_ERR`, and in-flight timeout CQE-drain/release behavior. Refill/capacity assertions use unique registry Jetty identities;
-    retirement now installs one pending record synchronously rather than maintaining overlapping counters.
-    The non-recoverable case creates and seals a real event,
-    then drives the production failed-event release/notify/wait-delete sequence before reacquiring the same Jetty.
+    pool exhaustion, repeated recoverable status-9 CQEs, non-recoverable CQE no-rebuild/no-leak behavior, and async
+    `JETTY_ERR`. Refill/capacity assertions use unique registry Jetty identities; retirement installs one pending
+    record synchronously rather than maintaining overlapping counters. The non-recoverable case drives the production
+    CQE path, transport-owned lane completion, and business Event notify/wait-delete before reacquiring the same Jetty.
   - It needs the same URMA SDK/runtime and configured device:
 
 ```bash
@@ -300,8 +299,11 @@ DS_URMA_DEV_NAME=<device> \
     `K_TRY_AGAIN`, because its worker-to-worker layer retries `K_TRY_AGAIN` until the request deadline; the manager fault
     UT checks the exact acquire error. The target also covers configured-capacity concurrent remote Get, a manual
     `LEVEL1_` 64 concurrently started Batch Get × 64 ordinary sub-object scenario with exactly 64 lane releases and zero
-    observed pool exhaustion (without claiming all lanes were simultaneously held), and recovery after an injected
-    recoverable CQE retires a send Jetty.
+    observed pool exhaustion (without claiming all lanes were simultaneously held), recovery after an injected
+    recoverable CQE retires a send Jetty, and `LEVEL1_ConcurrentBatchGetsRecoverFromInFlightTimeoutStorm`: timeout
+    deletes the business Event without retiring the Jetty, while late CQEs finish the transport-owned lanes and return
+    the original Jetties to the pool. The timeout-storm case pauses production CQE classification, observes all four
+    timed-out Events being deleted before polling resumes, and then verifies the same four lanes are drained and reused.
   - It needs the same URMA SDK/runtime and configured device:
 
 ```bash
