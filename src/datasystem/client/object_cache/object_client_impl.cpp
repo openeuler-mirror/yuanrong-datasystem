@@ -632,22 +632,24 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
     channelConfig.connect_timeout_ms = connectTimeoutMs_;
     channelConfig.max_retry = 0;
     channelConfig.enable_circuit_breaker = false;
-    // SDK hostId is stable for the SDK's lifetime. Cache the first value resolved from the initial
-    // worker so a later reconnect/port change does not leave hostIdMap.find(initialWorker) empty
-    // and disable same-host SHM partitioning. When the lookup still succeeds, refresh the cache.
-    auto sdkHostIdCache = std::make_shared<std::string>();
-    auto ringUpdateHook = [this, initialWorker, sdkHostIdCache](
+    // Service discovery owns SDK host-id resolution. Keep the initial-worker lookup only for
+    // direct local connections that do not have a discovery object.
+    auto sdkHostIdCache =
+        std::make_shared<std::string>(serviceDiscovery_ == nullptr ? "" : serviceDiscovery_->GetHostId());
+    auto ringUpdateHook = [this, initialWorker, initialWorkerIsLocal, sdkHostIdCache](
                               uint64_t ringVersion, const ::datasystem::ClusterTopologyPb &ring,
                               const std::unordered_map<std::string, std::string> &hostIdMap) {
-        auto iter = hostIdMap.find(initialWorker.ToString());
-        if (iter != hostIdMap.end() && !iter->second.empty()) {
-            *sdkHostIdCache = iter->second;
+        if (sdkHostIdCache->empty() && initialWorkerIsLocal) {
+            auto iter = hostIdMap.find(initialWorker.ToString());
+            if (iter != hostIdMap.end() && !iter->second.empty()) {
+                *sdkHostIdCache = iter->second;
+            }
         }
         return ApplyRoutingWorkerSnapshot(ringVersion, ring, hostIdMap, *sdkHostIdCache);
     };
-    auto routing = std::make_shared<client::Routing>(std::move(channelConfig), transportSignature_,
-                                                     std::move(ringUpdateHook));
-    RETURN_IF_NOT_OK(routing->Init("", initialWorker, initialWorkerIsLocal));
+    auto routing =
+        std::make_shared<client::Routing>(std::move(channelConfig), transportSignature_, std::move(ringUpdateHook));
+    RETURN_IF_NOT_OK(routing->Init(*sdkHostIdCache, initialWorker, initialWorkerIsLocal));
     std::atomic_store(&routing_, std::move(routing));
     LOG(INFO) << "[Routing] Object client routing initialized from worker " << initialWorker.ToString();
     return Status::OK();

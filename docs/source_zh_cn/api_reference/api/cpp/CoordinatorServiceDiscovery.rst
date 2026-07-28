@@ -78,6 +78,14 @@ CoordinatorServiceDiscovery
         检查当前配置是否能够按节点亲和性选择 Worker。当策略不是
         ``ServiceAffinityPolicy::RANDOM`` 且已获取本机 hostId 时返回 ``true``。
 
+    .. cpp:function:: std::string GetHostId() const
+
+        获取 :cpp:func:`CoordinatorServiceDiscovery::Init` 解析出的 SDK hostId。客户端使用该值为写入路由
+        识别同节点 Worker，初始连接地址不会覆盖该值。
+
+        返回：
+            SDK hostId；无法解析时返回空字符串。
+
     **使用固定 Coordinator 地址**
 
     .. code-block:: cpp

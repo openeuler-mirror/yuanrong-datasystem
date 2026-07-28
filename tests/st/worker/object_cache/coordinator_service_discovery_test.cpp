@@ -87,6 +87,8 @@ protected:
         opts.affinityPolicy = policy;
         serviceDiscovery = std::make_shared<CoordinatorServiceDiscovery>(opts);
         DS_ASSERT_OK(serviceDiscovery->Init());
+        const char *expectedHostId = hostIdEnvName.empty() ? nullptr : std::getenv(hostIdEnvName.c_str());
+        ASSERT_EQ(serviceDiscovery->GetHostId(), expectedHostId == nullptr ? "" : expectedHostId);
     }
 
     void InitKVClientWithCoordinatorServiceDiscovery(std::shared_ptr<KVClient> &client, ServiceAffinityPolicy policy,

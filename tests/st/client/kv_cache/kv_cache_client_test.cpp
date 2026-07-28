@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <memory>
 #include <ostream>
 #include <cstdint>
@@ -99,6 +100,9 @@ constexpr char ENV_RECOVERY_HOST_ID_ENV0[] = "host_id_env0";
 constexpr char ENV_RECOVERY_HOST_ID_VALUE0[] = "host_id0";
 constexpr char ENV_RECOVERY_CLIENT_LOG_MESSAGE[] = "env_recovery_client_pod_ip_log";
 constexpr char ENV_RECOVERY_LOCK_FILE_SUFFIX[] = ".lock";
+constexpr char REGISTER_CLIENT_INJECT[] = "WorkerServiceImpl.RegisterClient.AboveAddClient";
+constexpr char CREATE_OBJECT_INJECT[] = "worker.Create.begin";
+constexpr int REMOTE_INITIAL_WORKER_TIMEOUT_MS = 10'000;
 constexpr int ENV_RECOVERY_LOG_WAIT_MS = 5'000;
 constexpr int ENV_RECOVERY_LOG_POLL_MS = 100;
 constexpr int MMAP_SWITCH_WAIT_MS = 30'000;
@@ -2886,6 +2890,68 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeScaleUp)
     ASSERT_EQ(val, data);
 }
 
+class FixedHostServiceDiscovery final : public IServiceDiscovery {
+public:
+    FixedHostServiceDiscovery(std::string hostId, HostPort sameNodeWorker, HostPort initialWorker)
+        : hostId_(std::move(hostId)),
+          sameNodeWorker_(std::move(sameNodeWorker)),
+          initialWorker_(std::move(initialWorker))
+    {
+    }
+
+    Status Init() override
+    {
+        return Status::OK();
+    }
+
+    Status SelectWorker(std::string &workerIp, int &workerPort, bool *isSameNode, bool *isNoAvailableWorker) override
+    {
+        workerIp = initialWorker_.Host();
+        workerPort = initialWorker_.Port();
+        if (isSameNode != nullptr) {
+            *isSameNode = initialWorker_ == sameNodeWorker_;
+        }
+        if (isNoAvailableWorker != nullptr) {
+            *isNoAvailableWorker = false;
+        }
+        return Status::OK();
+    }
+
+    Status SelectSameNodeWorker(std::string &workerIp, int &workerPort) override
+    {
+        (void)workerIp;
+        (void)workerPort;
+        return Status(K_NOT_READY, "Same-node recovery is intentionally unavailable in this test");
+    }
+
+    Status GetAllWorkers(std::vector<std::string> &sameHostAddrs, std::vector<std::string> &otherAddrs) override
+    {
+        sameHostAddrs = { sameNodeWorker_.ToString() };
+        otherAddrs = { initialWorker_.ToString() };
+        return Status::OK();
+    }
+
+    ServiceAffinityPolicy GetAffinityPolicy() const override
+    {
+        return ServiceAffinityPolicy::PREFERRED_SAME_NODE;
+    }
+
+    bool HasHostAffinity() const override
+    {
+        return true;
+    }
+
+    std::string GetHostId() const override
+    {
+        return hostId_;
+    }
+
+private:
+    std::string hostId_;
+    HostPort sameNodeWorker_;
+    HostPort initialWorker_;
+};
+
 class KVCacheClientServiceDiscoveryTest : public OCClientCommon {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -3029,6 +3095,71 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestSimpleSetGetForRandom)
     ASSERT_EQ(value, std::string(valueGet.data(), valueGet.size()));
 }
 
+TEST_F(KVCacheClientServiceDiscoveryTest, TestClientPrefersSameNodeWorkerAndSetGet)
+{
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, REGISTER_CLIENT_INJECT, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, REGISTER_CLIENT_INJECT, "call()"));
+
+    std::shared_ptr<KVClient> client;
+    InitTestKVClient(client, ServiceAffinityPolicy::PREFERRED_SAME_NODE, "host_id_env0");
+
+    uint64_t localRegisterCount = 0;
+    uint64_t remoteRegisterCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, REGISTER_CLIENT_INJECT, localRegisterCount));
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 1, REGISTER_CLIENT_INJECT, remoteRegisterCount));
+    ASSERT_GT(localRegisterCount, 0);
+    ASSERT_EQ(remoteRegisterCount, 0);
+
+    const std::string key = NewObjectKey();
+    const std::string expectedValue = "same-node-client-value";
+    DS_ASSERT_OK(client->Set(key, expectedValue));
+    std::string actualValue;
+    DS_ASSERT_OK(client->Get(key, actualValue));
+    ASSERT_EQ(actualValue, expectedValue);
+}
+
+TEST_F(KVCacheClientServiceDiscoveryTest, TestRemoteInitialWorkerKeepsSameNodeRoutingForSetGet)
+{
+    auto serviceDiscovery =
+        std::make_shared<FixedHostServiceDiscovery>(ENV_RECOVERY_HOST_ID_VALUE0, workerAddress_[0], workerAddress_[1]);
+    DS_ASSERT_OK(serviceDiscovery->Init());
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, REGISTER_CLIENT_INJECT, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, REGISTER_CLIENT_INJECT, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, CREATE_OBJECT_INJECT, "call()"));
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 1, CREATE_OBJECT_INJECT, "call()"));
+
+    ConnectOptions options;
+    InitConnectOpt(0, options, REMOTE_INITIAL_WORKER_TIMEOUT_MS);
+    options.requestTimeoutMs = REMOTE_INITIAL_WORKER_TIMEOUT_MS;
+    options.enableLocalCache = false;
+    options.dataPlacementPolicy = DataPlacementPolicy::REQUIRED_SAME_NODE;
+    options.serviceDiscovery = serviceDiscovery;
+    auto client = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(client->Init());
+
+    uint64_t localRegisterCount = 0;
+    uint64_t remoteRegisterCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, REGISTER_CLIENT_INJECT, localRegisterCount));
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 1, REGISTER_CLIENT_INJECT, remoteRegisterCount));
+    ASSERT_EQ(localRegisterCount, 0);
+    ASSERT_GT(remoteRegisterCount, 0);
+
+    const std::string key = NewObjectKey();
+    const std::string expectedValue = "same-node-routing-value";
+    DS_ASSERT_OK(client->Set(key, expectedValue));
+    std::string actualValue;
+    DS_ASSERT_OK(client->Get(key, actualValue));
+    ASSERT_EQ(actualValue, expectedValue);
+
+    uint64_t localCreateCount = 0;
+    uint64_t remoteCreateCount = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, CREATE_OBJECT_INJECT, localCreateCount));
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 1, CREATE_OBJECT_INJECT, remoteCreateCount));
+    ASSERT_GT(localCreateCount, 0);
+    ASSERT_EQ(remoteCreateCount, 0);
+    DS_ASSERT_OK(client->ShutDown());
+}
+
 TEST_F(KVCacheClientServiceDiscoveryTest, TestSetGetAfterWorkerEnvRecoveredFromLogDirFile)
 {
     auto envFile = GetWorkerEnvFileForSt(cluster_.get(), 0);
@@ -3160,6 +3291,9 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestPreferSameNode)
         std::shared_ptr<ServiceDiscovery> serviceDiscovery;
         GetServiceDiscovery(hostIdEnvName, ServiceAffinityPolicy::PREFERRED_SAME_NODE, serviceDiscovery);
         ASSERT_TRUE(serviceDiscovery != nullptr);
+        const char *expectedHostId = std::getenv(hostIdEnvName.c_str());
+        ASSERT_NE(expectedHostId, nullptr);
+        ASSERT_EQ(serviceDiscovery->GetHostId(), expectedHostId);
         std::string workerIp;
         int workerPort;
         DS_ASSERT_OK(serviceDiscovery->SelectWorker(workerIp, workerPort));

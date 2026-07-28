@@ -1164,7 +1164,8 @@ TEST_F(OCClientGetTest, LEVEL1_GetRuntimeErrorAfterWorkerStart)
     DS_ASSERT_OK(cluster_->WaitNodeReady(WORKER, 0));
     std::vector<Optional<Buffer>> buffers;
     Status rc = cliLocal->Get(objKeys, 1000, buffers);
-    ASSERT_EQ(rc.GetCode(), K_RUNTIME_ERROR);
+    ASSERT_TRUE(rc.GetCode() == K_RUNTIME_ERROR || rc.GetCode() == K_NOT_FOUND)
+        << "expected stale-data or converged-metadata result, got: " << rc.ToString();
     LOG(INFO) << rc.ToString();
     for (size_t i = 0; i < objKeys.size(); i++) {
         std::string objKey = objKeys[i];

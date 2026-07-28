@@ -74,3 +74,11 @@ IServiceDiscovery
 
         返回：
             ``true`` 表示可以按同节点条件选择 Worker，否则返回 ``false``。
+
+    .. cpp:function:: virtual std::string GetHostId() const
+
+        获取服务发现初始化时解析出的 SDK hostId。客户端使用该值为写入路由识别同节点 Worker。
+        自定义实现启用节点亲和性时应重写本函数，并返回与 Worker 注册信息使用相同命名空间的 hostId。
+
+        返回：
+            SDK hostId；无法解析时返回空字符串。
