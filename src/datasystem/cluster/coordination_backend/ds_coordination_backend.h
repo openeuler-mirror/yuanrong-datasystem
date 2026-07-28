@@ -422,8 +422,9 @@ private:
 
     std::string keepAliveTableName_;
     std::string keepAliveKey_;
-    // Serializes complete membership state mutations and their RPC commit order.
+    // Serializes membership RPC commit order and protects keepAliveModRevision_.
     std::mutex membershipMutationMutex_;
+    int64_t keepAliveModRevision_{ COORDINATOR_NO_MOD_REVISION_CHECK };
     // Protects keepAliveValue_; also used by keepAliveCv_ to interrupt its wait.
     std::mutex keepAliveMutex_;
     MembershipValue keepAliveValue_;

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <future>
 #include <optional>
 #include <stdexcept>
@@ -18,6 +19,7 @@
 #include "datasystem/common/coordinator/coordinator_store.h"
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/steady_clock.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/status_helper.h"
@@ -30,7 +32,8 @@ namespace {
 constexpr size_t SHA256_HEX_SIZE = 64;
 constexpr size_t DIGEST_LOG_PREFIX_SIZE = 8;
 constexpr size_t COORDINATOR_ID_LOG_PREFIX_SIZE = 8;
-constexpr size_t TOPOLOGY_KEYSPACE_KIND_COUNT = 5;
+constexpr size_t TOPOLOGY_KEYSPACE_KIND_COUNT = 6;
+constexpr size_t MAX_ENCODED_SCALE_IN_SOURCE_SIZE = 256;
 constexpr uint64_t MEMBER_LIMIT_LOG_INTERVAL = 1'024;
 constexpr char PHYSICAL_ROOT[] = "/datasystem/";
 
@@ -102,6 +105,28 @@ bool HasPeerPayloadRequest(const std::unordered_map<std::string, TopologyCandida
     });
 }
 
+Status ValidateScaleInMetadataDoneKey(const std::string &relative)
+{
+    const auto epochEnd = relative.find('/');
+    const auto sourceEnd = epochEnd == std::string::npos ? std::string::npos : relative.find('/', epochEnd + 1);
+    CHECK_FAIL_RETURN_STATUS(epochEnd > 1 && sourceEnd != std::string::npos && sourceEnd > epochEnd + 1,
+                             K_INVALID, "invalid ScaleIn metadata-done key");
+    const std::string epochText = relative.substr(1, epochEnd - 1);
+    uint64_t epoch = 0;
+    const auto parsed = std::from_chars(epochText.data(), epochText.data() + epochText.size(), epoch);
+    CHECK_FAIL_RETURN_STATUS(relative.front() == 'e' && epoch > 0 && parsed.ec == std::errc()
+                                 && parsed.ptr == epochText.data() + epochText.size()
+                                 && (epochText.size() == 1 || epochText.front() != '0'),
+                             K_INVALID, "invalid ScaleIn metadata-done epoch");
+    const std::string encodedSource = relative.substr(epochEnd + 1, sourceEnd - epochEnd - 1);
+    CHECK_FAIL_RETURN_STATUS(encodedSource.size() <= MAX_ENCODED_SCALE_IN_SOURCE_SIZE
+                                 && encodedSource.size() % 2 == 0 && IsLowerHex(encodedSource),
+                             K_INVALID,
+                             "invalid ScaleIn metadata-done source");
+    std::string canonical;
+    return cluster::TopologyKeyHelper::TaskKey(relative.substr(sourceEnd + 1), canonical);
+}
+
 Status ValidateRelativeKey(TopologyCoordinationKeyKind kind, const std::string &relative)
 {
     std::string canonical;
@@ -117,6 +142,8 @@ Status ValidateRelativeKey(TopologyCoordinationKeyKind kind, const std::string &
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::NotifyKey(relative, canonical));
     } else if (kind == TopologyCoordinationKeyKind::MEMBERSHIP && !relative.empty()) {
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::MembershipKey(relative, canonical));
+    } else if (kind == TopologyCoordinationKeyKind::SCALE_IN_METADATA_DONE) {
+        RETURN_IF_NOT_OK(ValidateScaleInMetadataDoneKey(relative));
     }
     return Status::OK();
 }
@@ -131,6 +158,7 @@ Status MatchKeyspace(const cluster::TopologyKeyHelper &keys, const std::string &
         std::make_pair(&keys.DeleteTaskTable(), TopologyCoordinationKeyKind::DELETE_TASK),
         std::make_pair(&keys.NotifyTable(), TopologyCoordinationKeyKind::NOTIFY),
         std::make_pair(&keys.MembershipTable(), TopologyCoordinationKeyKind::MEMBERSHIP),
+        std::make_pair(&keys.ScaleInMetadataDoneTable(), TopologyCoordinationKeyKind::SCALE_IN_METADATA_DONE),
     };
     for (const auto &[table, kind] : tables) {
         if (physicalKey == *table) {
@@ -187,6 +215,7 @@ Status AwaitPayloadValidation(std::future<Status> &result, std::chrono::millisec
 }  // namespace
 
 struct TopologyRecoveryManager::ClusterRecoveryContext {
+    uint64_t generation{ 0 };
     TopologyRecoveryState state{ TopologyRecoveryState::RECOVERING };
     std::unordered_set<std::string> observedMembers;
     std::unordered_map<std::string, TopologyCandidateEvidence> reporterEvidence;
@@ -196,6 +225,7 @@ struct TopologyRecoveryManager::ClusterRecoveryContext {
     std::optional<std::chrono::steady_clock::time_point> discoveryDeadline;
     bool payloadValidationPending{ false };
     bool reconcileQueued{ false };
+    bool storedAuthorityChecked{ false };
 };
 
 TopologyRecoveryManager::TopologyRecoveryManager(std::string coordinatorId, CoordinatorStore &store,
@@ -230,15 +260,16 @@ Status TopologyRecoveryManager::ParseKey(const std::string &physicalKey,
     const size_t separator = suffix.find('/');
     std::unique_ptr<cluster::TopologyKeyHelper> keys;
     bool matched = false;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create("", keys));
+    RETURN_IF_NOT_OK(MatchKeyspace(*keys, physicalKey, parsed, matched));
+    if (matched) {
+        return Status::OK();
+    }
     if (separator != std::string::npos) {
         RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(suffix.substr(0, separator), keys));
-        RETURN_IF_NOT_OK(MatchKeyspace(*keys, physicalKey, parsed, matched));
-        if (matched) {
-            return Status::OK();
-        }
+        return MatchKeyspace(*keys, physicalKey, parsed, matched);
     }
-    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create("", keys));
-    return MatchKeyspace(*keys, physicalKey, parsed, matched);
+    return Status::OK();
 }
 
 Status TopologyRecoveryManager::EnsureContext(const std::string &clusterName, ClusterRecoveryContext *&context)
@@ -250,7 +281,9 @@ Status TopologyRecoveryManager::EnsureContext(const std::string &clusterName, Cl
     }
     CHECK_FAIL_RETURN_STATUS(contexts_.size() < options_.maxClusters, K_TRY_AGAIN,
                              "topology recovery cluster admission limit reached");
-    auto inserted = contexts_.emplace(clusterName, std::make_unique<ClusterRecoveryContext>());
+    auto candidate = std::make_unique<ClusterRecoveryContext>();
+    candidate->generation = nextContextGeneration_++;
+    auto inserted = contexts_.emplace(clusterName, std::move(candidate));
     context = inserted.first->second.get();
     LOG(INFO) << "CLUSTER_RECOVERY_STATE cluster=" << clusterName << ", coordinator_id="
               << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
@@ -346,6 +379,10 @@ void TopologyRecoveryManager::UpdateMembership(const ParsedTopologyCoordinationK
             return;
         }
         context->observedMembers.insert(parsed.relativeKey);
+        if (context->state == TopologyRecoveryState::RECOVERING
+            && !context->reporterEvidence.empty()) {
+            context->discoveryDeadline = clock_->Now() + options_.discoveryWindow;
+        }
         VLOG(1) << "CLUSTER_RECOVERY_MEMBER cluster=" << parsed.clusterName << ", address=" << parsed.relativeKey
                 << ", present=true, member_count=" << context->observedMembers.size();
         return;
@@ -426,6 +463,7 @@ Status TopologyRecoveryManager::ValidateEvidence(const std::string &clusterName,
 
 Status TopologyRecoveryManager::ValidatePayload(const TopologyRecoveryCandidateReport &report) const
 {
+    INJECT_POINT_NO_RETURN("TopologyRecoveryManager.ValidatePayload");
     cluster::TopologyState state;
     RETURN_IF_NOT_OK(cluster::TopologyRepositoryCodec::DecodeTopology(report.canonicalTopology, state));
     CHECK_FAIL_RETURN_STATUS(state.version == report.topologyVersion, K_INVALID,
@@ -530,8 +568,11 @@ Status TopologyRecoveryManager::UpdateEvidenceLocked(ClusterRecoveryContext &con
         context.state = TopologyRecoveryState::RECOVERING;
         context.discoveryDeadline.reset();
     }
+    const bool evidenceChanged =
+        old == context.reporterEvidence.end() || !SameEvidence(old->second, report);
+    const bool awaitingMembers = context.reporterEvidence.size() < context.observedMembers.size();
     if (context.discoveryDeadline.has_value() && now >= *context.discoveryDeadline
-        && (old == context.reporterEvidence.end() || !SameEvidence(old->second, report))) {
+        && evidenceChanged && !awaitingMembers) {
         decision.state = context.state;
         schedule = true;
         return Status::OK();
@@ -541,7 +582,7 @@ Status TopologyRecoveryManager::UpdateEvidenceLocked(ClusterRecoveryContext &con
     context.reporterEvidence[report.reporterAddress] = TopologyCandidateEvidence{
         report.hasSnapshot, report.topologyVersion, std::move(report.canonicalDigest), requested
     };
-    if (!context.discoveryDeadline.has_value()) {
+    if (!context.discoveryDeadline.has_value() || evidenceChanged) {
         context.discoveryDeadline = now + options_.discoveryWindow;
     }
     const auto selection = SelectHighestCandidate(context.reporterEvidence);
@@ -570,6 +611,7 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
 {
     const auto traceContext = GetRecoveryTraceContext();
     const size_t payloadBytes = report.canonicalTopology.size();
+    uint64_t contextGeneration = 0;
     std::future<Status> result;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -592,9 +634,11 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
         ++pendingRecoveryWork_;
         admittedReportBytes_ += payloadBytes;
         context.payloadValidationPending = true;
+        contextGeneration = context.generation;
         try {
             result = recoveryPool_->Submit(
-                [this, clusterName, payloadBytes, report = std::move(report), traceContext]() mutable {
+                [this, clusterName, contextGeneration, payloadBytes, report = std::move(report),
+                 traceContext]() mutable {
                     TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
                     Status status;
                     try {
@@ -605,9 +649,9 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
                         status = Status(K_RUNTIME_ERROR, "candidate validation failed with an unknown exception");
                     }
                     if (status.IsOk()) {
-                        return RecordPayload(clusterName, std::move(report));
+                        return RecordPayload(clusterName, contextGeneration, std::move(report));
                     }
-                    return RejectPayload(clusterName, report, payloadBytes, status);
+                    return RejectPayload(clusterName, contextGeneration, report, payloadBytes, status);
                 });
         } catch (const std::exception &error) {
             --pendingRecoveryWork_;
@@ -622,7 +666,7 @@ Status TopologyRecoveryManager::SubmitPayload(const std::string &clusterName,
     return Status::OK();
 }
 
-Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName,
+Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName, uint64_t contextGeneration,
                                               TopologyRecoveryCandidateReport report)
 {
     const size_t payloadBytes = report.canonicalTopology.size();
@@ -632,9 +676,8 @@ Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName,
         --pendingRecoveryWork_;
         admittedReportBytes_ -= payloadBytes;
         auto found = contexts_.find(clusterName);
-        if (found == contexts_.end()) {
-            RETURN_STATUS(K_TRY_AGAIN, "recovery context disappeared during payload validation");
-        }
+        CHECK_FAIL_RETURN_STATUS(found != contexts_.end() && found->second->generation == contextGeneration,
+                                 K_TRY_AGAIN, "recovery context changed during payload validation");
         auto &context = *found->second;
         context.payloadValidationPending = false;
         CHECK_FAIL_RETURN_STATUS(context.state != TopologyRecoveryState::INSTALLING, K_TRY_AGAIN,
@@ -669,7 +712,7 @@ Status TopologyRecoveryManager::RecordPayload(const std::string &clusterName,
     return Status::OK();
 }
 
-Status TopologyRecoveryManager::RejectPayload(const std::string &clusterName,
+Status TopologyRecoveryManager::RejectPayload(const std::string &clusterName, uint64_t contextGeneration,
                                               const TopologyRecoveryCandidateReport &report,
                                               size_t payloadBytes, const Status &validationStatus)
 {
@@ -677,7 +720,7 @@ Status TopologyRecoveryManager::RejectPayload(const std::string &clusterName,
     --pendingRecoveryWork_;
     admittedReportBytes_ -= payloadBytes;
     auto found = contexts_.find(clusterName);
-    if (found == contexts_.end()) {
+    if (found == contexts_.end() || found->second->generation != contextGeneration) {
         return validationStatus;
     }
     auto &context = *found->second;
@@ -770,6 +813,11 @@ void TopologyRecoveryManager::ScheduleReconcile(const std::string &clusterName)
 
 Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName)
 {
+    bool resolved = false;
+    RETURN_IF_NOT_OK(AdoptStoredAuthorityIfPresent(clusterName, resolved));
+    if (resolved) {
+        return Status::OK();
+    }
     std::shared_ptr<const std::string> payload;
     uint64_t version = 0;
     {
@@ -792,6 +840,68 @@ Status TopologyRecoveryManager::MaybeFinalize(const std::string &clusterName)
     return installStatus;
 }
 
+Status TopologyRecoveryManager::AdoptStoredAuthorityIfPresent(const std::string &clusterName, bool &resolved)
+{
+    resolved = false;
+    uint64_t contextGeneration = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto found = contexts_.find(clusterName);
+        if (found == contexts_.end() || found->second->state != TopologyRecoveryState::RECOVERING
+            || found->second->storedAuthorityChecked) {
+            return Status::OK();
+        }
+        found->second->storedAuthorityChecked = true;
+        contextGeneration = found->second->generation;
+    }
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(clusterName, keys));
+    const std::string physicalKey = keys->TopologyTable() + "/" + cluster::TopologyKeyHelper::TopologyKey();
+    std::vector<KeyValueEntry> entries;
+    int64_t revision = 0;
+    const auto rangeStatus = store_.Range(physicalKey, "", entries, revision);
+    INJECT_POINT_NO_RETURN("TopologyRecoveryManager.AdoptStoredAuthority.afterRead");
+    if (rangeStatus.IsError()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto found = contexts_.find(clusterName);
+        if (found != contexts_.end() && found->second->generation == contextGeneration
+            && found->second->state == TopologyRecoveryState::RECOVERING) {
+            found->second->storedAuthorityChecked = false;
+        }
+        return rangeStatus;
+    }
+    if (entries.empty()) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(entries.size() == 1, K_RUNTIME_ERROR, "exact topology read returned multiple values");
+    cluster::TopologyState topology;
+    const auto decodeStatus = cluster::TopologyRepositoryCodec::DecodeTopology(entries.front().value, topology);
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto found = contexts_.find(clusterName);
+    if (found == contexts_.end() || found->second->generation != contextGeneration
+        || found->second->state != TopologyRecoveryState::RECOVERING) {
+        return Status::OK();
+    }
+    auto &context = *found->second;
+    resolved = true;
+    ReleaseSelectedPayload(context);
+    context.reporterEvidence.clear();
+    context.discoveryDeadline.reset();
+    if (decodeStatus.IsError()) {
+        context.state = TopologyRecoveryState::BLOCKED;
+        LOG(ERROR) << "CLUSTER_RECOVERY_STORED_AUTHORITY_INVALID cluster=" << clusterName
+                   << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+                   << ", revision=" << revision << ", status=" << decodeStatus.ToString();
+        return Status::OK();
+    }
+    context.state = TopologyRecoveryState::READY;
+    LOG(INFO) << "CLUSTER_RECOVERY_READY_STORED_AUTHORITY cluster=" << clusterName
+              << ", coordinator_id=" << coordinatorId_.substr(0, COORDINATOR_ID_LOG_PREFIX_SIZE)
+              << ", topology_version=" << topology.version << ", store_revision=" << revision
+              << ", members=" << context.observedMembers.size();
+    return Status::OK();
+}
+
 Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clusterName,
                                                           std::shared_ptr<const std::string> &payload,
                                                           uint64_t &version)
@@ -801,6 +911,9 @@ Status TopologyRecoveryManager::PrepareInstallationLocked(const std::string &clu
         return Status::OK();
     }
     auto &context = *found->second;
+    if (context.reporterEvidence.size() < context.observedMembers.size()) {
+        return Status::OK();
+    }
     if (!context.discoveryDeadline.has_value() || clock_->Now() < *context.discoveryDeadline) {
         return Status::OK();
     }

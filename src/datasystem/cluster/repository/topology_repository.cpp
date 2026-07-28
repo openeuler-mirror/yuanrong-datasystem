@@ -22,17 +22,42 @@
 
 namespace datasystem::cluster {
 namespace {
-constexpr char TASK_DELETE_TOMBSTONE[] = "cluster-task-delete-tombstone-v1";
-constexpr char SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE[] = "cluster-scalein-metadata-delete-tombstone-v1";
+constexpr char TASK_DELETE_TOMBSTONE_PREFIX[] = "cluster-task-delete-tombstone-v1-";
+constexpr char NOTIFY_DELETE_TOMBSTONE_PREFIX[] = "cluster-notify-delete-tombstone-v1-";
+constexpr char SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE_PREFIX[] = "cluster-scalein-metadata-delete-tombstone-v1-";
+constexpr char DELETE_TOMBSTONE_FIRST_SUFFIX[] = "0";
+constexpr char DELETE_TOMBSTONE_SECOND_SUFFIX[] = "1";
+
+bool HasPrefix(const std::string &bytes, const char *prefix)
+{
+    return bytes.rfind(prefix, 0) == 0;
+}
+
+std::string NextDeleteTombstone(const char *prefix, const std::string &current)
+{
+    std::string first(prefix);
+    first.append(DELETE_TOMBSTONE_FIRST_SUFFIX);
+    if (current != first) {
+        return first;
+    }
+    std::string second(prefix);
+    second.append(DELETE_TOMBSTONE_SECOND_SUFFIX);
+    return second;
+}
 
 bool IsTaskDeleteTombstone(const std::string &bytes)
 {
-    return bytes == TASK_DELETE_TOMBSTONE;
+    return HasPrefix(bytes, TASK_DELETE_TOMBSTONE_PREFIX);
+}
+
+bool IsNotifyDeleteTombstone(const std::string &bytes)
+{
+    return HasPrefix(bytes, NOTIFY_DELETE_TOMBSTONE_PREFIX);
 }
 
 bool IsScaleInMetadataDoneDeleteTombstone(const std::string &bytes)
 {
-    return bytes == SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE;
+    return HasPrefix(bytes, SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE_PREFIX);
 }
 
 Status EncodeTask(const TopologyTask &task, std::string &taskId, TopologyTaskKind &kind, std::string &bytes)
@@ -294,26 +319,38 @@ Status TopologyRepository::ReadNotify(const std::string &address, TopologyTaskNo
     RETURN_IF_NOT_OK(TopologyKeyHelper::NotifyKey(address, key));
     std::string bytes;
     RETURN_IF_NOT_OK(backend_.Get(keys_.NotifyTable(), key, bytes));
-    CHECK_FAIL_RETURN_STATUS(!bytes.empty(), K_NOT_FOUND, "topology notify is logically deleted");
+    CHECK_FAIL_RETURN_STATUS(!bytes.empty() && !IsNotifyDeleteTombstone(bytes), K_NOT_FOUND,
+                             "topology notify is logically deleted");
     return TopologyRepositoryCodec::DecodeNotify(bytes, notify);
 }
 
 Status TopologyRepository::RewriteNotify(const std::string &address, const TopologyTaskNotify &expected)
 {
-    std::string key;
     std::string bytes;
-    RETURN_IF_NOT_OK(TopologyKeyHelper::NotifyKey(address, key));
     RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeNotify(expected, bytes));
+    return RewriteEncodedNotify(address, bytes);
+}
+
+Status TopologyRepository::RewriteEncodedNotify(const std::string &address, const std::string &bytes)
+{
+    std::string key;
+    RETURN_IF_NOT_OK(TopologyKeyHelper::NotifyKey(address, key));
     ICoordinationBackend::ProcessFunction process = [&bytes](const std::string &current,
                                                              std::unique_ptr<std::string> &next, bool &retry) {
         retry = false;
+        if (IsNotifyDeleteTombstone(current)) {
+            RETURN_STATUS(K_TRY_AGAIN, "topology notify physical deletion is in progress");
+        }
         if (current != bytes) {
             next = std::make_unique<std::string>(bytes);
         }
         return Status::OK();
     };
     auto rc = backend_.CAS(keys_.NotifyTable(), key, process);
-    return rc.IsOk() ? rc : ResolveExactWrite(backend_, keys_.NotifyTable(), key, bytes, rc);
+    if (rc.IsOk() || rc.GetCode() == K_TRY_AGAIN) {
+        return rc;
+    }
+    return ResolveExactWrite(backend_, keys_.NotifyTable(), key, bytes, rc);
 }
 
 Status TopologyRepository::MarkTaskScopeFinished(const TopologyExecutionFence &fence, TaskProgressOutcome &outcome)
@@ -406,18 +443,51 @@ Status TopologyRepository::CountScaleInMetadataDone(uint64_t batchEpoch, const s
 Status TopologyRepository::ListTaskCandidatesForJanitor(TopologyTaskKind kind, size_t limit,
                                                         std::vector<TaskJanitorCandidate> &tasks) const
 {
+    std::string cursor;
+    return ListTaskCandidatesForJanitor(kind, limit, cursor, tasks);
+}
+
+template <typename Visit>
+Status VisitRotatingPage(std::vector<std::pair<std::string, std::string>> &values, size_t limit,
+                         std::string &cursor, Visit visit)
+{
+    std::sort(values.begin(), values.end(), [](const auto &left, const auto &right) {
+        return left.first < right.first;
+    });
+    if (values.empty()) {
+        cursor.clear();
+        return Status::OK();
+    }
+    auto begin = std::upper_bound(values.begin(), values.end(), cursor, [](const auto &key, const auto &entry) {
+        return key < entry.first;
+    });
+    size_t index = begin == values.end() ? 0 : static_cast<size_t>(std::distance(values.begin(), begin));
+    const size_t count = std::min(limit, values.size());
+    std::string nextCursor = cursor;
+    for (size_t visited = 0; visited < count; ++visited) {
+        const auto &entry = values[index];
+        RETURN_IF_NOT_OK(visit(entry));
+        nextCursor = entry.first;
+        index = (index + 1) % values.size();
+    }
+    cursor = std::move(nextCursor);
+    return Status::OK();
+}
+
+Status TopologyRepository::ListTaskCandidatesForJanitor(TopologyTaskKind kind, size_t limit,
+                                                        std::string &cursor,
+                                                        std::vector<TaskJanitorCandidate> &tasks) const
+{
     CHECK_FAIL_RETURN_STATUS(limit > 0, K_INVALID, "task Janitor scan limit must be positive");
     std::vector<std::pair<std::string, std::string>> values;
     RETURN_IF_NOT_OK(backend_.GetAll(TaskTable(kind), values));
-    std::sort(values.begin(), values.end());
     std::vector<TaskJanitorCandidate> candidates;
     candidates.reserve(std::min(limit, values.size()));
-    for (const auto &[taskId, bytes] : values) {
-        if (candidates.size() >= limit) {
-            break;
-        }
+    RETURN_IF_NOT_OK(VisitRotatingPage(values, limit, cursor, [&](const auto &entry) {
+        const auto &[taskId, bytes] = entry;
         candidates.push_back({ kind, taskId, bytes });
-    }
+        return Status::OK();
+    }));
     tasks = std::move(candidates);
     return Status::OK();
 }
@@ -425,23 +495,28 @@ Status TopologyRepository::ListTaskCandidatesForJanitor(TopologyTaskKind kind, s
 Status TopologyRepository::ListNotifyCandidatesForJanitor(size_t limit,
                                                           std::vector<NotifyJanitorCandidate> &notifies) const
 {
+    std::string cursor;
+    return ListNotifyCandidatesForJanitor(limit, cursor, notifies);
+}
+
+Status TopologyRepository::ListNotifyCandidatesForJanitor(size_t limit, std::string &cursor,
+                                                          std::vector<NotifyJanitorCandidate> &notifies) const
+{
     CHECK_FAIL_RETURN_STATUS(limit > 0, K_INVALID, "notify Janitor scan limit must be positive");
     std::vector<std::pair<std::string, std::string>> values;
     RETURN_IF_NOT_OK(backend_.GetAll(keys_.NotifyTable(), values));
-    std::sort(values.begin(), values.end());
     std::vector<NotifyJanitorCandidate> candidates;
     candidates.reserve(std::min(limit, values.size()));
-    for (const auto &[address, bytes] : values) {
-        if (candidates.size() >= limit) {
-            break;
-        }
-        if (bytes.empty()) {
-            continue;
-        }
+    RETURN_IF_NOT_OK(VisitRotatingPage(values, limit, cursor, [&](const auto &entry) {
+        const auto &[address, bytes] = entry;
         TopologyTaskNotify notify;
-        RETURN_IF_NOT_OK(TopologyRepositoryCodec::DecodeNotify(bytes, notify));
-        candidates.push_back({ address, std::move(notify), bytes });
-    }
+        if (!bytes.empty() && !IsNotifyDeleteTombstone(bytes)) {
+            RETURN_IF_NOT_OK(TopologyRepositoryCodec::DecodeNotify(bytes, notify));
+        }
+        candidates.push_back(
+            { address, std::move(notify), bytes, bytes.empty() || IsNotifyDeleteTombstone(bytes) });
+        return Status::OK();
+    }));
     notifies = std::move(candidates);
     return Status::OK();
 }
@@ -449,18 +524,23 @@ Status TopologyRepository::ListNotifyCandidatesForJanitor(size_t limit,
 Status TopologyRepository::ListScaleInMetadataDoneCandidatesForJanitor(
     size_t limit, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const
 {
+    std::string cursor;
+    return ListScaleInMetadataDoneCandidatesForJanitor(limit, cursor, markers);
+}
+
+Status TopologyRepository::ListScaleInMetadataDoneCandidatesForJanitor(
+    size_t limit, std::string &cursor, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const
+{
     CHECK_FAIL_RETURN_STATUS(limit > 0, K_INVALID, "ScaleIn metadata marker Janitor scan limit must be positive");
     std::vector<std::pair<std::string, std::string>> values;
     RETURN_IF_NOT_OK(backend_.GetAll(keys_.ScaleInMetadataDoneTable(), values));
-    std::sort(values.begin(), values.end());
     std::vector<ScaleInMetadataDoneJanitorCandidate> candidates;
     candidates.reserve(std::min(limit, values.size()));
-    for (const auto &[key, bytes] : values) {
-        if (candidates.size() >= limit) {
-            break;
-        }
+    RETURN_IF_NOT_OK(VisitRotatingPage(values, limit, cursor, [&](const auto &entry) {
+        const auto &[key, bytes] = entry;
         candidates.push_back({ key, bytes });
-    }
+        return Status::OK();
+    }));
     markers = std::move(candidates);
     return Status::OK();
 }
@@ -468,43 +548,44 @@ Status TopologyRepository::ListScaleInMetadataDoneCandidatesForJanitor(
 Status TopologyRepository::DeleteTaskIfMatches(const TaskJanitorCandidate &candidate, bool &deleted)
 {
     deleted = false;
-    if (!IsTaskDeleteTombstone(candidate.matchToken)) {
-        bool matched = false;
-        ICoordinationBackend::ProcessFunction process = [&](const std::string &current,
-                                                            std::unique_ptr<std::string> &next, bool &retry) {
-            retry = false;
-            matched = current == candidate.matchToken;
-            if (matched) {
-                next = std::make_unique<std::string>(TASK_DELETE_TOMBSTONE);
-            }
-            return Status::OK();
-        };
-        RETURN_IF_NOT_OK(backend_.CAS(TaskTable(candidate.kind), candidate.taskId, process));
-        if (!matched) {
-            return Status::OK();
+    bool matched = false;
+    ICoordinationBackend::ProcessFunction process = [&](const std::string &current,
+                                                        std::unique_ptr<std::string> &next, bool &retry) {
+        retry = false;
+        matched = current == candidate.matchToken;
+        if (matched) {
+            next = std::make_unique<std::string>(NextDeleteTombstone(TASK_DELETE_TOMBSTONE_PREFIX, current));
         }
+        return Status::OK();
+    };
+    RETURN_IF_NOT_OK(backend_.CAS(TaskTable(candidate.kind), candidate.taskId, process));
+    if (!matched) {
+        return Status::OK();
     }
     RETURN_IF_NOT_OK(backend_.Delete(TaskTable(candidate.kind), candidate.taskId));
     deleted = true;
     return Status::OK();
 }
 
-Status TopologyRepository::DeleteNotifyIfMatches(const NotifyJanitorCandidate &candidate, bool &deleted)
+Status TopologyRepository::ReconcileNotifyIfMatches(const NotifyJanitorCandidate &candidate, bool &changed)
 {
-    deleted = false;
+    changed = false;
     std::string key;
     RETURN_IF_NOT_OK(TopologyKeyHelper::NotifyKey(candidate.address, key));
     std::string replacement;
-    if (!candidate.notify.taskIds.empty()) {
+    if (candidate.notify.activeBatch.has_value() || !candidate.notify.taskIds.empty()
+        || !candidate.notify.restartTimestampsByAddress.empty()) {
         RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeNotify(candidate.notify, replacement));
     }
+    const bool shouldDelete = replacement.empty();
     bool matched = false;
     ICoordinationBackend::ProcessFunction process = [&](const std::string &current, std::unique_ptr<std::string> &next,
                                                         bool &retry) {
         retry = false;
         matched = current == candidate.matchToken;
         if (matched) {
-            next = std::make_unique<std::string>(replacement);
+            next = std::make_unique<std::string>(
+                shouldDelete ? NextDeleteTombstone(NOTIFY_DELETE_TOMBSTONE_PREFIX, current) : replacement);
         }
         return Status::OK();
     };
@@ -512,7 +593,10 @@ Status TopologyRepository::DeleteNotifyIfMatches(const NotifyJanitorCandidate &c
     if (!matched) {
         return Status::OK();
     }
-    deleted = replacement.empty();
+    if (shouldDelete) {
+        RETURN_IF_NOT_OK(backend_.Delete(keys_.NotifyTable(), key));
+    }
+    changed = true;
     return Status::OK();
 }
 
@@ -526,7 +610,8 @@ Status TopologyRepository::DeleteScaleInMetadataDoneIfMatches(
         retry = false;
         matched = current == candidate.matchToken;
         if (matched) {
-            next = std::make_unique<std::string>(SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE);
+            next = std::make_unique<std::string>(
+                NextDeleteTombstone(SCALE_IN_METADATA_DONE_DELETE_TOMBSTONE_PREFIX, current));
         }
         return Status::OK();
     };

@@ -67,7 +67,8 @@ TopologyControllerRuntime::TopologyControllerRuntime(Options options, ICoordinat
       controller_(backend_, repository_, *keys_, algorithm_, dispatcher_, options_.controller)
 {
     if (options_.janitor.has_value()) {
-        janitor_ = std::make_unique<TopologyTaskJanitor>(repository_, algorithm_, materializer_, *options_.janitor);
+        janitor_ = std::make_unique<TopologyTaskJanitor>(
+            options_.clusterName, repository_, algorithm_, materializer_, *options_.janitor);
     }
 }
 

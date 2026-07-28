@@ -34,6 +34,7 @@ constexpr size_t FIRST_DRAINED_EVENT_COUNT = 1;
 constexpr uint64_t BACKOFF_SHIFT_BASE = 1;
 constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 constexpr int TOPOLOGY_RECONCILE_LOG_INTERVAL = 128;
+constexpr int64_t DERIVED_SLICE_WARN_THRESHOLD_MS = 20;
 
 std::string MembershipDigest(const std::vector<MembershipRecord> &memberships)
 {
@@ -46,9 +47,10 @@ std::string MembershipDigest(const std::vector<MembershipRecord> &memberships)
     }
     std::string digest;
     if (Hasher().GetSha256Hex(seed, digest).IsError()) {
-        return "unavailable";
+        // Retain collision-free change detection even if the diagnostic hash implementation is unavailable.
+        return seed;
     }
-    return TopologyDiagnosticPrefix(digest);
+    return digest;
 }
 
 bool IsTransientReconcileStatus(StatusCode code)
@@ -169,13 +171,34 @@ void LogMemberTransition(const std::string &clusterName, const char *action, siz
               << " count=" << count << " sample=" << MemberIdentitySample(members)
               << " committed_version=" << committedVersion;
 }
+
+void LogDirectFailureConfirmation(const std::string &clusterName, uint64_t version,
+                                  const std::vector<MemberAbsenceObservation> &observations,
+                                  std::chrono::seconds nodeDeadTimeout)
+{
+    std::vector<MemberIdentity> members;
+    members.reserve(observations.size());
+    int64_t maximumMissingMs = 0;
+    for (const auto &observation : observations) {
+        members.emplace_back(observation.identity);
+        maximumMissingMs = std::max(maximumMissingMs, observation.missingMs);
+    }
+    LOG_FIRST_AND_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+        << "CLUSTER_FAILURE_DETECT cluster=" << clusterName << " version=" << version
+        << " action=absence_timeout_direct confirmed_count=" << observations.size()
+        << " sample=" << MemberIdentitySample(members) << " maximum_missing_ms=" << maximumMissingMs
+        << " node_dead_timeout_ms="
+        << std::chrono::duration_cast<std::chrono::milliseconds>(nodeDeadTimeout).count();
+}
 }  // namespace
 
 bool TopologyControllerOptions::IsValid() const noexcept
 {
     return nodeDeadTimeout.count() >= 0 && failureBatchWindow.count() > 0 && ordinaryBatchWindow.count() > 0
            && reconcileTick.count() > 0 && failureProbeTimeout.count() > 0 && maxDerivedOperationsPerTick > 0
-           && maxMembersPerBatch > 0 && maxProgressReadsPerTick > 0 && now
+           && maxMembersPerBatch > 0 && maxProgressReadsPerTick > 0 && derivedSliceBudget.count() > 0 && now
+           && scaleOutCollectWindow.count() >= 0
+           && scaleOutCollectWindow.count() <= MAX_SCALE_OUT_COLLECT_WINDOW_MS
            && scaleInCollectWindow.count() >= 0
            && scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
            && (!memberLivenessProbe || !localAddress.empty())
@@ -205,7 +228,7 @@ TopologyController::~TopologyController()
 
 Status TopologyController::Start()
 {
-    std::lock_guard<std::mutex> lock(stateMutex_);
+    std::unique_lock<std::mutex> lock(stateMutex_);
     CHECK_FAIL_RETURN_STATUS(!started_ && options_.IsValid(),
                              K_INVALID, "invalid or already started topology Controller");
     std::vector<WatchKey> watches;
@@ -237,15 +260,23 @@ Status TopologyController::Start()
         stateThread_ = Thread(&TopologyController::Run, this);
         stateThread_.set_name("cluster-ctrl");
     } catch (const std::exception &error) {
-        started_ = false;
-        threadExited_ = true;
-        diagnostics_.running = false;
+        stopping_ = true;
         dispatcher_.ShutdownIngress();
+        lock.unlock();
         if (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED) {
             LOG_IF_ERROR(backend_.ShutdownEventSources(),
                          "Shut down topology Controller event sources after thread Start failure");
             backend_.SetEventHandler(ICoordinationBackend::EventHandler{});
         }
+        if (stateThread_.joinable()) {
+            stateThread_.join();
+        }
+        lock.lock();
+        started_ = false;
+        stopping_ = false;
+        threadExited_ = true;
+        diagnostics_.running = false;
+        stoppedCv_.notify_all();
         RETURN_STATUS(K_RUNTIME_ERROR, std::string("start topology Controller failed: ") + error.what());
     }
     LOG(INFO) << "CLUSTER_LIFECYCLE cluster=" << keys_.ClusterName() << " role=controller state=ready";
@@ -380,7 +411,9 @@ void TopologyController::DrainMembershipRestarts()
     for (const auto &[address, timestamp] : pending) {
         auto rc = options_.membershipRestartHandler(address, timestamp);
         if (rc.IsError()) {
-            LOG(WARNING) << "Failed to deliver membership restart event for " << address << ": " << rc.ToString();
+            LOG(WARNING) << "CLUSTER_RESTART_NOTIFY cluster=" << keys_.ClusterName()
+                         << " action=deliver_failed address=" << address
+                         << " timestamp=" << timestamp << " status=" << rc.ToString();
             std::lock_guard<std::mutex> lock(membershipRestartMutex_);
             auto latest = latestRestartTimestampByAddress_.find(address);
             if (latest != latestRestartTimestampByAddress_.end() && latest->second == timestamp) {
@@ -392,82 +425,122 @@ void TopologyController::DrainMembershipRestarts()
 
 void TopologyController::Run()
 {
+    bool initialReconcile = true;
     while (true) {
+        if (StopRequested()) {
+            break;
+        }
+        const auto startedAt = std::chrono::steady_clock::now();
         size_t drained = 0;
-        const auto reconcileStart = std::chrono::steady_clock::now();
-        {
-            std::lock_guard<std::mutex> lock(stateMutex_);
-            if (stopping_) {
+        const bool immediate =
+            initialReconcile || topologyCommittedThisTick_ || derivedWorkPending_ || progressWorkPending_;
+        auto rc = WaitForReconcile(immediate, drained);
+        initialReconcile = false;
+        if (rc.IsError()) {
+            if (StopRequested()) {
                 break;
             }
-        }
-        RuntimeEvent event;
-        auto wakeDeadline = std::chrono::steady_clock::now() + options_.reconcileTick;
-        if (scaleInCollectDeadline_.has_value() && *scaleInCollectDeadline_ < wakeDeadline) {
-            wakeDeadline = *scaleInCollectDeadline_;
-        }
-        auto rc = dispatcher_.WaitPop(wakeDeadline, event);
-        if (rc.IsError() && rc.GetCode() != K_RPC_DEADLINE_EXCEEDED) {
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);
-                if (stopping_) {
-                    break;
-                }
                 diagnostics_.lastError = rc.ToString();
             }
-            LOG(WARNING) << "Cluster topology Controller event wait failed: " << rc.ToString();
+            LOG(WARNING) << "CLUSTER_RECONCILE cluster=" << keys_.ClusterName()
+                         << " action=event_wait_failed status=" << rc.ToString();
             continue;
-        }
-        DrainMembershipRestarts();
-        if (rc.IsOk()) {
-            topologyDirty_ = true;
-            membershipDirty_ = true;
-            taskDirty_ = true;
-            drained = FIRST_DRAINED_EVENT_COUNT;
-            while (drained < MAX_DOORBELLS_PER_RECONCILE
-                   && dispatcher_.WaitPop(std::chrono::steady_clock::now(), event).IsOk()) {
-                ++drained;
-            }
         }
         const auto now = std::chrono::steady_clock::now();
         if (reconcileNotBefore_ != std::chrono::steady_clock::time_point{} && now < reconcileNotBefore_) {
             continue;
         }
         rc = ReconcileOnce();
-        if (IsTransientReconcileStatus(rc.GetCode())) {
-            consecutiveReconcileFailures_ = 0;
-            reconcileNotBefore_ = {};
-        }
-        if (rc.GetCode() == K_TRY_AGAIN) {
-            VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL) << "Cluster topology Controller CAS contention: " << rc.ToString();
-        } else if (rc.GetCode() == K_NOT_READY) {
-            VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
-                << "Cluster topology Controller recovery is not ready: " << rc.ToString();
-        } else if (rc.IsError()) {
-            const uint32_t shift = std::min(consecutiveReconcileFailures_, MAX_RECONCILE_BACKOFF_SHIFT);
-            reconcileNotBefore_ = now + options_.reconcileTick * (BACKOFF_SHIFT_BASE << shift);
-            ++consecutiveReconcileFailures_;
-            LOG(WARNING) << "Cluster topology Controller reconcile failed: " << rc.ToString();
-        } else {
-            consecutiveReconcileFailures_ = 0;
-            reconcileNotBefore_ = {};
-        }
-        if (rc.IsOk() && (drained > 0 || topologyCommittedThisTick_)) {
-            const auto elapsedMs = DurationMs(reconcileStart, std::chrono::steady_clock::now());
-            const auto stats = dispatcher_.GetStats();
-            LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_RECONCILE_LOG_INTERVAL)
-                << "CLUSTER_RECONCILE cluster=" << keys_.ClusterName() << " role=controller drained_events="
-                << drained << " committed=" << topologyCommittedThisTick_ << " elapsed_ms=" << elapsedMs
-                << " queued_events=" << stats.queueDepth << " coalesced_events=" << stats.coalesced
-                << " overflow_events=" << stats.overflow;
-        }
-        std::lock_guard<std::mutex> lock(stateMutex_);
-        diagnostics_.lastError = rc.IsError() ? rc.ToString() : "";
+        RecordReconcileResult(rc, now, startedAt, drained);
     }
     std::lock_guard<std::mutex> lock(stateMutex_);
     threadExited_ = true;
     diagnostics_.running = false;
     stoppedCv_.notify_all();
+}
+
+bool TopologyController::StopRequested() const
+{
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    return stopping_;
+}
+
+Status TopologyController::WaitForReconcile(bool immediate, size_t &drained)
+{
+    drained = 0;
+    RuntimeEvent event;
+    auto wakeDeadline =
+        immediate ? std::chrono::steady_clock::now() : std::chrono::steady_clock::now() + options_.reconcileTick;
+    if (scaleInCollectDeadline_.has_value() && *scaleInCollectDeadline_ < wakeDeadline) {
+        wakeDeadline = *scaleInCollectDeadline_;
+    }
+    if (scaleOutCollectDeadline_.has_value() && *scaleOutCollectDeadline_ < wakeDeadline) {
+        wakeDeadline = *scaleOutCollectDeadline_;
+    }
+    auto rc = dispatcher_.WaitPop(wakeDeadline, event);
+    if (rc.IsError() && rc.GetCode() != K_RPC_DEADLINE_EXCEEDED) {
+        return rc;
+    }
+    DrainMembershipRestarts();
+    if (rc.IsError()) {
+        return Status::OK();
+    }
+    topologyDirty_ = true;
+    membershipDirty_ = true;
+    taskDirty_ = true;
+    drained = FIRST_DRAINED_EVENT_COUNT;
+    while (drained < MAX_DOORBELLS_PER_RECONCILE
+           && dispatcher_.WaitPop(std::chrono::steady_clock::now(), event).IsOk()) {
+        ++drained;
+    }
+    return Status::OK();
+}
+
+void TopologyController::RecordReconcileResult(const Status &status, std::chrono::steady_clock::time_point now,
+                                               std::chrono::steady_clock::time_point startedAt, size_t drained)
+{
+    if (status.IsError()) {
+        // Back off every bounded continuation after an error because the returned Status does not preserve its source.
+        // This deliberately trades at most one reconcile tick for avoiding a busy loop on persistent Store failures.
+        derivedWorkPending_ = false;
+        progressWorkPending_ = false;
+    }
+    if (status.GetCode() == K_TRY_AGAIN) {
+        consecutiveReconcileFailures_ = 0;
+        reconcileNotBefore_ = {};
+        VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
+            << "CLUSTER_RECONCILE cluster=" << keys_.ClusterName()
+            << " action=cas_conflict backoff_ms=0 status=" << status.ToString();
+    } else if (status.GetCode() == K_NOT_READY) {
+        consecutiveReconcileFailures_ = 0;
+        reconcileNotBefore_ = {};
+        VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
+            << "CLUSTER_RECONCILE cluster=" << keys_.ClusterName()
+            << " action=recovery_not_ready backoff_ms=0 status=" << status.ToString();
+    } else if (status.IsError()) {
+        const uint32_t shift = std::min(consecutiveReconcileFailures_, MAX_RECONCILE_BACKOFF_SHIFT);
+        const auto backoff = options_.reconcileTick * (BACKOFF_SHIFT_BASE << shift);
+        reconcileNotBefore_ = now + backoff;
+        ++consecutiveReconcileFailures_;
+        LOG(WARNING) << "CLUSTER_RECONCILE cluster=" << keys_.ClusterName()
+                     << " action=failed backoff_ms=" << backoff.count() << " status=" << status.ToString();
+    } else {
+        consecutiveReconcileFailures_ = 0;
+        reconcileNotBefore_ = {};
+    }
+    if (status.IsOk() && (drained > 0 || topologyCommittedThisTick_)) {
+        const auto stats = dispatcher_.GetStats();
+        LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+            << "CLUSTER_RECONCILE cluster=" << keys_.ClusterName() << " role=controller drained_events="
+            << drained << " committed=" << topologyCommittedThisTick_
+            << " elapsed_ms=" << DurationMs(startedAt, std::chrono::steady_clock::now())
+            << " queued_events=" << stats.queueDepth << " coalesced_events=" << stats.coalesced
+            << " overflow_events=" << stats.overflow;
+    }
+    std::lock_guard<std::mutex> lock(stateMutex_);
+    diagnostics_.lastError = status.IsError() ? status.ToString() : "";
 }
 
 Status TopologyController::ReconcileOnce()
@@ -527,7 +600,7 @@ Status TopologyController::RecoverFromLatestTopology()
                       << " topology_revision=" << latest->AuthorityRevision()
                       << " member_count=" << memberships.size()
                       << " state_counts=" << MembershipStateCounts(memberships)
-                      << " digest_prefix=" << membershipDigest
+                      << " digest_prefix=" << TopologyDiagnosticPrefix(membershipDigest)
                       << " sample=" << MembershipSample(memberships);
         }
     }
@@ -535,7 +608,7 @@ Status TopologyController::RecoverFromLatestTopology()
     if (topologyCommittedThisTick_) {
         return Status::OK();
     }
-    RETURN_IF_NOT_OK(ReconcileDerivedState(*latest));
+    RETURN_IF_NOT_OK(ReconcileDerivedState(*latest, memberships));
     RETURN_IF_NOT_OK(TryFinalizeActiveBatch(*latest, memberships));
     if (topologyCommittedThisTick_) {
         return Status::OK();
@@ -555,38 +628,84 @@ Status TopologyController::EnsureTopologyAuthority()
     return Status::OK();
 }
 
-Status TopologyController::ReconcileDerivedState(const TopologySnapshot &latest)
+Status TopologyController::ReconcileDerivedState(const TopologySnapshot &latest,
+                                                 const std::vector<MembershipRecord> &memberships)
 {
-    ExpectedDerivedState expected;
-    RETURN_IF_NOT_OK(materializer_.RebuildExpected(latest, algorithm_, expected));
-    const uint64_t epoch = latest.GetActiveBatch().has_value() ? latest.GetActiveBatch()->epoch : 0;
-    if (derivedBatchEpoch_ != epoch) {
-        admissionCursor_ = 0;
-        derivedBatchEpoch_ = epoch;
+    RETURN_IF_NOT_OK(PrepareDerivedGeneration(latest, memberships));
+    return ReconcileDerivedSlice();
+}
+
+Status TopologyController::PrepareDerivedGeneration(const TopologySnapshot &latest,
+                                                    const std::vector<MembershipRecord> &memberships)
+{
+    const auto membershipDigest = options_.materializeRestartFacts ? MembershipDigest(memberships) : "";
+    if (derivedTopologyVersion_ == latest.Version() && derivedMembershipDigest_ == membershipDigest) {
+        return Status::OK();
     }
-    const size_t total = expected.tasks.size() + expected.notifiesByAddress.size();
+    ExpectedDerivedState candidate;
+    RETURN_IF_NOT_OK(materializer_.RebuildExpected(
+        latest, algorithm_, memberships, options_.materializeRestartFacts, candidate));
+    expectedDerivedState_ = std::move(candidate);
+    derivedTopologyVersion_ = latest.Version();
+    derivedMembershipDigest_ = membershipDigest;
+    admissionCursor_ = 0;
+    derivedWorkPending_ = true;
+    return Status::OK();
+}
+
+Status TopologyController::ReconcileDerivedSlice()
+{
+    const auto &expected = expectedDerivedState_;
+    const size_t total = expected.tasks.size() + expected.notifyRecipients.size();
     if (total == 0) {
         admissionCursor_ = 0;
+        derivedWorkPending_ = false;
         std::lock_guard<std::mutex> lock(stateMutex_);
         diagnostics_.dirtyDerivedOperations = 0;
         return Status::OK();
     }
-    const size_t start = admissionCursor_ % total;
+    const auto startedAt = std::chrono::steady_clock::now();
+    const bool wasPending = derivedWorkPending_;
     size_t operations = 0;
-    for (size_t step = 0; step < std::min(total, options_.maxDerivedOperationsPerTick); ++step) {
-        const size_t index = (start + step) % total;
+    std::string reusableNotify;
+    while (admissionCursor_ < total && operations < options_.maxDerivedOperationsPerTick
+           && std::chrono::steady_clock::now() - startedAt < options_.derivedSliceBudget) {
+        const size_t index = admissionCursor_;
         if (index < expected.tasks.size()) {
             RETURN_IF_NOT_OK(repository_.CreateTaskIfAbsent(expected.tasks[index]));
         } else {
-            auto notify = expected.notifiesByAddress.begin();
-            std::advance(notify, index - expected.tasks.size());
-            RETURN_IF_NOT_OK(repository_.RewriteNotify(notify->first, notify->second));
+            const auto &address = expected.notifyRecipients[index - expected.tasks.size()];
+            RETURN_IF_NOT_OK(materializer_.BuildEncodedNotifyFor(expected, address, reusableNotify));
+            RETURN_IF_NOT_OK(repository_.RewriteEncodedNotify(address, reusableNotify));
         }
+        ++admissionCursor_;
         ++operations;
     }
-    admissionCursor_ = (start + operations) % total;
-    std::lock_guard<std::mutex> lock(stateMutex_);
-    diagnostics_.dirtyDerivedOperations = total - operations;
+    derivedWorkPending_ = admissionCursor_ < total;
+    const auto elapsedMs = DurationMs(startedAt, std::chrono::steady_clock::now());
+    if (wasPending && !derivedWorkPending_) {
+        LOG(INFO) << "CLUSTER_DERIVED_STATE cluster=" << keys_.ClusterName()
+                  << " action=generation_complete version=" << derivedTopologyVersion_
+                  << " task_count=" << expected.tasks.size()
+                  << " notify_count=" << expected.notifyRecipients.size()
+                  << " elapsed_ms=" << elapsedMs;
+    }
+    if (elapsedMs > DERIVED_SLICE_WARN_THRESHOLD_MS) {
+        LOG(WARNING) << "CLUSTER_DERIVED_SLICE cluster=" << keys_.ClusterName()
+                     << " version=" << derivedTopologyVersion_ << " cursor=" << admissionCursor_
+                     << " total=" << total << " operations=" << operations << " elapsed_ms=" << elapsedMs
+                     << " pending=" << derivedWorkPending_;
+    } else {
+        VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
+            << "CLUSTER_DERIVED_SLICE cluster=" << keys_.ClusterName()
+            << " version=" << derivedTopologyVersion_ << " cursor=" << admissionCursor_
+            << " total=" << total << " operations=" << operations << " elapsed_ms=" << elapsedMs
+            << " pending=" << derivedWorkPending_;
+    }
+    {
+        std::lock_guard<std::mutex> lock(stateMutex_);
+        diagnostics_.dirtyDerivedOperations = total - admissionCursor_;
+    }
     return Status::OK();
 }
 
@@ -622,6 +741,11 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
                   << " member_id_prefix=" << MemberIdForLog(observed.identity.id)
                   << " state=" << MemberStateName(observed.state)
                   << " action=missing_resolved missing_ms=" << observed.missingMs;
+    }
+    if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL
+        && !classification.confirmedMissing.empty()) {
+        LogDirectFailureConfirmation(
+            keys_.ClusterName(), latest.Version(), classification.confirmedMissing, options_.nodeDeadTimeout);
     }
     RETURN_IF_NOT_OK(ConfirmMissingMembersUnreachable(latest, classification));
     if (!classification.confirmedFailure.empty()) {
@@ -961,6 +1085,11 @@ Status TopologyController::CommitMembershipFacts(const TopologySnapshot &latest,
             scaleInCollectDeadline_ = options_.now() + options_.scaleInCollectWindow;
             scaleInCollectStarted_ = false;
         }
+        if (latest.ClusterHasInit() && !admittedJoining.empty() && options_.scaleOutCollectWindow.count() > 0
+            && !scaleOutCollectDeadline_.has_value()) {
+            scaleOutCollectDeadline_ = options_.now() + options_.scaleOutCollectWindow;
+            scaleOutCollectStarted_ = false;
+        }
     }
     return rc;
 }
@@ -973,15 +1102,22 @@ Status TopologyController::TryFinalizeActiveBatch(const TopologySnapshot &latest
         deadlineBatchType_.reset();
         deadlineBatchEpoch_ = 0;
         progressReadCursor_ = 0;
+        progressSweepRemaining_ = 0;
+        progressTopologyVersion_ = 0;
         progressBatchEpoch_ = 0;
+        progressWorkPending_ = false;
         finishedTaskIds_.clear();
         return Status::OK();
     }
-    ExpectedDerivedState expected;
-    RETURN_IF_NOT_OK(materializer_.RebuildExpected(latest, algorithm_, expected));
+    CHECK_FAIL_RETURN_STATUS(derivedTopologyVersion_ == latest.Version(), K_TRY_AGAIN,
+                             "derived generation does not match active topology");
+    // Missing tasks or notifies are not callback progress until the bounded generation is fully materialized.
+    if (derivedWorkPending_) {
+        return Status::OK();
+    }
+    const auto &expected = expectedDerivedState_;
     bool complete = false;
-    std::vector<MemberIdentity> failedJoining;
-    RETURN_IF_NOT_OK(InspectBatchProgress(latest, expected, complete, failedJoining));
+    RETURN_IF_NOT_OK(InspectBatchProgress(latest, expected, complete));
     const auto now = options_.now();
     const auto &batch = *latest.GetActiveBatch();
     const bool preserveFailureDeadline =
@@ -1004,8 +1140,15 @@ Status TopologyController::TryFinalizeActiveBatch(const TopologySnapshot &latest
     if (complete) {
         return CommitBatchFinal(latest);
     }
+    if (progressWorkPending_) {
+        return Status::OK();
+    }
     if (now < *batchDeadline_) {
         return Status::OK();
+    }
+    std::vector<MemberIdentity> failedJoining;
+    if (batch.type == TopologyChangeType::SCALE_OUT) {
+        CollectFailedJoining(latest, expected, failedJoining);
     }
     return CommitExpiredBatch(latest, failedJoining, memberships);
 }
@@ -1038,11 +1181,17 @@ Status TopologyController::CommitExpiredBatch(const TopologySnapshot &latest,
 }
 
 Status TopologyController::InspectBatchProgress(const TopologySnapshot &latest, const ExpectedDerivedState &expected,
-                                                bool &complete, std::vector<MemberIdentity> &failedJoining)
+                                                bool &complete)
 {
     const auto &batch = *latest.GetActiveBatch();
     RETURN_IF_NOT_OK(RefreshTaskProgressCache(batch, expected));
     complete = finishedTaskIds_.size() == expected.tasks.size();
+    return Status::OK();
+}
+
+void TopologyController::CollectFailedJoining(const TopologySnapshot &latest, const ExpectedDerivedState &expected,
+                                              std::vector<MemberIdentity> &failedJoining) const
+{
     std::unordered_set<std::string> incompleteTargets;
     for (const auto &task : expected.tasks) {
         if (finishedTaskIds_.count(TaskId(task)) == 0 && std::holds_alternative<TopologyMigrateTask>(task)) {
@@ -1055,52 +1204,52 @@ Status TopologyController::InspectBatchProgress(const TopologySnapshot &latest, 
             failedJoining.push_back(member.identity);
         }
     }
-    return Status::OK();
 }
 
 Status TopologyController::RefreshTaskProgressCache(const ActiveBatch &batch, const ExpectedDerivedState &expected)
 {
-    if (progressBatchEpoch_ != batch.epoch) {
+    if (progressBatchEpoch_ != batch.epoch || progressTopologyVersion_ != derivedTopologyVersion_) {
+        progressTopologyVersion_ = derivedTopologyVersion_;
         progressBatchEpoch_ = batch.epoch;
         progressReadCursor_ = 0;
+        progressSweepRemaining_ = expected.tasks.size();
+        progressWorkPending_ = !expected.tasks.empty();
         finishedTaskIds_.clear();
     }
-    std::unordered_set<std::string> expectedTaskIds;
-    expectedTaskIds.reserve(expected.tasks.size());
-    for (const auto &task : expected.tasks) {
-        expectedTaskIds.insert(TaskId(task));
-    }
-    for (auto iter = finishedTaskIds_.begin(); iter != finishedTaskIds_.end();) {
-        if (expectedTaskIds.count(*iter) == 0) {
-            iter = finishedTaskIds_.erase(iter);
-        } else {
-            ++iter;
-        }
-    }
     const size_t total = expected.tasks.size();
-    if (total > 0) {
-        const size_t start = progressReadCursor_ % total;
-        size_t visited = 0;
-        size_t reads = 0;
-        while (visited < total && reads < options_.maxProgressReadsPerTick) {
-            const auto &task = expected.tasks[(start + visited) % total];
-            const std::string taskId = TaskId(task);
-            ++visited;
-            if (finishedTaskIds_.count(taskId) > 0) {
-                continue;
-            }
-            TopologyTask observed;
-            auto rc = repository_.ReadTask(TaskKind(task), taskId, batch.type, batch.epoch, observed);
-            ++reads;
-            if (rc.IsError() && rc.GetCode() != K_NOT_FOUND) {
-                return rc;
-            }
-            if (rc.IsOk() && TaskFinished(observed)) {
-                finishedTaskIds_.insert(taskId);
-            }
-        }
-        progressReadCursor_ = (start + visited) % total;
+    if (total == 0) {
+        progressReadCursor_ = 0;
+        progressSweepRemaining_ = 0;
+        progressWorkPending_ = false;
+        return Status::OK();
     }
+    progressSweepRemaining_ =
+        progressSweepRemaining_ == 0 ? total : std::min(progressSweepRemaining_, total);
+    const auto startedAt = std::chrono::steady_clock::now();
+    const size_t start = progressReadCursor_ % total;
+    size_t visited = 0;
+    size_t reads = 0;
+    while (visited < progressSweepRemaining_ && reads < options_.maxProgressReadsPerTick
+           && std::chrono::steady_clock::now() - startedAt < options_.derivedSliceBudget) {
+        const auto &task = expected.tasks[(start + visited) % total];
+        const std::string taskId = TaskId(task);
+        ++visited;
+        if (finishedTaskIds_.count(taskId) > 0) {
+            continue;
+        }
+        TopologyTask observed;
+        auto rc = repository_.ReadTask(TaskKind(task), taskId, batch.type, batch.epoch, observed);
+        ++reads;
+        if (rc.IsError() && rc.GetCode() != K_NOT_FOUND) {
+            return rc;
+        }
+        if (rc.IsOk() && TaskFinished(observed)) {
+            finishedTaskIds_.insert(taskId);
+        }
+    }
+    progressReadCursor_ = (start + visited) % total;
+    progressSweepRemaining_ -= visited;
+    progressWorkPending_ = progressSweepRemaining_ > 0;
     return Status::OK();
 }
 
@@ -1187,6 +1336,7 @@ Status TopologyController::TryStartNextBatch(const TopologySnapshot &latest,
 {
     if (latest.GetActiveBatch().has_value()) {
         ClearScaleInCollectState("active_batch");
+        ClearScaleOutCollectState("active_batch");
         return Status::OK();
     }
     std::vector<MemberIdentity> leaving;
@@ -1194,17 +1344,58 @@ Status TopologyController::TryStartNextBatch(const TopologySnapshot &latest,
     CollectNextBatchCandidates(latest, memberships, leaving, joining);
     TopologyState state{ latest.ClusterHasInit(), latest.Version(), latest.Members(), latest.GetActiveBatch() };
     if (latest.CommittedMembers().empty() && !joining.empty()) {
-        return CommitBootstrapBatchStart(latest, state, joining);
-    }
-    if (!joining.empty()) {
-        ClearScaleInCollectState("scale_out_priority");
-        return CommitOrdinaryBatchStart(latest, state, joining, TopologyChangeType::SCALE_OUT);
+        ClearScaleInCollectState("bootstrap_candidate");
+        return TryStartJoiningBatchAfterCollection(latest, state, joining, true);
     }
     if (!leaving.empty()) {
+        ClearScaleOutCollectState("scale_in_candidate");
         return TryStartScaleInBatchAfterCollection(latest, state, leaving);
     }
+    if (!joining.empty()) {
+        ClearScaleInCollectState("scale_out_candidate");
+        return TryStartJoiningBatchAfterCollection(latest, state, joining, false);
+    }
     ClearScaleInCollectState("no_candidate");
+    ClearScaleOutCollectState("no_candidate");
     return Status::OK();
+}
+
+Status TopologyController::TryStartJoiningBatchAfterCollection(const TopologySnapshot &latest,
+                                                               const TopologyState &state,
+                                                               const std::vector<MemberIdentity> &joining,
+                                                               bool bootstrap)
+{
+    if (options_.scaleOutCollectWindow.count() == 0) {
+        return bootstrap ? CommitBootstrapBatchStart(latest, state, joining)
+                         : CommitOrdinaryBatchStart(latest, state, joining, TopologyChangeType::SCALE_OUT);
+    }
+    if (!scaleOutCollectDeadline_.has_value()) {
+        scaleOutCollectDeadline_ = options_.now() + options_.scaleOutCollectWindow;
+        scaleOutCollectStarted_ = false;
+    }
+    const auto now = options_.now();
+    if (!scaleOutCollectStarted_) {
+        scaleOutCollectStarted_ = true;
+        LOG(INFO) << "CLUSTER_CHANGE_BATCH cluster=" << keys_.ClusterName()
+                  << " action=" << (bootstrap ? "bootstrap_collect_start" : "scaleout_collect_start")
+                  << " window_ms=" << options_.scaleOutCollectWindow.count()
+                  << " candidate_count=" << joining.size() << " sample=" << MemberIdentitySample(joining)
+                  << " topology_version=" << latest.Version();
+    }
+    if (now < *scaleOutCollectDeadline_) {
+        return Status::OK();
+    }
+    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - (*scaleOutCollectDeadline_ - options_.scaleOutCollectWindow)).count();
+    LOG(INFO) << "CLUSTER_CHANGE_BATCH cluster=" << keys_.ClusterName()
+              << " action=" << (bootstrap ? "bootstrap_collect_finish" : "scaleout_collect_finish")
+              << " elapsed_ms=" << elapsedMs
+              << " participant_count=" << joining.size() << " sample=" << MemberIdentitySample(joining)
+              << " topology_version=" << latest.Version();
+    scaleOutCollectDeadline_.reset();
+    scaleOutCollectStarted_ = false;
+    return bootstrap ? CommitBootstrapBatchStart(latest, state, joining)
+                     : CommitOrdinaryBatchStart(latest, state, joining, TopologyChangeType::SCALE_OUT);
 }
 
 Status TopologyController::TryStartScaleInBatchAfterCollection(const TopologySnapshot &latest,
@@ -1258,6 +1449,19 @@ void TopologyController::ClearScaleInCollectState(const char *reason)
     }
     scaleInCollectDeadline_.reset();
     scaleInCollectStarted_ = false;
+}
+
+void TopologyController::ClearScaleOutCollectState(const char *reason)
+{
+    if (!scaleOutCollectDeadline_.has_value() && !scaleOutCollectStarted_) {
+        return;
+    }
+    if (scaleOutCollectStarted_) {
+        LOG(INFO) << "CLUSTER_CHANGE_BATCH cluster=" << keys_.ClusterName()
+                  << " action=scaleout_collect_cancel reason=" << reason;
+    }
+    scaleOutCollectDeadline_.reset();
+    scaleOutCollectStarted_ = false;
 }
 
 void TopologyController::CollectNextBatchCandidates(const TopologySnapshot &latest,

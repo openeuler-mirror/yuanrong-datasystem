@@ -28,7 +28,8 @@ namespace datasystem::cluster {
 namespace {
 
 constexpr size_t MAX_NOTIFY_TASK_REFS = 4'096;
-constexpr size_t MAX_NOTIFY_VALUE_BYTES = 256 * 1'024;
+constexpr size_t MAX_NOTIFY_VALUE_BYTES = 4 * 1'024 * 1'024;
+constexpr size_t MAX_RESTART_NOTIFY_ENTRIES = 10'000;
 constexpr size_t MAX_TASK_RANGES = 4'096;
 constexpr size_t MAX_REPOSITORY_VALUE_BYTES = 4 * 1'024 * 1'024;
 constexpr size_t MAX_TOPOLOGY_MEMBERS = 10'000;
@@ -38,6 +39,12 @@ std::string BuildCapacityTaskId(size_t index)
     std::ostringstream digest;
     digest << std::hex << std::setfill('0') << std::setw(32) << index;
     return "m-e1-" + digest.str();
+}
+
+std::string BuildCapacityAddress(size_t index)
+{
+    constexpr size_t FIRST_TEST_PORT = 10'000;
+    return "127.0.0.1:" + std::to_string(FIRST_TEST_PORT + index);
 }
 
 TEST(TopologyRepositoryCodecTest, TopologyRoundTripIsCanonical)
@@ -75,9 +82,47 @@ TEST(TopologyRepositoryCodecTest, TaskRoundTripDerivesSingleExecutor)
     EXPECT_EQ(output.sourceRanges.size(), 2);
 }
 
+TEST(TopologyRepositoryCodecTest, AllowsRestartOnlyNotify)
+{
+    TopologyTaskNotify input;
+    input.restartTimestampsByAddress.emplace("127.0.0.1:1", 100);
+    std::string encoded;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(input, encoded));
+
+    TopologyTaskNotify output;
+    DS_ASSERT_OK(TopologyRepositoryCodec::DecodeNotify(encoded, output));
+    EXPECT_FALSE(output.activeBatch.has_value());
+    EXPECT_TRUE(output.taskIds.empty());
+    EXPECT_EQ(output.restartTimestampsByAddress, input.restartTimestampsByAddress);
+}
+
+TEST(TopologyRepositoryCodecTest, ActiveTaskNotifyRoundTripIsCanonical)
+{
+    TopologyTaskNotify input;
+    input.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 9 };
+    input.taskIds = { "m-e9-0123456789abcdef0123456789abcdef" };
+    input.restartTimestampsByAddress.emplace("127.0.0.1:2", 200);
+    std::string first;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(input, first));
+
+    TopologyTaskNotify output;
+    DS_ASSERT_OK(TopologyRepositoryCodec::DecodeNotify(first, output));
+    ASSERT_TRUE(output.activeBatch.has_value());
+    EXPECT_EQ(output.activeBatch->type, input.activeBatch->type);
+    EXPECT_EQ(output.activeBatch->epoch, input.activeBatch->epoch);
+    EXPECT_EQ(output.taskIds, input.taskIds);
+    EXPECT_EQ(output.restartTimestampsByAddress, input.restartTimestampsByAddress);
+
+    std::string second;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(output, second));
+    EXPECT_EQ(first, second);
+}
+
 TEST(TopologyRepositoryCodecTest, RejectsUnsortedDuplicateNotify)
 {
-    TopologyTaskNotify notify{ TopologyChangeType::SCALE_OUT, { "task-b", "task-a", "task-a" } };
+    TopologyTaskNotify notify;
+    notify.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 1 };
+    notify.taskIds = { "task-b", "task-a", "task-a" };
     std::string bytes;
     EXPECT_EQ(TopologyRepositoryCodec::EncodeNotify(notify, bytes).GetCode(), K_INVALID);
 }
@@ -85,7 +130,7 @@ TEST(TopologyRepositoryCodecTest, RejectsUnsortedDuplicateNotify)
 TEST(TopologyRepositoryCodecTest, EnforcesNotifyReferenceAndPayloadLimits)
 {
     TopologyTaskNotify notify;
-    notify.type = TopologyChangeType::SCALE_OUT;
+    notify.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 1 };
     notify.taskIds.reserve(MAX_NOTIFY_TASK_REFS + 1);
     for (size_t index = 0; index < MAX_NOTIFY_TASK_REFS; ++index) {
         notify.taskIds.emplace_back(BuildCapacityTaskId(index));
@@ -102,13 +147,61 @@ TEST(TopologyRepositoryCodecTest, EnforcesNotifyReferenceAndPayloadLimits)
 
 TEST(TopologyRepositoryCodecTest, RejectsNonCanonicalNotifyPayload)
 {
-    TopologyTaskNotify notify{ TopologyChangeType::SCALE_OUT, { "m-e1-0123456789abcdef0123456789abcdef" } };
+    TopologyTaskNotify notify;
+    notify.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 1 };
+    notify.taskIds = { "m-e1-0123456789abcdef0123456789abcdef" };
     std::string encoded;
     DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(notify, encoded));
     encoded.append("\xA0\x06\x01", 3);
 
     TopologyTaskNotify decoded;
     EXPECT_EQ(TopologyRepositoryCodec::DecodeNotify(encoded, decoded).GetCode(), K_INVALID);
+}
+
+TEST(TopologyRepositoryCodecTest, RestartNotifyEncodingIsDeterministic)
+{
+    TopologyTaskNotify first;
+    first.restartTimestampsByAddress.emplace("127.0.0.1:2", 200);
+    first.restartTimestampsByAddress.emplace("127.0.0.1:1", 100);
+    TopologyTaskNotify second;
+    second.restartTimestampsByAddress.emplace("127.0.0.1:1", 100);
+    second.restartTimestampsByAddress.emplace("127.0.0.1:2", 200);
+
+    std::string firstBytes;
+    std::string secondBytes;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(first, firstBytes));
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(second, secondBytes));
+    EXPECT_EQ(firstBytes, secondBytes);
+}
+
+TEST(TopologyRepositoryCodecTest, RejectsInvalidRestartNotifyWithoutChangingOutput)
+{
+    TopologyTaskNotify invalidAddress;
+    invalidAddress.restartTimestampsByAddress.emplace("invalid-address", 100);
+    std::string encoded = "unchanged";
+    EXPECT_EQ(TopologyRepositoryCodec::EncodeNotify(invalidAddress, encoded).GetCode(), K_INVALID);
+    EXPECT_EQ(encoded, "unchanged");
+
+    TopologyTaskNotify invalidTimestamp;
+    invalidTimestamp.restartTimestampsByAddress.emplace("127.0.0.1:1", 0);
+    EXPECT_EQ(TopologyRepositoryCodec::EncodeNotify(invalidTimestamp, encoded).GetCode(), K_INVALID);
+    EXPECT_EQ(encoded, "unchanged");
+
+    TopologyTaskNotify tooMany;
+    for (size_t index = 0; index <= MAX_RESTART_NOTIFY_ENTRIES; ++index) {
+        tooMany.restartTimestampsByAddress.emplace(BuildCapacityAddress(index), 100);
+    }
+    EXPECT_EQ(TopologyRepositoryCodec::EncodeNotify(tooMany, encoded).GetCode(), K_INVALID);
+    EXPECT_EQ(encoded, "unchanged");
+
+    ::datasystem::TaskNotifyPb invalidPb;
+    (*invalidPb.mutable_restart_timestamps_by_address())["127.0.0.1:1"] = -1;
+    std::string invalidBytes;
+    ASSERT_TRUE(invalidPb.SerializeToString(&invalidBytes));
+    TopologyTaskNotify output;
+    output.restartTimestampsByAddress.emplace("127.0.0.1:2", 200);
+    EXPECT_EQ(TopologyRepositoryCodec::DecodeNotify(invalidBytes, output).GetCode(), K_INVALID);
+    EXPECT_EQ(output.restartTimestampsByAddress.at("127.0.0.1:2"), 200);
 }
 
 TEST(TopologyRepositoryCodecTest, EnforcesTaskRangeAndPayloadLimits)

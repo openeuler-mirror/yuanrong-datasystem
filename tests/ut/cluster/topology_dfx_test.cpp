@@ -340,7 +340,9 @@ TEST(TopologyDfxTest, MultiMemberScaleOutReplansRetainedCompletionAndRemovesOnly
     HashAlgorithm algorithm;
     CoordinationEventDispatcher dispatcher(DFX_QUEUE_CAPACITY);
     auto clock = std::make_shared<ManualDfxClock>();
-    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, ManualBudgetOptions(clock));
+    auto options = ManualBudgetOptions(clock);
+    options.scaleOutCollectWindow = std::chrono::milliseconds::zero();
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
     DS_ASSERT_OK(controller.Start());
     const bool activeBatch = WaitDfxTopology(repository, [](const auto &latest) {
         return latest.activeBatch.has_value() && latest.activeBatch->type == TopologyChangeType::SCALE_OUT;

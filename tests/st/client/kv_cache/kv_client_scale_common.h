@@ -45,13 +45,17 @@ class KVClientScaleCommon : virtual public OCClientCommon, public KVClientCommon
 public:
     void AssertAllNodesJoinIntoClusterTopology(int num)
     {
-        if (!db_) {
-            InitTestEtcdInstance();
-        }
-        std::string value;
-        DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
         ClusterTopologyPb ring;
-        ASSERT_TRUE(ring.ParseFromString(value));
+        if (cluster_->GetEtcdNum() == 0) {
+            DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
+        } else {
+            if (!db_) {
+                InitTestEtcdInstance();
+            }
+            std::string value;
+            DS_ASSERT_OK(db_->Get(GetTopologyTableName(), "", value));
+            ASSERT_TRUE(ring.ParseFromString(value));
+        }
         ASSERT_EQ(ring.members_size(), num) << ring.ShortDebugString();
         for (auto &worker : ring.members()) {
             ASSERT_TRUE(worker.second.state() == MembershipPb::ACTIVE) << ring.ShortDebugString();
@@ -121,18 +125,25 @@ public:
     template <typename F>
     void WaitClusterTopologyChange(F &&f, uint64_t timeoutMs = shutdownTimeoutMs, std::string azName = "")
     {
-        if (!db_) {
-            InitTestEtcdInstance();
-        }
-        const auto topologyTable = azName.empty() ? GetTopologyTableName() : GetTopologyTableName(azName);
-        DS_ASSERT_OK(azName.empty() ? RegisterTopologyTables(*db_) : RegisterTopologyTables(*db_, azName));
         auto timeOut = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         bool flag = false;
         ClusterTopologyPb ring;
+        const bool useClusterReader = azName.empty() && cluster_->GetEtcdNum() == 0;
+        const auto topologyTable = azName.empty() ? GetTopologyTableName() : GetTopologyTableName(azName);
+        if (!useClusterReader) {
+            if (!db_) {
+                InitTestEtcdInstance();
+            }
+            DS_ASSERT_OK(azName.empty() ? RegisterTopologyTables(*db_) : RegisterTopologyTables(*db_, azName));
+        }
         while (std::chrono::steady_clock::now() < timeOut) {
-            std::string hashRingStr;
-            DS_ASSERT_OK(db_->Get(topologyTable, "", hashRingStr));
-            ASSERT_TRUE(ring.ParseFromString(hashRingStr));
+            if (useClusterReader) {
+                DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
+            } else {
+                std::string hashRingStr;
+                DS_ASSERT_OK(db_->Get(topologyTable, "", hashRingStr));
+                ASSERT_TRUE(ring.ParseFromString(hashRingStr));
+            }
             if (f(ring)) {
                 flag = true;
                 break;

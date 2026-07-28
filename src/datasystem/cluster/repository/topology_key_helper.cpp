@@ -17,6 +17,7 @@
 #include "datasystem/cluster/repository/topology_key_helper.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <utility>
 
@@ -38,6 +39,9 @@ constexpr size_t HEX_HIGH_NIBBLE_SHIFT = 4;
 constexpr unsigned char HEX_LOW_NIBBLE_MASK = 0x0f;
 constexpr char LOWER_HEX[] = "0123456789abcdef";
 constexpr char ROOT_PREFIX[] = "/datasystem";
+constexpr std::array<const char *, 5> RESERVED_CLUSTER_NAMES = {
+    "topology", "tasks", "notify", "cluster", "scale-in-metadata-done"
+};
 const std::string EMPTY_KEY;
 
 bool IsAlphaNumeric(char value)
@@ -48,6 +52,10 @@ bool IsAlphaNumeric(char value)
 bool IsValidClusterName(const std::string &name)
 {
     if (name.empty() || name.size() > MAX_CLUSTER_NAME_SIZE || !IsAlphaNumeric(name.front())) {
+        return false;
+    }
+    if (std::find(RESERVED_CLUSTER_NAMES.begin(), RESERVED_CLUSTER_NAMES.end(), name)
+        != RESERVED_CLUSTER_NAMES.end()) {
         return false;
     }
     for (char value : name) {

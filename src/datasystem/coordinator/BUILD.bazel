@@ -3,6 +3,38 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
+    name = "coordinator_store_backend",
+    srcs = ["coordinator_store_backend.cpp"],
+    hdrs = ["coordinator_store_backend.h"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/cluster/coordination_backend",
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_topology_control_host",
+    srcs = ["topology_control_host.cpp"],
+    hdrs = ["topology_control_host.h"],
+    deps = [
+        ":coordinator_store_backend",
+        ":coordinator_topology_recovery_manager",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/common/util:uuid_generator",
+    ],
+)
+
+ds_cc_library(
     name = "coordinator_topology_recovery_manager",
     srcs = ["topology_recovery_manager.cpp"],
     hdrs = ["topology_recovery_manager.h"],
@@ -24,6 +56,7 @@ ds_cc_library(
     hdrs = ["coordinator_service_impl.h"],
     deps = [
         ":coordinator_watch_dispatcher_impl",
+        ":coordinator_topology_control_host",
         ":coordinator_topology_recovery_manager",
         "//src/datasystem/cluster:cluster_topology_keyspace",
         "//src/datasystem/common/coordinator:coordinator_store",

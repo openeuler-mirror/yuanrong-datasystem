@@ -31,16 +31,16 @@
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
-#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/validator.h"
 
 namespace datasystem::client::cluster_query {
+DS_DECLARE_bool(use_brpc);
+
 namespace {
 
 constexpr size_t MAX_RAW_SNAPSHOT_BYTES = 16 * 1'024 * 1'024;
 constexpr size_t MAX_RAW_MEMBERSHIPS = 10'000;
-constexpr uint64_t QUERY_RPC_STUB_CACHE_SIZE = 1;
 using QueryDeadline = std::chrono::time_point<std::chrono::steady_clock>;
 
 Status RemainingTimeoutMs(const QueryDeadline &deadline, int32_t &timeoutMs)
@@ -219,7 +219,6 @@ Status ClusterQueryClient::Impl::InitCoordinator()
     RETURN_IF_NOT_OK(address.ParseString(options_.coordinatorAddress));
     CHECK_FAIL_RETURN_STATUS(address.ToString() == options_.coordinatorAddress, K_INVALID,
                              "coordinator address is not canonical");
-    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(QUERY_RPC_STUB_CACHE_SIZE));
     auto coordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(options_.coordinatorAddress);
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorProxy;
     if (FLAGS_use_brpc) {

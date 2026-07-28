@@ -22,6 +22,8 @@ set(DS_UT_DEPEND_LIBS
         coordinator_raft_state_machine
         coordinator_raft_node
         coordinator_membership_manager
+        coordinator_store_backend
+        coordinator_topology_control_host
         datasystem_braft
         common_log
         common_metrics
@@ -74,6 +76,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/flags/.*)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/l2cache/slot_store_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common/coordinator/coordinator_store_perf_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/coordinator_server_options_test\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/coordinator/topology_control_perf_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/worker/data_worker_options_test\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/test_main\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/common\\.cpp$)
@@ -188,6 +191,9 @@ add_executable(coordinator_store_perf_test
         common/coordinator/coordinator_store_perf_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>
         $<TARGET_OBJECTS:_ds_ut_common_obj>)
+add_executable(topology_control_perf_test
+        coordinator/topology_control_perf_test.cpp
+        $<TARGET_OBJECTS:_ds_ut_main_obj>)
 add_ds_ut_executable(coordinator_server_options_test
         coordinator/coordinator_server_options_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)
@@ -291,6 +297,11 @@ target_link_libraries(ds_ut_slot_store PRIVATE
         common_util
         common_request_context)
 target_link_libraries(coordinator_store_perf_test PRIVATE ${DS_UT_DEPEND_LIBS})
+target_link_libraries(topology_control_perf_test PRIVATE
+        GTest::gtest
+        GTest::gmock
+        cluster_topology
+        ${DS_UT_COMMON_UTIL_EXTRA_LIBS})
 target_link_libraries(coordinator_server_options_test PRIVATE
         coordinator_server
         GTest::gtest

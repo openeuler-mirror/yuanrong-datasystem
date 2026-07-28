@@ -13,6 +13,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -132,11 +133,11 @@ public:
 
         /**
          * @brief Register the existing member-restart cleanup sink.
-         * @param[in] handler Restart sink to consume.
+         * @param[in] handler Batched restart sink and its named completion contract.
          * @return This Builder.
          */
         Builder &SetMembershipRestartHandler(
-            std::function<Status(const std::string &, int64_t)> handler);
+            std::function<Status(const std::map<std::string, int64_t> &, RestartEffectMode)> handler);
 
         /**
          * @brief Register a non-blocking newly-published Snapshot callback.
@@ -351,14 +352,13 @@ private:
     static RuntimeOptions ConsumeRuntimeOptions(Builder::Config &config);
 
     /**
-     * @brief Construct Controller Runtime and optional recovery reporter after core members exist.
-     * @param[in] membershipRestartHandler Existing Controller restart cleanup sink.
+     * @brief Construct the ETCD Controller Runtime and optional recovery reporter after core members exist.
      * @param[in] nodeDeadTimeout Existing confirmed-failure timeout.
+     * @param[in] scaleInCollectWindow Existing ScaleIn collection window.
      * @return K_OK on success or component construction status otherwise.
      */
-    Status InitializeOwnedComponents(
-        std::function<Status(const std::string &, int64_t)> membershipRestartHandler,
-        std::chrono::seconds nodeDeadTimeout, std::chrono::milliseconds scaleInCollectWindow);
+    Status InitializeOwnedComponents(std::chrono::seconds nodeDeadTimeout,
+                                     std::chrono::milliseconds scaleInCollectWindow);
 
     /**
      * @brief Route one Coordinator watch event to its unique role backend.
@@ -504,7 +504,7 @@ private:
      * @brief Invoke the non-blocking Snapshot publication hook.
      * @param[in] snapshot Newly published immutable Snapshot.
      */
-    void NotifySnapshotPublished(std::shared_ptr<const TopologySnapshot> snapshot);
+    void NotifySnapshotPublished(std::shared_ptr<const TopologySnapshot> snapshot) noexcept;
 
     /**
      * @brief Record a runtime error without exposing high-cardinality payload.
@@ -518,6 +518,7 @@ private:
     std::unique_ptr<HashAlgorithm> algorithm_;
     ICoordinatorServiceProxy *coordinatorProxy_{ nullptr };  // Non-owning; outlives the Engine.
     CoordinatorWatchIngress coordinatorIngress_;
+    std::function<Status(const std::map<std::string, int64_t> &, RestartEffectMode)> membershipRestartHandler_;
     std::unique_ptr<TopologyKeyHelper> keys_;
     TopologyRepository repository_;
     TopologyReader reader_;

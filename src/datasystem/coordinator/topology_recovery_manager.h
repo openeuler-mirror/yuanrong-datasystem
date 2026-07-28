@@ -25,7 +25,15 @@ namespace coordinator {
 
 enum class TopologyRecoveryState : uint8_t { RECOVERING, INSTALLING, READY, BLOCKED };
 enum class TopologyRecoveryReportResult : uint8_t { ACCEPTED, COORDINATOR_ID_MISMATCH, MEMBERSHIP_NOT_READY };
-enum class TopologyCoordinationKeyKind : uint8_t { OTHER, TOPOLOGY, MIGRATE_TASK, DELETE_TASK, NOTIFY, MEMBERSHIP };
+enum class TopologyCoordinationKeyKind : uint8_t {
+    OTHER,
+    TOPOLOGY,
+    MIGRATE_TASK,
+    DELETE_TASK,
+    NOTIFY,
+    MEMBERSHIP,
+    SCALE_IN_METADATA_DONE
+};
 
 struct ParsedTopologyCoordinationKey {
     std::string clusterName;
@@ -225,21 +233,25 @@ private:
     /**
      * @brief Commit a validated payload while its evidence remains selected.
      * @param[in] clusterName Cluster scope.
+     * @param[in] contextGeneration Recovery-context generation that admitted the payload.
      * @param[in] report Validated payload to consume.
      * @return Recording status.
      */
-    Status RecordPayload(const std::string &clusterName, TopologyRecoveryCandidateReport report);
+    Status RecordPayload(const std::string &clusterName, uint64_t contextGeneration,
+                         TopologyRecoveryCandidateReport report);
 
     /**
      * @brief Release admission budget and block an invalid selected candidate.
      * @param[in] clusterName Cluster scope.
+     * @param[in] contextGeneration Recovery-context generation that admitted the payload.
      * @param[in] report Rejected candidate payload.
      * @param[in] payloadBytes Reserved payload bytes.
      * @param[in] validationStatus Payload validation result.
      * @return Original validation status.
      */
-    Status RejectPayload(const std::string &clusterName, const TopologyRecoveryCandidateReport &report,
-                         size_t payloadBytes, const Status &validationStatus);
+    Status RejectPayload(const std::string &clusterName, uint64_t contextGeneration,
+                         const TopologyRecoveryCandidateReport &report, size_t payloadBytes,
+                         const Status &validationStatus);
 
     /**
      * @brief Drop a retained payload that is no longer selected.
@@ -252,6 +264,14 @@ private:
      * @param[in] clusterName Cluster scope.
      */
     void ScheduleReconcile(const std::string &clusterName);
+
+    /**
+     * @brief Reuse a legal topology already owned by the current process Store.
+     * @param[in] clusterName Cluster scope.
+     * @param[out] resolved True when an existing authority made recovery READY or BLOCKED.
+     * @return Store status.
+     */
+    Status AdoptStoredAuthorityIfPresent(const std::string &clusterName, bool &resolved);
 
     /**
      * @brief Advance one cluster after its discovery deadline.
@@ -307,6 +327,7 @@ private:
     size_t pendingRecoveryWork_{ 0 };
     size_t retainedCandidateBytes_{ 0 };
     size_t admittedReportBytes_{ 0 };
+    uint64_t nextContextGeneration_{ 1 };
     std::unordered_map<std::string, std::unique_ptr<ClusterRecoveryContext>> contexts_;
 };
 

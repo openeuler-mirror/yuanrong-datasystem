@@ -284,6 +284,8 @@ public:
 
     std::string GetEtcdAddrs() const override;
 
+    Status ReadClusterTopology(ClusterTopologyPb &topology) const override;
+
     Status GetCoordinatorAddr(uint32_t idx, HostPort &addr) const;
 
     Status GetMasterAddr(uint32_t idx, HostPort &addr) const override;

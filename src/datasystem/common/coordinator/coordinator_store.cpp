@@ -95,12 +95,13 @@ Status CoordinatorStore::CheckInitialized() const
 }
 
 Status CoordinatorStore::Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
-                             int64_t &version, int64_t &revision)
+                             int64_t &version, int64_t &revision, int64_t expectedModRevision)
 {
     RETURN_IF_NOT_OK(CheckInitialized());
 
     uint64_t ttlGeneration = 0;
-    RETURN_IF_NOT_OK(memKvStore_->Put(key, value, ttlMs, expectedVersion, version, revision, ttlGeneration));
+    RETURN_IF_NOT_OK(
+        memKvStore_->Put(key, value, ttlMs, expectedVersion, version, revision, ttlGeneration, expectedModRevision));
     VLOG(1) << "Put key: " << key << " revision: " << revision;
 
     if (ttlMs > 0) {
@@ -119,12 +120,12 @@ Status CoordinatorStore::Range(const std::string &key, const std::string &rangeE
 }
 
 Status CoordinatorStore::DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
-                                     int64_t &revision)
+                                     int64_t &revision, int64_t expectedModRevision)
 {
     RETURN_IF_NOT_OK(CheckInitialized());
 
     std::vector<KeyValueEntry> deletedEntries;
-    memKvStore_->Delete(key, rangeEnd, deleted, revision, deletedEntries);
+    RETURN_IF_NOT_OK(memKvStore_->Delete(key, rangeEnd, deleted, revision, deletedEntries, expectedModRevision));
     VLOG(1) << "DeleteRange key: " << key << " rangeEnd: " << rangeEnd << ", revision: " << revision;
 
     return Status::OK();
@@ -164,12 +165,14 @@ Status CoordinatorStore::CancelWatch(const std::string &watcherAddr, const std::
     return firstError;
 }
 
-Status CoordinatorStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs)
+Status CoordinatorStore::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
+                                   int64_t expectedModRevision)
 {
     RETURN_IF_NOT_OK(CheckInitialized());
     int64_t revision = 0;
     uint64_t ttlGeneration = 0;
-    RETURN_IF_NOT_OK(memKvStore_->KeepAlive(key, ttlMs, remainingTtlMs, revision, ttlGeneration));
+    RETURN_IF_NOT_OK(
+        memKvStore_->KeepAlive(key, ttlMs, remainingTtlMs, revision, ttlGeneration, expectedModRevision));
     VLOG(1) << "KeepAlive key: " << key << " ttlMs: " << ttlMs << ", remainingTtlMs: " << remainingTtlMs;
     return ttlManager_->Schedule(key, ttlMs, revision, ttlGeneration);
 }

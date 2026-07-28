@@ -1,3 +1,19 @@
+add_library(coordinator_store_backend STATIC coordinator_store_backend.cpp)
+target_include_directories(coordinator_store_backend PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
+target_link_libraries(coordinator_store_backend PUBLIC
+    cluster_coordination_backend common_coordinator_store common_log common_util)
+
+add_library(coordinator_topology_control_host STATIC topology_control_host.cpp)
+target_include_directories(coordinator_topology_control_host PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
+target_link_libraries(coordinator_topology_control_host PUBLIC
+    cluster_topology
+    common_coordinator_store
+    common_inject
+    common_log
+    common_util
+    coordinator_store_backend
+    coordinator_topology_recovery_manager)
+
 add_library(coordinator_topology_recovery_manager STATIC topology_recovery_manager.cpp)
 target_include_directories(coordinator_topology_recovery_manager PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
 target_link_libraries(coordinator_topology_recovery_manager PUBLIC
@@ -20,6 +36,7 @@ target_link_libraries(coordinator_service_impl PUBLIC
     rpc_stub_cache_mgr
     coordinator_watch_dispatcher_impl
     coordinator_topology_recovery_manager
+    coordinator_topology_control_host
     ds_server
 )
 add_dependencies(coordinator_service_impl coordinator_protos)

@@ -168,14 +168,19 @@ TEST(TopologyRepositoryTest, ScaleInMetadataDoneTombstoneMakesConcurrentRewriteR
     std::vector<ScaleInMetadataDoneJanitorCandidate> markers;
     DS_ASSERT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(8, markers));
     ASSERT_EQ(markers.size(), 1);
+    Status staleDeleteStatus;
+    bool staleDeleted = true;
     Status concurrentWrite;
     backend.SetBeforeDeleteHandler([&] {
+        staleDeleteStatus = repository.DeleteScaleInMetadataDoneIfMatches(markers.front(), staleDeleted);
         concurrentWrite = repository.MarkScaleInMetadataDone({ 7, sourceId, taskId, "operation-a" });
     });
 
     bool deleted = false;
     DS_ASSERT_OK(repository.DeleteScaleInMetadataDoneIfMatches(markers.front(), deleted));
     EXPECT_TRUE(deleted);
+    EXPECT_TRUE(staleDeleteStatus.IsOk());
+    EXPECT_FALSE(staleDeleted);
     EXPECT_EQ(concurrentWrite.GetCode(), K_TRY_AGAIN);
     DS_ASSERT_OK(repository.MarkScaleInMetadataDone({ 7, sourceId, taskId, "operation-a" }));
 }

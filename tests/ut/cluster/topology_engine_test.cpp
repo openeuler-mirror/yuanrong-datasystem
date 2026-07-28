@@ -17,6 +17,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
@@ -305,7 +306,7 @@ TEST(TopologyEngineTest, BuilderAcceptsEmptyClusterAndDerivesMissingTopologyAsFr
     EXPECT_EQ(engine->GetSnapshot(snapshot).GetCode(), K_NOT_READY);
 }
 
-TEST(TopologyEngineTest, BuilderAllowsRecoveringCoordinatorWithoutGuessingRestart)
+TEST(TopologyEngineTest, BuilderUsesFreshStartWhileCoordinatorRecoveryIsNotReady)
 {
     testing::FakeCoordinatorServiceProxy proxy;
     TestWatchIngress ingress;
@@ -483,6 +484,55 @@ TEST(TopologyEngineTest, SnapshotPublicationCallbackRunsOnlyAfterStartPublishes)
     DS_ASSERT_OK(engine->Start());
     // Snapshot publication happens on the state thread after Start() returns.
     EXPECT_TRUE(WaitFor([&published] { return published.load() > 0U; }));
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, IdempotentExactReadDoesNotRepublishSnapshotCallback)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "idempotent-publish";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    std::atomic<size_t> published{ 0 };
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, clusterName);
+    builder.SetSnapshotPublishedHandler(
+        [&published](std::shared_ptr<const TopologySnapshot>) { published.fetch_add(1); });
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+    ASSERT_TRUE(WaitFor([&published] { return published.load() == 1; }));
+
+    DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 1));
+    ASSERT_TRUE(WaitFor([&engine] { return engine->GetDiagnostics().dispatcher.queueDepth == 0; }));
+
+    EXPECT_EQ(published.load(), 1U);
+    DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyEngineTest, SnapshotPublicationExceptionDoesNotTerminateStateThread)
+{
+    testing::FakeCoordinatorServiceProxy proxy;
+    TestWatchIngress ingress;
+    NoopTopologyCallbacks callbacks;
+    const std::string clusterName = "throwing-publish";
+    auto keys = MakeKeys(clusterName);
+    PutTopology(proxy, clusterName, MakeTopology());
+    TopologyEngine::Builder builder;
+    ConfigureBuilder(builder, proxy, ingress, callbacks, clusterName);
+    builder.SetSnapshotPublishedHandler(
+        [](std::shared_ptr<const TopologySnapshot>) { throw std::runtime_error("injected callback failure"); });
+    std::unique_ptr<TopologyEngine> engine;
+    DS_ASSERT_OK(builder.Build(engine));
+    DS_ASSERT_OK(engine->Start());
+
+    PutTopology(proxy, clusterName, MakeTopology(2));
+    DS_ASSERT_OK(EmitTopologyEvent(proxy, ingress, *keys, 2));
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    ASSERT_TRUE(WaitFor([&] { return engine->GetSnapshot(snapshot).IsOk() && snapshot->Version() == 2; }));
+
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
@@ -666,7 +716,7 @@ TEST(TopologyEngineTest, CoordinatorWatchEventFlowsThroughBoundedDispatcher)
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
-TEST(TopologyEngineTest, ControllerStartFailureNeverPublishesHostAdmission)
+TEST(TopologyEngineTest, WorkerWatchStartFailureNeverPublishesHostAdmission)
 {
     testing::FakeCoordinatorServiceProxy proxy;
     TestWatchIngress ingress;
@@ -683,7 +733,7 @@ TEST(TopologyEngineTest, ControllerStartFailureNeverPublishesHostAdmission)
     });
     std::unique_ptr<TopologyEngine> engine;
     DS_ASSERT_OK(builder.Build(engine));
-    proxy.FailNextWatchForKey(keys->MembershipTable() + "/", K_RPC_UNAVAILABLE);
+    proxy.FailNextWatchForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
 
     EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_EQ(normalAdmissions.load(), 0U);
@@ -697,7 +747,7 @@ TEST(TopologyEngineTest, StartRollbackCleanupFailureRemainsRetryable)
     const auto keys = MakeKeys("start-rollback");
     PutTopology(proxy, "start-rollback", MakeTopology());
     auto engine = BuildEngine(proxy, ingress, callbacks, "start-rollback");
-    proxy.FailNextWatchForKey(keys->MembershipTable() + "/", K_RPC_UNAVAILABLE);
+    proxy.FailNextWatchForKey(TopologyStorageKey(*keys), K_RPC_UNAVAILABLE);
     ingress.FailNextUnbind();
 
     EXPECT_EQ(engine->Start().GetCode(), K_RPC_UNAVAILABLE);

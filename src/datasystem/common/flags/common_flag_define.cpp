@@ -16,9 +16,15 @@
 
 #include "datasystem/common/flags/flags.h"
 
+#include <cstdint>
+
 // In the co-process scenario of client and worker, the following flags variables are redefined in both libdatasystem.so
 // and libdatasystem_worker.so, which will cause a double free error. These libraries need to be packaged as static
 // libraries to avoid this issue.
+
+namespace {
+constexpr uint32_t DEFAULT_SCALE_IN_COLLECT_WINDOW_MS = 3'000;
+}
 
 DS_DEFINE_string(l2_cache_type, "none",
                  "L2 cache type, optional value: 'obs', 'sfs', 'distributed_disk' or 'none', default is none");
@@ -101,7 +107,7 @@ DS_DEFINE_double(spill_low_watermark_ratio, 0.6,
                  "Spill directory usage low watermark (ratio of spill_size_limit, 0.0-1.0). Valid range: 0.01-0.99. "
                  "Must be less than spill_high_watermark_ratio.");
 DS_DEFINE_uint32_dynamic(node_dead_timeout_s, 300, "maximum time interval for the master to determine node death");
-DS_DEFINE_uint32(scale_in_collect_window_ms, 1000,
+DS_DEFINE_uint32(scale_in_collect_window_ms, DEFAULT_SCALE_IN_COLLECT_WINDOW_MS,
                  "ordinary SCALE_IN batch coalescing window in milliseconds. When non-zero, the first PRE_LEAVING "
                  "candidate opens a short collect window so members exiting within it land in the same epoch; "
                  "0 disables coalescing (legacy immediate-batch behavior). Hard upper bound 5000ms.");

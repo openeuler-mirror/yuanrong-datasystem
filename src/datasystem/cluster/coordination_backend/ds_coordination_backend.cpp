@@ -179,8 +179,19 @@ Status DsCoordinationBackend::Delete(const std::string &tableName, const std::st
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     int64_t deleted = 0;
     int64_t revision = 0;
-    auto rc = proxy_->DeleteRange(BuildRealKey(tableName, key), "", deleted, revision, timeoutMs);
+    const bool deletesLocalMembership = tableName == keepAliveTableName_ && key == keepAliveKey_;
+    std::unique_lock<std::mutex> mutationLock(membershipMutationMutex_, std::defer_lock);
+    if (deletesLocalMembership) {
+        mutationLock.lock();
+    }
+    const int64_t expectedModRevision =
+        deletesLocalMembership ? keepAliveModRevision_ : COORDINATOR_NO_MOD_REVISION_CHECK;
+    auto rc =
+        proxy_->DeleteRange(BuildRealKey(tableName, key), "", deleted, revision, timeoutMs, expectedModRevision);
     RefreshWatchIdentity(rc);
+    if (rc.IsOk() && deletesLocalMembership) {
+        keepAliveModRevision_ = COORDINATOR_NO_MOD_REVISION_CHECK;
+    }
     return rc;
 }
 
@@ -405,7 +416,8 @@ Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const 
     keepAliveKey_ = key;
     firstKeepAliveSent_.store(false, std::memory_order_release);
     keepAliveTtlMs_ = static_cast<int64_t>(FLAGS_node_timeout_s) * MS_PER_SECOND;
-    keepAliveValue_.timestamp = 0;
+    // Keep one process incarnation across ambiguous lease-publication retries.
+    keepAliveValue_.timestamp = std::chrono::system_clock::now().time_since_epoch().count();
     keepAliveValue_.hostId = hostId;
     keepAliveValue_.compatibilityVersion = CompatibilityManager::Instance().GetCurrentCompatibilityVersion().ToString();
     if (!isStoreAvailableWhenStart) {
@@ -428,25 +440,44 @@ Status DsCoordinationBackend::AutoCreateKeepAliveKey(bool recreated)
     CHECK_FAIL_RETURN_STATUS(!keepAliveKey_.empty(), K_INVALID, "Coordinator keepalive key is empty");
     std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
 
+    const std::string physicalKey = BuildRealKey(keepAliveTableName_, keepAliveKey_);
+    std::vector<KeyValueEntry> current;
+    int64_t rangeRevision = 0;
+    std::string rangeCoordinatorId;
+    RETURN_IF_NOT_OK(proxy_->Range(physicalKey, "", current, rangeRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                                   &rangeCoordinatorId));
+    CHECK_FAIL_RETURN_STATUS(current.size() <= 1, K_RUNTIME_ERROR,
+                             "membership exact read returned multiple values");
+    const int64_t expectedVersion =
+        current.empty() ? COORDINATOR_KEY_NOT_EXISTS_VERSION : current.front().version;
+    const int64_t expectedModRevision =
+        current.empty() ? COORDINATOR_NO_MOD_REVISION_CHECK : current.front().modRevision;
+
     MembershipValue value;
-    int64_t timeStamp = std::chrono::system_clock::now().time_since_epoch().count();
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
         CHECK_FAIL_RETURN_STATUS(keepAliveValue_.lifecycleState != MemberLifecycleState::UNKNOWN, K_INVALID,
                                  "Node state should not be empty.");
-        keepAliveValue_.timestamp = timeStamp;
         value = keepAliveValue_;
+    }
+    if (!current.empty() && keepAliveModRevision_ != COORDINATOR_NO_MOD_REVISION_CHECK
+        && current.front().modRevision != keepAliveModRevision_) {
+        MembershipValue currentValue;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Decode(current.front().value, currentValue));
+        CHECK_FAIL_RETURN_STATUS(currentValue.timestamp == value.timestamp, K_TRY_AGAIN,
+                                 "membership process incarnation changed before recreation");
     }
     std::string valueStr;
     RETURN_IF_NOT_OK(MembershipValueCodec::Encode(value, valueStr));
     int64_t version = 0;
     int64_t revision = 0;
     std::string coordinatorId;
-    auto rc = proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
-                          COORDINATOR_NO_VERSION_CHECK, version, revision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
-                          &coordinatorId);
+    auto rc = proxy_->Put(physicalKey, valueStr, keepAliveTtlMs_, expectedVersion, version, revision,
+                          DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId, rangeCoordinatorId,
+                          expectedModRevision);
     LOG(INFO) << "AutoCreateKeepAliveKey: Put keepalive key " << keepAliveKey_ << " result: " << rc.ToString();
     RETURN_IF_NOT_OK(rc);
+    keepAliveModRevision_ = revision;
     firstKeepAliveSent_.store(true, std::memory_order_release);
     HandleMembershipSuccess(coordinatorId, recreated);
     {
@@ -463,11 +494,17 @@ Status DsCoordinationBackend::RenewKeepAliveOnce()
 {
     CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
     INJECT_POINT("CoordinationBackend.KeepAlive.returnError");
+    std::lock_guard<std::mutex> mutationLock(membershipMutationMutex_);
+    CHECK_FAIL_RETURN_STATUS(keepAliveModRevision_ != COORDINATOR_NO_MOD_REVISION_CHECK, K_NOT_READY,
+                             "membership incarnation is not established");
     int64_t ttlMs = keepAliveTtlMs_;
     int64_t remainingTtlMs = 0;
     std::string coordinatorId;
+    std::string expectedCoordinatorId;
+    proxy_->GetObservedCoordinatorId(expectedCoordinatorId);
     auto rc = proxy_->KeepAlive(BuildRealKey(keepAliveTableName_, keepAliveKey_), ttlMs, remainingTtlMs,
-                                DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId);
+                                DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId, expectedCoordinatorId,
+                                keepAliveModRevision_);
     if (rc.IsOk()) {
         HandleMembershipSuccess(coordinatorId);
     }
@@ -570,7 +607,7 @@ void DsCoordinationBackend::HandleKeepAliveFailure(const Status &status, const s
         state.needHandleFailure = false;
         LOG(WARNING) << "Confirmed local Coordinator network isolation; keep the process alive and report the "
                         "membership deletion event.";
-    } else if (status.GetCode() == K_NOT_FOUND) {
+    } else if (status.GetCode() == K_NOT_FOUND || status.GetCode() == K_TRY_AGAIN) {
         (void)AutoCreateKeepAliveKey(true);
     }
 }
@@ -656,9 +693,13 @@ Status DsCoordinationBackend::UpdateNodeState(MemberLifecycleState state)
     int64_t version = 0;
     int64_t revision = 0;
     std::string coordinatorId;
+    std::string expectedCoordinatorId;
+    proxy_->GetObservedCoordinatorId(expectedCoordinatorId);
     RETURN_IF_NOT_OK(proxy_->Put(BuildRealKey(keepAliveTableName_, keepAliveKey_), valueStr, keepAliveTtlMs_,
                                  COORDINATOR_NO_VERSION_CHECK, version, revision,
-                                 DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId));
+                                 DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId, expectedCoordinatorId,
+                                 keepAliveModRevision_));
+    keepAliveModRevision_ = revision;
     {
         std::lock_guard<std::mutex> lock(keepAliveMutex_);
         keepAliveValue_ = value;
@@ -703,9 +744,12 @@ Status DsCoordinationBackend::InformReconciliationDone(const HostPort &workerAdd
         std::string coordinatorId;
         auto putStatus = proxy_->Put(realKey, readyValue, keepAliveTtlMs_, entries.front().version, version,
                                      putRevision, DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, &coordinatorId,
-                                     rangeCoordinatorId);
+                                     rangeCoordinatorId, entries.front().modRevision);
         RefreshWatchIdentity(putStatus);
         RETURN_IF_NOT_OK(putStatus);
+        if (workerAddr.ToString() == keepAliveKey_) {
+            keepAliveModRevision_ = putRevision;
+        }
         HandleMembershipSuccess(coordinatorId);
     }
     return Status::OK();

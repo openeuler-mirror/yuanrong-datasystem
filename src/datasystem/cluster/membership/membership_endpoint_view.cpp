@@ -108,4 +108,11 @@ Status MembershipEndpointView::GetSnapshot(std::shared_ptr<const TopologySnapsho
     return snapshots_.Load(snapshot);
 }
 
+Status MembershipEndpointView::WaitForSnapshotVersion(
+    uint64_t minimumVersion, std::chrono::steady_clock::time_point deadline,
+    std::shared_ptr<const TopologySnapshot> &snapshot) const
+{
+    return snapshots_.WaitForVersion(minimumVersion, deadline, snapshot);
+}
+
 }  // namespace datasystem::cluster

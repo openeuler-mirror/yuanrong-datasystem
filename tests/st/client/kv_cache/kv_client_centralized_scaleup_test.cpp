@@ -29,10 +29,19 @@ const std::string HOST_IP_PREFIX = "127.0.0.1";
 constexpr size_t DEFAULT_WORKER_NUM = 4;
 class KVClientCentralizedScaleupTest : public OCClientCommon {
 public:
+    static bool IsConcurrentScaleupCase()
+    {
+        std::string suiteName;
+        std::string caseName;
+        GetCurTestName(suiteName, caseName);
+        return caseName == "ScaleUpWorkerConcurrently";
+    }
+
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         opts.waitWorkerReady = false;
-        opts.numEtcd = 1;
+        opts.numEtcd = 0;
+        opts.numCoordinators = 1;
         opts.numOBS = 1;
         opts.numWorkers = DEFAULT_WORKER_NUM;
         opts.enableDistributedMaster = "false";
@@ -69,15 +78,18 @@ public:
         CommonTest::SetUp();
         DS_ASSERT_OK(Init());
         ASSERT_TRUE(cluster_ != nullptr);
-        DS_ASSERT_OK(cluster_->StartEtcdCluster());
         externalCluster_ = dynamic_cast<ExternalCluster *>(cluster_.get());
+        ASSERT_NE(externalCluster_, nullptr);
+        if (IsConcurrentScaleupCase()) {
+            // Fork before starting BRPC threads in the test process.
+            DS_ASSERT_OK(externalCluster_->StartForkWorkerProcess());
+        }
+        DS_ASSERT_OK(cluster_->StartCoordinatorCluster());
     }
 
     void InitCluster(bool withConcurrently = false)
     {
         if (withConcurrently) {
-            DS_ASSERT_OK(externalCluster_->StartForkWorkerProcess());
-
             DS_ASSERT_OK(externalCluster_->StartWorkerByForkProcess(0));
             DS_ASSERT_OK(externalCluster_->StartWorkerByForkProcess(1));
             WaitWorkerReady({ 0, 1 });

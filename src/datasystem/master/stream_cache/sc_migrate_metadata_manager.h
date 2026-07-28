@@ -90,6 +90,8 @@ public:
         uint64_t batchEpoch{ 0 };
         std::string sourceMemberId;
         std::string targetMemberId;
+        std::chrono::steady_clock::time_point deadline{};
+        cluster::CancellationToken cancellation;
     };
     SCMigrateMetadataManager(const SCMigrateMetadataManager &other) = delete;
     SCMigrateMetadataManager(SCMigrateMetadataManager &&other) = delete;
@@ -198,6 +200,13 @@ private:
         const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, MigrateMetaInfo &info);
 
     /**
+     * @brief Check the cooperative cancellation and deadline of a topology-owned migration.
+     * @param[in] info Migration context; legacy migrations have no topology fence and remain unaffected.
+     * @return K_OK, K_NOT_READY after cancellation, or K_RPC_DEADLINE_EXCEEDED.
+     */
+    Status CheckTopologyExecution(const MigrateMetaInfo &info) const;
+
+    /**
      * @brief Migrate metadata.
      * @param[in] scMetadataManager The SCMetadataManager instance.
      * @param[in] api Rpc channel for send data
@@ -226,7 +235,30 @@ private:
      */
     Status BatchMigrateMetadata(const std::shared_ptr<master::SCMetadataManager> &scMetadataManager,
                                 std::unique_ptr<MasterMasterSCApi> &api, MigrateSCMetadataReqPb &req,
-                                std::vector<std::string> &failedStreams);
+                                std::vector<std::string> &failedStreams, const MigrateMetaInfo &info);
+
+    /**
+     * @brief Restore one failed source stream metadata entry and record its name.
+     * @param[in] metadata Metadata whose target migration did not commit.
+     * @param[in] scMetadataManager Source metadata owner.
+     * @param[out] failedStreams Failed stream names.
+     */
+    void RecordBatchMigrationFailure(const MetaForSCMigrationPb &metadata,
+                                     const std::shared_ptr<master::SCMetadataManager> &scMetadataManager,
+                                     std::vector<std::string> &failedStreams);
+
+    /**
+     * @brief Commit per-stream migration results while the topology execution remains authorized.
+     * @param[in] req Migration request whose order defines the response mapping.
+     * @param[in] rsp Target migration results.
+     * @param[in] scMetadataManager Source metadata owner.
+     * @param[out] failedStreams Failed stream names.
+     * @param[in] info Topology migration execution fence.
+     * @return Status of applying the target response.
+     */
+    Status ApplyBatchMigrationResponse(const MigrateSCMetadataReqPb &req, const MigrateSCMetadataRspPb &rsp,
+                                       const std::shared_ptr<master::SCMetadataManager> &scMetadataManager,
+                                       std::vector<std::string> &failedStreams, const MigrateMetaInfo &info);
 
     /**
      * @brief Handle migration failed streams.

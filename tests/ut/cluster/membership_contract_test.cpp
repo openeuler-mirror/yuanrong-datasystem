@@ -204,5 +204,28 @@ TEST(MembershipEndpointViewTest, RejectsObservationWhenIdentityDoesNotMatchCurre
     EXPECT_EQ(endpoint.localAvailability, EndpointAvailability::UNKNOWN);
 }
 
+TEST(MembershipEndpointViewTest, WaitsForMinimumTopologyVersion)
+{
+    TopologyState topology;
+    topology.version = 1;
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 1, std::string(64, 'a'), snapshot));
+    TopologySnapshotState snapshots;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    MembershipEndpointView view(snapshots);
+    std::shared_ptr<const TopologySnapshot> observed;
+
+    EXPECT_EQ(view.WaitForSnapshotVersion(2, std::chrono::steady_clock::now(), observed).GetCode(), K_TRY_AGAIN);
+
+    topology.version = 2;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 2, std::string(64, 'b'), snapshot));
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    DS_ASSERT_OK(view.WaitForSnapshotVersion(
+        2, std::chrono::steady_clock::now() + std::chrono::seconds(1), observed));
+    ASSERT_NE(observed, nullptr);
+    EXPECT_EQ(observed->Version(), 2U);
+}
+
 }  // namespace
 }  // namespace datasystem::cluster

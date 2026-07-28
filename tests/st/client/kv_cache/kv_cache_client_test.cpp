@@ -2478,12 +2478,28 @@ TEST_F(KVClientQuerySizeTest, TestRPCError)
     ASSERT_EQ(outSizes.capacity(), keyCount);
 }
 
+bool IsCoordinatorWriteRocksdbCase()
+{
+    static const std::unordered_set<std::string> coordinatorCases = {
+        "TestNoneModeVoluntaryScaleDown", "TestNoneModeScaleUp", "TestSyncModeVoluntaryScaleDown",
+        "TestSyncModeScaleUp", "TestASyncModeVoluntaryScaleDown", "TestASyncModeScaleUp"
+    };
+    std::string suiteName;
+    std::string caseName;
+    GetCurTestName(suiteName, caseName);
+    return coordinatorCases.count(caseName) > 0;
+}
+
+constexpr auto VOLUNTARY_SCALE_DOWN_WAIT = std::chrono::seconds(5);
+constexpr auto TOPOLOGY_POLL_INTERVAL = std::chrono::milliseconds(100);
+
 class KVClientWriteRocksdbTest : public OCClientCommon, public CommonDistributedExt {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         const int workerCount = 2;
-        opts.numEtcd = 1;
+        opts.numEtcd = IsCoordinatorWriteRocksdbCase() ? 0 : 1;
+        opts.numCoordinators = IsCoordinatorWriteRocksdbCase() ? 1 : 0;
         opts.numOBS = 1;
         opts.numWorkers = workerCount;
         opts.enableDistributedMaster = "true";
@@ -2496,9 +2512,13 @@ public:
         CommonTest::SetUp();
         DS_ASSERT_OK(Init());
         ASSERT_TRUE(cluster_ != nullptr);
-        DS_ASSERT_OK(cluster_->StartEtcdCluster());
+        if (IsCoordinatorWriteRocksdbCase()) {
+            DS_ASSERT_OK(cluster_->StartCoordinatorCluster());
+        } else {
+            DS_ASSERT_OK(cluster_->StartEtcdCluster());
+            CommonDistributedExt::InitTestEtcdInstance();
+        }
         DS_ASSERT_OK(cluster_->StartOBS());
-        CommonDistributedExt::InitTestEtcdInstance();
         externalCluster_ = dynamic_cast<ExternalCluster *>(cluster_.get());
     }
 
@@ -2544,11 +2564,14 @@ public:
             ASSERT_TRUE(cluster_->WaitNodeReady(WORKER, i, maxWaitTimeSec).IsOk()) << i;
         }
         for (auto i : indexes) {
-            // When the scale-in scenario is tested, the scale-in failure may not be determined correctly.
-            // Therefore, the scale-in failure is directly exited.
-            DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "Hashring.Scaletask.Fail", "abort()"));
+            if (cluster_->GetEtcdNum() > 0) {
+                // Preserve the legacy ETCD-only scale task injection. The Coordinator owns its Controller.
+                DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, i, "Hashring.Scaletask.Fail", "abort()"));
+            }
         }
-        InitWorkersInfoMap(indexes);
+        if (cluster_->GetEtcdNum() > 0) {
+            InitWorkersInfoMap(indexes);
+        }
     }
 
     void StartWorkerAndWaitReady(std::initializer_list<int> indexes, const std::string &flags, int maxWaitTimeSec = 20)
@@ -2558,6 +2581,23 @@ public:
             workerFlags.emplace(i, flags);
         }
         StartWorkerAndWaitReady(indexes, workerFlags, maxWaitTimeSec);
+    }
+
+    Status VoluntaryScaleDownAndWait(int workerIdx)
+    {
+        HostPort workerAddress;
+        RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIdx, workerAddress));
+        VoluntaryScaleDownInject(workerIdx);
+        const auto deadline = std::chrono::steady_clock::now() + VOLUNTARY_SCALE_DOWN_WAIT;
+        while (std::chrono::steady_clock::now() < deadline) {
+            ClusterTopologyPb topology;
+            RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(topology));
+            if (topology.members().count(workerAddress.ToString()) == 0) {
+                return Status::OK();
+            }
+            std::this_thread::sleep_for(TOPOLOGY_POLL_INTERVAL);
+        }
+        RETURN_STATUS(K_RUNTIME_ERROR, "Voluntary scale down did not converge before the test deadline");
     }
 
 protected:
@@ -2623,12 +2663,14 @@ TEST_F(KVClientWriteRocksdbTest, TestNoneModeVoluntaryScaleDown)
     uint64_t size = 128;
     std::string data = GenRandomString(size);
     DS_ASSERT_OK(client1->Set(key1, data));
+    std::shared_ptr<KVClient> readClient;
+    InitTestKVClient(1, readClient);
+    client1.reset();
 
-    VoluntaryScaleDownInject(0);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
+    DS_ASSERT_OK(VoluntaryScaleDownAndWait(0));
 
     std::string val;
-    DS_ASSERT_OK(client1->Get(key1, val));
+    DS_ASSERT_OK(readClient->Get(key1, val));
     ASSERT_EQ(val, data);
 }
 
@@ -2777,12 +2819,14 @@ TEST_F(KVClientWriteRocksdbTest, TestSyncModeVoluntaryScaleDown)
     uint64_t size = 128;
     std::string data = GenRandomString(size);
     DS_ASSERT_OK(client1->Set(key1, data));
+    std::shared_ptr<KVClient> readClient;
+    InitTestKVClient(1, readClient);
+    client1.reset();
 
-    VoluntaryScaleDownInject(0);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
+    DS_ASSERT_OK(VoluntaryScaleDownAndWait(0));
 
     std::string val;
-    DS_ASSERT_OK(client1->Get(key1, val));
+    DS_ASSERT_OK(readClient->Get(key1, val));
     ASSERT_EQ(val, data);
 }
 
@@ -2862,12 +2906,14 @@ TEST_F(KVClientWriteRocksdbTest, TestASyncModeVoluntaryScaleDown)
     uint64_t size = 128;
     std::string data = GenRandomString(size);
     DS_ASSERT_OK(client1->Set(key1, data));
+    std::shared_ptr<KVClient> readClient;
+    InitTestKVClient(1, readClient);
+    client1.reset();
 
-    VoluntaryScaleDownInject(0);
-    sleep(3);  // Wait 3 seconds for voluntary scale down finished
+    DS_ASSERT_OK(VoluntaryScaleDownAndWait(0));
 
     std::string val;
-    DS_ASSERT_OK(client1->Get(key1, val));
+    DS_ASSERT_OK(readClient->Get(key1, val));
     ASSERT_EQ(val, data);
 }
 

@@ -28,7 +28,8 @@ namespace {
 constexpr size_t MAX_TASK_RANGES = 4'096;
 constexpr size_t MAX_VALUE_BYTES = 4 * 1024 * 1024;
 constexpr size_t MAX_NOTIFY_TASK_REFS = 4'096;
-constexpr size_t MAX_NOTIFY_VALUE_BYTES = 256 * 1024;
+constexpr size_t MAX_NOTIFY_VALUE_BYTES = 4 * 1024 * 1024;
+constexpr size_t MAX_RESTART_NOTIFY_ENTRIES = 10'000;
 constexpr size_t MAX_TOPOLOGY_MEMBERS = 10'000;
 constexpr size_t MAX_TOPOLOGY_TOKENS = 40'000;
 constexpr size_t SHA256_HEX_SIZE = 64;
@@ -149,6 +150,36 @@ Status DecodeRanges(const google::protobuf::RepeatedPtrField<::datasystem::Token
     CHECK_FAIL_RETURN_STATUS(IsCanonicalRanges(decoded, owner), K_INVALID, "invalid task ranges");
     ranges = std::move(decoded);
     executor = owner;
+    return Status::OK();
+}
+
+Status ValidateRestartFacts(const std::map<std::string, int64_t> &restartTimestamps)
+{
+    CHECK_FAIL_RETURN_STATUS(restartTimestamps.size() <= MAX_RESTART_NOTIFY_ENTRIES, K_INVALID,
+                             "restart notify count exceeds limit");
+    for (const auto &[address, timestamp] : restartTimestamps) {
+        RETURN_IF_NOT_OK(ValidateMemberAddress(address));
+        CHECK_FAIL_RETURN_STATUS(timestamp > 0, K_INVALID, "restart notify timestamp must be positive");
+    }
+    return Status::OK();
+}
+
+Status EncodeActiveBatch(const ActiveBatch &activeBatch, ::datasystem::ChangeBatchPb &output)
+{
+    CHECK_FAIL_RETURN_STATUS(activeBatch.epoch > 0, K_INVALID, "notify batch epoch must be positive");
+    ::datasystem::TypePb typePb;
+    RETURN_IF_NOT_OK(ToPbType(activeBatch.type, typePb));
+    output.set_type(typePb);
+    output.set_epoch(activeBatch.epoch);
+    return Status::OK();
+}
+
+Status DecodeActiveBatch(const ::datasystem::ChangeBatchPb &input, ActiveBatch &activeBatch)
+{
+    CHECK_FAIL_RETURN_STATUS(input.epoch() > 0, K_INVALID, "notify batch epoch must be positive");
+    TopologyChangeType type;
+    RETURN_IF_NOT_OK(FromPbType(input.type(), type));
+    activeBatch = ActiveBatch{ type, input.epoch() };
     return Status::OK();
 }
 }  // namespace
@@ -276,22 +307,43 @@ Status TopologyRepositoryCodec::DecodeDeleteTask(const std::string &taskId, uint
 Status TopologyRepositoryCodec::EncodeNotify(const TopologyTaskNotify &notify, std::string &value)
 {
     auto duplicate = std::adjacent_find(notify.taskIds.begin(), notify.taskIds.end());
-    CHECK_FAIL_RETURN_STATUS(!notify.taskIds.empty() && std::is_sorted(notify.taskIds.begin(), notify.taskIds.end())
+    CHECK_FAIL_RETURN_STATUS(std::is_sorted(notify.taskIds.begin(), notify.taskIds.end())
                                  && duplicate == notify.taskIds.end() && notify.taskIds.size() <= MAX_NOTIFY_TASK_REFS,
                              K_INVALID, "invalid notify task ids");
-    ::datasystem::TypePb typePb;
-    RETURN_IF_NOT_OK(ToPbType(notify.type, typePb));
+    CHECK_FAIL_RETURN_STATUS(notify.activeBatch.has_value() || notify.taskIds.empty(), K_INVALID,
+                             "notify tasks require an active batch");
+    RETURN_IF_NOT_OK(ValidateRestartFacts(notify.restartTimestampsByAddress));
     ::datasystem::TaskNotifyPb pb;
-    pb.set_type(typePb);
+    if (notify.activeBatch.has_value()) {
+        RETURN_IF_NOT_OK(EncodeActiveBatch(*notify.activeBatch, *pb.mutable_active_batch()));
+    }
     for (const auto &taskId : notify.taskIds) {
         RETURN_IF_NOT_OK(ValidateTaskId(taskId));
-        const std::string prefix = notify.type == TopologyChangeType::FAILURE ? "d-e" : "m-e";
+        const std::string prefix =
+            notify.activeBatch->type == TopologyChangeType::FAILURE ? "d-e" : "m-e";
         CHECK_FAIL_RETURN_STATUS(taskId.rfind(prefix, 0) == 0, K_INVALID, "notify task kind mismatch");
         pb.add_task_ids(taskId);
+    }
+    for (const auto &[address, timestamp] : notify.restartTimestampsByAddress) {
+        (*pb.mutable_restart_timestamps_by_address())[address] = timestamp;
     }
     std::string encoded;
     RETURN_IF_NOT_OK(SerializeCanonical(pb, encoded));
     CHECK_FAIL_RETURN_STATUS(encoded.size() <= MAX_NOTIFY_VALUE_BYTES, K_INVALID, "notify value exceeds limit");
+    value = std::move(encoded);
+    return Status::OK();
+}
+
+Status TopologyRepositoryCodec::ComposeNotify(const TopologyTaskNotify &taskNotify,
+                                              const std::string &canonicalRestartNotify, std::string &value)
+{
+    CHECK_FAIL_RETURN_STATUS(taskNotify.restartTimestampsByAddress.empty(), K_INVALID,
+                             "task notify contains duplicate restart facts");
+    std::string encoded;
+    RETURN_IF_NOT_OK(EncodeNotify(taskNotify, encoded));
+    CHECK_FAIL_RETURN_STATUS(canonicalRestartNotify.size() <= MAX_NOTIFY_VALUE_BYTES - encoded.size(), K_INVALID,
+                             "notify value exceeds limit");
+    encoded.append(canonicalRestartNotify);
     value = std::move(encoded);
     return Status::OK();
 }
@@ -302,8 +354,14 @@ Status TopologyRepositoryCodec::DecodeNotify(const std::string &value, TopologyT
     ::datasystem::TaskNotifyPb pb;
     CHECK_FAIL_RETURN_STATUS(pb.ParseFromString(value), K_INVALID, "invalid notify value");
     TopologyTaskNotify decoded;
-    RETURN_IF_NOT_OK(FromPbType(pb.type(), decoded.type));
+    if (pb.has_active_batch()) {
+        ActiveBatch activeBatch;
+        RETURN_IF_NOT_OK(DecodeActiveBatch(pb.active_batch(), activeBatch));
+        decoded.activeBatch = activeBatch;
+    }
     decoded.taskIds.assign(pb.task_ids().begin(), pb.task_ids().end());
+    decoded.restartTimestampsByAddress.insert(pb.restart_timestamps_by_address().begin(),
+                                              pb.restart_timestamps_by_address().end());
     std::string canonical;
     RETURN_IF_NOT_OK(EncodeNotify(decoded, canonical));
     CHECK_FAIL_RETURN_STATUS(canonical == value, K_INVALID, "notify value is not canonical");

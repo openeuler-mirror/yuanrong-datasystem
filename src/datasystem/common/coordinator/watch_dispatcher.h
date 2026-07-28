@@ -103,6 +103,14 @@ public:
     void RemoveChannelsByWatcher(const std::string &watcherAddr);
 
     /**
+     * @brief Cancel channels owned by one watcher only inside selected logical tables.
+     * @param[in] watcherAddr Watcher address whose scoped channels should be removed.
+     * @param[in] tableScopes Physical logical-table prefixes without trailing separators.
+     */
+    void RemoveChannelsByWatcherInScopes(const std::string &watcherAddr,
+                                         const std::vector<std::string> &tableScopes);
+
+    /**
      * @brief Set the snapshot revision for dedup after WatchRange snapshot.
      * @param[in] watchId The watch ID.
      * @param[in] revision The snapshot revision.

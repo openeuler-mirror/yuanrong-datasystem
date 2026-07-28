@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Watch registry with flat map and linear scan matching.
+ * Description: Watch registry with exact-key indexing and grouped range matching.
  */
 #ifndef DATASYSTEM_COMMON_COORDINATOR_WATCH_REGISTRY_H
 #define DATASYSTEM_COMMON_COORDINATOR_WATCH_REGISTRY_H
@@ -27,6 +27,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "datasystem/utils/status.h"
@@ -87,10 +88,20 @@ public:
      */
     void MatchWatchers(const std::string &key, std::vector<std::shared_ptr<WatcherEntry>> &matched);
 
+    /**
+     * @brief Check whether one watch belongs to any logical table scope.
+     * @param[in] watchId Watch identity.
+     * @param[in] tableScopes Physical logical-table prefixes without trailing separators.
+     * @return True when the watch start key is inside one supplied table.
+     */
+    bool IsWatchInScopes(int64_t watchId, const std::vector<std::string> &tableScopes) const;
+
 private:
     std::unordered_map<int64_t, std::shared_ptr<WatcherEntry>> watchers_;
     std::unordered_map<std::string, int64_t> watchIdsByRegistrationId_;
-    std::vector<WatchRange> watchRanges_;
+    std::unordered_map<int64_t, std::pair<std::string, std::string>> watchScopesById_;
+    std::unordered_map<std::string, std::unordered_set<int64_t>> exactWatchIdsByKey_;
+    std::vector<WatchRange> rangeWatches_;
     std::atomic<int64_t> nextWatchId_{ 1 };
     mutable std::shared_mutex mutex_;
 };

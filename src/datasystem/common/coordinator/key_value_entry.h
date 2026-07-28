@@ -26,6 +26,7 @@
 namespace datasystem {
 static constexpr int64_t COORDINATOR_NO_VERSION_CHECK = -1;
 static constexpr int64_t COORDINATOR_KEY_NOT_EXISTS_VERSION = 0;
+static constexpr int64_t COORDINATOR_NO_MOD_REVISION_CHECK = 0;
 
 struct KeyValueEntry {
     std::string key;

@@ -90,6 +90,14 @@ public:
      */
     Status IsLocalOwner(std::string_view placementKey, bool &isLocal) const;
 
+    /**
+     * @brief Check whether the current ScaleOut task range containing one key has completed.
+     * @param[in] placementKey Binary-safe placement key.
+     * @param[in] batchEpoch ScaleOut batch epoch from the same redirect decision.
+     * @return True only while matching process-local task completion evidence remains current.
+     */
+    bool IsScaleOutHandoffComplete(std::string_view placementKey, uint64_t batchEpoch) const noexcept;
+
 private:
     /**
      * @brief Locate without reloading Snapshot.

@@ -37,6 +37,7 @@
 
 namespace datasystem {
 namespace coordinator {
+class TopologyControlHost;
 class TopologyRecoveryManager;
 
 class CoordinatorServiceImpl : public CoordinatorService, public ICoordinatorService {
@@ -146,9 +147,10 @@ public:
 
 private:
     /**
-     * @brief Construct the Store, watch, TTL, and topology recovery component tree.
+     * @brief Construct and start the Store, recovery, and topology control component tree.
+     * @return Component construction or Host startup status.
      */
-    void BuildComponentTree();
+    Status BuildComponentTree();
 
     /**
      * @brief Configure the selected RPC transport and service endpoint.
@@ -160,6 +162,22 @@ private:
      * @param[in] key Physical membership key reported by the Store.
      */
     void HandleCommittedMembershipMutation(const std::string &key);
+
+    /**
+     * @brief Route one committed Store mutation to Recovery, Host and watch cleanup.
+     * @param[in] type Mutation type.
+     * @param[in] key Physical Store key.
+     */
+    void HandleCommittedMutation(WatchEvent::Type type, const std::string &key);
+
+    /**
+     * @brief Reserve Controller capacity before one membership Put can commit.
+     * @param[in] key Physical Put key.
+     * @param[out] clusterName Parsed cluster when this is a membership Put.
+     * @param[out] reserved True when reservation completion is required.
+     * @return Admission, parse, or lifecycle status.
+     */
+    Status PrepareTopologyMembershipPut(const std::string &key, std::string &clusterName, bool &reserved);
 
     /**
      * @brief Reject a topology watch whose owning membership no longer exists.
@@ -188,6 +206,7 @@ private:
     std::shared_ptr<TtlManager> ttlManager_;
     std::shared_ptr<CoordinatorStore> store_;
     std::unique_ptr<TopologyRecoveryManager> topologyRecoveryManager_;
+    std::unique_ptr<TopologyControlHost> topologyControlHost_;
     // Serializes membership-current-value checks, stale-channel cleanup and new watch registration.
     std::mutex membershipWatchMutex_;
     // brpc mode address (set in Init, consumed in Start)

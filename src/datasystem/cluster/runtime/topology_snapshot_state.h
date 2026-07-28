@@ -10,10 +10,11 @@
 #define DATASYSTEM_CLUSTER_RUNTIME_TOPOLOGY_SNAPSHOT_STATE_H
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
+#include <vector>
 
 #include "datasystem/cluster/model/topology_snapshot.h"
 
@@ -36,7 +37,7 @@ public:
     /**
      * @brief Destroy the current immutable reference.
      */
-    ~TopologySnapshotState() = default;
+    ~TopologySnapshotState();
     TopologySnapshotState(const TopologySnapshotState &) = delete;
     TopologySnapshotState &operator=(const TopologySnapshotState &) = delete;
 
@@ -63,12 +64,43 @@ public:
     Status PublishAfterFullRebuild(std::shared_ptr<const TopologySnapshot> snapshot);
 
     /**
+     * @brief Wait until the process-local Snapshot reaches a minimum topology version.
+     * @param[in] minimumVersion Minimum acceptable topology version.
+     * @param[in] deadline Absolute wait deadline.
+     * @param[out] snapshot Current Snapshot at or above the requested version; unchanged on failure.
+     * @return K_OK when ready; K_TRY_AGAIN when the local watch has not caught up before the deadline.
+     */
+    Status WaitForVersion(uint64_t minimumVersion, std::chrono::steady_clock::time_point deadline,
+                          std::shared_ptr<const TopologySnapshot> &snapshot) const;
+
+    /**
+     * @brief Record a successfully migrated ScaleOut task range while its batch is still current.
+     * @param[in] fence Completed task fence.
+     */
+    void RecordScaleOutHandoffCompletion(const TopologyExecutionFence &fence);
+
+    /**
+     * @brief Check whether a token's entire ScaleOut task range has completed in the current batch.
+     * @param[in] batchEpoch ScaleOut batch epoch carried by the placement decision.
+     * @param[in] token Placement token.
+     * @return True only after the responsible task callback completed all business metadata migration.
+     */
+    bool IsScaleOutHandoffComplete(uint64_t batchEpoch, uint32_t token) const noexcept;
+
+    /**
      * @brief Clear only after foreground admission and runtime threads stop.
      */
     void Clear();
 
 private:
     friend class TopologyTaskExecutor;
+
+    struct PublicationSync;
+
+    struct ScaleOutHandoffCompletion {
+        uint64_t batchEpoch{ 0 };
+        std::vector<TokenRange> ranges;
+    };
 
     /**
      * @brief Authorize one short local cleanup only while the expected Snapshot is still current.
@@ -79,9 +111,17 @@ private:
     Status AuthorizeCleanupIfCurrent(const TopologySnapshot &expected,
                                      const std::function<Status()> &authorize) const;
 
-    // Serializes current_ validation/publication/clearing, cleanup authorization, and publicationGeneration_ updates.
-    mutable std::mutex publishMutex_;
+    /**
+     * @brief Drop local completion evidence when publication leaves its ScaleOut epoch.
+     * @param[in] snapshot Snapshot being published while the publication mutex is held.
+     */
+    void ResetScaleOutHandoffIfBatchChanged(const TopologySnapshot &snapshot);
+
+    // Owns the bthread-aware mutex/CV protecting publication, cleanup authorization, and ScaleOut completion.
+    std::unique_ptr<PublicationSync> publicationSync_;
     std::shared_ptr<const TopologySnapshot> current_;
+    // Immutable, atomically published ScaleOut completion evidence for WAIT-path lookups.
+    std::shared_ptr<const ScaleOutHandoffCompletion> scaleOutHandoffCompletion_;
     const uint64_t instanceId_;
     std::atomic<uint64_t> publicationGeneration_{ 0 };
 };

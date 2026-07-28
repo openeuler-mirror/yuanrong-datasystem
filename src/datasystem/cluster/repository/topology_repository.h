@@ -25,6 +25,8 @@
 
 namespace datasystem::cluster {
 
+class TopologyController;
+
 enum class TopologyCasOutcome : uint8_t { COMMITTED, CONFLICT, UNKNOWN };
 struct TopologyCasResult {
     TopologyCasOutcome outcome{ TopologyCasOutcome::UNKNOWN };
@@ -40,6 +42,7 @@ struct NotifyJanitorCandidate {
     std::string address;
     TopologyTaskNotify notify;
     std::string matchToken;
+    bool logicallyDeleted{ false };
 };
 struct ScaleInMetadataDoneJanitorCandidate {
     std::string key;
@@ -153,7 +156,7 @@ public:
     Status ReadNotify(const std::string &address, TopologyTaskNotify &notify) const;
 
     /**
-     * @brief List a bounded ETCD-janitor task snapshot.
+     * @brief List a bounded backend-neutral Janitor task snapshot.
      * @param[in] kind Task collection kind.
      * @param[in] limit Maximum result count.
      * @param[out] tasks Raw byte-match candidates.
@@ -163,7 +166,18 @@ public:
                                         std::vector<TaskJanitorCandidate> &tasks) const;
 
     /**
-     * @brief List a bounded ETCD-janitor notify snapshot.
+     * @brief Continue a rotating backend-neutral Janitor task scan.
+     * @param[in] kind Task collection kind.
+     * @param[in] limit Maximum result count.
+     * @param[in,out] cursor Last visited physical key; updated after a successful page.
+     * @param[out] tasks Raw byte-match candidates.
+     * @return Backend status.
+     */
+    Status ListTaskCandidatesForJanitor(TopologyTaskKind kind, size_t limit, std::string &cursor,
+                                        std::vector<TaskJanitorCandidate> &tasks) const;
+
+    /**
+     * @brief List a bounded backend-neutral Janitor notify snapshot.
      * @param[in] limit Maximum result count.
      * @param[out] notifies Decoded byte-match candidates.
      * @return Backend or validation status.
@@ -171,13 +185,33 @@ public:
     Status ListNotifyCandidatesForJanitor(size_t limit, std::vector<NotifyJanitorCandidate> &notifies) const;
 
     /**
-     * @brief List a bounded ETCD-janitor ScaleIn metadata marker snapshot.
+     * @brief Continue a rotating backend-neutral Janitor notify scan.
+     * @param[in] limit Maximum result count.
+     * @param[in,out] cursor Last visited physical key; updated after a successful page.
+     * @param[out] notifies Decoded byte-match candidates.
+     * @return Backend or validation status.
+     */
+    Status ListNotifyCandidatesForJanitor(size_t limit, std::string &cursor,
+                                          std::vector<NotifyJanitorCandidate> &notifies) const;
+
+    /**
+     * @brief List a bounded backend-neutral Janitor ScaleIn metadata marker snapshot.
      * @param[in] limit Maximum result count.
      * @param[out] markers Raw byte-match candidates.
      * @return Backend status.
      */
     Status ListScaleInMetadataDoneCandidatesForJanitor(
         size_t limit, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const;
+
+    /**
+     * @brief Continue a rotating backend-neutral Janitor ScaleIn metadata marker scan.
+     * @param[in] limit Maximum result count.
+     * @param[in,out] cursor Last visited physical key; updated after a successful page.
+     * @param[out] markers Raw byte-match candidates.
+     * @return Backend status.
+     */
+    Status ListScaleInMetadataDoneCandidatesForJanitor(
+        size_t limit, std::string &cursor, std::vector<ScaleInMetadataDoneJanitorCandidate> &markers) const;
 
     /**
      * @brief CAS-rewrite complete notify references.
@@ -197,11 +231,11 @@ public:
 
     /**
      * @brief Conditionally tombstone or rewrite one byte-identical stale notify.
-     * @param[in] candidate Match token plus desired notify; empty task ids request a tombstone.
-     * @param[out] deleted True only when this call installed a logical-delete tombstone.
+     * @param[in] candidate Match token plus desired notify; an empty composite notify requests deletion.
+     * @param[out] changed True only when this call installed a rewrite or logical-delete tombstone.
      * @return Backend status.
      */
-    Status DeleteNotifyIfMatches(const NotifyJanitorCandidate &candidate, bool &deleted);
+    Status ReconcileNotifyIfMatches(const NotifyJanitorCandidate &candidate, bool &changed);
 
     /**
      * @brief Conditionally delete one byte-identical stale ScaleIn metadata marker.
@@ -212,6 +246,16 @@ public:
     Status DeleteScaleInMetadataDoneIfMatches(const ScaleInMetadataDoneJanitorCandidate &candidate, bool &deleted);
 
 private:
+    friend class TopologyController;
+
+    /**
+     * @brief CAS-rewrite a canonical notify built by TopologyTaskMaterializer.
+     * @param[in] address Canonical member address.
+     * @param[in] value Canonical encoded notify.
+     * @return Backend status.
+     */
+    Status RewriteEncodedNotify(const std::string &address, const std::string &value);
+
     /**
      * @brief Select a fixed task table.
      * @param[in] kind Task kind.

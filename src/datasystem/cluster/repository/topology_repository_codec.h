@@ -21,6 +21,8 @@
 
 namespace datasystem::cluster {
 
+class TopologyTaskMaterializer;
+
 class TopologyRepositoryCodec final {
 public:
     /**
@@ -95,6 +97,18 @@ public:
     static Status DecodeNotify(const std::string &value, TopologyTaskNotify &notify);
 
 private:
+    friend class TopologyTaskMaterializer;
+
+    /**
+     * @brief Compose canonical task fields with a pre-encoded canonical restart-only notify.
+     * @param[in] taskNotify Active-batch and task portion without restart facts.
+     * @param[in] canonicalRestartNotify Restart-only value produced by EncodeNotify.
+     * @param[out] value Canonical composite notify bytes.
+     * @return K_OK or K_INVALID.
+     */
+    static Status ComposeNotify(const TopologyTaskNotify &taskNotify, const std::string &canonicalRestartNotify,
+                                std::string &value);
+
     /**
      * @brief Static-only utility; construction is forbidden.
      */

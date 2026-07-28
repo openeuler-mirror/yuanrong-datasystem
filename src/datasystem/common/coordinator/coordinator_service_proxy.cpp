@@ -33,6 +33,7 @@ namespace datasystem {
 namespace {
 constexpr int MAX_CAS_RETRY_TIMES = 16;
 constexpr uint32_t CAS_MAX_SLEEP_TIME_US = 200000;
+constexpr uint64_t COORDINATOR_PROXY_RPC_STUB_CACHE_SIZE = 100;
 
 Status CheckCoordinatorAddress(const HostPort &coordinatorAddr)
 {
@@ -92,6 +93,7 @@ Status CoordinatorServiceProxyBase::Init()
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS(coordinatorDiscovery_ != nullptr, StatusCode::K_INVALID, "Coordinator Discovery is null");
+    RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(COORDINATOR_PROXY_RPC_STUB_CACHE_SIZE));
 
     std::vector<std::string> candidates;
     Status discoveryStatus;
@@ -266,7 +268,8 @@ Status CoordinatorServiceProxyBase::InstallProbedIdentity(const std::string &coo
 
 Status CoordinatorServiceProxyBase::Put(const std::string &key, const std::string &value, int64_t ttlMs,
                                         int64_t expectedVersion, int64_t &version, int64_t &revision, int32_t timeoutMs,
-                                        std::string *coordinatorId, const std::string &expectedCoordinatorId)
+                                        std::string *coordinatorId, const std::string &expectedCoordinatorId,
+                                        int64_t expectedModRevision)
 {
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::PutReqPb req;
@@ -275,6 +278,7 @@ Status CoordinatorServiceProxyBase::Put(const std::string &key, const std::strin
     req.set_ttl(ttlMs);
     req.set_expected_version(expectedVersion);
     req.set_expected_coordinator_id(expectedCoordinatorId);
+    req.set_expected_mod_revision(expectedModRevision);
     coordinator::PutRspPb rsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);
@@ -308,13 +312,14 @@ Status CoordinatorServiceProxyBase::Range(const std::string &key, const std::str
 }
 
 Status CoordinatorServiceProxyBase::DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted,
-                                                int64_t &revision, int32_t timeoutMs)
+                                                int64_t &revision, int32_t timeoutMs, int64_t expectedModRevision)
 {
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::DeleteRangeReqPb req;
     req.set_key(key);
     req.set_range_end(rangeEnd);
     req.set_expected_coordinator_id(inFlight.StartedCoordinatorId());
+    req.set_expected_mod_revision(expectedModRevision);
     coordinator::DeleteRangeRspPb rsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);
@@ -370,11 +375,15 @@ Status CoordinatorServiceProxyBase::CancelWatch(const std::string &watcherAddr, 
 }
 
 Status CoordinatorServiceProxyBase::KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
-                                              int32_t timeoutMs, std::string *coordinatorId)
+                                              int32_t timeoutMs, std::string *coordinatorId,
+                                              const std::string &expectedCoordinatorId,
+                                              int64_t expectedModRevision)
 {
     auto inFlight = BeginRpc(timeoutMs);
     coordinator::KeepAliveReqPb req;
     req.set_key(key);
+    req.set_expected_coordinator_id(expectedCoordinatorId);
+    req.set_expected_mod_revision(expectedModRevision);
     coordinator::KeepAliveRspPb rsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);

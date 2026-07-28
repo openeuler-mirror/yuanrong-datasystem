@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -471,6 +472,13 @@ public:
      */
     Status RemoveMetaByWorker(const std::string &workerAddr);
 
+    /**
+     * @brief Remove locations for a restarted-worker batch after one metadata-table scan.
+     * @param[in] restartFacts Worker addresses and their membership generation timestamps.
+     * @return Status of the call.
+     */
+    Status RemoveMetaByWorkers(const std::map<std::string, int64_t> &restartFacts);
+
     Status RemoveMetaByWorkerForKey(const std::string &objectKey, const std::string &workerAddr);
 
     /**
@@ -489,6 +497,14 @@ public:
      * @return Status of the call.
      */
     Status ProcessWorkerRestart(const std::string &workerAddr, int64_t timestamp, bool sync = false);
+
+    /**
+     * @brief Process one complete restarted-worker generation batch.
+     * @param[in] restartFacts Worker addresses and their membership generation timestamps.
+     * @param[in] sync Call OCNotifyWorkerManager::PushMetaToWorker or OCNotifyWorkerManager::AsyncPushMetaToWorker.
+     * @return First failure after attempting every restart fact.
+     */
+    Status ProcessWorkerRestarts(const std::map<std::string, int64_t> &restartFacts, bool sync = false);
 
     /**
      * @brief Recover master app ref
@@ -953,10 +969,11 @@ public:
     Status CheckObjectDataLocation(const CheckObjectDataLocationReqPb &req, CheckObjectDataLocationRspPb &rsp);
 
     /**
-     * @brief SaveNestedMigrationMetadata
-     * @param[in] objMeta objMeta for nested info.
+     * @brief Persist nested relationships and reference counts received during metadata migration.
+     * @param[in] objMeta Migrated nested metadata.
+     * @return K_OK after all nested metadata is durable; the error code otherwise.
      */
-    void SaveNestedMigrationMetadata(const MetaForMigrationPb &objMeta);
+    Status SaveNestedMigrationMetadata(const MetaForMigrationPb &objMeta);
 
     /**
      * @brief Fill sub meta for migration
@@ -1329,6 +1346,15 @@ protected:
 
 private:
     using PrimaryChangeMap = std::unordered_map<std::string, std::unordered_set<std::string>>;
+
+    /**
+     * @brief Apply one restarted-worker effect after batch metadata removal.
+     * @param[in] workerAddr Restarted Worker address.
+     * @param[in] timestamp Membership generation timestamp.
+     * @param[in] sync Whether reconciliation delivery must complete synchronously.
+     * @return K_OK after the requested effect is accepted or completed; the error code otherwise.
+     */
+    Status CompleteWorkerRestartEffect(const std::string &workerAddr, int64_t timestamp, bool sync);
 
     /**
      * @brief Apply one validated ReplacePrimary item under its metadata shard lock.

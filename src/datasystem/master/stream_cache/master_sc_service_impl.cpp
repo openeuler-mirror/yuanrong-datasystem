@@ -16,6 +16,7 @@
  */
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 
+#include <chrono>
 #include <utility>
 
 #include "datasystem/common/log/log_helper.h"
@@ -32,6 +33,33 @@ DS_DEFINE_int32(master_sc_thread_num, 128, "Max number of threads for (non rpc) 
 namespace datasystem {
 namespace master {
 namespace {
+Status WaitForMigrationSnapshot(const cluster::MembershipEndpointView &membership, const std::string &localAddress,
+                                const std::string &sourceAddress, uint64_t batchEpoch, uint64_t requiredVersion,
+                                std::chrono::steady_clock::time_point deadline,
+                                std::shared_ptr<const cluster::TopologySnapshot> &snapshot)
+{
+    const uint64_t observedVersion = snapshot == nullptr ? 0 : snapshot->Version();
+    const auto waitStart = std::chrono::steady_clock::now();
+    VLOG(1) << "CLUSTER_TASK action=wait_migration_fence_snapshot local_address=" << localAddress
+            << " source_address=" << sourceAddress << " batch_epoch=" << batchEpoch
+            << " observed_version=" << observedVersion << " required_version=" << requiredVersion;
+    auto waitStatus = membership.WaitForSnapshotVersion(requiredVersion, deadline, snapshot);
+    const auto waitMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
+    if (waitStatus.IsError()) {
+        LOG(WARNING) << "CLUSTER_TASK action=wait_migration_fence_snapshot local_address=" << localAddress
+                     << " source_address=" << sourceAddress << " batch_epoch=" << batchEpoch
+                     << " observed_version=" << observedVersion << " required_version=" << requiredVersion
+                     << " wait_ms=" << waitMs << " status=" << waitStatus.ToString();
+        return waitStatus;
+    }
+    VLOG(1) << "CLUSTER_TASK action=migration_fence_snapshot_ready local_address=" << localAddress
+            << " source_address=" << sourceAddress << " batch_epoch=" << batchEpoch
+            << " observed_version=" << snapshot->Version() << " required_version=" << requiredVersion
+            << " wait_ms=" << waitMs;
+    return Status::OK();
+}
+
 Status ValidateMigrationRequest(const cluster::MembershipEndpointView *membership, const std::string &localAddress,
                                 uint64_t topologyVersion, uint64_t batchEpoch, const std::string &sourceMemberId,
                                 const std::string &targetMemberId, const std::string &sourceAddress)
@@ -45,12 +73,28 @@ Status ValidateMigrationRequest(const cluster::MembershipEndpointView *membershi
                              K_INVALID, "Incomplete topology migration RPC fence");
     CHECK_FAIL_RETURN_STATUS(membership != nullptr && !localAddress.empty(), K_NOT_READY,
                              "Topology membership is unavailable for migration fence validation");
+    const auto waitDeadlineBase = std::chrono::steady_clock::now();
+    const int64_t remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    CHECK_FAIL_RETURN_STATUS(remainingMs > 0, K_RPC_DEADLINE_EXCEEDED,
+                             "Migration RPC deadline expired before topology fence validation");
+    const auto waitDeadline = waitDeadlineBase + std::chrono::milliseconds(remainingMs);
     std::shared_ptr<const cluster::TopologySnapshot> snapshot;
-    RETURN_IF_NOT_OK(membership->GetSnapshot(snapshot));
+    auto snapshotStatus = membership->GetSnapshot(snapshot);
+    if (snapshotStatus.IsError() && snapshotStatus.GetCode() != K_NOT_READY) {
+        return snapshotStatus;
+    }
+    if (snapshotStatus.IsError() || snapshot->Version() < topologyVersion) {
+        RETURN_IF_NOT_OK(WaitForMigrationSnapshot(*membership, localAddress, sourceAddress, batchEpoch, topologyVersion,
+                                                   waitDeadline, snapshot));
+    }
     cluster::TopologyMigrationFence fence{ topologyVersion, batchEpoch,
                                            { sourceMemberId, sourceAddress },
                                            { targetMemberId, localAddress } };
-    return snapshot->ValidateMigrationFence(fence);
+    RETURN_IF_NOT_OK(snapshot->ValidateMigrationFence(fence));
+    CHECK_FAIL_RETURN_STATUS(GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() > 0,
+                             K_RPC_DEADLINE_EXCEEDED,
+                             "Migration RPC deadline expired after topology fence validation");
+    return Status::OK();
 }
 }  // namespace
 

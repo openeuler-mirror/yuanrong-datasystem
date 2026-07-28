@@ -37,6 +37,7 @@
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/protos/cluster_topology.pb.h"
 #include "datasystem/protos/generic_service.brpc.stub.pb.h"
 #include "subprocess.h"
 
@@ -463,6 +464,13 @@ public:
      * @return The etcd cluster address.
      */
     virtual std::string GetEtcdAddrs() const = 0;
+
+    /**
+     * @brief Exact-read the current topology from the configured coordination backend.
+     * @param[out] topology Parsed topology; unchanged when the read fails.
+     * @return Status of the backend read and protobuf decode.
+     */
+    virtual Status ReadClusterTopology(ClusterTopologyPb &topology) const = 0;
 
     /**
      * @brief Get IP address of a master.

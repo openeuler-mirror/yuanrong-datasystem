@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <map>
 #include <mutex>
 #include <memory>
 #include <unordered_map>
@@ -599,12 +600,12 @@ private:
     cluster::CoordinatorWatchIngress BuildCoordinatorWatchIngress();
 
     /**
-     * @brief Deliver one deduplicated membership generation restart to local business owners.
-     * @param[in] address Canonical address of the restarted member.
-     * @param[in] timestamp Monotonic membership generation timestamp used by reconciliation.
-     * @return K_OK after Stream cleanup and asynchronous object recovery are accepted.
+     * @brief Deliver one deduplicated membership restart batch to local business owners.
+     * @param[in] restartFacts Canonical member addresses and their membership generation timestamps.
+     * @param[in] sync Whether business effects run synchronously in the caller's bounded pool.
+     * @return K_OK after Stream cleanup and object recovery are completed or accepted.
      */
-    Status HandleMembershipRestart(const std::string &address, int64_t timestamp);
+    Status HandleMembershipRestarts(const std::map<std::string, int64_t> &restartFacts, bool sync);
 
     /**
      * @brief Resolve the metadata endpoint used by worker-local master services before service construction.

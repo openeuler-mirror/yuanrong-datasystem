@@ -112,6 +112,16 @@ public:
      */
     Status GetSnapshot(std::shared_ptr<const TopologySnapshot> &snapshot) const;
 
+    /**
+     * @brief Wait for the process-local topology watch to publish at least one version.
+     * @param[in] minimumVersion Minimum acceptable topology version.
+     * @param[in] deadline Absolute wait deadline.
+     * @param[out] snapshot Current immutable Snapshot; unchanged on failure.
+     * @return K_OK when ready; K_TRY_AGAIN when the local watch remains behind at the deadline.
+     */
+    Status WaitForSnapshotVersion(uint64_t minimumVersion, std::chrono::steady_clock::time_point deadline,
+                                  std::shared_ptr<const TopologySnapshot> &snapshot) const;
+
 private:
     /**
      * @brief Resolve a current member's usable local observation.

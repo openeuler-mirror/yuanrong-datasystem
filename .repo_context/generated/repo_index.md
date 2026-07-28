@@ -116,6 +116,10 @@ src/datasystem/
   - coordinator_server.cpp
   - coordinator_service_impl.cpp
   - coordinator_service_impl.h
+  - coordinator_store_backend.cpp
+  - coordinator_store_backend.h
+  - topology_control_host.cpp
+  - topology_control_host.h
   - topology_recovery_manager.cpp
   - topology_recovery_manager.h
   - watch_dispatcher_impl.cpp
@@ -632,6 +636,9 @@ tests/
   - coordinator/
     - BUILD.bazel
     - coordinator_server_options_test.cpp
+    - coordinator_store_backend_test.cpp
+    - topology_control_host_test.cpp
+    - topology_control_perf_test.cpp
     - topology_recovery_manager_test.cpp
   - device/
     - ascend/

@@ -126,7 +126,10 @@ TEST(TopologyKeyHelperTest, EnforcesClusterNameContractWithoutNormalization)
     EXPECT_EQ(keys->ClusterName(), longestName);
 
     auto *original = keys.get();
-    const std::vector<std::string> invalidNames = { "-cluster", "a/b", "a%2Fb", "a" + std::string(128, 'z') };
+    const std::vector<std::string> invalidNames = {
+        "-cluster", "a/b", "a%2Fb", "a" + std::string(128, 'z'),
+        "topology", "tasks", "notify", "cluster", "scale-in-metadata-done"
+    };
     for (const auto &name : invalidNames) {
         EXPECT_EQ(TopologyKeyHelper::Create(name, keys).GetCode(), K_INVALID) << name;
         EXPECT_EQ(keys.get(), original);

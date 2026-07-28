@@ -12,6 +12,7 @@
 #include <atomic>
 #include <exception>
 #include <functional>
+#include <iterator>
 #include <random>
 #include <thread>
 #include <tuple>
@@ -37,6 +38,7 @@ constexpr size_t MAX_CALLBACK_THREADS = 16;
 constexpr size_t MAX_CALLBACK_QUEUE_CAPACITY = 1'024;
 constexpr int32_t EXECUTOR_AUTHORITY_READ_TIMEOUT_MS = 3'000;
 constexpr size_t OPERATION_ID_PREFIX_SIZE = sizeof("op-") - 1;
+constexpr size_t RESTART_EFFECT_FAILURE_LOG_INTERVAL = 128;
 std::atomic<uint64_t> g_retrySeed{ 0 };
 
 const char *CallbackPhaseName(TopologyCallbackPhase phase)
@@ -143,14 +145,27 @@ Status ScaleInMetadataGateKey(const TopologyExecutionFence &fence, std::string &
 }  // namespace
 
 TopologyTaskExecutor::TopologyTaskExecutor(std::string localAddress, TopologyRepository &repository,
-                                           const TopologySnapshotState &snapshots, ITopologyPhaseCallbacks &callbacks,
-                                           CoordinationEventDispatcher &dispatcher, TopologyTaskExecutorOptions options)
+                                           TopologySnapshotState &snapshots, ITopologyPhaseCallbacks &callbacks,
+                                           CoordinationEventDispatcher &dispatcher,
+                                           std::function<Status(const std::map<std::string, int64_t> &,
+                                                                RestartEffectMode)>
+                                               restartHandler,
+                                           TopologyTaskExecutorOptions options)
     : localAddress_(std::move(localAddress)),
       repository_(repository),
       snapshots_(snapshots),
       callbacks_(callbacks),
       dispatcher_(dispatcher),
+      restartHandler_(std::move(restartHandler)),
       options_(options)
+{
+}
+
+TopologyTaskExecutor::TopologyTaskExecutor(std::string localAddress, TopologyRepository &repository,
+                                           TopologySnapshotState &snapshots, ITopologyPhaseCallbacks &callbacks,
+                                           CoordinationEventDispatcher &dispatcher,
+                                           TopologyTaskExecutorOptions options)
+    : TopologyTaskExecutor(std::move(localAddress), repository, snapshots, callbacks, dispatcher, {}, options)
 {
 }
 
@@ -221,7 +236,7 @@ Status TopologyTaskExecutor::BuildExecutionFence(const TopologyTask &task, Topol
                                      K_INVALID, "invalid ScaleOut task participants");
         } else {
             CHECK_FAIL_RETURN_STATUS(phase == TopologyCallbackPhase::SCALE_IN && executor->state == MemberState::LEAVING
-                                         && IsCommitted(target->state),
+                                         && target->state == MemberState::ACTIVE,
                                      K_INVALID, "invalid ScaleIn task participants");
         }
         built.source = executor->identity;
@@ -295,35 +310,146 @@ Status TopologyTaskExecutor::ValidateFence(const TopologyExecutionFence &fence,
 
 Status TopologyTaskExecutor::HandleNotify(const TopologyTaskNotify &notify)
 {
+    if (!notify.activeBatch.has_value()) {
+        VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
+            << "CLUSTER_TASK action=ignore_restart_only_notify"
+            << " local_address=" << localAddress_
+            << " restart_count=" << notify.restartTimestampsByAddress.size();
+        return HandleRestartFacts(notify.restartTimestampsByAddress);
+    }
     std::shared_ptr<const TopologySnapshot> snapshot;
     RETURN_IF_NOT_OK(snapshots_.Load(snapshot));
     const auto activeBatch = snapshot->GetActiveBatch();
-    if (!activeBatch.has_value() || activeBatch->type != notify.type) {
+    const auto &notifyBatch = *notify.activeBatch;
+    if (!activeBatch.has_value() || activeBatch->type != notifyBatch.type || activeBatch->epoch != notifyBatch.epoch) {
         VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
-            << "CLUSTER_TASK action=ignore_stale_notify type=" << static_cast<uint32_t>(notify.type)
-            << " type_name=" << TopologyChangeTypeName(notify.type)
-            << " topology_version=" << snapshot->Version();
-        return Status::OK();
+            << "CLUSTER_TASK action=ignore_stale_notify type=" << static_cast<uint32_t>(notifyBatch.type)
+            << " type_name=" << TopologyChangeTypeName(notifyBatch.type)
+            << " epoch=" << notifyBatch.epoch << " topology_version=" << snapshot->Version();
+        return HandleRestartFacts(notify.restartTimestampsByAddress);
     }
-    const auto epoch = activeBatch->epoch;
+    const auto epoch = notifyBatch.epoch;
     std::string scaleInMetadataGate;
     RETURN_IF_NOT_OK(BuildScaleInMetadataGateForNotify(notify, *snapshot, epoch, scaleInMetadataGate));
-    LOG(INFO) << "CLUSTER_TASK action=notify type=" << static_cast<uint32_t>(notify.type)
-              << " type_name=" << TopologyChangeTypeName(notify.type)
+    LOG(INFO) << "CLUSTER_TASK action=notify type=" << static_cast<uint32_t>(notifyBatch.type)
+              << " type_name=" << TopologyChangeTypeName(notifyBatch.type)
               << " epoch=" << epoch
               << " local_address=" << localAddress_ << " task_count=" << notify.taskIds.size();
-    if (notify.type == TopologyChangeType::SCALE_IN) {
+    if (notifyBatch.type == TopologyChangeType::SCALE_IN) {
+        const auto sourceIdOffset = scaleInMetadataGate.find(':') + 1;
         LOG(INFO) << "CLUSTER_SCALE_IN action=notify"
                   << " epoch=" << epoch
                   << " executor=" << localAddress_
                   << " task_count=" << notify.taskIds.size()
-                  << " gate_prefix=" << TopologyDiagnosticPrefix(scaleInMetadataGate);
+                  << " source_id_prefix=" << MemberIdForLog(scaleInMetadataGate.substr(sourceIdOffset));
     }
     {
         std::lock_guard<std::mutex> lock(mutex_);
         RETURN_IF_NOT_OK(RefreshNotifyEpochLocked(epoch));
     }
-    return SubmitNotifiedTasks(notify, epoch);
+    const auto taskStatus = SubmitNotifiedTasks(notify, epoch);
+    const auto restartStatus = HandleRestartFacts(notify.restartTimestampsByAddress);
+    return taskStatus.IsError() ? taskStatus : restartStatus;
+}
+
+Status TopologyTaskExecutor::HandleRestartFacts(const std::map<std::string, int64_t> &restartFacts)
+{
+    std::map<std::string, int64_t> pending;
+    std::shared_ptr<const std::map<std::string, int64_t>> batch;
+    Status enqueueStatus;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        CHECK_FAIL_RETURN_STATUS(started_ && !stopping_ && callbackPool_ != nullptr, K_NOT_READY,
+                                 "topology task Executor is stopping");
+        for (auto iter = completedRestartTimestampsByAddress_.begin();
+             iter != completedRestartTimestampsByAddress_.end();) {
+            iter = restartFacts.count(iter->first) == 0 ? completedRestartTimestampsByAddress_.erase(iter)
+                                                        : std::next(iter);
+        }
+        RETURN_OK_IF_TRUE(restartBatchInFlight_);
+        for (const auto &[address, timestamp] : restartFacts) {
+            const auto completed = completedRestartTimestampsByAddress_.find(address);
+            const bool isCompleted =
+                completed != completedRestartTimestampsByAddress_.end() && completed->second == timestamp;
+            if (!isCompleted) {
+                pending.emplace(address, timestamp);
+            }
+        }
+        RETURN_OK_IF_TRUE(pending.empty());
+        batch = std::make_shared<const std::map<std::string, int64_t>>(std::move(pending));
+        restartBatchInFlight_ = true;
+        ++callbackBodies_;
+        diagnostics_.queuedCallbacks = callbackBodies_;
+        try {
+            callbackPool_->Execute([this, batch] {
+                FinishRestartEffects(*batch, InvokeRestartEffects(*batch));
+            });
+        } catch (const std::exception &error) {
+            enqueueStatus = Status(K_TRY_AGAIN, std::string("enqueue restart effect batch failed: ") + error.what());
+        } catch (...) {
+            enqueueStatus = Status(K_TRY_AGAIN, "enqueue restart effect batch failed with an unknown exception");
+        }
+        if (enqueueStatus.IsError()) {
+            restartBatchInFlight_ = false;
+            --callbackBodies_;
+            diagnostics_.queuedCallbacks = callbackBodies_;
+            drained_.notify_all();
+        }
+    }
+    VLOG_IF(TOPOLOGY_VERBOSE_LOG_LEVEL, enqueueStatus.IsOk())
+        << "CLUSTER_RESTART_NOTIFY action=submitted local_address=" << localAddress_
+        << " fact_count=" << batch->size();
+    return enqueueStatus;
+}
+
+Status TopologyTaskExecutor::InvokeRestartEffects(const std::map<std::string, int64_t> &restartFacts) noexcept
+{
+    try {
+        return restartHandler_ == nullptr
+                   ? Status(K_INVALID, "restart effect handler is not configured")
+                   : restartHandler_(restartFacts, RestartEffectMode::WAIT_FOR_COMPLETION);
+    } catch (const std::exception &error) {
+        return Status(K_RUNTIME_ERROR, std::string("restart effect batch handler threw: ") + error.what());
+    } catch (...) {
+        return Status(K_RUNTIME_ERROR, "restart effect batch handler threw an unknown exception");
+    }
+}
+
+void TopologyTaskExecutor::FinishRestartEffects(const std::map<std::string, int64_t> &restartFacts,
+                                                const Status &callbackStatus) noexcept
+{
+    Status status = callbackStatus;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        try {
+            if (status.IsOk()) {
+                for (const auto &[address, timestamp] : restartFacts) {
+                    completedRestartTimestampsByAddress_.insert_or_assign(address, timestamp);
+                }
+            }
+        } catch (const std::exception &error) {
+            status = Status(K_RUNTIME_ERROR, std::string("record restart effect batch failed: ") + error.what());
+        } catch (...) {
+            status = Status(K_RUNTIME_ERROR, "record restart effect batch failed with an unknown exception");
+        }
+        restartBatchInFlight_ = false;
+        --callbackBodies_;
+        diagnostics_.queuedCallbacks = callbackBodies_;
+        drained_.notify_all();
+    }
+    if (status.IsOk()) {
+        VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
+            << "CLUSTER_RESTART_NOTIFY action=completed local_address=" << localAddress_
+            << " fact_count=" << restartFacts.size();
+    } else {
+        const auto firstFact = restartFacts.begin();
+        const std::string firstAddress = firstFact == restartFacts.end() ? std::string() : firstFact->first;
+        const int64_t firstTimestamp = firstFact == restartFacts.end() ? 0 : firstFact->second;
+        LOG_FIRST_AND_EVERY_N(WARNING, RESTART_EFFECT_FAILURE_LOG_INTERVAL)
+            << "CLUSTER_RESTART_NOTIFY action=retry local_address=" << localAddress_
+            << " fact_count=" << restartFacts.size() << " first_address=" << firstAddress
+            << " first_timestamp=" << firstTimestamp << " status=" << status.ToString();
+    }
 }
 
 Status TopologyTaskExecutor::BuildScaleInMetadataGateForNotify(const TopologyTaskNotify &notify,
@@ -331,7 +457,7 @@ Status TopologyTaskExecutor::BuildScaleInMetadataGateForNotify(const TopologyTas
                                                                std::string &gate) const
 {
     gate.clear();
-    if (notify.type != TopologyChangeType::SCALE_IN) {
+    if (!notify.activeBatch.has_value() || notify.activeBatch->type != TopologyChangeType::SCALE_IN) {
         return Status::OK();
     }
     const Member *source = nullptr;
@@ -365,12 +491,14 @@ Status TopologyTaskExecutor::RefreshNotifyEpochLocked(uint64_t epoch)
 
 Status TopologyTaskExecutor::SubmitNotifiedTasks(const TopologyTaskNotify &notify, uint64_t epoch)
 {
+    CHECK_FAIL_RETURN_STATUS(notify.activeBatch.has_value(), K_INVALID, "notify tasks require an active batch");
+    const auto type = notify.activeBatch->type;
     auto firstError = Status::OK();
     for (const auto &taskId : notify.taskIds) {
-        const auto kind =
-            notify.type == TopologyChangeType::FAILURE ? TopologyTaskKind::DELETE_MEMBER : TopologyTaskKind::MIGRATE;
+        const auto kind = type == TopologyChangeType::FAILURE ? TopologyTaskKind::DELETE_MEMBER
+                                                              : TopologyTaskKind::MIGRATE;
         TopologyTask task;
-        auto rc = repository_.ReadTask(kind, taskId, notify.type, epoch, task);
+        auto rc = repository_.ReadTask(kind, taskId, type, epoch, task);
         if (rc.IsError()) {
             if (firstError.IsOk()) {
                 firstError = rc;
@@ -841,6 +969,9 @@ Status TopologyTaskExecutor::CompleteProgress(TopologyCallbackCompletion &comple
     if (outcome != TaskProgressOutcome::UPDATED && outcome != TaskProgressOutcome::ALREADY_FINISHED) {
         return CompleteStale(operation, Status(K_INVALID, "topology task progress fence is stale"));
     }
+    if (completion.status.IsOk()) {
+        snapshots_.RecordScaleOutHandoffCompletion(completion.fence);
+    }
     bool bestEffortFailure = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1186,6 +1317,7 @@ Status TopologyTaskExecutor::Stop(std::chrono::steady_clock::time_point deadline
     scaleInMetadataGateByOperation_.clear();
     scaleInMetadataDoneByOperation_.clear();
     bestEffortFailureByOperation_.clear();
+    restartBatchInFlight_ = false;
     started_ = false;
     diagnostics_.running = false;
     diagnostics_.inFlightCallbacks = 0;

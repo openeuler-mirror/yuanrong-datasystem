@@ -97,6 +97,7 @@
 #include "datasystem/worker/worker_topology_phase_callbacks.h"
 
 DS_DECLARE_bool(use_brpc);
+DS_DECLARE_bool(enable_reconciliation);
 DS_DECLARE_string(coordinator_address);
 DS_DEFINE_string(master_address, "", "Address of ds master and the value cannot be empty.");
 DS_DEFINE_bool(enable_distributed_master, true, "Whether to support distributed master, default is true.");
@@ -1105,18 +1106,23 @@ Status WorkerOCServer::InitCoordinationBackend()
     return Status::OK();
 }
 
-
 void WorkerOCServer::CleanupRpcStubsForFailedMembers(const cluster::TopologySnapshot &snapshot)
 {
-    for (const auto &member : snapshot.FailedMembers())
+    for (const auto &member : snapshot.FailedMembers()) {
         knownFailedAddresses_.insert(member->identity.address);
-    for (const auto &member : snapshot.ActiveMembers())
+    }
+    for (const auto &member : snapshot.ActiveMembers()) {
         knownFailedAddresses_.erase(member->identity.address);
+    }
     for (const auto &addrStr : knownFailedAddresses_) {
         HostPort addr;
-        if (addr.ParseString(addrStr).IsError() || addr.Empty()) continue;
-        for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC, StubType::WORKER_WORKER_TRANS_SVC })
+        if (addr.ParseString(addrStr).IsError() || addr.Empty()) {
+            continue;
+        }
+        for (auto type : { StubType::WORKER_WORKER_OC_SVC, StubType::WORKER_WORKER_SC_SVC,
+                           StubType::WORKER_WORKER_TRANS_SVC }) {
             RpcStubCacheMgr::Instance().Remove(addr, type);
+        }
     }
 }
 
@@ -1174,8 +1180,9 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         .SetPhaseCallbacks(*topologyTaskCallbacks_)
         .SetNodeDeadTimeout(std::chrono::seconds(classifierAbsenceS))
         .SetScaleInCollectWindow(std::chrono::milliseconds(FLAGS_scale_in_collect_window_ms))
-        .SetMembershipRestartHandler([this](const std::string &address, int64_t timestamp) {
-            return HandleMembershipRestart(address, timestamp);
+        .SetMembershipRestartHandler([this](const std::map<std::string, int64_t> &restartFacts,
+                                            cluster::RestartEffectMode mode) {
+            return HandleMembershipRestarts(restartFacts, mode == cluster::RestartEffectMode::WAIT_FOR_COMPLETION);
         })
         .SetSnapshotPublishedHandler([this](std::shared_ptr<const cluster::TopologySnapshot> snapshot) {
             ScheduleTopologySnapshotWarmup(std::move(snapshot));
@@ -1211,13 +1218,16 @@ Status WorkerOCServer::ConstructTopologyRuntime()
     return Status::OK();
 }
 
-Status WorkerOCServer::HandleMembershipRestart(const std::string &address, int64_t timestamp)
+Status WorkerOCServer::HandleMembershipRestarts(const std::map<std::string, int64_t> &restartFacts, bool sync)
 {
-    HostPort restartedMember;
-    RETURN_IF_NOT_OK(restartedMember.ParseString(address));
-    // Preserve the proven yrds/master restart order: clear Stream ownership before object metadata reconciliation.
-    RETURN_IF_NOT_OK(ClearWorkerMeta::GetInstance().NotifyAll(restartedMember));
-    return NodeRestartEvent::GetInstance().NotifyAll(address, timestamp, false);
+    for (const auto &[address, timestamp] : restartFacts) {
+        (void)timestamp;
+        HostPort restartedMember;
+        RETURN_IF_NOT_OK(restartedMember.ParseString(address));
+        // Preserve the proven yrds/master restart order: clear Stream ownership before object metadata reconciliation.
+        RETURN_IF_NOT_OK(ClearWorkerMeta::GetInstance().NotifyAll(restartedMember));
+    }
+    return NodeRestartEvent::GetInstance().NotifyAll(restartFacts, sync);
 }
 
 Status WorkerOCServer::ResolveLocalMetadataAddress()
@@ -1498,7 +1508,15 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
     // Start task execution only after every callback target is fully initialized.
     RETURN_IF_NOT_OK(StartTopologyRuntime());
     RETURN_IF_NOT_OK(StartBrpcIfEnabled());
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(PublishReadyMembership(), "Publish Worker topology READY membership failed");
+    const bool needsRestartReconciliation =
+        topologyEngine_->IsRestart() && EnableOCService() && FLAGS_enable_reconciliation;
+    if (!needsRestartReconciliation) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(PublishReadyMembership(), "Publish Worker topology READY membership failed");
+    } else {
+        LOG(INFO) << "CLUSTER_MEMBERSHIP cluster=" << FLAGS_cluster_name
+                  << " role=worker action=defer_ready reason=restart_reconciliation address="
+                  << hostPort_.ToString();
+    }
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(StartUbHealthLeaseSync(), "Start UB health lease synchronization failed");
     RETURN_IF_NOT_OK(InitSlotRecovery());
     return Status::OK();

@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <vector>
 
 #include "datasystem/common/util/event_subscribers.h"
@@ -55,7 +56,8 @@ using RemoveDeadWorkerEvent = EventSubscribers<REMOVE_DEAD_WORKER, std::function
 using ChangePrimaryCopy = EventSubscribers<CHANGE_PRIMARY_COPY, std::function<Status(const std::string &, bool)>>;
 using RequestMetaFromWorkerEvent =
     EventSubscribers<REQUEST_META_FROM_WORKER, std::function<Status(const std::string &, const std::string &)>>;
-using NodeRestartEvent = EventSubscribers<NODE_RESTART, std::function<Status(const std::string &, int64_t, bool)>>;
+using NodeRestartEvent =
+    EventSubscribers<NODE_RESTART, std::function<Status(const std::map<std::string, int64_t> &, bool)>>;
 using CheckNewNodeMetaEvent = EventSubscribers<CHECK_NEW_NODE_META, std::function<Status(const HostPort &)>>;
 using StartClearWorkerMeta = EventSubscribers<START_CLEAR_WORKER_META, std::function<Status(const HostPort &)>>;
 using ClearWorkerMeta = EventSubscribers<CLEAR_WORKER_META, std::function<Status(const HostPort &)>>;
