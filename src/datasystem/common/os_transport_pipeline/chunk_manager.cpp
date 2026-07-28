@@ -583,17 +583,25 @@ Status ChunkManager::DoPiplnStep1_StartSender(PiplnSndArgs &args)
     dst.tseg = args.remoteSeg;
 
     int ret;
+    urma_status_t urmaStatus = URMA_SUCCESS;
     {
         datasystem::PerfPoint point(datasystem::PerfKey::PIPLN_RH2D_OS_XPRT_SEND);
         CALL_OS_XPRT_FUNC(ret, DoSend, osPiplnH2DHandle_, &jettyInfo, &src, &dst, args.len, args.serverKey,
-                          args.clientKey, (task_sync **)&info->syncHandle);
+                          args.clientKey, (task_sync **)&info->syncHandle, &urmaStatus);
     }
     VLOG(1) << PIPLN_LOG_PREFIX "os_transport_send ret: " << ret << " reqId: " << reqId << " remote src "
             << args.remoteAddr << " targetSeg.seg.ubva.va " << args.remoteSeg->seg.ubva.va << " len " << args.len
-            << " segoff " << (args.remoteAddr - args.remoteSeg->seg.ubva.va);
+            << " segoff " << (args.remoteAddr - args.remoteSeg->seg.ubva.va) << " urma_status "
+            << static_cast<int>(urmaStatus);
 
     if (ret) {
-        return Status(StatusCode::K_RUNTIME_ERROR, "os_transport_send " + std::to_string(reqId) + " failed");
+        if (urmaStatus) {
+            // urma_status_t is not 0, means urma_post_jetty_send_wr failed, do something
+        }
+        const auto statusCode =
+            urmaStatus == URMA_SUCCESS ? StatusCode::K_RUNTIME_ERROR : StatusCode::K_URMA_ERROR;
+        return Status(statusCode, "os_transport_send " + std::to_string(reqId) + " failed, urma_status="
+                                      + std::to_string(static_cast<int>(urmaStatus)));
     }
 
     // trick CheckIsRequestSuccess to be success, because we cannot get chunk number from os_transport_send now.
@@ -623,17 +631,25 @@ Status ChunkManager::WaitPiplnStep12Done()
             task_sync_t *syncHandle = (task_sync_t *)info.second.syncHandle;
             if (syncHandle) {
                 int ret;
+                urma_status_t urmaStatus = URMA_SUCCESS;
 
                 info.second.syncHandle = nullptr;
-                CALL_OS_XPRT_FUNC(ret, DoWaitTimeout, osPiplnH2DHandle_, syncHandle, remainingTimeMs);
+                CALL_OS_XPRT_FUNC(ret, DoWaitTimeout, osPiplnH2DHandle_, syncHandle, remainingTimeMs, &urmaStatus);
                 if (ret == 0) {
                     MarkCancelOrDone(info.first, true /* isDone */);
                 } else {
                     MarkCancelOrDone(info.first, false /* isDone */);
-                    LOG_AND_SET_FIRST_ERROR(
-                        K_RPC_DEADLINE_EXCEEDED,
+                    const auto errorMsg =
                         PIPLN_LOG_PREFIX "Worker wait os_transport timeout/failed: reqId=" + std::to_string(info.first)
-                            + ", key=" + info.second.key + ", ret=" + std::to_string(ret));
+                        + ", key=" + info.second.key + ", ret=" + std::to_string(ret)
+                        + ", urma_status=" + std::to_string(static_cast<int>(urmaStatus));
+
+                    if (urmaStatus == URMA_SUCCESS) {
+                        LOG_AND_SET_FIRST_ERROR(K_RPC_DEADLINE_EXCEEDED, errorMsg);
+                    } else {
+                        LOG_AND_SET_FIRST_ERROR(K_URMA_ERROR, errorMsg);
+                        // urma_status_t is not 0, means urma_post_jetty_send_wr failed, do something
+                    }
                 }
             }
         }
