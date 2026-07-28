@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -1570,6 +1571,8 @@ private:
                                       const std::string &sdkHostId);
 
     Status InitRouting(const HostPort &initialWorker, bool initialWorkerIsLocal);
+
+    Status InitDataPlacementPolicy();
 
     Status InitClientWorkerConnect(bool enableHeartbeat, bool initWithWorker, int32_t connectTimeoutMs = -1);
 

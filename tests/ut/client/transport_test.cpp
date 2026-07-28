@@ -2505,6 +2505,43 @@ TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdk
     EXPECT_TRUE(weakOwner.expired());
 }
 
+TEST(ObjectClientTransportTest, ConnectOptionsPolicyControlsWritePlacement)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    options.dataPlacementPolicy = datasystem::DataPlacementPolicy::PREFERRED_META_OWNER;
+
+    object_cache::ObjectClientImpl client(options);
+
+    ASSERT_TRUE(client.InitDataPlacementPolicy().IsOk());
+    EXPECT_EQ(client.dataPlacementPolicy_, DataPlacementPolicy::PREFERRED_META_OWNER);
+}
+
+TEST(ObjectClientTransportTest, ConnectOptionsPolicyDefaultsToPreferredSameNode)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+
+    object_cache::ObjectClientImpl client(options);
+
+    ASSERT_TRUE(client.InitDataPlacementPolicy().IsOk());
+    EXPECT_EQ(client.dataPlacementPolicy_, DataPlacementPolicy::PREFERRED_SAME_NODE);
+}
+
+TEST(ObjectClientTransportTest, RejectsInvalidWritePlacementPolicyFromConnectOptions)
+{
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    options.dataPlacementPolicy = static_cast<datasystem::DataPlacementPolicy>(255);
+
+    object_cache::ObjectClientImpl client(options);
+
+    EXPECT_EQ(client.InitDataPlacementPolicy().GetCode(), K_INVALID);
+}
+
 TEST(ObjectReadFlowTest, QueriesMultipleOwnersInParallelAndPreservesPartialSuccess)
 {
     ApiDeadlineGuard deadline(1000);

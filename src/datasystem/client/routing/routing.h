@@ -39,7 +39,7 @@
 namespace datasystem {
 namespace client {
 
-enum class DataPlacementPolicy {
+enum class DataPlacementPolicy : uint8_t {
     PREFERRED_SAME_NODE,  // Prefer a same-node worker, then fall back to the metadata owner.
     REQUIRED_SAME_NODE,   // Select only from same-node workers.
     PREFERRED_META_OWNER,  // Prefer the metadata owner selected by the hash ring.

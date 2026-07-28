@@ -81,6 +81,13 @@ std::optional<RunMode> ParseRunMode(const std::string &s) {
     return std::nullopt;
 }
 
+std::optional<datasystem::DataPlacementPolicy> ParseDataPlacementPolicy(const std::string &s) {
+    if (s == "PREFERRED_SAME_NODE") return datasystem::DataPlacementPolicy::PREFERRED_SAME_NODE;
+    if (s == "REQUIRED_SAME_NODE") return datasystem::DataPlacementPolicy::REQUIRED_SAME_NODE;
+    if (s == "PREFERRED_META_OWNER") return datasystem::DataPlacementPolicy::PREFERRED_META_OWNER;
+    return std::nullopt;
+}
+
 uint64_t ParseSize(const std::string &str) {
     if (str.empty()) return 0;
 
@@ -240,6 +247,14 @@ bool LoadConfig(const std::string &path, Config &cfg, const std::string &outputD
             if (co.contains("request_timeout_ms")) cfg.requestTimeoutMs = co["request_timeout_ms"];
             if (co.contains("enable_cross_node_connection")) cfg.enableCrossNodeConnection = co["enable_cross_node_connection"];
             if (co.contains("enable_local_cache")) cfg.enableLocalCache = co["enable_local_cache"];
+            if (co.contains("data_placement_policy")) {
+                auto policy = ParseDataPlacementPolicy(co["data_placement_policy"].get<std::string>());
+                if (!policy.has_value()) {
+                    SLOG_ERROR("Invalid connect_options.data_placement_policy");
+                    return false;
+                }
+                cfg.dataPlacementPolicy = policy.value();
+            }
             if (co.contains("fast_transport_mem_size")) {
                 const auto &ftm = co["fast_transport_mem_size"];
                 cfg.fastTransportMemSize = ftm.is_string() ? ParseSize(ftm.get<std::string>()) : ftm.get<uint64_t>();

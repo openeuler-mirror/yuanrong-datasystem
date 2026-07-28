@@ -187,6 +187,7 @@ inline std::shared_ptr<datasystem::KVClient> CreateClientForRole(
     opts.connectTimeoutMs = cfg.connectTimeoutMs;
     opts.enableCrossNodeConnection = cfg.enableCrossNodeConnection;
     opts.enableLocalCache = cfg.enableLocalCache;
+    opts.dataPlacementPolicy = cfg.dataPlacementPolicy;
     opts.fastTransportMemSize = cfg.fastTransportMemSize;
 
     if (role == ROLE_DEL) {

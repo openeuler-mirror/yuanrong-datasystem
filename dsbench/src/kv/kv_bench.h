@@ -44,6 +44,8 @@ protected:
     std::string GetBenchCost();
     Status FetchOwnerId(const std::string &ownerWorkerAddr, const std::string &accessKey, const std::string &secretKey,
                         std::string &ownerId);
+    Status ApplyDataPlacementPolicy(ConnectOptions &connectOptions) const;
+    Status InitClients();
 
     Status Set(KVClient &client, uint64_t threadIndex);
     Status Get(KVClient &client, uint64_t threadIndex);

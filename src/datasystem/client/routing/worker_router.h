@@ -23,6 +23,7 @@
 #define DATASYSTEM_CLIENT_ROUTING_WORKER_ROUTER_H
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -37,7 +38,7 @@
 namespace datasystem {
 namespace client {
 
-enum class DataPlacementPolicy;
+enum class DataPlacementPolicy : uint8_t;
 
 // Legacy compatibility enum. New routing code must use DataPlacementPolicy so REQUIRED_SAME_NODE remains expressible.
 enum class SelectStrategy {

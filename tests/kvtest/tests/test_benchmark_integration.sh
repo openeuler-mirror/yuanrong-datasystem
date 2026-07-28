@@ -68,6 +68,7 @@ gen_config() {
     "request_timeout_ms": 20,
     "enable_cross_node_connection": true,
     "enable_local_cache": true,
+    "data_placement_policy": "PREFERRED_SAME_NODE",
     "fast_transport_mem_size": "512MB"
   },
   "data_sizes": ["1MB"],
@@ -99,6 +100,7 @@ gen_config_dual() {
     "request_timeout_ms": 20,
     "enable_cross_node_connection": true,
     "enable_local_cache": true,
+    "data_placement_policy": "PREFERRED_SAME_NODE",
     "fast_transport_mem_size": "512MB"
   },
   "data_sizes": ["1MB"],

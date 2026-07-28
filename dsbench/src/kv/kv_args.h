@@ -37,6 +37,8 @@ struct KVArgs : public ArgsBase {
     int workerNum;
     int workerIndex;
     bool skipLocal;
+    bool enableLocalCache;
+    std::string dataPlacementPolicy;
 };
 }  // namespace bench
 }  // namespace datasystem

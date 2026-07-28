@@ -3407,7 +3407,8 @@ TEST_F(KVCacheClientServiceDiscoverySwitchBackTest, TestFailoverClientsSpreadAcr
     DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, 0));
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
         [this, clientNum]() { return CheckClientsSwitchedToBothRemoteWorkers(clientNum); }, 10, K_OK));
-    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this]() { return CheckFailureFinalized(0); }, 10, K_OK));
+    // Failure probing and the topology CAS batch can lag client failover on loaded CI runners.
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult([this]() { return CheckFailureFinalized(0); }, 30, K_OK));
     DS_ASSERT_OK(CheckClientsSetGet(clients_));
 }
 

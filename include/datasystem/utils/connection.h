@@ -16,6 +16,7 @@
 #ifndef DATASYSTEM_UTILS_CONNECTION_H
 #define DATASYSTEM_UTILS_CONNECTION_H
 
+#include <cstdint>
 #include <string>
 
 #include "datasystem/object/object_enum.h"
@@ -24,6 +25,12 @@
 #include "datasystem/utils/service_discovery.h"
 
 namespace datasystem {
+enum class DataPlacementPolicy : uint8_t {
+    PREFERRED_SAME_NODE = 0,
+    REQUIRED_SAME_NODE,
+    PREFERRED_META_OWNER,
+};
+
 struct ConnectOptions {
     void SetAkSkAuth(const std::string &accessKey, const SensitiveValue &secretKey, const std::string &tenantId)
     {
@@ -45,6 +52,7 @@ struct ConnectOptions {
     std::string tenantId = "";
     bool enableCrossNodeConnection = false;
     bool enableLocalCache = true;
+    DataPlacementPolicy dataPlacementPolicy = DataPlacementPolicy::PREFERRED_SAME_NODE;
     bool enableRemoteH2D = false;
     bool enableClientDirectPipelineH2D = false;
     int32_t clientDirectPipelineH2DThreadNum = 64;

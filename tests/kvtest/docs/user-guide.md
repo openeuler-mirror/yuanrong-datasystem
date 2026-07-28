@@ -69,6 +69,7 @@ cd tests/kvtest
     "request_timeout_ms": 20,
     "enable_cross_node_connection": true,
     "enable_local_cache": true,
+    "data_placement_policy": "PREFERRED_SAME_NODE",
     "fast_transport_mem_size": "512MB"
   },
   "data_sizes": ["1MB"],
@@ -99,6 +100,7 @@ cd tests/kvtest
 | `connect_options.request_timeout_ms` | int | 20 | KVClient 请求超时（毫秒） |
 | `connect_options.enable_cross_node_connection` | bool | true | 允许跨节点连接 standby Worker |
 | `connect_options.enable_local_cache` | bool | true | 启用 SDK 客户端本地缓存，`false` 走 Transport 层 |
+| `connect_options.data_placement_policy` | string | "PREFERRED_SAME_NODE" | Set/MSet 数据放置策略 |
 | `connect_options.fast_transport_mem_size` | string | "512MB" | 快速传输内存大小，支持 KB/MB/GB 后缀 |
 | `data_sizes` | string[] | ["1MB"] | 数据大小列表，支持 KB/MB/GB 后缀，随机选取 |
 | `set_param.ttl_second` | uint | 0 | Set 操作 TTL（秒），0 = 永不过期。所有模式通用 |
@@ -245,6 +247,7 @@ python3 deploy_client.py gen-config -p ds-worker -n datasystem \
 | `--verify-sample-step` | Pipeline/Cache | `level=sample` 时采样段间隔（默认 `1MB`，支持 KB/MB/GB） |
 | `--verify-fail-op` | Pipeline/Cache | 校验失败让操作计入 Fail（默认关，仅 `verify_fail`+1 + 告警） |
 | `--enable-local-cache` | 全部 | 启用 SDK 客户端本地缓存（默认 `true`，裸 flag = `true`）。传 `false` 时 Get 走 Transport 层 |
+| `--data-placement-policy` | 全部 | Set/MSet 数据放置策略，默认 `PREFERRED_SAME_NODE` |
 | `--use-brpc` | 全部 | 使用 brpc RPC 后端：运行 kvtest 时注入 `DATASYSTEM_USE_BRPC=true` 环境变量（默认关，走 ZMQ 后端） |
 | `--coordinator-address` | 全部 | 使用 coordinator 服务发现替代 etcd：写入 `coordinator_address` 并省略 `etcd_address`。优先级高于 `--etcd-address` |
 

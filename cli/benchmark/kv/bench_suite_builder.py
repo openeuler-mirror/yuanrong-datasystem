@@ -283,11 +283,19 @@ class KVBenchSuiteBuilder:
             testcase_handler.final_csv_filepath = self.final_csv_filepath
 
         testcase = KVBenchTestCase(name, self.bench_args, testcase_handler, testcase_index)
-        if args.concurrent:
-            testcase.add_prefill_task(kv_args)
-            testcase.add_concurrent_task(kv_args)
-        else:
+        if args.operation == "all":
+            if args.concurrent:
+                testcase.add_prefill_task(kv_args)
+                testcase.add_concurrent_task(kv_args)
+                testcase.add_del_task(kv_args)
+            else:
+                testcase.add_set_task(kv_args)
+                testcase.add_get_task(kv_args)
+                testcase.add_del_task(kv_args)
+        elif args.operation == "set":
             testcase.add_set_task(kv_args)
+        elif args.operation == "get":
             testcase.add_get_task(kv_args)
-        testcase.add_del_task(kv_args)
+        elif args.operation == "del":
+            testcase.add_del_task(kv_args)
         return testcase

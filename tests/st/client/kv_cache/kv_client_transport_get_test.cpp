@@ -1041,7 +1041,9 @@ TEST_F(KVClientTransportGetShmLatchTest, DirectGetSucceedsWithShmEnabled)
 // and returns K_RPC_DEADLINE_EXCEEDED; after clearing the inject the same key reads successfully.
 TEST_F(KVClientTransportGetShmLatchTest, LatchFailureIsRetryableNotRuntimeError)
 {
-    const std::string key = "shm_latch_fail_" + GetStringUuid();
+    // Keep the data on writer worker 0 while routing metadata through worker 1, which deterministically
+    // exercises worker-to-worker SHM and its read latch instead of an inline metadata-owner hit.
+    const std::string key = GetObjectKeyHashToWorker(etcd_.get(), TRANSPORT_CLIENT_WORKER_INDEX);
     const std::string value(VALUE_SIZE, 'y');
     DS_ASSERT_OK(writer_->Set(key, value));
 
