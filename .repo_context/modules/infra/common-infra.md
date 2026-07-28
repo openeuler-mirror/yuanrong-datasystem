@@ -96,6 +96,7 @@ Detailed follow-up docs now exist for:
 
 - Verified:
   - `rpc` contains both generation tooling and the main ZMQ transport implementation.
+  - `ScopedBthreadLocal<T>` exposes materializing access only through `Get()`, `operator->`, `operator*`, assignment, and conversion. Its non-materializing existing-value lookup is a private implementation helper used only by `Get()`; no production or test caller consumes a public `Peek()` API. This API contraction does not change key creation, per-execution-context allocation, locking, or value lifetime behavior.
   - selected ZMQ, message-queue, and URMA IO threads can be deprioritized together via `io_thread_nice`, which
     defaults to `0`; `0` skips `setpriority(2)`, while non-zero explicit values are applied in `ZmqServerImpl` proxy
     execution, `ZmqEpoll`, `MsgQueMgr`, and `UrmaManager` server event handling.

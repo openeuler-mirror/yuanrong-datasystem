@@ -78,6 +78,7 @@ list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/rpc/brpc/hello_test\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/rpc/brpc/shutdown_timeout_test\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/rpc/brpc/stream_close_timeout_test\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/common/raft/braft_cluster_test\\.cpp$)
+list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/common/raft/coordinator_raft_node_test\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/common_test\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/test_main\\.cpp$)
 list(FILTER DS_TEST_ST_SRCS EXCLUDE REGEX .*/st_oc_service_impl\\.cpp$)
@@ -135,6 +136,9 @@ add_executable(ds_st_coordinator_backend_manual
         worker/object_cache/coordinator_backend_cluster_test.cpp
         $<TARGET_OBJECTS:_ds_st_main_obj>
         $<TARGET_OBJECTS:_ds_st_group_common_obj>)
+add_executable(coordinator_raft_node_test
+        common/raft/coordinator_raft_node_test.cpp
+        $<TARGET_OBJECTS:_ds_st_main_obj>)
 
 # Heavy ST link targets (ds_st / ds_st_stream_cache / ds_st_object_cache /
 # ds_st_kv_cache) pull in worker+master+rocksdb+zmq and trip the OOM killer on
@@ -146,9 +150,13 @@ target_link_libraries(ds_st_object_cache PRIVATE ${DS_ST_DEPEND_LIBS} binmock -W
 target_link_libraries(ds_st_kv_cache PRIVATE ${DS_ST_DEPEND_LIBS} -Wl,--reduce-memory-overheads)
 target_link_libraries(ds_st_embedded_client GTest::gtest GTest::gmock common_etcd nlohmann_json::nlohmann_json
         generic_service_protos datasystem cluster cluster_topology_protos_client)
-target_link_libraries(braft_cluster_test PRIVATE GTest::gtest GTest::gmock common_test test_port_allocator ${BRAFT_LIBRARIES})
 target_link_libraries(ds_st_coordinator_backend_manual PRIVATE
         ${DS_ST_DEPEND_LIBS} binmock static_coordinator_discovery -Wl,--reduce-memory-overheads)
+target_link_libraries(braft_cluster_test PRIVATE GTest::gtest GTest::gmock common_test test_port_allocator datasystem_braft
+        coordinator_raft_state_machine)
+target_link_libraries(coordinator_raft_node_test PRIVATE GTest::gtest GTest::gmock common_test test_port_allocator
+        coordinator_membership_manager coordinator_raft_node coordinator_raft_state_machine coordinator_raft_types
+        common_rpc_zmq datasystem_braft)
 if (BUILD_WITH_URMA_MOCK)
     target_compile_definitions(ds_st_coordinator_backend_manual PRIVATE USE_URMA USE_URMA_MOCK)
     target_link_libraries(ds_st PRIVATE common_urma_mock_obj)
@@ -311,6 +319,7 @@ add_datasystem_test(ds_st_object_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_kv_cache TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(ds_st_embedded_client TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 add_datasystem_test(braft_cluster_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
+add_datasystem_test(coordinator_raft_node_test TEST_ENVIRONMENTS ${TEST_ENVIRONMENT})
 
 file(GLOB_RECURSE DS_DEVICE_TEST_SRCS CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/device/*.cpp"

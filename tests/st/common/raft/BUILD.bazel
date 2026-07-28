@@ -6,8 +6,28 @@ ds_cc_test(
     name = "braft_cluster_test",
     srcs = ["braft_cluster_test.cpp"],
     deps = [
+        "//src/datasystem/coordinator/raft:coordinator_raft_state_machine",
         "//tests/st:common_test",
         "//tests/st/cluster:test_port_allocator",
         "@braft//:braft",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_test(
+    name = "coordinator_raft_node_test",
+    srcs = ["coordinator_raft_node_test.cpp"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/coordinator/raft:coordinator_membership_manager",
+        "//src/datasystem/coordinator/raft:coordinator_raft_node",
+        "//src/datasystem/coordinator/raft:coordinator_raft_state_machine",
+        "//src/datasystem/coordinator/raft:coordinator_raft_types",
+        "//tests/st:common_test",
+        "//tests/st/cluster:test_port_allocator",
+        "@braft//:braft",
+        "@com_github_apache_brpc//:brpc",
+        "@com_github_apache_brpc//:butil",
     ],
 )

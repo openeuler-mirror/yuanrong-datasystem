@@ -3,6 +3,10 @@ target_include_directories(coordinator_topology_recovery_manager PUBLIC ${PROTO_
 target_link_libraries(coordinator_topology_recovery_manager PUBLIC
     cluster_topology common_ak_sk common_coordinator_store common_log common_util)
 
+if (WITH_TESTS)
+    add_subdirectory(raft)
+endif()
+
 add_library(coordinator_service_impl STATIC coordinator_service_impl.cpp)
 target_include_directories(coordinator_service_impl PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
 target_link_libraries(coordinator_service_impl PUBLIC

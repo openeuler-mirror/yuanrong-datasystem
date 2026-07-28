@@ -81,13 +81,10 @@ set(ENV{LD_LIBRARY_PATH} "${_BRAFT_SAVED_LD_LIBRARY_PATH}")
 
 set(BRAFT_INCLUDE_DIR ${braft_ROOT}/include)
 set(BRAFT_LIB_DIR ${braft_LIB_PATH})
-unset(BRAFT_LIBRARY CACHE)
-find_library(BRAFT_LIBRARY
-    NAMES braft
-    PATHS ${BRAFT_LIB_DIR}
-    REQUIRED
-    NO_DEFAULT_PATH)
-include_directories(SYSTEM ${BRAFT_INCLUDE_DIR})
+set(BRAFT_LIBRARY "${BRAFT_LIB_DIR}/libbraft.a")
+if (NOT EXISTS "${BRAFT_LIBRARY}" OR IS_DIRECTORY "${BRAFT_LIBRARY}")
+    message(FATAL_ERROR "Required static braft library was not found: ${BRAFT_LIBRARY}")
+endif()
 
 set(BRAFT_LIBRARIES
     ${BRAFT_LIBRARY}
@@ -98,6 +95,10 @@ set(BRAFT_LIBRARIES
     ${CMAKE_DL_LIBS}
     ZLIB::ZLIB
     rt)
+
+add_library(datasystem_braft INTERFACE)
+target_include_directories(datasystem_braft SYSTEM INTERFACE ${BRAFT_INCLUDE_DIR})
+target_link_libraries(datasystem_braft INTERFACE ${BRAFT_LIBRARIES})
 
 if (DEFINED EXPORT_TO_USER_ENV_FILE)
     file(APPEND "${EXPORT_TO_USER_ENV_FILE}"

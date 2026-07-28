@@ -25,7 +25,7 @@
   - `cmake/dependency.cmake`
   - `cmake/package.cmake`
 - Last verified against source:
-  - `2026-07-16`
+  - `2026-07-17`
 - Related context docs:
   - `README.md`
   - `../build-test-debug.md`
@@ -113,7 +113,7 @@
 | libsodium | `1.0.18` | always through `libzmq.cmake` | Built before ZeroMQ. |
 | ZeroMQ | `4.3.5` | always | Provides main RPC transport library. |
 | brpc | `1.15.0` | always | Built as shared brpc with `WITH_GLOG=OFF` against project gflags, leveldb, protobuf, and OpenSSL; applies `avoid-glog-flag-conflicts.patch` so brpc's built-in logging path registers `brpc_*` verbosity flags instead of glog-owned names. |
-| braft | `1.1.2` | `WITH_TESTS=on` | Reuses the existing brpc, gflags, leveldb, protobuf, OpenSSL, and zlib builds. `modern-toolchain-compat.patch` backports modern compiler/architecture compatibility, fixes the revision to the release tag supplied by DataSystem, and disables unused tools for the test-only build. |
+| braft | `1.1.2` | `WITH_TESTS=on` | Reuses the existing brpc, gflags, leveldb, protobuf, OpenSSL, and zlib builds. `modern-toolchain-compat.patch` backports modern compiler/architecture compatibility, fixes the revision to the release tag supplied by DataSystem, and disables unused tools. It builds a static PIC `libbraft.a` for the test-only Coordinator Raft adapter, focused UT linkage, real-Node ST, and raw cluster/replay ST; there is no production consumer yet. |
 | jemalloc | `5.3.0` | always | Shared jemalloc is linked into `datasystem_worker_bin`; profiling controlled by `SUPPORT_JEPROF`. |
 | RocksDB | `7.10.2` | always | Used by metadata/replica storage code. |
 | SecureC / libboundscheck | `v1.1.16` | always | Also passed into p2p-transfer build. |
@@ -152,14 +152,16 @@
     `grpc:protobuf:openssl:zlib:re2`.
 - `DS_OPENSOURCE_DIR` controls third-party cache root. If not set, `cmake/util.cmake` hashes `CMAKE_BINARY_DIR` and
   uses `/tmp/<sha256>`.
-- `DS_PACKAGE` switches dependency sources to local packages/source trees and generates package hashes; the test-only
-  braft dependency follows the same rule when `WITH_TESTS=on`.
+- `DS_PACKAGE` switches dependency sources to local packages/source trees and generates package hashes; when braft is
+  enabled by `WITH_TESTS=on`, it follows the same source-selection rule.
 - `DS_LOCAL_LIBS_DIR` switches many open-source URLs to local tarballs under `opensource_third_party`.
 - Cache keys include dependency name, package hash, version, components, toolchain, configure options, compiler
   versions, flags, link flags, patches, and extra dependency roots.
-- braft is currently consumed only by `braft_cluster_test`; it is not installed into SDK, service, wheel, or release
-  package outputs. Its CMake build pins `BRAFT_REVISION` to `v1.1.2`, applies SSE flags only on x86_64, uses C++17,
-  and links the repository's zlib instead of an ambient system copy.
+- braft is prepared only for `WITH_TESTS=on` builds. Its CMake build pins `BRAFT_REVISION` to `v1.1.2`, builds static PIC
+  `libbraft.a`, applies SSE flags only on x86_64, uses C++17, and links the repository's zlib instead of an ambient system
+  copy. The Coordinator Raft adapter, its focused UT linkage, the real-Node ST, and `braft_cluster_test` raw
+  first-apply/restart-replay validation are all present under the CMake test gate. They remain test-build consumers, not
+  production integration: no product target consumes `CoordinatorRaftNode`, and no braft install or package rule exists.
 
 ## CMake Target Graph Summary
 
@@ -223,7 +225,7 @@ root
 
 | Flag | Added work | Source |
 | --- | --- | --- |
-| `WITH_TESTS` | `tests` subtree, GTest, test-only protos, test-only worker/server sources, CTest registration | `CMakeLists.txt`, `src/datasystem/protos/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt` |
+| `WITH_TESTS` | `tests` subtree, GTest, braft, Coordinator Raft adapter plus its UT/Node ST/raw replay ST, test-only protos, test-only worker/server sources, CTest registration | `cmake/dependency.cmake`, `CMakeLists.txt`, `src/datasystem/coordinator/CMakeLists.txt`, `tests/ut/CMakeLists.txt`, `tests/st/CMakeLists.txt`, `src/datasystem/protos/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt` |
 | `ENABLE_PERF` | perf client source, perf service source, perf proto targets, `perf_client.h` included in SDK headers | `src/datasystem/client/CMakeLists.txt`, `src/datasystem/worker/CMakeLists.txt`, `cmake/package.cmake` |
 | `BUILD_HETERO_NPU` | Ascend find, optional p2p-transfer, `acl_plugin`, transfer_engine subproject, plugin hash generation; TransferEngine links the repository-private `ds_spdlog` target and installs a process-local callback into the bundled P2P DSO | `cmake/dependency.cmake`, `CMakeLists.txt`, device CMake files, `transfer_engine/CMakeLists.txt` |
 | `TRANSFER_ENGINE_ENABLE_HIXL` | Adds `transfer_engine/src/internal/backend/ascend/hixl_d2d_backend.cpp`, defines `TRANSFER_ENGINE_ENABLE_HIXL=1`, and links `cann_hixl`, `metadef`, `ascendcl` only after CANN/HIXL `8.5.2+` is detected; `protocol=hixl` returns `kNotSupported` when this is off | `build.sh`, `scripts/build_cmake.sh`, `transfer_engine/CMakeLists.txt`, `transfer_engine/cmake/options.cmake` |

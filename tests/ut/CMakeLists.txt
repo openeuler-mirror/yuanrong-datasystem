@@ -17,6 +17,12 @@ set(DS_UT_DEPEND_LIBS
         common_coordinator_store
         static_coordinator_discovery
         coordinator_service_impl
+        coordinator_raft_peer
+        coordinator_raft_types
+        coordinator_raft_state_machine
+        coordinator_raft_node
+        coordinator_membership_manager
+        datasystem_braft
         common_log
         common_metrics
         common_buffer

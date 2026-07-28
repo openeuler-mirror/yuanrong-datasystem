@@ -1,0 +1,84 @@
+{
+  "id": "runtime.coordinator-election",
+  "title": "Coordinator Election",
+  "status": "active",
+  "domain": "runtime",
+  "module_type": "leaf",
+  "canonical_docs": {
+    "overview": ".repo_context/modules/runtime/coordinator-election/README.md",
+    "design": ".repo_context/modules/runtime/coordinator-election/design.md",
+    "details": []
+  },
+  "playbooks": {
+    "feature": [
+      ".repo_context/playbooks/features/runtime/coordinator-election/implementation.md"
+    ],
+    "operations": [],
+    "upkeep": [
+      ".repo_context/playbooks/upkeep/module-context-generation.md"
+    ]
+  },
+  "source_roots": [
+    "src/datasystem/coordinator/raft"
+  ],
+  "key_tests": [
+    "tests/ut/common/coordinator/coordinator_raft_types_test.cpp",
+    "tests/ut/common/coordinator/coordinator_raft_state_machine_test.cpp",
+    "tests/ut/common/coordinator/coordinator_raft_node_test.cpp",
+    "tests/ut/common/coordinator/coordinator_membership_manager_test.cpp",
+    "tests/st/common/raft/coordinator_raft_node_test.cpp",
+    "tests/st/common/raft/braft_cluster_test.cpp"
+  ],
+  "module_boundary": {
+    "related_modules": [
+      "runtime.topology",
+      "runtime.worker-runtime",
+      "infra.common-infra",
+      "quality.cmake-build"
+    ],
+    "split_signals": [
+      "distributed_lifecycle",
+      "leader_election",
+      "membership_configuration",
+      "recovery_lifecycle",
+      "shared_brpc_server",
+      "test_gated_integration"
+    ]
+  },
+  "retrieval": {
+    "keywords": [
+      "CoordinatorRaftNode",
+      "CoordinatorRaftStateMachine",
+      "coordinator election",
+      "braft",
+      "brpc",
+      "RaftStartPlan",
+      "BOOTSTRAP",
+      "RECOVER",
+      "WAITING_TO_JOIN",
+      "committed configuration",
+      "AddPeer",
+      "RemovePeer",
+      "CoordinatorMembershipManager",
+      "GetMembershipStatus",
+      "stable_followers",
+      "consecutive_error_times",
+      "memberFailureGrace",
+      "dynamic Discovery",
+      "add-before-remove",
+      "membership manager shutdown",
+      "unsupported management log"
+    ],
+    "intent_examples": [
+      "understand Coordinator braft election and shared brpc lifecycle",
+      "review Coordinator Raft startup, shutdown, callback, or ownership invariants",
+      "debug Coordinator Raft recovery or waiting-to-join behavior",
+      "change committed membership observation or asynchronous peer operations",
+      "understand dynamic Discovery vacancy filling or failed follower replacement",
+      "validate Coordinator membership health, continuous failure grace, single-flight changes, or add-before-remove",
+      "review Manager-before-Node shutdown and term-scoped policy recovery",
+      "validate unsupported management log restart and replay behavior",
+      "plan CoordinatorServiceImpl product integration without claiming current flag wiring"
+    ]
+  }
+}

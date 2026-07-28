@@ -19,8 +19,18 @@ Use this file when you know the problem type but not the owning module.
   - read `modules/client/client-sdk.md`
 - If the change touches worker startup, request handling, or service flags:
   - read `modules/runtime/worker-runtime.md`
-- If the change depends on metadata backend or multi-node behavior:
-  - read `modules/runtime/cluster-management.md`
+- If the change concerns current Coordinator election, braft, Raft lifecycle, recovery, or one-operation membership changes:
+  - read `modules/runtime/coordinator-election/README.md`
+- If the change designs or extends Coordinator election or product integration:
+  - read `modules/runtime/coordinator-election/design.md`
+  - follow `playbooks/features/runtime/coordinator-election/implementation.md`
+- If the change concerns ETCD, Metastore, watch, keepalive, lease, CAS, or metadata-backend behavior:
+  - read `modules/runtime/etcd-metadata/README.md`
+  - for design or implementation changes, also read `modules/runtime/etcd-metadata/design.md` and
+    `playbooks/features/runtime/etcd-metadata/implementation.md`
+- If the change concerns topology, worker membership, routing, scale transitions, controller recovery, or failover:
+  - read `modules/runtime/topology/README.md`
+  - for implementation changes, also follow `playbooks/features/runtime/topology/implementation.md`
 - If the change mostly affects plumbing used by many modules:
   - read `modules/infra/common-infra.md`
 
@@ -43,8 +53,15 @@ Use this file when you know the problem type but not the owning module.
   - read `modules/client/client-sdk.md`
 - If the failure appears only after worker start or during client registration:
   - read `modules/runtime/worker-runtime.md`
-- If the failure mentions ETCD, Metastore, hash ring, node readiness, or failover:
-  - read `modules/runtime/cluster-management.md`
+- If the failure concerns Coordinator Leader election, braft startup, Raft recovery, callback lifetime, shutdown, or
+  `AddPeer` / `RemovePeer`:
+  - read `modules/runtime/coordinator-election/README.md`
+  - use `modules/runtime/coordinator-election/design.md` for lifecycle and recovery invariants
+- If the failure mentions ETCD, Metastore, watch, lease, CAS, or metadata-backend availability:
+  - read `modules/runtime/etcd-metadata/README.md`
+- If the failure mentions topology, hash ring, worker membership, routing, scale, node readiness, controller recovery, or
+  failover:
+  - read `modules/runtime/topology/README.md`
 - If the failure looks like transport, shared memory, persistence, logging, or metrics:
   - read `modules/infra/common-infra.md`
 
@@ -54,13 +71,21 @@ Use this file when you know the problem type but not the owning module.
   - `playbooks/reviews/pr-review-checklist.md`
 - API or behavior review:
   - `modules/client/client-sdk.md`
-- lifecycle or service review:
+- Worker lifecycle or service review:
   - `modules/runtime/worker-runtime.md`
-- distributed coordination review:
-  - `modules/runtime/cluster-management.md`
-- infra dependency or side-effect review:
+- Coordinator election, braft lifecycle, recovery, callback, or membership-operation review:
+  - start with `modules/runtime/coordinator-election/README.md`
+  - verify invariants in `modules/runtime/coordinator-election/design.md`
+  - check workflow and validation gates in `playbooks/features/runtime/coordinator-election/implementation.md`
+- ETCD or Metastore coordination review:
+  - `modules/runtime/etcd-metadata/README.md`
+  - `modules/runtime/etcd-metadata/design.md`
+- Topology, worker membership, routing, scale, recovery, or failover review:
+  - `modules/runtime/topology/README.md`
+  - `playbooks/features/runtime/topology/implementation.md`
+- Infra dependency or side-effect review:
   - `modules/infra/common-infra.md`
-- missing tests review:
+- Missing tests review:
   - `modules/quality/tests-and-reproduction.md`
 
 ## When Nothing Fits Cleanly

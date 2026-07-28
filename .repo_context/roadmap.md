@@ -24,7 +24,8 @@ Deliverables:
 - `.repo_context/glossary.md`
 - `.repo_context/README.md`
 - `.repo_context/maintenance.md`
-- `.repo_context/generated/repo_index.{md,json}`
+- `.repo_context/generated/repo_index.md`
+- `.repo_context/generated/repo_index.json`
 
 ## Phase 1
 
@@ -56,7 +57,9 @@ Completed in this phase so far:
 - `worker-runtime.md`
 - `tests-and-reproduction.md`
 - `common-infra.md`
-- `cluster-management.md`
+- `runtime/topology/README.md`
+- `runtime/etcd-metadata/README.md`
+- `runtime/coordinator-election/README.md`
 - `logging/README.md`
 - `logging/trace-and-context.md`
 - `logging/access-recorder.md`
@@ -87,7 +90,8 @@ Likely next document splits:
 - `client-sdk.md` -> `cpp-api`, `python-binding`, `connect-options-auth`
 - `worker-runtime.md` -> `startup-lifecycle`, `worker-service`, `embedded-worker`
 - `common-infra.md` -> `rpc-and-transport`, `shared-memory`, `kvstore-backends`, `metrics-and-logging`, `device-and-rdma`
-- `cluster-management.md` -> `metadata-backends`, `hash-ring-and-routing`, `deployment-config-flow`
+- deepen `modules/runtime/topology/README.md`, `modules/runtime/etcd-metadata/README.md`, and
+  `modules/runtime/coordinator-election/README.md` independently as their source-backed boundaries evolve
 
 ## Phase 3
 

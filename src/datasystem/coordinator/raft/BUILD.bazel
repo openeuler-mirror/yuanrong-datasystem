@@ -1,0 +1,76 @@
+load("//bazel:build_defs.bzl", "ds_cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_library(
+    name = "coordinator_raft_peer",
+    srcs = ["coordinator_raft_peer.cpp"],
+    hdrs = ["coordinator_raft_peer.h"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:status_helper",
+        "@braft//:braft",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_raft_types",
+    srcs = ["coordinator_raft_types.cpp"],
+    hdrs = ["coordinator_raft_types.h"],
+    deps = [
+        ":coordinator_raft_peer",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:status_helper",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_raft_state_machine",
+    srcs = ["coordinator_raft_state_machine.cpp"],
+    hdrs = ["coordinator_raft_state_machine.h"],
+    deps = [
+        ":coordinator_raft_types",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:status_helper",
+        "@braft//:braft",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_raft_node",
+    srcs = ["coordinator_raft_node.cpp"],
+    hdrs = [
+        "coordinator_raft_node.h",
+        "coordinator_raft_operation.h",
+    ],
+    deps = [
+        ":coordinator_raft_peer",
+        ":coordinator_raft_state_machine",
+        ":coordinator_raft_types",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/common/util:file_util",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "@braft//:braft",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_library(
+    name = "coordinator_membership_manager",
+    srcs = ["coordinator_membership_manager.cpp"],
+    hdrs = ["coordinator_membership_manager.h"],
+    deps = [
+        ":coordinator_raft_node",
+        ":coordinator_raft_peer",
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/util:status_helper",
+        "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
+    ],
+)
