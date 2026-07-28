@@ -129,6 +129,8 @@ Backed by `.bazelrc`, `bazel/workspace_status.sh`, `bazel/git_version.bzl`, and 
 - `//src/datasystem/common/util:git_version_def` generates `git_version_def.h`, which defines `GIT_HASH` and
   `GIT_BRANCH` for Bazel-built code while CMake builds continue using compile definitions from `CMakeLists.txt`;
 - worker startup logging and `datasystem::GetGitHash()` share the same generated Git version macros in Bazel builds.
+- the `@datasystem_sdk_validation` source SDK repository is registered by `bazel/sdk/workspace.bzl` with
+  `repository_ctx.symlink()` for source-tree entries and does not require host `rsync`.
 
 ## Environment Notes
 
