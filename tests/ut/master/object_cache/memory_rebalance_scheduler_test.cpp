@@ -167,23 +167,38 @@ protected:
     // gtest-derived subclass and cannot, so they go through these protected static wrappers.
     static bool HasInflight(const MemoryRebalanceScheduler &s)
     {
-        return !s.targetInflightBytes_.empty();
+        for (const auto &p : s.futureView_) {
+            if (p.second.inflightBytes > 0) {
+                return true;
+            }
+        }
+        return false;
     }
     static bool HasPendingRelease(const MemoryRebalanceScheduler &s)
     {
-        return !s.pendingReleaseBytes_.empty();
+        for (const auto &p : s.futureView_) {
+            if (p.second.heldBytes > 0) {
+                return true;
+            }
+        }
+        return false;
     }
     static bool HasHold(const MemoryRebalanceScheduler &s)
     {
-        return !s.holdSinceMs_.empty();
+        for (const auto &p : s.futureView_) {
+            if (p.second.holdSinceMs > 0) {
+                return true;
+            }
+        }
+        return false;
     }
     static void BackdateHold(MemoryRebalanceScheduler &s, const std::string &worker, uint64_t ts)
     {
-        s.holdSinceMs_[worker] = ts;
+        s.futureView_[worker].holdSinceMs = ts;
     }
     static uint64_t GetHoldTs(const MemoryRebalanceScheduler &s, const std::string &worker)
     {
-        return s.holdSinceMs_.at(worker);
+        return s.futureView_.at(worker).holdSinceMs;
     }
 
 private:
@@ -488,7 +503,7 @@ TEST_F(MemoryRebalanceSchedulerTest, CooldownWorkerAndRunningSourceAreNotSelecte
     }
 }
 
-TEST_F(MemoryRebalanceSchedulerTest, SuccessfulResultHoldsInflightToBlockImmediateRepick)
+TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForImmediateRepick)
 {
     MemoryRebalanceScheduler scheduler;
     auto snapshot = MakeSnapshot({
@@ -498,53 +513,61 @@ TEST_F(MemoryRebalanceSchedulerTest, SuccessfulResultHoldsInflightToBlockImmedia
     auto firstRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
     ASSERT_FALSE(firstRsp.rebalance_task().task_id().empty());
 
-    // Success no longer clears the in-flight charge (issue #685): the target's snapshot is
-    // still stale-low, so the held in-flight makes a re-pick's projected usage (100 + 410 +
-    // 410 = 92%) exceed the source threshold and the reject guard blocks it.
+    // Success holds the in-flight charge (issue #685): the target's snapshot is still
+    // stale-low, so the held in-flight reduces the re-pick budget. But the available
+    // clamp still allows a dispatch: maxBytes = min(410, 900-410=490) = 410, projected
+    // = 920 < triggerLine(1000). No eviction; converges.
     master::ReportRebalanceResultRspPb reportRsp;
     auto successReq = MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_SUCCEEDED);
     DS_ASSERT_OK(scheduler.ReportResult(successReq, reportRsp));
 
     auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, snapshot);
-    EXPECT_TRUE(secondRsp.rebalance_task().task_id().empty());
+    ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
+    EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_10);
+    EXPECT_EQ(secondRsp.rebalance_task().max_bytes(), 410ul);
 }
 
 // ============================================================================
 // Issue #685: Memory Rebalance target over-receive + oscillation.
 // https://gitcode.com/openeuler/yuanrong-datasystem/issues/685
 //
-// Root cause (verified against logs685 + source): the in-flight accounting
-// (targetInflightBytes_, since the feature's first commit 6df8eb07) EXISTS but
-// is INSUFFICIENT to prevent two sources converging on the same target:
-//   1. it only REDUCES the second budget (min, not reject) -- a target with
-//      headroom is still selected even when its projected post-migration usage
-//      would cross the 70% source threshold (logs685 W2: master projected
-//      .103 "37% -> 85%" and still dispatched -- the projection was sort-only,
-//      there was NO reject-on-overflow guard);
-//   2. the availableMemory used for the reduction is the STALE snapshot value
-//      (worker report every 30s + master swap every 10s => up to ~40s lag, so
-//      stale-low usedMemory => stale-high available => budget stays > 0);
-//   3. RemoveTaskLocked cleared targetInflightBytes_ at completion BEFORE the
+// Root cause (verified against logs685 + source): three factors combined to
+// over-fill the target:
+//   1. maxBytes used a midpoint (source-target)/2 but the available cap allowed
+//      reaching exactly the eviction trigger line (equality fires eviction);
+//   2. the availableMemory used for the cap was the STALE snapshot value (worker
+//      report every 30s + master swap every 10s => up to ~40s lag, so stale-low
+//      usedMemory => stale-high available => budget stays > 0);
+//   3. RemoveTaskLocked cleared the in-flight charge at completion BEFORE the
 //      target's snapshot reflected the received bytes, so the just-received
 //      target was re-pickable in the next window.
 //
-// Fix (this PR) = A + C (no fixed cooldown):
-//   A. Reject guard in CollectCandidatePairsLocked -- skip a target whose projected
-//      post-migration usage >= source threshold (don't create a future source).
-//   C. Hold the in-flight charge past success until the target reports its real
-//      post-receive memory (ReleaseReporterHoldsLocked on the target's own report +
-//      ReleaseSnapshotHoldsLocked as a swap-lagged backup). Self-timing (<= one
-//      30s report cycle), no blind timeout. This keeps the projection high so A
-//      also blocks the sequential H1 re-pick (not just the concurrent H3 case).
-// H2 (migrated_bytes payload-vs-salcx) is the separate #1346 fix; the reject guard's
-// projection is salcx-accurate only with #1346 -- without it a ~6% mid-band still leaks.
+// Fix = available cap + held-inflight + fresh projection:
+//   1. CalculateTaskBytesLocked caps maxBytes at availableMemory - inflight so
+//      projected used + inflight + maxBytes does not EXCEED the eviction trigger
+//      line (eviction fires at >= in the worker's Allocate path, which is the
+//      eviction manager's job, not the scheduler's). The trigger line uses BOTH
+//      eviction params (ratio + reserve) via availableMemory.
+//   2. ReportResource swaps snapshots before Schedule (#1702 swap-on-trigger) so
+//      projection uses fresh post-receive memory, not stale-low.
+//   3. Success holds the in-flight charge (heldBytes) until the target reports
+//      its real post-receive memory (ReleaseReporterHoldsLocked on the target's
+//      own report + ReleaseSnapshotHoldsLocked as a swap-lagged backup). This
+//      prevents sequential re-pick of the just-received target.
+//   4. migrated_bytes uses sallocx real size (#1346) so projection is accurate.
+//
+// Why no infinite oscillation: single migration moves (source-target)/2 to the
+// midpoint, not the full gap. The only over-concentration is the concurrent case
+// (two sources, T stale-low): T can reach ~triggerLine for ONE cycle, then
+// becomes a source and redistributes (converges to cluster average). The available
+// cap ensures projected does not exceed triggerLine; held-inflight bounds concurrent sources.
 // ============================================================================
 
-// C+A (sequential, H1): after S1->T1 succeeds, the in-flight charge is held. S2
-// reports while T1's snapshot is still stale-low; the held in-flight makes S2's
-// projected post-migration usage for T1 (100 + 400 + 400 = 90%) exceed the 70%
-// source threshold, so A rejects T1 and S2 is redirected to T2.
-TEST_F(MemoryRebalanceSchedulerTest, SuccessHoldsInflightToPreventRepickToJustReceivedTarget)
+// Sequential repick (H1): after S1->T1 succeeds, the in-flight charge is held. S2
+// reports while T1's snapshot is still stale-low; the held in-flight reduces S2's
+// budget for T1 but does NOT reject it (70% ceiling removed). maxBytes = min(400,
+// 900-400=500) = 400, projected = 900 < triggerLine(1000). S2 is dispatched to T1.
+TEST_F(MemoryRebalanceSchedulerTest, HeldInflightReducesBudgetForSequentialRepickToReceivedTarget)
 {
     const std::string source1 = "127.0.0.1:9301";
     const std::string source2 = "127.0.0.1:8301";
@@ -564,7 +587,8 @@ TEST_F(MemoryRebalanceSchedulerTest, SuccessHoldsInflightToPreventRepickToJustRe
         scheduler.ReportResult(MakeResultReq(firstRsp.rebalance_task(), master::REBALANCE_TASK_SUCCEEDED), reportRsp));
 
     // T1's snapshot is still stale-low (T1 actually received ~400 bytes). The held
-    // in-flight makes S2's projection for T1 exceed 70% -> A rejects -> redirect to T2.
+    // in-flight reduces S2's budget for T1 (maxBytes=400, not 800) but does NOT
+    // reject it — projected 900 < triggerLine(1000). S2 targets T1 directly.
     auto secondSnapshot = MakeSnapshot({
         MakeNode(source1, 500, 500),  // S1 drained in reality
         MakeNode(source2, 900, 100),  // S2 is the reporting source
@@ -575,35 +599,39 @@ TEST_F(MemoryRebalanceSchedulerTest, SuccessHoldsInflightToPreventRepickToJustRe
 
     ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
     EXPECT_EQ(secondRsp.rebalance_task().source_worker(), source2);
-    EXPECT_EQ(secondRsp.rebalance_task().target_worker(), target2);
+    EXPECT_EQ(secondRsp.rebalance_task().target_worker(), target1);
+    EXPECT_EQ(secondRsp.rebalance_task().max_bytes(), 400ul);
 }
 
-// A (concurrent, H3 / logs685 W2): while S1->T is still active (in-flight[T]=445),
-// S2 reports; S2's only viable target is T and its projected post-migration usage for
-// T is 92% (>= 70%). A must reject it -- do not dispatch a migration that would itself
-// create a future source.
-TEST_F(MemoryRebalanceSchedulerTest, ConcurrentSourceRejectsOverflowTarget)
+// Concurrent (H3 / logs685 W2): while S1->T is still active (in-flight[T]=445),
+// S2 reports. The available cap reduces S2's budget so projected = 100+445+355 =
+// 900 = triggerLine(900). S2 is dispatched (not rejected); T fills up to but does
+// not exceed the eviction trigger line.
+TEST_F(MemoryRebalanceSchedulerTest, ConcurrentSourcesFillTargetUpToTriggerLine)
 {
     const std::string source1 = "127.0.0.1:9302";
     const std::string source2 = "127.0.0.1:8302";
     const std::string target = "127.0.0.1:1302";
     MemoryRebalanceScheduler scheduler;
 
+    // triggerLine = 100 + 800 = 900 (tighter than 1000 to make the clamp, not midpoint, bind).
     auto snap = MakeSnapshot({
         MakeNode(source1, 990, 10),
         MakeNode(source2, 850, 150),
-        MakeNode(target, 100, 900),
+        MakeNode(target, 100, 800),
     });
-    // S1 (99%) -> T (10%): midpoint 445, in-flight[T]=445 (projected T = 54.5% < 70% -> ok).
+    // S1 (99%) -> T (10%): maxBytes = min(445, 800-0=800) = 445, in-flight[T]=445.
     auto rsp1 = ScheduleAndGetRsp(scheduler, source1, snap);
     ASSERT_FALSE(rsp1.rebalance_task().task_id().empty());
     ASSERT_EQ(rsp1.rebalance_task().target_worker(), target);
     ASSERT_EQ(rsp1.rebalance_task().max_bytes(), 445ul);
 
-    // S2 (85%) reports while S1 is active. T's projected post-migration usage
-    // = 100 + 445(in-flight) + 375(max) = 920 = 92% >= 70% -> A rejects T.
+    // S2 (85%) reports while S1 is active. maxBytes = min(375, 800-445=355) = 355
+    // (clamp binds, not midpoint). projected = 100+445+355 = 900 = 900. Dispatched.
     auto rsp2 = ScheduleAndGetRsp(scheduler, source2, snap);
-    EXPECT_TRUE(rsp2.rebalance_task().task_id().empty());
+    ASSERT_FALSE(rsp2.rebalance_task().task_id().empty());
+    EXPECT_EQ(rsp2.rebalance_task().target_worker(), target);
+    EXPECT_EQ(rsp2.rebalance_task().max_bytes(), 355ul);
 }
 
 // Baseline (passes now): when the snapshot is kept fresh (each schedule reflects the
@@ -664,13 +692,13 @@ TEST_F(MemoryRebalanceSchedulerTest, TTLReleasesHeldInflightWhenTargetNeverRepor
         MakeNode(WORKER_10, 100, 900),
     });
     auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, secondSnapshot);
-    // TTL GC released the held charge: pendingRelease + holdSinceMs are gone. We do NOT assert
-    // targetInflightBytes_ empty here -- the second dispatch (below) just added the new task's
-    // charge back into it. The GC itself is proven by pendingRelease/holdSinceMs being empty and
-    // by the second task being assigned instead of A-rejected (projected 51% < 70%).
+    // TTL GC released the held charge: heldBytes + holdSinceMs are gone. We do NOT assert
+    // futureView_ empty here -- the second dispatch (below) just added the new task's charge
+    // back into it. The GC itself is proven by heldBytes/holdSinceMs being zero and by the
+    // second task being assigned (projected 51%, well below triggerLine).
     EXPECT_FALSE(HasPendingRelease(scheduler));
     EXPECT_FALSE(HasHold(scheduler));
-    // After GC the target's in-flight is 0, so it is selectable again (projected 51% < 70%).
+    // After GC the target's in-flight is 0, so it is selectable again (projected 51%, well below triggerLine).
     ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
     EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_10);
 }
@@ -705,13 +733,13 @@ TEST_F(MemoryRebalanceSchedulerTest, SnapshotTimestampAdvanceReleasesHeldInfligh
         target,
     });
     auto secondRsp = ScheduleAndGetRsp(scheduler, WORKER_92, advancedSnapshot);
-    // Snapshot-based release cleared the held charge: pendingRelease + holdSinceMs are gone.
-    // (targetInflightBytes_ is not empty -- the second dispatch just added its charge back; the
-    // release itself is proven by pendingRelease/holdSinceMs being empty and by the second task
-    // being assigned instead of A-rejected, projected 51% < 70%.)
+    // Snapshot-based release cleared the held charge: heldBytes + holdSinceMs are gone.
+    // (futureView_ is not empty -- the second dispatch just added its charge back; the
+    // release itself is proven by heldBytes/holdSinceMs being zero and by the second task
+    // being assigned, projected 51% well below triggerLine.)
     EXPECT_FALSE(HasPendingRelease(scheduler));
     EXPECT_FALSE(HasHold(scheduler));
-    // After release the target is selectable again (projected 51% < 70%).
+    // After release the target is selectable again (projected 51%, well below triggerLine).
     ASSERT_FALSE(secondRsp.rebalance_task().task_id().empty());
     EXPECT_EQ(secondRsp.rebalance_task().target_worker(), WORKER_10);
 }
@@ -766,6 +794,53 @@ TEST_F(MemoryRebalanceSchedulerTest, FailureDoesNotHoldInflightCharge)
     EXPECT_FALSE(HasHold(scheduler));
     // Failure DecreaseCounter'd the in-flight charge, so the dispatch-time charge is gone.
     EXPECT_FALSE(HasInflight(scheduler));
+}
+
+// Verifies the available cap in CalculateTaskBytesLocked: the target's post-migration
+// projected usage must not EXCEED the eviction trigger line (availableMemory encodes
+// triggerLine - used, using BOTH eviction params). The cap binds maxBytes to the
+// available headroom minus inflight, preventing over-migration past the trigger line.
+TEST_F(MemoryRebalanceSchedulerTest, TargetClampBindsMaxBytesToAvailableHeadroom)
+{
+    const std::string source = "127.0.0.1:9305";
+    const std::string target = "127.0.0.1:1305";
+
+    // Case 1: ample headroom → midpoint binds, projected well below triggerLine.
+    {
+        MemoryRebalanceScheduler scheduler;
+        auto snap = MakeSnapshot({
+            MakeNode(source, 900, 100),   // triggerLine = 1000
+            MakeNode(target, 100, 850),   // available = 850, triggerLine = 950
+        });
+        auto rsp = ScheduleAndGetRsp(scheduler, source, snap);
+        ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
+        EXPECT_EQ(rsp.rebalance_task().max_bytes(), 400ul);  // min(400, 850, ...) = 400
+    }
+
+    // Case 2: tight headroom → clamp binds (available < gap/2), verify cap boundary.
+    {
+        MemoryRebalanceScheduler scheduler;
+        auto snap = MakeSnapshot({
+            MakeNode(source, 990, 10),    // triggerLine = 1000
+            MakeNode(target, 100, 100),   // available = 100, triggerLine = 200
+        });
+        auto rsp = ScheduleAndGetRsp(scheduler, source, snap);
+        ASSERT_FALSE(rsp.rebalance_task().task_id().empty());
+        // min((990-100)/2=445, SubOrZero(100, 0)=100, ...) = 100 (clamp binds, not midpoint)
+        EXPECT_EQ(rsp.rebalance_task().max_bytes(), 100ul);
+        // projected = 100 + 0 + 100 = 200 = triggerLine. Does not exceed.
+    }
+
+    // Case 3: no headroom (target at triggerLine) → maxBytes=0 → skipped.
+    {
+        MemoryRebalanceScheduler scheduler;
+        auto snap = MakeSnapshot({
+            MakeNode(source, 900, 100),   // triggerLine = 1000
+            MakeNode(target, 100, 0),     // available = 0, already at triggerLine
+        });
+        auto rsp = ScheduleAndGetRsp(scheduler, source, snap);
+        EXPECT_TRUE(rsp.rebalance_task().task_id().empty());
+    }
 }
 
 }  // namespace ut

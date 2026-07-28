@@ -102,6 +102,16 @@ private:
     // Release held in-flight for every target whose snapshot timestamp advanced since its
     // latest completion (swap-lagged backup for non-reporting targets).
     void ReleaseSnapshotHoldsLocked(const std::unordered_map<std::string, NodeInfo> &snapshot);
+    // Decrement the target's total in-flight charge (active + held) and erase the FutureDelta
+    // entry once the total reaches zero (heldBytes/holdSinceMs are 0 by then -- held is a subset
+    // of the total). Mirrors the old DecreaseCounter(targetInflightBytes_, ...) erase-on-zero.
+    void DecreaseInflightLocked(const std::string &targetWorker, uint64_t bytes);
+    // Release a held charge: decrement inflight by heldBytes, then clear heldBytes/holdSinceMs
+    // on the surviving entry (if inflight > 0 after decrement, i.e. an active task remains).
+    // If inflight reaches zero, DecreaseInflightLocked erases the entry and the find returns end().
+    // Encapsulates the decrease-then-clear pattern shared by GC, reporter-release, and
+    // snapshot-release paths so callers cannot forget the clear.
+    void ReleaseHeldLocked(const std::string &worker, uint64_t heldBytes);
     std::shared_ptr<const cluster::TopologySnapshot> GetTopologySnapshot();
     bool IsWorkerActiveInTopology(const std::string &worker,
                                   const cluster::TopologySnapshot *topologySnapshot) const;
@@ -128,13 +138,22 @@ private:
     // Non-owning read-only topology view. WorkerOCServer destroys ResourceManager before TopologyEngine.
     const cluster::MembershipEndpointView *topologyMembership_{ nullptr };
     std::unordered_map<std::string, RunningTask> activeTasksBySource_;
-    std::unordered_map<std::string, uint64_t> targetInflightBytes_;
     std::unordered_map<std::string, uint64_t> cooldownUntilMs_;
-    // issue #685: in-flight bytes held past completion until the target reports its real
-    // post-receive memory. pendingReleaseBytes_[T] = bytes still charged & waiting to drop;
-    // holdSinceMs_[T] = latest completion time of a held charge on T (steady-clock ms).
-    std::unordered_map<std::string, uint64_t> pendingReleaseBytes_;
-    std::unordered_map<std::string, uint64_t> holdSinceMs_;
+    // Future table (FutureView): per-target in-flight migration deltas overlaid on the current
+    // table (readSnapshot_) for projection decisions. Grouping the three legacy maps into one
+    // struct keeps a single entry per target so active/held state cannot drift apart, and gives
+    // a stable place to add future overlays (outbound delta, eviction reserve, ...).
+    //   inflightBytes  = total charged (active in-progress + held-pending-release); used by
+    //                    projection (CalculateProjectedTargetUsageRate).
+    //   heldBytes      = subset of inflightBytes held past success until the target reports its
+    //                    real post-receive memory (issue #685).
+    //   holdSinceMs    = latest completion time of a held charge on this target (steady-clock ms).
+    struct FutureDelta {
+        uint64_t inflightBytes = 0;
+        uint64_t heldBytes = 0;
+        uint64_t holdSinceMs = 0;
+    };
+    std::unordered_map<std::string, FutureDelta> futureView_;
 
 #ifdef WITH_TESTS
     friend class ::datasystem::ut::MemoryRebalanceSchedulerTest;

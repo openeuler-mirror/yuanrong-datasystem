@@ -55,18 +55,6 @@ uint64_t SubOrZero(uint64_t lhs, uint64_t rhs)
 {
     return lhs > rhs ? lhs - rhs : 0;
 }
-
-void DecreaseCounter(std::unordered_map<std::string, uint64_t> &counter, const std::string &key, uint64_t value)
-{
-    auto iter = counter.find(key);
-    if (iter == counter.end()) {
-        return;
-    }
-    iter->second = iter->second > value ? iter->second - value : 0;
-    if (iter->second == 0) {
-        counter.erase(iter);
-    }
-}
 }  // namespace
 
 void MemoryRebalanceScheduler::SetTopologyMembership(const cluster::MembershipEndpointView *topologyMembership)
@@ -133,8 +121,8 @@ Status MemoryRebalanceScheduler::Schedule(const master::ResourceReportReqPb &req
 
     RunningTask runningTask{ .task = task };
     activeTasksBySource_.emplace(task.source_worker(), runningTask);
-    targetInflightBytes_[task.target_worker()] =
-        SaturatingAdd(targetInflightBytes_[task.target_worker()], task.max_bytes());
+    futureView_[task.target_worker()].inflightBytes =
+        SaturatingAdd(futureView_[task.target_worker()].inflightBytes, task.max_bytes());
 
     LOG(INFO) << FormatString(
         "[MemoryRebalance] assign task %s source=%s target=%s max_bytes=%lu timeout_ms=%lu deadline_ms=%lu",
@@ -242,9 +230,9 @@ void MemoryRebalanceScheduler::ExpireTimeoutTasksLocked(uint64_t nowMs, const st
         }
     }
     // issue #685: GC held in-flight charges whose target never reported back. Kept in a helper so
-    // ExpireTimeoutTasksLocked stays under the 50-line limit; the helper also sweeps orphan
-    // holdSinceMs_ entries for defensive consistency (the two maps are always updated together,
-    // so an orphan indicates a logic bug worth a WARNING).
+    // ExpireTimeoutTasksLocked stays under the 50-line limit. With FutureDelta the active/held
+    // fields share one entry, so there is no orphan-map inconsistency to sweep -- the helper only
+    // applies the TTL release.
     GcHeldInflightLocked(nowMs);
 }
 
@@ -252,39 +240,24 @@ void MemoryRebalanceScheduler::GcHeldInflightLocked(uint64_t nowMs)
 {
     const uint64_t holdTtlMs =
         std::max(static_cast<uint64_t>(FLAGS_node_dead_timeout_s), HOLD_TTL_MIN_S) * MS_PER_SECOND;
-    for (auto it = pendingReleaseBytes_.begin(); it != pendingReleaseBytes_.end();) {
-        auto hIt = holdSinceMs_.find(it->first);
-        if (hIt == holdSinceMs_.end()) {
-            // Defensive: pendingRelease without holdSinceMs is inconsistent (the two are always
-            // updated together). Release the charge so targetInflightBytes_ cannot get stuck high
-            // and permanently reject the target.
-            LOG(WARNING) << FormatString(
-                "[MemoryRebalance] orphan pendingRelease target=%s bytes=%lu (no holdSinceMs); releasing", it->first,
-                it->second);
-            DecreaseCounter(targetInflightBytes_, it->first, it->second);
-            it = pendingReleaseBytes_.erase(it);
-            continue;
+    // Collect targets whose held charge outlived the TTL, then release outside the iteration so
+    // DecreaseInflightLocked's erase-on-zero cannot invalidate the range iterator.
+    std::vector<std::pair<std::string, uint64_t>> expired;
+    for (const auto &[worker, delta] : futureView_) {
+        if (delta.heldBytes == 0) {
+            continue;  // no held charge on this target
         }
-        if (nowMs - hIt->second > holdTtlMs) {
-            LOG(WARNING) << FormatString(
-                "[MemoryRebalance] release held in-flight target=%s after TTL %lus (hold_age=%lums, bytes=%lu)",
-                it->first, holdTtlMs / MS_PER_SECOND, nowMs - hIt->second, it->second);
-            DecreaseCounter(targetInflightBytes_, it->first, it->second);
-            holdSinceMs_.erase(hIt);
-            it = pendingReleaseBytes_.erase(it);
-        } else {
-            ++it;
+        // heldBytes > 0 implies holdSinceMs was set (the two are updated together on success), so
+        // there is no orphan case to defend here -- the single FutureDelta entry keeps them paired.
+        if (nowMs - delta.holdSinceMs > holdTtlMs) {
+            expired.emplace_back(worker, delta.heldBytes);
         }
     }
-    // Defensive: clean orphan holdSinceMs entries not backed by pendingReleaseBytes_.
-    for (auto hIt = holdSinceMs_.begin(); hIt != holdSinceMs_.end();) {
-        if (pendingReleaseBytes_.find(hIt->first) == pendingReleaseBytes_.end()) {
-            LOG(WARNING) << FormatString("[MemoryRebalance] orphan holdSinceMs target=%s (no pendingRelease); erasing",
-                                         hIt->first);
-            hIt = holdSinceMs_.erase(hIt);
-        } else {
-            ++hIt;
-        }
+    for (const auto &[worker, heldBytes] : expired) {
+        LOG(WARNING) << FormatString(
+            "[MemoryRebalance] release held in-flight target=%s after TTL %lus (hold_age=%lums, bytes=%lu)",
+            worker, holdTtlMs / MS_PER_SECOND, nowMs - futureView_.at(worker).holdSinceMs, heldBytes);
+        ReleaseHeldLocked(worker, heldBytes);
     }
 }
 
@@ -312,18 +285,17 @@ void MemoryRebalanceScheduler::RemoveTaskLocked(const std::string &sourceWorker,
             // still shows stale-low usage until it reports again, so clearing now would let the
             // next source re-pick the just-received target. Hold the charge; it is released by
             // ReleaseReporterHoldsLocked / ReleaseSnapshotHoldsLocked when the target reports.
-            pendingReleaseBytes_[task.target_worker()] =
-                SaturatingAdd(pendingReleaseBytes_[task.target_worker()], task.max_bytes());
-            auto holdIt = holdSinceMs_.find(task.target_worker());
-            if (holdIt == holdSinceMs_.end() || nowMs > holdIt->second) {
-                holdSinceMs_[task.target_worker()] = nowMs;  // keep the latest completion time
+            auto &delta = futureView_[task.target_worker()];
+            delta.heldBytes = SaturatingAdd(delta.heldBytes, task.max_bytes());
+            if (nowMs > delta.holdSinceMs) {
+                delta.holdSinceMs = nowMs;  // keep the latest completion time
             }
             LOG(INFO) << FormatString(
                 "[MemoryRebalance] hold in-flight target=%s bytes=%lu pending=%lu until target reports",
-                task.target_worker(), task.max_bytes(), pendingReleaseBytes_[task.target_worker()]);
+                task.target_worker(), task.max_bytes(), delta.heldBytes);
         } else {
             // Failure/expire: data did not land on the target, so the in-flight charge is bogus.
-            DecreaseCounter(targetInflightBytes_, task.target_worker(), task.max_bytes());
+            DecreaseInflightLocked(task.target_worker(), task.max_bytes());
             AddCooldownLocked(task.source_worker(), nowMs);
             AddCooldownLocked(task.target_worker(), nowMs);
         }
@@ -341,31 +313,54 @@ void MemoryRebalanceScheduler::MarkTaskDispatchedLocked(RunningTask &runningTask
 
 uint64_t MemoryRebalanceScheduler::GetTargetInflightBytesLocked(const std::string &targetWorker) const
 {
-    auto inFlightIt = targetInflightBytes_.find(targetWorker);
-    if (inFlightIt != targetInflightBytes_.end()) {
-        return inFlightIt->second;
+    auto inFlightIt = futureView_.find(targetWorker);
+    if (inFlightIt != futureView_.end()) {
+        return inFlightIt->second.inflightBytes;
     }
     return 0;
 }
 
+void MemoryRebalanceScheduler::DecreaseInflightLocked(const std::string &targetWorker, uint64_t bytes)
+{
+    auto it = futureView_.find(targetWorker);
+    if (it == futureView_.end()) {
+        return;
+    }
+    it->second.inflightBytes = it->second.inflightBytes > bytes ? it->second.inflightBytes - bytes : 0;
+    if (it->second.inflightBytes == 0) {
+        // No inflight charge remains on this target. Since heldBytes is always a subset of
+        // inflightBytes (invariant), the held charge was part of the inflight just released,
+        // so erasing the entry cannot drop a still-held charge.
+        futureView_.erase(it);
+    }
+}
+
+void MemoryRebalanceScheduler::ReleaseHeldLocked(const std::string &worker, uint64_t heldBytes)
+{
+    DecreaseInflightLocked(worker, heldBytes);
+    auto cur = futureView_.find(worker);
+    if (cur != futureView_.end()) {
+        cur->second.heldBytes = 0;
+        cur->second.holdSinceMs = 0;
+    }
+}
+
 void MemoryRebalanceScheduler::ReleaseReporterHoldsLocked(const std::string &worker, uint64_t reportTimestamp)
 {
-    auto it = pendingReleaseBytes_.find(worker);
-    if (it == pendingReleaseBytes_.end()) {
+    auto it = futureView_.find(worker);
+    if (it == futureView_.end() || it->second.heldBytes == 0) {
         return;  // no held charge for this worker
     }
-    auto holdIt = holdSinceMs_.find(worker);
-    if (holdIt == holdSinceMs_.end() || reportTimestamp <= holdIt->second) {
+    if (reportTimestamp <= it->second.holdSinceMs) {
         return;  // worker has not reported since its latest held completion
     }
     // The worker just reported (reportTimestamp is fresh), so its snapshot now reflects the
     // post-receive memory. Drop the held charge so the worker can be re-evaluated on its merits.
+    const uint64_t heldBytes = it->second.heldBytes;
     LOG(INFO) << FormatString(
-        "[MemoryRebalance] release held in-flight target=%s bytes=%lu hold_age=%lums via reporter", worker, it->second,
-        reportTimestamp - holdIt->second);
-    DecreaseCounter(targetInflightBytes_, worker, it->second);
-    pendingReleaseBytes_.erase(it);
-    holdSinceMs_.erase(holdIt);
+        "[MemoryRebalance] release held in-flight target=%s bytes=%lu hold_age=%lums via reporter", worker, heldBytes,
+        reportTimestamp - it->second.holdSinceMs);
+    ReleaseHeldLocked(worker, heldBytes);
 }
 
 void MemoryRebalanceScheduler::ReleaseSnapshotHoldsLocked(const std::unordered_map<std::string, NodeInfo> &snapshot)
@@ -376,25 +371,25 @@ void MemoryRebalanceScheduler::ReleaseSnapshotHoldsLocked(const std::unordered_m
     // target's hold may persist up to ~10s after its snapshot is actually fresh -- within that
     // window CollectCandidatePairsLocked may over-estimate its projected usage and briefly skip
     // it. Acceptable: the reporter path (ReleaseReporterHoldsLocked) is the primary release.
-    std::vector<std::string> toRelease;
-    for (const auto &[worker, bytes] : pendingReleaseBytes_) {
+    std::vector<std::pair<std::string, uint64_t>> toRelease;
+    for (const auto &[worker, delta] : futureView_) {
+        if (delta.heldBytes == 0) {
+            continue;
+        }
         auto nit = snapshot.find(worker);
         if (nit == snapshot.end()) {
             continue;  // worker no longer in the snapshot (down / scaled away)
         }
-        auto holdIt = holdSinceMs_.find(worker);
-        if (holdIt == holdSinceMs_.end() || nit->second.timestamp <= holdIt->second) {
+        if (nit->second.timestamp <= delta.holdSinceMs) {
             continue;  // snapshot timestamp still predates the held completion
         }
         LOG(INFO) << FormatString(
             "[MemoryRebalance] release held in-flight target=%s bytes=%lu hold_age=%lums via snapshot-swap", worker,
-            bytes, nit->second.timestamp - holdIt->second);
-        DecreaseCounter(targetInflightBytes_, worker, bytes);
-        toRelease.emplace_back(worker);
+            delta.heldBytes, nit->second.timestamp - delta.holdSinceMs);
+        toRelease.emplace_back(worker, delta.heldBytes);
     }
-    for (const auto &worker : toRelease) {
-        pendingReleaseBytes_.erase(worker);
-        holdSinceMs_.erase(worker);
+    for (const auto &[worker, heldBytes] : toRelease) {
+        ReleaseHeldLocked(worker, heldBytes);
     }
 }
 
@@ -493,14 +488,6 @@ void MemoryRebalanceScheduler::CollectCandidatePairsLocked(const std::vector<con
             pair.usageGapRate = static_cast<uint32_t>(usageGap);
             pair.projectedTargetUsageRate =
                 static_cast<uint32_t>(CalculateProjectedTargetUsageRate(*target, targetInflightBytes, maxBytes));
-            // issue #685 H3: do not pick a target whose projected post-migration usage would
-            // reach the source threshold -- migrating to it would just create a future source
-            // (logs685 W2: master projected .103 "37% -> 85%" and still dispatched). Projection
-            // is salcx-unit-accurate only with the #1346 migrated_bytes fix; without it the
-            // executor moves ~1.25x max_bytes so a [~64%,70%) projected band still overshoots.
-            if (pair.projectedTargetUsageRate >= FLAGS_rebalance_source_usage_percent) {
-                continue;
-            }
             targetPairs.emplace_back(pair);
         }
     }

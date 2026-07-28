@@ -40,9 +40,16 @@ namespace object_cache {
 
 class MigrateDataHandler {
 public:
+    // SelfHealBusyRate probes the remote after a migrate batch returns limit_rate=0. The remote's
+    // MigrateDataRateLimiter uses a 1-second sliding window; a full batch (= maxBandwidth) saturates
+    // it, so availableBandwidth stays 0 until the entry expires (~1s after receipt). The 3-probe
+    // backoff sequence MUST span more than 1 second so probe 3 lands after the window drains:
+    //   probe 1 at +200~400ms, probe 2 at +600~1200ms, probe 3 at +1400~2200ms.
+    // Worst case (all minimum sleeps): 1400ms, giving 400ms margin past the 1s window. Do NOT
+    // reduce these values without verifying probe 3 still clears the 1-second sliding window.
     static constexpr uint64_t BUSY_HEAL_BUDGET_MS = 3000;
-    static constexpr uint64_t BUSY_HEAL_INITIAL_SLEEP_MS = 100;
-    static constexpr uint64_t BUSY_HEAL_MAX_SLEEP_MS = 800;
+    static constexpr uint64_t BUSY_HEAL_INITIAL_SLEEP_MS = 200;
+    static constexpr uint64_t BUSY_HEAL_MAX_SLEEP_MS = 1000;
     static constexpr uint64_t BUSY_HEAL_BACKOFF_FACTOR = 2;
     static constexpr int BUSY_HEAL_MAX_PROBES = 3;
     static constexpr uint64_t BUSY_HEAL_CANCEL_POLL_MS = 10;
