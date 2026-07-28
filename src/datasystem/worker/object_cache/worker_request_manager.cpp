@@ -25,6 +25,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
@@ -284,6 +285,47 @@ std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> GetRequest::GetServ
     return serverApi_;
 }
 
+void GetRequest::RecordRemoteProviderUbFailure(const ObjectKey &objectKey, const Status &status,
+                                               const ProviderUbFailureDetailPb &detail)
+{
+    if (detail.failure_side() != PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE || detail.failed_endpoint().empty()
+        || detail.operator_worker().empty() || detail.status_code() != static_cast<int32_t>(status.GetCode())
+        || detail.message() != status.GetMsg()) {
+        return;
+    }
+    std::lock_guard<std::mutex> locker(mutex_);
+    auto iter = objects_.find(objectKey);
+    if (iter != objects_.end() && iter->second.remoteProviderUbFailureDetail == nullptr) {
+        iter->second.remoteProviderUbFailureDetail = std::make_shared<ProviderUbFailureDetailPb>(detail);
+    }
+}
+
+void GetRequest::AttachRemoteProviderUbFailure(const Status &status, GetRspPb &resp)
+{
+    if (status.IsOk() || resp.has_provider_ub_failure_detail()) {
+        return;
+    }
+    std::shared_ptr<const ProviderUbFailureDetailPb> detailSnapshot;
+    {
+        std::lock_guard<std::mutex> locker(mutex_);
+        for (const auto &objectKey : rawObjectKeys_) {
+            auto iter = objects_.find(objectKey);
+            if (iter == objects_.end() || iter->second.remoteProviderUbFailureDetail == nullptr) {
+                continue;
+            }
+            const auto &detail = iter->second.remoteProviderUbFailureDetail;
+            if (detail->status_code() == static_cast<int32_t>(status.GetCode())
+                && detail->message() == status.GetMsg()) {
+                detailSnapshot = detail;
+                break;
+            }
+        }
+    }
+    if (detailSnapshot != nullptr) {
+        resp.mutable_provider_ub_failure_detail()->CopyFrom(*detailSnapshot);
+    }
+}
+
 void GetRequest::Register(WorkerRequestManager *workerRequestManager)
 {
     workerRequestManager_ = workerRequestManager;
@@ -417,6 +459,7 @@ Status GetRequest::ReturnToClient(const Status &rc)
     }
     resp.mutable_last_rc()->set_error_code(lastRc.GetCode());
     resp.mutable_last_rc()->set_error_msg(lastRc.GetMsg());
+    AttachRemoteProviderUbFailure(lastRc, resp);
     PerfPoint writePoint(PerfKey::WORKER_RETURN_TO_CLIENT_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi_->Write(resp), "Write reply to client stream failed.");
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi_->SendPayload(payloads), "SendPayload to client stream failed");
@@ -506,8 +549,9 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
         const uint8_t dstChipId =
             ubUrmaInfo_.has_chip_id() ? static_cast<uint8_t>(ubUrmaInfo_.chip_id()) : INVALID_CHIP_ID;
         std::vector<uint64_t> eventKeys;
+        UrmaWriteFailure failure;
         Status ubRc = UrmaWritePayload(urmaInfo, localSegAddress, localSegSize, localObjectAddressBase + readOffset, 0,
-                                       readSize, metaSize, srcChipId, dstChipId, true, eventKeys);
+                                       readSize, metaSize, srcChipId, dstChipId, true, eventKeys, nullptr, &failure);
         if (ubRc.IsOk()) {
             ubWriteOffset += readSize;
             METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);
@@ -516,6 +560,7 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
             INJECT_POINT_NO_RETURN("worker.get.urma_write_ok");
             return Status::OK();
         }
+        RecordProviderUbWriteFailure(ubRc, resp, &failure);
         LOG(WARNING) << "UB get write failed for object " << objectKeyUri
                      << ", fallback to TCP payload: " << ubRc.ToString();
         return ubRc;
@@ -524,6 +569,49 @@ Status GetRequest::UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSiz
                  << ", used " << ubWriteOffset << ", capacity " << ubBufferSize_ << ", fallback to TCP payload.";
     return Status(K_INVALID, "UB get comm buffer insufficient");
 }
+
+void GetRequest::RecordProviderUbWriteFailure(const Status &status, GetRspPb &resp,
+                                              const UrmaWriteFailure *failure) const
+{
+    const auto &address = ubUrmaInfo_.request_address();
+    HostPort failedEndpoint(address.host(), address.port());
+    std::string failedEndpointIdentity =
+        failedEndpoint.Empty() && !clientId_.Empty() ? "client_id=" + clientId_.ToString() : failedEndpoint.ToString();
+    auto &detail = *resp.mutable_provider_ub_failure_detail();
+    if (failure != nullptr) {
+        FillProviderUbFailureDetail(status, failedEndpointIdentity, operatorWorkerAddress_, failure->providerStatus,
+                                    failure->cqeStatus, detail);
+    } else {
+        FillProviderUbFailureDetail(status, failedEndpointIdentity, operatorWorkerAddress_, std::nullopt,
+                                    std::nullopt, detail);
+    }
+    HostPort operatorWorker;
+    if (operatorWorker.ParseString(operatorWorkerAddress_).IsOk()) {
+        ReportProviderLocalUbWriteFailure(
+            ubAdmission_.get(), operatorWorker, UbOperationKind::CLIENT_GET_WRITEBACK, status,
+            failure == nullptr ? std::nullopt : failure->providerStatus,
+            failure == nullptr ? std::nullopt : failure->cqeStatus);
+    }
+}
+
+namespace {
+Status TrackWorkerToClientUrmaFallback(ShmGuard &shmGuard, uint64_t readSize, const Status &ubRc, GetRspPb &resp,
+                                       const ObjectKey &objectKeyUri)
+{
+    const Status &transportStatus =
+        ubRc.IsError() ? ubRc : Status(K_URMA_ERROR, "UB get request fallback to TCP payload before worker UB");
+    auto rc = shmGuard.TrackUrmaFallbackTcp(readSize, transportStatus, "worker->client");
+    if (rc.IsError()) {
+        if (resp.has_provider_ub_failure_detail()) {
+            UpdateProviderUbFailureDetailForWrappedStatus(transportStatus, rc,
+                                                          *resp.mutable_provider_ub_failure_detail());
+        }
+        LOG(WARNING) << "Worker-to-client TCP fallback payload rejected for object " << objectKeyUri
+                     << ": " << rc.ToString();
+    }
+    return rc;
+}
+}  // namespace
 
 Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo &objectInfo, size_t objectIndex,
                                        bool shmEnabled, bool useUbGet, uint64_t &ubWriteOffset, GetRspPb &resp,
@@ -563,14 +651,7 @@ Status GetRequest::AddObjectToResponse(const ObjectKey &objectKeyUri, GetObjInfo
                               readOffset, readSize);
     METRIC_TIMER(metrics::KvMetricId::WORKER_TCP_WRITE_LATENCY);
     if (ubRc.IsError() || (IsUrmaEnabled() && !shmEnabled)) {
-        const Status &transportStatus =
-            ubRc.IsError() ? ubRc : Status(K_URMA_ERROR, "UB get request fallback to TCP payload before worker UB");
-        auto rc = shmGuard.TrackUrmaFallbackTcp(readSize, transportStatus, "worker->client");
-        if (rc.IsError()) {
-            LOG(WARNING) << "Worker-to-client TCP fallback payload rejected for object " << objectKeyUri
-                         << ": " << rc.ToString();
-            return rc;
-        }
+        RETURN_IF_NOT_OK(TrackWorkerToClientUrmaFallback(shmGuard, readSize, ubRc, resp, objectKeyUri));
     }
     RETURN_IF_NOT_OK(shmGuard.TransferTo(outPayloads, readOffset, readSize));
     METRIC_ADD(metrics::KvMetricId::WORKER_TO_CLIENT_TOTAL_BYTES, readSize);

@@ -122,7 +122,8 @@ void GetSegmentInfoFromShmUnit(std::shared_ptr<ShmUnit> shmUnit, uint64_t memory
 Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress, const uint64_t &localSegSize,
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
                         const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId, bool blocking,
-                        std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter = nullptr);
+                        std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter = nullptr,
+                        UrmaWriteFailure *failure = nullptr);
 
 /**
  * @brief Acquire the send lane owned by one worker-to-worker Batch Get RPC.
@@ -143,7 +144,7 @@ Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t
                                 uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                                 std::vector<uint64_t> &eventKeys,
                                 const std::shared_ptr<UrmaSendLaneLease> &laneLease,
-                                std::shared_ptr<EventWaiter> waiter = nullptr);
+                                std::shared_ptr<EventWaiter> waiter = nullptr, UrmaWriteFailure *failure = nullptr);
 
 /**
  * @brief Trigger UrmaManager logic to import segment and read payload.

@@ -55,6 +55,8 @@ public:
 
 private:
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> ocClientWorkerSvc_;
+    uint64_t recoveryProbeSegmentAddress_{ 0 };
+    uint64_t recoveryProbeDataOffset_{ 0 };
 };
 }  // namespace object_cache
 }  // namespace datasystem

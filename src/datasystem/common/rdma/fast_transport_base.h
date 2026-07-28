@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <vector>
 
 #include "datasystem/utils/status.h"
@@ -27,6 +28,11 @@
 #ifndef DATASYSTEM_COMMON_FAST_TRANSPORT_BASE_H
 #define DATASYSTEM_COMMON_FAST_TRANSPORT_BASE_H
 namespace datasystem {
+struct UrmaWriteFailure {
+    std::optional<int> providerStatus;
+    std::optional<int> cqeStatus;
+};
+
 /**
  * @brief Register fast transport memory (as segment).
  * @param[in] segAddress Starting address of the segment.
@@ -94,5 +100,7 @@ bool NeedRegisterWholeArena();
  */
 Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
                               std::function<Status(Status &)> errorHandler);
+Status WaitFastTransportEventWithFailure(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
+                                         std::function<Status(Status &)> errorHandler, UrmaWriteFailure *failure);
 }  // namespace datasystem
 #endif  // DATASYSTEM_COMMON_FAST_TRANSPORT_BASE_H

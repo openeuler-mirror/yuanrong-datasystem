@@ -288,6 +288,11 @@ DS_URMA_DEV_NAME=<device> \
   --test_env=DS_URMA_DEV_NAME --test_output=streamed
 ```
 
+- URMA client failover ST setup:
+  - `KVClientUrmaFailoverTest` uses `ExternalCluster::KillWorker()` when removing workers to construct remote discovery
+    and failover scenarios. These cases validate service-discovery and URMA data-plane recovery rather than graceful
+    worker shutdown, so their setup must not enter or depend on the URMA provider destruction path.
+
 - Manual URMA send-Jetty pool system coverage:
   - `//tests/st/client/object_cache:urma_send_jetty_pool_test` starts real workers and clients with URMA enabled.
     Its admission-gate regression forces multi-chunk writes, pauses the second chunk after permit acquisition, injects
@@ -367,6 +372,9 @@ python -m unittest test_multi_key_prefetch.TestDeviceOcClientMethods.test_device
 - Topology, scale, failover, or ETCD behavior:
   - start with `tests/ut/cluster`, `tests/st/client/*_scale*`, `tests/st/client/kv_cache/kv_client_etcd_dfx_test.cpp`,
     `tests/st/cluster`, and `.repo_context/modules/runtime/topology/README.md`.
+  - cluster-backed ST fixtures use an 80-second watchdog by default. Hardware-bound fixtures can override
+    `ClusterTest::GetTestCaseTimeoutSecs()` locally when their startup, shutdown, or recovery lifecycle requires a
+    longer bound; keep the shared default unchanged.
 - Device or hetero behavior:
   - start with `ds_device_llt`, `tests/st/device`, and Python device tests under `tests/python`.
 - Transport or RPC behavior:

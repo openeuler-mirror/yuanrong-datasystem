@@ -30,6 +30,7 @@
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 
 namespace datasystem {
 namespace client {
@@ -98,9 +99,10 @@ protected:
     /** @brief Write one ObjectBuffer payload through UB. Overridable for deterministic transport tests. */
     virtual Status WritePayload(ObjectBufferInfo &info);
     /** @brief Submit one non-blocking payload write. Overridable for deterministic transport tests. */
-    virtual Status SubmitPayload(ObjectBufferInfo &info, bool blocking, std::vector<uint64_t> &eventKeys);
+    virtual Status SubmitPayload(ObjectBufferInfo &info, bool blocking, std::vector<uint64_t> &eventKeys,
+                                 UrmaWriteFailure *failure = nullptr);
     /** @brief Wait for one payload's submitted events. Overridable for deterministic transport tests. */
-    virtual Status WaitPayloadEvents(std::vector<uint64_t> &eventKeys);
+    virtual Status WaitPayloadEvents(std::vector<uint64_t> &eventKeys, UrmaWriteFailure *failure = nullptr);
     /** @brief Submit a batch of UB writes before waiting for their completions. */
     virtual Status WritePayloads(const std::vector<ObjectBufferInfo *> &infos, std::vector<Status> &statuses);
     /** @brief Return a bounded batch depth that does not exceed the configured process-level send-lane pool. */

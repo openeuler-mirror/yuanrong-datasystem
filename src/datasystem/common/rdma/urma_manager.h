@@ -31,6 +31,7 @@
 #include "datasystem/common/rdma/urma_dlopen_util.h"
 
 #include "datasystem/common/flags/flags.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rdma/urma_info.h"
 #include "datasystem/common/rdma/urma_resource.h"
 #include "datasystem/common/rpc/rpc_channel.h"
@@ -322,6 +323,14 @@ public:
     Status RegisterSegment(const uint64_t &segAddress, const uint64_t &segSize);
 
     /**
+     * @brief Get the manager-owned memory segment used for UB recovery probes.
+     * @param[out] segmentAddress Starting virtual address of the segment.
+     * @param[out] dataOffset Data offset within the segment.
+     * @return K_OK on success; the error code otherwise.
+     */
+    Status GetRecoveryProbeSegmentInfo(uint64_t &segmentAddress, uint64_t &dataOffset);
+
+    /**
      * @brief Fill segment info into request
      * @param[out] handshakeReq The protobuf to fill with segment info
      * @return Status of the call.
@@ -361,7 +370,7 @@ public:
                             const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                             const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
                             uint8_t srcChipId, uint8_t dstChipId, bool blocking, std::vector<uint64_t> &eventKeys,
-                            std::shared_ptr<EventWaiter> waiter = nullptr);
+                            std::shared_ptr<EventWaiter> waiter = nullptr, UrmaWriteFailure *failure = nullptr);
 
     /**
      * @brief Acquire the single send lane owned by a worker-to-worker Batch Get RPC.
@@ -384,7 +393,8 @@ public:
                                     const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId,
                                     bool blocking, std::vector<uint64_t> &eventKeys,
                                     const std::shared_ptr<UrmaSendLaneLease> &laneLease,
-                                    std::shared_ptr<EventWaiter> waiter = nullptr);
+                                    std::shared_ptr<EventWaiter> waiter = nullptr,
+                                    UrmaWriteFailure *failure = nullptr);
 
     /**
      * @brief Does a RDMA read from remote worker memory location
@@ -451,7 +461,7 @@ public:
      * @param[in] timeoutMs timeout waiting for the request to end
      * @return Status of the call.
      */
-    Status WaitToFinish(uint64_t requestId, int64_t timeoutMs);
+    Status WaitToFinish(uint64_t requestId, int64_t timeoutMs, UrmaWriteFailure *failure = nullptr);
 
     /**
      * @brief Converts Urma device eid to string
@@ -737,7 +747,8 @@ private:
     };
 
     Status UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys,
-                         const std::shared_ptr<UrmaSendLaneLease> &laneLease = nullptr);
+                         const std::shared_ptr<UrmaSendLaneLease> &laneLease = nullptr,
+                         UrmaWriteFailure *failure = nullptr);
 
     Status UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
                                 const uint64_t &localSegSize, const uint64_t &localObjectAddress,
@@ -745,7 +756,7 @@ private:
                                 uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                                 std::vector<uint64_t> &eventKeys,
                                 const std::shared_ptr<UrmaSendLaneLease> &laneLease,
-                                std::shared_ptr<EventWaiter> waiter);
+                                std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure);
 
     Status UrmaGatherWriteImpl(const RemoteSegInfo &remoteInfo, const std::vector<LocalSgeInfo> &objInfos,
                                bool blocking, std::vector<uint64_t> &eventKeys,
@@ -766,6 +777,11 @@ private:
                                     uint64_t totalElapsedUs, double totalElapsedMs, double waitElapsedMs,
                                     uint64_t wakeSchedLatencyUs, const Status &waitRc) const;
     void LogUrmaLateCompletionElapsed(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event) const;
+    Status CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
+                                       double elapsedMs, const std::string &reason,
+                                       bool &deleteEventOnExit) const;
+    Status WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs, const std::shared_ptr<UrmaEvent> &event,
+                            UrmaWriteFailure *failure, bool &deleteEventOnExit);
     uint64_t pollLastStartUs_{ 0 };
     uint64_t pollLastEndUs_{ 0 };
 
@@ -807,6 +823,8 @@ private:
     bool clientTransportMemoryPinned_ = false;
     uint32_t clientTransportMemoryPinRef_ = 0;
     std::mutex clientTransportMemoryPinMutex_;
+    std::mutex recoveryProbeMutex_;
+    void *recoveryProbeBuffer_ = nullptr;
     std::mutex clientIdMutex_;
     std::unordered_map<ClientKey, std::string> clientIdMapping_;
     static std::atomic<uint64_t> ubTransportMemSize_;  // 256 MB

@@ -83,6 +83,8 @@ message UrmaHandshakeRspPb {
     UrmaHandshakeReqPb hand_shake = 1;
     // The receiver safely keeps payload-only client Batch Get requests out of aggregate gather.
     bool supports_payload_only_client_batch_get = 2;
+    // Dedicated non-business byte used to verify outbound URMA WRITE recovery.
+    UrmaRemoteAddrPb recovery_probe_addr = 3;
 }
 
 enum FastTransportMode {

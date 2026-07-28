@@ -72,6 +72,8 @@ constexpr uint32_t URMA_LOG_LIMIT_US = 250;
 constexpr uint32_t URMA_WRITE_VLOG0_LIMIT_US = 200;
 constexpr size_t URMA_CHIP_INFLIGHT_TRACKED_COUNT = 10;
 constexpr size_t URMA_CHIP_INFLIGHT_LOG_BUFFER_SIZE = 160;
+constexpr uint64_t URMA_RECOVERY_PROBE_SEGMENT_SIZE = 4096;
+constexpr int URMA_CQE_PORT_UNAVAILABLE = 4;
 constexpr const char *URMA_ELAPSED_TOTAL_SUGGEST =
     "check whether URMA_ELAPSED_THREAD_SHED/URMA_ELAPSED_POLL_JFC/URMA_ELAPSED_NOTIFY logs appear in the "
     "same time window; if none appear, check URMA and UDMA";
@@ -185,6 +187,10 @@ UrmaManager::~UrmaManager()
     if (memoryBuffer_ != nullptr) {
         munmap(memoryBuffer_, ubTransportMemSize_.load());
         memoryBuffer_ = nullptr;
+    }
+    if (recoveryProbeBuffer_ != nullptr) {
+        munmap(recoveryProbeBuffer_, URMA_RECOVERY_PROBE_SEGMENT_SIZE);
+        recoveryProbeBuffer_ = nullptr;
     }
     VLOG(RPC_LOG_LEVEL) << "UrmaManager::~UrmaManager() done";
 }
@@ -698,6 +704,27 @@ Status UrmaManager::RegisterSegment(const uint64_t &segAddress, const uint64_t &
     return Status::OK();
 }
 
+Status UrmaManager::GetRecoveryProbeSegmentInfo(uint64_t &segmentAddress, uint64_t &dataOffset)
+{
+    constexpr uint64_t probeSegmentSize = URMA_RECOVERY_PROBE_SEGMENT_SIZE;
+    std::lock_guard<std::mutex> lock(recoveryProbeMutex_);
+    if (recoveryProbeBuffer_ == nullptr) {
+        void *buffer = mmap(nullptr, probeSegmentSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        CHECK_FAIL_RETURN_STATUS(buffer != MAP_FAILED, K_OUT_OF_MEMORY,
+                                 "Failed to allocate Worker URMA recovery probe segment");
+        Status rc = RegisterSegment(reinterpret_cast<uint64_t>(buffer), probeSegmentSize);
+        if (rc.IsError()) {
+            LOG_IF(ERROR, munmap(buffer, probeSegmentSize) != 0)
+                << "Failed to unmap Worker URMA recovery probe segment: " << StrErr(errno);
+            return rc;
+        }
+        recoveryProbeBuffer_ = buffer;
+    }
+    segmentAddress = reinterpret_cast<uint64_t>(recoveryProbeBuffer_);
+    dataOffset = 0;
+    return Status::OK();
+}
+
 Status UrmaManager::GetSegmentInfo(UrmaHandshakeReqPb &handshakeReq)
 {
     PerfPoint point(PerfKey::URMA_GET_LOCAL_SEGMENT_INFO);
@@ -1102,7 +1129,78 @@ void UrmaManager::LogUrmaLateCompletionElapsed(uint64_t requestId, const std::sh
                                Status(K_URMA_WAIT_TIMEOUT, "CQE completed after upper-layer wait timeout"));
 }
 
-Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
+Status UrmaManager::CreateUrmaWaitTimeoutStatus(uint64_t requestId, const std::shared_ptr<UrmaEvent> &event,
+                                                double elapsedMs, const std::string &reason,
+                                                bool &deleteEventOnExit) const
+{
+    if (event->MarkWaitTimedOut()) {
+        deleteEventOnExit = false;
+    }
+    const auto requestIdStr = std::to_string(requestId);
+    const auto srcAddress = localUrmaInfo_.localAddress.ToString();
+    const auto message = FormatString(
+        "[URMA_WAIT_TIMEOUT] timedout waiting for requestId=%s, elapsedMs=%f, srcAddress=%s, "
+        "targetAddress=%s, remoteInstanceId=%s, dataSize=%zu, op=%s, reason=%s",
+        requestIdStr.c_str(), elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
+        event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
+        UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
+    LOG(WARNING) << message;
+    return Status(K_URMA_WAIT_TIMEOUT, message);
+}
+
+Status UrmaManager::WaitForUrmaEvent(uint64_t requestId, int64_t timeoutMs,
+                                     const std::shared_ptr<UrmaEvent> &event, UrmaWriteFailure *failure,
+                                     bool &deleteEventOnExit)
+{
+    if (timeoutMs < 0) {
+        return CreateUrmaWaitTimeoutStatus(requestId, event, 0, "request deadline already expired",
+                                           deleteEventOnExit);
+    }
+    // Test-only: simulate a real UB link-down (URMA completion never arrives).
+    // Sleep a fixed 2000ms instead of timeoutMs so teardown cannot race a long request timeout.
+    // The delay exceeds the test client's 1s RPC deadline, allowing the circuit breaker to
+    // observe the timeout before this injected worker-side timeout is returned.
+    INJECT_POINT("UrmaManager.UrmaWaitNoCompletionHang", [this, &event]() {
+        constexpr int64_t hangMs = 2000;
+        SleepCurrentFor(std::chrono::milliseconds(hangMs));
+        LOG_IF_ERROR(RetireEventLane(event), "Failed to retire URMA lane for no-completion-hang inject");
+        return Status(K_URMA_WAIT_TIMEOUT,
+                      FormatString("[URMA_WAIT_TIMEOUT] inject no-completion hang (link down): %ldms", hangMs));
+    });
+    PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
+    Timer waitTimer;
+    event->SetWriteWaitTimeUs(waitTimer.GetStartTimeStampUs());
+    Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
+    waitTimer.Stop();
+    const auto endWaitTimeUs = waitTimer.GetEndTimeStampUs();
+    constexpr double US_TO_MS = 1000.0;
+    auto totalElapsedUs = endWaitTimeUs - event->GetCreateTimeUs();
+    auto wakeSchedLatencyUs = event->GetWakeSchedLatencyUs();
+    auto urmaElapsedUs = totalElapsedUs >= wakeSchedLatencyUs ? totalElapsedUs - wakeSchedLatencyUs : 0;
+    auto totalElapsedMs = static_cast<double>(urmaElapsedUs) / US_TO_MS;
+    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
+    auto waitElapsedMs = waitTimer.ElapsedMicroSecond() / US_TO_MS;
+    GetWorkerTimeCost().Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
+    // UrmaEvent::WaitFor returns K_URMA_WAIT_TIMEOUT; keep K_RPC_DEADLINE_EXCEEDED for older Event paths.
+    const bool isUrmaWaitTimeout = waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT
+                                   || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
+    if (isUrmaWaitTimeout) {
+        return CreateUrmaWaitTimeoutStatus(requestId, event, totalElapsedMs, waitRc.GetMsg(), deleteEventOnExit);
+    }
+    LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs, wakeSchedLatencyUs,
+                               waitRc);
+    if (event->IsFailed() && failure != nullptr) {
+        const int cqeStatus = event->GetStatusCode();
+        if (!failure->cqeStatus.has_value() || cqeStatus == URMA_CQE_PORT_UNAVAILABLE) {
+            failure->cqeStatus = cqeStatus;
+        }
+    }
+    RETURN_IF_NOT_OK(waitRc);
+    waitPoint.Record();
+    return Status::OK();
+}
+
+Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs, UrmaWriteFailure *failure)
 {
     PerfPoint point(PerfKey::URMA_WAIT_TO_FINISH);
     // This legacy injection models a wait call that fails before it obtains an event.
@@ -1125,68 +1223,7 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
             DeleteEvent(requestId);
         }
     });
-    auto timeoutStatus = [&](double elapsedMs, const std::string &reason) {
-        if (event->MarkWaitTimedOut()) {
-            deleteEventOnExit = false;
-        }
-        const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId));
-        const auto srcAddress = localUrmaInfo_.localAddress.ToString();
-        const auto message = FormatString(
-            "[URMA_WAIT_TIMEOUT] timedout waiting for requestId=%s, elapsedMs=%f, srcAddress=%s, "
-            "targetAddress=%s, remoteInstanceId=%s, dataSize=%zu, op=%s, reason=%s",
-            requestIdStr.c_str(), elapsedMs, srcAddress.c_str(), event->GetRemoteAddress().c_str(),
-            event->GetRemoteInstanceId().c_str(), static_cast<size_t>(event->GetDataSize()),
-            UrmaEvent::OperationTypeName(event->GetOperationType()), reason.c_str());
-        LOG(WARNING) << message;
-        return Status(K_URMA_WAIT_TIMEOUT, message);
-    };
-    if (timeoutMs < 0) {
-        return timeoutStatus(0, "request deadline already expired");
-    }
-
-    // Test-only: simulate a real UB link-down (URMA completion never arrives).
-    // Sleep a FIXED 2000ms (NOT timeoutMs: the worker's reqTimeoutDuration remaining
-    // time can be tens of seconds, which would extend the sleep past teardown and
-    // crash). 2000ms exceeds the test client's 1s RPC deadline so the client's brpc
-    // RPC times out (E1008 slow failure) -> feeds the circuit breaker; the worker
-    // returns K_URMA_WAIT_TIMEOUT shortly after (response discarded). Uses the
-    // `return()` action so WaitToFinish returns here without running event->WaitFor/
-    // HandleUrmaEvent: by now the client's brpc RPC has already timed out and been
-    // cancelled (the worker's response is discarded), and event->WaitFor would block
-    // on a URMA completion that never arrives (simulated link-down), racing teardown.
-    // Bthread-friendly via SleepCurrentFor. Default inactive.
-    INJECT_POINT("UrmaManager.UrmaWaitNoCompletionHang", [this, &event]() {
-        constexpr int64_t hangMs = 2000;
-        SleepCurrentFor(std::chrono::milliseconds(hangMs));
-        LOG_IF_ERROR(RetireEventLane(event), "Failed to retire URMA lane for no-completion-hang inject");
-        return Status(K_URMA_WAIT_TIMEOUT,
-                      FormatString("[URMA_WAIT_TIMEOUT] inject no-completion hang (link down): %ldms", hangMs));
-    });
-
-    PerfPoint waitPoint(PerfKey::URMA_WAIT_TIME);
-    Timer waitTimer;
-    event->SetWriteWaitTimeUs(waitTimer.GetStartTimeStampUs());
-    Status waitRc = event->WaitFor(std::chrono::milliseconds(timeoutMs));
-    waitTimer.Stop();
-    const auto endWaitTimeUs = waitTimer.GetEndTimeStampUs();
-    constexpr double US_TO_MS = 1000.0;
-    auto totalElapsedUs = endWaitTimeUs - event->GetCreateTimeUs();
-    auto wakeSchedLatencyUs = event->GetWakeSchedLatencyUs();
-    auto urmaElapsedUs = totalElapsedUs >= wakeSchedLatencyUs ? totalElapsedUs - wakeSchedLatencyUs : 0;
-    auto totalElapsedMs = static_cast<double>(urmaElapsedUs) / US_TO_MS;
-    metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
-    auto waitElapsedMs = waitTimer.ElapsedMicroSecond() / US_TO_MS;
-    GetWorkerTimeCost().Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
-    // UrmaEvent::WaitFor returns K_URMA_WAIT_TIMEOUT; keep K_RPC_DEADLINE_EXCEEDED for older Event paths.
-    const bool isUrmaWaitTimeout = waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT
-                                   || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
-    if (isUrmaWaitTimeout) {
-        return timeoutStatus(totalElapsedMs, waitRc.GetMsg());
-    }
-    LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs, wakeSchedLatencyUs,
-                               waitRc);
-    RETURN_IF_NOT_OK(waitRc);
-    waitPoint.Record();
+    RETURN_IF_NOT_OK(WaitForUrmaEvent(requestId, timeoutMs, event, failure, deleteEventOnExit));
     RETURN_IF_NOT_OK(HandleUrmaEvent(requestId, event));
     return Status::OK();
 }
@@ -1654,7 +1691,8 @@ static urma_status_t PostJettyRw(const std::shared_ptr<UrmaJetty> &jetty, urma_o
 }
 
 Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_t> &eventKeys,
-                                  const std::shared_ptr<UrmaSendLaneLease> &externalLaneLease)
+                                  const std::shared_ptr<UrmaSendLaneLease> &externalLaneLease,
+                                  UrmaWriteFailure *failure)
 {
     if (args.size == 0) {
         return Status::OK();
@@ -1698,7 +1736,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
             LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA write lane lease");
         }
     });
-    auto cleanupSubmittedEvents = [this, &eventKeys, &sealLaneLease, ownsLaneLease]() {
+    auto cleanupSubmittedEvents = [this, &eventKeys, &sealLaneLease, ownsLaneLease, failure]() {
         if (ownsLaneLease) {
             LOG_IF_ERROR(sealLaneLease(), "Failed to seal URMA write lane lease during cleanup");
         }
@@ -1707,7 +1745,7 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         }
         auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
-        LOG_IF_ERROR(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler),
+        LOG_IF_ERROR(WaitFastTransportEventWithFailure(eventKeys, remainingTime, errorHandler, failure),
                      "Failed to cleanup submitted URMA write events");
         eventKeys.clear();
     };
@@ -1775,6 +1813,9 @@ Status UrmaManager::UrmaWriteImpl(const UrmaWriteArgs &args, std::vector<uint64_
         }
 
         if (ret != URMA_SUCCESS) {
+            if (failure != nullptr && !failure->providerStatus.has_value()) {
+                failure->providerStatus = static_cast<int>(ret);
+            }
             ReleaseAndDeleteEvent(key);
             cleanupSubmittedEvents();
             const auto srcAddress = localUrmaInfo_.localAddress.ToString();
@@ -1837,10 +1878,11 @@ Status UrmaManager::UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uin
                                      const uint64_t &localSegSize, const uint64_t &localObjectAddress,
                                      const uint64_t &readOffset, const uint64_t &readSize, const uint64_t &metaDataSize,
                                      uint8_t srcChipId, uint8_t dstChipId, bool blocking,
-                                     std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter)
+                                     std::vector<uint64_t> &eventKeys, std::shared_ptr<EventWaiter> waiter,
+                                     UrmaWriteFailure *failure)
 {
     return UrmaWritePayloadImpl(urmaInfo, localSegAddress, localSegSize, localObjectAddress, readOffset, readSize,
-                                metaDataSize, srcChipId, dstChipId, blocking, eventKeys, nullptr, waiter);
+                                metaDataSize, srcChipId, dstChipId, blocking, eventKeys, nullptr, waiter, failure);
 }
 
 Status UrmaManager::UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
@@ -1849,12 +1891,12 @@ Status UrmaManager::UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, c
                                              const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId,
                                              bool blocking, std::vector<uint64_t> &eventKeys,
                                              const std::shared_ptr<UrmaSendLaneLease> &laneLease,
-                                             std::shared_ptr<EventWaiter> waiter)
+                                             std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(laneLease != nullptr, K_RUNTIME_ERROR,
                                          "Batch Get URMA send lane lease is null");
     return UrmaWritePayloadImpl(urmaInfo, localSegAddress, localSegSize, localObjectAddress, readOffset, readSize,
-                                metaDataSize, srcChipId, dstChipId, blocking, eventKeys, laneLease, waiter);
+                                metaDataSize, srcChipId, dstChipId, blocking, eventKeys, laneLease, waiter, failure);
 }
 
 Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localSegAddress,
@@ -1863,7 +1905,7 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
                                          const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId,
                                          bool blocking, std::vector<uint64_t> &eventKeys,
                                          const std::shared_ptr<UrmaSendLaneLease> &externalLaneLease,
-                                         std::shared_ptr<EventWaiter> waiter)
+                                         std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure)
 {
     eventKeys.clear();
     PerfPoint point(PerfKey::URMA_WRITE_TOTAL);
@@ -1966,13 +2008,13 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
     writeLoopArgs.size = readSize;
     writeLoopArgs.srcChipId = srcChipId;
     writeLoopArgs.dstChipId = dstChipId;
-    RETURN_IF_NOT_OK(UrmaWriteImpl(writeLoopArgs, eventKeys, externalLaneLease));
+    RETURN_IF_NOT_OK(UrmaWriteImpl(writeLoopArgs, eventKeys, externalLaneLease, failure));
     point.Record();
     // If it is blocking wait, we will wait for the write to finish here.
     if (blocking) {
         auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
-        RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, errorHandler));
+        RETURN_IF_NOT_OK(WaitFastTransportEventWithFailure(eventKeys, remainingTime, errorHandler, failure));
         eventKeys.clear();
     }
     return Status::OK();

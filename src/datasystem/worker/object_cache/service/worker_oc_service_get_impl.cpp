@@ -40,6 +40,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/metrics.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/parallel/parallel_for.h"
 #include "datasystem/common/parallel/service_parallel_policy.h"
 #include "datasystem/common/perf/perf_manager.h"
@@ -154,17 +155,19 @@ WorkerOcServiceGetImpl::WorkerOcServiceGetImpl(WorkerOcServiceCrudParam &initPar
                                                std::shared_ptr<ThreadPool> memCpyThreadPool,
                                                std::shared_ptr<ThreadPool> threadPool,
                                                std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
-                                               std::shared_ptr<MigrateDataRateController> rateController)
+                                               std::shared_ptr<MigrateDataRateController> rateController,
+                                               std::shared_ptr<PeerUbAdmission> ubAdmission)
     : WorkerOcServiceCrudCommonApi(initParam),
       etcdStore_(etcdStore),
       memCpyThreadPool_(std::move(memCpyThreadPool)),
       threadPool_(std::move(threadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddress_(std::move(localAddress)),
-      rateController_(std::move(rateController))
+      rateController_(std::move(rateController)),
+      ubAdmission_(std::move(ubAdmission))
 {
     remoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "RemoteGetThreadPool");
-    workerBatchQueryMetaThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchQureyMeta");
+    workerBatchQueryMetaThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchQueryMeta");
     if (FLAGS_enable_worker_worker_batch_get) {
         workerBatchRemoteGetThreadPool_ = std::make_unique<ThreadPool>(1, FLAGS_rpc_thread_num, "BatchRemoteGet");
     }
@@ -179,7 +182,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
     if (traceEnabled) {
         Trace::Instance().AddLatencyTick(LatencyTickKey::WORKER_GET_START);
     }
-    auto request = std::make_shared<GetRequest>(AccessRecorderKey::DS_POSIX_GET);
+    auto request =
+        std::make_shared<GetRequest>(AccessRecorderKey::DS_POSIX_GET, localAddress_.ToString(), ubAdmission_);
     INJECT_POINT("WorkerOCServiceImpl.Get.Retry",
                  [&serverApi]() { return serverApi->SendStatus(Status(K_TRY_AGAIN, "test get retry")); });
     GetReqPb req;
@@ -199,7 +203,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
         remainingUs = changedRemainingUs;
         return Status::OK();
     });
-    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(
+        remainingUs > 0, K_RPC_DEADLINE_EXCEEDED,
         FormatString("RPC deadline exceeded before dispatch, remaining %ld us.", remainingUs));
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(Validator::IsInNonNegativeInt32(subTimeout), K_RUNTIME_ERROR,
                                          "SubTimeout is out of range.");
@@ -231,8 +236,8 @@ Status WorkerOcServiceGetImpl::Get(std::shared_ptr<ServerUnaryWriterReader<GetRs
             } else {
                 int64_t currentRemainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
                 VLOG(1) << FormatString("[Get] Receive, clientId: %s, objects: %s, threadPool: %s, remainingUs: %ld",
-                    clientId, VectorToString(request->GetRawObjectKeys()), threadPool_->GetStatistics(),
-                    currentRemainingUs);
+                                        clientId, VectorToString(request->GetRawObjectKeys()),
+                                        threadPool_->GetStatistics(), currentRemainingUs);
                 // subTimeout is the client's subscribe budget; the actual wait is capped by
                 // std::min(subTimeout, remainingTimeMs) in ProcessGetObjectRequest.
                 auto newSubTimeout = subTimeout > 0 ? subTimeout : 0;
@@ -626,7 +631,8 @@ Status WorkerOcServiceGetImpl::TryGetObjectFromRemote(int64_t subTimeout, std::s
     if (status.IsError()) {
         // K_NOT_FOUND_IN_L2CACHE: Metadata exists in etcd but data not exists in .
         // K_OUT_OF_RANGE: offset > szie.
-        static std::set<StatusCode> bypassCodeRemoteGet{ K_OUT_OF_RANGE };
+        static std::set<StatusCode> bypassCodeRemoteGet{ K_OUT_OF_RANGE, K_URMA_ERROR,
+                                                         K_URMA_DATA_WORKER_UNAVAILABLE };
         if (status.GetCode() == K_NOT_FOUND_IN_L2CACHE) {
             LOG(ERROR) << "ProcessObjectsNotExistInLocal failed with status: " << status.ToString();
             auto msg = "Cannot get object from worker and l2 cache";
@@ -948,8 +954,8 @@ Status WorkerOcServiceGetImpl::MarkReferencedAbsentObjectsFailed(
 
     std::unordered_set<std::string> referencedRequestKeys;
     for (const auto &item : grouped.groups) {
-        RETURN_IF_NOT_OK(QueryReferencedRequestKeys(item.first, item.second, responseKeyToRequestKey,
-                                                    referencedRequestKeys));
+        RETURN_IF_NOT_OK(
+            QueryReferencedRequestKeys(item.first, item.second, responseKeyToRequestKey, referencedRequestKeys));
     }
     if (referencedRequestKeys.empty()) {
         return Status::OK();
@@ -1276,8 +1282,8 @@ Status WorkerOcServiceGetImpl::TryReconnectRemoteWorker(const std::string &endPo
     LOG_IF(INFO, elapsedMs > logThresholdMs)
         << "[URMA_NEED_CONNECT] TryReconnectRemoteWorker finished, remoteAddress=" << endPoint
         << ", remoteWorkerId=" << remoteWorkerId << ", elapsed ms: " << elapsedMs
-        << ", realRemainingTimeMs="
-        << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime() << ", status=" << rc.ToString();
+        << ", realRemainingTimeMs=" << GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime()
+        << ", status=" << rc.ToString();
     RETURN_IF_NOT_OK(rc);
     RETURN_STATUS(K_TRY_AGAIN, "Reconnect success");
 }
@@ -1397,6 +1403,7 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
                      objectKV.GetReadOffset(), objectKV.GetReadSize()),
         localAddress_.ToString(), address);
     INJECT_POINT("worker.remote_get_failed");
+    RETURN_IF_NOT_OK(CheckRemoteReadAdmission(address));
     std::shared_ptr<WorkerRemoteWorkerOCApi> workerStub;
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(CreateRemoteWorkerApi(address, localAddress_, akSkManager_, workerStub),
                                      "Create remote worker api failed.");
@@ -1463,8 +1470,12 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
                 // deallocate the memory here
                 objectKV.GetObjEntry()->SetShmUnit(nullptr);
             }
+            if (rc.IsError()) {
+                ReportRemoteReadOutcome(address, rc, "remote_get");
+            }
             RETURN_IF_NOT_OK(rc);
         }
+        RETURN_IF_NOT_OK(ProcessRemoteReadResponse(address, rspPb, "remote_get_response"));
     } while (dataSizeChange);
     // At this point, we haven't materialized the payload which is still sitting in the tcp/ip buffers.
     // We either receive payload directly into shared memory or fall back to the old behavior to save
@@ -1504,6 +1515,95 @@ Status WorkerOcServiceGetImpl::PullObjectDataFromRemoteWorker(const std::string 
                          IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP"), remoteGetMs),
             localAddress_.ToString(), address));
     return Status::OK();
+}
+
+Status WorkerOcServiceGetImpl::CheckRemoteReadAdmission(const std::string &address) const
+{
+    if (ubAdmission_ == nullptr) {
+        return Status::OK();
+    }
+    HostPort peer;
+    RETURN_IF_NOT_OK(peer.ParseString(address));
+    return ubAdmission_->CheckReadSource(peer);
+}
+
+void WorkerOcServiceGetImpl::ReportRemoteReadOutcome(const std::string &address, const Status &status,
+                                                     const std::string &learnedFrom) const
+{
+    if (ubAdmission_ == nullptr || status.IsOk()) {
+        return;
+    }
+    HostPort peer;
+    auto rc = peer.ParseString(address);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("[Get] Failed to parse remote read peer [%s]: %s", address, rc.ToString());
+        return;
+    }
+    UbOpOutcome outcome{ peer, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK, status };
+    outcome.learnedFrom = learnedFrom;
+    // Requester-side RPC status has no provider-local CQE evidence. Keep timeout suspicion only;
+    // hard isolation is admitted through the trusted structured provider detail overload.
+    if (UbFailureClassifier().Classify(outcome) == UbFailureClass::TIMEOUT_SUSPECT) {
+        ubAdmission_->ReportOutcome(outcome);
+    }
+}
+
+void WorkerOcServiceGetImpl::ReportRemoteReadOutcome(const std::string &address, const GetObjectRemoteRspPb &response,
+                                                     const std::string &learnedFrom) const
+{
+    if (ubAdmission_ == nullptr || !response.has_provider_ub_failure_detail()) {
+        return;
+    }
+    HostPort peer;
+    auto rc = peer.ParseString(address);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("[Get] Failed to parse remote read peer [%s]: %s", address, rc.ToString());
+        return;
+    }
+    ReportRemoteReadOutcome(peer, response, learnedFrom);
+}
+
+void WorkerOcServiceGetImpl::ReportRemoteReadOutcome(const HostPort &peer, const GetObjectRemoteRspPb &response,
+                                                     const std::string &learnedFrom) const
+{
+    auto outcome = DecodeProviderUbFailureDetail(response.provider_ub_failure_detail(), peer,
+                                                 UbOperationKind::WORKER_REMOTE_GET_WRITEBACK, learnedFrom);
+    if (outcome.has_value()) {
+        ubAdmission_->ReportOutcome(*outcome);
+    }
+}
+
+void WorkerOcServiceGetImpl::ReportRemoteReadOutcome(const std::string &address,
+                                                     const BatchGetObjectRemoteRspPb &response,
+                                                     const std::string &learnedFrom) const
+{
+    if (ubAdmission_ == nullptr) {
+        return;
+    }
+    HostPort peer;
+    auto rc = peer.ParseString(address);
+    if (rc.IsError()) {
+        LOG(WARNING) << FormatString("[Get] Failed to parse remote read peer [%s]: %s", address, rc.ToString());
+        return;
+    }
+    for (const auto &item : response.responses()) {
+        if (item.has_provider_ub_failure_detail()) {
+            ReportRemoteReadOutcome(peer, item, learnedFrom);
+        }
+    }
+}
+
+Status WorkerOcServiceGetImpl::ProcessRemoteReadResponse(const std::string &address,
+                                                         const GetObjectRemoteRspPb &response,
+                                                         const std::string &learnedFrom) const
+{
+    ReportRemoteReadOutcome(address, response, learnedFrom);
+    const auto code = static_cast<StatusCode>(response.error().error_code());
+    // A size mismatch is handled by the caller's resize-and-retry loop.
+    if (code == StatusCode::K_OK || code == StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH) {
+        return Status::OK();
+    }
+    return Status(code, response.error().error_msg());
 }
 
 Status WorkerOcServiceGetImpl::RetrieveRemotePayload(
@@ -1721,9 +1821,9 @@ Status WorkerOcServiceGetImpl::QueryMetadataFromMaster(const std::vector<std::st
 }
 
 void WorkerOcServiceGetImpl::FinalizeAbsentQueryMetadata(
-    const std::unordered_set<std::string> &routeFailedObjectKeys,
-    ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed, bool queryEtcdMeta,
-    std::vector<master::QueryMetaInfoPb> &queryMetas, std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
+    const std::unordered_set<std::string> &routeFailedObjectKeys, ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
+    bool queryEtcdMeta, std::vector<master::QueryMetaInfoPb> &queryMetas,
+    std::map<std::string, uint64_t> &absentObjectKeysWithVersion,
     const std::map<std::string, uint64_t> &deletingObjectsWithVersion)
 {
     auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
@@ -1766,8 +1866,8 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
             TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId, true);
             RETURN_IF_NOT_OK(InitTimeoutsFromDispatch(remainingUs, dispatchTime));
             Timer queryMetaTimer;
-            auto rc = QueryMetaDataFromMasterImpl(itemPtr->first, subTimeout, itemPtr->second, result.rsp,
-                                                  result.payloads);
+            auto rc =
+                QueryMetaDataFromMasterImpl(itemPtr->first, subTimeout, itemPtr->second, result.rsp, result.payloads);
             if (rc.IsError()) {
                 LOG(ERROR) << FormatString("Query metadata from master[%s]: %s, elapsed %.3f ms",
                                            itemPtr->first.ToString(), rc.ToString(),
@@ -1790,10 +1890,10 @@ Status WorkerOcServiceGetImpl::DispatchQueryMetadataGroups(
     return lastRc;
 }
 
-Status WorkerOcServiceGetImpl::MergeQueryMetadataResults(
-    std::vector<BatchQueryMetaResult> &batchQueryResults, bool traceEnabled, QueryMetadataFromMasterResult &result,
-    ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
-    std::map<std::string, uint64_t> &deletingObjectsWithVersion)
+Status WorkerOcServiceGetImpl::MergeQueryMetadataResults(std::vector<BatchQueryMetaResult> &batchQueryResults,
+                                                         bool traceEnabled, QueryMetadataFromMasterResult &result,
+                                                         ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
+                                                         std::map<std::string, uint64_t> &deletingObjectsWithVersion)
 {
     auto &objectKeysNotExist = std::get<OBJECTS_NOT_EXIST_IDX>(objectKeysQueryMetaFailed);
     auto &objectKeysPuzzled = std::get<OBJECTS_PUZZLED_IDX>(objectKeysQueryMetaFailed);
@@ -2877,9 +2977,9 @@ Status WorkerOcServiceGetImpl::QueryExistMetadataViaPureQueryMeta(const std::vec
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(redirectMasterAddr.ParseString(redirectInfo.redirect_meta_address()),
                                          "Parse Exist redirect master address failed");
         auto redirectWorkerMasterApi = workerMasterApiManager_->GetWorkerMasterApi(redirectMasterAddr);
-        CHECK_FAIL_RETURN_STATUS(redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
-                                 FormatString("Get redirect master api failed, address: %s",
-                                              redirectMasterAddr.ToString()));
+        CHECK_FAIL_RETURN_STATUS(
+            redirectWorkerMasterApi != nullptr, K_RUNTIME_ERROR,
+            FormatString("Get redirect master api failed, address: %s", redirectMasterAddr.ToString()));
         master::PureQueryMetaReqPb redirectReq;
         master::PureQueryMetaRspPb redirectRsp;
         redirectReq.set_redirect(false);

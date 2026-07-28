@@ -152,7 +152,7 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
                         const uint64_t &localObjectAddress, const uint64_t &readOffset, const uint64_t &readSize,
                         const uint64_t &metaDataSize, uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                         std::vector<uint64_t> &eventKeys,
-                        std::shared_ptr<EventWaiter> waiter)
+                        std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure)
 {
     (void)urmaInfo;
     (void)localSegAddress;
@@ -166,10 +166,14 @@ Status UrmaWritePayload(const UrmaRemoteAddrPb &urmaInfo, const uint64_t &localS
     (void)blocking;
     (void)eventKeys;
     (void)waiter;
+    if (failure != nullptr) {
+        *failure = {};
+    }
 #ifdef USE_URMA
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(urmaInfo, localSegAddress, localSegSize,
                                                               localObjectAddress, readOffset, readSize, metaDataSize,
-                                                              srcChipId, dstChipId, blocking, eventKeys, waiter));
+                                                              srcChipId, dstChipId, blocking, eventKeys, waiter,
+                                                              failure));
 #endif
     return Status::OK();
 }
@@ -199,7 +203,7 @@ Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t
                                 uint8_t srcChipId, uint8_t dstChipId, bool blocking,
                                 std::vector<uint64_t> &eventKeys,
                                 const std::shared_ptr<UrmaSendLaneLease> &laneLease,
-                                std::shared_ptr<EventWaiter> waiter)
+                                std::shared_ptr<EventWaiter> waiter, UrmaWriteFailure *failure)
 {
     (void)urmaInfo;
     (void)localSegAddress;
@@ -214,10 +218,13 @@ Status UrmaWritePayloadWithLane(const UrmaRemoteAddrPb &urmaInfo, const uint64_t
     (void)eventKeys;
     (void)laneLease;
     (void)waiter;
+    if (failure != nullptr) {
+        *failure = {};
+    }
 #ifdef USE_URMA
     RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayloadWithLane(
         urmaInfo, localSegAddress, localSegSize, localObjectAddress, readOffset, readSize, metaDataSize, srcChipId,
-        dstChipId, blocking, eventKeys, laneLease, waiter));
+        dstChipId, blocking, eventKeys, laneLease, waiter, failure));
 #endif
     return Status::OK();
 }

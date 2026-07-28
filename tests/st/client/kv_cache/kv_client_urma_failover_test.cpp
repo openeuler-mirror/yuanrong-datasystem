@@ -49,6 +49,7 @@ constexpr int WORKER_NUM = 3;
 constexpr int CONNECT_TIMEOUT_MS = 2'000;
 constexpr int REQUEST_TIMEOUT_MS = 10'000;
 constexpr int SWITCH_TIMEOUT_S = 15;
+constexpr int TESTCASE_TIMEOUT_S = 180;
 constexpr int WINDOW_SETTLE_MS = 1'200;
 constexpr int NODE_DEAD_TIMEOUT_S = 5;
 constexpr int FAILURE_ISOLATION_WAIT_S = NODE_DEAD_TIMEOUT_S + 1;
@@ -87,7 +88,7 @@ public:
         opts.enableDistributedMaster = "true";
         opts.systemAccessKey = DUMMY_ACCESS_KEY;
         opts.systemSecretKey = DUMMY_SECRET_KEY;
-        // Keep the initial master away from worker0 because several cases stop worker0 to force remote discovery.
+        // Keep the initial master away from worker0 because several cases kill worker0 to force remote discovery.
         opts.masterIdx = 1;
         // Keep local IPC enabled so same-host service discovery exercises the UDS/shared-memory path.
         opts.workerGflagParams = FormatString(
@@ -147,6 +148,11 @@ public:
     }
 
 protected:
+    int GetTestCaseTimeoutSecs() const override
+    {
+        return TESTCASE_TIMEOUT_S;
+    }
+
     static std::string GetHostIdEnvName(uint32_t workerIndex)
     {
         return HOST_ID_ENV_PREFIX + std::to_string(workerIndex);
@@ -185,7 +191,7 @@ protected:
 
     void InitRemoteFallbackClient(std::shared_ptr<KVClient> &client)
     {
-        ShutdownWorkerAndWaitDiscoveryRemote(0);
+        KillWorkerAndWaitDiscoveryRemote(0);
         InitClientByServiceDiscovery(GetHostIdEnvName(0), client);
         RunTraffic(client, 1, "remote_fallback_ready");
         // Readiness traffic records healthy remote UB samples. Keep those samples out of the measured failover window
@@ -196,10 +202,10 @@ protected:
     void InitRemoteFallbackClientWithSingleLiveRemote(std::shared_ptr<KVClient> &client, uint32_t initialWorkerIndex)
     {
         ASSERT_NE(initialWorkerIndex, 0u);
-        ShutdownWorkerAndWaitDiscoveryRemote(0);
+        KillWorkerAndWaitDiscoveryRemote(0);
         for (uint32_t i = 1; i < WORKER_NUM; ++i) {
             if (i != initialWorkerIndex) {
-                ShutdownWorkerAndWaitDiscoveryRemote(i);
+                KillWorkerAndWaitDiscoveryRemote(i);
             }
         }
         InitClientByServiceDiscovery(GetHostIdEnvName(0), client);
@@ -294,7 +300,7 @@ protected:
     }
 
     void RunGetErrorTraffic(const std::shared_ptr<KVClient> &client, const GetTrafficData &data, uint32_t begin,
-                            uint32_t count)
+                            uint32_t count, int expectedCqeStatus = -1)
     {
         ASSERT_LE(static_cast<uint64_t>(begin) + count, data.keys.size());
         for (uint32_t i = 0; i < count; ++i) {
@@ -303,6 +309,12 @@ protected:
             ASSERT_EQ(status.GetCode(), StatusCode::K_URMA_ERROR) << status.ToString();
             ASSERT_NE(status.GetMsg().find("fallback tcp payload rejected by limiter"), std::string::npos)
                 << status.ToString();
+            if (expectedCqeStatus >= 0) {
+                EXPECT_NE(status.GetMsg().find("failure_side=provider_local_ub_write"), std::string::npos)
+                    << status.ToString();
+                EXPECT_NE(status.GetMsg().find("cqe_status=" + std::to_string(expectedCqeStatus)), std::string::npos)
+                    << status.ToString();
+            }
         }
     }
 
@@ -322,10 +334,11 @@ protected:
         RunGetTraffic(client, data, MIN_SAMPLE_COUNT, 1);
     }
 
-    void TriggerUnhealthyGetErrorWindow(const std::shared_ptr<KVClient> &client, const GetTrafficData &data)
+    void TriggerUnhealthyGetErrorWindow(const std::shared_ptr<KVClient> &client, const GetTrafficData &data,
+                                        int expectedCqeStatus = -1)
     {
         // K_URMA_ERROR is still a data-plane failure sample when the request carried URMA info.
-        RunGetErrorTraffic(client, data, 0, MIN_SAMPLE_COUNT);
+        RunGetErrorTraffic(client, data, 0, MIN_SAMPLE_COUNT, expectedCqeStatus);
         std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
         std::string result;
         Status status = client->Get(data.keys[MIN_SAMPLE_COUNT], result);
@@ -365,10 +378,10 @@ protected:
         }
     }
 
-    void InjectWorkerGetUrmaWriteError(uint32_t workerIndex, uint32_t count)
+    void InjectWorkerGetUrmaWriteError(uint32_t workerIndex, uint32_t count, int cqeStatus = 9)
     {
         DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, workerIndex, URMA_CQE_ERROR_INJECT,
-                                               FormatString("%u*call(0, 9)", count)));
+                                               FormatString("%u*call(0, %d)", count, cqeStatus)));
         injectedWorkerIndexes_.emplace(workerIndex);
     }
 
@@ -468,12 +481,14 @@ protected:
         return Status::OK();
     }
 
-    void ShutdownWorkerAndWaitDiscoveryRemote(uint32_t workerIndex)
+    void KillWorkerAndWaitDiscoveryRemote(uint32_t workerIndex)
     {
         if (stoppedWorkers_.count(workerIndex) == 0) {
-            DS_ASSERT_OK(cluster_->ShutdownNode(WORKER, workerIndex));
+            // These cases validate service-discovery and URMA data-plane failover, not graceful worker teardown.
+            // Use SIGKILL so test setup cannot enter or depend on the URMA provider destruction path.
+            DS_ASSERT_OK(cluster_->KillWorker(workerIndex));
             stoppedWorkers_.emplace(workerIndex);
-            // After a worker is stopped, wait for node_dead_timeout_s plus a grace second so the failed node is
+            // After a worker is killed, wait for node_dead_timeout_s plus a grace second so the failed node is
             // isolated from hash-master routing before the next KV Set creates metadata.
             std::this_thread::sleep_for(std::chrono::seconds(FAILURE_ISOLATION_WAIT_S));
         }
@@ -596,6 +611,26 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_RemoteGetUrmaErrorSwitchByDiscovery)
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
     ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
     RunTraffic(client, 2, "remote_get_urma_error_after");
+}
+
+TEST_F(KVClientUrmaFailoverTest, LEVEL1_RemoteGetProviderError4DetailTriggersSwitch)
+{
+    LOG(INFO) << "[URMA failover test] verify provider CQE status 4 detail triggers remote worker switch";
+    std::shared_ptr<KVClient> client;
+    PrepareRemoteSwitchToExpectedWorker(client, 2, 1);
+    const uint64_t rejectedFallbackSize = UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes;
+    GetTrafficData data;
+    PrepareGetKeys(client, MIN_SAMPLE_COUNT + 1, "remote_get_provider_error4", data, rejectedFallbackSize);
+    // Keep Set samples from key preparation out of the measured worker-to-client Get failure window.
+    std::this_thread::sleep_for(std::chrono::milliseconds(WINDOW_SETTLE_MS));
+    EnableSwitchEndCounter();
+    InjectWorkerGetUrmaWriteError(2, MIN_SAMPLE_COUNT + 1, 4);
+
+    TriggerUnhealthyGetErrorWindow(client, data, 4);
+
+    ASSERT_TRUE(WaitSwitchCountAtLeast(1));
+    ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
+    RunTraffic(client, 2, "remote_get_provider_error4_after");
 }
 
 TEST_F(KVClientUrmaFailoverTest, LEVEL1_RemoteSwitchFailureKeepsCurrentWorkerAvailable)
@@ -735,9 +770,9 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_LocalFailRemoteFailThenSwitchBack)
     EnableSwitchEndCounter();
     RunTraffic(client, 1, "chain_local_before");
     // Keep worker2 out of service discovery so worker0 failure has exactly one remote candidate: worker1.
-    ShutdownWorkerAndWaitDiscoveryRemote(2);
+    KillWorkerAndWaitDiscoveryRemote(2);
     SetSwitchWorkerExpected(1, 1);
-    ShutdownWorkerAndWaitDiscoveryRemote(0);
+    KillWorkerAndWaitDiscoveryRemote(0);
     WaitClientTrafficReady(client, 1);
     ASSERT_TRUE(WaitSwitchCountAtLeast(1));
     ASSERT_TRUE(WaitSwitchToExpectedWorker(1, 1));
@@ -745,7 +780,7 @@ TEST_F(KVClientUrmaFailoverTest, LEVEL1_LocalFailRemoteFailThenSwitchBack)
     RestartWorkerAndWaitReady(2);
     ClearSwitchWorkerExpectedInjects();
     SetSwitchWorkerExpected(1, 2);
-    ShutdownWorkerAndWaitDiscoveryRemote(1);
+    KillWorkerAndWaitDiscoveryRemote(1);
     // Worker0 is still down, so worker1 failure should drive the remote client to worker2.
     WaitClientTrafficReady(client, 2);
     ASSERT_TRUE(WaitSwitchCountAtLeast(2));

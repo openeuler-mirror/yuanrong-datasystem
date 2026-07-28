@@ -117,12 +117,17 @@ ClusterTest::ClusterTest()
 
 ClusterTest::~ClusterTest() = default;
 
+int ClusterTest::GetTestCaseTimeoutSecs() const
+{
+    return DEFAULT_TESTCASE_TIMEOUT_SECS;
+}
+
 void ClusterTest::SetUp()
 {
     CommonTest::SetUp();
     DS_ASSERT_OK(Init());
     ASSERT_TRUE(cluster_ != nullptr);
-    killTimerPtr_ = std::make_unique<KillTimer>(DEFAULT_TESTCASE_TIMEOUT_SECS, [this]() { ClusterTest::TearDown(); });
+    killTimerPtr_ = std::make_unique<KillTimer>(GetTestCaseTimeoutSecs(), [this]() { ClusterTest::TearDown(); });
     DS_ASSERT_OK(cluster_->Start());
 }
 

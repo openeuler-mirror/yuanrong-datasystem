@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,9 @@ struct TransportMSetResult {
     bool publishAttempted = false;
     // True when the worker released memory references for successfully published objects.
     bool workerAutoRelease = false;
+    Status ubFailureReportRc = Status::OK();
+    std::optional<int> ubProviderStatus;
+    std::optional<int> ubCqeStatus;
 
     void Clear();
 };

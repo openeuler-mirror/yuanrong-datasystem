@@ -629,9 +629,13 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         Status subRc = status;
         bool tryGetFromElsewhere = true;
         bool dataSizeChanged = false;
+        const ProviderUbFailureDetailPb *providerUbFailureDetail = nullptr;
         if (subRc.IsOk()) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_PAYLOAD);
             auto &subResp = rspPb.responses(i);
+            if (subResp.has_provider_ub_failure_detail()) {
+                providerUbFailureDetail = &subResp.provider_ub_failure_detail();
+            }
             subRc = HandleBatchSubResponse(subResp, rspPb.root_info(), metaIter, objectKV, payloads, payloadIndex,
                                            tryGetFromElsewhere, dataSizeChanged);
             if (subRc.IsOk() && request && subResp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED) {
@@ -661,6 +665,9 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         if (subRc.IsOk()) {
             point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_UPDATA_REQUEST);
             subRc = UpdateRequestForSuccess(objectKV, request);
+        }
+        if (subRc.IsError() && request != nullptr && providerUbFailureDetail != nullptr) {
+            request->RecordRemoteProviderUbFailure(objectKey, subRc, *providerUbFailureDetail);
         }
         const bool needFailureCleanup = !dataSizeChanged && subRc.IsError();
         point.RecordAndReset(PerfKey::WORKER_HANDLE_BATCH_SUB_FOR_STATUS);
@@ -701,30 +708,28 @@ Status WorkerOcServiceGetImpl::ProcessBatchResponse(
         }                                                                                             \
     } while (0)
 
-Status WorkerOcServiceGetImpl::PrepareBatchGetRemoteRequest(
-    const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
-    std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-    std::unordered_set<std::string> &failedIds, PerfPoint &point, HostPort &hostAddr,
-    Status &checkConnectStatus, BatchGetObjectRemoteReqPb &reqPb)
+Status WorkerOcServiceGetImpl::PrepareBatchGetRemoteRequest(BatchGetRemoteRequestContext context)
 {
-    CHECK_FAIL_RETURN_STATUS(!address.empty(), K_RUNTIME_ERROR,
+    CHECK_FAIL_RETURN_STATUS(!context.address.empty(), K_RUNTIME_ERROR,
                              "Fail to get objects from remote worker, no object copy exists.");
-    CHECK_FAIL_RETURN_STATUS(address != localAddress_.ToString(), K_RUNTIME_ERROR,
+    CHECK_FAIL_RETURN_STATUS(context.address != localAddress_.ToString(), K_RUNTIME_ERROR,
                              "Remote getting from self address is invalid");
-    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(hostAddr.ParseString(address),
-                                     FormatString("Parse object address %s failed", address));
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(context.hostAddr.ParseString(context.address),
+                                     FormatString("Parse object address %s failed", context.address));
     CHECK_FAIL_RETURN_STATUS(endpointPolicy_ != nullptr, K_NOT_READY, "Object endpoint policy is unavailable");
-    checkConnectStatus = endpointPolicy_->CheckEndpoint(hostAddr, false);
-    CHECK_FAIL_RETURN_STATUS(checkConnectStatus.IsOk(), K_RUNTIME_ERROR,
+    context.checkConnectStatus = endpointPolicy_->CheckEndpoint(context.hostAddr, false);
+    CHECK_FAIL_RETURN_STATUS(context.checkConnectStatus.IsOk(), K_RUNTIME_ERROR,
                              "Fail to get objects from remote worker, no object copy exists.");
     INJECT_POINT("worker.before_GetObjectFromRemoteWorkerAndDump");
-    point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
-    RETURN_IF_NOT_OK(ConstructBatchGetRequest(address, infos, request, successIds, needRetryIds, failedIds, reqPb));
-    VLOG(1) << AppendSrcDstForLog(FormatString("[Get] Remote pull, count: %d, path: %s", reqPb.requests_size(),
+    context.point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CONSTRUCT_GET_REQUEST);
+    RETURN_IF_NOT_OK(CheckRemoteReadAdmission(context.address));
+    RETURN_IF_NOT_OK(ConstructBatchGetRequest(context.address, context.infos, context.request, context.successIds,
+                                              context.needRetryIds, context.failedIds, context.reqPb));
+    VLOG(1) << AppendSrcDstForLog(FormatString("[Get] Remote pull, count: %d, path: %s", context.reqPb.requests_size(),
                                                IsUrmaEnabled() ? "UB" : (IsUcpEnabled() ? "RDMA" : "TCP")),
-                                      localAddress_.ToString(), address);
+                                  localAddress_.ToString(), context.address);
     INJECT_POINT("worker.remote_get_failed");
-    point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
+    context.point.RecordAndReset(PerfKey::WORKER_BATCH_GET_CREATE_REMOTE_API);
     return Status::OK();
 }
 
@@ -804,12 +809,17 @@ Status WorkerOcServiceGetImpl::BatchGetObjectFromRemoteWorker(
         {
             PerfPoint detailPoint(PerfKey::WORKER_BATCH_GET_CONSTRUCT_AND_SEND_PRE);
             HostPort hostAddr;
-            rc = PrepareBatchGetRemoteRequest(address, infos, request, successIds, needRetryIds, failedIds,
-                                              detailPoint, hostAddr, checkConnectStatus, reqPb);
+            rc = PrepareBatchGetRemoteRequest({ address, infos, request, successIds, needRetryIds, failedIds,
+                                                detailPoint, hostAddr, checkConnectStatus, reqPb });
             if (rc.IsOk()) {
                 rc = SendBatchGetRemoteRequest(address, hostAddr, request, MIGRATE_DATA_TIMEOUT_MS,
                                                traceConfig.rpcSlowerThanUs, detailPoint, reqPb, rspPb, payloads);
             }
+        }
+        if (rc.IsError()) {
+            ReportRemoteReadOutcome(address, rc, "batch_remote_get");
+        } else {
+            ReportRemoteReadOutcome(address, rspPb, "batch_remote_get_response");
         }
         point.Record();
         point.RecordAndReset(PerfKey::WORKER_BATCH_GET_HANDLE_RESPONSE);

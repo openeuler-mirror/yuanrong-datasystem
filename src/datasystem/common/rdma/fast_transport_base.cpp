@@ -15,6 +15,9 @@
  */
 
 #include "datasystem/utils/status.h"
+
+#include <utility>
+
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rdma/fast_transport_base.h"
 
@@ -134,15 +137,22 @@ bool NeedRegisterWholeArena()
 Status WaitFastTransportEvent(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
                               std::function<Status(Status &)> errorHandler)
 {
+    return WaitFastTransportEventWithFailure(keys, std::move(remainingTime), std::move(errorHandler), nullptr);
+}
+
+Status WaitFastTransportEventWithFailure(std::vector<uint64_t> &keys, std::function<int64_t(void)> remainingTime,
+                                         std::function<Status(Status &)> errorHandler, UrmaWriteFailure *failure)
+{
     (void)keys;
     (void)remainingTime;
     (void)errorHandler;
+    (void)failure;
 #ifdef USE_URMA
     if (IsUrmaEnabled()) {
         Status firstError = Status::OK();
         for (auto key : keys) {
             // Wait for the event until timeout
-            Status rc = UrmaManager::Instance().WaitToFinish(key, remainingTime());
+            Status rc = UrmaManager::Instance().WaitToFinish(key, remainingTime(), failure);
             if (rc.IsError() && firstError.IsOk()) {
                 firstError = errorHandler(rc);
             }

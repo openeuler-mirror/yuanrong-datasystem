@@ -64,6 +64,7 @@
 #include "datasystem/common/metrics/metrics.h"
 #include "datasystem/common/object_cache/buffer_composer.h"
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rpc/rpc_auth_key_manager.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/log/log.h"
@@ -114,6 +115,46 @@
 DS_DECLARE_bool(log_monitor);
 
 static constexpr size_t OBJ_META_MAX_SIZE_LIMIT = 64;
+
+namespace datasystem {
+namespace {
+
+static Status WithProviderUbFailureDetail(Status status, const GetRspPb &rsp)
+{
+    if (status.IsOk() || !rsp.has_provider_ub_failure_detail()) {
+        return status;
+    }
+    const auto &detail = rsp.provider_ub_failure_detail();
+    if (detail.failure_side() != PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE || detail.failed_endpoint().empty()
+        || detail.operator_worker().empty() || detail.status_code() != static_cast<int32_t>(status.GetCode())
+        || detail.message() != status.GetMsg()) {
+        return status;
+    }
+    std::string fields = "provider_ub_failure_detail: failed_endpoint=" + detail.failed_endpoint()
+                         + ", operator_worker=" + detail.operator_worker()
+                         + ", failure_side=" + detail.failure_side();
+    if (detail.has_provider_status()) {
+        fields += ", provider_status=" + std::to_string(detail.provider_status());
+    }
+    if (detail.has_cqe_status()) {
+        fields += ", cqe_status=" + std::to_string(detail.cqe_status());
+    }
+    status.AppendMsg(fields);
+    return status;
+}
+
+static Status GetWorkerGetFailure(const GetRspPb &rsp, const HostPort &worker, const std::string &notFoundMessage)
+{
+    Status status(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
+    if (status.IsOk()) {
+        return Status(K_NOT_FOUND, notFoundMessage);
+    }
+    return WithRpcDiag(WithProviderUbFailureDetail(std::move(status), rsp), "Get", worker);
+}
+
+}  // namespace
+}  // namespace datasystem
+
 static constexpr size_t QUERY_SIZE_OBJECT_LIMIT = 10000;
 const std::string K_SEPARATOR = "$";
 const std::string CLIENT_PARALLEL_THREAD_MIN_NUM_ENV = "CLIENT_PARALLEL_THREAD_MIN_NUM";
@@ -4905,10 +4946,8 @@ Status ObjectClientImpl::GetBuffersFromWorker(std::shared_ptr<IClientWorkerApi> 
         return Status::OK();
     }
 
-    Status recvRc(static_cast<StatusCode>(rsp.last_rc().error_code()), rsp.last_rc().error_msg());
     totalPoint.Record();
-    return recvRc.IsOk() ? Status(K_NOT_FOUND, "Cannot get objects from worker")
-                         : WithRpcDiag(recvRc, "Get", workerApi->hostPort_);
+    return GetWorkerGetFailure(rsp, workerApi->hostPort_, "Cannot get objects from worker");
 }
 
 #ifdef USE_URMA
@@ -5037,7 +5076,11 @@ Status ObjectClientImpl::GetBuffersFromWorkerBatched(std::shared_ptr<IClientWork
         for (size_t k = 0; k < batch.indices.size(); ++k) {
             buffers[batch.indices[k]] = std::move(subBuffers[k]);
         }
-        totalSuccessCount += (subKeys.size() - failedObjectKey.size());
+        const size_t batchSuccessCount = subKeys.size() - failedObjectKey.size();
+        if (batchSuccessCount == 0) {
+            lastError = GetWorkerGetFailure(rsp, workerApi->hostPort_, "Cannot get objects from worker");
+        }
+        totalSuccessCount += batchSuccessCount;
     }
 
     if (totalSuccessCount > 0) {
@@ -5127,9 +5170,11 @@ Status ObjectClientImpl::GetOversizedBufferChunk(std::shared_ptr<IClientWorkerAp
     std::vector<std::string> failedObjectKey;
     RETURN_IF_NOT_OK(ProcessGetResponse(subKeys, subReadParams, rsp, version, payloads, chunkBuffers,
                                         failedObjectKey));
-    CHECK_FAIL_RETURN_STATUS(failedObjectKey.empty() && chunkBuffers[0] != nullptr, K_NOT_FOUND,
-                             FormatString("Cannot get chunk of object %s, offset %zu, size %zu", objectKey, offset,
-                                          chunkSize));
+    if (!failedObjectKey.empty() || chunkBuffers[0] == nullptr) {
+        return GetWorkerGetFailure(
+            rsp, workerApi->hostPort_,
+            FormatString("Cannot get chunk of object %s, offset %zu, size %zu", objectKey, offset, chunkSize));
+    }
     chunkBuffer = std::move(chunkBuffers[0]);
     return Status::OK();
 }

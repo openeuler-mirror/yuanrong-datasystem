@@ -25,7 +25,9 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include <tbb/concurrent_hash_map.h>
 
@@ -101,6 +103,9 @@ public:
      */
     virtual Status GetOrCreateRpcClient(const HostPort &workerAddr, std::shared_ptr<WorkerRpcClient> &out);
 
+    /** @brief Validate a UB connection and commit recovery while the worker snapshot remains admitted. */
+    Status ProbeUbConnection(const HostPort &workerAddr, const std::function<void()> &commitRecovery = {});
+
     /** @brief Drop only the selected data-plane transporter while retaining the shared RPC connection. */
     void ResetDataPlane(const HostPort &workerAddr);
 
@@ -128,6 +133,8 @@ protected:
     virtual Status BuildTransporter(const HostPort &workerAddr, TransportHint hint,
                                     const std::shared_ptr<WorkerRpcClient> &rpcClient,
                                     std::shared_ptr<IDataTransporter> &out);
+
+    virtual Status EstablishUbProbe(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient);
 
 private:
     struct WorkerTransportEntry {
@@ -161,8 +168,12 @@ private:
     // Protects entries_, the published worker admission set, and its version.
     std::shared_mutex mutex_;
     std::unordered_set<std::string> liveWorkers_;
+    std::vector<std::string> writeProbeWorkers_;
+    std::unordered_map<std::string, size_t> writeProbeWorkerIndices_;
     uint64_t workerSnapshotVersion_{ 0 };
     bool hasWorkerSnapshot_{ false };
+    std::string probePreferredWorker_;
+    std::string lastProbeWorker_;
     std::atomic<bool> shutdown_{ false };
     std::shared_ptr<Signature> signature_;
     BrpcChannelConfig channelConfig_;

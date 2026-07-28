@@ -42,6 +42,9 @@ Status BuildWorkerSnapshot(uint64_t ringVersion, const ::datasystem::ClusterTopo
             auto it = hostIdMap.find(member.first);
             sameHost = it != hostIdMap.end() && it->second == sdkHostId;
         }
+        if (member.second.state() == ::datasystem::MembershipPb::ACTIVE) {
+            updated.writeProbeAddrs.emplace_back(worker);
+        }
         if (sameHost) {
             updated.sameHostAddrs.emplace_back(std::move(worker));
         } else {

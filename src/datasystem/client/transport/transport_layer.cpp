@@ -18,6 +18,7 @@
 
 #include "datasystem/client/transport/transport_layer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
@@ -38,6 +39,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/object_cache/ub_failure_classifier.h"
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -46,6 +48,8 @@
 namespace datasystem {
 namespace client {
 namespace {
+constexpr uint32_t MAX_LOCAL_UB_PROBE_BACKOFF_LEVEL = 6;
+
 uint64_t GetConfiguredUbInlineBufferSize()
 {
     const char *value = std::getenv("DATASYSTEM_UB_GET_DATA_SIZE_BYTES");
@@ -54,11 +58,16 @@ uint64_t GetConfiguredUbInlineBufferSize()
     }
     for (const char *cursor = value; *cursor != '\0'; ++cursor) {
         if (*cursor < '0' || *cursor > '9') {
+            LOG(WARNING) << "Ignore invalid DATASYSTEM_UB_GET_DATA_SIZE_BYTES: expected an unsigned integer";
             return 0;
         }
     }
     uint64_t size = 0;
-    return Uri::StrToUint64(value, size) ? size : 0;
+    if (!Uri::StrToUint64(value, size)) {
+        LOG(WARNING) << "Ignore invalid DATASYSTEM_UB_GET_DATA_SIZE_BYTES: value is out of range";
+        return 0;
+    }
+    return size;
 }
 }  // namespace
 
@@ -82,8 +91,131 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
 
 TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager,
                                std::shared_ptr<TransportAdvisor> advisor)
+    : TransportLayer(std::move(dataPlaneManager), std::move(advisor), std::chrono::seconds(1))
+{
+}
+
+TransportLayer::TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager,
+                               std::shared_ptr<TransportAdvisor> advisor,
+                               std::chrono::milliseconds localUbProbeBaseDelay)
     : manager_(std::move(dataPlaneManager)), advisor_(std::move(advisor))
 {
+    localUbProbeBaseDelay_ = std::max(localUbProbeBaseDelay, std::chrono::milliseconds(1));
+}
+
+Status TransportLayer::CheckLocalUbSenderAdmission(TransportHint hint) const
+{
+    CHECK_FAIL_RETURN_STATUS(!shutdownRequested_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "TransportLayer is shutting down");
+    if (hint != TransportHint::UB_CANDIDATE || !localUbSenderUnavailable_.load(std::memory_order_acquire)) {
+        return Status::OK();
+    }
+    return Status(K_URMA_WORKER_UNAVAILABLE, "Client-local UB sender is unavailable");
+}
+
+Status TransportLayer::AcquireLocalUbSenderAdmission(TransportHint hint,
+                                                     std::shared_lock<std::shared_mutex> &admission) const
+{
+    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
+    if (hint != TransportHint::UB_CANDIDATE) {
+        return Status::OK();
+    }
+    admission = std::shared_lock<std::shared_mutex>(localUbSenderMutex_);
+    CHECK_FAIL_RETURN_STATUS(!shutdownRequested_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "TransportLayer is shutting down");
+    if (!localUbSenderUnavailable_.load(std::memory_order_acquire)) {
+        return Status::OK();
+    }
+    return Status(K_URMA_WORKER_UNAVAILABLE, "Client-local UB sender is unavailable");
+}
+
+bool TransportLayer::ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure,
+                                                std::shared_lock<std::shared_mutex> &admission)
+{
+    auto releaseAdmission = [&admission]() {
+        if (admission.owns_lock()) {
+            admission.unlock();
+        }
+    };
+    if (failure.kind != AccessTransportKind::UB || failure.status.IsOk()) {
+        releaseAdmission();
+        return false;
+    }
+    UbOpOutcome outcome(failure.workerAddr, UbOperationKind::CLIENT_PUT, failure.status);
+    outcome.providerStatus = failure.providerStatus;
+    outcome.cqeStatus = failure.cqeStatus;
+    outcome.learnedFrom = "client_local_ub_write";
+    if (UbFailureClassifier().Classify(outcome) != UbFailureClass::PORT_UNAVAILABLE_ERROR4) {
+        releaseAdmission();
+        return false;
+    }
+    localUbSenderUnavailable_.store(true, std::memory_order_release);
+    releaseAdmission();
+    {
+        std::lock_guard<std::shared_mutex> lock(localUbSenderMutex_);
+        localUbSenderUnavailable_.store(true, std::memory_order_release);
+        localUbSenderFailure_ = failure.status;
+        localUbProbeWorker_ = failure.workerAddr;
+        ++localUbSenderGeneration_;
+        localUbProbeBackoffLevel_ = 1;
+        localUbProbeDeadline_ = std::chrono::steady_clock::now() + localUbProbeBaseDelay_;
+    }
+    reconcileCv_.notify_one();
+    return true;
+}
+
+std::optional<std::chrono::steady_clock::time_point> TransportLayer::GetLocalUbProbeDeadline() const
+{
+    std::shared_lock<std::shared_mutex> lock(localUbSenderMutex_);
+    return localUbSenderFailure_.IsError() && localUbProbeWorker_.has_value()
+               ? std::optional<std::chrono::steady_clock::time_point>{ localUbProbeDeadline_ }
+               : std::nullopt;
+}
+
+void TransportLayer::TryRecoverLocalUbSender()
+{
+    std::optional<HostPort> workerAddr;
+    uint64_t generation = 0;
+    {
+        std::shared_lock<std::shared_mutex> lock(localUbSenderMutex_);
+        if (localUbSenderFailure_.IsOk() || !localUbProbeWorker_.has_value()
+            || std::chrono::steady_clock::now() < localUbProbeDeadline_) {
+            return;
+        }
+        workerAddr = localUbProbeWorker_;
+        generation = localUbSenderGeneration_;
+    }
+
+    bool committed = false;
+    Status probeRc = manager_->ProbeUbConnection(*workerAddr, [this, &workerAddr, generation, &committed] {
+        std::lock_guard<std::shared_mutex> lock(localUbSenderMutex_);
+        if (!shutdownRequested_.load(std::memory_order_acquire) && localUbSenderFailure_.IsError()
+            && localUbProbeWorker_ == workerAddr && localUbSenderGeneration_ == generation) {
+            localUbSenderFailure_ = Status::OK();
+            localUbProbeWorker_.reset();
+            localUbProbeBackoffLevel_ = 0;
+            localUbSenderUnavailable_.store(false, std::memory_order_release);
+            committed = true;
+        }
+    });
+    if (committed) {
+        LOG(INFO) << "Client-local UB sender recovered via probe to " << workerAddr->ToString();
+        return;
+    }
+    if (shutdownRequested_.load(std::memory_order_acquire)) {
+        return;
+    }
+    std::lock_guard<std::shared_mutex> lock(localUbSenderMutex_);
+    if (localUbSenderFailure_.IsOk() || localUbProbeWorker_ != workerAddr || localUbSenderGeneration_ != generation) {
+        return;
+    }
+    if (probeRc.IsOk()) {
+        return;
+    }
+    localUbProbeBackoffLevel_ = std::min<uint32_t>(localUbProbeBackoffLevel_ + 1, MAX_LOCAL_UB_PROBE_BACKOFF_LEVEL);
+    auto delay = localUbProbeBaseDelay_ * (1u << (localUbProbeBackoffLevel_ - 1));
+    localUbProbeDeadline_ = std::chrono::steady_clock::now() + delay;
+    LOG(WARNING) << "Client-local UB sender recovery probe failed for " << workerAddr->ToString() << ": " << probeRc;
 }
 
 TransportLayer::~TransportLayer()
@@ -177,9 +309,8 @@ Status TransportLayer::Exist(const HostPort &workerAddr, const TransportExistReq
     }
 
     if (static_cast<size_t>(response.exists_size()) != input.objectKeys.size()) {
-        return Status(K_RUNTIME_ERROR,
-                      FormatString("Exist response size mismatch: expected %zu keys, got %d results",
-                                   input.objectKeys.size(), response.exists_size()));
+        return Status(K_RUNTIME_ERROR, FormatString("Exist response size mismatch: expected %zu keys, got %d results",
+                                                    input.objectKeys.size(), response.exists_size()));
     }
     output.exists.assign(response.exists().begin(), response.exists().end());
     return Status::OK();
@@ -202,20 +333,29 @@ Status TransportLayer::Create(const HostPort &workerAddr, const std::string &obj
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    std::shared_lock<std::shared_mutex> admission;
+    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
     std::shared_ptr<IDataTransporter> transporter;
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
     Status rc = transporter->Create(workerAddr, objectKey, dataSize, param, buffer);
+    if (admission.owns_lock()) {
+        admission.unlock();
+    }
     if (rc.GetCode() != K_RPC_UNAVAILABLE) {
         return rc;
     }
-    LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
-                 << " after Create failed: " << rc;
+    LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString() << " after Create failed: " << rc;
     manager_->Teardown(workerAddr);
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
     rc = transporter->Create(workerAddr, objectKey, dataSize, param, buffer);
+    if (admission.owns_lock()) {
+        admission.unlock();
+    }
     if (rc.IsError()) {
-        LOG(WARNING) << "Create still failed after rebuilding transport for worker " << workerAddr.ToString()
-                     << ": " << rc;
+        LOG(WARNING) << "Create still failed after rebuilding transport for worker " << workerAddr.ToString() << ": "
+                     << rc;
     }
     return rc;
 }
@@ -226,19 +366,32 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const HostPort workerAddr = ObjectBufferInternal::GetInfo(buffer).workerAddr;
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    std::shared_lock<std::shared_mutex> admission;
+    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
     std::shared_ptr<IDataTransporter> transporter;
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
-    TransportSetParam retryParam = param;
-    Status rc = transporter->Set(buffer, retryParam);
-    const bool firstPublishMayHaveReachedWorker = rc.GetCode() == K_RPC_UNAVAILABLE
-                                                  && !IsBrpcRequestDefinitelyNotSent(rc);
-    Status firstPublishRc;
-    if (firstPublishMayHaveReachedWorker) {
+    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
+    auto &mutableBufferInfo = ObjectBufferInternal::GetMutableInfo(buffer);
+    mutableBufferInfo.ubFailureReportRc = Status::OK();
+    mutableBufferInfo.ubProviderStatus.reset();
+    mutableBufferInfo.ubCqeStatus.reset();
+    Status rc = transporter->Set(buffer, param);
+    const auto &ubFailureReport = ObjectBufferInternal::GetInfo(buffer).ubFailureReportRc;
+    const auto &bufferInfo = ObjectBufferInternal::GetInfo(buffer);
+    bool senderQuarantined = ReportLocalUbSenderFailure(
+        { workerAddr, transporter->Kind(), ubFailureReport, bufferInfo.ubProviderStatus, bufferInfo.ubCqeStatus },
+        admission);
+    std::optional<Status> firstPublishRc;
+    if (rc.GetCode() == K_RPC_UNAVAILABLE && !IsBrpcRequestDefinitelyNotSent(rc)) {
         firstPublishRc = rc;
     }
+    if (senderQuarantined) {
+        const auto &info = ObjectBufferInternal::GetInfo(buffer);
+        ScheduleRelease(workerAddr, info.shmId, param.requestContext, TransportHint::TCP_ONLY);
+        return rc.GetCode() == K_URMA_NEED_CONNECT ? ubFailureReport : rc;
+    }
     if (rc.GetCode() == K_URMA_NEED_CONNECT) {
-        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString()
-                     << " after Set failed: " << rc;
+        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString() << " after Set failed: " << rc;
         manager_->ResetDataPlane(workerAddr);
     } else if (rc.GetCode() == K_RPC_UNAVAILABLE) {
         LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
@@ -249,24 +402,38 @@ Status TransportLayer::Set(ObjectBuffer &buffer, const TransportSetParam &param)
         ScheduleRelease(workerAddr, info.shmId, param.requestContext);
         return rc;
     }
-    Status rebuildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
-    if (rebuildRc.IsOk()) {
-        // A same-worker retry is idempotent through isRetry. Cross-worker replay is not safe when the first Publish
-        // may have executed, so preserve that ambiguity if this recovery attempt also fails.
-        retryParam.isRetry = true;
-        rc = transporter->Set(buffer, retryParam);
-        if (rc.IsError()) {
-            LOG(WARNING) << "Set still failed after rebuilding transport for worker " << workerAddr.ToString()
-                         << ": " << rc;
-            if (firstPublishMayHaveReachedWorker) {
-                rc = firstPublishRc;
-            }
-        }
-    } else {
-        rc = rebuildRc;
+    rc = RetrySet(workerAddr, buffer, param, hint);
+    if (rc.IsError() && firstPublishRc.has_value()) {
+        rc = *firstPublishRc;
     }
     const auto &info = ObjectBufferInternal::GetInfo(buffer);
     ScheduleRelease(workerAddr, info.shmId, param.requestContext);
+    return rc;
+}
+
+Status TransportLayer::RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
+                                TransportHint hint)
+{
+    std::shared_ptr<IDataTransporter> transporter;
+    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    std::shared_lock<std::shared_mutex> admission;
+    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
+    TransportSetParam retryParam = param;
+    retryParam.isRetry = true;
+    auto &mutableBufferInfo = ObjectBufferInternal::GetMutableInfo(buffer);
+    mutableBufferInfo.ubFailureReportRc = Status::OK();
+    mutableBufferInfo.ubProviderStatus.reset();
+    mutableBufferInfo.ubCqeStatus.reset();
+    Status rc = transporter->Set(buffer, retryParam);
+    const auto &bufferInfo = ObjectBufferInternal::GetInfo(buffer);
+    (void)ReportLocalUbSenderFailure(
+        { workerAddr, transporter->Kind(), bufferInfo.ubFailureReportRc, bufferInfo.ubProviderStatus,
+          bufferInfo.ubCqeStatus },
+        admission);
+    if (rc.IsError()) {
+        LOG(WARNING) << "Set still failed after rebuilding transport for worker " << workerAddr.ToString() << ": "
+                     << rc;
+    }
     return rc;
 }
 
@@ -279,9 +446,15 @@ Status TransportLayer::MCreate(const HostPort &workerAddr, const std::vector<std
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    std::shared_lock<std::shared_mutex> admission;
+    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
     std::shared_ptr<IDataTransporter> transporter;
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
     Status rc = transporter->MCreate(workerAddr, objectKeys, dataSizes, param, buffers);
+    if (admission.owns_lock()) {
+        admission.unlock();
+    }
     if (rc.GetCode() == K_RPC_UNAVAILABLE) {
         // MultiCreate has no idempotency marker. The worker may have allocated memory even when the response is lost.
         LOG(WARNING) << "Tear down RPC and data plane for worker " << workerAddr.ToString()
@@ -291,8 +464,8 @@ Status TransportLayer::MCreate(const HostPort &workerAddr, const std::vector<std
     return rc;
 }
 
-Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
-                            const TransportSetParam &param, TransportMSetResult &result)
+Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers, const TransportSetParam &param,
+                            TransportMSetResult &result)
 {
     result.Clear();
     RETURN_IF_NOT_OK(ValidateMSetRequest(buffers, param));
@@ -300,9 +473,19 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
     RETURN_RUNTIME_ERROR_IF_NULL(advisor_);
     const HostPort workerAddr = ObjectBufferInternal::GetInfo(*buffers.front()).workerAddr;
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
+    std::shared_lock<std::shared_mutex> admission;
+    RETURN_IF_NOT_OK(CheckLocalUbSenderAdmission(hint));
     std::shared_ptr<IDataTransporter> transporter;
     RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
     Status rc = transporter->MSet(buffers, param, result);
+    const auto &ubFailureReport = result.ubFailureReportRc;
+    bool senderQuarantined = ReportLocalUbSenderFailure(
+        { workerAddr, transporter->Kind(), ubFailureReport, result.ubProviderStatus, result.ubCqeStatus }, admission);
+    if (senderQuarantined) {
+        ScheduleMSetReleases(buffers, param.requestContext, result, TransportHint::TCP_ONLY);
+        return rc.GetCode() == K_URMA_NEED_CONNECT ? ubFailureReport : rc;
+    }
     const bool retryUbWrite = rc.GetCode() == K_URMA_NEED_CONNECT;
     const bool retryUnsentPublish = rc.GetCode() == K_RPC_UNAVAILABLE && !result.publishAttempted;
     if (!retryUbWrite && !retryUnsentPublish) {
@@ -315,26 +498,38 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
         return rc;
     }
     if (retryUbWrite) {
-        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString()
-                     << " after MSet failed: " << rc;
+        LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString() << " after MSet failed: " << rc;
         manager_->ResetDataPlane(workerAddr);
     } else {
         LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
                      << " after MSet failed before publish: " << rc;
         manager_->Teardown(workerAddr);
     }
-    Status rebuildRc = manager_->GetOrCreate(workerAddr, hint, transporter);
-    if (rebuildRc.IsOk()) {
-        result.Clear();
-        rc = transporter->MSet(buffers, param, result);
-        if (rc.IsError()) {
-            LOG(WARNING) << "MSet still failed after rebuilding transport for worker " << workerAddr.ToString()
-                         << ": " << rc;
-        }
-    } else {
-        rc = rebuildRc;
+    rc = RetryMSet(workerAddr, buffers, param, hint, result);
+    std::optional<TransportHint> releaseHint;
+    if (localUbSenderUnavailable_.load(std::memory_order_acquire)) {
+        releaseHint = TransportHint::TCP_ONLY;
     }
-    ScheduleMSetReleases(buffers, param.requestContext, result);
+    ScheduleMSetReleases(buffers, param.requestContext, result, releaseHint);
+    return rc;
+}
+
+Status TransportLayer::RetryMSet(const HostPort &workerAddr, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                                 const TransportSetParam &param, TransportHint hint, TransportMSetResult &result)
+{
+    std::shared_ptr<IDataTransporter> transporter;
+    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    std::shared_lock<std::shared_mutex> admission;
+    RETURN_IF_NOT_OK(AcquireLocalUbSenderAdmission(hint, admission));
+    result.Clear();
+    Status rc = transporter->MSet(buffers, param, result);
+    (void)ReportLocalUbSenderFailure(
+        { workerAddr, transporter->Kind(), result.ubFailureReportRc, result.ubProviderStatus, result.ubCqeStatus },
+        admission);
+    if (rc.IsError()) {
+        LOG(WARNING) << "MSet still failed after rebuilding transport for worker " << workerAddr.ToString() << ": "
+                     << rc;
+    }
     return rc;
 }
 
@@ -350,14 +545,15 @@ Status TransportLayer::Release(ObjectBuffer &buffer, const TransportRequestConte
 }
 
 void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId,
-                                     const TransportRequestContext &context)
+                                     const TransportRequestContext &context, std::optional<TransportHint> transportHint)
 {
     if (shmId.Empty()) {
         return;
     }
     if (releasePool_ == nullptr) {
         std::shared_ptr<IDataTransporter> transporter;
-        Status rc = manager_->GetOrCreate(workerAddr, advisor_->GetTransportHint(workerAddr), transporter);
+        Status rc = manager_->GetOrCreate(workerAddr, transportHint.value_or(advisor_->GetTransportHint(workerAddr)),
+                                          transporter);
         if (rc.IsOk()) {
             rc = InvokeReleaseWithRetry(workerAddr, shmId, context, transporter);
         }
@@ -366,9 +562,10 @@ void TransportLayer::ScheduleRelease(const HostPort &workerAddr, const ShmKey &s
     }
     auto manager = manager_;
     auto advisor = advisor_;
-    releasePool_->Execute([manager, advisor, workerAddr, shmId, context]() {
+    releasePool_->Execute([manager, advisor, workerAddr, shmId, context, transportHint]() {
         std::shared_ptr<IDataTransporter> transporter;
-        Status rc = manager->GetOrCreate(workerAddr, advisor->GetTransportHint(workerAddr), transporter);
+        Status rc = manager->GetOrCreate(workerAddr, transportHint.value_or(advisor->GetTransportHint(workerAddr)),
+                                         transporter);
         if (rc.IsOk()) {
             rc = TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(workerAddr, shmId, context, transporter,
                                                                           manager, advisor);
@@ -430,7 +627,8 @@ Status TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(
 
 void TransportLayer::ScheduleMSetReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
                                           const TransportRequestContext &context,
-                                          const TransportMSetResult &result)
+                                          const TransportMSetResult &result,
+                                          std::optional<TransportHint> transportHint)
 {
     if (result.workerAutoRelease && result.failedKeys.empty()) {
         return;
@@ -445,7 +643,7 @@ void TransportLayer::ScheduleMSetReleases(const std::vector<std::shared_ptr<Obje
         if (result.workerAutoRelease && failedKeys.find(info.objectKey) == failedKeys.end()) {
             continue;
         }
-        ScheduleRelease(info.workerAddr, info.shmId, context);
+        ScheduleRelease(info.workerAddr, info.shmId, context, transportHint);
     }
 }
 
@@ -481,25 +679,44 @@ void TransportLayer::ReconcileLoop()
 {
     bool keepRunning = true;
     while (keepRunning) {
-        WorkerSnapshot snapshot;
+        std::optional<WorkerSnapshot> snapshot;
         {
             std::unique_lock<std::mutex> lock(reconcileMutex_);
-            reconcileCv_.wait(lock, [this] { return reconcileStopping_ || pendingSnapshot_.has_value(); });
-            keepRunning = !reconcileStopping_;
-            if (keepRunning) {
-                snapshot = std::move(*pendingSnapshot_);
+            while (!reconcileStopping_ && !pendingSnapshot_.has_value()) {
+                auto probeDeadline = GetLocalUbProbeDeadline();
+                if (probeDeadline.has_value()) {
+                    (void)reconcileCv_.wait_until(
+                        lock, *probeDeadline, [this] { return reconcileStopping_ || pendingSnapshot_.has_value(); });
+                    break;
+                }
+                reconcileCv_.wait(lock, [this] {
+                    return reconcileStopping_ || pendingSnapshot_.has_value() || GetLocalUbProbeDeadline().has_value();
+                });
+            }
+            if (reconcileStopping_) {
+                keepRunning = false;
+                continue;
+            }
+            if (pendingSnapshot_.has_value()) {
+                snapshot = std::move(pendingSnapshot_);
                 pendingSnapshot_.reset();
             }
         }
-        if (keepRunning) {
-            manager_->ReconcileWithSnapshot(snapshot);
+        if (snapshot.has_value()) {
+            manager_->ReconcileWithSnapshot(*snapshot);
         }
+        TryRecoverLocalUbSender();
     }
 }
 
 void TransportLayer::Shutdown()
 {
     std::lock_guard<std::mutex> shutdownLock(shutdownMutex_);
+    {
+        std::lock_guard<std::shared_mutex> admission(localUbSenderMutex_);
+        shutdownRequested_.store(true, std::memory_order_release);
+        localUbSenderUnavailable_.store(true, std::memory_order_release);
+    }
     Thread reconcileThread;
     {
         std::lock_guard<std::mutex> lock(reconcileMutex_);
