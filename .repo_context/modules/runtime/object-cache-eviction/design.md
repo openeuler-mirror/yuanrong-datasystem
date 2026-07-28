@@ -27,7 +27,7 @@
 - Related context docs:
   - `.repo_context/modules/runtime/object-cache-eviction/README.md`
   - `.repo_context/modules/runtime/worker-runtime.md`
-  - `.repo_context/modules/runtime/cluster-management.md`
+  - `.repo_context/modules/runtime/topology/README.md`
   - `.repo_context/modules/infra/l2cache/README.md`
   - `.repo_context/modules/infra/slot/design.md`
   - `.repo_context/modules/quality/tests-and-reproduction.md`

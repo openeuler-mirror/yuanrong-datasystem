@@ -90,6 +90,15 @@ Status RpcServer::AddBrpcService(google::protobuf::Service *service)
     return Status::OK();
 }
 
+Status RpcServer::AddBrpcServices(const std::function<Status(brpc::Server &)> &registrar)
+{
+    CHECK_FAIL_RETURN_STATUS(static_cast<bool>(registrar), StatusCode::K_INVALID, "Registrar is empty");
+    if (!brpcServer_) {
+        brpcServer_ = std::make_unique<brpc::Server>();
+    }
+    return registrar(*brpcServer_);
+}
+
 Status RpcServer::StartBrpcServer(const std::string &addr, int port)
 {
     if (!brpcServer_) {
@@ -137,7 +146,7 @@ Status RpcServer::StartBrpcServer(const std::string &addr, int port)
         // reject duplicate service registrations on the next attempt.
         brpcServer_.reset();
         RETURN_STATUS(StatusCode::K_RUNTIME_ERROR,
-            FormatString("Failed to start brpc server on %s:%d", addr.c_str(), port));
+                      FormatString("Failed to start brpc server on %s:%d", addr.c_str(), port));
     }
     LOG(INFO) << "brpc server started on " << addr << ":" << port;
     return Status::OK();

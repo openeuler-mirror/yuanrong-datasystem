@@ -23,6 +23,7 @@ Current canonical records:
 - `overview.repository-skills.json`
 - `client.client-sdk.json`
 - `runtime.worker-runtime.json`
+- `runtime.coordinator-election.json`
 - `runtime.etcd-metadata.json`
 - `runtime.topology.json`
 - `infra.common-infra.json`

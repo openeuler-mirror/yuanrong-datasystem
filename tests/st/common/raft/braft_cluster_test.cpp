@@ -15,10 +15,13 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <unistd.h>
@@ -27,33 +30,257 @@
 #include <brpc/server.h>
 #include <butil/at_exit.h>
 #include <butil/endpoint.h>
+#include <butil/iobuf.h>
 #include <gtest/gtest.h>
 
 #include "cluster/test_port_allocator.h"
 #include "common_test.h"
+#include "datasystem/coordinator/raft/coordinator_raft_state_machine.h"
 
 namespace datasystem {
 namespace st {
 namespace {
 constexpr size_t kClusterNodeCount = 3;
 constexpr int kElectionTimeoutMs = 300;
-constexpr int kLeaderElectionDeadlineMs = 5'000;
 constexpr int kLeaderPollIntervalMs = 20;
+constexpr std::chrono::seconds kClusterCaseBudget{ 6 };
+constexpr std::chrono::seconds kReplayCaseBudget{ 6 };
+constexpr std::chrono::seconds kDefaultTestBudget{ 8 };
+constexpr std::chrono::milliseconds kRecoveredNodeObservationWindow{ 500 };
+constexpr char kLoopbackIp[] = "127.0.0.1";
+constexpr char kReplayRaftGroupId[] = "datasystem_braft_replay_test";
 const std::string kRaftGroupId = "datasystem_braft_election_test";
+const std::string kUnknownUserLog = "unknown-user-log";
+const std::string kUnsupportedManagementLogMessage = "Coordinator raft management log apply is not supported yet";
 
-class EmptyStateMachine : public braft::StateMachine {
+static_assert(kRecoveredNodeObservationWindow < kReplayCaseBudget);
+static_assert(kClusterCaseBudget < kDefaultTestBudget);
+static_assert(kReplayCaseBudget < kDefaultTestBudget);
+
+struct ApplyCompletion {
+    std::promise<butil::Status> promise;
+};
+
+class SelfDeletingApplyClosure : public braft::Closure {
 public:
-    ~EmptyStateMachine() override = default;
-
-    void on_apply(braft::Iterator &iterator) override
+    explicit SelfDeletingApplyClosure(std::shared_ptr<ApplyCompletion> completion) : completion_(std::move(completion))
     {
-        for (; iterator.valid(); iterator.next()) {
-            if (iterator.done() != nullptr) {
-                iterator.done()->Run();
-            }
-        }
+    }
+
+    ~SelfDeletingApplyClosure() override = default;
+
+    butil::IOBuf &Data()
+    {
+        return data_;
+    }
+
+    void Run() override
+    {
+        completion_->promise.set_value(status());
+        delete this;
+    }
+
+private:
+    std::shared_ptr<ApplyCompletion> completion_;
+    butil::IOBuf data_;
+};
+
+struct ReplayErrorCompletion {
+    std::once_flag once;
+    std::promise<Status> promise;
+
+    void Complete(Status status)
+    {
+        std::call_once(once, [this, status = std::move(status)]() mutable { promise.set_value(std::move(status)); });
     }
 };
+
+class BraftReplayTest : public CommonTest {
+public:
+    BraftReplayTest() : CommonTest(std::to_string(getpid()))
+    {
+    }
+
+protected:
+    void SetUp() override
+    {
+        CommonTest::SetUp();
+
+        const auto *testInfo = testing::UnitTest::GetInstance()->current_test_info();
+        const std::string testName =
+            testInfo == nullptr ? "unknown" : std::string(testInfo->test_case_name()) + "." + testInfo->name();
+        rootDir_ = testCasePath_ + "/braft-replay";
+        dataDir_ = rootDir_ + "/node";
+
+        std::error_code error;
+        std::filesystem::remove_all(rootDir_, error);
+        ASSERT_FALSE(error) << error.message();
+        ASSERT_TRUE(std::filesystem::create_directories(dataDir_, error)) << error.message();
+
+        auto &allocator = TestPortAllocator::Instance();
+        allocator.SetOwnerInfo("braft_cluster_test", testName, rootDir_);
+        const auto reserveStatus = allocator.Reserve("braft_replay_node", portLease_);
+        ASSERT_TRUE(reserveStatus.IsOk()) << reserveStatus.ToString();
+
+        ASSERT_EQ(butil::str2endpoint(kLoopbackIp, portLease_.Port(), &endpoint_), 0);
+        peer_ = braft::PeerId(endpoint_);
+    }
+
+    void TearDown() override
+    {
+        StopNodeGeneration();
+        if (!testCasePath_.empty()) {
+            std::error_code error;
+            std::filesystem::remove_all(testCasePath_, error);
+            EXPECT_FALSE(error) << error.message();
+        }
+        TestPortAllocator::Instance().ReleaseAll();
+        CommonTest::TearDown();
+    }
+
+    void StartNodeGeneration(const braft::Configuration &initialConfiguration,
+                             coordinator::CoordinatorRaftEventCallbacks callbacks)
+    {
+        ASSERT_EQ(node_, nullptr);
+        ASSERT_EQ(stateMachine_, nullptr);
+        ASSERT_EQ(server_, nullptr);
+
+        server_ = std::make_unique<brpc::Server>();
+        ASSERT_EQ(braft::add_service(server_.get(), endpoint_), 0);
+        ASSERT_EQ(server_->Start(endpoint_, nullptr), 0);
+
+        stateMachine_ = std::make_unique<coordinator::CoordinatorRaftStateMachine>(std::move(callbacks));
+        braft::NodeOptions options;
+        options.election_timeout_ms = kElectionTimeoutMs;
+        options.initial_conf = initialConfiguration;
+        options.fsm = stateMachine_.get();
+        options.node_owns_fsm = false;
+        options.log_uri = "local://" + dataDir_ + "/log";
+        options.raft_meta_uri = "local://" + dataDir_ + "/raft_meta";
+        options.snapshot_uri = "local://" + dataDir_ + "/snapshot";
+        options.snapshot_interval_s = 0;
+        options.disable_cli = true;
+
+        auto node = std::make_unique<braft::Node>(kReplayRaftGroupId, peer_);
+        ASSERT_EQ(node->init(options), 0);
+        node_ = std::move(node);
+    }
+
+    void StopNodeGeneration()
+    {
+        if (node_ != nullptr) {
+            node_->shutdown(nullptr);
+            node_->join();
+            node_.reset();
+        }
+        stateMachine_.reset();
+        if (server_ != nullptr) {
+            server_->Stop(0);
+            server_->Join();
+            server_.reset();
+        }
+    }
+
+    bool WaitForLeader(std::chrono::steady_clock::time_point deadline) const
+    {
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (node_ != nullptr && node_->is_leader()) {
+                return true;
+            }
+            const auto nextPoll = std::chrono::steady_clock::now() + std::chrono::milliseconds(kLeaderPollIntervalMs);
+            std::this_thread::sleep_until(nextPoll < deadline ? nextPoll : deadline);
+        }
+        return node_ != nullptr && node_->is_leader();
+    }
+
+    bool WaitForNodeError(std::chrono::steady_clock::time_point deadline) const
+    {
+        while (std::chrono::steady_clock::now() < deadline) {
+            braft::NodeStatus status;
+            node_->get_status(&status);
+            if (status.state == braft::STATE_ERROR) {
+                return true;
+            }
+            const auto nextPoll = std::chrono::steady_clock::now() + std::chrono::milliseconds(kLeaderPollIntervalMs);
+            std::this_thread::sleep_until(nextPoll < deadline ? nextPoll : deadline);
+        }
+        braft::NodeStatus status;
+        node_->get_status(&status);
+        return status.state == braft::STATE_ERROR;
+    }
+
+    bool RemainsNotLeaderUntil(std::chrono::steady_clock::time_point deadline) const
+    {
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (node_->is_leader()) {
+                return false;
+            }
+            const auto nextPoll = std::chrono::steady_clock::now() + std::chrono::milliseconds(kLeaderPollIntervalMs);
+            std::this_thread::sleep_until(nextPoll < deadline ? nextPoll : deadline);
+        }
+        return !node_->is_leader();
+    }
+
+    butil::AtExitManager atExitManager_;
+    TestPortLease portLease_;
+    std::string rootDir_;
+    std::string dataDir_;
+    butil::EndPoint endpoint_;
+    braft::PeerId peer_;
+    std::unique_ptr<brpc::Server> server_;
+    std::unique_ptr<coordinator::CoordinatorRaftStateMachine> stateMachine_;
+    std::unique_ptr<braft::Node> node_;
+};
+
+TEST_F(BraftReplayTest, UnsupportedUserLogReplayFailsClosedAfterRestart)
+{
+    const auto caseDeadline = std::chrono::steady_clock::now() + kReplayCaseBudget;
+    braft::Configuration bootstrapConfiguration;
+    bootstrapConfiguration.add_peer(peer_);
+    ASSERT_NO_FATAL_FAILURE(StartNodeGeneration(bootstrapConfiguration, {}));
+    ASSERT_TRUE(WaitForLeader(caseDeadline));
+
+    auto applyCompletion = std::make_shared<ApplyCompletion>();
+    auto applyFuture = applyCompletion->promise.get_future();
+    auto *done = new SelfDeletingApplyClosure(std::move(applyCompletion));
+    done->Data().append(kUnknownUserLog);
+
+    braft::Task task;
+    task.data = &done->Data();
+    task.done = done;
+    node_->apply(task);
+
+    ASSERT_EQ(applyFuture.wait_until(caseDeadline), std::future_status::ready);
+    const auto applyStatus = applyFuture.get();
+    ASSERT_EQ(applyStatus.error_code(), braft::ESTATEMACHINE) << applyStatus.error_str();
+    ASSERT_NE(std::string(applyStatus.error_str()).find(kUnsupportedManagementLogMessage), std::string::npos)
+        << applyStatus.error_str();
+
+    StopNodeGeneration();
+
+    auto replayError = std::make_shared<ReplayErrorCompletion>();
+    auto replayErrorFuture = replayError->promise.get_future();
+    coordinator::CoordinatorRaftEventCallbacks callbacks;
+    callbacks.onError = [replayError](Status status) { replayError->Complete(std::move(status)); };
+    const braft::Configuration recoveryConfiguration;
+    ASSERT_TRUE(recoveryConfiguration.empty());
+    ASSERT_NO_FATAL_FAILURE(StartNodeGeneration(recoveryConfiguration, std::move(callbacks)));
+
+    ASSERT_EQ(replayErrorFuture.wait_until(caseDeadline), std::future_status::ready);
+    const auto replayStatus = replayErrorFuture.get();
+    EXPECT_EQ(replayStatus.GetCode(), K_RUNTIME_ERROR);
+    EXPECT_NE(replayStatus.GetMsg().find(kUnsupportedManagementLogMessage), std::string::npos)
+        << replayStatus.ToString();
+    ASSERT_TRUE(WaitForNodeError(caseDeadline));
+
+    const auto observationDeadline = std::chrono::steady_clock::now() + kRecoveredNodeObservationWindow;
+    ASSERT_LT(observationDeadline, caseDeadline) << "Replay left no time for the recovered-node observation window";
+    EXPECT_TRUE(RemainsNotLeaderUntil(observationDeadline));
+    braft::NodeStatus recoveredStatus;
+    node_->get_status(&recoveredStatus);
+    EXPECT_EQ(recoveredStatus.state, braft::STATE_ERROR);
+    EXPECT_FALSE(node_->is_leader());
+}
 
 class BraftClusterTest : public CommonTest {
 public:
@@ -101,7 +328,8 @@ protected:
             error.clear();
             ASSERT_TRUE(std::filesystem::create_directories(nodeDir, error)) << error.message();
 
-            stateMachines_[i] = std::make_unique<EmptyStateMachine>();
+            stateMachines_[i] = std::make_unique<coordinator::CoordinatorRaftStateMachine>(
+                coordinator::CoordinatorRaftEventCallbacks{});
             braft::NodeOptions options;
             options.election_timeout_ms = kElectionTimeoutMs;
             options.initial_conf = configuration_;
@@ -158,9 +386,8 @@ protected:
         CommonTest::TearDown();
     }
 
-    bool WaitForLeader()
+    bool WaitForLeader(std::chrono::steady_clock::time_point deadline)
     {
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kLeaderElectionDeadlineMs);
         while (std::chrono::steady_clock::now() < deadline) {
             size_t leaderCount = 0;
             braft::PeerId electedLeader;
@@ -178,7 +405,8 @@ protected:
             if (converged) {
                 return true;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(kLeaderPollIntervalMs));
+            const auto nextPoll = std::chrono::steady_clock::now() + std::chrono::milliseconds(kLeaderPollIntervalMs);
+            std::this_thread::sleep_until(nextPoll < deadline ? nextPoll : deadline);
         }
         return false;
     }
@@ -200,13 +428,15 @@ protected:
     braft::Configuration configuration_;
     std::array<braft::PeerId, kClusterNodeCount> peers_;
     std::array<std::unique_ptr<brpc::Server>, kClusterNodeCount> servers_;
-    std::array<std::unique_ptr<EmptyStateMachine>, kClusterNodeCount> stateMachines_;
+    std::array<std::unique_ptr<coordinator::CoordinatorRaftStateMachine>, kClusterNodeCount> stateMachines_;
     std::array<std::unique_ptr<braft::Node>, kClusterNodeCount> nodes_;
 };
 
 TEST_F(BraftClusterTest, ThreeNodesElectOneLeader)
 {
-    ASSERT_TRUE(WaitForLeader()) << ElectionState();
+    const auto caseDeadline = std::chrono::steady_clock::now() + kClusterCaseBudget;
+    ASSERT_TRUE(WaitForLeader(caseDeadline))
+        << "cluster did not converge on one leader before the case deadline: " << ElectionState();
 
     size_t leaderCount = 0;
     braft::PeerId electedLeader;
@@ -221,6 +451,39 @@ TEST_F(BraftClusterTest, ThreeNodesElectOneLeader)
     for (const auto &node : nodes_) {
         EXPECT_EQ(node->leader_id(), electedLeader) << ElectionState();
     }
+}
+
+TEST_F(BraftClusterTest, UnknownUserLogFailsClosed)
+{
+    const auto caseDeadline = std::chrono::steady_clock::now() + kClusterCaseBudget;
+    ASSERT_TRUE(WaitForLeader(caseDeadline))
+        << "cluster did not converge on one leader before the case deadline: " << ElectionState();
+
+    braft::Node *leader = nullptr;
+    for (const auto &node : nodes_) {
+        if (node->is_leader()) {
+            leader = node.get();
+            break;
+        }
+    }
+    ASSERT_NE(leader, nullptr) << ElectionState();
+
+    auto completion = std::make_shared<ApplyCompletion>();
+    auto completionFuture = completion->promise.get_future();
+    auto *done = new SelfDeletingApplyClosure(std::move(completion));
+    done->Data().append(kUnknownUserLog);
+
+    braft::Task task;
+    task.data = &done->Data();
+    task.done = done;
+    leader->apply(task);
+
+    ASSERT_EQ(completionFuture.wait_until(caseDeadline), std::future_status::ready)
+        << "unknown-log apply did not complete before the case deadline";
+    const auto applyStatus = completionFuture.get();
+    EXPECT_EQ(applyStatus.error_code(), braft::ESTATEMACHINE) << applyStatus.error_str();
+    EXPECT_NE(std::string(applyStatus.error_str()).find(kUnsupportedManagementLogMessage), std::string::npos)
+        << applyStatus.error_str();
 }
 }  // namespace
 }  // namespace st

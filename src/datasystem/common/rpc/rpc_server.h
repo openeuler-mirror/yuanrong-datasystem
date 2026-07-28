@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_COMMON_RPC_RPC_SERVER_H
 #define DATASYSTEM_COMMON_RPC_RPC_SERVER_H
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -238,6 +239,16 @@ public:
      * @return Status of the call.
      */
     Status AddBrpcService(google::protobuf::Service *service);
+
+    /**
+     * @brief Register brpc services synchronously through the provided registrar.
+     * @note Call only before StartBrpcServer() from the external single-threaded lifecycle. Do not call concurrently
+     * with AddBrpcService(), StartBrpcServer(), or StopBrpcServer(). The registrar must not retain the server
+     * reference.
+     * @param[in] registrar Registrar invoked synchronously with the owned brpc server.
+     * @return Status returned by the registrar.
+     */
+    Status AddBrpcServices(const std::function<Status(brpc::Server &)> &registrar);
 
     /**
      * @brief Start the brpc server listening on the given address and port.

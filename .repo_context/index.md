@@ -34,6 +34,8 @@ Use it to jump from a question type to the smallest useful document instead of r
 | optimize CMake compile speed or change CMake target/package dependencies | `playbooks/features/quality/cmake-build-optimization.md` | `modules/quality/cmake-build/design.md`, nearest `CMakeLists.txt`, `cmake/package.cmake` |
 | understand public SDK APIs and Python bindings | `modules/client/client-sdk.md` | `include/datasystem/*`, `src/datasystem/client`, `src/datasystem/pybind_api`, `python/yr/datasystem` |
 | understand worker startup and runtime services | `modules/runtime/worker-runtime.md` | `src/datasystem/worker/*` |
+| understand current Coordinator election, braft lifecycle, recovery, or test-gated integration | `modules/runtime/coordinator-election/README.md` | `src/datasystem/coordinator/raft/*`, `tests/ut/common/coordinator/coordinator_raft_*`, `tests/st/common/raft/*`, `src/datasystem/coordinator/CMakeLists.txt` |
+| design or extend Coordinator Raft election and product integration | `modules/runtime/coordinator-election/design.md` | `playbooks/features/runtime/coordinator-election/implementation.md`, `src/datasystem/coordinator/raft/*`, `src/datasystem/coordinator/coordinator_service_impl.*` |
 | understand worker object cache eviction, END_LIFE, spill eviction, or master metadata cleanup from eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*`, `src/datasystem/master/object_cache/oc_metadata_manager.*` |
 | understand runtime topology, worker membership, route lookup, scale, restart, or degraded startup | `modules/runtime/topology/README.md` | `src/datasystem/cluster`, `src/datasystem/protos/cluster_topology.proto`, `src/datasystem/worker/worker_oc_server.cpp` |
 | understand ETCD proto/client access, watch, keepalive, CAS, or Metastore behavior | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |
@@ -80,6 +82,7 @@ Use it to jump from a question type to the smallest useful document instead of r
 | module metadata registry | `modules/metadata/README.md` | `modules/metadata/*.json` |
 | client/API surface | `modules/client/client-sdk.md` | `include/datasystem`, `src/datasystem/client`, `python/yr/datasystem` |
 | worker runtime | `modules/runtime/worker-runtime.md` | `src/datasystem/worker` |
+| Coordinator election | `modules/runtime/coordinator-election/README.md` | `src/datasystem/coordinator/raft`, `tests/ut/common/coordinator`, `tests/st/common/raft`, `src/datasystem/coordinator/CMakeLists.txt` |
 | object cache eviction | `modules/runtime/object-cache-eviction/README.md` | `src/datasystem/worker/object_cache/worker_oc_eviction_manager.*`, `src/datasystem/worker/object_cache/eviction_list.*`, `src/datasystem/worker/object_cache/worker_oc_spill.*` |
 | runtime topology | `modules/runtime/topology/README.md` | `src/datasystem/cluster`, `src/datasystem/protos/cluster_topology.proto`, `src/datasystem/worker/worker_oc_server.cpp` |
 | ETCD metadata backend | `modules/runtime/etcd-metadata/README.md` | `third_party/protos/etcd`, `src/datasystem/common/kvstore/etcd`, `src/datasystem/common/kvstore/metastore` |

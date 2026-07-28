@@ -32,6 +32,59 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "coordinator_raft_types_test",
+    srcs = ["coordinator_raft_types_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//src/datasystem/coordinator/raft:coordinator_raft_peer",
+        "//src/datasystem/coordinator/raft:coordinator_raft_types",
+        "//tests/ut:ut_common",
+        "@com_github_apache_brpc//:brpc",
+    ],
+)
+
+ds_cc_test(
+    name = "coordinator_raft_state_machine_test",
+    srcs = ["coordinator_raft_state_machine_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//src/datasystem/coordinator/raft:coordinator_raft_state_machine",
+        "//tests/ut:ut_common",
+        "@braft//:braft",
+    ],
+)
+
+ds_cc_test(
+    name = "coordinator_raft_node_test",
+    srcs = ["coordinator_raft_node_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/rpc:rpc_server",
+        "//src/datasystem/coordinator/raft:coordinator_raft_node",
+        "//src/datasystem/coordinator/raft:coordinator_raft_state_machine",
+        "//src/datasystem/coordinator/raft:coordinator_raft_types",
+        "//tests/ut:ut_common",
+        "@braft//:braft",
+        "@com_github_apache_brpc//:brpc",
+        "@com_github_apache_brpc//:butil",
+    ],
+)
+
+ds_cc_test(
+    name = "coordinator_membership_manager_test",
+    srcs = ["coordinator_membership_manager_test.cpp"],
+    tags = ["level0", "ut", "asan", "tsan"],
+    deps = [
+        "//include/datasystem/utils:utils_headers",
+        "//src/datasystem/common/util:thread",
+        "//src/datasystem/coordinator/raft:coordinator_membership_manager",
+        "//src/datasystem/coordinator/raft:coordinator_raft_node",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "coordinator_store_perf_test",
     srcs = ["coordinator_store_perf_test.cpp"],
     deps = [
