@@ -69,6 +69,7 @@ const std::string TARGET_MEMORY_AVAILABLE_POINT = "worker.migrate_service.memory
 const std::string ASSIGN_TASK_POINT = "MemoryRebalanceScheduler.AssignTask";
 const std::string EXPIRE_TASK_POINT = "MemoryRebalanceScheduler.ExpireTask";
 const std::string REPLACE_PRIMARY_POINT = "OCMetadataManager.ReplacePrimary";
+const std::string NOTIFY_REMOTE_GET_REPLACE_POINT = "worker.NotifyRemoteGet.ReplacePrimary";
 const std::string REPORT_RESULT_POINT = "MasterOCServiceImpl.ReportRebalanceResult";
 const std::string SOURCE_CLOCK_OFFSET_POINT = "RebalanceExecutor.NowMsForExpiryCheck.addOffsetMs";
 const std::string ADMISSION_CLOSED_POINT = "WorkerOcServiceMigrateImpl.CloseIncomingMigrationAdmissionAndWait.closed";
@@ -941,6 +942,114 @@ TEST_F(LEVEL1_KVClientMemoryRebalanceEnabledEvictSpillRegressionTest, EvictAndSp
 TEST_F(LEVEL1_KVClientMemoryRebalanceDisabledEvictSpillRegressionTest, EvictAndSpillSemanticsRemainWithRebalanceOff)
 {
    VerifySpillRoundTrip();
+}
+
+// ============================================================================
+// B+ fix: enable_data_replication=false + URMA write mode + memory rebalance
+// triggers NotifyRemoteGet path. Before fix, master metadata is never updated
+// (BatchUpdateLocationHelper is a no-op) so the source releases its data while
+// master still points at the source, causing permanent data loss. After fix,
+// the target calls ReplacePrimary to switch master's primary to the target so
+// Get requests route to the target after the source releases.
+//
+// Trigger config (all 4 must hold):
+//   1. enable_data_replication=false (fixture)
+//   2. enable_urma=true (fixture, when USE_URMA)
+//   3. data_migrate_urma_transport_mode=write (default)
+//   4. enable_memory_rebalance=true (base class)
+// ============================================================================
+class LEVEL1_KVClientMemoryRebalanceNoReplicationTest : public LEVEL1_KVClientMemoryRebalanceTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        LEVEL1_KVClientMemoryRebalanceTest::SetClusterSetupOptions(opts);
+        // Trigger condition 1: enable_data_replication=false
+        opts.workerGflagParams += " -enable_data_replication=false";
+        // Lower rebalance threshold so fewer objects trigger rebalance (avoid eviction)
+        opts.workerGflagParams += " -rebalance_source_usage_percent=30 -rebalance_usage_gap_percent=10";
+        // Trigger condition 2: enable_urma=true (base class only adds URMA for
+        // IsUrmaScaleInCase tests; this fixture's test name does not match, so add explicitly).
+#ifdef USE_URMA
+        opts.workerGflagParams += " -enable_urma=true -enable_transport_fallback=false";
+#else
+        opts.workerGflagParams += " -enable_urma=false";
+#endif
+    }
+};
+
+TEST_F(LEVEL1_KVClientMemoryRebalanceNoReplicationTest, NotifyRemoteGetUpdatesMasterWhenReplicationDisabled)
+{
+#ifdef USE_URMA
+    WaitAllNodesActiveInHashRing(3);
+
+    // NONE_L2_CACHE_EVICT so data has no L2 fallback (amplifies data loss consequence)
+    SetParam evictParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
+
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+
+    // Write 6 x 5MB = 30MB ~ 47% of 64MB. Exceeds 30% source threshold (19.2MB)
+    // so rebalance fires and worker0 sends NotifyRemoteGet to worker1.
+    auto batch = WriteObjects(client0_, "norep", 6, 'n', 5UL * 1024 * 1024, &evictParam);
+
+    // Wait for rebalance to trigger (source=worker0 sends NotifyRemoteGet to target=worker1)
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1, AllWorkers(), 30'000);
+    // Give time for NotifyRemoteGet + ReplacePrimary to complete on the target side.
+    SleepMs(SHORT_WAIT_MS * 2);
+
+    // Verify: Get succeeds (master primary switched to target=worker1, worker1 has data).
+    // Before B+ fix, master metadata was never updated (BatchUpdateLocationHelper is a no-op
+    // when enable_data_replication=false), so worker0 released its data while master still
+    // pointed at worker0, causing permanent data loss (K_NOT_FOUND on Get).
+    AssertReadable(client0_, batch);
+    AssertReadable(client2_, batch);
+#else
+    GTEST_SKIP() << "Worker not built with URMA framework; skip write-path test";
+#endif
+}
+
+// ============================================================================
+// B+ error path: ReplacePrimary RPC fails on master. The target must report
+// these objects in failed_object_keys so the source does not treat them as
+// success and release its data. Get must still succeed because master primary
+// still points at the source (metadata unchanged) and source keeps its data.
+// ============================================================================
+TEST_F(LEVEL1_KVClientMemoryRebalanceNoReplicationTest, ReplacePrimaryFailureKeepsSourceData)
+{
+#ifdef USE_URMA
+    WaitAllNodesActiveInHashRing(3);
+
+    // Inject master ReplacePrimary to fail so target cannot switch primary.
+    SetInjectActionForAll(REPLACE_PRIMARY_POINT, "100000*return(K_RUNTIME_ERROR)");
+    // Enable counting on FAST_MIGRATE_SEND_POINT so we can confirm source used
+    // FastMigrateTransport2 (the B+ NotifyRemoteGet path).
+    SetInjectAction(WORKER0, FAST_MIGRATE_SEND_POINT, "100000*call()");
+    // Enable counting on the worker-side inject point to verify the B+ path
+    // (ReplacePrimaryForNotifyRemoteGet) is entered on the target before the
+    // master-side RPC fails. This covers the worker inject point that was
+    // previously untested.
+    SetInjectActionForAll(NOTIFY_REMOTE_GET_REPLACE_POINT, "100000*call()");
+    auto assignBaseline = GetTotalInjectCount(ASSIGN_TASK_POINT);
+    auto sourceSendBaseline = GetInjectCountIfAlive(WORKER0, FAST_MIGRATE_SEND_POINT);
+    auto notifyReplaceBaseline = GetTotalInjectCount(NOTIFY_REMOTE_GET_REPLACE_POINT);
+
+    SetParam evictParam{ .writeMode = WriteMode::NONE_L2_CACHE_EVICT };
+    auto batch = WriteObjects(client0_, "norep_fail", 6, 'f', 5UL * 1024 * 1024, &evictParam);
+
+    WaitForTotalInjectCount(ASSIGN_TASK_POINT, assignBaseline + 1, AllWorkers(), 30'000);
+    // Confirm source sent NotifyRemoteGet via FastMigrateTransport2 (B+ path).
+    WaitForInjectCount(WORKER0, FAST_MIGRATE_SEND_POINT, sourceSendBaseline + 1, 30'000);
+    // Confirm target entered ReplacePrimaryForNotifyRemoteGet (worker-side inject
+    // point covered by this test, complementing the master-side REPLACE_PRIMARY_POINT).
+    WaitForTotalInjectCount(NOTIFY_REMOTE_GET_REPLACE_POINT, notifyReplaceBaseline + 1, AllWorkers(),
+                            30'000);
+    SleepMs(SHORT_WAIT_MS * 2);
+
+    // Source must keep its data because ReplacePrimary failed (B+ reports as failed).
+    AssertReadable(client0_, batch);
+    AssertReadable(client2_, batch);
+#else
+    GTEST_SKIP() << "Worker not built with URMA framework; skip write-path test";
+#endif
 }
 
 }  // namespace st

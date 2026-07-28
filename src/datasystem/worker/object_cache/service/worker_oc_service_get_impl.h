@@ -1053,10 +1053,36 @@ private:
     void ClearNeedDeleteForMigratedObjects(const std::vector<std::string> &successIds,
                                            std::map<ReadKey, LockedEntity> &lockedEntries);
 
+    void CollectUnconfirmedVersions(const std::unordered_set<std::string> &unconfirmedIds,
+                                    std::map<ReadKey, LockedEntity> &lockedEntries,
+                                    std::map<std::string, uint64_t> &unconfirmedObjectVersions);
+
     void ConfirmCopyMetaForNotifyRemoteGet(const std::vector<std::string> &dataSuccessIds,
                                            const QueryMetaMap &queryMetas, std::vector<std::string> &confirmedIds,
                                            std::unordered_set<std::string> &failedIds,
                                            std::unordered_set<std::string> &failedConfirmationOwners);
+
+    // When enable_data_replication=false, BatchUpdateLocationHelper is a no-op so
+    // master metadata is never updated during NotifyRemoteGet migration. Call
+    // ReplacePrimary to switch master's primary to the target so Get requests route
+    // to the target after the source releases its data. Without this, data is lost.
+    void ReplacePrimaryForNotifyRemoteGet(const std::vector<std::string> &successIds,
+                                          const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp);
+
+    // When enable_data_replication=false, call ReplacePrimary to switch master's primary
+    // to the target, then remove failed objects from successIds so their needDelete is not
+    // cleared (target can reclaim orphan copies).
+    void ReplacePrimaryAndPruneFailed(std::vector<std::string> &successIds,
+                                      const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp);
+
+    master::ReplacePrimaryReqPb BuildReplacePrimaryReq(const std::vector<std::string> &objectKeys,
+                                                      const std::string &sourceAddr,
+                                                      const QueryMetaMap &queryMetas);
+
+    void ReplacePrimaryForMasterGroup(const HostPort &masterAddr,
+                                      const std::vector<std::string> &objectKeys,
+                                      const std::string &sourceAddr,
+                                      const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp);
 
     bool ClassifyCopyMetaConfirmationResult(const master::CreateMultiCopyMetaRspPb &rsp, const Status &status,
                                             const std::vector<std::string> &objectKeys,
