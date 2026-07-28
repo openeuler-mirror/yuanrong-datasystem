@@ -1177,7 +1177,10 @@ Status UrmaManager::WaitToFinish(uint64_t requestId, int64_t timeoutMs)
     metrics::GetHistogram(static_cast<uint16_t>(metrics::KvMetricId::URMA_WAIT_LATENCY)).Observe(totalElapsedUs);
     auto waitElapsedMs = waitTimer.ElapsedMicroSecond() / US_TO_MS;
     GetWorkerTimeCost().Append("Urma wait time.", static_cast<uint64_t>(totalElapsedMs));
-    if (waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED) {
+    // UrmaEvent::WaitFor returns K_URMA_WAIT_TIMEOUT; keep K_RPC_DEADLINE_EXCEEDED for older Event paths.
+    const bool isUrmaWaitTimeout = waitRc.GetCode() == StatusCode::K_URMA_WAIT_TIMEOUT
+                                   || waitRc.GetCode() == StatusCode::K_RPC_DEADLINE_EXCEEDED;
+    if (isUrmaWaitTimeout) {
         return timeoutStatus(totalElapsedMs, waitRc.GetMsg());
     }
     LogUrmaWaitToFinishElapsed(requestId, event, totalElapsedUs, totalElapsedMs, waitElapsedMs, wakeSchedLatencyUs,

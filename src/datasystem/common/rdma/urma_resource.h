@@ -278,7 +278,8 @@ public:
         }
         RecordWakeSchedLatencyLocked();
         const auto requestIdStr = std::to_string(static_cast<uint64_t>(requestId_));
-        RETURN_STATUS_LOG_ERROR(K_RPC_DEADLINE_EXCEEDED,
+        // URMA wait timeout is a transport completion timeout, not an RPC API deadline.
+        RETURN_STATUS_LOG_ERROR(K_URMA_WAIT_TIMEOUT,
                                 FormatString("Timed out waiting for request: %s", requestIdStr.c_str()));
     }
 
