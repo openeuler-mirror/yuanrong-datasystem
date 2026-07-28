@@ -123,6 +123,17 @@ void ExpectReplacementAfterRetire(UrmaResource &resource, const std::shared_ptr<
     resource.ReleaseJetty(replacementJetty);
 }
 
+void CompleteTimedOutEvent(UrmaManager &manager, uint64_t requestId)
+{
+    // Drive the completion-owned part directly, matching the non-recoverable CQE test below without racing the
+    // manager's single-owner finishedRequests_ poll thread.
+    std::shared_ptr<UrmaEvent> event;
+    ASSERT_TRUE(manager.GetEvent(requestId, event).IsOk());
+    manager.ReleaseEventLane(event);
+    EXPECT_TRUE(event->NotifyAllAndGetWaitTimedOut());
+    manager.DeleteEvent(requestId);
+}
+
 size_t GetRegisteredJettyCount(UrmaResource &resource)
 {
     std::lock_guard<std::mutex> lock(resource.jettyRegistryMutex_);
@@ -299,7 +310,7 @@ TEST(UrmaSendJettyFaultTest, AsyncJettyErrorRetiresAndRefillsJetty)
     ExpectReplacementAfterRetire(resource, failedJetty);
 }
 
-TEST(UrmaSendJettyFaultTest, WaitTimeoutRetiresAndRefillsJetty)
+TEST(UrmaSendJettyFaultTest, WaitTimeoutReturnsAndReleasesJettyAfterCqe)
 {
     if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
@@ -317,13 +328,26 @@ TEST(UrmaSendJettyFaultTest, WaitTimeoutRetiresAndRefillsJetty)
     ASSERT_TRUE(manager.CreateEvent(kRequestId, MakeTestConnection(), lease, "fault-test", 0,
                                     UrmaEvent::OperationType::WRITE, nullptr)
                     .IsOk());
-    // Seal before waiting, matching the submit path: the timeout then becomes the lease's final retirement action.
+    // Seal before waiting, matching the submit path. A timeout must leave the sealed lease in use until its CQE.
     ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
     const auto status = manager.WaitToFinish(kRequestId, -1);
     EXPECT_EQ(status.GetCode(), K_URMA_WAIT_TIMEOUT);
-    EXPECT_FALSE(timedOutJetty->IsValid());
-    resource.ReleaseJetty(timedOutJetty);
-    ExpectReplacementAfterRetire(resource, timedOutJetty);
+    EXPECT_TRUE(timedOutJetty->IsValid());
+    const auto stats = resource.GetSendJettyPoolStats();
+    EXPECT_EQ(stats.poolSize, 1);
+    EXPECT_EQ(stats.idleCount, 0);
+    EXPECT_EQ(stats.inUseCount, 1);
+    std::shared_ptr<UrmaEvent> pendingEvent;
+    EXPECT_TRUE(manager.GetEvent(kRequestId, pendingEvent).IsOk());
+
+    CompleteTimedOutEvent(manager, kRequestId);
+    std::shared_ptr<UrmaEvent> event;
+    EXPECT_TRUE(manager.GetEvent(kRequestId, event).IsError());
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+    std::shared_ptr<UrmaJetty> releasedJetty;
+    ASSERT_TRUE(resource.AcquireJetty(releasedJetty).IsOk());
+    EXPECT_EQ(releasedJetty.get(), timedOutJetty.get());
+    resource.ReleaseJetty(releasedJetty);
 }
 
 TEST(UrmaSendJettyFaultTest, InFlightWaitTimeoutStatusIncludesPeerContext)
@@ -350,12 +374,16 @@ TEST(UrmaSendJettyFaultTest, InFlightWaitTimeoutStatusIncludesPeerContext)
     EXPECT_EQ(status.GetCode(), K_URMA_WAIT_TIMEOUT);
     ExpectStatusContains(status, { "requestId=1003", "srcAddress=", "targetAddress=127.0.0.1:29100",
                                    "dataSize=4096", "op=WRITE" });
-    EXPECT_FALSE(timedOutJetty->IsValid());
-    resource.ReleaseJetty(timedOutJetty);
-    ExpectReplacementAfterRetire(resource, timedOutJetty);
+    EXPECT_TRUE(timedOutJetty->IsValid());
+    CompleteTimedOutEvent(manager, kRequestId);
+    ASSERT_TRUE(WaitForIdleSendLane(resource));
+    std::shared_ptr<UrmaJetty> releasedJetty;
+    ASSERT_TRUE(resource.AcquireJetty(releasedJetty).IsOk());
+    EXPECT_EQ(releasedJetty.get(), timedOutJetty.get());
+    resource.ReleaseJetty(releasedJetty);
 }
 
-TEST(UrmaSendJettyFaultTest, RepeatedWaitTimeoutsRefillWithoutExceedingUniqueJettyHeadroom)
+TEST(UrmaSendJettyFaultTest, RepeatedWaitTimeoutsReuseJettyAfterCqeDrain)
 {
     if (!IsUrmaFaultTestEnvAvailable()) {
         GTEST_SKIP() << "URMA environment test requires DS_URMA_DEV_NAME and a usable local URMA device.";
@@ -377,11 +405,13 @@ TEST(UrmaSendJettyFaultTest, RepeatedWaitTimeoutsRefillWithoutExceedingUniqueJet
                         .IsOk());
         ASSERT_TRUE(manager.SealSendLaneLease(lease).IsOk());
         EXPECT_EQ(manager.WaitToFinish(requestId, -1).GetCode(), K_URMA_WAIT_TIMEOUT);
-        EXPECT_FALSE(timedOutJetty->IsValid());
-        resource.ReleaseJetty(timedOutJetty);
-        ExpectReplacementAfterRetire(resource, timedOutJetty);
-        EXPECT_LE(GetRegisteredJettyCount(resource),
-                  FLAGS_urma_send_jetty_lane_pool_size + FLAGS_urma_send_jetty_lane_refill_extra_size);
+        EXPECT_TRUE(timedOutJetty->IsValid());
+        CompleteTimedOutEvent(manager, requestId);
+        ASSERT_TRUE(WaitForIdleSendLane(resource));
+        std::shared_ptr<UrmaJetty> releasedJetty;
+        ASSERT_TRUE(resource.AcquireJetty(releasedJetty).IsOk());
+        EXPECT_EQ(releasedJetty.get(), timedOutJetty.get());
+        resource.ReleaseJetty(releasedJetty);
     }
 }
 
