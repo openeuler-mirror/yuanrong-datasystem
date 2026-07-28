@@ -2,6 +2,19 @@
 
 load("//bazel/sdk:deps.bzl", "source_sdk_deps")
 
+_SOURCE_SDK_EXCLUDED_ENTRIES = {
+    ".git": True,
+    "BUILD": True,
+    "BUILD.bazel": True,
+    "WORKSPACE": True,
+    "WORKSPACE.bazel": True,
+    "bazel-bin": True,
+    "bazel-out": True,
+    "bazel-testlogs": True,
+    "build": True,
+    "output": True,
+}
+
 
 def _datasystem_source_repository_impl(repository_ctx):
     if not repository_ctx.attr.enabled:
@@ -23,30 +36,12 @@ def _datasystem_source_repository_impl(repository_ctx):
     if not source_path.exists:
         fail("DataSystem source path does not exist: %s" % source_path)
 
-    rsync = repository_ctx.which("rsync")
-    if rsync == None:
-        fail("rsync is required to register the DataSystem source SDK")
-
-    result = repository_ctx.execute([
-        rsync,
-        "-a",
-        "--delete",
-        "--delete-excluded",
-        "--exclude=/build/",
-        "--exclude=/output/",
-        "--exclude=/.git/",
-        str(source_path) + "/",
-        ".",
-    ])
-    if result.return_code != 0:
-        fail("Failed to copy DataSystem sources: %s %s" % (result.stderr, result.stdout))
-
     repository_ctx.file("WORKSPACE", "workspace(name = \"%s\")\n" % repository_ctx.name)
-
-    for build_file in ("BUILD", "BUILD.bazel"):
-        result = repository_ctx.execute(["rm", "-r", "-f", str(repository_ctx.path(build_file))])
-        if result.return_code != 0:
-            fail("Failed to replace DataSystem root BUILD file: %s %s" % (result.stderr, result.stdout))
+    for entry in source_path.readdir():
+        entry_name = entry.basename
+        if entry_name in _SOURCE_SDK_EXCLUDED_ENTRIES or entry_name.startswith("bazel-"):
+            continue
+        repository_ctx.symlink(entry, repository_ctx.path(entry_name))
 
     native_build = repository_ctx.path(repository_ctx.attr.native_build_path)
     if not native_build.exists:
