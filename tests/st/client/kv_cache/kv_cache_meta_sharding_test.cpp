@@ -27,7 +27,6 @@
 #include <vector>
 
 #include "common.h"
-#include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
 #include "datasystem/common/eventloop/timer_queue.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/common/util/status_helper.h"
@@ -159,7 +158,7 @@ private:
 // some shards have more expired entries than others.
 TEST_F(KVCacheMetaShardingTest, CrossShardFairnessLargeBatch)
 {
-    const int kNumKeys = 300;
+    const int kNumKeys = 60;
     const uint32_t kTtlSeconds = 2;
     const std::string kValue = "fairness_val";
 
@@ -178,28 +177,25 @@ TEST_F(KVCacheMetaShardingTest, CrossShardFairnessLargeBatch)
     }
 
     // Wait for TTL expiry.
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
-    // Use the first 200 actually-inserted keys for verification (not regenerated).
-    const int kSampleSize = std::min(200, kNumKeys);
-    std::vector<std::string> sampled(keys.begin(), keys.begin() + kSampleSize);
+    // Poll until >=95% of sampled keys are deleted. 60 keys converges faster than 300 under CI
+    // parallel load (-u16); keep the window tight (8s) so the case stays under 10s.
+    int notFound = WaitForKeysDeleted(keys, client1, 0.95, 8);
 
-    // Poll until >=95% of sampled keys are deleted.
-    int notFound = WaitForKeysDeleted(sampled, client1, 0.95, 60);
-
-    LOG(INFO) << "[A1] " << notFound << "/" << kSampleSize << " expired";
+    LOG(INFO) << "[A1] " << notFound << "/" << kNumKeys << " expired";
     // 95% strict, 80% fallback.
-    if (notFound < kSampleSize * 0.95) {
+    if (notFound < kNumKeys * 0.95) {
         // Log surviving keys for diagnosis.
         std::string out;
-        for (int i = 0; i < kSampleSize; ++i) {
-            if (client1->Get(sampled[i], out).IsOk()) {
-                LOG(WARNING) << "[A1] Surviving key: " << sampled[i];
+        for (int i = 0; i < kNumKeys; ++i) {
+            if (client1->Get(keys[i], out).IsOk()) {
+                LOG(WARNING) << "[A1] Surviving key: " << keys[i];
             }
         }
-        EXPECT_GE(notFound, kSampleSize * 0.80)
+        EXPECT_GE(notFound, kNumKeys * 0.80)
             << "k-way merge must process expired keys from ALL shards. "
-            << "Only " << notFound << "/" << kSampleSize << " expired.";
+            << "Only " << notFound << "/" << kNumKeys << " expired.";
     }
 }
 
@@ -302,9 +298,6 @@ TEST_F(KVCacheMetaShardingTest, AsyncDeleteMultiShardConsistency)
 // connection to maximize shard coverage.
 TEST_F(KVCacheMetaShardingTest, RemoveMetaByWorkerFullShardCoverage)
 {
-    if (FLAGS_use_brpc) {
-        GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     const int kKeysPerWorker = 300;
     const std::string kValue = "rmw_val";
 

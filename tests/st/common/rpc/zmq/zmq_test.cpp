@@ -1172,7 +1172,7 @@ TEST_F(ZmqTest, ZmqFdEventCrash1)
         req.set_msg("Hello");
         arbitrary::workspace::ReplyHelloPb rsp;
         DS_ASSERT_OK(datasystem::inject::Set("IOService.ServiceToClient.wait", "call(1000)"));
-        DS_ASSERT_NOT_OK(stub->UnarySocketSimpleGreeting(opt_, req, rsp));
+        DS_EXPECT_NOT_OK(stub->UnarySocketSimpleGreeting(opt_, req, rsp));
     });
 
     auto r2 = pool.Submit([this]() {
@@ -1183,7 +1183,7 @@ TEST_F(ZmqTest, ZmqFdEventCrash1)
         arbitrary::workspace::SayHelloPb req1;
         req1.set_msg("Hello1");
         arbitrary::workspace::ReplyHelloPb rsp;
-        DS_ASSERT_NOT_OK(stub->UnarySocketSimpleGreeting(opt_, req1, rsp));
+        DS_EXPECT_NOT_OK(stub->UnarySocketSimpleGreeting(opt_, req1, rsp));
     });
 
     r1.get();
@@ -1201,7 +1201,7 @@ TEST_F(ZmqTest, ZmqFdEventCrash2)
         req.set_msg("Hello");
         arbitrary::workspace::ReplyHelloPb rsp;
         DS_ASSERT_OK(datasystem::inject::Set("IOService.ClientToService.wait", "call(1000)"));
-        DS_ASSERT_NOT_OK(stub->UnarySocketSimpleGreeting(opt_, req, rsp));
+        DS_EXPECT_NOT_OK(stub->UnarySocketSimpleGreeting(opt_, req, rsp));
     });
 
     auto r2 = pool.Submit([this]() {
@@ -1212,7 +1212,7 @@ TEST_F(ZmqTest, ZmqFdEventCrash2)
         arbitrary::workspace::SayHelloPb req1;
         req1.set_msg("Hello1");
         arbitrary::workspace::ReplyHelloPb rsp;
-        DS_ASSERT_NOT_OK(stub->UnarySocketSimpleGreeting(opt_, req1, rsp));
+        DS_EXPECT_NOT_OK(stub->UnarySocketSimpleGreeting(opt_, req1, rsp));
     });
 
     r1.get();
