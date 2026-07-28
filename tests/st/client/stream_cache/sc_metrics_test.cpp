@@ -186,10 +186,18 @@ protected:
     void GetStreamMetrics(int index, const std::string &fileName,
                           std::unordered_map<std::string, std::vector<std::string>> &allScMetrics)
     {
+        DS_ASSERT_OK(TryGetStreamMetrics(index, fileName, allScMetrics));
+    }
+
+    // Non-aborting variant for polling: returns K_NOT_READY when the metrics log has not yet accumulated
+    // two PRINT_INTERVAL samples (the "second last set" the reader targets), so callers can retry.
+    Status TryGetStreamMetrics(int index, const std::string &fileName,
+                               std::unordered_map<std::string, std::vector<std::string>> &allScMetrics)
+    {
         allScMetrics.clear();
         std::string fullName = FormatString("%s/../worker%d/log/%s", FLAGS_log_dir.c_str(), index, fileName);
         std::ifstream ifs(fullName);
-        ASSERT_TRUE(ifs.is_open());
+        CHECK_FAIL_RETURN_STATUS(ifs.is_open(), K_NOT_READY, "metrics log not open yet");
         std::string line;
         std::streampos metric_start_pos = ifs.tellg();
         std::streampos pos = ifs.tellg();
@@ -211,18 +219,45 @@ protected:
             }
             pos = ifs.tellg();  // stores the last position
         }
-        ASSERT_TRUE(found);
+        CHECK_FAIL_RETURN_STATUS(found, K_NOT_READY, "metrics log has fewer than two samples");
         ifs.clear();
         ifs.seekg(metric_start_pos);
         while (std::getline(ifs, line)) {
             if ((line.find(" exit") == std::string::npos)) {
                 auto scMetrics = Split(line, "/");
-                ASSERT_TRUE(scMetrics.size() > 0);
+                CHECK_FAIL_RETURN_STATUS(scMetrics.size() > 0, K_RUNTIME_ERROR, "malformed metrics line");
                 auto streamName = scMetrics[0].substr(scMetrics[0].find_last_of("|") + 2);
                 scMetrics.erase(scMetrics.begin());
                 allScMetrics.emplace(streamName, scMetrics);
             }
         }
+        return Status::OK();
+    }
+
+    // Returns true only when metrics can be read and every expected field matches.
+    bool TryVerifyStreamMetrics(int index, const std::string &fileName,
+                                const std::unordered_map<std::string, std::vector<std::string>> &expected,
+                                const std::vector<StreamMetric> &metricsToVerify)
+    {
+        std::unordered_map<std::string, std::vector<std::string>> scMetrics;
+        if (!TryGetStreamMetrics(index, fileName, scMetrics).IsOk()) {
+            return false;
+        }
+        if (scMetrics.size() != expected.size()) {
+            return false;
+        }
+        for (auto &metric : expected) {
+            if (scMetrics.count(metric.first) != 1) {
+                return false;
+            }
+            auto scMetric = scMetrics.at(metric.first);
+            for (size_t i = 0; i < metricsToVerify.size(); i++) {
+                if (GetScMetric(scMetric, metricsToVerify[i]) != metric.second[i]) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     std::string GetScMetric(const std::vector<std::string> &scMetrics, StreamMetric metric)
@@ -937,8 +972,16 @@ TEST_F(SCMetricsTest, NumRemoteProducersConsumersBlocked)
     int eleNum = 400;
     Produce(producers[0], "producer1", eleNum, TEST_ELEMENT2_SIZE, waitTime);
 
-    sleep(LONG_SLEEP_TIME);
-
+    // sc_metrics.log is printed every PRINT_INTERVAL seconds. Poll until both workers reflect the
+    // blocked state instead of a fixed sleep that races the print interval on slow runners.
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&]() {
+            return (TryVerifyStreamMetrics(0, "sc_metrics.log", expected1, metricsToVerify)
+                    && TryVerifyStreamMetrics(1, "sc_metrics.log", expected2, metricsToVerify))
+                       ? Status::OK()
+                       : Status(K_NOT_READY, "blocked metrics not yet reflected");
+        },
+        10, K_OK));
     GetStreamMetrics(0, "sc_metrics.log", sc0Metrics);
     VerifyStreamMetrics(sc0Metrics, expected1, metricsToVerify);
     GetStreamMetrics(1, "sc_metrics.log", sc1Metrics);
@@ -955,7 +998,14 @@ TEST_F(SCMetricsTest, NumRemoteProducersConsumersBlocked)
     expected1 = { { streamName1, { "0", "0" } }, { streamName2, { "", "" } } };
 
     expected2 = { { streamName1, { "0", "0" } }, { streamName2, { "0", "0" } } };
-    sleep(SLEEP_TIME);
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&]() {
+            return (TryVerifyStreamMetrics(0, "sc_metrics.log", expected1, metricsToVerify)
+                    && TryVerifyStreamMetrics(1, "sc_metrics.log", expected2, metricsToVerify))
+                       ? Status::OK()
+                       : Status(K_NOT_READY, "unblocked metrics not yet reflected");
+        },
+        10, K_OK));
     GetStreamMetrics(0, "sc_metrics.log", sc0Metrics);
     VerifyStreamMetrics(sc0Metrics, expected1, metricsToVerify);
     GetStreamMetrics(1, "sc_metrics.log", sc1Metrics);
@@ -996,7 +1046,13 @@ TEST_F(SCMetricsTest, RetainDataState)
     for (int i = 0; i < DEFAULT_NUM_ELEMENT; i++) {
         DS_ASSERT_OK(producer->Send(element));
     }
-    sleep(SLEEP_TIME);
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&]() {
+            return TryVerifyStreamMetrics(0, "sc_metrics.log", expected, metricsToVerify)
+                       ? Status::OK()
+                       : Status(K_NOT_READY, "retain state not yet reflected");
+        },
+        10, K_OK));
     GetStreamMetrics(0, "sc_metrics.log", sc0Metrics);
     VerifyStreamMetrics(sc0Metrics, expected, metricsToVerify);
 
@@ -1011,7 +1067,13 @@ TEST_F(SCMetricsTest, RetainDataState)
 
     expected = { { streamName, { std::to_string(RetainDataState::NOT_RETAIN) } } };
 
-    sleep(SLEEP_TIME);
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&]() {
+            return TryVerifyStreamMetrics(0, "sc_metrics.log", expected, metricsToVerify)
+                       ? Status::OK()
+                       : Status(K_NOT_READY, "not-retain state not yet reflected");
+        },
+        10, K_OK));
     GetStreamMetrics(0, "sc_metrics.log", sc0Metrics);
     VerifyStreamMetrics(sc0Metrics, expected, metricsToVerify);
 }

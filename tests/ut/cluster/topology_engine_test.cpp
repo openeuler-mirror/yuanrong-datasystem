@@ -481,8 +481,8 @@ TEST(TopologyEngineTest, SnapshotPublicationCallbackRunsOnlyAfterStartPublishes)
     EXPECT_EQ(published.load(), 0U);
 
     DS_ASSERT_OK(engine->Start());
-    // Initial watch replay and controller reconciliation may notify more than once during startup.
-    EXPECT_GT(published.load(), 0U);
+    // Snapshot publication happens on the state thread after Start() returns.
+    EXPECT_TRUE(WaitFor([&published] { return published.load() > 0U; }));
     DS_ASSERT_OK(engine->Shutdown(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
