@@ -3131,19 +3131,32 @@ void WorkerOcServiceGetImpl::PostProcessRemoteGetInNotificationImpl(
     ConfirmCopyMetaForNotifyRemoteGet(dataSuccessIds, queryMetas, confirmedIds, unconfirmedIds,
                                       failedConfirmationOwners);
     rsp.mutable_failed_object_keys()->Add(unconfirmedIds.begin(), unconfirmedIds.end());
-    for (const auto &objectKey : unconfirmedIds) {
-        auto entryIt = lockedEntries.find(ReadKey(objectKey));
-        if (entryIt != lockedEntries.end() && entryIt->second.insert && entryIt->second.safeObj != nullptr
-            && entryIt->second.safeObj->Get() != nullptr) {
-            unconfirmedObjectVersions.emplace(objectKey, entryIt->second.safeObj->Get()->GetCreateTime());
-        }
-    }
+    CollectUnconfirmedVersions(unconfirmedIds, lockedEntries, unconfirmedObjectVersions);
     successIds = std::move(confirmedIds);
+    // IMPORTANT: ReplacePrimaryAndPruneFailed MUST run before ClearNeedDeleteForMigratedObjects.
+    // Objects where ReplacePrimary fails are pruned from successIds so their needDelete
+    // is preserved; clearing needDelete before confirming master metadata update would
+    // leave orphan copies on the target with no path to either the source or the target.
+    ReplacePrimaryAndPruneFailed(successIds, queryMetas, rsp);
     ClearNeedDeleteForMigratedObjects(successIds, lockedEntries);
     for (const auto &objectKey : dataSuccessIds) {
         auto metaIt = queryMetas.find(objectKey);
         if (metaIt != queryMetas.end()) {
             migratedBytes += metaIt->second.meta().data_size();
+        }
+    }
+}
+
+void WorkerOcServiceGetImpl::CollectUnconfirmedVersions(
+    const std::unordered_set<std::string> &unconfirmedIds,
+    std::map<ReadKey, LockedEntity> &lockedEntries,
+    std::map<std::string, uint64_t> &unconfirmedObjectVersions)
+{
+    for (const auto &objectKey : unconfirmedIds) {
+        auto entryIt = lockedEntries.find(ReadKey(objectKey));
+        if (entryIt != lockedEntries.end() && entryIt->second.insert && entryIt->second.safeObj != nullptr
+            && entryIt->second.safeObj->Get() != nullptr) {
+            unconfirmedObjectVersions.emplace(objectKey, entryIt->second.safeObj->Get()->GetCreateTime());
         }
     }
 }
@@ -3200,6 +3213,129 @@ void WorkerOcServiceGetImpl::ConfirmCopyMetaForNotifyRemoteGet(
                          << ", status: " << status << ", failed count: " << failedIds.size();
         }
     }
+}
+
+void WorkerOcServiceGetImpl::ReplacePrimaryForNotifyRemoteGet(
+    const std::vector<std::string> &successIds, const QueryMetaMap &queryMetas,
+    NotifyRemoteGetRspPb &rsp)
+{
+    if (successIds.empty()) {
+        return;
+    }
+    std::string sourceAddr;
+    for (const auto &objectKey : successIds) {
+        auto metaIt = queryMetas.find(objectKey);
+        if (metaIt != queryMetas.end() && !metaIt->second.address().empty()) {
+            sourceAddr = metaIt->second.address();
+            break;
+        }
+    }
+    if (sourceAddr.empty()) {
+        LOG(WARNING) << "[NotifyRemoteGet] Cannot determine source address from queryMetas for "
+                     << successIds.size() << " objects, skip ReplacePrimary";
+        return;
+    }
+    // NO_RETURN because ReplacePrimaryForNotifyRemoteGet returns void; INJECT_POINT would
+    // emit "return _handle.Get()" which fails to compile in a void function. Use this point
+    // for counting/pausing in tests (e.g. "call()") to verify the B+ path is triggered.
+    // To simulate ReplacePrimary failure, inject the master-side OCMetadataManager.ReplacePrimary
+    // point instead, which returns an error status from the RPC.
+    INJECT_POINT_NO_RETURN("worker.NotifyRemoteGet.ReplacePrimary");
+    auto grouped = metadataRouteResolver_->GroupOwners(successIds);
+    AppendRouteFailures(grouped);
+    for (const auto &[masterAddr, objectKeys] : grouped.groups) {
+        ReplacePrimaryForMasterGroup(masterAddr, objectKeys, sourceAddr, queryMetas, rsp);
+    }
+}
+
+void WorkerOcServiceGetImpl::ReplacePrimaryAndPruneFailed(
+    std::vector<std::string> &successIds, const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp)
+{
+    if (FLAGS_enable_data_replication || successIds.empty()) {
+        return;
+    }
+    ReplacePrimaryForNotifyRemoteGet(successIds, queryMetas, rsp);
+    // Remove objects where ReplacePrimary failed so ClearNeedDeleteForMigratedObjects
+    // does not clear their needDelete. Failed objects keep needDelete=true so the target
+    // can reclaim the orphan copy later (mirrors Bug B RollbackObjects semantics).
+    std::unordered_set<std::string> failedSet(rsp.failed_object_keys().begin(),
+                                              rsp.failed_object_keys().end());
+    successIds.erase(std::remove_if(successIds.begin(), successIds.end(),
+        [&](const std::string &key) { return failedSet.count(key) > 0; }),
+        successIds.end());
+}
+
+master::ReplacePrimaryReqPb WorkerOcServiceGetImpl::BuildReplacePrimaryReq(
+    const std::vector<std::string> &objectKeys, const std::string &sourceAddr,
+    const QueryMetaMap &queryMetas)
+{
+    master::ReplacePrimaryReqPb req;
+    req.set_redirect(true);
+    req.set_origin_primary_addr(sourceAddr);
+    req.set_new_primary_addr(localAddress_.ToString());
+    req.set_remove_location(true);
+    for (const auto &objectKey : objectKeys) {
+        auto metaIt = queryMetas.find(objectKey);
+        if (metaIt == queryMetas.end()) {
+            continue;  // not in queryMetas, caller will report as failed
+        }
+        auto *info = req.add_object_infos();
+        info->set_object_key(objectKey);
+        info->set_version(metaIt->second.meta().version());
+    }
+    return req;
+}
+
+void WorkerOcServiceGetImpl::ReplacePrimaryForMasterGroup(
+    const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+    const std::string &sourceAddr, const QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp)
+{
+    const auto masterKey = masterAddr.ToString();
+    std::shared_ptr<WorkerMasterOCApi> api;
+    if (workerMasterApiManager_->GetWorkerMasterApi(masterAddr, api).IsError() || api == nullptr) {
+        LOG(WARNING) << "[NotifyRemoteGet] ReplacePrimary: cannot get master API for " << masterKey;
+        rsp.mutable_failed_object_keys()->Add(objectKeys.begin(), objectKeys.end());
+        return;
+    }
+    auto req = BuildReplacePrimaryReq(objectKeys, sourceAddr, queryMetas);
+    if (req.object_infos_size() == 0) {
+        // All objects missing from queryMetas; report as failed without a wasted RPC.
+        rsp.mutable_failed_object_keys()->Add(objectKeys.begin(), objectKeys.end());
+        return;
+    }
+    master::ReplacePrimaryRspPb replaceRsp;
+    std::function<Status(master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)> func =
+        [&api](master::ReplacePrimaryReqPb &request, master::ReplacePrimaryRspPb &response) {
+            return api->ReplacePrimary(request, response);
+        };
+    constexpr int64_t replacePrimaryTimeoutMs = 1000;
+    const auto remainingMs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime();
+    ScopedRequestContext replacePrimaryContext;
+    GetRequestContext()->reqTimeoutDuration.Init(std::min(replacePrimaryTimeoutMs, remainingMs));
+    Status status = WorkerOcServiceCrudCommonApi::RedirectRetryWhenMetasMoving(req, replaceRsp, func);
+    if (status.IsError()) {
+        LOG(WARNING) << "[NotifyRemoteGet] ReplacePrimary RPC failed for master " << masterKey
+                     << ": " << status.ToString();
+        rsp.mutable_failed_object_keys()->Add(objectKeys.begin(), objectKeys.end());
+        return;
+    }
+    // Handle redirect info: objects that need redirect to another master are not in
+    // success_ids/expired_ids/failed_ids, so they will be reported as failed below.
+    if (replaceRsp.info_size() > 0) {
+        LOG(WARNING) << "[NotifyRemoteGet] ReplacePrimary got redirect info for master " << masterKey
+                     << ", redirect objects treated as failed";
+    }
+    // Objects in success_ids and expired_ids are confirmed, the rest are failed.
+    std::unordered_set<std::string> confirmedSet(replaceRsp.success_ids().begin(),
+                                                 replaceRsp.success_ids().end());
+    confirmedSet.insert(replaceRsp.expired_ids().begin(), replaceRsp.expired_ids().end());
+    for (const auto &objectKey : objectKeys) {
+        if (confirmedSet.find(objectKey) == confirmedSet.end()) {
+            rsp.add_failed_object_keys(objectKey);
+        }
+    }
+    VLOG(1) << "[NotifyRemoteGet] ReplacePrimary confirmed " << confirmedSet.size()
+            << "/" << objectKeys.size() << " objects for master " << masterKey;
 }
 
 bool WorkerOcServiceGetImpl::ClassifyCopyMetaConfirmationResult(
@@ -3409,6 +3545,11 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
     // modified and the leaving worker's data is stale. Mark it as success (no need to migrate).
     const int maxBatchSize = 32;
     std::set<ReadKey> batchObjects;
+    // Tracks every object that entered batchObjects across all batches. Objects in
+    // req.object_keys but NOT here were silent-skipped (version mismatch, master has
+    // no metadata, or meta_is_moving) and must be reported as failed so the source
+    // does not treat them as success and release its local copy.
+    std::unordered_set<std::string> attemptedObjectKeys;
     Status lastRc;
     uint64_t migratedBytes = 0;
     for (const auto &kv : queryMetas) {
@@ -3424,6 +3565,7 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
         }
         ReadKey readKey(objectKey, 0, meta.meta().data_size());
         batchObjects.insert(readKey);
+        attemptedObjectKeys.insert(objectKey);
 
         if (batchObjects.size() >= maxBatchSize) {
             Status rc = ProcessRemoteGetInNotification(req, std::move(batchObjects), queryMetas, rsp, migratedBytes);
@@ -3439,6 +3581,21 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
         Status rc = ProcessRemoteGetInNotification(req, std::move(batchObjects), queryMetas, rsp, migratedBytes);
         if (rc.IsError()) {
             lastRc = rc;
+        }
+    }
+    // Catch-all (only when enable_data_replication=false): objects in req.object_keys
+    // but not attempted (silent skipped due to version mismatch, meta_is_moving, or
+    // master has no metadata) must be added to failed_object_keys so the source does
+    // not treat them as success and release. When enable_data_replication=true, keep
+    // the existing behavior so stale version-mismatch objects are still released.
+    if (!FLAGS_enable_data_replication) {
+        std::unordered_set<std::string> failedSet(rsp.failed_object_keys().begin(),
+                                                  rsp.failed_object_keys().end());
+        for (const auto &key : req.object_keys()) {
+            if (attemptedObjectKeys.find(key) == attemptedObjectKeys.end()
+                && failedSet.find(key) == failedSet.end()) {
+                rsp.add_failed_object_keys(key);
+            }
         }
     }
     UpdateNotifyRemoteGetRateLimit(req.addr(), migratedBytes, rsp);
