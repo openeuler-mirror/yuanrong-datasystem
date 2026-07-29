@@ -524,6 +524,12 @@ Status KVClient::HealthCheck()
     return impl_->HealthCheck(state);
 }
 
+Status KVClient::SetWorkerHealthCallback(std::function<void(const Status &)> callback,
+                                         uint32_t intervalMs)
+{
+    return impl_->SetWorkerHealthCallback(std::move(callback), intervalMs);
+}
+
 Status KVClient::Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 {
     TraceGuard traceGuard = Trace::Instance().SetRequestTraceUUID();

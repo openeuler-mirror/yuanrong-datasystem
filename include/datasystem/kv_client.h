@@ -20,6 +20,7 @@
 #ifndef DATASYSTEM_KV_CLIENT_H
 #define DATASYSTEM_KV_CLIENT_H
 
+#include <functional>
 #include <memory>
 #include <vector>
 #include <future>
@@ -411,6 +412,39 @@ public:
     ///
     /// \return K_OK on any object success; the error code otherwise.
     Status HealthCheck();
+
+    /// \brief Register a periodic worker health probe callback.
+    ///
+    /// Registers a callback that is invoked periodically with the health status of the currently
+    /// connected worker. The probe runs on a dedicated timer thread at the given interval. Both
+    /// successful and failed probes trigger the callback. The semantics of the status passed to
+    /// the callback are identical to Status KVClient::HealthCheck(): Status::OK() when the worker
+    /// is healthy, an error code otherwise.
+    ///
+    /// Pass nullptr to stop probing and clear the callback. The callback is also stopped on
+    /// ShutDown or client destruction.
+    ///
+    /// Thread-safety and lifetime contract:
+    ///  - The callback is invoked from the probe timer thread, not the calling thread.
+    ///  - The callback MUST NOT call any KVClient API from within the callback; it is a
+    ///    notification channel only. Performing blocking work or KVClient calls inside the
+    ///    callback risks deadlock or contention with client internals.
+    ///  - The callback must not capture references to stack objects; use value capture or
+    ///    shared_ptr-owned state.
+    ///  - After passing nullptr or after ShutDown, the callback is guaranteed not to be invoked
+    ///    again; the probe thread is joined before the registered callback is released.
+    ///
+    /// \param[in] callback The callback to invoke on each probe, or nullptr to stop probing.
+    ///                     Receives the probe Status (OK = healthy, error otherwise).
+    /// \param[in] intervalMs Probe interval in milliseconds. Must be > 0 when callback is non-null.
+    ///                       Ignored when callback is nullptr. Defaults to 3000ms.
+    /// \return K_OK on success (including clearing with nullptr).
+    ///         K_NOT_READY: client not initialized (only when callback is non-null).
+    ///         K_INVALID: intervalMs is 0 while callback is non-null.
+    ///         Clearing (nullptr) always succeeds regardless of client state, so callers can
+    ///         always tear down.
+    Status SetWorkerHealthCallback(std::function<void(const Status &)> callback,
+                                   uint32_t intervalMs = 3000);
 
     /// \brief Check whether the keys exist in the data system.
     ///

@@ -407,6 +407,24 @@ KVClient
         返回：
             返回值状态码为 `K_OK` 时表示 Worker 健康，否则返回其他错误码。
 
+    .. cpp:function:: Status SetWorkerHealthCallback(std::function<void(const Status &)> callback, uint32_t intervalMs = 3000)
+
+        注册 Worker 健康检查回调，客户端按固定周期对当前连接的 Worker 主动发起探活，
+        并将结果通过回调通知调用方。回调收到的 ``Status`` 与 :cpp:func:`HealthCheck` 的返回值语义一致。
+
+        .. note::
+            回调在内部后台线程中执行，不允许在其中调用任何 :cpp:class:`KVClient` 接口。
+            传入 ``nullptr`` 清除回调并停止探活；客户端 :cpp:func:`ShutDown` 或析构时也会自动停止。
+
+        参数：
+            - **callback** - 探活结果回调。传入 ``nullptr`` 表示清除回调。
+            - **intervalMs** - 探活周期（毫秒），默认 3000，必须大于 0。
+
+        返回：
+            - 返回 ``StatusCode::K_OK`` 表示回调注册或清除成功。
+            - 返回 ``StatusCode::K_NOT_READY`` 表示客户端未初始化（仅在 ``callback`` 非 ``nullptr`` 时校验）。
+            - 返回 ``StatusCode::K_INVALID`` 表示 ``intervalMs`` 为 0（仅在 ``callback`` 非 ``nullptr`` 时校验）。
+
     .. cpp:function:: Status Exist(const std::vector<std::string> &keys, std::vector<bool> &exists)
 
         批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多100000个键的查询。
