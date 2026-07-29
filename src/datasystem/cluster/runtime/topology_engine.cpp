@@ -407,23 +407,26 @@ Status TopologyEngine::InitializeOwnedComponents(std::chrono::seconds nodeDeadTi
             [probe = options_.controlBackendProbe, localAddress = options_.localAddress](
                 const std::vector<MemberIdentity> &targets, std::chrono::steady_clock::time_point deadline) {
                 std::vector<MemberIdentity> remoteTargets;
-                std::vector<ControlBackendObservation> observations;
+                std::vector<ControlBackendProbeResult> results;
                 remoteTargets.reserve(targets.size());
-                observations.reserve(targets.size());
+                results.reserve(targets.size());
                 for (const auto &target : targets) {
                     if (target.address == localAddress) {
-                        observations.push_back(
-                            { target, ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() });
+                        results.push_back(
+                            { target,
+                              ControlBackendObservation{ target, ControlBackendState::UNKNOWN, 0, 0, "",
+                                                         std::chrono::steady_clock::now() },
+                              ControlBackendProbeOutcome::RESPONSE, std::chrono::milliseconds(0) });
                     } else {
                         remoteTargets.push_back(target);
                     }
                 }
                 if (!remoteTargets.empty()) {
                     auto remote = probe({}, remoteTargets, deadline);
-                    observations.insert(observations.end(), std::make_move_iterator(remote.begin()),
-                                        std::make_move_iterator(remote.end()));
+                    results.insert(results.end(), std::make_move_iterator(remote.begin()),
+                                   std::make_move_iterator(remote.end()));
                 }
-                return observations;
+                return results;
             };
         runtimeOptions.controller.eventSourceMode = TopologyEventSourceMode::EXTERNAL_ETCD;
         runtimeOptions.janitor = TopologyTaskJanitorOptions{};
@@ -1142,14 +1145,21 @@ Status TopologyEngine::ReevaluateFailureScope()
         return Status::OK();
     }
     const auto deadline = std::chrono::steady_clock::now() + options_.scopeProbeDeadline;
-    std::vector<ControlBackendObservation> observations;
+    std::vector<ControlBackendProbeResult> results;
     // An injected control-plane probe must not unwind through the Engine state thread.
     try {
-        observations = options_.controlBackendProbe(local, targets, deadline);
+        results = options_.controlBackendProbe(local, targets, deadline);
     } catch (const std::exception &error) {
         LOG(ERROR) << "CLUSTER_BACKEND_PROBE_FAILED reason=exception error=" << error.what();
     } catch (...) {
         LOG(ERROR) << "CLUSTER_BACKEND_PROBE_FAILED reason=unknown_exception";
+    }
+    std::vector<ControlBackendObservation> observations;
+    observations.reserve(results.size());
+    for (auto &result : results) {
+        if (result.observation.has_value()) {
+            observations.push_back(std::move(*result.observation));
+        }
     }
     if (ConfirmsGlobalOutage(local, targets, observations)) {
         SetAvailability(TopologyAvailabilityLevel::CONTROL_DEGRADED, "control_backend_unavailable");

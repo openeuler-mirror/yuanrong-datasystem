@@ -974,48 +974,62 @@ Status TopologyController::ConfirmMissingMembersUnreachable(const TopologySnapsh
                      << std::chrono::duration_cast<std::chrono::milliseconds>(options_.nodeDeadTimeout).count();
     }
 
-    std::vector<ControlBackendObservation> observations;
+    std::vector<ControlBackendProbeResult> probeResults;
+    auto probeElapsed = std::chrono::milliseconds(0);
     if (!targets.empty()) {
+        const auto probeStartedAt = std::chrono::steady_clock::now();
         try {
-            observations =
+            probeResults =
                 options_.memberLivenessProbe(targets, std::chrono::steady_clock::now() + options_.failureProbeTimeout);
         } catch (const std::exception &error) {
             RETURN_STATUS(K_RUNTIME_ERROR, std::string("member liveness probe threw: ") + error.what());
         } catch (...) {
             RETURN_STATUS(K_RUNTIME_ERROR, "member liveness probe threw an unknown exception");
         }
+        probeElapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - probeStartedAt);
     }
 
-    std::unordered_map<std::string, const ControlBackendObservation *> observationsByAddress;
-    observationsByAddress.reserve(observations.size());
-    for (const auto &observation : observations) {
-        observationsByAddress.emplace(observation.reporter.address, &observation);
+    std::unordered_map<std::string, const ControlBackendProbeResult *> resultsByAddress;
+    resultsByAddress.reserve(probeResults.size());
+    for (const auto &result : probeResults) {
+        resultsByAddress.emplace(result.target.address, &result);
     }
+    const auto outcomeName = [](ControlBackendProbeOutcome outcome) {
+        switch (outcome) {
+            case ControlBackendProbeOutcome::RESPONSE:
+                return "response";
+            case ControlBackendProbeOutcome::DEADLINE_EXCEEDED:
+                return "deadline_exceeded";
+            case ControlBackendProbeOutcome::UNAVAILABLE:
+                return "unavailable";
+            case ControlBackendProbeOutcome::CANCELLED:
+                return "cancelled";
+            case ControlBackendProbeOutcome::ERROR:
+                return "error";
+        }
+        return "error";
+    };
     std::unordered_set<std::string> directlyUnreachable;
     directlyUnreachable.reserve(targets.size());
-    const auto unreachableConfirmationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               options_.nodeDeadTimeout + options_.failureProbeTimeout)
-                                               .count();
-    for (size_t index = 0; index < targets.size(); ++index) {
-        const auto &target = targets[index];
-        const auto observed = observationsByAddress.find(target.address);
-        if (observed == observationsByAddress.end()) {
-            if (owned[index]->missingMs < unreachableConfirmationMs) {
-                LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
-                             << " version=" << latest.Version() << " address=" << target.address
-                             << " member_id_prefix=" << MemberIdForLog(target.id)
-                             << " action=direct_probe_retry missing_ms="
-                             << owned[index]->missingMs
-                             << " confirmation_ms=" << unreachableConfirmationMs;
-                continue;
-            }
+    for (const auto &target : targets) {
+        const auto found = resultsByAddress.find(target.address);
+        const auto *result = found == resultsByAddress.end() ? nullptr : found->second;
+        const bool hasObservation = result != nullptr && result->observation.has_value();
+        const bool observationMatchesTarget =
+            hasObservation && result->observation->reporter.address == target.address;
+        if (!observationMatchesTarget) {
             directlyUnreachable.emplace(target.address);
             LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
                          << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
-                         << " action=direct_probe_unreachable";
+                         << " action="
+                         << (hasObservation ? "direct_probe_invalid_response" : "direct_probe_no_response")
+                         << " probe_result=" << (result == nullptr ? "missing" : outcomeName(result->outcome))
+                         << " probe_elapsed_ms="
+                         << (result == nullptr ? probeElapsed.count() : result->elapsed.count());
             continue;
         }
-        const auto &evidence = *observed->second;
+        const auto &evidence = *result->observation;
         const auto now = std::chrono::steady_clock::now();
         const bool matchingEvidence = evidence.reporter.id == target.id && evidence.topologyVersion == latest.Version()
                                       && evidence.topologyRevision == latest.AuthorityRevision()
@@ -1028,8 +1042,45 @@ Status TopologyController::ConfirmMissingMembersUnreachable(const TopologySnapsh
         LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
                      << " address=" << target.address << " member_id_prefix=" << MemberIdForLog(target.id)
                      << " action=" << (matchingEvidence ? "direct_probe_reachable" : "direct_probe_inconclusive")
+                     << " probe_result=" << outcomeName(result->outcome)
+                     << " probe_elapsed_ms=" << result->elapsed.count()
                      << " evidence_version=" << evidence.topologyVersion
                      << " evidence_revision=" << evidence.topologyRevision;
+    }
+
+    if (!directlyUnreachable.empty()) {
+        std::vector<MembershipRecord> exactMemberships;
+        auto rc = repository_.ReadMemberships(exactMemberships);
+        if (rc.IsError()) {
+            failureClassifier_.Pause(options_.now());
+            LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
+                         << " version=" << latest.Version()
+                         << " action=membership_exact_read_failed decision=skip_failure status=" << rc.ToString();
+            return rc;
+        }
+        std::unordered_set<std::string> exactAddresses;
+        exactAddresses.reserve(exactMemberships.size());
+        for (const auto &membership : exactMemberships) {
+            exactAddresses.emplace(membership.address);
+        }
+        for (const auto &target : targets) {
+            if (directlyUnreachable.count(target.address) == 0) {
+                continue;
+            }
+            if (exactAddresses.count(target.address) > 0) {
+                directlyUnreachable.erase(target.address);
+                failureClassifier_.ResetMissing(target.address);
+                LOG(INFO) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
+                          << " version=" << latest.Version() << " address=" << target.address
+                          << " member_id_prefix=" << MemberIdForLog(target.id)
+                          << " action=membership_exact_read_recovered decision=skip_failure";
+            } else {
+                LOG(WARNING) << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName()
+                             << " version=" << latest.Version() << " address=" << target.address
+                             << " member_id_prefix=" << MemberIdForLog(target.id)
+                             << " action=direct_probe_unreachable membership_exact_read=absent";
+            }
+        }
     }
 
     classification.confirmedFailure.erase(

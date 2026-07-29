@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,7 +34,25 @@ struct ControlBackendObservation {
     std::chrono::steady_clock::time_point observedAt;
 };
 
-using ControlBackendProbe = std::function<std::vector<ControlBackendObservation>(
+enum class ControlBackendProbeOutcome : uint8_t {
+    RESPONSE,
+    DEADLINE_EXCEEDED,
+    UNAVAILABLE,
+    CANCELLED,
+    ERROR
+};
+
+/**
+ * @brief One target's result from a bounded control-backend probe.
+ */
+struct ControlBackendProbeResult {
+    MemberIdentity target;
+    std::optional<ControlBackendObservation> observation;
+    ControlBackendProbeOutcome outcome{ ControlBackendProbeOutcome::ERROR };
+    std::chrono::milliseconds elapsed{ 0 };
+};
+
+using ControlBackendProbe = std::function<std::vector<ControlBackendProbeResult>(
     const ControlBackendObservation &, const std::vector<MemberIdentity> &, std::chrono::steady_clock::time_point)>;
 
 }  // namespace datasystem::cluster

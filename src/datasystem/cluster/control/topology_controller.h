@@ -76,11 +76,11 @@ struct TopologyControllerOptions {
 
     /**
      * @brief Directly probe all supplied members before the absolute deadline.
-     * @return One observation for each target that returned a direct response. An omitted target is treated as
-     *         unreachable; incomplete evidence still proves transport reachability; an exception aborts the current
-     *         reconcile tick without changing topology and is retried safely by a later tick.
+     * @return One structured result per target, including an optional direct observation, completion reason and elapsed
+     *         time. Incomplete evidence still proves transport reachability; an exception aborts the current reconcile
+     *         tick without changing topology and is retried safely by a later tick.
      */
-    std::function<std::vector<ControlBackendObservation>(const std::vector<MemberIdentity> &,
+    std::function<std::vector<ControlBackendProbeResult>(const std::vector<MemberIdentity> &,
                                                          std::chrono::steady_clock::time_point)>
         memberLivenessProbe;
 
@@ -297,9 +297,9 @@ private:
     Status TryConfirmFailures(const TopologySnapshot &latest, const std::vector<MembershipRecord> &memberships);
 
     /**
-     * @brief Remove directly reachable or not-yet-probed members from this tick's failure candidates.
+     * @brief Narrow failure candidates with one owned bounded direct probe after classifier confirmation.
      * @param[in] latest Snapshot that supplied the candidate identities.
-     * @param[in,out] classification Failure candidates to narrow to directly unreachable members.
+     * @param[in,out] classification Failure candidates; omitted probe targets become immediately eligible.
      * @return K_OK after bounded probing; K_RUNTIME_ERROR if an injected probe throws.
      */
     Status ConfirmMissingMembersUnreachable(const TopologySnapshot &latest, FailureClassification &classification);
