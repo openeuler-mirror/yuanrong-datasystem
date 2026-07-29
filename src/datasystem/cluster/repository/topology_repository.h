@@ -99,7 +99,7 @@ public:
      * @param[out] members Decoded address-key projected records.
      * @return Backend or validation status.
      */
-    Status ReadMemberships(std::vector<MembershipRecord> &members) const;
+    Status ReadMemberships(std::vector<MembershipRecord> &members, int64_t *responseRevision = nullptr) const;
 
     /**
      * @brief Exact-read one task with active-batch context.

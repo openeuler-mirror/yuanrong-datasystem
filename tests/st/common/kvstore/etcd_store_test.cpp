@@ -35,6 +35,7 @@
 #include "datasystem/common/kvstore/etcd/etcd_watch.h"
 #include "datasystem/common/kvstore/etcd/grpc_session.h"
 #include "datasystem/common/kvstore/etcd/member_service_info.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/ssl_authorization.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/log/log.h"
@@ -70,6 +71,12 @@ protected:
         std::mutex mutex;
         std::condition_variable received;
         std::vector<WatchValueEvent> events;
+    };
+
+    struct WatchFailureState {
+        std::mutex mutex;
+        std::condition_variable received;
+        size_t count = 0;
     };
 
     static constexpr auto WATCH_WRITE_RETRY_INTERVAL = std::chrono::milliseconds(100);
@@ -652,6 +659,69 @@ TEST_F(EtcdStoreTest, LEVEL1_TestRetrieveEvent)
     ASSERT_EQ(watchKeyMap_.size(), size_t(0));
 }
 
+TEST_F(EtcdStoreTest, LEVEL1_CompensationFailureUsesAbnormalRetryInterval)
+{
+    Raii clearInjects([] {
+        (void)inject::Clear("EtcdWatch.StoreEvents.IgnoreEvent");
+        (void)inject::Clear("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly");
+        (void)inject::Clear("EtcdWatch.RetrieveEventPassivelyImpl.preRetrieveEvent");
+    });
+    DS_ASSERT_OK(inject::Set("EtcdWatch.StoreEvents.IgnoreEvent", "return"));
+    DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly", "1*call(10)"));
+    DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassivelyImpl.preRetrieveEvent",
+                             "1*return(K_RPC_UNAVAILABLE)"));
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    auto state = std::make_shared<WatchValueState>();
+    db_->SetEventHandler([state](mvccpb::Event &&event) {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->events.push_back({ event.kv().key(), event.kv().value() });
+        state->received.notify_all();
+    });
+    DS_ASSERT_OK(db_->WatchEvents(tableName_, "compensation-retry", 1));
+    DS_ASSERT_OK(db_->Put(tableName_, "compensation-retry", "value"));
+
+    std::unique_lock<std::mutex> lock(state->mutex);
+    const bool recovered = state->received.wait_for(lock, std::chrono::milliseconds(2'500),
+                                                    [&] { return !state->events.empty(); });
+    EXPECT_TRUE(recovered);
+    if (recovered) {
+        EXPECT_EQ(state->events.front().value, "value");
+    }
+    lock.unlock();
+    DS_ASSERT_OK(db_->Put(tableName_, "compensation-retry", "next-value"));
+    lock.lock();
+    EXPECT_FALSE(state->received.wait_for(lock, std::chrono::milliseconds(2'500),
+                                          [&] { return state->events.size() > 1; }));
+    lock.unlock();
+    DS_ASSERT_OK(db_->ShutdownEventSources());
+}
+
+TEST_F(EtcdStoreTest, LEVEL1_PassiveCompensationFailureNotifiesResync)
+{
+    Raii clearInjects(
+        [] { (void)inject::Clear("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly"); });
+    DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassively.RetrieveEventQuickly", "call(10)"));
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    auto state = std::make_shared<WatchFailureState>();
+    db_->SetEventHandler([](mvccpb::Event &&) {});
+    db_->SetWatchFailureHandler([state] {
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            ++state->count;
+        }
+        state->received.notify_all();
+    });
+    DS_ASSERT_OK(db_->WatchEvents(tableName_, "passive-compensation-failure", 1));
+    DS_ASSERT_OK(db_->DropTable(ETCD_HEALTH_CHECK_TABLE));
+
+    std::unique_lock<std::mutex> lock(state->mutex);
+    EXPECT_TRUE(state->received.wait_for(lock, std::chrono::seconds(3), [&] { return state->count > 0; }));
+    lock.unlock();
+    DS_ASSERT_OK(db_->ShutdownEventSources());
+}
+
 TEST_F(EtcdStoreTest, TestRetrieveCrossVersionEvent)
 {
     // Ignore Event from watch response
@@ -843,7 +913,8 @@ TEST_F(EtcdStoreTest, CompactedWatchRecoversAllTargetsAndRebuildsWholeStream)
     RangeSearchResult secondCurrent;
     DS_ASSERT_OK(db_->Get(tableName_, firstKey, firstCurrent));
     DS_ASSERT_OK(db_->Get(tableName_, secondKey, secondCurrent));
-    ASSERT_GT(firstCurrent.modRevision, 0);
+    constexpr int64_t lastProcessedRevision = 0;
+    ASSERT_GT(firstCurrent.modRevision, lastProcessedRevision + 1);
     ASSERT_EQ(firstCurrent.modRevision, secondCurrent.modRevision);
     DS_ASSERT_OK(CompactEtcdAtRevision(firstCurrent.modRevision));
     auto state = std::make_shared<WatchValueState>();
@@ -855,9 +926,9 @@ TEST_F(EtcdStoreTest, CompactedWatchRecoversAllTargetsAndRebuildsWholeStream)
         state->received.notify_all();
     });
 
-    const auto staleRevision = firstCurrent.modRevision - 1;
-    const std::vector<WatchElement> watches{ { tableName_, firstKey, staleRevision, true },
-                                             { tableName_, secondKey, staleRevision, true } };
+    // EtcdWatch starts at lastProcessedRevision + 1, which must remain below the compaction revision.
+    const std::vector<WatchElement> watches{ { tableName_, firstKey, lastProcessedRevision, true },
+                                             { tableName_, secondKey, lastProcessedRevision, true } };
     const auto currentRecoveryDeadline = std::chrono::steady_clock::now() + currentRecoveryTimeout;
     DS_ASSERT_OK(db_->WatchEvents(watches));
     {
@@ -884,6 +955,43 @@ TEST_F(EtcdStoreTest, CompactedWatchRecoversAllTargetsAndRebuildsWholeStream)
     ASSERT_EQ(observedFuture.size(), futurePrefixes.size());
     EXPECT_EQ(observedFuture[0].rfind(futurePrefixes[0].second, 0), 0U);
     EXPECT_EQ(observedFuture[1].rfind(futurePrefixes[1].second, 0), 0U);
+    DS_ASSERT_OK(db_->ShutdownEventSources());
+}
+
+TEST_F(EtcdStoreTest, LEVEL1_ActiveCompensationNotifiesResyncAfterSnapshot)
+{
+    Raii clearInjects(
+        [] { (void)inject::Clear("EtcdWatch.RetrieveEventPassively.AvoidEventCompensation"); });
+    DS_ASSERT_OK(inject::Set("EtcdWatch.RetrieveEventPassively.AvoidEventCompensation", "return"));
+    InitTestEtcdInstance();
+    ASSERT_TRUE(db_ != nullptr && tableCreated_);
+    const std::string key = "active-compensation-resync";
+    DS_ASSERT_OK(db_->Put(tableName_, key, "current"));
+    RangeSearchResult current;
+    DS_ASSERT_OK(db_->Get(tableName_, key, current));
+    constexpr int64_t lastProcessedRevision = 0;
+    ASSERT_GT(current.modRevision, lastProcessedRevision + 1);
+    DS_ASSERT_OK(CompactEtcdAtRevision(current.modRevision));
+    auto state = std::make_shared<WatchFailureState>();
+    db_->SetEventHandler([](mvccpb::Event &&) {});
+    db_->SetWatchFailureHandler([state] {
+        {
+            std::lock_guard<std::mutex> lock(state->mutex);
+            ++state->count;
+        }
+        state->received.notify_all();
+    });
+    DS_ASSERT_OK(db_->WatchEvents({ WatchElement{ tableName_, key, lastProcessedRevision, true } }));
+
+    std::unique_lock<std::mutex> lock(state->mutex);
+    const bool streamFailureObserved =
+        state->received.wait_for(lock, std::chrono::seconds(3), [&] { return state->count >= 1; });
+    EXPECT_TRUE(streamFailureObserved);
+    const bool snapshotResyncObserved =
+        streamFailureObserved
+        && state->received.wait_for(lock, std::chrono::seconds(9), [&] { return state->count >= 2; });
+    EXPECT_TRUE(snapshotResyncObserved);
+    lock.unlock();
     DS_ASSERT_OK(db_->ShutdownEventSources());
 }
 

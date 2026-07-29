@@ -47,6 +47,12 @@ public:
         return backend_.GetAll(table, values);
     }
 
+    Status GetAll(const std::string &table, std::vector<std::pair<std::string, std::string>> &values,
+                  int64_t &responseRevision) override
+    {
+        return backend_.GetAll(table, values, responseRevision);
+    }
+
     Status Get(const std::string &table, const std::string &key, std::string &value) override
     {
         return backend_.Get(table, key, value);

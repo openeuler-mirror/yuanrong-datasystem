@@ -180,6 +180,11 @@ Status TopologyControllerRuntime::SubmitCoordinationEvent(CoordinationEvent &&ev
     return controller_.SubmitCoordinationEvent(std::move(event));
 }
 
+int64_t TopologyControllerRuntime::GetBootstrapRevision() const noexcept
+{
+    return controller_.GetBootstrapRevision();
+}
+
 TopologyControllerDiagnostics TopologyControllerRuntime::GetDiagnostics() const
 {
     return controller_.GetDiagnostics();

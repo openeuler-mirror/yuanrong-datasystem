@@ -223,10 +223,12 @@ Status TopologyRepository::CompareAndSwapTopology(uint64_t expectedVersion, cons
     return rc.IsError() ? rc : readRc;
 }
 
-Status TopologyRepository::ReadMemberships(std::vector<MembershipRecord> &members) const
+Status TopologyRepository::ReadMemberships(std::vector<MembershipRecord> &members, int64_t *responseRevision) const
 {
     std::vector<std::pair<std::string, std::string>> values;
-    RETURN_IF_NOT_OK(backend_.GetAll(keys_.MembershipTable(), values));
+    int64_t revision = 0;
+    RETURN_IF_NOT_OK(responseRevision == nullptr ? backend_.GetAll(keys_.MembershipTable(), values)
+                                                : backend_.GetAll(keys_.MembershipTable(), values, revision));
     std::vector<MembershipRecord> decoded;
     decoded.reserve(values.size());
     for (const auto &[address, bytes] : values) {
@@ -237,6 +239,9 @@ Status TopologyRepository::ReadMemberships(std::vector<MembershipRecord> &member
     std::sort(decoded.begin(), decoded.end(),
               [](const auto &left, const auto &right) { return left.address < right.address; });
     members = std::move(decoded);
+    if (responseRevision != nullptr) {
+        *responseRevision = revision;
+    }
     return Status::OK();
 }
 

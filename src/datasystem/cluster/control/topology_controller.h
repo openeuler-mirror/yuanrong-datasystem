@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -25,6 +26,7 @@
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/repository/topology_repository.h"
 #include "datasystem/cluster/runtime/control_backend_state.h"
+#include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/common/util/thread.h"
 
 namespace datasystem::cluster {
@@ -148,6 +150,8 @@ public:
      */
     Status SubmitCoordinationEvent(CoordinationEvent &&event);
 
+    int64_t GetBootstrapRevision() const noexcept;  // Immutable revision for external watch registration.
+
     /**
      * @brief Return a no-IO diagnostic snapshot.
      * @return Current diagnostics.
@@ -174,6 +178,10 @@ private:
      * @return K_OK when ignored or recorded; key or membership value validation status otherwise.
      */
     Status ObserveMembershipRestart(const CoordinationEvent &event);
+
+    Status ResyncExternalFacts();
+    Status ApplyExternalEvent(const CoordinationEvent &event);
+    Status PublishExternalTopology(std::shared_ptr<const TopologySnapshot> candidate, bool fullRebuild);
 
     /**
      * @brief Preserve restart generations recovered by a full membership read.
@@ -449,6 +457,14 @@ private:
     std::mutex membershipRestartMutex_;
     std::unordered_map<std::string, int64_t> latestRestartTimestampByAddress_;
     std::unordered_map<std::string, int64_t> pendingRestartTimestampByAddress_;
+    TopologySnapshotState externalTopology_;  // Synchronous bootstrap, then Controller state-thread-owned.
+    std::map<std::string, MembershipRecord> externalMemberships_;
+    std::unordered_map<std::string, int64_t> membershipEventRevisionByAddress_;
+    size_t externalMembershipTombstones_{ 0 };
+    int64_t bootstrapRevision_{ 0 };
+    int64_t membershipRevisionFloor_{ 0 };
+    int64_t topologyEventRevision_{ 0 };
+    bool externalResyncRequired_{ true };
     // State-thread-owned admission quarantine for exhausted READY process generations.
     std::unordered_map<std::string, int64_t> quarantinedReadyTimestampByAddress_;
     std::string lastMembershipObservationDigest_;

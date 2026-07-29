@@ -92,6 +92,8 @@ public:
      */
     Status SubmitCoordinationEvent(CoordinationEvent &&event);
 
+    int64_t GetBootstrapRevision() const noexcept;  // Valid after Start for external watch registration.
+
     /**
      * @brief Return the Controller's existing no-IO diagnostic snapshot.
      * @return Current Controller diagnostics.

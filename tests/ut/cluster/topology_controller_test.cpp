@@ -16,6 +16,7 @@
 
 #include "datasystem/cluster/algorithm/hash_algorithm.h"
 #include "datasystem/cluster/membership/membership_value_codec.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "ut/cluster/testing/fake_coordination_backend.h"
@@ -34,6 +35,20 @@ constexpr size_t EXPECTED_RECOVERY_GET_ATTEMPTS =
 constexpr std::chrono::milliseconds RECOVERY_WAIT_TIMEOUT{ 150 };
 constexpr std::chrono::seconds RECOVERY_STOP_TIMEOUT{ 1 };
 constexpr auto FAILURE_PROBE_WAIT_TIMEOUT = std::chrono::seconds(1);
+
+template <typename Predicate>
+bool WaitForCondition(Predicate predicate,
+                      std::chrono::steady_clock::duration timeout = FAILURE_PROBE_WAIT_TIMEOUT)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (predicate()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return predicate();
+}
 
 std::string EncodeMembership(MemberLifecycleState state, int64_t timestamp = 0)
 {
@@ -281,6 +296,322 @@ TEST(TopologyControllerTest, PreservesRestartGenerationAcrossDoorbellCoalescing)
         std::this_thread::yield();
     }
     EXPECT_EQ(restartCalls.load(), 1);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ExternalBootstrapRetriesAcrossMembershipRevisionBoundary)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("bootstrap-watermark", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState initial;
+    initial.version = 1;
+    initial.clusterHasInit = true;
+    initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::READY);
+    auto advanced = initial;
+    advanced.version = 2;
+    backend.SetAfterRevisionGetAllHandler(
+        [&] { backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), advanced); });
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), 2U);
+    EXPECT_EQ(controller.GetBootstrapRevision(), backend.CurrentRevision());
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ExternalResyncChurnUsesReconcileBackoff)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("resync-backoff", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState initial;
+    initial.version = 1;
+    initial.clusterHasInit = true;
+    initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::READY);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(100);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+
+    auto churn = std::make_shared<std::function<void()>>();
+    auto next = std::make_shared<TopologyState>(initial);
+    auto stopped = std::make_shared<std::atomic<bool>>(false);
+    *churn = [&, churn, next, stopped] {
+        if (stopped->load()) {
+            return;
+        }
+        ++next->version;
+        backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), *next);
+        backend.SetAfterRevisionGetAllHandler(*churn);
+    };
+    backend.SetAfterRevisionGetAllHandler(*churn);
+    backend.ResetReadCounts();
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    ASSERT_TRUE(WaitForCondition(
+        [&] { return backend.RevisionGetAllCount(keys->MembershipTable()) >= 16; },
+        std::chrono::seconds(1)));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), 16U);
+
+    stopped->store(true);
+    backend.SetAfterRevisionGetAllHandler({});
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+    *churn = {};
+}
+
+TEST(TopologyControllerTest, ExternalTopologyWatchValueAdvancesWithoutPeriodicReads)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("watch-value", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState initial;
+    initial.version = 1;
+    initial.clusterHasInit = true;
+    initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::READY);
+    std::atomic<size_t> clockCalls{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.now = [&] {
+        ++clockCalls;
+        return std::chrono::steady_clock::now();
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+
+    backend.ResetReadCounts();
+    const auto before = clockCalls.load();
+    auto next = initial;
+    next.version = 2;
+    std::string payload;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeTopology(next, payload));
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent(
+        { CoordinationEventType::PUT, keys->TopologyTable() + "/", std::move(payload), 2,
+          backend.CurrentRevision() + 1 }));
+    EXPECT_TRUE(WaitForCondition([&] { return controller.GetDiagnostics().topologyVersion == 2; }));
+    EXPECT_TRUE(WaitForCondition([&] { return clockCalls.load() >= before + 5; }));
+    EXPECT_EQ(backend.ExactGetCount(keys->TopologyTable(), TopologyKeyHelper::TopologyKey()), 0U);
+    EXPECT_EQ(backend.GetAllCount(keys->MembershipTable()), 0U);
+    EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), 0U);
+    const auto beforeTaskDoorbell = clockCalls.load();
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent(
+        { CoordinationEventType::PUT, keys->MigrateTaskTable() + "/task", "", 1,
+          backend.CurrentRevision() + 2 }));
+    EXPECT_TRUE(WaitForCondition([&] { return clockCalls.load() >= beforeTaskDoorbell + 2; }));
+    EXPECT_EQ(backend.ExactGetCount(keys->TopologyTable(), TopologyKeyHelper::TopologyKey()), 0U);
+    EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), 0U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ExternalMembershipPutValueAdvancesWithoutGetAll)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("watch-membership-put", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState initial;
+    initial.version = 1;
+    initial.clusterHasInit = true;
+    initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::READY);
+    backend.SetStorePrefix(keys->MembershipTable(), keys->EtcdMembershipTablePrefix());
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+
+    backend.ResetReadCounts();
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent(
+        { CoordinationEventType::PUT,
+          keys->EtcdMembershipTablePrefix() + "/" + initial.members.front().identity.address,
+          EncodeMembership(MemberLifecycleState::EXITING),
+          2,
+          backend.CurrentRevision() + 1 }));
+    ASSERT_TRUE(WaitForCondition([&] { return controller.GetDiagnostics().topologyVersion >= 2; }));
+    EXPECT_EQ(backend.GetAllCount(keys->MembershipTable()), 0U);
+    EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), 0U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ExternalMembershipDeleteUsesWatchObservationWithoutGetAll)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("watch-membership", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState initial;
+    initial.version = 1;
+    initial.clusterHasInit = true;
+    initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, initial.members[0].identity.address, MemberLifecycleState::READY);
+    PutMembership(backend, *keys, initial.members[1].identity.address, MemberLifecycleState::READY);
+    backend.SetStorePrefix(keys->MembershipTable(), keys->EtcdMembershipTablePrefix());
+    std::atomic<int64_t> nowSeconds{ 0 };
+    std::atomic<size_t> clockCalls{ 0 };
+    std::atomic<size_t> probeCalls{ 0 };
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.failureProbeTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.localAddress = initial.members[0].identity.address;
+    options.now = [&] {
+        ++clockCalls;
+        return std::chrono::steady_clock::time_point(std::chrono::seconds(nowSeconds.load()));
+    };
+    options.memberLivenessProbe = [&](const std::vector<MemberIdentity> &targets, auto) {
+        ++probeCalls;
+        EXPECT_EQ(targets.size(), 1U);
+        return std::vector<ControlBackendObservation>{
+            { targets.front(), ControlBackendState::UNKNOWN, 0, 0, "", std::chrono::steady_clock::now() }
+        };
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+
+    backend.ResetReadCounts();
+    clockCalls = 0;
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent(
+        { CoordinationEventType::DELETE,
+          keys->EtcdMembershipTablePrefix() + "/" + initial.members[1].identity.address, "", 0,
+          backend.CurrentRevision() + 1 }));
+    ASSERT_TRUE(WaitForCondition([&] { return clockCalls.load() >= 3; }, std::chrono::milliseconds(200)));
+    nowSeconds = 2;
+    EXPECT_TRUE(WaitForCondition([&] { return probeCalls.load() > 0; }));
+    EXPECT_EQ(backend.GetAllCount(keys->MembershipTable()), 0U);
+    EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), 0U);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ExternalResetRevisionFloorRejectsQueuedStaleValue)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("watch-resync-floor", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState initial;
+    initial.version = 1;
+    initial.clusterHasInit = true;
+    initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::READY);
+    std::atomic<size_t> clockCalls{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.now = [&] {
+        ++clockCalls;
+        return std::chrono::steady_clock::now();
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+
+    auto rebuilt = initial;
+    rebuilt.version = 2;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), rebuilt);
+    std::string stalePayload;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeTopology(initial, stalePayload));
+    backend.BlockNextGet();
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    const bool rebuildBlocked =
+        backend.WaitUntilGetBlocked(std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT);
+    if (!rebuildBlocked) {
+        backend.ReleaseBlockedGet();
+    }
+    ASSERT_TRUE(rebuildBlocked);
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent(
+        { CoordinationEventType::PUT, keys->TopologyTable() + "/", std::move(stalePayload), 1,
+          backend.CurrentRevision() }));
+    backend.ReleaseBlockedGet();
+    ASSERT_TRUE(WaitForCondition([&] { return controller.GetDiagnostics().topologyVersion == 2; }));
+    const auto exactReads =
+        backend.ExactGetCount(keys->TopologyTable(), TopologyKeyHelper::TopologyKey());
+    const auto membershipReads = backend.RevisionGetAllCount(keys->MembershipTable());
+    const auto before = clockCalls.load();
+    ASSERT_TRUE(WaitForCondition([&] { return clockCalls.load() >= before + 2; }));
+    EXPECT_EQ(controller.GetDiagnostics().topologyVersion, 2U);
+    EXPECT_EQ(backend.ExactGetCount(keys->TopologyTable(), TopologyKeyHelper::TopologyKey()), exactReads);
+    EXPECT_EQ(backend.RevisionGetAllCount(keys->MembershipTable()), membershipReads);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ExternalQueueOverflowTriggersExactResync)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("watch-overflow-resync", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(1);
+    TopologyState initial;
+    initial.version = 1;
+    initial.clusterHasInit = true;
+    initial.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), initial);
+    PutMembership(backend, *keys, initial.members.front().identity.address, MemberLifecycleState::READY);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(5);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    DS_ASSERT_OK(controller.Start());
+
+    backend.BlockNextGet();
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent({ CoordinationEventType::RESET, "", "", 0, 0 }));
+    const bool rebuildBlocked =
+        backend.WaitUntilGetBlocked(std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT);
+    if (!rebuildBlocked) {
+        backend.ReleaseBlockedGet();
+    }
+    ASSERT_TRUE(rebuildBlocked);
+    const auto membershipKey = keys->MembershipTable() + "/" + initial.members.front().identity.address;
+    DS_ASSERT_OK(controller.SubmitCoordinationEvent(
+        { CoordinationEventType::PUT, membershipKey, EncodeMembership(MemberLifecycleState::READY), 1, 1 }));
+    EXPECT_EQ(controller
+                  .SubmitCoordinationEvent({ CoordinationEventType::PUT,
+                                             keys->MembershipTable() + "/127.0.0.1:2",
+                                             EncodeMembership(MemberLifecycleState::READY),
+                                             1,
+                                             2 })
+                  .GetCode(),
+              K_TRY_AGAIN);
+    auto rebuilt = initial;
+    rebuilt.version = 2;
+    backend.SetAfterRevisionGetAllHandler(
+        [&] { backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), rebuilt); });
+    backend.ReleaseBlockedGet();
+
+    ASSERT_TRUE(WaitForCondition([&] { return controller.GetDiagnostics().topologyVersion == 2; }));
+    EXPECT_GE(backend.RevisionGetAllCount(keys->MembershipTable()), 3U);
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 

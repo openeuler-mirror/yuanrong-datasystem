@@ -32,12 +32,37 @@ Status FakeCoordinationBackend::GetAll(const std::string &table,
                                        std::vector<std::pair<std::string, std::string>> &values)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    ++getAllAttemptsByTable_[table];
     values.clear();
     const std::string prefix = table + "/";
     for (const auto &[key, value] : values_) {
         if (key.rfind(prefix, 0) == 0) {
             values.emplace_back(key.substr(prefix.size()), value.first);
         }
+    }
+    return Status::OK();
+}
+
+Status FakeCoordinationBackend::GetAll(const std::string &table,
+                                       std::vector<std::pair<std::string, std::string>> &values,
+                                       int64_t &responseRevision)
+{
+    std::function<void()> afterRead;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++revisionGetAllAttemptsByTable_[table];
+        values.clear();
+        const std::string prefix = table + "/";
+        for (const auto &[key, value] : values_) {
+            if (key.rfind(prefix, 0) == 0) {
+                values.emplace_back(key.substr(prefix.size()), value.first);
+            }
+        }
+        responseRevision = revision_;
+        afterRead = std::move(afterRevisionGetAllHandler_);
+    }
+    if (afterRead != nullptr) {
+        afterRead();
     }
     return Status::OK();
 }
@@ -56,6 +81,7 @@ Status FakeCoordinationBackend::Get(const std::string &table, const std::string 
     CHECK_FAIL_RETURN_STATUS(timeoutMs > 0, K_INVALID, "invalid timeout");
     std::unique_lock<std::mutex> lock(mutex_);
     ++getAttempts_;
+    ++getAttemptsByKey_[FullKey(table, key)];
     getCv_.notify_all();
     if (failNextGet_) {
         failNextGet_ = false;
@@ -194,7 +220,9 @@ Status FakeCoordinationBackend::UpdateNodeState(MemberLifecycleState)
 
 Status FakeCoordinationBackend::GetStorePrefix(const std::string &table, std::string &prefix)
 {
-    prefix = table;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = storePrefixes_.find(table);
+    prefix = found == storePrefixes_.end() ? table : found->second;
     return Status::OK();
 }
 
@@ -330,6 +358,54 @@ void FakeCoordinationBackend::ReleaseBlockedGet()
     std::lock_guard<std::mutex> lock(mutex_);
     releaseGet_ = true;
     getCv_.notify_all();
+}
+
+void FakeCoordinationBackend::ResetReadCounts()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    getAttempts_ = 0;
+    getAttemptsByKey_.clear();
+    getAllAttemptsByTable_.clear();
+    revisionGetAllAttemptsByTable_.clear();
+}
+
+size_t FakeCoordinationBackend::ExactGetCount(const std::string &table, const std::string &key) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = getAttemptsByKey_.find(FullKey(table, key));
+    return found == getAttemptsByKey_.end() ? 0 : found->second;
+}
+
+size_t FakeCoordinationBackend::GetAllCount(const std::string &table) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = getAllAttemptsByTable_.find(table);
+    return found == getAllAttemptsByTable_.end() ? 0 : found->second;
+}
+
+size_t FakeCoordinationBackend::RevisionGetAllCount(const std::string &table) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = revisionGetAllAttemptsByTable_.find(table);
+    return found == revisionGetAllAttemptsByTable_.end() ? 0 : found->second;
+}
+
+int64_t FakeCoordinationBackend::CurrentRevision() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return revision_;
+}
+
+void FakeCoordinationBackend::SetStorePrefix(std::string table, std::string prefix)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    storePrefixes_[std::move(table)] = std::move(prefix);
+}
+
+void FakeCoordinationBackend::SetAfterRevisionGetAllHandler(std::function<void()> handler)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    afterRevisionGetAllHandler_ = std::move(handler);
 }
 
 void FakeCoordinationBackend::SetBeforeCasHandler(std::function<void()> handler)

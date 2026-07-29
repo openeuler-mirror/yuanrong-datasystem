@@ -187,32 +187,39 @@ Important nuance:
 1. `EtcdStore::WatchEvents` converts table/key pairs to physical targets and starts one `EtcdWatch` stream. Worker
    topology passes exact topology/local-notify plus the membership prefix in one call; ETCD creates one watch ID per
    target on that stream.
-2. Topology startup synchronously reloads authority before registering the stream. A successful reload supplies the
-   published `TopologySnapshot::AuthorityRevision()` as the last processed revision for every unified target, and ETCD
-   receives `start_revision = last_processed_revision + 1`.
-3. If the bootstrap reload reports `K_NOT_FOUND` or `K_NOT_READY`, topology may register in `WATCH_FROM_NOW` mode. This
-   omits protobuf `start_revision`; the first topology creation in the read-watch window may be missed, and later
-   topology events or passive compensation provide convergence.
+2. Unified ETCD startup first ranges the complete membership prefix at revision `R`, then accepts an exact topology
+   whose modification revision is no newer than `R`. If topology advances across that read window, Controller retries
+   the bounded baseline. Topology and membership watches then receive `start_revision = R + 1`.
+3. Worker keeps its existing exact topology/local-notify doorbell path. If its startup topology read reports
+   `K_NOT_FOUND` or `K_NOT_READY`, only local notify uses `WATCH_FROM_NOW`; Controller-owned topology and membership
+   facts still start after the positive baseline revision `R`.
 4. Exact targets omit `range_end`; collection targets use `range_end = prefix + "\xFF"`.
 5. The producer reads the ETCD watch stream and queues events. A response records created/canceled state, compact
    revision, cancel reason, header revision, watch ID, and event count.
-6. A canceled response is a producer error. `EtcdStore::WatchRun` uses the existing whole-stream recovery path:
-   `ReInitWatch` first calls `RetrieveEventActively`, updates every target revision from the range reads, and then reopens
-   the unified stream. Active compensation orders events by revision, key, and event type so one transaction's distinct
-   same-revision keys are all retained. Recovery does not rebuild only the canceled watcher.
+6. A canceled response is a producer error. Before the existing whole-stream recovery path runs,
+   `EtcdCoordinationBackend` converts the failure into RESET for both unified consumers. Controller pauses
+   missing-member accounting and exact-resyncs its fact cache. `ReInitWatch` then calls `RetrieveEventActively`, updates
+   every target revision from the range reads, emits RESET again so bootstrap-only deleted keys are exact-resynced, and
+   reopens the unified stream from the captured revisions. Failed-stream cleanup cancels the gRPC client context before
+   `WritesDone`/`Finish`, so a canceled watcher cannot block whole-stream recovery. Active compensation orders events by
+   revision, key, and event type so one transaction's distinct same-revision keys are all retained.
 7. The consumer filters stale events using local `keyVersion_`, runs the RocksDB cluster-info update callback, then calls
    the runtime event handler.
-8. DELETE events under a membership `/cluster/` key are ignored if the backend is not writable.
+8. DELETE events under a membership `/cluster/` key are ignored if the backend is not writable. That unobservable
+   interval emits RESET so Controller retains last-good state and exact-resyncs when ETCD is observable again.
 9. A passive compensation thread periodically searches ETCD and filters exact targets before generating fake PUT/DELETE
-   events for missed state.
+   events for missed state. A failed writable check emits the same RESET; a later successful attempt restores the
+   normal compensation interval.
 10. `TopologyKeyHelper` classifies physical keys from the unified stream, and `TopologyEngine` applies role-delivery
-    policy: topology wakes Worker and Controller, local notify wakes Worker, and membership wakes Controller.
-    Topology/notify payloads are discarded before bounded doorbell dispatch; membership values are retained for
-    restart-generation observation.
+    policy: topology reaches Worker and Controller, local notify reaches Worker, and membership reaches Controller.
+    Controller validates and applies topology/membership PUT/DELETE values on its serialized state thread. Worker keeps
+    topology/local notify as exact-read doorbells, and task/Coordinator events retain their existing semantics.
 
 Important nuance:
 
 - Watch is not a pure subscription layer. It actively compares ETCD state against local `keyVersion_` and can synthesize events.
+- Normal watch and active/passive compensation values enter the same Controller validation path. RESET, queue overflow,
+  malformed/revisionless events, version gaps, and revision conflicts retain last-good state and require exact resync.
 - `WATCH_FROM_NOW` is distinct from revision zero: it leaves protobuf `start_revision` unset instead of deriving a value
   through arithmetic.
 - Fake PUT events may be delayed when the observed version suggests an intermediate event may still arrive.
