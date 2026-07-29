@@ -22,6 +22,7 @@
 #include <cstdlib>
 #include <exception>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 
 #include "datasystem/client/transport/common/deadline_retry.h"
@@ -298,7 +299,7 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
                          << " after ambiguous MSet failure without replay: " << rc;
             manager_->Teardown(workerAddr);
         }
-        ScheduleReleases(buffers, param.requestContext);
+        ScheduleMSetReleases(buffers, param.requestContext, result);
         return rc;
     }
     if (retryUbWrite) {
@@ -321,7 +322,7 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
     } else {
         rc = rebuildRc;
     }
-    ScheduleReleases(buffers, param.requestContext);
+    ScheduleMSetReleases(buffers, param.requestContext, result);
     return rc;
 }
 
@@ -415,11 +416,23 @@ Status TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(
     return rc;
 }
 
-void TransportLayer::ScheduleReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
-                                      const TransportRequestContext &context)
+void TransportLayer::ScheduleMSetReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                                          const TransportRequestContext &context,
+                                          const TransportMSetResult &result)
 {
+    if (result.workerAutoRelease && result.failedKeys.empty()) {
+        return;
+    }
+    std::unordered_set<std::string> failedKeys;
+    if (result.workerAutoRelease) {
+        failedKeys.reserve(result.failedKeys.size());
+        failedKeys.insert(result.failedKeys.begin(), result.failedKeys.end());
+    }
     for (const auto &buffer : buffers) {
         const auto &info = ObjectBufferInternal::GetInfo(*buffer);
+        if (result.workerAutoRelease && failedKeys.find(info.objectKey) == failedKeys.end()) {
+            continue;
+        }
         ScheduleRelease(info.workerAddr, info.shmId, context);
     }
 }

@@ -105,6 +105,18 @@ std::shared_ptr<Signature> MakeSignature()
     return std::make_shared<Signature>();
 }
 
+class FakeMmapTableEntry : public IMmapTableEntry {
+public:
+    FakeMmapTableEntry() : IMmapTableEntry(-1, 1)
+    {
+    }
+
+    Status Init(bool, const std::string &) override
+    {
+        return Status::OK();
+    }
+};
+
 TransportRequestContext MakeRequestContext()
 {
     return { "client-1", "token-1", "tenant-1" };
@@ -741,6 +753,8 @@ public:
         ++mSetCount;
         result.actualKind = kind;
         result.publishAttempted = mSetPublishAttempted;
+        result.workerAutoRelease = mSetWorkerAutoRelease;
+        result.failedKeys = mSetFailedKeys;
         if (!mSetStatuses.empty()) {
             Status rc = mSetStatuses.front();
             mSetStatuses.erase(mSetStatuses.begin());
@@ -749,9 +763,10 @@ public:
         return Status::OK();
     }
 
-    Status Release(const ShmKey &, const TransportRequestContext &context) override
+    Status Release(const ShmKey &shmId, const TransportRequestContext &context) override
     {
         ++releaseCount;
+        releasedShmIds.push_back(shmId);
         releaseContexts.push_back(context);
         return releaseStatus;
     }
@@ -769,6 +784,7 @@ public:
     std::shared_ptr<WorkerRpcClient> rpcClient;
     bool alive = true;
     bool mSetPublishAttempted = true;
+    bool mSetWorkerAutoRelease = false;
     int closeCount = 0;
     int getCount = 0;
     std::vector<DataGetRequest> getRequests;
@@ -794,6 +810,8 @@ public:
     std::vector<std::string> createdKeys;
     std::vector<uint64_t> createdSizes;
     std::vector<TransportSetParam> setParams;
+    std::vector<std::string> mSetFailedKeys;
+    std::vector<ShmKey> releasedShmIds;
     std::vector<TransportRequestContext> releaseContexts;
 };
 
@@ -3828,6 +3846,7 @@ TEST(ShmTransporterTest, MSetPartialFailureReturnsOkWithFailedKeys)
     for (int i = 0; i < 3; ++i) {
         std::shared_ptr<ObjectBuffer> buf;
         ASSERT_TRUE(transporter.Create(MakeAddress(9201), "mset-p" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
+        ObjectBufferInternal::GetMutableInfo(*buf).mmapEntry = std::make_shared<FakeMmapTableEntry>();
         buffers.push_back(buf);
     }
     TransportSetParam sp = MakeSetParam();
@@ -3837,6 +3856,9 @@ TEST(ShmTransporterTest, MSetPartialFailureReturnsOkWithFailedKeys)
     EXPECT_EQ(result.failedKeys[0], "mset-p1");
     EXPECT_EQ(result.lastRc.GetCode(), K_NOT_FOUND);
     EXPECT_TRUE(result.publishAttempted);
+    ASSERT_EQ(rpc->invokedMultiSetRequests.size(), 1u);
+    EXPECT_TRUE(rpc->invokedMultiSetRequests[0].auto_release_memory_ref());
+    EXPECT_TRUE(result.workerAutoRelease);
 }
 
 // MSet full failure: every key fails + last_rc error → returns the last error.
@@ -3859,6 +3881,30 @@ TEST(ShmTransporterTest, MSetAllFailureReturnsLastError)
     EXPECT_EQ(result.failedKeys.size(), 2u);
     EXPECT_EQ(result.lastRc.GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_TRUE(result.publishAttempted);
+}
+
+TEST(ShmTransporterTest, MSetFullFailureWithoutFailedKeysKeepsClientCleanup)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    rpc->multiSetLastCode = K_OUT_OF_MEMORY;
+    rpc->multiSetLastMessage = "master rejected the batch";
+    ShmTransporter transporter(rpc);
+    const HostPort workerAddr = MakeAddress(9203);
+    auto first = MakeTransportBuffer(workerAddr, "mset-f0", "data", "shm-f0");
+    auto second = MakeTransportBuffer(workerAddr, "mset-f1", "data", "shm-f1");
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    ObjectBufferInternal::GetMutableInfo(*first).mmapEntry = std::make_shared<FakeMmapTableEntry>();
+    ObjectBufferInternal::GetMutableInfo(*second).mmapEntry = std::make_shared<FakeMmapTableEntry>();
+
+    TransportMSetResult result;
+    Status rc = transporter.MSet({ first, second }, MakeSetParam(), result);
+
+    EXPECT_EQ(rc.GetCode(), K_OUT_OF_MEMORY);
+    ASSERT_EQ(rpc->invokedMultiSetRequests.size(), 1u);
+    EXPECT_TRUE(rpc->invokedMultiSetRequests[0].auto_release_memory_ref());
+    EXPECT_TRUE(result.failedKeys.empty());
+    EXPECT_FALSE(result.workerAutoRelease);
 }
 
 // The 5 new shm metrics must register without ID collision (InitKvMetrics returns OK). This guards
@@ -4830,6 +4876,7 @@ TEST(MSetRequestBuilderTest, BuildsMultiCreateAndAlignsMixedFallbackPayloads)
     ASSERT_TRUE(BuildMultiPublishRequest({ ubBuffer, fallbackBuffer }, { false, true }, MakeSetParam(),
                                          publishRequest, payloads).IsOk());
     EXPECT_TRUE(publishRequest.is_routed());
+    EXPECT_FALSE(publishRequest.auto_release_memory_ref());
     ASSERT_EQ(publishRequest.object_info_size(), 2);
     EXPECT_EQ(publishRequest.object_info(0).object_key(), "fallback-key");
     EXPECT_TRUE(publishRequest.object_info(0).shm_id().empty());
@@ -4837,6 +4884,27 @@ TEST(MSetRequestBuilderTest, BuildsMultiCreateAndAlignsMixedFallbackPayloads)
     EXPECT_EQ(publishRequest.object_info(1).shm_id(), "shm-ub");
     ASSERT_EQ(payloads.size(), 1u);
     EXPECT_EQ(std::string(static_cast<const char *>(payloads[0].Data()), payloads[0].Size()), "tcp");
+}
+
+TEST(MSetRequestBuilderTest, EnablesWorkerAutoReleaseOnlyForPureShmOrUbBatch)
+{
+    const HostPort workerAddr = MakeAddress(9000);
+    auto first = MakeTransportBuffer(workerAddr, "key-a", "data-a", "shm-a", true);
+    auto second = MakeTransportBuffer(workerAddr, "key-b", "data-b", "shm-b", true);
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+    MultiPublishReqPb request;
+    std::vector<MemView> payloads;
+
+    ASSERT_TRUE(
+        BuildMultiPublishRequest({ first, second }, { false, false }, MakeSetParam(), request, payloads).IsOk());
+    EXPECT_TRUE(request.auto_release_memory_ref());
+    EXPECT_TRUE(payloads.empty());
+
+    ObjectBufferInternal::GetMutableInfo(*second).shmId = ShmKey();
+    ASSERT_TRUE(
+        BuildMultiPublishRequest({ first, second }, { false, false }, MakeSetParam(), request, payloads).IsOk());
+    EXPECT_FALSE(request.auto_release_memory_ref());
 }
 
 TEST(MSetRequestBuilderTest, PreservesPartialFailureWithoutFailingWholeBatch)
@@ -5037,6 +5105,7 @@ TEST(UbTransporterTest, MSetUsesUbAndPositionalTcpFallbackInOneRpc)
     EXPECT_EQ(transporter.writeCount, 2);
     ASSERT_EQ(rpcClient->invokedMultiSetRequests.size(), 1u);
     const auto &request = rpcClient->invokedMultiSetRequests[0];
+    EXPECT_FALSE(request.auto_release_memory_ref());
     EXPECT_EQ(request.object_info(0).object_key(), "fallback-key");
     EXPECT_TRUE(request.object_info(0).shm_id().empty());
     EXPECT_EQ(request.object_info(1).object_key(), "ub-key");
@@ -5044,6 +5113,7 @@ TEST(UbTransporterTest, MSetUsesUbAndPositionalTcpFallbackInOneRpc)
     ASSERT_EQ(rpcClient->invokedMultiSetPayloadData[0].size(), 1u);
     EXPECT_EQ(rpcClient->invokedMultiSetPayloadData[0][0], "tcp");
     EXPECT_EQ(result.actualKind, AccessTransportKind::TCP);
+    EXPECT_FALSE(result.workerAutoRelease);
 }
 
 TEST(UbTransporterTest, RejectedObjectFallbackDoesNotAbortSuccessfulObjects)
@@ -5099,6 +5169,9 @@ TEST(UbTransporterTest, PreservesLocalFailureWhenWorkerAlsoReportsPartialFailure
     EXPECT_EQ(result.failedKeys[1], "worker-failed-key");
     EXPECT_EQ(result.lastRc.GetCode(), K_URMA_ERROR);
     EXPECT_EQ(result.actualKind, AccessTransportKind::UB);
+    ASSERT_EQ(rpcClient->invokedMultiSetRequests.size(), 1u);
+    EXPECT_TRUE(rpcClient->invokedMultiSetRequests[0].auto_release_memory_ref());
+    EXPECT_TRUE(result.workerAutoRelease);
 }
 
 TEST(UbTransporterTest, MSetWritesMoreThanOnePipelineBatch)
@@ -5115,6 +5188,9 @@ TEST(UbTransporterTest, MSetWritesMoreThanOnePipelineBatch)
     EXPECT_EQ(transporter.writeCount, 33);
     EXPECT_EQ(transporter.waitCount, 33);
     EXPECT_EQ(rpcClient->multiSetInvokeCount, 1);
+    ASSERT_EQ(rpcClient->invokedMultiSetRequests.size(), 1u);
+    EXPECT_TRUE(rpcClient->invokedMultiSetRequests[0].auto_release_memory_ref());
+    EXPECT_TRUE(result.workerAutoRelease);
     for (const auto &buffer : buffers) {
         EXPECT_TRUE(ObjectBufferInternal::GetInfo(*buffer).ubDataSentByMemoryCopy);
     }
@@ -5169,6 +5245,7 @@ TEST(UbTransporterTest, PublishFailureMarksEverySubmittedObjectFailed)
     ASSERT_EQ(result.failedKeys.size(), 2u);
     EXPECT_EQ(result.failedKeys[0], "key-a");
     EXPECT_EQ(result.failedKeys[1], "key-b");
+    EXPECT_FALSE(result.workerAutoRelease);
 }
 
 TEST(UbTransporterTest, PublishRpcFailureMarksEverySubmittedObjectFailed)
@@ -5508,6 +5585,45 @@ TEST(TransportLayerTest, MSetRetryOnUrmaNeedConnectRebuildsOnlyDataPlane)
     for (const auto &buffer : buffers) {
         EXPECT_TRUE(ObjectBufferInternal::GetInfo(*buffer).ubDataSentByMemoryCopy);
     }
+}
+
+TEST(TransportLayerTest, MSetWorkerAutoReleaseSkipsSuccessfulObjectClientReleases)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &, FakeTransporter &transporter) {
+        transporter.mSetWorkerAutoRelease = true;
+    };
+    TestTransportLayer layer(manager);
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    ASSERT_TRUE(layer.MCreate(MakeAddress(42), { "key-a", "key-b" }, { 4, 4 }, MakeCreateParam(), buffers).IsOk());
+
+    TransportMSetResult result;
+    ASSERT_TRUE(layer.MSet(buffers, MakeSetParam(), result).IsOk());
+
+    ASSERT_NE(manager->lastTransporter, nullptr);
+    EXPECT_TRUE(result.workerAutoRelease);
+    EXPECT_EQ(manager->lastTransporter->releaseCount, 0);
+}
+
+TEST(TransportLayerTest, MSetWorkerAutoReleaseKeepsClientCleanupForFailedObjects)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->configureTransporter = [](const HostPort &, FakeTransporter &transporter) {
+        transporter.mSetWorkerAutoRelease = true;
+        transporter.mSetFailedKeys = { "key-b" };
+    };
+    TestTransportLayer layer(manager);
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    ASSERT_TRUE(layer.MCreate(MakeAddress(43), { "key-a", "key-b" }, { 4, 4 }, MakeCreateParam(), buffers).IsOk());
+
+    TransportMSetResult result;
+    ASSERT_TRUE(layer.MSet(buffers, MakeSetParam(), result).IsOk());
+
+    ASSERT_NE(manager->lastTransporter, nullptr);
+    ASSERT_EQ(manager->lastTransporter->releasedShmIds.size(), 1u);
+    EXPECT_EQ(manager->lastTransporter->releasedShmIds[0].ToString(), "fake-shm-id");
+    ASSERT_EQ(result.failedKeys.size(), 1u);
+    EXPECT_EQ(result.failedKeys[0], "key-b");
 }
 }  // namespace
 }  // namespace client

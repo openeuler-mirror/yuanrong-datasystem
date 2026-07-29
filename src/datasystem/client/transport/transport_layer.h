@@ -145,8 +145,8 @@ private:
 
     void ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId,
                          const TransportRequestContext &context);
-    void ScheduleReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
-                          const TransportRequestContext &context);
+    void ScheduleMSetReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                              const TransportRequestContext &context, const TransportMSetResult &result);
 
     // Retry InvokeDecreaseReference up to 3 times with exponential backoff; rebuilds the transporter
     // if it dies mid-retry. Used by Release and ScheduleRelease to avoid permanent shm-ref leaks.
