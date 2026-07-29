@@ -512,6 +512,34 @@ TEST_F(KVClientTransportSetTest, RoutedMSetSameHostBatchSucceeds)
     ASSERT_TRUE(failedKeys.empty()) << "failedKeys: " << failedKeys.size();
 }
 
+TEST_F(KVClientTransportSetTest, RoutedMSetWorkerAutoReleaseKeepsDataReadableAndReusable)
+{
+    std::string firstKey;
+    std::string secondKey;
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_auto_release_first_", firstKey));
+    DS_ASSERT_OK(FindRouteKeyToWorker(READER_WORKER_INDEX, "transport_mset_auto_release_second_", secondKey));
+    const std::vector<std::string> keys{ firstKey, secondKey };
+    const std::vector<std::string> values{ "first-value", "second-value" };
+    const std::vector<StringView> valueViews{ values[0], values[1] };
+    std::vector<std::string> failedKeys;
+
+    DS_ASSERT_OK(routedClient_->MSet(keys, valueViews, failedKeys));
+
+    EXPECT_TRUE(failedKeys.empty());
+    AssertValue(firstKey, values[0]);
+    AssertValue(secondKey, values[1]);
+
+    DS_ASSERT_OK(routedClient_->Del(firstKey));
+    DS_ASSERT_OK(routedClient_->Del(secondKey));
+    failedKeys.clear();
+    const std::vector<std::string> retryValues{ "first-retry", "second-retry" };
+    const std::vector<StringView> retryValueViews{ retryValues[0], retryValues[1] };
+    DS_ASSERT_OK(routedClient_->MSet(keys, retryValueViews, failedKeys));
+    EXPECT_TRUE(failedKeys.empty());
+    AssertValue(firstKey, retryValues[0]);
+    AssertValue(secondKey, retryValues[1]);
+}
+
 // Same-host routed Set must succeed with metrics initialized (review 180849800).
 TEST_F(KVClientTransportSetTest, ShmMetricRegisteredAndRoutedSetSucceeds)
 {

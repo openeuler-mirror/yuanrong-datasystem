@@ -939,6 +939,7 @@ Status UbTransporter::PublishMSet(const std::shared_ptr<WorkerRpcClient> &rpcCli
         result.lastRc = publishedResult.lastRc;
     }
     result.actualKind = publishedResult.actualKind;
+    result.workerAutoRelease = request.auto_release_memory_ref() && publishRc.IsOk();
     return publishRc;
 }
 

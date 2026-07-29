@@ -18,6 +18,7 @@
 
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 #include "datasystem/client/transport/object_buffer_internal.h"
@@ -83,6 +84,7 @@ void TransportMSetResult::Clear()
     lastRc = Status::OK();
     actualKind = AccessTransportKind::UNKNOWN;
     publishAttempted = false;
+    workerAutoRelease = false;
 }
 
 Status ValidateMultiCreateRequest(const std::vector<std::string> &keys, const std::vector<uint64_t> &sizes,
@@ -135,7 +137,13 @@ Status BuildMultiPublishRequest(const std::vector<std::shared_ptr<ObjectBuffer>>
     request.set_ttl_second(param.ttlSecond);
     request.set_existence(static_cast<::datasystem::ExistenceOptPb>(param.existence));
     request.set_is_replica(false);
-    request.set_auto_release_memory_ref(false);
+    const bool hasTcpPayload =
+        std::any_of(tcpPayload.begin(), tcpPayload.end(), [](bool useTcpPayload) { return useTcpPayload; });
+    const bool allShmIdsPresent =
+        std::all_of(buffers.begin(), buffers.end(), [](const std::shared_ptr<ObjectBuffer> &buffer) {
+            return !ObjectBufferInternal::GetInfo(*buffer).shmId.Empty();
+        });
+    request.set_auto_release_memory_ref(!hasTcpPayload && allShmIdsPresent);
     request.set_is_routed(true);
 
     const auto &first = ObjectBufferInternal::GetInfo(*buffers.front());

@@ -324,6 +324,7 @@ public:
         // TcpTransporter::MSet (tcp_transporter.cpp) so the caller's retry logic (retryUnsentPublish)
         // does not re-publish data the worker already received.
         result.publishAttempted = true;
+        result.workerAutoRelease = request.auto_release_memory_ref() && msetRc.IsOk();
         return msetRc;
     }
 
