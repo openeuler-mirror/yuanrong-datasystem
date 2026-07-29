@@ -159,7 +159,7 @@ void LogMemberTransition(const std::string &clusterName, const char *action, siz
 
 bool TopologyControllerOptions::IsValid() const noexcept
 {
-    return nodeDeadTimeout.count() > 0 && failureBatchWindow.count() > 0 && ordinaryBatchWindow.count() > 0
+    return nodeDeadTimeout.count() >= 0 && failureBatchWindow.count() > 0 && ordinaryBatchWindow.count() > 0
            && reconcileTick.count() > 0 && failureProbeTimeout.count() > 0 && maxDerivedOperationsPerTick > 0
            && maxMembersPerBatch > 0 && maxProgressReadsPerTick > 0 && now
            && scaleInCollectWindow.count() >= 0
