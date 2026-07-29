@@ -53,6 +53,11 @@ namespace client {
 namespace {
 constexpr uint64_t UB_BATCH_SLICE_ALIGNMENT = 16;
 constexpr size_t UB_BATCH_MAX_OBJECT_COUNT = 1024;
+constexpr uint32_t UB_FAILURE_PRIORITY_TRANSIENT = 1;
+constexpr uint32_t UB_FAILURE_PRIORITY_TIMEOUT = 2;
+constexpr uint32_t UB_FAILURE_PRIORITY_PATH = 3;
+constexpr uint32_t UB_FAILURE_PRIORITY_PORT_UNAVAILABLE = 4;
+constexpr int URMA_PORT_UNAVAILABLE_STATUS = 4;
 
 Status AlignUbBatchSlice(uint64_t size, uint64_t &alignedSize)
 {
@@ -69,6 +74,43 @@ Status AddUbBatchSize(uint64_t lhs, uint64_t rhs, uint64_t &sum)
                              "UB batch aggregate size overflows uint64");
     sum = lhs + rhs;
     return Status::OK();
+}
+
+uint32_t UbFailureReportPriority(const Status &rc, const std::optional<int> &providerStatus,
+                                 const std::optional<int> &cqeStatus)
+{
+    if ((providerStatus.has_value() && *providerStatus == URMA_PORT_UNAVAILABLE_STATUS)
+        || (cqeStatus.has_value() && *cqeStatus == URMA_PORT_UNAVAILABLE_STATUS)) {
+        return UB_FAILURE_PRIORITY_PORT_UNAVAILABLE;
+    }
+    switch (rc.GetCode()) {
+        case K_URMA_ERROR:
+        case K_URMA_NEED_CONNECT:
+        case K_URMA_CONNECT_FAILED:
+            return UB_FAILURE_PRIORITY_PATH;
+        case K_URMA_WAIT_TIMEOUT:
+            return UB_FAILURE_PRIORITY_TIMEOUT;
+        case K_TRY_AGAIN:
+        case K_URMA_TRY_AGAIN:
+            return UB_FAILURE_PRIORITY_TRANSIENT;
+        default:
+            return 0;
+    }
+}
+
+void MergeUbFailureReport(const Status &candidate, const ObjectBufferInfo &info, TransportMSetResult &result)
+{
+    if (candidate.IsOk()) {
+        return;
+    }
+    const auto candidatePriority = UbFailureReportPriority(candidate, info.ubProviderStatus, info.ubCqeStatus);
+    const auto currentPriority =
+        UbFailureReportPriority(result.ubFailureReportRc, result.ubProviderStatus, result.ubCqeStatus);
+    if (result.ubFailureReportRc.IsOk() || candidatePriority > currentPriority) {
+        result.ubFailureReportRc = candidate;
+        result.ubProviderStatus = info.ubProviderStatus;
+        result.ubCqeStatus = info.ubCqeStatus;
+    }
 }
 
 #ifdef USE_URMA
@@ -102,8 +144,8 @@ public:
         std::shared_ptr<UrmaManager::BufferHandle> handle;
         RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(handle, requiredSize));
         CHECK_FAIL_RETURN_STATUS(handle != nullptr, K_RUNTIME_ERROR, "UB receive buffer handle is null");
-        RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferInfo(
-            handle, buffer.data, buffer.size, buffer.remoteAddr));
+        RETURN_IF_NOT_OK(
+            UrmaManager::Instance().GetMemoryBufferInfo(handle, buffer.data, buffer.size, buffer.remoteAddr));
         buffer.owner = std::make_shared<UbReceiveBufferOwner>(std::move(handle));
         return Status::OK();
 #else
@@ -238,8 +280,7 @@ Status UbTransporter::BatchGet(const DataGetBatchRequest &inputs, DataGetBatchRe
             fallbackInputs.emplace_back(inputs[index]);
         }
 
-        METRIC_ADD(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL,
-                   tcpFallbackIndexes.size());
+        METRIC_ADD(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_TCP_FALLBACK_TOTAL, tcpFallbackIndexes.size());
         TcpTransporter tcpTransporter(rpcClient_);
         DataGetBatchResult fallbackOutputs;
         Status fallbackStatus = tcpTransporter.BatchGet(fallbackInputs, fallbackOutputs);
@@ -296,12 +337,11 @@ Status UbTransporter::BatchGetAggregateAdaptive(const DataGetBatchRequest &input
     using AggregateRange = std::tuple<uint64_t, size_t, size_t>;
     std::vector<AggregateRange> pendingRanges;
     auto enqueueChildren = [&alignedSizes, &pendingRanges](uint64_t rangeSize, size_t rangeBegin,
-                                                          size_t rangeEnd) -> Status {
+                                                           size_t rangeEnd) -> Status {
         size_t split = rangeBegin + 1;
         uint64_t bestLeftSize = alignedSizes[rangeBegin];
         uint64_t rightSize = rangeSize - bestLeftSize;
-        uint64_t bestDifference =
-            bestLeftSize > rightSize ? bestLeftSize - rightSize : rightSize - bestLeftSize;
+        uint64_t bestDifference = bestLeftSize > rightSize ? bestLeftSize - rightSize : rightSize - bestLeftSize;
         uint64_t cumulativeSize = bestLeftSize;
         for (size_t candidate = rangeBegin + 2; candidate < rangeEnd; ++candidate) {
             RETURN_IF_NOT_OK(AddUbBatchSize(cumulativeSize, alignedSizes[candidate - 1], cumulativeSize));
@@ -365,8 +405,7 @@ Status UbTransporter::BatchGetAggregateAdaptive(const DataGetBatchRequest &input
 
 Status UbTransporter::BatchGetAggregateOnce(const DataGetBatchRequest &inputs,
                                             const std::vector<uint64_t> &alignedSizes, size_t begin, size_t end,
-                                            uint64_t aggregateSize, DataGetBatchResult &outputs,
-                                            bool &allocationFailed)
+                                            uint64_t aggregateSize, DataGetBatchResult &outputs, bool &allocationFailed)
 {
     outputs.clear();
     allocationFailed = false;
@@ -419,8 +458,7 @@ Status UbTransporter::BatchGetAggregateOnce(const DataGetBatchRequest &inputs,
     size_t expectedPayloadCount = 0;
     for (size_t i = 0; i < end - begin; ++i) {
         const auto &itemResponse = response.responses(static_cast<int>(i));
-        Status itemStatus(static_cast<StatusCode>(itemResponse.error().error_code()),
-                          itemResponse.error().error_msg());
+        Status itemStatus(static_cast<StatusCode>(itemResponse.error().error_code()), itemResponse.error().error_msg());
         if (!itemStatus.IsOk()) {
             continue;
         }
@@ -445,8 +483,8 @@ Status UbTransporter::BatchGetAggregateOnce(const DataGetBatchRequest &inputs,
     for (size_t i = 0; i < end - begin; ++i) {
         const auto &itemResponse = response.responses(static_cast<int>(i));
         DataGetItemResult item;
-        item.status = Status(static_cast<StatusCode>(itemResponse.error().error_code()),
-                             itemResponse.error().error_msg());
+        item.status =
+            Status(static_cast<StatusCode>(itemResponse.error().error_code()), itemResponse.error().error_msg());
         item.data.response = itemResponse;
         if (item.status.IsOk() && itemResponse.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
             item.data.kind = AccessTransportKind::TCP;
@@ -600,8 +638,7 @@ Status UbTransporter::Create(const HostPort &workerAddr, const std::string &key,
     return Status(K_NOT_SUPPORTED, "UB Create: worker returned no URMA info; SHM-in-UB not yet supported");
 }
 
-void UbTransporter::ReleaseMCreateAllocations(const MultiCreateRspPb &response,
-                                              const TransportRequestContext &context)
+void UbTransporter::ReleaseMCreateAllocations(const MultiCreateRspPb &response, const TransportRequestContext &context)
 {
     if (rpcClient_ == nullptr) {
         return;
@@ -662,8 +699,8 @@ Status UbTransporter::BuildMCreateBuffers(const HostPort &workerAddr, const std:
     created.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
         std::shared_ptr<ObjectBuffer> buffer;
-        RETURN_IF_NOT_OK(BuildMCreateBuffer(workerAddr, keys[i], sizes[i], param,
-                                            response.results(static_cast<int>(i)), workerVersion, buffer));
+        RETURN_IF_NOT_OK(BuildMCreateBuffer(workerAddr, keys[i], sizes[i], param, response.results(static_cast<int>(i)),
+                                            workerVersion, buffer));
         created.emplace_back(std::move(buffer));
     }
     buffers = std::move(created);
@@ -698,16 +735,18 @@ Status UbTransporter::MCreate(const HostPort &workerAddr, const std::vector<std:
 Status UbTransporter::WritePayload(ObjectBufferInfo &info)
 {
     std::vector<uint64_t> eventKeys;
-    return SubmitPayload(info, true, eventKeys);
+    UrmaWriteFailure failure;
+    auto rc = SubmitPayload(info, true, eventKeys, &failure);
+    info.ubProviderStatus = failure.providerStatus;
+    info.ubCqeStatus = failure.cqeStatus;
+    return rc;
 }
 
-Status UbTransporter::WaitPayloadEvents(std::vector<uint64_t> &eventKeys)
+Status UbTransporter::WaitPayloadEvents(std::vector<uint64_t> &eventKeys, UrmaWriteFailure *failure)
 {
-    auto remainingTime = []() {
-        return TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs());
-    };
+    auto remainingTime = []() { return TimeoutDuration::CeilUsToMs(ApiDeadline::Instance().ApiRemainingUs()); };
     auto preserveError = [](Status &rc) { return rc; };
-    return WaitFastTransportEvent(eventKeys, remainingTime, preserveError);
+    return WaitFastTransportEventWithFailure(eventKeys, remainingTime, preserveError, failure);
 }
 
 size_t UbTransporter::GetMSetPipelineDepth()
@@ -717,7 +756,8 @@ size_t UbTransporter::GetMSetPipelineDepth()
     return std::max<size_t>(1, std::min(MSET_URMA_MAX_PIPELINE_DEPTH, lanePoolSize));
 }
 
-Status UbTransporter::SubmitPayload(ObjectBufferInfo &info, bool blocking, std::vector<uint64_t> &eventKeys)
+Status UbTransporter::SubmitPayload(ObjectBufferInfo &info, bool blocking, std::vector<uint64_t> &eventKeys,
+                                    UrmaWriteFailure *failure)
 {
 #ifdef USE_URMA
     auto handle = std::static_pointer_cast<UrmaManager::BufferHandle>(info.ubGetBufferHandle);
@@ -727,16 +767,16 @@ Status UbTransporter::SubmitPayload(ObjectBufferInfo &info, bool blocking, std::
 
     auto segment = UrmaManager::Instance().GetLocalSegmentInfo();
     const uint8_t srcChipId = NumaIdToChipId(handle->GetNumaId());
-    const uint8_t dstChipId = info.ubUrmaDataInfo->has_chip_id()
-                                  ? static_cast<uint8_t>(info.ubUrmaDataInfo->chip_id())
-                                  : INVALID_CHIP_ID;
+    const uint8_t dstChipId =
+        info.ubUrmaDataInfo->has_chip_id() ? static_cast<uint8_t>(info.ubUrmaDataInfo->chip_id()) : INVALID_CHIP_ID;
     return UrmaWritePayload(*(info.ubUrmaDataInfo), segment.first, segment.second,
-                            reinterpret_cast<uint64_t>(info.pointer), 0, info.dataSize, info.metadataSize,
-                            srcChipId, dstChipId, blocking, eventKeys);
+                            reinterpret_cast<uint64_t>(info.pointer), 0, info.dataSize, info.metadataSize, srcChipId,
+                            dstChipId, blocking, eventKeys, nullptr, failure);
 #else
     (void)info;
     (void)blocking;
     (void)eventKeys;
+    (void)failure;
     return Status(K_NOT_SUPPORTED, "UB Set: USE_URMA not compiled");
 #endif
 }
@@ -745,6 +785,7 @@ Status UbTransporter::WritePayloads(const std::vector<ObjectBufferInfo *> &infos
 {
     statuses.assign(infos.size(), Status::OK());
     std::vector<std::vector<uint64_t>> eventKeys(infos.size());
+    std::vector<UrmaWriteFailure> failures(infos.size());
     const size_t pipelineDepth = GetMSetPipelineDepth();
     size_t completedPayloads = 0;
     for (size_t begin = 0; begin < infos.size(); begin += pipelineDepth) {
@@ -756,12 +797,16 @@ Status UbTransporter::WritePayloads(const std::vector<ObjectBufferInfo *> &infos
                                        begin, end, completedPayloads, infos.size()));
         }
         for (size_t i = begin; i < end; ++i) {
-            statuses[i] = SubmitPayload(*infos[i], false, eventKeys[i]);
+            infos[i]->ubProviderStatus.reset();
+            infos[i]->ubCqeStatus.reset();
+            statuses[i] = SubmitPayload(*infos[i], false, eventKeys[i], &failures[i]);
         }
         for (size_t i = begin; i < end; ++i) {
             if (statuses[i].IsOk()) {
-                statuses[i] = WaitPayloadEvents(eventKeys[i]);
+                statuses[i] = WaitPayloadEvents(eventKeys[i], &failures[i]);
             }
+            infos[i]->ubProviderStatus = failures[i].providerStatus;
+            infos[i]->ubCqeStatus = failures[i].cqeStatus;
             if (statuses[i].IsOk()) {
                 infos[i]->ubDataSentByMemoryCopy = true;
                 METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, infos[i]->dataSize);
@@ -786,6 +831,9 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     auto rpcClient = rpcClient_;
 
     ObjectBufferInfo &info = ObjectBufferInternal::GetMutableInfo(buffer);
+    info.ubFailureReportRc = Status::OK();
+    info.ubProviderStatus.reset();
+    info.ubCqeStatus.reset();
     PublishReqPb pubReq;
     RETURN_IF_NOT_OK(BuildSetRequest(info, param, pubReq));
     // URMA write path: data already in pool buffer via user MemoryCopy.
@@ -795,6 +843,8 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
         if (writeRc.IsOk()) {
             info.ubDataSentByMemoryCopy = true;
             METRIC_ADD(metrics::KvMetricId::CLIENT_PUT_URMA_WRITE_TOTAL_BYTES, info.dataSize);
+        } else {
+            info.ubFailureReportRc = writeRc;
         }
     }
 
@@ -808,9 +858,8 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     } else {
         // TCP fallback: send data as payload through RPC
         UrmaFallbackTcpLimiter::Ticket ticket;
-        RETURN_IF_NOT_OK(UrmaFallbackTcpLimiter::TryAcquire(
-            urmaFallbackTcpPendingBytes_, info.dataSize, writeRc,
-            "client->worker", ticket));
+        RETURN_IF_NOT_OK(UrmaFallbackTcpLimiter::TryAcquire(urmaFallbackTcpPendingBytes_, info.dataSize, writeRc,
+                                                            "client->worker", ticket));
 
         MemView payload(info.pointer + info.metadataSize, info.dataSize);
         std::vector<MemView> payloads{ payload };
@@ -821,11 +870,11 @@ Status UbTransporter::Set(ObjectBuffer &buffer, const TransportSetParam &param)
     return SetTransportResponseStatus(rsp, kind, param.isSeal, param.isRetry);
 }
 
-void UbTransporter::ClassifyMSetPayload(
-    const std::shared_ptr<ObjectBuffer> &buffer, const Status &writeRc,
-    std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers, std::vector<bool> &tcpPayload,
-    std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets, uint64_t &fallbackBytes,
-    TransportMSetResult &result)
+void UbTransporter::ClassifyMSetPayload(const std::shared_ptr<ObjectBuffer> &buffer, const Status &writeRc,
+                                        std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
+                                        std::vector<bool> &tcpPayload,
+                                        std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,
+                                        uint64_t &fallbackBytes, TransportMSetResult &result)
 {
     auto &info = ObjectBufferInternal::GetMutableInfo(*buffer);
     if (writeRc.IsOk()) {
@@ -836,9 +885,10 @@ void UbTransporter::ClassifyMSetPayload(
         return;
     }
     info.ubDataSentByMemoryCopy = false;
+    MergeUbFailureReport(writeRc, info, result);
     UrmaFallbackTcpLimiter::Ticket ticket;
-    Status acquireRc = UrmaFallbackTcpLimiter::TryAcquire(
-        urmaFallbackTcpPendingBytes_, info.dataSize, writeRc, "client->worker", ticket);
+    Status acquireRc = UrmaFallbackTcpLimiter::TryAcquire(urmaFallbackTcpPendingBytes_, info.dataSize, writeRc,
+                                                          "client->worker", ticket);
     if (acquireRc.IsError()) {
         result.failedKeys.emplace_back(info.objectKey);
         result.lastRc = acquireRc;
@@ -850,11 +900,11 @@ void UbTransporter::ClassifyMSetPayload(
     tcpPayload.emplace_back(true);
 }
 
-Status UbTransporter::PrepareMSetPayloads(
-    const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
-    std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers, std::vector<bool> &tcpPayload,
-    std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets, uint64_t &fallbackBytes,
-    TransportMSetResult &result)
+Status UbTransporter::PrepareMSetPayloads(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                                          std::vector<std::shared_ptr<ObjectBuffer>> &publishBuffers,
+                                          std::vector<bool> &tcpPayload,
+                                          std::vector<UrmaFallbackTcpLimiter::Ticket> &fallbackTickets,
+                                          uint64_t &fallbackBytes, TransportMSetResult &result)
 {
     std::vector<ObjectBufferInfo *> pendingInfos;
     std::vector<size_t> pendingIndexes;
@@ -883,8 +933,7 @@ Status UbTransporter::PrepareMSetPayloads(
             pending += static_cast<size_t>(wasPending);
             continue;
         }
-        CHECK_FAIL_RETURN_STATUS(wasPending, K_RUNTIME_ERROR,
-                                 "UB MSet pending payload index mismatch");
+        CHECK_FAIL_RETURN_STATUS(wasPending, K_RUNTIME_ERROR, "UB MSet pending payload index mismatch");
         ClassifyMSetPayload(buffers[i], writeStatuses[pending++], publishBuffers, tcpPayload, fallbackTickets,
                             fallbackBytes, result);
     }
@@ -943,8 +992,8 @@ Status UbTransporter::PublishMSet(const std::shared_ptr<WorkerRpcClient> &rpcCli
     return publishRc;
 }
 
-Status UbTransporter::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
-                           const TransportSetParam &param, TransportMSetResult &result)
+Status UbTransporter::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers, const TransportSetParam &param,
+                           TransportMSetResult &result)
 {
     result.Clear();
     std::shared_ptr<WorkerRpcClient> rpcClient;
@@ -962,8 +1011,7 @@ Status UbTransporter::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buf
         }
         rpcClient = rpcClient_;
     }
-    RETURN_IF_NOT_OK(PrepareMSetPayloads(buffers, publishBuffers, tcpPayload, fallbackTickets, fallbackBytes,
-                                         result));
+    RETURN_IF_NOT_OK(PrepareMSetPayloads(buffers, publishBuffers, tcpPayload, fallbackTickets, fallbackBytes, result));
     return PublishMSet(rpcClient, publishBuffers, tcpPayload, param, fallbackBytes, result);
 }
 

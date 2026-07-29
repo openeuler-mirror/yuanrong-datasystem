@@ -141,6 +141,14 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
     single RECV Jetty/JFR published by TCP handshake responses. Jetty role is immutable, so RECV async-event retirement
     does not enter the send pool or trigger send-pool refill. Shutdown closes Jetty admission before stopping the poll
     thread; non-converged provider resources are retained fail-closed rather than implicitly deleted.
+  - URMA write failures preserve raw provider-post and completion status in `UrmaWriteFailure`. The object-cache
+    classifier treats raw status `4` as a hard local-port failure, wait/RPC timeout evidence as `SUSPECT`, and
+    resource-pressure failures as non-isolating. A generic `K_URMA_ERROR` without raw provider/CQE evidence is not
+    sufficient for hard isolation.
+  - The client transport layer owns process-local UB sender admission. A raw status-4 write failure closes admission
+    for later UB Create/Set/MCreate/MSet operations; already-admitted operations drain under a shared lifecycle lock.
+    Recovery uses an explicit one-byte URMA WRITE to a manager-owned probe segment advertised by an ACTIVE Worker
+    handshake, with bounded exponential retry. Business requests do not reopen the sender state.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available

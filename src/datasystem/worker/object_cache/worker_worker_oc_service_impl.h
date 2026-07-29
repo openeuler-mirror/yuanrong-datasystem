@@ -20,6 +20,8 @@
 #include <functional>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
+#include "datasystem/common/object_cache/peer_ub_admission.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/rdma/rdma_util.h"
 #include "datasystem/common/rdma/urma_send_lane.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
@@ -78,8 +80,8 @@ public:
      * @param[in] isQueryAndGet Whether to use the metadata-query resident-data fast path.
      * @return Status of the call.
      */
-    Status GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                           std::vector<RpcMessage> &payload, bool isQueryAndGet = false);
+    Status GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload,
+                           bool isQueryAndGet = false);
 
     /**
      * @brief Check etcd state.
@@ -133,6 +135,12 @@ public:
     Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp) override;
 
 private:
+    static void RecordProviderUbWriteFailure(const GetObjectRemoteReqPb &req, const Status &status,
+                                             const HostPort &operatorWorker, GetObjectRemoteRspPb &rsp,
+                                             const UrmaWriteFailure *failure = nullptr,
+                                             PeerUbAdmission *ubAdmission = nullptr);
+    static bool TryEncodeProviderUbFailureResponse(const Status &status, GetObjectRemoteRspPb &rsp);
+
     struct AggregateInfo {
         bool canBatchHandler = false;
         std::vector<uint64_t> batchReqSize;
@@ -195,15 +203,13 @@ private:
                                RemoteH2DRootInfoPb *batchRootInfo = nullptr, Status *fallbackStatus = nullptr,
                                BatchRh2dContext *batchRh2dContext = nullptr, bool isQueryAndGet = false);
 
-    Status LoadPayloadAndFillResponse(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
-                                      SafeObjType &entry, std::vector<RpcMessage> &outPayload,
-                                      const std::string &objectKey, uint64_t offset, uint64_t size,
-                                      bool blocking, std::vector<uint64_t> &eventKeys,
+    Status LoadPayloadAndFillResponse(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
+                                      std::vector<RpcMessage> &outPayload, const std::string &objectKey,
+                                      uint64_t offset, uint64_t size, bool blocking, std::vector<uint64_t> &eventKeys,
                                       const std::shared_ptr<AggregateMemory> &batchPtr,
                                       RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
-                                      Status *fallbackStatus, bool isFastTransportEnabled,
-                                      bool isUrmaFastTransport, bool isPipelineH2DRequest,
-                                      PerfPoint &batchImplPoint, bool isQueryAndGet);
+                                      Status *fallbackStatus, bool isFastTransportEnabled, bool isUrmaFastTransport,
+                                      bool isPipelineH2DRequest, PerfPoint &batchImplPoint, bool isQueryAndGet);
 
     /**
      * @brief Load a spilled object for the regular remote-get path.
@@ -224,37 +230,34 @@ private:
      * @param[in,out] loadDataPoint Object-load performance point.
      * @param[in,out] batchImplPoint Remote-get implementation performance point.
      */
-    void FillGetObjectRemoteResponse(GetObjectRemoteRspPb &rsp, const SafeObjType &entry,
-                                     PerfPoint &loadDataPoint, PerfPoint &batchImplPoint);
+    void FillGetObjectRemoteResponse(GetObjectRemoteRspPb &rsp, const SafeObjType &entry, PerfPoint &loadDataPoint,
+                                     PerfPoint &batchImplPoint);
 
     Status LockEntryForRemoteGet(const std::string &objectKey, bool tryLock, uint64_t version,
                                  std::shared_ptr<SafeObjType> &safeEntry);
 
-    Status CheckFastTransportSize(const SafeObjType &entry, uint64_t expectedDataSize,
-                                  const std::string &objectKey, bool isFastTransportEnabled,
-                                  GetObjectRemoteRspPb &rsp);
+    Status CheckFastTransportSize(const SafeObjType &entry, uint64_t expectedDataSize, const std::string &objectKey,
+                                  bool isFastTransportEnabled, GetObjectRemoteRspPb &rsp);
 
     Status WriteViaFastTransport(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
                                  std::shared_ptr<ShmUnit> shmUnit, uint64_t localSegAddress, uint64_t localSegSize,
                                  uint64_t offset, uint64_t size, bool blocking, std::vector<uint64_t> &eventKeys,
                                  const std::shared_ptr<AggregateMemory> &batchPtr, bool isFastTransportEnabled,
                                  bool isPipelineH2DRequest, BatchRh2dContext *batchRh2dContext,
-                                 Status &fastTransportStatus,
-                                 std::string &fastTransportName);
+                                 Status &fastTransportStatus, std::string &fastTransportName);
 
     Status HandlePayloadFallback(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
                                  std::vector<RpcMessage> &outPayload, ShmGuard &shmGuard,
                                  std::shared_ptr<ShmUnit> shmUnit, Status &fastTransportStatus,
-                                 const std::string &fastTransportName,
-                                 const std::string &objectKey, bool isUrmaFastTransport,
-                                 bool isPipelineH2DRequest, bool blocking,
+                                 const std::string &fastTransportName, const std::string &objectKey,
+                                 bool isUrmaFastTransport, bool isPipelineH2DRequest, bool blocking,
                                  const std::shared_ptr<AggregateMemory> &batchPtr, Status *fallbackStatus,
                                  RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
                                  const ReadObjectKV &objKv, uint64_t localSegAddress, uint64_t localSegSize);
 
     Status ProcessFallbackTrackError(const Status &rc, const Status &fastTransportStatus, bool blocking,
-        Status *fallbackStatus, bool &canPrepareFallbackPayload,
-        const std::string &objectKey);
+                                     Status *fallbackStatus, bool &canPrepareFallbackPayload,
+                                     const std::string &objectKey);
 
     /**
      * @brief Helper function to GetObjectRemote, but specialized for the batch get path.
@@ -326,8 +329,7 @@ private:
      * @return Status of the call.
      */
     Status ParallelBatchGetObject(BatchGetObjectRemoteReqPb &req, BatchGetObjectRemoteRspPb &rsp,
-                                  std::vector<ParallelRes> &parallelRes,
-                                  const BatchRh2dContext &batchTransportContext);
+                                  std::vector<ParallelRes> &parallelRes, const BatchRh2dContext &batchTransportContext);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to prepare the aggregate info.

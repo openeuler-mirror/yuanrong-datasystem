@@ -65,3 +65,21 @@ ds_cc_test(
         "//tests/ut:ut_common",
     ],
 )
+
+ds_cc_test(
+    name = "ub_failure_classifier_test",
+    srcs = ["ub_failure_classifier_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:common_object_cache",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "peer_ub_admission_test",
+    srcs = ["peer_ub_admission_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:common_object_cache",
+        "//tests/ut:ut_common",
+    ],
+)

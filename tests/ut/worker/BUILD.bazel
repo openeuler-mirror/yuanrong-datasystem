@@ -306,6 +306,19 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "worker_oc_service_get_ub_admission_test",
+    srcs = ["object_cache/worker_oc_service_get_ub_admission_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:common_object_cache",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/worker/object_cache:object_kv",
+        "//src/datasystem/worker/object_cache:worker_request_manager",
+        "//src/datasystem/worker/object_cache/service:worker_oc_service_get_impl",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # Worker OC Spill 驱逐测试
 ds_cc_test(
     name = "worker_oc_spill_eviction_test",
@@ -567,6 +580,7 @@ test_suite(
         "worker_oc_eviction_test",
         "worker_oc_service_impl_header_test",
         "worker_oc_service_impl_test",
+        "worker_oc_service_get_ub_admission_test",
         "worker_oc_spill_eviction_test",
         "worker_oc_spill_test",
         "worker_worker_peer_state_codec_test",

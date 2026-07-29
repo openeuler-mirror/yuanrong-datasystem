@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <tbb/concurrent_hash_map.h>
@@ -374,6 +375,9 @@ struct ObjectBufferInfo {
     std::shared_ptr<RemoteH2DHostInfoPb> remoteHostInfo = nullptr;
     std::shared_ptr<UrmaRemoteAddrPb> ubUrmaDataInfo = nullptr;
     bool ubDataSentByMemoryCopy = false;
+    Status ubFailureReportRc = Status::OK();
+    std::optional<int> ubProviderStatus;
+    std::optional<int> ubCqeStatus;
     std::shared_ptr<void> ubGetBufferHandle;  // UB Get zero-copy: type-erased BufferHandle ref
     HostPort workerAddr;                       // Worker address for Set(buffer) recovery
 };

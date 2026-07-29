@@ -115,6 +115,8 @@ public:
 protected:
     virtual Status Init() = 0;
 
+    virtual int GetTestCaseTimeoutSecs() const;
+
     // Cluster manager, used to start and shutdown cluster.
     std::unique_ptr<BaseCluster> cluster_;
 
@@ -128,7 +130,7 @@ private:
 
     const int DEFAULT_CLIENT_TIMEOUT_SECS = 10;
 
-    const int DEFAULT_TESTCASE_TIMEOUT_SECS = 80;  // in real test, need to change;
+    const int DEFAULT_TESTCASE_TIMEOUT_SECS = 80;
 };
 
 class ExternalClusterTest : public ClusterTest {

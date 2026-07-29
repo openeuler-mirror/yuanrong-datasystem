@@ -94,6 +94,44 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "ub_fault_p1_transport_admission_test",
+    srcs = ["transport_admission_test.cpp"],
+    defines = select({
+        "//:enable_urma": ["USE_URMA"],
+        "//:enable_urma_mock": ["USE_URMA", "USE_URMA_MOCK"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//include/datasystem:headers",
+        "//src/datasystem/client:client_transport",
+        "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/object_cache:object_base",
+        "//src/datasystem/common/object_cache:object_buffer",
+        "//src/datasystem/common/rpc:api_deadline",
+        "//src/datasystem/common/rpc:mem_view",
+        "//src/datasystem/common/rpc:rpc_message",
+        "//src/datasystem/common/util:common_util",
+        "//src/datasystem/protos:cluster_topology_cc_proto",
+        "//src/datasystem/protos:object_posix_brpc",
+        "//tests/ut:ut_common",
+    ] + select({
+        "//:enable_urma_mock": ["//tests/support/datasystem/common/urma_mock:urma_mock_backend"],
+        "//conditions:default": [],
+    }),
+)
+
+ds_cc_test(
+    name = "ub_transporter_mset_failure_test",
+    srcs = ["ub_transporter_mset_failure_test.cpp"],
+    deps = [
+        "//src/datasystem/client:client_transport",
+        "//src/datasystem/common/object_cache:object_buffer",
+        "//src/datasystem/common/rpc:mem_view",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "urma_send_lane_test",
     srcs = ["urma_send_lane_test.cpp"],
     deps = [
@@ -174,6 +212,10 @@ ds_cc_test(
 ds_cc_test(
     name = "urma_send_jetty_fault_test",
     srcs = ["urma_send_jetty_fault_test.cpp"],
+    copts = select({
+        "//:enable_urma_mock": ["-DUSE_URMA", "-DUSE_URMA_MOCK"],
+        "//conditions:default": [],
+    }),
     tags = ["manual", "urma"],
     timeout = "long",
     env_inherit = ["DS_URMA_DEV_NAME"],

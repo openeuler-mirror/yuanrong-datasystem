@@ -23,6 +23,7 @@
 #include <unordered_set>
 
 #include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/utils/status.h"
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/rpc/rpc_message.h"
@@ -50,7 +51,8 @@ public:
                            std::shared_ptr<ThreadPool> memCpyThreadPool,
                            std::shared_ptr<ThreadPool> threadPool,
                            std::shared_ptr<AkSkManager> akSkManager, HostPort localAddress,
-                           std::shared_ptr<MigrateDataRateController> rateController);
+                           std::shared_ptr<MigrateDataRateController> rateController,
+                           std::shared_ptr<PeerUbAdmission> ubAdmission = nullptr);
 
     ~WorkerOcServiceGetImpl()
     {
@@ -504,9 +506,8 @@ private:
      */
     Status QueryMetadataFromMaster(const std::vector<std::string> &objectKeys, uint64_t subTimeout,
                                    QueryMetadataFromMasterResult &result, bool queryEtcdMeta = true);
-    Status DispatchQueryMetadataGroups(
-        std::unordered_map<HostPort, std::vector<std::string>> &objectKeysByMaster, uint64_t subTimeout,
-        std::vector<BatchQueryMetaResult> &batchQueryResults);
+    Status DispatchQueryMetadataGroups(std::unordered_map<HostPort, std::vector<std::string>> &objectKeysByMaster,
+                                       uint64_t subTimeout, std::vector<BatchQueryMetaResult> &batchQueryResults);
     Status MergeQueryMetadataResults(std::vector<BatchQueryMetaResult> &batchQueryResults, bool traceEnabled,
                                      QueryMetadataFromMasterResult &result,
                                      ObjectKeysQueryMetaFailed &objectKeysQueryMetaFailed,
@@ -569,10 +570,9 @@ private:
      * @param[out] referencedRequestKeys Referenced original request keys.
      * @return Status of the call.
      */
-    Status QueryReferencedRequestKeys(
-        const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
-        const std::unordered_map<std::string, std::string> &responseKeyToRequestKey,
-        std::unordered_set<std::string> &referencedRequestKeys);
+    Status QueryReferencedRequestKeys(const HostPort &masterAddr, const std::vector<std::string> &objectKeys,
+                                      const std::unordered_map<std::string, std::string> &responseKeyToRequestKey,
+                                      std::unordered_set<std::string> &referencedRequestKeys);
 
     /**
      * @brief Remove object location.
@@ -771,25 +771,25 @@ private:
                                           std::unordered_set<std::string> &failedIds,
                                           std::list<GetObjectInfo> &failedMetas);
 
+    struct BatchGetRemoteRequestContext {
+        const std::string &address;
+        std::list<GetObjectInfo> &infos;
+        const std::shared_ptr<GetRequest> &request;
+        std::vector<std::string> &successIds;
+        std::vector<ReadKey> &needRetryIds;
+        std::unordered_set<std::string> &failedIds;
+        PerfPoint &point;
+        HostPort &hostAddr;
+        Status &checkConnectStatus;
+        BatchGetObjectRemoteReqPb &reqPb;
+    };
+
     /**
      * @brief Validate one remote batch and construct its RPC request.
-     * @param[in] address Remote Worker address.
-     * @param[in,out] infos Objects remaining in this batch attempt.
-     * @param[in] request Get request instance, or null for metadata migration.
-     * @param[out] successIds Succeeded object keys discovered during request construction.
-     * @param[out] needRetryIds Object reads that need retry.
-     * @param[out] failedIds Object keys that failed request construction.
-     * @param[in,out] point Detailed performance point for the batch attempt.
-     * @param[out] hostAddr Parsed remote Worker address.
-     * @param[out] checkConnectStatus Remote endpoint availability status.
-     * @param[out] reqPb Constructed batch request.
+     * @param[in,out] context Synchronous view of the request inputs and outputs.
      * @return K_OK on success; the validation or construction error otherwise.
      */
-    Status PrepareBatchGetRemoteRequest(
-        const std::string &address, std::list<GetObjectInfo> &infos, const std::shared_ptr<GetRequest> &request,
-        std::vector<std::string> &successIds, std::vector<ReadKey> &needRetryIds,
-        std::unordered_set<std::string> &failedIds, PerfPoint &point, HostPort &hostAddr,
-        Status &checkConnectStatus, BatchGetObjectRemoteReqPb &reqPb);
+    Status PrepareBatchGetRemoteRequest(BatchGetRemoteRequestContext context);
 
     /**
      * @brief Send one constructed remote batch request with the existing retry policy.
@@ -1101,6 +1101,18 @@ private:
     void UpdateNotifyRemoteGetRateLimit(const std::string &workerAddr, uint64_t migratedBytes,
                                         NotifyRemoteGetRspPb &rsp);
 
+    Status CheckRemoteReadAdmission(const std::string &address) const;
+
+    void ReportRemoteReadOutcome(const std::string &address, const Status &status,
+                                 const std::string &learnedFrom) const;
+    void ReportRemoteReadOutcome(const std::string &address, const GetObjectRemoteRspPb &response,
+                                 const std::string &learnedFrom) const;
+    void ReportRemoteReadOutcome(const HostPort &peer, const GetObjectRemoteRspPb &response,
+                                 const std::string &learnedFrom) const;
+    void ReportRemoteReadOutcome(const std::string &address, const BatchGetObjectRemoteRspPb &response,
+                                 const std::string &learnedFrom) const;
+    Status ProcessRemoteReadResponse(const std::string &address, const GetObjectRemoteRspPb &response,
+                                     const std::string &learnedFrom) const;
     EtcdStore *etcdStore_;  // pointer to EtcdStore in WorkerOcServer
 
     std::shared_ptr<ThreadPool> memCpyThreadPool_{ nullptr };
@@ -1120,6 +1132,8 @@ private:
     HostPort localAddress_;
 
     std::shared_ptr<MigrateDataRateController> rateController_;
+
+    std::shared_ptr<PeerUbAdmission> ubAdmission_{ nullptr };
 
     std::unique_ptr<AsyncUpdateLocationManager> asyncUpdateLocationManager_{ nullptr };
 

@@ -51,6 +51,7 @@ message GetObjectRemoteRspPb {
   DataTransferSource data_source = 5;
   ErrorInfoPb error = 6;
   RemoteH2DHostInfoPb host_info = 7;
+  ProviderUbFailureDetailPb provider_ub_failure_detail = 8;
   repeated uint32 latency_phase_us = 20;
   // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
   uint32 latency_tick_dropped_count = 21;

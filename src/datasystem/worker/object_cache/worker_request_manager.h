@@ -32,7 +32,9 @@
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/object_cache/object_base.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
+#include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/object_cache/safe_object.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/common/util/memory.h"
 #include "datasystem/common/util/request_table.h"
 #include "datasystem/protos/worker_object.pb.h"
@@ -97,6 +99,7 @@ struct GetObjEntryParams {
 struct GetObjInfo {
     OffsetInfo offsetInfo;
     std::unique_ptr<GetObjEntryParams> params;
+    std::shared_ptr<ProviderUbFailureDetailPb> remoteProviderUbFailureDetail;
     Status rc;
     bool isRollBack = false;
     bool NotFound() const
@@ -109,7 +112,9 @@ using ObjectKey = std::string;
 class WorkerRequestManager;
 class GetRequest : public std::enable_shared_from_this<GetRequest> {
 public:
-    GetRequest(AccessRecorderKey key)
+    explicit GetRequest(AccessRecorderKey key, std::string operatorWorkerAddress = "",
+                        std::shared_ptr<PeerUbAdmission> ubAdmission = nullptr)
+        : operatorWorkerAddress_(std::move(operatorWorkerAddress)), ubAdmission_(std::move(ubAdmission))
     {
         recorder_ = AccessRecorder::Object(key);
     };
@@ -193,10 +198,13 @@ public:
     const std::string &GetClientId() const;
     bool NoQueryL2Cache() const;
     const std::string &GetClientCommUuid() const;
-    H2DChunkManager& GetH2DChunkManager();
+    H2DChunkManager &GetH2DChunkManager();
 
     std::vector<ObjectKey> GetUniqueObjectkeys() const;
     std::shared_ptr<ServerUnaryWriterReader<GetRspPb, GetReqPb>> GetServerApi() const;
+
+    void RecordRemoteProviderUbFailure(const ObjectKey &objectKey, const Status &status,
+                                       const ProviderUbFailureDetailPb &detail);
 
 private:
     Status MarkSuccessImpl(const ObjectKey &objectKey, std::unique_ptr<GetObjEntryParams> params);
@@ -210,6 +218,11 @@ private:
     Status UbWriteHelper(const ObjectKey &objectKeyUri, uint64_t metaSize, uint64_t readSize, uint64_t readOffset,
                          std::shared_ptr<ShmUnit> shmUnit, GetObjInfo &objectInfo, size_t objectIndex,
                          uint64_t &ubWriteOffset, GetRspPb &resp);
+
+    void RecordProviderUbWriteFailure(const Status &status, GetRspPb &resp,
+                                      const UrmaWriteFailure *failure = nullptr) const;
+
+    void AttachRemoteProviderUbFailure(const Status &status, GetRspPb &resp);
 
     void SetShmObjectInfoPb(const ObjectKey &, size_t objectIndex, GetObjEntryParams &safeEntry,
                             GetRspPb::ObjectInfoPb &info);
@@ -251,6 +264,8 @@ private:
     bool hasUbGetInfo_ = false;
     UrmaRemoteAddrPb ubUrmaInfo_;
     uint64_t ubBufferSize_ = 0;
+    std::string operatorWorkerAddress_;
+    std::shared_ptr<PeerUbAdmission> ubAdmission_;
 };
 
 class WorkerRequestManager {

@@ -41,6 +41,7 @@
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/immutable_string/immutable_string.h"
 #include "datasystem/common/object_cache/object_bitmap.h"
+#include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/object_cache/object_ref_info.h"
 #include "datasystem/protos/object_posix.pb.h"
 #include "datasystem/worker/object_cache/service/worker_oc_service_migrate_impl.h"
@@ -546,6 +547,11 @@ public:
      * @return The metadata size
      */
     size_t GetMetadataSize() const;
+
+    PeerUbAdmission *GetUbAdmission() const
+    {
+        return ubAdmission_.get();
+    }
 
     /**
      * @brief Get the worker-to-master object cache api manager.
@@ -1370,6 +1376,8 @@ private:
     std::shared_ptr<WorkerOcServiceMultiPublishImpl> multiPublishProc_{ nullptr };
 
     std::shared_ptr<WorkerOcServiceGetImpl> getProc_{ nullptr };
+
+    std::shared_ptr<PeerUbAdmission> ubAdmission_{ std::make_shared<PeerUbAdmission>() };
 
     std::shared_ptr<WorkerOcServiceDeleteImpl> deleteProc_{ nullptr };
 

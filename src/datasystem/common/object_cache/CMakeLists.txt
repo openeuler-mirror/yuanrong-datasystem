@@ -3,6 +3,8 @@ set(COMMON_BUFFER_SRCS
         lock.cpp
         shm_guard.cpp
         urma_fallback_tcp_limiter.cpp
+        ub_failure_classifier.cpp
+        peer_ub_admission.cpp
         device_buffer.cpp
         buffer_composer.cpp
         object_buffer.cpp)

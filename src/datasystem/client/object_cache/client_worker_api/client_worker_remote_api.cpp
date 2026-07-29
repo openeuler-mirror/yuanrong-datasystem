@@ -33,6 +33,7 @@
 
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/latency_phase.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/rpc/api_deadline.h"
@@ -598,8 +599,19 @@ Status ClientWorkerRemoteApi::Get(const GetParam &getParam, uint32_t &version, G
     const bool hasUrmaGetAttempt = (ubBufferHandle != nullptr || getParam.ubPreAllocHandle != nullptr)
         && req.has_urma_info();
     if (hasUrmaGetAttempt) {
-        const bool hasUrmaResponseError = static_cast<StatusCode>(rsp.last_rc().error_code()) == K_URMA_ERROR;
-        if (hasUrmaResponseError) {
+        bool hasHardProviderFailure = false;
+        if (rsp.has_provider_ub_failure_detail()
+            && rsp.provider_ub_failure_detail().operator_worker() == hostPort_.ToString()) {
+            auto outcome = DecodeProviderUbFailureDetail(rsp.provider_ub_failure_detail(), hostPort_,
+                                                         UbOperationKind::CLIENT_GET_WRITEBACK,
+                                                         "client_get_response");
+            if (outcome.has_value()) {
+                auto failureClass = UbFailureClassifier().Classify(*outcome);
+                hasHardProviderFailure = failureClass == UbFailureClass::PORT_UNAVAILABLE_ERROR4
+                                         || failureClass == UbFailureClass::CONNECT_OR_PATH_FAILURE;
+            }
+        }
+        if (hasHardProviderFailure) {
             RecordUrmaDataPlaneResult(false);
         } else if (rsp.payload_info_size() > 0) {
             RecordUrmaDataPlaneResult(!HasUrmaTcpFallbackPayload(rsp));

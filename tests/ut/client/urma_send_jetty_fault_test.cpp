@@ -286,6 +286,60 @@ TEST(UrmaSendJettyFaultTest, NonRecoverableCqeDoesNotRecreateOrLeakLane)
     resource.ReleaseJetty(reacquired);
 }
 
+TEST(UrmaSendJettyFaultTest, WaitToFinishReturnsRawCqeStatus)
+{
+    auto &manager = UrmaManager::Instance();
+    constexpr uint64_t kRequestId = 1003;
+    auto event = std::make_shared<UrmaEvent>(kRequestId, nullptr, "fault-test", "fault-test", 0,
+                                             UrmaEvent::OperationType::WRITE, nullptr);
+    // Deliberately bypass CreateEvent: this focused unit verifies raw CQE propagation without requiring a live
+    // URMA connection, Jetty, or send-lane lease. Production-path event creation is covered by the lane tests above.
+    TbbEventMap::accessor accessor;
+    ASSERT_TRUE(manager.tbbEventMap_.insert(accessor, kRequestId));
+    accessor->second = event;
+    accessor.release();
+    event->SetFailed(4);
+    event->NotifyAll();
+    UrmaWriteFailure failure;
+
+    const auto status = manager.WaitToFinish(kRequestId, 1000, &failure);
+
+    EXPECT_EQ(status.GetCode(), K_URMA_ERROR);
+    EXPECT_FALSE(failure.providerStatus.has_value());
+    ASSERT_TRUE(failure.cqeStatus.has_value());
+    EXPECT_EQ(*failure.cqeStatus, 4);
+}
+
+TEST(UrmaSendJettyFaultTest, CleanupWaitPreservesEarlierCqe4WithLaterPostFailure)
+{
+    const bool originalEnableUrma = FLAGS_enable_urma;
+    Raii restoreEnableUrma([originalEnableUrma] { FLAGS_enable_urma = originalEnableUrma; });
+    FLAGS_enable_urma = true;
+    auto &manager = UrmaManager::Instance();
+    constexpr uint64_t kRequestId = 1004;
+    auto event = std::make_shared<UrmaEvent>(kRequestId, nullptr, "fault-test", "fault-test", 0,
+                                             UrmaEvent::OperationType::WRITE, nullptr);
+    // As above, direct insertion isolates failure aggregation from hardware-backed event creation.
+    TbbEventMap::accessor accessor;
+    ASSERT_TRUE(manager.tbbEventMap_.insert(accessor, kRequestId));
+    accessor->second = event;
+    accessor.release();
+    event->SetFailed(4);
+    event->NotifyAll();
+    UrmaWriteFailure failure{ .providerStatus = 5 };
+    std::vector<uint64_t> eventKeys{ kRequestId };
+    auto remainingTime = []() { return 1000; };
+    auto preserveError = [](Status &status) { return status; };
+
+    const auto status = WaitFastTransportEventWithFailure(eventKeys, remainingTime, preserveError, &failure);
+
+    EXPECT_EQ(status.GetCode(), K_URMA_ERROR);
+    ASSERT_TRUE(failure.providerStatus.has_value());
+    EXPECT_EQ(*failure.providerStatus, 5);
+    ASSERT_TRUE(failure.cqeStatus.has_value());
+    EXPECT_EQ(*failure.cqeStatus, 4);
+}
+
 TEST(UrmaSendJettyFaultTest, AsyncJettyErrorRetiresAndRefillsJetty)
 {
     if (!IsUrmaFaultTestEnvAvailable()) {

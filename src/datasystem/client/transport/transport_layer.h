@@ -18,11 +18,14 @@
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_LAYER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_TRANSPORT_LAYER_H
 
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -117,8 +120,8 @@ public:
                    std::vector<std::shared_ptr<ObjectBuffer>> &buffers);
 
     /** @brief Commit a same-worker MSet batch and return per-object failures. */
-    Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
-                const TransportSetParam &param, TransportMSetResult &result);
+    Status MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers, const TransportSetParam &param,
+                TransportMSetResult &result);
 
     /** @brief Release an unfinished worker allocation after a local copy failure. */
     Status Release(ObjectBuffer &buffer, const TransportRequestContext &context);
@@ -137,16 +140,36 @@ public:
 
 protected:
     /** @brief Construct the facade with injected collaborators for focused orchestration tests. */
-    TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager,
-                   std::shared_ptr<TransportAdvisor> advisor);
+    TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager, std::shared_ptr<TransportAdvisor> advisor);
+    TransportLayer(std::shared_ptr<DataPlaneManager> dataPlaneManager, std::shared_ptr<TransportAdvisor> advisor,
+                   std::chrono::milliseconds localUbProbeBaseDelay);
 
 private:
-    void ReconcileLoop();
+    struct LocalUbSenderFailureView {
+        const HostPort &workerAddr;
+        AccessTransportKind kind;
+        const Status &status;
+        std::optional<int> providerStatus;
+        std::optional<int> cqeStatus;
+    };
 
-    void ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId,
-                         const TransportRequestContext &context);
+    Status CheckLocalUbSenderAdmission(TransportHint hint) const;
+    Status AcquireLocalUbSenderAdmission(TransportHint hint, std::shared_lock<std::shared_mutex> &admission) const;
+    bool ReportLocalUbSenderFailure(const LocalUbSenderFailureView &failure,
+                                    std::shared_lock<std::shared_mutex> &admission);
+    std::optional<std::chrono::steady_clock::time_point> GetLocalUbProbeDeadline() const;
+    void TryRecoverLocalUbSender();
+    void ReconcileLoop();
+    Status RetrySet(const HostPort &workerAddr, ObjectBuffer &buffer, const TransportSetParam &param,
+                    TransportHint hint);
+    Status RetryMSet(const HostPort &workerAddr, const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
+                     const TransportSetParam &param, TransportHint hint, TransportMSetResult &result);
+
+    void ScheduleRelease(const HostPort &workerAddr, const ShmKey &shmId, const TransportRequestContext &context,
+                         std::optional<TransportHint> transportHint = std::nullopt);
     void ScheduleMSetReleases(const std::vector<std::shared_ptr<ObjectBuffer>> &buffers,
-                              const TransportRequestContext &context, const TransportMSetResult &result);
+                              const TransportRequestContext &context, const TransportMSetResult &result,
+                              std::optional<TransportHint> transportHint = std::nullopt);
 
     // Retry InvokeDecreaseReference up to 3 times with exponential backoff; rebuilds the transporter
     // if it dies mid-retry. Used by Release and ScheduleRelease to avoid permanent shm-ref leaks.
@@ -164,6 +187,14 @@ private:
     std::shared_ptr<MmapManager> mmapManager_;
     std::shared_ptr<ThreadPool> releasePool_;
     std::unique_ptr<ObjectReadFlow> objectRead_;
+    mutable std::shared_mutex localUbSenderMutex_;
+    std::atomic<bool> localUbSenderUnavailable_{ false };
+    Status localUbSenderFailure_ = Status::OK();
+    std::optional<HostPort> localUbProbeWorker_;
+    uint64_t localUbSenderGeneration_{ 0 };
+    uint32_t localUbProbeBackoffLevel_{ 0 };
+    std::chrono::steady_clock::time_point localUbProbeDeadline_;
+    std::chrono::milliseconds localUbProbeBaseDelay_{ std::chrono::seconds(1) };
     // ApplyWorkerSnapshot serializes admission publication with shutdown through reconcileMutex_.
     std::mutex reconcileMutex_;
     std::condition_variable reconcileCv_;
@@ -171,6 +202,7 @@ private:
     Thread reconcileThread_;
     bool reconcileStarted_{ false };
     bool reconcileStopping_{ false };
+    std::atomic<bool> shutdownRequested_{ false };
     // Serializes complete Shutdown calls while reconcileMutex_ remains available to the worker.
     std::mutex shutdownMutex_;
 };

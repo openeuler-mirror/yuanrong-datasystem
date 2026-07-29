@@ -394,7 +394,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
         std::make_shared<MigrateDataRateController>(FLAGS_data_migrate_rate_limit_mb * 1024ul * 1024ul);
     getProc_ =
         std::make_shared<WorkerOcServiceGetImpl>(param, etcdStore_, memCpyThreadPool_, threadPool_,
-                                                 akSkManager_, localAddress_, migrateRateController_);
+                                                 akSkManager_, localAddress_, migrateRateController_, ubAdmission_);
 
     deleteProc_ =
         std::make_shared<WorkerOcServiceDeleteImpl>(param, akSkManager_, localAddress_, getProc_);

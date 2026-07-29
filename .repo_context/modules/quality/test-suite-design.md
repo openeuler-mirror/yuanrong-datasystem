@@ -84,6 +84,7 @@
 | Bazel test runner | Runs Bazel tests | `scripts/build_bazel.sh` | Uses `bazel test --config=test //...`. |
 | ST port allocator | Coordinates service ports across concurrent ST processes | `tests/st/cluster/test_port_allocator.*`, `scripts/modules/llt_util.sh` | Uses per-port `flock`, bind probing, lease metadata, and bounded stale cleanup. |
 | ST common fixture | Owns lightweight `CommonTest` path setup and command helpers | `tests/st/common_test.*`, `tests/st/BUILD.bazel` | Built once as `common_test`; helper sources are excluded from glob-based ST object buckets, and fixtures that need same-name process isolation can supply a path suffix. |
+| ST cluster watchdog | Bounds cluster-backed test runtime | `tests/st/common.h`, `tests/st/cluster/common.cpp`, `tests/st/kill_timer.h` | `ClusterTest` defaults to 80 seconds; a fixture with inherently slower hardware lifecycle work can override `GetTestCaseTimeoutSecs()` without changing the global default. |
 
 ## Main Flows
 
@@ -176,6 +177,9 @@ Failure-sensitive steps:
   dependency graph.
 - Fixtures that can run concurrently under the same suite/test name must use the `CommonTest` path-suffix constructor
   before any cleanup occurs. `BraftClusterTest` supplies its PID and cleans only that process-specific top-level path.
+- Cluster-backed ST fixtures inherit an 80-second watchdog. A fixture may override `GetTestCaseTimeoutSecs()` when its
+  hardware startup, shutdown, or recovery lifecycle has a source-backed longer bound; do not increase the shared
+  default to accommodate one test family.
 
 ## Validation Guidance
 

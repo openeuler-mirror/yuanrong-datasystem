@@ -16,6 +16,7 @@
  */
 #include "datasystem/worker/object_cache/worker_worker_oc_service_impl.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <thread>
 #include <type_traits>
@@ -34,6 +35,7 @@
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/object_cache/shm_guard.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
@@ -157,7 +159,8 @@ WorkerWorkerOCServiceImpl::WorkerWorkerOCServiceImpl(
     std::shared_ptr<datasystem::object_cache::WorkerOCServiceImpl> clientSvc, std::shared_ptr<AkSkManager> akSkManager,
     const cluster::MembershipEndpointView &membership, CoordinationAvailabilityProvider coordinationAvailable,
     BackendObservationProvider backendObservationProvider)
-    : ocClientWorkerSvc_(std::move(clientSvc)),
+    : WorkerWorkerOCService(clientSvc == nullptr ? HostPort() : clientSvc->GetLocalAddr()),
+      ocClientWorkerSvc_(std::move(clientSvc)),
       akSkManager_(std::move(akSkManager)),
       membership_(membership),
       coordinationAvailable_(std::move(coordinationAvailable)),
@@ -207,8 +210,13 @@ Status WorkerWorkerOCServiceImpl::GetObjectRemote(
         return connectionRc;
     }
     // K_OC_REMOTE_GET_NOT_ENOUGH error happens only when URMA is used for RDMA and size of the object
-    // is different from the request
-    RETURN_IF_NOT_OK_EXCEPT(GetObjectRemote(req, rsp, payload), StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
+    // is different from the request. A provider-local UB write failure must also cross the RPC boundary so the
+    // requester can quarantine this source before its next read.
+    auto getRc = GetObjectRemote(req, rsp, payload);
+    const bool providerUbFailureEncoded = TryEncodeProviderUbFailureResponse(getRc, rsp);
+    if (!providerUbFailureEncoded) {
+        RETURN_IF_NOT_OK_EXCEPT(getRc, StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
+    }
     TryEncodeRemoteGetLatencySummary(config, traceEnabled, rsp);
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
@@ -711,18 +719,24 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
             const uint8_t dstChipId =
                 req.urma_info().has_chip_id() ? static_cast<uint8_t>(req.urma_info().chip_id()) : INVALID_CHIP_ID;
             Status rc;
+            UrmaWriteFailure failure;
             if (batchRh2dContext != nullptr && batchRh2dContext->sendLaneLease != nullptr) {
                 rc = UrmaWritePayloadWithLane(
                     req.urma_info(), localSegAddress, localSegSize,
                     reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size, entry->GetMetadataSize(),
-                    srcChipId, dstChipId, blocking, eventKeys, batchRh2dContext->sendLaneLease);
+                    srcChipId, dstChipId, blocking, eventKeys, batchRh2dContext->sendLaneLease, nullptr, &failure);
             } else {
                 rc = UrmaWritePayload(req.urma_info(), localSegAddress, localSegSize,
                                       reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size,
-                                      entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys);
+                                      entry->GetMetadataSize(), srcChipId, dstChipId, blocking, eventKeys, nullptr,
+                                      &failure);
             }
             fastTransportStatus = rc;
             fastTransportName = "UrmaWrite";
+            if (rc.IsError()) {
+                RecordProviderUbWriteFailure(req, rc, localAddress_, rsp, &failure,
+                                             ocClientWorkerSvc_->GetUbAdmission());
+            }
             RETURN_IF_NOT_OK(markFastTransferResult(rc));
         } else if (IsUcpEnabled()) {
             auto rc = UcpPutPayload(req.ucp_info(), reinterpret_cast<uint64_t>(shmUnit->GetPointer()), offset, size,
@@ -733,6 +747,37 @@ Status WorkerWorkerOCServiceImpl::WriteViaFastTransport(
         }
     }
     return Status::OK();
+}
+
+void WorkerWorkerOCServiceImpl::RecordProviderUbWriteFailure(const GetObjectRemoteReqPb &req, const Status &status,
+                                                             const HostPort &operatorWorker, GetObjectRemoteRspPb &rsp,
+                                                             const UrmaWriteFailure *failure,
+                                                             PeerUbAdmission *ubAdmission)
+{
+    const auto &address = req.urma_info().request_address();
+    HostPort failedEndpoint(address.host(), address.port());
+    auto &detail = *rsp.mutable_provider_ub_failure_detail();
+    if (failure != nullptr) {
+        FillProviderUbFailureDetail(status, failedEndpoint.ToString(), operatorWorker.ToString(),
+                                    failure->providerStatus, failure->cqeStatus, detail);
+    } else {
+        FillProviderUbFailureDetail(status, failedEndpoint.ToString(), operatorWorker.ToString(), std::nullopt,
+                                    std::nullopt, detail);
+    }
+    ReportProviderLocalUbWriteFailure(
+        ubAdmission, operatorWorker, UbOperationKind::WORKER_REMOTE_GET_WRITEBACK, status,
+        failure == nullptr ? std::nullopt : failure->providerStatus,
+        failure == nullptr ? std::nullopt : failure->cqeStatus);
+}
+
+bool WorkerWorkerOCServiceImpl::TryEncodeProviderUbFailureResponse(const Status &status, GetObjectRemoteRspPb &rsp)
+{
+    if (status.IsOk() || !rsp.has_provider_ub_failure_detail()) {
+        return false;
+    }
+    rsp.mutable_error()->set_error_code(status.GetCode());
+    rsp.mutable_error()->set_error_msg(status.GetMsg());
+    return true;
 }
 
 Status WorkerWorkerOCServiceImpl::ProcessFallbackTrackError(const Status &rc, const Status &fastTransportStatus,
@@ -781,6 +826,10 @@ Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
                                    ? Status(StatusCode::K_URMA_ERROR, "URMA wait fallback payload precheck")
                                    : fastTransportStatus;
             auto rc = shmGuard.TrackUrmaFallbackTcp(objKv.GetReadSize(), trackStatus, "worker->worker");
+            if (rc.IsError() && rsp.has_provider_ub_failure_detail()) {
+                UpdateProviderUbFailureDetailForWrappedStatus(trackStatus, rc,
+                                                              *rsp.mutable_provider_ub_failure_detail());
+            }
             RETURN_IF_NOT_OK(ProcessFallbackTrackError(rc, fastTransportStatus, blocking, fallbackStatus,
                                                        canPrepareFallbackPayload, objectKey));
         }
@@ -1112,10 +1161,22 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
 {
     auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(); };
     const auto srcAddress = localAddress_.ToString();
+    UrmaWriteFailure failure;
     auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum, &fallbackStatus, &srcAddress,
-                         &req](Status &status) {
+                         &req, &failure, this](Status &status) {
         const bool waitFailed = status.IsError();
         if (waitFailed) {
+            if (index < static_cast<uint64_t>(req.requests_size()) && req.requests(index).has_urma_info()) {
+                const uint64_t detailCount = std::min<uint64_t>(coveredRespNum, req.requests_size() - index);
+                for (uint64_t detailIndex = 0; detailIndex < detailCount; ++detailIndex) {
+                    // A batch shares one transport failure observation. Report it once to admission while preserving
+                    // the same structured evidence on every affected sub-response.
+                    RecordProviderUbWriteFailure(
+                        req.requests(index + detailIndex), status, localAddress_,
+                        *rsp.mutable_responses()->Mutable(static_cast<int>(index + detailIndex)), &failure,
+                        detailIndex == 0 ? ocClientWorkerSvc_->GetUbAdmission() : nullptr);
+                }
+            }
             if (fallbackStatus.IsError()) {
                 // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
                 HostPort requestAddress;
@@ -1163,7 +1224,7 @@ Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
         return status;
     };
 
-    (void)WaitFastTransportEvent(kp.second.first, remainingTime, errorHandler);
+    (void)WaitFastTransportEventWithFailure(kp.second.first, remainingTime, errorHandler, &failure);
     index += coveredRespNum;
     return Status::OK();
 }

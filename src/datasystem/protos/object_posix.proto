@@ -164,6 +164,18 @@ message MultiPublishRspPb {
   ErrorInfoPb last_rc = 2;
 }
 
+message ProviderUbFailureDetailPb {
+  int32 status_code = 1;
+  int32 provider_status = 2;
+  int32 cqe_status = 3;
+  string failed_endpoint = 4;
+  string failure_side = 5;
+  string operator_worker = 6;
+  bytes message = 7;
+  bool has_provider_status = 8;
+  bool has_cqe_status = 9;
+}
+
 message RemoteH2DHostInfoPb {
   RemoteHostSegmentPb remote_host_segment = 1;
   RemoteH2DRootInfoPb root_info = 2;
@@ -227,6 +239,7 @@ message GetRspPb {
   repeated ObjectInfoPb objects = 1;
   repeated PayloadInfoPb payload_info = 2;
   ErrorInfoPb last_rc = 3;
+  ProviderUbFailureDetailPb provider_ub_failure_detail = 4;
   repeated uint32 latency_phase_us = 20;
   uint32 latency_tick_dropped_count = 21; // Stores total dropped tick+phase count. See FormatLatencySummary for breakdown.
 }

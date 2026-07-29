@@ -107,6 +107,11 @@
   - URMA warmup treats `K_WORKER_PULL_OBJECT_NOT_FOUND` for internal `_urma_` URMA warmup requests as a silent
     best-effort miss because ready-state discovery can race peer warmup-object creation; ordinary RemoteGet failures
     still use normal error logs
+  - Worker Get and worker-to-worker RemoteGet URMA writeback failures return `ProviderUbFailureDetailPb` containing the
+    provider Worker identity, failed write endpoint, and available raw provider/CQE status. Consumers only apply hard
+    isolation when the detail identifies the actual responding Worker; RPC deadline/unavailable outcomes remain
+    `SUSPECT` and do not close read-source admission. Batch and oversized Get paths preserve the matching structured
+    detail when all relevant objects fail.
   - object-cache worker-to-master RPC warmup also starts before `ReadinessProbe()`: a best-effort asynchronous startup
     task reads immutable topology snapshots until the ready member set is stable or the startup warmup window expires;
     later Snapshot publication callbacks enqueue bounded warmup for newly ready members

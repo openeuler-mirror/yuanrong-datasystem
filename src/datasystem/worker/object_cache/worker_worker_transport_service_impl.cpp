@@ -26,6 +26,9 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
+#ifdef USE_URMA
+#include "datasystem/common/rdma/urma_manager.h"
+#endif
 #include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/timer.h"
@@ -47,7 +50,14 @@ Status WorkerWorkerTransportServiceImpl::Init()
 {
     CHECK_FAIL_RETURN_STATUS(ocClientWorkerSvc_ != nullptr, StatusCode::K_NOT_READY,
                              "ClientWorkerService must be initialized before WorkerWorkerService construction");
-    return WorkerWorkerTransportService::Init();
+    RETURN_IF_NOT_OK(WorkerWorkerTransportService::Init());
+#ifdef USE_URMA
+    if (UrmaManager::IsUrmaEnabled()) {
+        RETURN_IF_NOT_OK(UrmaManager::Instance().GetRecoveryProbeSegmentInfo(recoveryProbeSegmentAddress_,
+                                                                             recoveryProbeDataOffset_));
+    }
+#endif
+    return Status::OK();
 }
 
 Status WorkerWorkerTransportServiceImpl::WorkerWorkerExchangeUrmaConnectInfo(const UrmaHandshakeReqPb &req,
@@ -60,6 +70,15 @@ Status WorkerWorkerTransportServiceImpl::WorkerWorkerExchangeUrmaConnectInfo(con
     auto rc = ExchangeJfr(req, rsp);
     if (rc.IsOk()) {
         rsp.set_supports_payload_only_client_batch_get(true);
+#ifdef USE_URMA
+        if (recoveryProbeSegmentAddress_ != 0 && rsp.has_hand_shake()) {
+            auto *probeAddr = rsp.mutable_recovery_probe_addr();
+            probeAddr->set_seg_va(recoveryProbeSegmentAddress_);
+            probeAddr->set_seg_data_offset(recoveryProbeDataOffset_);
+            probeAddr->mutable_request_address()->CopyFrom(rsp.hand_shake().address());
+            probeAddr->set_client_id(rsp.hand_shake().client_id());
+        }
+#endif
     }
     LOG(INFO) << "[URMA_NEED_CONNECT] WorkerWorkerExchangeUrmaConnectInfo finish, elapsed ms: "
               << timer.ElapsedMilliSecond() << ", status=" << rc.ToString();

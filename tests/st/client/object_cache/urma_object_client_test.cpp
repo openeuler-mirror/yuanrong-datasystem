@@ -43,6 +43,7 @@
 #include "zmq_curve_test_common.h"
 
 DS_DECLARE_bool(log_monitor);
+DS_DECLARE_bool(use_brpc);
 DS_DECLARE_string(log_dir);
 
 namespace datasystem {
@@ -2221,6 +2222,115 @@ public:
         opts.workerGflagParams += " -enable_transport_fallback=false ";
     }
 };
+
+class UrmaClientSenderRecoveryTest : public UrmaDisableFallbackTest {
+public:
+    void SetUp() override
+    {
+        previousUseBrpc_ = FLAGS_use_brpc;
+        FLAGS_use_brpc = true;
+        DS_ASSERT_OK(inject::Set("ObjectClientImpl.ClientWorkerWarmup.skip", "call()"));
+        UrmaDisableFallbackTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        (void)inject::Clear("ObjectClientImpl.ClientWorkerWarmup.skip");
+        (void)inject::Clear("UrmaManager.CheckCompletionRecordStatus");
+        (void)inject::Clear("UrmaManager.UrmaWriteError");
+        (void)inject::Clear("UrmaManager.UrmaWriteAfterPost");
+        (void)inject::Clear("DataPlaneManager.ProbeUbDataPlane.AfterCompletion");
+        UrmaDisableFallbackTest::TearDown();
+        FLAGS_use_brpc = previousUseBrpc_;
+    }
+
+private:
+    bool previousUseBrpc_{ false };
+};
+
+TEST_F(UrmaDisableFallbackTest, RemoteGetProviderError4IsolatesSourceOnRequester)
+{
+    std::shared_ptr<KVClient> sourceClient;
+    std::shared_ptr<KVClient> requesterClient;
+    InitTestKVClient(0, sourceClient);
+    InitTestKVClient(1, requesterClient);
+
+    HostPort sourceWorker;
+    DS_ASSERT_OK(cluster_->GetWorkerAddr(0, sourceWorker));
+    const std::string key = NewObjectKey();
+    const std::string value = GenRandomString(256 * 1024);
+    DS_ASSERT_OK(sourceClient->Set(key, value));
+    constexpr char cqeInject[] = "UrmaManager.CheckCompletionRecordStatus";
+    DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, cqeInject, "1*call(0, 4)"));
+
+    std::string output;
+    Status providerFailure = requesterClient->Get(key, output);
+    ASSERT_EQ(providerFailure.GetCode(), K_URMA_ERROR) << providerFailure.ToString();
+    EXPECT_NE(providerFailure.GetMsg().find("operator_worker=" + sourceWorker.ToString()), std::string::npos)
+        << providerFailure.ToString();
+    EXPECT_NE(providerFailure.GetMsg().find("failure_side=provider_local_ub_write"), std::string::npos)
+        << providerFailure.ToString();
+    EXPECT_NE(providerFailure.GetMsg().find("cqe_status=4"), std::string::npos) << providerFailure.ToString();
+
+    uint64_t completionChecks = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, cqeInject, completionChecks));
+    EXPECT_EQ(completionChecks, 1u);
+
+    Status isolated = requesterClient->Get(key, output);
+    EXPECT_EQ(isolated.GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE) << isolated.ToString();
+    uint64_t checksAfterIsolation = 0;
+    DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, cqeInject, checksAfterIsolation));
+    EXPECT_EQ(checksAfterIsolation, completionChecks);
+}
+
+TEST_F(UrmaClientSenderRecoveryTest, ClientSenderProbeWaitsForUrmaDataPlaneRecovery)
+{
+    ConnectOptions options;
+    InitConnectOpt(0, options);
+    options.enableLocalCache = false;
+    auto client = std::make_shared<KVClient>(options);
+    DS_ASSERT_OK(client->Init());
+    const std::string value = GenRandomString(UrmaFallbackTcpLimiter::kMaxSinglePayloadBytes);
+    constexpr char cqeInject[] = "UrmaManager.CheckCompletionRecordStatus";
+    DS_ASSERT_OK(inject::Set(cqeInject, "1*call(0, 4)"));
+
+    Status firstFailure = client->Set(NewObjectKey(), value);
+    ASSERT_EQ(firstFailure.GetCode(), K_URMA_ERROR) << firstFailure.ToString();
+    EXPECT_EQ(inject::GetExecuteCount(cqeInject), 1u);
+    DS_ASSERT_OK(inject::Clear(cqeInject));
+    DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteError", "1*return()"));
+
+    Status fastFailure = client->Set(NewObjectKey(), value);
+    EXPECT_EQ(fastFailure.GetCode(), K_URMA_WORKER_UNAVAILABLE) << fastFailure.ToString();
+    EXPECT_EQ(inject::GetExecuteCount("UrmaManager.UrmaWriteError"), 0u);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    Status stillUnavailable = client->Set(NewObjectKey(), value);
+    EXPECT_EQ(stillUnavailable.GetCode(), K_URMA_WORKER_UNAVAILABLE) << stillUnavailable.ToString();
+    EXPECT_EQ(inject::GetExecuteCount("UrmaManager.UrmaWriteError"), 1u);
+    DS_ASSERT_OK(inject::Clear("UrmaManager.UrmaWriteError"));
+    DS_ASSERT_OK(inject::Set("UrmaManager.UrmaWriteAfterPost", "call()"));
+    constexpr char probeCompleted[] = "DataPlaneManager.ProbeUbDataPlane.AfterCompletion";
+    DS_ASSERT_OK(inject::Set(probeCompleted, "1*pause()"));
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (inject::GetExecuteCount(probeCompleted) == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    EXPECT_EQ(inject::GetExecuteCount(probeCompleted), 1u);
+    EXPECT_EQ(inject::GetExecuteCount("UrmaManager.UrmaWriteAfterPost"), 1u);
+    Status beforeCompletion = client->Set(NewObjectKey(), value);
+    EXPECT_EQ(beforeCompletion.GetCode(), K_URMA_WORKER_UNAVAILABLE) << beforeCompletion.ToString();
+    DS_ASSERT_OK(inject::Clear(probeCompleted));
+    DS_ASSERT_OK(inject::Clear("UrmaManager.UrmaWriteAfterPost"));
+
+    Status recovered(K_URMA_WORKER_UNAVAILABLE, "waiting for recovery probe commit");
+    while (recovered.GetCode() == K_URMA_WORKER_UNAVAILABLE && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        recovered = client->Set(NewObjectKey(), value);
+    }
+    EXPECT_TRUE(recovered.IsOk()) << recovered.ToString();
+}
 
 TEST_F(UrmaDisableFallbackTest, TestUrmaRemoteGetFailed)
 {

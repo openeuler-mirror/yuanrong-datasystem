@@ -39,6 +39,8 @@ struct WorkerSnapshot {
     uint64_t ringVersion = 0;
     std::vector<HostPort> sameHostAddrs;
     std::vector<HostPort> otherAddrs;
+    // ACTIVE GlobalFact candidates eligible to receive a client sender recovery WRITE probe.
+    std::vector<HostPort> writeProbeAddrs;
 };
 
 /**

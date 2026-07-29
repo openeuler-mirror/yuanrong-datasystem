@@ -1116,7 +1116,8 @@ protected:
         return writeStatus;
     }
 
-    Status SubmitPayload(ObjectBufferInfo &, bool, std::vector<uint64_t> &eventKeys) override
+    Status SubmitPayload(ObjectBufferInfo &, bool, std::vector<uint64_t> &eventKeys,
+                         UrmaWriteFailure *) override
     {
         if (static_cast<size_t>(writeCount) % GetMSetPipelineDepth() == 0) {
             ++writeBatchCount;
@@ -1133,7 +1134,7 @@ protected:
         return rc;
     }
 
-    Status WaitPayloadEvents(std::vector<uint64_t> &) override
+    Status WaitPayloadEvents(std::vector<uint64_t> &, UrmaWriteFailure *) override
     {
         ++waitCount;
         if (afterWait) {

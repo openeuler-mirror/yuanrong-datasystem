@@ -18,6 +18,8 @@
 
 #include "datasystem/client/transport/data_plane/data_plane_manager.h"
 
+#include <algorithm>
+#include <chrono>
 #include <mutex>
 #include <unordered_set>
 #include <utility>
@@ -26,6 +28,7 @@
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
@@ -67,6 +70,40 @@ Status InitClientUbRuntime(uint64_t fastTransportMemSize, bool enablePipelineH2D
 #endif
 }
 
+#ifdef USE_URMA
+Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response)
+{
+    CHECK_FAIL_RETURN_STATUS(response.has_recovery_probe_addr(), K_NOT_SUPPORTED,
+                             "Worker handshake has no dedicated URMA WRITE recovery probe address");
+
+    constexpr uint64_t probeSize = 1;
+    std::shared_ptr<UrmaManager::BufferHandle> localBuffer;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().GetMemoryBufferHandle(localBuffer, probeSize));
+    RETURN_RUNTIME_ERROR_IF_NULL(localBuffer);
+    auto *probeBuffer = static_cast<uint8_t *>(localBuffer->GetPointer());
+    RETURN_RUNTIME_ERROR_IF_NULL(probeBuffer);
+    *probeBuffer = 0;
+
+    std::vector<uint64_t> eventKeys;
+    RETURN_IF_NOT_OK(UrmaManager::Instance().UrmaWritePayload(
+        response.recovery_probe_addr(), localBuffer->GetSegmentAddress(), localBuffer->GetSegmentSize(),
+        reinterpret_cast<uint64_t>(probeBuffer), 0, probeSize, 0, INVALID_CHIP_ID, INVALID_CHIP_ID, false,
+        eventKeys));
+
+    constexpr auto probeTimeout = std::chrono::milliseconds(500);
+    const auto deadline = std::chrono::steady_clock::now() + probeTimeout;
+    auto remainingTime = [deadline]() {
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+        return std::max<int64_t>(0, remaining.count());
+    };
+    auto preserveError = [](Status &status) { return status; };
+    RETURN_IF_NOT_OK(WaitFastTransportEvent(eventKeys, remainingTime, preserveError));
+    INJECT_POINT("DataPlaneManager.ProbeUbDataPlane.AfterCompletion");
+    return Status::OK();
+}
+#endif
+
 std::unordered_set<std::string> BuildLiveWorkerSet(const WorkerSnapshot &snapshot)
 {
     std::unordered_set<std::string> liveWorkers;
@@ -78,6 +115,22 @@ std::unordered_set<std::string> BuildLiveWorkerSet(const WorkerSnapshot &snapsho
         liveWorkers.insert(worker.ToString());
     }
     return liveWorkers;
+}
+
+std::vector<std::string> BuildWriteProbeWorkers(const WorkerSnapshot &snapshot,
+                                                const std::unordered_set<std::string> &liveWorkers)
+{
+    std::vector<std::string> workers;
+    workers.reserve(snapshot.writeProbeAddrs.size());
+    for (const auto &worker : snapshot.writeProbeAddrs) {
+        auto key = worker.ToString();
+        if (liveWorkers.count(key) != 0) {
+            workers.emplace_back(std::move(key));
+        }
+    }
+    std::sort(workers.begin(), workers.end());
+    workers.erase(std::unique(workers.begin(), workers.end()), workers.end());
+    return workers;
 }
 
 }  // namespace
@@ -224,6 +277,63 @@ Status DataPlaneManager::GetOrCreateRpcClient(const HostPort &workerAddr, std::s
     return Status::OK();
 }
 
+Status DataPlaneManager::ProbeUbConnection(const HostPort &workerAddr, const std::function<void()> &commitRecovery)
+{
+    HostPort probeWorker;
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                                 "DataPlaneManager is shutting down");
+        CHECK_FAIL_RETURN_STATUS(hasWorkerSnapshot_, K_NOT_READY,
+                                 "Worker snapshot is not published for UB recovery probe");
+        CHECK_FAIL_RETURN_STATUS(!writeProbeWorkers_.empty(), K_NOT_FOUND,
+                                 "No admitted Worker endpoint is available for UB recovery probe");
+
+        const std::string preferredWorker = workerAddr.ToString();
+        size_t selectedIndex = 0;
+        if (probePreferredWorker_ != preferredWorker || lastProbeWorker_.empty()) {
+            auto preferred = writeProbeWorkerIndices_.find(preferredWorker);
+            selectedIndex = preferred == writeProbeWorkerIndices_.end() ? 0 : preferred->second;
+        } else {
+            auto last = writeProbeWorkerIndices_.find(lastProbeWorker_);
+            selectedIndex = last == writeProbeWorkerIndices_.end() ? 0 : (last->second + 1) % writeProbeWorkers_.size();
+        }
+        const std::string &selectedWorker = writeProbeWorkers_[selectedIndex];
+        probePreferredWorker_ = preferredWorker;
+        lastProbeWorker_ = selectedWorker;
+        RETURN_IF_NOT_OK(probeWorker.ParseString(selectedWorker));
+    }
+    std::shared_ptr<WorkerRpcClient> rpcClient;
+    RETURN_IF_NOT_OK(GetOrCreateRpcClient(probeWorker, rpcClient));
+    RETURN_IF_NOT_OK(EstablishUbProbe(probeWorker, rpcClient));
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+    CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "DataPlaneManager is shutting down");
+    CHECK_FAIL_RETURN_STATUS(
+        hasWorkerSnapshot_ && writeProbeWorkerIndices_.count(probeWorker.ToString()) != 0, K_NOT_FOUND,
+        "Worker endpoint is absent from latest writable transport snapshot: " + probeWorker.ToString());
+    probePreferredWorker_.clear();
+    lastProbeWorker_.clear();
+    if (commitRecovery) {
+        commitRecovery();
+    }
+    return Status::OK();
+}
+
+Status DataPlaneManager::EstablishUbProbe(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient)
+{
+    (void)workerAddr;
+    RETURN_RUNTIME_ERROR_IF_NULL(rpcClient);
+    UrmaHandshakeRspPb response;
+    RETURN_IF_NOT_OK(rpcClient->ExchangeUrmaConnectInfo(response));
+    RETURN_IF_NOT_OK(FinalizeOutboundConnection(response));
+#ifdef USE_URMA
+    RETURN_IF_NOT_OK(ProbeUbDataPlane(response));
+#endif
+    return Status::OK();
+}
+
 Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
                                           std::shared_ptr<WorkerTransportEntry> &entry)
 {
@@ -350,6 +460,7 @@ void DataPlaneManager::Teardown(const HostPort &workerAddr)
 Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
 {
     auto liveWorkers = BuildLiveWorkerSet(snapshot);
+    auto writeProbeWorkers = BuildWriteProbeWorkers(snapshot, liveWorkers);
     std::unique_lock<std::shared_mutex> lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
@@ -358,6 +469,12 @@ Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
                                  + std::to_string(workerSnapshotVersion_) + " to "
                                  + std::to_string(snapshot.ringVersion));
     liveWorkers_ = std::move(liveWorkers);
+    writeProbeWorkers_ = std::move(writeProbeWorkers);
+    writeProbeWorkerIndices_.clear();
+    writeProbeWorkerIndices_.reserve(writeProbeWorkers_.size());
+    for (size_t index = 0; index < writeProbeWorkers_.size(); ++index) {
+        writeProbeWorkerIndices_.emplace(writeProbeWorkers_[index], index);
+    }
     workerSnapshotVersion_ = snapshot.ringVersion;
     hasWorkerSnapshot_ = true;
     VLOG(1) << "[TransportGet][Reconcile] Published worker snapshot, version: " << workerSnapshotVersion_
