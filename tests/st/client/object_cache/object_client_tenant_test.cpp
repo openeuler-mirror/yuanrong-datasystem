@@ -468,8 +468,17 @@ TEST_F(ObjectClientGetMetaNoTenantAuthTest, GetFailed)
     constexpr int failureFinalizationWaitSec = 15;
     DS_ASSERT_OK(cluster_->WaitForExpectedResult(
         [this]() { return CheckWorkerRemoved(0); }, failureFinalizationWaitSec, K_OK));
+    // Master topology has finalized worker0 removal, but worker1's local view may lag. Poll
+    // GetObjMetaInfo until it returns both objects without retrying RPC to the dead worker0.
     objMetas.clear();
-    DS_ASSERT_OK(client1->GetObjMetaInfo("", { objectKey1, objectKey0 }, objMetas));
+    DS_ASSERT_OK(cluster_->WaitForExpectedResult(
+        [&]() {
+            objMetas.clear();
+            Status rc = client1->GetObjMetaInfo("", { objectKey1, objectKey0 }, objMetas);
+            return rc.IsOk() && objMetas.size() == 2 ? Status::OK()
+                                                     : Status(K_NOT_READY, "GetObjMetaInfo not converged");
+        },
+        10, K_OK));
     ASSERT_EQ(objMetas.at(0).objSize, size1);
     ASSERT_EQ(objMetas.at(1).objSize, 0);
 }
