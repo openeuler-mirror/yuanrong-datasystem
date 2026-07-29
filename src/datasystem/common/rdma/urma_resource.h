@@ -983,6 +983,15 @@ public:
     void NotifyPostPermitReleased();
 
     /**
+     * @brief Whether provider dependencies were intentionally retained until process exit.
+     * @return True when non-converged Jetty resources made JFC/JFCE/context deletion unsafe.
+     */
+    bool IsProviderCleanupDeferred() const
+    {
+        return providerCleanupDeferred_.load(std::memory_order_acquire);
+    }
+
+    /**
      * @brief Asynchronously delete a Jetty that has been detached from service.
      * @param[in] jettyId Urma-assigned Jetty id.
      */
@@ -1104,6 +1113,9 @@ private:
     std::atomic<bool> refillStop_{ true };
     std::atomic<bool> refillNeeded_{ false };
     std::atomic<bool> shuttingDown_{ false };
+    // Once set, this remains latched for the UrmaResource lifetime. UrmaManager must not unload
+    // liburma while retained provider handles still depend on its userspace objects.
+    std::atomic<bool> providerCleanupDeferred_{ false };
     std::mutex postDrainMutex_;
     std::condition_variable postDrainCV_;
     std::mutex pipelineInitMutex_;
