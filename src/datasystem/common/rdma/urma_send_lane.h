@@ -48,38 +48,50 @@ public:
     UrmaSendLaneLease(UrmaSendLaneLease &&) = delete;
     UrmaSendLaneLease &operator=(UrmaSendLaneLease &&) = delete;
 
-    void AddEvent()
+    // A lane tracks provider WRs, not business events. Add before the provider post so a
+    // completion that races with the post return cannot release the Jetty early.
+    void AddWr()
     {
-        pendingEvents_.fetch_add(1);
+        pendingWrs_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    SettleAction MarkEventReleased()
+    SettleAction CompleteWr()
     {
-        return MarkEventSettled(false);
+        return MarkWrSettled(false);
     }
 
-    SettleAction MarkEventRetired()
+    // Cancel a WR only when the provider did not accept it (for example, a single-WR
+    // post failure or the part of a gather chain after bad_wr).
+    SettleAction CancelWr()
     {
-        return MarkEventSettled(true);
+        return MarkWrSettled(false);
     }
 
-    // Mark the request as failed without consuming an event. Standalone logical transfers use
+    // Mark the request as failed without consuming a submitted WR count. Standalone logical transfers use
     // this when a later chunk cannot be submitted after earlier chunks were posted. A worker-
     // to-worker Batch Get passes an externally owned lease and intentionally does not call this
     // for object-level WR creation or post failures; those failures settle through release.
     SettleAction RequestRetire()
     {
-        retireRequested_.store(true);
-        if (sealed_.load() && pendingEvents_.load() == 0) {
+        retireRequested_.store(true, std::memory_order_release);
+        if (sealed_.load(std::memory_order_acquire) && pendingWrs_.load(std::memory_order_acquire) == 0) {
             return TrySettleLane();
         }
         return SettleAction::NONE;
     }
 
+    // A fatal CQE or Jetty async error retires the whole lane immediately. Its outstanding
+    // WRs are subsequently owned by the provider Jetty flush lifecycle, never by Event.
+    SettleAction Retire()
+    {
+        retireRequested_.store(true, std::memory_order_release);
+        return TrySettleLane();
+    }
+
     SettleAction Seal()
     {
-        sealed_.store(true);
-        if (pendingEvents_.load() == 0) {
+        sealed_.store(true, std::memory_order_release);
+        if (pendingWrs_.load(std::memory_order_acquire) == 0) {
             return TrySettleLane();
         }
         return SettleAction::NONE;
@@ -90,9 +102,9 @@ public:
         return jetty_;
     }
 
-    uint32_t GetPendingEventCount() const
+    uint32_t GetPendingWrCount() const
     {
-        return pendingEvents_.load();
+        return pendingWrs_.load(std::memory_order_acquire);
     }
 
     bool IsSettled() const
@@ -101,15 +113,16 @@ public:
     }
 
 private:
-    SettleAction MarkEventSettled(bool retire)
+    SettleAction MarkWrSettled(bool retire)
     {
         if (retire) {
-            retireRequested_.store(true);
+            retireRequested_.store(true, std::memory_order_release);
         }
-        uint32_t pending = pendingEvents_.load();
+        uint32_t pending = pendingWrs_.load(std::memory_order_acquire);
         while (pending > 0) {
-            if (pendingEvents_.compare_exchange_weak(pending, pending - 1)) {
-                if (pending == 1 && sealed_.load()) {
+            if (pendingWrs_.compare_exchange_weak(pending, pending - 1, std::memory_order_acq_rel,
+                                                  std::memory_order_acquire)) {
+                if (pending == 1 && sealed_.load(std::memory_order_acquire)) {
                     return TrySettleLane();
                 }
                 return SettleAction::NONE;
@@ -121,14 +134,15 @@ private:
     SettleAction TrySettleLane()
     {
         bool expected = false;
-        if (!laneSettled_.compare_exchange_strong(expected, true)) {
+        if (!laneSettled_.compare_exchange_strong(expected, true, std::memory_order_acq_rel,
+                                                  std::memory_order_acquire)) {
             return SettleAction::NONE;
         }
-        return retireRequested_.load() ? SettleAction::RETIRE : SettleAction::RELEASE;
+        return retireRequested_.load(std::memory_order_acquire) ? SettleAction::RETIRE : SettleAction::RELEASE;
     }
 
     std::shared_ptr<UrmaJetty> jetty_;
-    std::atomic<uint32_t> pendingEvents_{ 0 };
+    std::atomic<uint32_t> pendingWrs_{ 0 };
     std::atomic<bool> sealed_{ false };
     std::atomic<bool> retireRequested_{ false };
     std::atomic<bool> laneSettled_{ false };
