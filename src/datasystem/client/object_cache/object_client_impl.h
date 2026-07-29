@@ -973,6 +973,10 @@ private:
                                   bool traceEnabled, std::vector<std::shared_ptr<Buffer>> &objectBuffers,
                                   Status &rc);
 
+    Status BuildTransportGetResponse(
+        client::ObjectReadItemResult &item, GetRspPb &response,
+        std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> &ubBufferInfos, uint64_t &payloadSize);
+
     Status MaterializeTransportItem(const std::string &objectKey, client::ObjectReadItemResult &item,
                                     std::shared_ptr<Buffer> &buffer);
 

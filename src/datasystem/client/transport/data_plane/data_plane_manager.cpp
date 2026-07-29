@@ -26,6 +26,7 @@
 #include "datasystem/client/transport/data_plane/tcp_transporter.h"
 #include "datasystem/client/transport/data_plane/ub_connection.h"
 #include "datasystem/client/transport/data_plane/ub_transporter.h"
+#include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
@@ -303,7 +304,7 @@ Status DataPlaneManager::EnsureTransporterLocked(const HostPort &workerAddr, Tra
     entry->kind = transporter->Kind();
     entry->transporter = std::move(transporter);
     VLOG(1) << "[TransportGet][Connection] Data transporter ready, endpoint: " << workerAddr.ToString()
-            << ", transport kind: " << static_cast<int>(entry->kind);
+            << ", transport: " << AccessTransportTracker::KindToName(entry->kind);
     return Status::OK();
 }
 

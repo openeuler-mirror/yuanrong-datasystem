@@ -18,6 +18,7 @@
 
 #include "datasystem/client/transport/data_plane/data_plane_executor.h"
 
+#include <cstddef>
 #include <utility>
 
 #include "datasystem/common/log/access_recorder.h"
@@ -26,6 +27,29 @@
 
 namespace datasystem {
 namespace client {
+namespace {
+constexpr size_t INITIAL_ATTEMPT = 1;
+constexpr size_t REBUILD_ATTEMPT = 2;
+// Rebuild/teardown events are recoverable and can recur on every request during sustained instability;
+// sample them like the other transport degradation WARNINGs. Terminal failures stay unsampled.
+constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
+
+void LogDataPlaneOperation(const HostPort &workerAddr, AccessTransportKind kind, size_t attempt,
+                           const Status &status)
+{
+    const bool rebuildRequired =
+        status.GetCode() == K_URMA_NEED_CONNECT || status.GetCode() == K_RPC_UNAVAILABLE;
+    if (status.IsError() && (!rebuildRequired || attempt >= REBUILD_ATTEMPT)) {
+        LOG(ERROR) << "[TransportGet][DataPlane] Operation failed, worker: " << workerAddr.ToString()
+                   << ", transport: " << AccessTransportTracker::KindToName(kind) << ", attempt: " << attempt
+                   << ", status: " << status.ToString();
+    } else if (!rebuildRequired) {
+        VLOG(1) << "[TransportGet][DataPlane] Operation completed, worker: " << workerAddr.ToString()
+                << ", transport: " << AccessTransportTracker::KindToName(kind) << ", attempt: " << attempt
+                << ", status: " << status.ToString();
+    }
+}
+}  // namespace
 
 DataPlaneExecutor::DataPlaneExecutor(std::shared_ptr<DataPlaneManager> manager,
                                      std::shared_ptr<TransportAdvisor> advisor)
@@ -40,29 +64,45 @@ Status DataPlaneExecutor::Execute(const HostPort &workerAddr, const Operation &o
     CHECK_FAIL_RETURN_STATUS(static_cast<bool>(operation), K_INVALID, "Data-plane operation is empty");
     const TransportHint hint = advisor_->GetTransportHint(workerAddr);
     std::shared_ptr<IDataTransporter> transporter;
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    Status connectionStatus = manager_->GetOrCreate(workerAddr, hint, transporter);
+    if (connectionStatus.IsError()) {
+        LOG(ERROR) << "[TransportGet][Connection] Get data plane failed, worker: " << workerAddr.ToString()
+                   << ", attempt: " << INITIAL_ATTEMPT << ", status: " << connectionStatus.ToString();
+        return connectionStatus;
+    }
     RETURN_RUNTIME_ERROR_IF_NULL(transporter);
-    Status rc = operation(*transporter);
-    VLOG(1) << "[TransportGet][DataPlane] Operation completed, worker: " << workerAddr.ToString()
+    VLOG(1) << "[TransportGet][DataPlane] Send operation, worker: " << workerAddr.ToString()
             << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
-            << ", attempt: 1, status: " << rc.ToString();
+            << ", attempt: " << INITIAL_ATTEMPT;
+    Status rc = operation(*transporter);
+    LogDataPlaneOperation(workerAddr, transporter->Kind(), INITIAL_ATTEMPT, rc);
     if (rc.GetCode() == K_URMA_NEED_CONNECT) {
-        VLOG(1) << "[TransportGet][Connection] Rebuild data plane, worker: " << workerAddr.ToString()
-                << ", status: " << rc.ToString();
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "[TransportGet][Connection] Rebuild data plane, worker: " << workerAddr.ToString()
+            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
+            << ", status: " << rc.ToString();
         manager_->ResetDataPlane(workerAddr);
     } else if (rc.GetCode() == K_RPC_UNAVAILABLE) {
-        VLOG(1) << "[TransportGet][Connection] Rebuild RPC connection, worker: " << workerAddr.ToString()
-                << ", status: " << rc.ToString();
+        LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+            << "[TransportGet][Connection] Rebuild RPC connection, worker: " << workerAddr.ToString()
+            << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
+            << ", status: " << rc.ToString();
         manager_->Teardown(workerAddr);
     } else {
         return rc;
     }
-    RETURN_IF_NOT_OK(manager_->GetOrCreate(workerAddr, hint, transporter));
+    connectionStatus = manager_->GetOrCreate(workerAddr, hint, transporter);
+    if (connectionStatus.IsError()) {
+        LOG(ERROR) << "[TransportGet][Connection] Rebuild data plane failed, worker: " << workerAddr.ToString()
+                   << ", attempt: " << REBUILD_ATTEMPT << ", status: " << connectionStatus.ToString();
+        return connectionStatus;
+    }
     RETURN_RUNTIME_ERROR_IF_NULL(transporter);
-    rc = operation(*transporter);
-    VLOG(1) << "[TransportGet][DataPlane] Operation completed, worker: " << workerAddr.ToString()
+    VLOG(1) << "[TransportGet][DataPlane] Send operation, worker: " << workerAddr.ToString()
             << ", transport: " << AccessTransportTracker::KindToName(transporter->Kind())
-            << ", attempt: 2, status: " << rc.ToString();
+            << ", attempt: " << REBUILD_ATTEMPT;
+    rc = operation(*transporter);
+    LogDataPlaneOperation(workerAddr, transporter->Kind(), REBUILD_ATTEMPT, rc);
     return rc;
 }
 }  // namespace client

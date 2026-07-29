@@ -56,6 +56,9 @@ struct MetadataGroup {
             for (auto *item : items) {
                 item->status = status;
             }
+            LOG(ERROR) << "[TransportGet][Metadata] Metadata group failed, meta owner: " << address.ToString()
+                       << ", key count: " << items.size() << ", metadata only: " << metadataOnly
+                       << ", status: " << status.ToString();
         }
     }
 
@@ -143,7 +146,9 @@ void QueryMetadata(ObjectMetadataClient &metadata, ThreadPool &taskPool, std::ve
 {
     auto groups = GroupByMetaOwner(items);
     VLOG(1) << "[TransportGet][Flow] Query metadata, key count: " << items.size()
-            << ", owner count: " << groups.size() << ", parallel: " << (groups.size() > 1);
+            << ", owner count: " << groups.size() << ", parallel: " << (groups.size() > 1)
+            << ", metadata only: " << metadataOnly
+            << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
     std::vector<MetadataGroup *> tasks;
     tasks.reserve(groups.size());
     for (auto &group : groups) {
@@ -187,7 +192,8 @@ void ReadObjects(ReplicaReader &replicas, std::vector<ReadItem> &items)
         }
     }
     VLOG(1) << "[TransportGet][Flow] Read data, key count: " << ready.size()
-            << ", skipped: " << items.size() - ready.size() << ", batch: " << (ready.size() > 1);
+            << ", inline or failed: " << items.size() - ready.size() << ", batch: " << (ready.size() > 1)
+            << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
     Status readStatus = Status::OK();
     if (ready.size() == 1) {
         readStatus = replicas.Read(*ready.front().location, *ready.front().result);
@@ -262,7 +268,6 @@ Status ObjectReadFlow::Run(const ObjectReadRequest &request, ObjectReadResult &r
     RETURN_RUNTIME_ERROR_IF_NULL(replicas_);
     RETURN_RUNTIME_ERROR_IF_NULL(taskPool_);
 
-    VLOG(1) << "[TransportGet][Flow] Start, key count: " << request.items.size();
     std::vector<ReadItem> items;
     RETURN_IF_NOT_OK(InitializeItems(request, items));
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_START);
@@ -271,9 +276,7 @@ Status ObjectReadFlow::Run(const ObjectReadRequest &request, ObjectReadResult &r
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_START);
     ReadObjects(*replicas_, items);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_END);
-    Status status = BuildResult(items, result);
-    VLOG(1) << "[TransportGet][Flow] Finish, result count: " << result.items.size();
-    return status;
+    return BuildResult(items, result);
 }
 }  // namespace client
 }  // namespace datasystem
