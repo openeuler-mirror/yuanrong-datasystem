@@ -271,8 +271,10 @@ private:
     Status HandlePayloadFallback(const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry,
                                  std::vector<RpcMessage> &outPayload, ShmGuard &shmGuard,
                                  std::shared_ptr<ShmUnit> shmUnit, Status &fastTransportStatus,
-                                 const std::string &fastTransportName, const std::string &objectKey,
-                                 bool isUrmaFastTransport, bool isPipelineH2DRequest, bool blocking,
+                                 const std::string &fastTransportName,
+                                 const std::string &objectKey, bool isFastTransportEnabled,
+                                 bool isUrmaFastTransport,
+                                 bool isPipelineH2DRequest, bool blocking,
                                  const std::shared_ptr<AggregateMemory> &batchPtr, Status *fallbackStatus,
                                  RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext,
                                  const ReadObjectKV &objKv, uint64_t localSegAddress, uint64_t localSegSize);

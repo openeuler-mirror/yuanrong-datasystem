@@ -608,8 +608,8 @@ Status WorkerWorkerOCServiceImpl::LoadPayloadAndFillResponse(
         } else {
             RETURN_IF_NOT_OK(HandlePayloadFallback(
                 req, rsp, entry, outPayload, shmGuard, shmUnit, fastTransportStatus, fastTransportName, objectKey,
-                isUrmaFastTransport, isPipelineH2DRequest, blocking, batchPtr, fallbackStatus, batchRootInfo,
-                batchRh2dContext, objKv, localSegAddress, localSegSize));
+                isFastTransportEnabled, isUrmaFastTransport, isPipelineH2DRequest, blocking, batchPtr, fallbackStatus,
+                batchRootInfo, batchRh2dContext, objKv, localSegAddress, localSegSize));
         }
         pointImpl.RecordAndReset(PerfKey::WORKER_REMOTE_GET_RESP);
     }
@@ -815,7 +815,8 @@ Status WorkerWorkerOCServiceImpl::ProcessFallbackTrackError(const Status &rc, co
 Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
     const GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp, SafeObjType &entry, std::vector<RpcMessage> &outPayload,
     ShmGuard &shmGuard, std::shared_ptr<ShmUnit> shmUnit, Status &fastTransportStatus,
-    const std::string &fastTransportName, const std::string &objectKey, bool isUrmaFastTransport,
+    const std::string &fastTransportName,
+    const std::string &objectKey, bool isFastTransportEnabled, bool isUrmaFastTransport,
     bool isPipelineH2DRequest, bool blocking, const std::shared_ptr<AggregateMemory> &batchPtr, Status *fallbackStatus,
     RemoteH2DRootInfoPb *batchRootInfo, BatchRh2dContext *batchRh2dContext, const ReadObjectKV &objKv,
     uint64_t localSegAddress, uint64_t localSegSize)
@@ -829,7 +830,10 @@ Status WorkerWorkerOCServiceImpl::HandlePayloadFallback(
     }
 
     const bool skipTcpPayload = isPipelineH2DRequest || (IsRemoteH2DEnabled() && !req.comm_id().empty());
-    if ((!IsFastTransportEnabled() || !blocking) && !skipTcpPayload) {
+    // Use request-level isFastTransportEnabled, not worker-level IsFastTransportEnabled(). When URMA is globally
+    // enabled but this request carries no urma_info, the global flag would skip TCP payload preparation while
+    // data_size is nonzero, producing an empty payload.
+    if ((!isFastTransportEnabled || !blocking) && !skipTcpPayload) {
         bool canPrepareFallbackPayload = true;
         if (FLAGS_enable_transport_fallback && (fastTransportStatus.IsError() || (!blocking && batchPtr == nullptr))
             && isUrmaFastTransport) {

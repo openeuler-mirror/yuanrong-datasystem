@@ -389,6 +389,62 @@ TEST_F(UrmaObjectClientTest, UrmaPutGetDeleteShmTest)
     ASSERT_EQ(failedObjectKeys.size(), size_t(0));
 }
 
+// Variant of UrmaObjectClientTest that forces every worker onto the same host_id so the SDK
+// routes cross-worker Get over SHM transport (TransportHint::SHM_CANDIDATE) instead of URMA/UB.
+// Without a shared host_id the SDK sees each worker as cross-node and picks UB_CANDIDATE, which
+// carries urma_info and never hits the bug. The issue #1005 failure only reproduces when the worker
+// has URMA enabled but the SHM-transport request carries no urma_info.
+class UrmaObjectClientSameHostTest : public UrmaObjectClientTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        UrmaObjectClientTest::SetClusterSetupOptions(opts);
+        // All workers read host_id from the same env var; the test process exports one shared
+        // value before the workers fork so every worker registers the same host_id, which makes
+        // the SDK partition them as same-host and select SHM transport for cross-worker Get.
+        opts.workerGflagParams += " -host_id_env_name=DS_TEST_HOST_ID";
+    }
+
+    void SetUp() override
+    {
+        ASSERT_EQ(setenv("DS_TEST_HOST_ID", "same-host-id", 1), 0);
+        UrmaObjectClientTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        UrmaObjectClientTest::TearDown();
+        (void)unsetenv("DS_TEST_HOST_ID");
+    }
+};
+
+// Repro for issue #1005: cross-worker ObjectClient Get over SHM transport while URMA is enabled
+// on the worker returns an empty payload ("Runtime error. Invalid object data response").
+// Root cause: HandlePayloadFallback decided whether to prepare a TCP fallback payload using the
+// worker-level IsFastTransportEnabled() (= IsUrmaEnabled() || IsUcpEnabled()) instead of whether
+// THIS request actually used fast transport (isFastTransportEnabled, which requires
+// req.has_urma_info()). A same-host SDK Get selects SHM transport (TransportHint::SHM_CANDIDATE
+// in transport_advisor) and therefore carries no urma_info, so WriteViaFastTransport skips the
+// transfer, yet the global-flag check also skipped TCP payload preparation — producing an empty
+// payload while the response still declared data_size>0. Expected RED pre-fix; GREEN post-fix.
+TEST_F(UrmaObjectClientSameHostTest, CrossWorkerShmGetWithUrmaEnabledReturnsPayload)
+{
+    std::shared_ptr<ObjectClient> client0;
+    std::shared_ptr<ObjectClient> client1;
+    InitTestClient(0, client0);
+    InitTestClient(1, client1);
+    std::string objectKey = NewObjectKey();
+    std::string data = GenRandomString(SHM_SIZE);
+    CreateAndSealObject(client1, objectKey, data);
+    std::vector<Optional<Buffer>> dataList;
+    DS_ASSERT_OK(client0->Get({ objectKey }, 0, dataList));
+    ASSERT_TRUE(NotExistsNone(dataList));
+    AssertBufferEqual(*dataList[0], data);
+    std::vector<std::string> objectKeys{ objectKey };
+    std::vector<std::string> failedObjectKeys;
+    DS_ASSERT_OK(client1->GDecreaseRef(objectKeys, failedObjectKeys));
+}
+
 TEST_F(UrmaObjectClientTest, TestParallelGetSameObject)
 {
     std::shared_ptr<ObjectClient> client;
