@@ -148,6 +148,12 @@ public:
         return action.status;
     }
 
+    Status GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &,
+                                 coordinator::GetClusterRawSnapshotRspPb &, int32_t) override
+    {
+        return Unused("GetClusterRawSnapshot");
+    }
+
     void GetObservedCoordinatorId(std::string &coordinatorId) const override
     {
         coordinatorId.clear();

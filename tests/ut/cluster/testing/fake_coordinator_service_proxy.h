@@ -177,6 +177,12 @@ public:
         return Status::OK();
     }
 
+    Status GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &,
+                                 coordinator::GetClusterRawSnapshotRspPb &, int32_t) override
+    {
+        return Status(K_RUNTIME_ERROR, "FakeCoordinatorServiceProxy does not implement GetClusterRawSnapshot");
+    }
+
     void GetObservedCoordinatorId(std::string &coordinatorId) const override
     {
         std::lock_guard<std::mutex> lock(mutex_);

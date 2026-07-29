@@ -174,6 +174,16 @@ public:
                                                    int32_t timeoutMs) = 0;
 
     /**
+     * @brief Read raw topology and membership facts for one logical cluster.
+     * @param[in] req Logical cluster name only.
+     * @param[out] rsp Raw facts observed by the Coordinator.
+     * @param[in] timeoutMs RPC deadline in milliseconds.
+     * @return RPC or response validation status.
+     */
+    virtual Status GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &req,
+                                         coordinator::GetClusterRawSnapshotRspPb &rsp, int32_t timeoutMs) = 0;
+
+    /**
      * @brief Copy the current non-retired CoordinatorId observed from a successful response or identity probe.
      * @param[out] coordinatorId Current CoordinatorId; empty before first observation.
      */
@@ -264,7 +274,7 @@ public:
      * @return RPC or response validation status.
      */
     Status GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &req,
-                                 coordinator::GetClusterRawSnapshotRspPb &rsp, int32_t timeoutMs);
+                                 coordinator::GetClusterRawSnapshotRspPb &rsp, int32_t timeoutMs) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::GetObservedCoordinatorId

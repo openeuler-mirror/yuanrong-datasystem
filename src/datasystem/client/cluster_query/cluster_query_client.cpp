@@ -28,6 +28,7 @@
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/kvstore/coordination_keys.h"
 #include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
@@ -196,7 +197,7 @@ private:
     ClusterQueryOptions options_;
     std::unique_ptr<cluster::TopologyKeyHelper> keys_;
     std::unique_ptr<EtcdStore> etcdStore_;
-    std::unique_ptr<CoordinatorServiceProxyZmqImpl> coordinatorProxy_;
+    std::unique_ptr<ICoordinatorServiceProxy> coordinatorProxy_;
     ClusterQueryProjector projector_;
     bool initialized_{ false };
 };
@@ -220,7 +221,12 @@ Status ClusterQueryClient::Impl::InitCoordinator()
                              "coordinator address is not canonical");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(QUERY_RPC_STUB_CACHE_SIZE));
     auto coordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(options_.coordinatorAddress);
-    auto coordinatorProxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
+    std::unique_ptr<ICoordinatorServiceProxy> coordinatorProxy;
+    if (FLAGS_use_brpc) {
+        coordinatorProxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
+    } else {
+        coordinatorProxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
+    }
     RETURN_IF_NOT_OK(coordinatorProxy->Init());
     coordinatorProxy_ = std::move(coordinatorProxy);
     return Status::OK();
