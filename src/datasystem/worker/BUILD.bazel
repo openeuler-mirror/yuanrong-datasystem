@@ -106,6 +106,7 @@ ds_cc_library(
         "//src/datasystem/common/iam:common_iam",
         "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:common_object_cache",
         "//src/datasystem/common/rdma:fast_transport_manager_wrapper",
         "//src/datasystem/common/rpc:rpc_constants",
         "//src/datasystem/common/rpc:unix_sock_fd",

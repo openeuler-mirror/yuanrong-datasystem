@@ -756,12 +756,16 @@ void WorkerWorkerOCServiceImpl::RecordProviderUbWriteFailure(const GetObjectRemo
 {
     const auto &address = req.urma_info().request_address();
     HostPort failedEndpoint(address.host(), address.port());
+    const std::string failedEndpointIdentity =
+        failedEndpoint.Empty() && !req.urma_info().client_id().empty()
+            ? "client_id=" + req.urma_info().client_id()
+            : failedEndpoint.ToString();
     auto &detail = *rsp.mutable_provider_ub_failure_detail();
     if (failure != nullptr) {
-        FillProviderUbFailureDetail(status, failedEndpoint.ToString(), operatorWorker.ToString(),
+        FillProviderUbFailureDetail(status, failedEndpointIdentity, operatorWorker.ToString(),
                                     failure->providerStatus, failure->cqeStatus, detail);
     } else {
-        FillProviderUbFailureDetail(status, failedEndpoint.ToString(), operatorWorker.ToString(), std::nullopt,
+        FillProviderUbFailureDetail(status, failedEndpointIdentity, operatorWorker.ToString(), std::nullopt,
                                     std::nullopt, detail);
     }
     ReportProviderLocalUbWriteFailure(
@@ -987,6 +991,7 @@ Status WorkerWorkerOCServiceImpl::BatchGetObjectRemote(
     std::vector<RpcMessage> payload;
     PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
+    INJECT_POINT("worker.BatchGetObjectRemote.afterRead");
     pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
     HostPort requestAddress;
     const std::string callerAddress =
@@ -1143,8 +1148,8 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(const BatchGetObje
                 continue;
             }
 
-            RETURN_IF_NOT_OK(
-                WaitFastTransportAndFallback(req, loc, kp, rsp, payload, index, coveredRespNum, fallbackStatus));
+            BatchWaitContext context{ req, loc, kp, rsp, payload, index, coveredRespNum, fallbackStatus };
+            RETURN_IF_NOT_OK(WaitFastTransportAndFallback(context));
         }
 
         loc.kps.clear();
@@ -1154,78 +1159,100 @@ Status WorkerWorkerOCServiceImpl::MergeParallelBatchGetResult(const BatchGetObje
     return Status::OK();
 }
 
-Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(
-    const BatchGetObjectRemoteReqPb &req, ParallelRes &loc,
-    std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp, BatchGetObjectRemoteRspPb &rsp,
-    std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum, const Status &fallbackStatus)
+void WorkerWorkerOCServiceImpl::SetBatchResponseError(BatchGetObjectRemoteRspPb &rsp, uint64_t begin, uint64_t count,
+                                                      const Status &status)
+{
+    const uint64_t responseCount = static_cast<uint64_t>(rsp.responses_size());
+    if (begin >= responseCount) {
+        return;
+    }
+    const uint64_t affectedCount = std::min(count, responseCount - begin);
+    for (uint64_t offset = 0; offset < affectedCount; ++offset) {
+        auto *error = rsp.mutable_responses(static_cast<int>(begin + offset))->mutable_error();
+        error->set_error_code(status.GetCode());
+        error->set_error_msg(status.GetMsg());
+    }
+}
+
+void WorkerWorkerOCServiceImpl::RecordBatchProviderFailure(BatchWaitContext &context, const Status &status,
+                                                           const UrmaWriteFailure &failure)
+{
+    const auto &req = context.req;
+    const uint64_t index = context.responseIndex;
+    if (index >= static_cast<uint64_t>(req.requests_size()) || !req.requests(index).has_urma_info()) {
+        return;
+    }
+    const uint64_t detailCount = std::min(context.coveredResponseCount,
+                                          static_cast<uint64_t>(req.requests_size()) - index);
+    for (uint64_t detailIndex = 0; detailIndex < detailCount; ++detailIndex) {
+        RecordProviderUbWriteFailure(
+            req.requests(index + detailIndex), status, localAddress_,
+            *context.rsp.mutable_responses()->Mutable(static_cast<int>(index + detailIndex)), &failure,
+            detailIndex == 0 ? ocClientWorkerSvc_->GetUbAdmission() : nullptr);
+    }
+}
+
+void WorkerWorkerOCServiceImpl::MoveBatchFallbackPayload(BatchWaitContext &context)
+{
+    auto &eventPayloads = context.eventPayload.second.second;
+    if (eventPayloads.empty()) {
+        MovePayload(context.parallelResult.fallbackPayloads, context.payload);
+        for (uint64_t offset = 0; offset < context.coveredResponseCount; ++offset) {
+            context.rsp.mutable_responses()
+                ->at(context.responseIndex + offset)
+                .set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
+        }
+        context.parallelResult.fallbackPayloads.clear();
+        return;
+    }
+    MovePayload(eventPayloads, context.payload);
+    context.rsp.mutable_responses()
+        ->at(context.responseIndex)
+        .set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
+    eventPayloads.clear();
+}
+
+Status WorkerWorkerOCServiceImpl::HandleBatchWaitFailure(BatchWaitContext &context, Status &status,
+                                                         const UrmaWriteFailure &failure)
+{
+    RecordBatchProviderFailure(context, status, failure);
+    if (context.fallbackStatus.IsError()) {
+        HostPort requestAddress;
+        LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(context.req, requestAddress),
+                     "GetRemoteAddressFromBatchGetReq failed");
+        LOG(WARNING) << FormatString(
+            "Worker-to-worker TCP fallback payload rejected, srcAddress = %s, targetAddress = %s, "
+            "wait rc = %s, fallback rc = %s",
+            localAddress_.ToString(), requestAddress.ToString(), status.ToString(),
+            context.fallbackStatus.ToString());
+        auto wrappedStatus = context.fallbackStatus;
+        wrappedStatus.AppendMsg(status.GetMsg());
+        SetBatchResponseError(context.rsp, context.responseIndex, context.coveredResponseCount, wrappedStatus);
+        return wrappedStatus;
+    }
+    if (!FLAGS_enable_transport_fallback) {
+        SetBatchResponseError(context.rsp, context.responseIndex, context.coveredResponseCount, status);
+        return status;
+    }
+
+    MoveBatchFallbackPayload(context);
+    HostPort requestAddress;
+    LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(context.req, requestAddress),
+                 "GetRemoteAddressFromBatchGetReq failed");
+    LOG(WARNING) << FormatString("fallback to tcp, srcAddress = %s, targetAddress = %s, rc = %s",
+                                 localAddress_.ToString(), requestAddress.ToString(), status.ToString());
+    return Status::OK();
+}
+
+Status WorkerWorkerOCServiceImpl::WaitFastTransportAndFallback(BatchWaitContext &context)
 {
     auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRemainingTime(); };
-    const auto srcAddress = localAddress_.ToString();
     UrmaWriteFailure failure;
-    auto errorHandler = [&index, &rsp, &loc, &kp, &payload, coveredRespNum, &fallbackStatus, &srcAddress,
-                         &req, &failure, this](Status &status) {
-        const bool waitFailed = status.IsError();
-        if (waitFailed) {
-            if (index < static_cast<uint64_t>(req.requests_size()) && req.requests(index).has_urma_info()) {
-                const uint64_t detailCount = std::min<uint64_t>(coveredRespNum, req.requests_size() - index);
-                for (uint64_t detailIndex = 0; detailIndex < detailCount; ++detailIndex) {
-                    // A batch shares one transport failure observation. Report it once to admission while preserving
-                    // the same structured evidence on every affected sub-response.
-                    RecordProviderUbWriteFailure(
-                        req.requests(index + detailIndex), status, localAddress_,
-                        *rsp.mutable_responses()->Mutable(static_cast<int>(index + detailIndex)), &failure,
-                        detailIndex == 0 ? ocClientWorkerSvc_->GetUbAdmission() : nullptr);
-                }
-            }
-            if (fallbackStatus.IsError()) {
-                // fallbackStatus is populated only when transport fallback is enabled and the limiter rejects it.
-                HostPort requestAddress;
-                LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(req, requestAddress),
-                             "GetRemoteAddressFromBatchGetReq failed");
-                const auto targetAddress = requestAddress.ToString();
-                LOG(WARNING) << FormatString(
-                    "Worker-to-worker TCP fallback payload rejected, srcAddress = %s, targetAddress = %s, "
-                    "wait rc = %s, fallback rc = %s",
-                    srcAddress, targetAddress, status.ToString(), fallbackStatus.ToString());
-                auto newStatus = fallbackStatus;
-                newStatus.AppendMsg(status.GetMsg());
-                rsp.mutable_responses()->at(index).mutable_error()->set_error_code(newStatus.GetCode());
-                rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(newStatus.GetMsg());
-                return newStatus;
-            }
-            const bool batchWaitFailed = kp.second.second.empty();
-            if (batchWaitFailed) {
-                MovePayload(loc.fallbackPayloads, payload);
-                for (uint64_t batchIndex = 0; batchIndex < coveredRespNum; ++batchIndex) {
-                    rsp.mutable_responses()
-                        ->at(index + batchIndex)
-                        .set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
-                }
-                loc.fallbackPayloads.clear();
-            } else {
-                MovePayload(kp.second.second, payload);
-                rsp.mutable_responses()->at(index).set_data_source(DataTransferSource::DATA_IN_PAYLOAD);
-                kp.second.second.clear();
-            }
-
-            if (FLAGS_enable_transport_fallback) {
-                HostPort requestAddress;
-                LOG_IF_ERROR(GetRemoteAddressFromBatchGetReq(req, requestAddress),
-                             "GetRemoteAddressFromBatchGetReq failed");
-                const auto targetAddress = requestAddress.ToString();
-                LOG(WARNING) << FormatString("fallback to tcp, srcAddress = %s, targetAddress = %s, rc = %s",
-                                             srcAddress, targetAddress, status.ToString());
-                return Status::OK();
-            }
-        }
-
-        rsp.mutable_responses()->at(index).mutable_error()->set_error_code(status.GetCode());
-        rsp.mutable_responses()->at(index).mutable_error()->set_error_msg(status.GetMsg());
-        return status;
+    auto errorHandler = [&context, &failure, this](Status &status) {
+        return status.IsError() ? HandleBatchWaitFailure(context, status, failure) : status;
     };
-
-    (void)WaitFastTransportEventWithFailure(kp.second.first, remainingTime, errorHandler, &failure);
-    index += coveredRespNum;
+    (void)WaitFastTransportEventWithFailure(context.eventPayload.second.first, remainingTime, errorHandler, &failure);
+    context.responseIndex += context.coveredResponseCount;
     return Status::OK();
 }
 

@@ -297,6 +297,23 @@ TEST(WorkerOcServiceGetUbAdmissionTest, BatchRemoteGetUsesPerResponseFailureDeta
     EXPECT_EQ(getImpl.CheckRemoteReadAdmission(DATA_WORKER.ToString()).GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE);
 }
 
+TEST(WorkerOcServiceGetUbAdmissionTest, BatchTransportFailureMarksEveryCoveredResponse)
+{
+    BatchGetObjectRemoteRspPb rsp;
+    rsp.add_responses();
+    rsp.add_responses();
+    rsp.add_responses();
+    const Status failure(K_URMA_ERROR, "shared batch write failed");
+
+    WorkerWorkerOCServiceImpl::SetBatchResponseError(rsp, 1, 2, failure);
+
+    EXPECT_EQ(rsp.responses(0).error().error_code(), K_OK);
+    EXPECT_EQ(rsp.responses(1).error().error_code(), K_URMA_ERROR);
+    EXPECT_EQ(rsp.responses(1).error().error_msg(), failure.GetMsg());
+    EXPECT_EQ(rsp.responses(2).error().error_code(), K_URMA_ERROR);
+    EXPECT_EQ(rsp.responses(2).error().error_msg(), failure.GetMsg());
+}
+
 TEST(WorkerOcServiceGetUbAdmissionTest, ClientWritebackDetailDecodesAsClientGetOutcome)
 {
     GetRspPb rsp;
@@ -414,6 +431,24 @@ TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetProviderRecordsWorkerToWorkerFa
     EXPECT_TRUE(rsp.provider_ub_failure_detail().has_cqe_status());
     EXPECT_EQ(rsp.provider_ub_failure_detail().provider_status(), 4);
     EXPECT_EQ(rsp.provider_ub_failure_detail().cqe_status(), 9);
+}
+
+TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetProviderUsesClientIdWhenRequesterAddressIsEmpty)
+{
+    constexpr char CLIENT_ID[] = "test-client-id";
+    GetObjectRemoteReqPb req;
+    req.mutable_urma_info()->set_client_id(CLIENT_ID);
+    GetObjectRemoteRspPb rsp;
+    UrmaWriteFailure failure{ .cqeStatus = 4 };
+
+    WorkerWorkerOCServiceImpl::RecordProviderUbWriteFailure(req, Status(K_URMA_ERROR, "client writeback failed"),
+                                                            DATA_WORKER, rsp, &failure);
+
+    ASSERT_TRUE(rsp.has_provider_ub_failure_detail());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().failed_endpoint(), std::string("client_id=") + CLIENT_ID);
+    EXPECT_EQ(rsp.provider_ub_failure_detail().operator_worker(), DATA_WORKER.ToString());
+    EXPECT_TRUE(rsp.provider_ub_failure_detail().has_cqe_status());
+    EXPECT_EQ(rsp.provider_ub_failure_detail().cqe_status(), 4);
 }
 
 TEST(WorkerOcServiceGetUbAdmissionTest, RemoteGetWritebackFailureQuarantinesProviderSelfAdmission)

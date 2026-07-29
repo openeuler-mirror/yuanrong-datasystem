@@ -82,6 +82,7 @@ ds_cc_library(
         "runtime/topology_reader.cpp",
         "runtime/topology_role_watch_plan.cpp",
         "runtime/topology_snapshot_state.cpp",
+        "ub_health/ub_health_lease_sync.cpp",
     ],
     hdrs = [
         "algorithm/algorithm_catalog.h",
@@ -110,6 +111,7 @@ ds_cc_library(
         "runtime/topology_role_watch_plan.h",
         "runtime/topology_runtime_types.h",
         "runtime/topology_snapshot_state.h",
+        "ub_health/ub_health_lease_sync.h",
     ],
     deps = [
         ":cluster_membership_codec",
@@ -119,12 +121,15 @@ ds_cc_library(
         "//src/datasystem/cluster/coordination_backend:coordination_backend",
         "//src/datasystem/cluster/coordination_backend:topology_recovery_reporter",
         "//src/datasystem/common/ak_sk:hasher",
+        "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/kvstore:kv_store",
         "//src/datasystem/common/kvstore/etcd:etcd_store",
         "//src/datasystem/common/log:common_log_header",
+        "//src/datasystem/common/object_cache:ub_health",
         "//src/datasystem/common/util:hash_algorithm",
         "//src/datasystem/common/util:common_util",
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/protos:cluster_topology_cc_proto",
+        "//src/datasystem/protos:share_memory_cc_proto",
     ],
 )

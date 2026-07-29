@@ -65,6 +65,13 @@ constexpr char GET_OBJECT_REMOTE_INJECT[] = "client.transport.get_object_remote"
 constexpr char BATCH_GET_OBJECT_REMOTE_INJECT[] = "client.transport.batch_get_object_remote";
 constexpr char INLINE_READ_FAILURE_INJECT[] = "worker.worker_worker_remote_get_failure";
 constexpr char SHM_LATCH_FAIL_INJECT[] = "worker.ShmGuard.TryRLatch.Fail";
+constexpr char PROVIDER_GET_ENTER_INJECT[] = "worker.GetObjectRemote.afterRead";
+constexpr char PROVIDER_BATCH_GET_ENTER_INJECT[] = "worker.BatchGetObjectRemote.afterRead";
+constexpr char URMA_CQE_ERROR_INJECT[] = "UrmaManager.CheckCompletionRecordStatus";
+constexpr char LOCAL_OBSERVATION_INJECT[] = "client.ub_health_filter.local_observation";
+constexpr char LOCAL_READ_DENIED_INJECT[] = "client.ub_health_filter.local_read_denied";
+constexpr char GLOBAL_UNAVAILABLE_APPLIED_INJECT[] = "client.ub_health_filter.global_unavailable_applied";
+constexpr char GLOBAL_READ_DENIED_INJECT[] = "client.ub_health_filter.global_read_denied";
 
 struct TransportRpcCounts {
     uint64_t queryAndGet = 0;
@@ -133,6 +140,10 @@ public:
         (void)inject::Clear(SKIP_WARMUP_INJECT);
         (void)inject::Clear(QUERY_AND_GET_INJECT);
         (void)inject::Clear(GET_OBJECT_REMOTE_INJECT);
+        (void)inject::Clear(LOCAL_OBSERVATION_INJECT);
+        (void)inject::Clear(LOCAL_READ_DENIED_INJECT);
+        (void)inject::Clear(GLOBAL_UNAVAILABLE_APPLIED_INJECT);
+        (void)inject::Clear(GLOBAL_READ_DENIED_INJECT);
         ExternalClusterTest::TearDown();
         FLAGS_use_brpc = previousUseBrpc_;
     }
@@ -251,6 +262,158 @@ protected:
         }
         return keys;
     }
+
+#ifdef USE_URMA
+    void PrepareUbReplicaScenario(const std::string &key, const std::string &value,
+                                  std::shared_ptr<KVClient> &requester)
+    {
+        SetUbGetSize(value.size() * 2);
+        DS_ASSERT_OK(writer_->Set(key, value));
+        std::shared_ptr<KVClient> replicaWarmer;
+        InitTestKVClient(TRANSPORT_CLIENT_WORKER_INDEX, replicaWarmer, CLIENT_TIMEOUT_MS);
+        std::string warmedValue;
+        DS_ASSERT_OK(replicaWarmer->Get(key, warmedValue));
+        ASSERT_EQ(warmedValue, value);
+        replicaWarmer.reset();
+
+        SetUbGetSize(INLINE_DATA_LIMIT);
+        ConnectOptions requesterOptions;
+        InitConnectOpt(2, requesterOptions, CLIENT_TIMEOUT_MS);
+        requesterOptions.enableLocalCache = false;
+        requester = std::make_shared<KVClient>(requesterOptions);
+        DS_ASSERT_OK(requester->Init());
+
+        DS_ASSERT_OK(inject::Set(LOCAL_OBSERVATION_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(LOCAL_READ_DENIED_INJECT, "call()"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, PROVIDER_GET_ENTER_INJECT, "call()"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, URMA_CQE_ERROR_INJECT, "1*call(0, 4)"));
+    }
+
+    void VerifyLocalObservationAndReplicaSwitch(const std::shared_ptr<KVClient> &requester, const std::string &key,
+                                                const std::string &value, uint64_t &providerRequestsAfterFailure)
+    {
+        const uint64_t observationBaseline = inject::GetExecuteCount(LOCAL_OBSERVATION_INJECT);
+        Optional<Buffer> firstBuffer;
+        auto firstStatus = requester->Get(key, firstBuffer);
+        ASSERT_EQ(firstStatus.GetCode(), K_URMA_ERROR) << firstStatus.ToString();
+        ASSERT_FALSE(firstBuffer);
+        ASSERT_EQ(inject::GetExecuteCount(LOCAL_OBSERVATION_INJECT), observationBaseline + 1);
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, PROVIDER_GET_ENTER_INJECT,
+                                                           providerRequestsAfterFailure));
+        ASSERT_EQ(providerRequestsAfterFailure, 1u);
+
+        const uint64_t localDenyBaseline = inject::GetExecuteCount(LOCAL_READ_DENIED_INJECT);
+        Optional<Buffer> secondBuffer;
+        DS_ASSERT_OK(requester->Get(key, secondBuffer));
+        ASSERT_TRUE(secondBuffer);
+        AssertBufferEqual(*secondBuffer, value);
+        ASSERT_GT(inject::GetExecuteCount(LOCAL_READ_DENIED_INJECT), localDenyBaseline);
+        uint64_t requestsAfterReplicaSwitch = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, PROVIDER_GET_ENTER_INJECT,
+                                                           requestsAfterReplicaSwitch));
+        ASSERT_EQ(requestsAfterReplicaSwitch, providerRequestsAfterFailure);
+    }
+
+    void VerifyGlobalFactIsolation(const std::string &key, const std::string &value,
+                                   uint64_t providerRequestsAfterFailure)
+    {
+        writer_.reset();
+        DS_ASSERT_OK(inject::Set(GLOBAL_UNAVAILABLE_APPLIED_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(GLOBAL_READ_DENIED_INJECT, "call()"));
+        const uint64_t appliedBaseline = inject::GetExecuteCount(GLOBAL_UNAVAILABLE_APPLIED_INJECT);
+        ConnectOptions observerOptions;
+        InitConnectOpt(META_OWNER_INDEX, observerOptions, CLIENT_TIMEOUT_MS);
+        observerOptions.enableLocalCache = false;
+        auto observer = std::make_shared<KVClient>(observerOptions);
+        DS_ASSERT_OK(observer->Init());
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (inject::GetExecuteCount(GLOBAL_UNAVAILABLE_APPLIED_INJECT) == appliedBaseline
+               && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        ASSERT_GT(inject::GetExecuteCount(GLOBAL_UNAVAILABLE_APPLIED_INJECT), appliedBaseline);
+        const uint64_t observationsBeforeRead = inject::GetExecuteCount(LOCAL_OBSERVATION_INJECT);
+        const uint64_t globalDenyBaseline = inject::GetExecuteCount(GLOBAL_READ_DENIED_INJECT);
+        Optional<Buffer> observedBuffer;
+        DS_ASSERT_OK(observer->Get(key, observedBuffer));
+        ASSERT_TRUE(observedBuffer);
+        AssertBufferEqual(*observedBuffer, value);
+        ASSERT_GT(inject::GetExecuteCount(GLOBAL_READ_DENIED_INJECT), globalDenyBaseline);
+        ASSERT_EQ(inject::GetExecuteCount(LOCAL_OBSERVATION_INJECT), observationsBeforeRead);
+
+        uint64_t requestsAfterGlobalRead = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, META_OWNER_INDEX, PROVIDER_GET_ENTER_INJECT,
+                                                           requestsAfterGlobalRead));
+        ASSERT_EQ(requestsAfterGlobalRead, providerRequestsAfterFailure);
+    }
+
+    void PrepareUbBatchReplicaScenario(const std::vector<std::string> &keys,
+                                       const std::vector<std::string> &values,
+                                       std::shared_ptr<KVClient> &requester)
+    {
+        size_t warmupBufferSize = 0;
+        for (const auto &value : values) {
+            warmupBufferSize += value.size();
+        }
+        SetUbGetSize(warmupBufferSize);
+        for (size_t i = 0; i < keys.size(); ++i) {
+            DS_ASSERT_OK(writer_->Set(keys[i], values[i]));
+        }
+        std::shared_ptr<KVClient> replicaWarmer;
+        InitTestKVClient(TRANSPORT_CLIENT_WORKER_INDEX, replicaWarmer, CLIENT_TIMEOUT_MS);
+        std::vector<std::string> warmedValues;
+        DS_ASSERT_OK(replicaWarmer->Get(keys, warmedValues));
+        ASSERT_EQ(warmedValues.size(), values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            AssertTwoStrs(warmedValues[i], values[i]);
+        }
+        replicaWarmer.reset();
+
+        SetUbGetSize(INLINE_DATA_LIMIT);
+        ConnectOptions requesterOptions;
+        InitConnectOpt(2, requesterOptions, CLIENT_TIMEOUT_MS);
+        requesterOptions.enableLocalCache = false;
+        requester = std::make_shared<KVClient>(requesterOptions);
+        DS_ASSERT_OK(requester->Init());
+        DS_ASSERT_OK(inject::Set(LOCAL_OBSERVATION_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(LOCAL_READ_DENIED_INJECT, "call()"));
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, PROVIDER_BATCH_GET_ENTER_INJECT, "call()"));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, META_OWNER_INDEX, URMA_CQE_ERROR_INJECT, "1*call(0, 4)"));
+    }
+
+    void VerifyBatchObservationAndReplicaSwitch(const std::shared_ptr<KVClient> &requester,
+                                                const std::vector<std::string> &keys,
+                                                const std::vector<std::string> &values)
+    {
+        const uint64_t observationBaseline = inject::GetExecuteCount(LOCAL_OBSERVATION_INJECT);
+        std::vector<Optional<Buffer>> firstBuffers;
+        const Status firstStatus = requester->Get(keys, firstBuffers);
+        ASSERT_TRUE(firstStatus.IsOk() || firstStatus.GetCode() == K_URMA_ERROR) << firstStatus.ToString();
+        ASSERT_EQ(firstBuffers.size(), keys.size());
+        ASSERT_TRUE(std::any_of(firstBuffers.begin(), firstBuffers.end(), [](const auto &buffer) { return !buffer; }));
+        ASSERT_GT(inject::GetExecuteCount(LOCAL_OBSERVATION_INJECT), observationBaseline);
+        uint64_t providerRequests = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, META_OWNER_INDEX, PROVIDER_BATCH_GET_ENTER_INJECT, providerRequests));
+        ASSERT_EQ(providerRequests, 1u);
+
+        const uint64_t denyBaseline = inject::GetExecuteCount(LOCAL_READ_DENIED_INJECT);
+        std::vector<Optional<Buffer>> secondBuffers;
+        DS_ASSERT_OK(requester->Get(keys, secondBuffers));
+        ASSERT_EQ(secondBuffers.size(), values.size());
+        for (size_t i = 0; i < values.size(); ++i) {
+            ASSERT_TRUE(secondBuffers[i]) << "missing buffer at position " << i;
+            AssertBufferEqual(*secondBuffers[i], values[i]);
+        }
+        ASSERT_GT(inject::GetExecuteCount(LOCAL_READ_DENIED_INJECT), denyBaseline);
+        uint64_t requestsAfterSwitch = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, META_OWNER_INDEX, PROVIDER_BATCH_GET_ENTER_INJECT, requestsAfterSwitch));
+        ASSERT_EQ(requestsAfterSwitch, providerRequests);
+    }
+#endif
 
     std::unique_ptr<EtcdStore> etcd_;
     std::shared_ptr<KVClient> writer_;
@@ -377,6 +540,40 @@ TEST_F(KVClientTransportGetTest, MultiKeyGetDifferentOwners)
         AssertBufferEqual(*buffers[i], values[i]);
     }
     ASSERT_EQ(AccessTransportTracker::ToString(), ExpectedTransport());
+}
+
+TEST_F(KVClientTransportGetTest, ProviderError4CreatesLocalObservationAndNextReadSwitchesReplica)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Direct read UB admission ST requires USE_URMA.";
+#else
+    const std::string key = "transport_get_ub_local_observation_" + GetStringUuid();
+    const std::string value(INLINE_DATA_LIMIT * 2, 'u');
+    uint64_t providerRequestsAfterFailure = 0;
+    std::shared_ptr<KVClient> requester;
+    PrepareUbReplicaScenario(key, value, requester);
+    VerifyLocalObservationAndReplicaSwitch(requester, key, value, providerRequestsAfterFailure);
+    VerifyGlobalFactIsolation(key, value, providerRequestsAfterFailure);
+#endif
+}
+
+TEST_F(KVClientTransportGetTest, BatchProviderError4CreatesObservationAndNextBatchSwitchesReplica)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Direct Batch Read UB admission ST requires USE_URMA.";
+#else
+    const std::vector<std::string> keys = {
+        "transport_batch_ub_observation_0_" + GetStringUuid(),
+        "transport_batch_ub_observation_1_" + GetStringUuid(),
+    };
+    const std::vector<std::string> values = {
+        std::string(INLINE_DATA_LIMIT * 2, 'a'),
+        std::string(INLINE_DATA_LIMIT * 2 + 4096, 'b'),
+    };
+    std::shared_ptr<KVClient> requester;
+    PrepareUbBatchReplicaScenario(keys, values, requester);
+    VerifyBatchObservationAndReplicaSwitch(requester, keys, values);
+#endif
 }
 
 // Absent object yields empty locations -> K_NOT_FOUND, no data fetch.

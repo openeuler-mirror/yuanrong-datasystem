@@ -89,6 +89,12 @@ public:
         return backend_.WatchEvents(watchKeys);
     }
 
+    Status PutWithKeepAliveLease(const std::string &table, const std::string &key,
+                                 const std::string &value) override
+    {
+        return backend_.PutWithKeepAliveLease(table, key, value);
+    }
+
     Status InitKeepAlive(const std::string &table, const std::string &key, bool isRestart,
                          bool isStoreAvailableWhenStart) override
     {

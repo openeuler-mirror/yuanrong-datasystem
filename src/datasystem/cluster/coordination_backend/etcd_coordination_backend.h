@@ -128,6 +128,8 @@ public:
      * @return Backend operation status.
      */
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override;
+    Status PutWithKeepAliveLease(const std::string &tableName, const std::string &key,
+                                 const std::string &value) override;
 
     /**
      * @brief Initialize the existing ETCD membership keepalive.

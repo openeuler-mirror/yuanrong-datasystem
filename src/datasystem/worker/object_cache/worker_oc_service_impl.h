@@ -548,6 +548,11 @@ public:
      */
     size_t GetMetadataSize() const;
 
+    UbHealthSummary BuildSelfUbHealthSummary() const
+    {
+        return ubAdmission_->BuildSelfHealthSummary(localAddress_);
+    }
+
     PeerUbAdmission *GetUbAdmission() const
     {
         return ubAdmission_.get();

@@ -28,8 +28,9 @@ namespace datasystem {
 namespace client {
 
 Routing::Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
-                 HashRingRefresher::RingUpdateHook ringUpdateHook, int64_t refreshIntervalMs)
-    : router_(std::make_shared<WorkerRouter>("")),
+                 HashRingRefresher::RingUpdateHook ringUpdateHook,
+                 std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters, int64_t refreshIntervalMs)
+    : router_(std::make_shared<WorkerRouter>("", std::move(additionalFilters))),
       rpcClient_(std::make_shared<RoutingRpcClient>(std::move(channelConfig), std::move(signature))),
       refreshIntervalMs_(refreshIntervalMs)
 {

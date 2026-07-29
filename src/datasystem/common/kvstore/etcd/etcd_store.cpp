@@ -383,6 +383,15 @@ Status EtcdStore::PutWithLeaseId(const std::string &tableName, const std::string
                                 value.size());
 }
 
+Status EtcdStore::PutWithKeepAliveLease(const std::string &tableName, const std::string &key,
+                                        const std::string &value)
+{
+    const int64_t leaseId = CheckLeaseId();
+    CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout() && leaseId != 0, K_NOT_READY,
+                             "UB health value must be bound to an active membership lease");
+    return PutWithLeaseId(tableName, key, value, leaseId);
+}
+
 Status EtcdStore::GetLeaseID(const int64_t ttlInSec, std::atomic<int64_t> &leaseId)
 {
     CHECK_FAIL_RETURN_STATUS(leaseSession_ != nullptr, K_KVSTORE_ERROR,

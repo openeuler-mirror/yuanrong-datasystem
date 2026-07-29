@@ -33,6 +33,7 @@
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/log/log_sampler.h"
+#include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/os_transport_pipeline/os_transport_pipeline_worker_api.h"
 #include "datasystem/common/rpc/rpc_constants.h"
 #include "datasystem/common/util/compatibility_manager.h"
@@ -407,6 +408,7 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     rsp.set_standby_worker(GetLocalStandbyWorker());
     rsp.set_unhealthy(!IsHealthy());
     SetAvailableWorkers(rsp);
+    PopulateUbHealthSummary(rsp);
     LogSampler::Instance().PopulateConfigProto(rsp.mutable_log_sample_config());
     rsp.set_is_voluntary_scale_down(localExiting_.load(std::memory_order_acquire));
 
@@ -416,6 +418,31 @@ Status WorkerServiceImpl::Heartbeat(const HeartbeatReqPb &req, HeartbeatRspPb &r
     }
     VLOG(HEARTBEAT_LEVEL) << "Response heartbeat message to client " << clientId << ", response: " << rsp.DebugString();
     return Status::OK();
+}
+
+void WorkerServiceImpl::SetUbHealthSummaryProvider(std::function<std::optional<UbHealthSummary>()> provider)
+{
+    std::lock_guard<std::mutex> lock(ubHealthSummaryProviderMutex_);
+    ubHealthSummaryProvider_ = std::move(provider);
+}
+
+void WorkerServiceImpl::PopulateUbHealthSummary(HeartbeatRspPb &rsp) const
+{
+    std::function<std::optional<UbHealthSummary>()> provider;
+    {
+        std::lock_guard<std::mutex> lock(ubHealthSummaryProviderMutex_);
+        provider = ubHealthSummaryProvider_;
+    }
+    if (!provider) {
+        return;
+    }
+    auto summary = provider();
+    if (!summary.has_value()) {
+        return;
+    }
+    summary->worker = localAddress_;
+    summary->incarnation = workerStartId_;
+    EncodeUbHealthSummary(*summary, *rsp.mutable_ub_health_summary());
 }
 
 std::set<int> WorkerServiceImpl::GetExpiredFdsForClient(const ClientKey &clientId)

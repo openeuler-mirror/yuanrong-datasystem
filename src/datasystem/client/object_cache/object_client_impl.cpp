@@ -611,13 +611,20 @@ Status ObjectClientImpl::InitTransportLayer()
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
     RETURN_RUNTIME_ERROR_IF_NULL(asyncGetRPCPool_);
     RETURN_RUNTIME_ERROR_IF_NULL(asyncReleasePool_);
+    if (ubHealthFilter_ == nullptr) {
+        ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
+    }
     BrpcChannelConfig channelConfig;
     channelConfig.timeout_ms = requestTimeoutMs_;
     channelConfig.connect_timeout_ms = connectTimeoutMs_;
-    auto transportLayer =
-        std::make_unique<client::TransportLayer>(transportSignature_, asyncGetRPCPool_, fastTransportMemSize_,
-                                                 std::move(channelConfig), asyncReleasePool_,
-                                                 enableClientDirectPipelineH2D_, clientDirectPipelineH2DThreadNum_);
+    client::TransportLayerOptions options;
+    options.channelConfig = std::move(channelConfig);
+    options.releasePool = asyncReleasePool_;
+    options.enableClientDirectPipelineH2D = enableClientDirectPipelineH2D_;
+    options.pipelineThreadNum = clientDirectPipelineH2DThreadNum_;
+    options.readSourceFilter = ubHealthFilter_;
+    auto transportLayer = std::make_unique<client::TransportLayer>(
+        transportSignature_, asyncGetRPCPool_, fastTransportMemSize_, std::move(options));
     RETURN_IF_NOT_OK(transportLayer->Init());
     // Inject shm dependencies (workerApi for GetClientFd fd-passing, mmapManager for mmap)
     // so ShmTransporter can do real zero-copy shm instead of RPC payload inline.
@@ -634,8 +641,10 @@ Status ObjectClientImpl::ApplyRoutingWorkerSnapshot(uint64_t ringVersion,
                                                     const std::string &sdkHostId)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(transportLayer_);
+    RETURN_RUNTIME_ERROR_IF_NULL(ubHealthFilter_);
     client::WorkerSnapshot snapshot;
     RETURN_IF_NOT_OK(client::BuildWorkerSnapshot(ringVersion, ring, hostIdMap, sdkHostId, snapshot));
+    ubHealthFilter_->ApplyTopologyIncarnations(ring);
     return transportLayer_->ApplyWorkerSnapshot(std::move(snapshot));
 }
 
@@ -667,6 +676,9 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
     CHECK_FAIL_RETURN_STATUS(!initialWorker.Empty(), K_NOT_READY,
                              "Initial worker address is unavailable for routing initialization");
     RETURN_IF_NOT_OK(InitDataPlacementPolicy());
+    if (ubHealthFilter_ == nullptr) {
+        ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
+    }
     RETURN_RUNTIME_ERROR_IF_NULL(transportSignature_);
     BrpcChannelConfig channelConfig;
     channelConfig.timeout_ms = requestTimeoutMs_;
@@ -688,8 +700,9 @@ Status ObjectClientImpl::InitRouting(const HostPort &initialWorker, bool initial
         }
         return ApplyRoutingWorkerSnapshot(ringVersion, ring, hostIdMap, *sdkHostIdCache);
     };
-    auto routing =
-        std::make_shared<client::Routing>(std::move(channelConfig), transportSignature_, std::move(ringUpdateHook));
+    auto routing = std::make_shared<client::Routing>(
+        std::move(channelConfig), transportSignature_, std::move(ringUpdateHook),
+        std::vector<std::shared_ptr<client::IWorkerFilter>>{ ubHealthFilter_ });
     RETURN_IF_NOT_OK(routing->Init(*sdkHostIdCache, initialWorker, initialWorkerIsLocal));
     std::atomic_store(&routing_, std::move(routing));
     LOG(INFO) << "[Routing] Object client routing initialized from worker " << initialWorker.ToString();
@@ -728,7 +741,20 @@ Status ObjectClientImpl::InitClientWorkerConnectAt(WorkerNode node, const HostPo
 void ObjectClientImpl::ConfigureUrmaDataPlaneFailureCallback(WorkerNode node,
                                                              const std::shared_ptr<IClientWorkerApi> &workerApi)
 {
-    if (workerApi == nullptr || !enableCrossNodeConnection_) {
+    if (workerApi == nullptr) {
+        return;
+    }
+    if (ubHealthFilter_ == nullptr) {
+        ubHealthFilter_ = std::make_shared<client::UbHealthFilter>();
+    }
+    std::weak_ptr<client::UbHealthFilter> weakUbHealthFilter(ubHealthFilter_);
+    workerApi->SetUbHealthSummaryCallback([weakUbHealthFilter](const UbHealthSummary &summary) {
+        auto filter = weakUbHealthFilter.lock();
+        if (filter != nullptr) {
+            (void)filter->ApplySummary(summary, summary.incarnation);
+        }
+    });
+    if (!enableCrossNodeConnection_) {
         return;
     }
     std::weak_ptr<client::IClientWorkerCommonApi> weakWorkerApi(workerApi);

@@ -43,6 +43,7 @@
 #include "datasystem/master/stream_cache/master_sc_service_impl.h"
 #include "datasystem/server/common_server.h"
 #include "datasystem/cluster/runtime/topology_engine.h"
+#include "datasystem/cluster/ub_health/ub_health_lease_sync.h"
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/worker/object_cache/master_worker_oc_service_impl.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
@@ -580,6 +581,7 @@ private:
      * @return Status of this call.
      */
     Status ConstructTopologyRuntime();
+    Status InitUbHealthSidecar();
 
     /**
      * @brief Construct business callbacks consumed by the Engine Builder.
@@ -634,6 +636,8 @@ private:
      * @return Status of this call.
      */
     Status PublishReadyMembership();
+
+    Status StartUbHealthLeaseSync();
 
     /**
      * @brief Keep the external readiness gate closed until this member has a legal serving topology.
@@ -720,6 +724,8 @@ private:
     std::string etcdOrMetastoreAddress_;
     std::unique_ptr<EtcdStore> etcdStore_;
     std::unique_ptr<ICoordinatorServiceProxy> coordinatorServiceProxy_;
+    std::unique_ptr<cluster::UbHealthLeaseSync> ubHealthLeaseSync_;
+    std::string ubHealthTable_;
     std::unique_ptr<cluster::ITopologyPhaseCallbacks> topologyTaskCallbacks_{ nullptr };
     // Declared before topologyEngine_ so the Engine drains ingress before the service is destroyed.
     std::unique_ptr<coordinator::CoordinatorWatchServiceImpl> coordinatorWatchSvc_{ nullptr };

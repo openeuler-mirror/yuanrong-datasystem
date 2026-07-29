@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <exception>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -72,20 +73,32 @@ uint64_t GetConfiguredUbInlineBufferSize()
 }  // namespace
 
 TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
-                               uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig,
-                               std::shared_ptr<ThreadPool> releasePool, bool enableClientDirectPipelineH2D,
-                               int32_t pipelineThreadNum)
-    : advisor_(std::make_shared<TransportAdvisor>()), releasePool_(std::move(releasePool))
+                               uint64_t fastTransportMemSize, TransportLayerOptions options)
+    : advisor_(std::make_shared<TransportAdvisor>()), releasePool_(std::move(options.releasePool))
 {
     auto ubBufferProvider = CreateDefaultUbReceiveBufferProvider();
     manager_ = std::make_shared<DataPlaneManager>(std::move(signature), fastTransportMemSize,
-                                                  std::move(channelConfig), ubBufferProvider,
-                                                  enableClientDirectPipelineH2D, pipelineThreadNum);
+                                                  std::move(options.channelConfig), ubBufferProvider,
+                                                  options.enableClientDirectPipelineH2D, options.pipelineThreadNum);
     auto retry = std::make_shared<DeadlineRetry>();
     auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
                                                            GetConfiguredUbInlineBufferSize());
     auto executor = std::make_shared<DataPlaneExecutor>(manager_, advisor_);
-    auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry), taskPool);
+    auto healthFilter = options.readSourceFilter == nullptr ? std::make_shared<UbHealthFilter>()
+                                                            : std::move(options.readSourceFilter);
+    auto checkReadSource = [healthFilter](const HostPort &workerAddr) {
+        return healthFilter->IsAvailable(workerAddr)
+                   ? Status::OK()
+                   : Status(K_URMA_DATA_WORKER_UNAVAILABLE,
+                            "Data Worker UB data plane is unavailable: " + workerAddr.ToString());
+    };
+    auto reportReadOutcome = [healthFilter](const HostPort &workerAddr, const GetObjectRemoteRspPb &response) {
+        if (response.has_provider_ub_failure_detail()) {
+            (void)healthFilter->ReportProviderFailure(workerAddr, response.provider_ub_failure_detail());
+        }
+    };
+    auto replicas = std::make_shared<ReplicaReader>(std::move(executor), std::move(retry), taskPool,
+                                                    std::move(checkReadSource), std::move(reportReadOutcome));
     objectRead_ = std::make_unique<ObjectReadFlow>(std::move(metadata), std::move(replicas), std::move(taskPool));
 }
 

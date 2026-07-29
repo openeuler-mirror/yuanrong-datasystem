@@ -19,6 +19,7 @@
 #define DATASYSTEM_CLIENT_TRANSPORT_OBJECT_READ_REPLICA_READER_H
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -39,8 +40,12 @@ using ReplicaReadBatch = std::vector<ReplicaReadRequest>;
 
 class ReplicaReader {
 public:
+    using ReadAdmissionCheck = std::function<Status(const HostPort &)>;
+    using ReadOutcomeReport = std::function<void(const HostPort &, const GetObjectRemoteRspPb &)>;
+
     ReplicaReader(std::shared_ptr<DataPlaneExecutor> executor, std::shared_ptr<DeadlineRetry> retry,
-                  std::shared_ptr<ThreadPool> taskPool);
+                  std::shared_ptr<ThreadPool> taskPool, ReadAdmissionCheck readAdmissionCheck = nullptr,
+                  ReadOutcomeReport readOutcomeReport = nullptr);
     virtual ~ReplicaReader() = default;
 
     /** @brief Poll the fixed metadata locations until one read succeeds or the API deadline expires. */
@@ -64,6 +69,8 @@ private:
     std::shared_ptr<DataPlaneExecutor> executor_;
     std::shared_ptr<DeadlineRetry> retry_;
     std::shared_ptr<ThreadPool> taskPool_;
+    ReadAdmissionCheck readAdmissionCheck_;
+    ReadOutcomeReport readOutcomeReport_;
 };
 }  // namespace client
 }  // namespace datasystem

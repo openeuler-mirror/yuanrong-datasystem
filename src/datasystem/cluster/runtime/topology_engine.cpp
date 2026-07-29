@@ -841,6 +841,27 @@ bool TopologyEngine::IsMemberLeaseTimedOut() const noexcept
     return memberBackend_->IsKeepAliveTimeout();
 }
 
+const std::string &TopologyEngine::GetMembershipTableName() const noexcept
+{
+    return keys_->MembershipTable();
+}
+
+Status TopologyEngine::PutWithMembershipLease(const std::string &tableName, const std::string &key,
+                                              const std::string &value)
+{
+    CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
+                             "cluster topology Engine is not running");
+    return memberBackend_->PutWithKeepAliveLease(tableName, key, value);
+}
+
+Status TopologyEngine::GetMembershipSidecar(
+    const std::string &tableName, std::vector<std::pair<std::string, std::string>> &records) const
+{
+    CHECK_FAIL_RETURN_STATUS(state_.load() == TopologyEngineState::RUNNING, K_NOT_READY,
+                             "cluster topology Engine is not running");
+    return memberBackend_->GetAll(tableName, records);
+}
+
 Status TopologyEngine::GetRoutingHostIds(std::unordered_map<std::string, std::string> &hostIds) const
 {
     std::vector<std::pair<std::string, std::string>> members;

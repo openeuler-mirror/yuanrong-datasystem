@@ -33,8 +33,10 @@
 #include "datasystem/client/object_cache/object_client_impl.h"
 #include "datasystem/common/immutable_string/immutable_string_pool.h"
 #include "datasystem/common/inject/inject_point.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/log/log_manager.h"
 #include "datasystem/common/log/logging.h"
+#include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/object_cache/urma_fallback_tcp_limiter.h"
 #include "datasystem/common/util/uuid_generator.h"
 #include "datasystem/kv_client.h"
@@ -57,6 +59,11 @@ constexpr int ABNORMAL_EXIT_CODE = -2;
 const char *WARMUP_PREPARE_INJECT = "WorkerOCServiceImpl.PrepareUrmaWarmupObject.done";
 const char *WARMUP_REMOTE_GET_INJECT = "WorkerOcServiceGetImpl.WarmupGetObjectFromRemoteWorker.begin";
 const char *QUERY_META_INJECT = "worker.before_query_meta";
+constexpr char PROVIDER_GET_ENTER_INJECT[] = "worker.GetObjectRemote.afterRead";
+constexpr char PROVIDER_BATCH_GET_ENTER_INJECT[] = "worker.BatchGetObjectRemote.afterRead";
+constexpr char GLOBAL_SUMMARY_COMMITTED_INJECT[] = "PeerUbAdmission.ReplaceGlobalSummaries.afterCommit";
+constexpr char UB_HEALTH_BEFORE_PUBLISH_INJECT[] = "UbHealthLeaseSync.beforePublish";
+constexpr char UB_HEALTH_SIDECAR_ROOT[] = "/datasystem_ub_health";
 
 #ifdef USE_URMA
 std::string ReadFileContent(const std::string &path)
@@ -2223,6 +2230,147 @@ public:
     }
 };
 
+class UrmaGlobalFactLifecycleTest : public UrmaDisableFallbackTest {
+protected:
+    struct Scenario {
+        std::shared_ptr<KVClient> source;
+        std::shared_ptr<KVClient> localRequester;
+        std::shared_ptr<KVClient> globalRequester;
+        std::unique_ptr<EtcdStore> store;
+        HostPort sourceWorker;
+        UbHealthSummary failedSummary;
+        std::string table;
+        std::string key;
+        std::string value;
+        uint64_t providerRequests = 0;
+    };
+
+    void WaitForLeaseSummary(EtcdStore &store, const std::string &table, const HostPort &worker, bool writable,
+                             UbHealthSummary &summary)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        Status lastStatus(K_NOT_FOUND, "UB health summary was not read");
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::string bytes;
+            lastStatus = store.Get(table, worker.ToString(), bytes);
+            UbHealthSummaryPb pb;
+            UbHealthSummary candidate;
+            if (lastStatus.IsOk() && pb.ParseFromString(bytes)) {
+                lastStatus = DecodeUbHealthSummary(pb, candidate);
+                if (lastStatus.IsOk() && candidate.worker == worker && candidate.writable == writable) {
+                    summary = std::move(candidate);
+                    return;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        FAIL() << "timed out waiting for UB health summary, worker=" << worker.ToString()
+               << ", writable=" << writable << ", lastStatus=" << lastStatus.ToString();
+    }
+
+    void WaitForLeaseRemoval(EtcdStore &store, const std::string &table, const HostPort &worker)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        Status lastStatus;
+        while (std::chrono::steady_clock::now() < deadline) {
+            std::string bytes;
+            lastStatus = store.Get(table, worker.ToString(), bytes);
+            if (lastStatus.GetCode() == K_NOT_FOUND) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        FAIL() << "timed out waiting for UB health lease removal, worker=" << worker.ToString()
+               << ", lastStatus=" << lastStatus.ToString();
+    }
+
+    void WaitForGlobalSummaryRefresh(uint32_t workerIndex)
+    {
+        (void)cluster_->ClearInjectAction(WORKER, workerIndex, GLOBAL_SUMMARY_COMMITTED_INJECT);
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(WORKER, workerIndex, GLOBAL_SUMMARY_COMMITTED_INJECT, "call()"));
+        WaitForWorkerInjectExecuteCount(workerIndex, GLOBAL_SUMMARY_COMMITTED_INJECT, 2, 5000);
+    }
+
+    void PrepareProviderFailure(Scenario &scenario)
+    {
+        InitTestKVClient(0, scenario.source);
+        InitTestKVClient(1, scenario.localRequester);
+        InitTestKVClient(2, scenario.globalRequester);
+        DS_ASSERT_OK(cluster_->GetWorkerAddr(0, scenario.sourceWorker));
+        scenario.store = InitTestEtcdInstance();
+        ASSERT_NE(scenario.store, nullptr);
+        scenario.table = std::string(UB_HEALTH_SIDECAR_ROOT) + GetMembershipTableName();
+        const auto createRc = scenario.store->CreateTableWithExactPrefix(scenario.table, scenario.table);
+        ASSERT_TRUE(createRc.IsOk() || createRc.GetCode() == K_DUPLICATED) << createRc.ToString();
+        scenario.key = NewObjectKey();
+        scenario.value = GenRandomString(256 * 1024);
+        DS_ASSERT_OK(scenario.source->Set(scenario.key, scenario.value));
+        DS_ASSERT_OK(cluster_->SetInjectAction(WORKER, 0, PROVIDER_BATCH_GET_ENTER_INJECT, "call()"));
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(WORKER, 0, "UrmaManager.CheckCompletionRecordStatus", "1*call(0, 4)"));
+
+        std::string output;
+        const Status failure = scenario.localRequester->Get(scenario.key, output);
+        ASSERT_EQ(failure.GetCode(), K_URMA_ERROR) << failure.ToString();
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, 0, PROVIDER_BATCH_GET_ENTER_INJECT, scenario.providerRequests));
+        ASSERT_EQ(scenario.providerRequests, 1u);
+        WaitForLeaseSummary(*scenario.store, scenario.table, scenario.sourceWorker, false, scenario.failedSummary);
+    }
+
+    void VerifyCrossWorkerGlobalFact(Scenario &scenario)
+    {
+        WaitForGlobalSummaryRefresh(2);
+        std::string output;
+        const Status isolated = scenario.globalRequester->Get(scenario.key, output);
+        ASSERT_EQ(isolated.GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE) << isolated.ToString();
+        uint64_t requestsAfterGlobalDeny = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, 0, PROVIDER_BATCH_GET_ENTER_INJECT, requestsAfterGlobalDeny));
+        ASSERT_EQ(requestsAfterGlobalDeny, scenario.providerRequests);
+    }
+
+    void VerifyLocalObservationSurvivesGlobalFactRemoval(Scenario &scenario)
+    {
+        DS_ASSERT_OK(
+            cluster_->SetInjectAction(WORKER, 0, UB_HEALTH_BEFORE_PUBLISH_INJECT, "return(K_RUNTIME_ERROR)"));
+        WaitForWorkerInjectExecuteCount(0, UB_HEALTH_BEFORE_PUBLISH_INJECT, 1, 5000);
+        DS_ASSERT_OK(scenario.store->Delete(scenario.table, scenario.sourceWorker.ToString()));
+        WaitForLeaseRemoval(*scenario.store, scenario.table, scenario.sourceWorker);
+        WaitForGlobalSummaryRefresh(1);
+
+        std::string output;
+        const Status localDeny = scenario.localRequester->Get(scenario.key, output);
+        ASSERT_EQ(localDeny.GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE) << localDeny.ToString();
+        uint64_t requestsAfterLeaseRemoval = 0;
+        DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(
+            WORKER, 0, PROVIDER_BATCH_GET_ENTER_INJECT, requestsAfterLeaseRemoval));
+        ASSERT_EQ(requestsAfterLeaseRemoval, scenario.providerRequests);
+    }
+
+    void VerifyRestartIncarnationReadmits(Scenario &scenario)
+    {
+        scenario.source.reset();
+        DS_ASSERT_OK(cluster_->KillWorker(0));
+        auto *externalCluster = dynamic_cast<ExternalCluster *>(cluster_.get());
+        ASSERT_NE(externalCluster, nullptr);
+        DS_ASSERT_OK(externalCluster->StartWorkerAndWaitReady({ 0 }, 20));
+
+        UbHealthSummary restartedSummary;
+        WaitForLeaseSummary(*scenario.store, scenario.table, scenario.sourceWorker, true, restartedSummary);
+        ASSERT_NE(restartedSummary.incarnation, scenario.failedSummary.incarnation);
+        WaitForGlobalSummaryRefresh(1);
+        InitTestKVClient(0, scenario.source);
+        const std::string newKey = NewObjectKey();
+        const std::string newValue = GenRandomString(256 * 1024);
+        DS_ASSERT_OK(scenario.source->Set(newKey, newValue));
+        std::string output;
+        DS_ASSERT_OK(scenario.localRequester->Get(newKey, output));
+        ASSERT_EQ(output, newValue);
+    }
+};
+
 class UrmaClientSenderRecoveryTest : public UrmaDisableFallbackTest {
 public:
     void SetUp() override
@@ -2281,6 +2429,19 @@ TEST_F(UrmaDisableFallbackTest, RemoteGetProviderError4IsolatesSourceOnRequester
     uint64_t checksAfterIsolation = 0;
     DS_ASSERT_OK(cluster_->GetInjectActionExecuteCount(WORKER, 0, cqeInject, checksAfterIsolation));
     EXPECT_EQ(checksAfterIsolation, completionChecks);
+}
+
+TEST_F(UrmaGlobalFactLifecycleTest, GlobalFactPropagatesLeaseRemovalPreservesLocalAndNewIncarnationReadmits)
+{
+#ifndef USE_URMA
+    GTEST_SKIP() << "Worker UB Global Fact lifecycle ST requires USE_URMA.";
+#else
+    Scenario scenario;
+    PrepareProviderFailure(scenario);
+    VerifyCrossWorkerGlobalFact(scenario);
+    VerifyLocalObservationSurvivesGlobalFactRemoval(scenario);
+    VerifyRestartIncarnationReadmits(scenario);
+#endif
 }
 
 TEST_F(UrmaClientSenderRecoveryTest, ClientSenderProbeWaitsForUrmaDataPlaneRecovery)

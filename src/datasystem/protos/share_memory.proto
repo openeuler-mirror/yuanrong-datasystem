@@ -147,6 +147,18 @@ message HeartbeatReqPb{
     string access_key = 102;
 }
 
+message UbHealthSummaryPb {
+    string worker_address = 1;
+    string incarnation = 2;
+    bool writable = 3;
+    int32 state = 4;
+    int32 reason = 5;
+    int32 last_status_code = 6;
+    uint64 epoch = 7;
+    uint32 backoff_level = 8;
+    uint64 backoff_deadline_ms = 9;
+}
+
 message HeartbeatRspPb{
     bytes worker_start_id = 1;
     bool client_removed = 2;
@@ -156,6 +168,7 @@ message HeartbeatRspPb{
     repeated string available_workers = 6;
     bool unhealthy = 7;
     LogSampleConfigPb log_sample_config = 8;
+    UbHealthSummaryPb ub_health_summary = 9;
 }
 
 message GetSocketPathReqPb {

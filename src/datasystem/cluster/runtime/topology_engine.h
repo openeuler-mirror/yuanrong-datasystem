@@ -17,6 +17,8 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/cluster/routing/placement_facade.h"
@@ -258,6 +260,11 @@ public:
      * @return True only for a confirmed local lease timeout.
      */
     bool IsMemberLeaseTimedOut() const noexcept;
+
+    const std::string &GetMembershipTableName() const noexcept;
+    Status PutWithMembershipLease(const std::string &tableName, const std::string &key, const std::string &value);
+    Status GetMembershipSidecar(const std::string &tableName,
+                                std::vector<std::pair<std::string, std::string>> &records) const;
 
     /**
      * @brief Read membership host identifiers for the existing routing response.

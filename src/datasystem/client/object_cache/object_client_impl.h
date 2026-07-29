@@ -49,6 +49,7 @@
 #include "datasystem/client/object_cache/device/p2p_subscribe.h"
 #include "datasystem/client/object_cache/exist_handler.h"
 #include "datasystem/client/routing/routing.h"
+#include "datasystem/client/routing/ub_health_filter.h"
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/client/routing/worker_router.h"
@@ -1870,6 +1871,7 @@ private:
     std::shared_ptr<const SensitiveValue> transportToken_;
     std::unique_ptr<client::TransportLayer> transportLayer_;
     std::shared_ptr<client::Routing> routing_;
+    std::shared_ptr<client::UbHealthFilter> ubHealthFilter_;
 
     // Listenworker needs to be placed at the bottom to ensure that it is destructed first.
     std::vector<std::shared_ptr<client::ListenWorker>> listenWorker_;

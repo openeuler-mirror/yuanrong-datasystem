@@ -54,6 +54,17 @@
     non-SHM routed Set path and keeps one worker address fixed across Create, payload transfer, and Publish.
     Transport-owned BRPC channels use the SDK request and connection timeouts; foreground RPCs further clamp the
     per-call timeout to the remaining API deadline.
+  - Client-direct Get preserves structured Provider UB failure details even when the data RPC fails. A hard Provider
+    ERROR 4 immediately creates requester-local read-source admission evidence; a later request checks each endpoint
+    group once, skips the quarantined source with `K_URMA_DATA_WORKER_UNAVAILABLE`, and continues with the next replica.
+    Heartbeat health summaries share the same filter but are bound to the responding Worker endpoint and fenced by
+    Worker incarnation plus monotonically increasing epoch before they can affect routing or replica admission. The
+    requester tags local evidence with the latest trusted incarnation learned from topology membership or a validated
+    heartbeat. Evidence learned before either source establishes the endpoint identity is unversioned and is cleared
+    when the first trusted incarnation arrives. A matching incarnation never clears later hard local evidence; a
+    different trusted incarnation clears evidence belonging to the old Worker process. Ordinary topology refresh and
+    Global Fact lease expiry do not silently clear versioned local evidence. Global summary reads use a shared lock
+    because Direct Read admission is a read-mostly foreground path.
   - `client::TransportLayer` also provides internal same-worker `MCreate`/`MSet` primitives. TCP MCreate allocates local
     buffers and MSet sends one positional MultiPublish payload; UB MCreate uses one MultiCreate RPC, MSet pipelines
     non-blocking per-object URMA writes in bounded groups, and failed writes use bounded TCP payload fallback in the

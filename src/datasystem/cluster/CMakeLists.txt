@@ -48,7 +48,8 @@ add_library(cluster_topology STATIC
         runtime/topology_observer.cpp
         runtime/topology_reader.cpp
         runtime/topology_role_watch_plan.cpp
-        runtime/topology_snapshot_state.cpp)
+        runtime/topology_snapshot_state.cpp
+        ub_health/ub_health_lease_sync.cpp)
 
 target_include_directories(cluster_topology PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(cluster_topology PUBLIC
@@ -59,6 +60,9 @@ target_link_libraries(cluster_topology PUBLIC
         cluster_topology_protos
         topology_recovery_reporter
         common_ak_sk
+        common_buffer
+        common_inject
         common_log
-        common_util)
+        common_util
+        share_memory_protos)
 add_dependencies(cluster_topology cluster_topology_protos)

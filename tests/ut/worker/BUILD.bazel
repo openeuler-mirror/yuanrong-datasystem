@@ -319,6 +319,16 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "worker_service_ub_health_test",
+    srcs = ["object_cache/worker_service_ub_health_test.cpp"],
+    deps = [
+        "//src/datasystem/common/object_cache:common_object_cache",
+        "//src/datasystem/worker:worker_service_impl",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # Worker OC Spill 驱逐测试
 ds_cc_test(
     name = "worker_oc_spill_eviction_test",

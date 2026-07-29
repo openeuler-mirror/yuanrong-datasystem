@@ -216,6 +216,12 @@ constexpr auto TOPOLOGY_STOP_GRACE = std::chrono::seconds(10);
 static const std::string WORKER_OC_SERVER = "WorkerOcServer";
 static const std::string URMA_WARMUP_KEY_PREFIX = "_urma_";
 constexpr char TOPOLOGY_READINESS_PROBE_KEY[] = "topology-readiness-probe";
+constexpr char UB_HEALTH_SIDECAR_ROOT[] = "/datasystem_ub_health";
+
+std::string BuildUbHealthSidecarTable(const std::string &membershipTable)
+{
+    return std::string(UB_HEALTH_SIDECAR_ROOT).append(membershipTable);
+}
 
 namespace {
 /**
@@ -917,6 +923,12 @@ void WorkerOCServer::CreateObjectCacheWorkerServices(
         hostPort_, masterAddr_, objectTable, akSkManager_, evictionManager, persistenceApi_, etcdStore_.get(),
         objCacheMasterSvc_.get(), topologyEngine_.get(), *metadataRouteResolver_, topologyEngine_->Membership(),
         &topologyExitRequested_, topologyEngine_->IsRestart(), true);
+    std::weak_ptr<datasystem::object_cache::WorkerOCServiceImpl> weakOcService = objCacheClientWorkerSvc_;
+    workerSvc_->SetUbHealthSummaryProvider([weakOcService]() -> std::optional<UbHealthSummary> {
+        auto service = weakOcService.lock();
+        return service == nullptr ? std::nullopt
+                                  : std::optional<UbHealthSummary>{ service->BuildSelfUbHealthSummary() };
+    });
     CreateRebalanceExecutor(objectTable, evictionManager);
     objCacheClientWorkerSvc_->RegisterAsyncTasksDoneChecker([this](const std::string &,
                                                                    std::chrono::steady_clock::time_point deadline,
@@ -1177,6 +1189,7 @@ Status WorkerOCServer::ConstructTopologyRuntime()
         builder.UseEtcd(*etcdStore_);
     }
     RETURN_IF_NOT_OK(builder.Build(topologyEngine_));
+    RETURN_IF_NOT_OK(InitUbHealthSidecar());
     const bool isRestart = topologyEngine_->IsRestart();
     const bool centralizedMetadata = !FLAGS_enable_distributed_master;
     MetadataRouteOptions metadataRouteOptions;
@@ -1263,6 +1276,16 @@ Status WorkerOCServer::ResolveCentralMetadataAddress(std::string &address)
     return Status::OK();
 }
 
+Status WorkerOCServer::InitUbHealthSidecar()
+{
+    ubHealthTable_ = BuildUbHealthSidecarTable(topologyEngine_->GetMembershipTableName());
+    if (etcdStore_ == nullptr) {
+        return Status::OK();
+    }
+    RETURN_IF_NOT_OK_EXCEPT(etcdStore_->CreateTableWithExactPrefix(ubHealthTable_, ubHealthTable_), K_DUPLICATED);
+    return Status::OK();
+}
+
 Status WorkerOCServer::StartTopologyRuntime()
 {
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_NOT_READY, "topology engine is not constructed");
@@ -1286,6 +1309,42 @@ Status WorkerOCServer::PublishReadyMembership()
     }
     RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED,
                   "timed out publishing READY membership after first lease: " + lastStatus.ToString());
+}
+
+Status WorkerOCServer::StartUbHealthLeaseSync()
+{
+    if (objCacheClientWorkerSvc_ == nullptr) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr && !ubHealthTable_.empty(), K_NOT_READY,
+                             "UB health lease backend is not initialized");
+    CHECK_FAIL_RETURN_STATUS(workerSvc_ != nullptr && !workerSvc_->GetWorkerStartId().empty(), K_NOT_READY,
+                             "Worker incarnation is not initialized");
+    std::weak_ptr<object_cache::WorkerOCServiceImpl> weakService = objCacheClientWorkerSvc_;
+    cluster::UbHealthLeaseSync::Config config{
+        ubHealthTable_,
+        hostPort_,
+        workerSvc_->GetWorkerStartId(),
+        [weakService] {
+            auto service = weakService.lock();
+            return service == nullptr ? UbHealthSummary{} : service->BuildSelfUbHealthSummary();
+        },
+        [weakService](const std::vector<UbHealthSummary> &summaries) {
+            auto service = weakService.lock();
+            if (service != nullptr) {
+                service->GetUbAdmission()->ReplaceGlobalSummaries(summaries);
+            }
+        }
+    };
+    ubHealthLeaseSync_ = std::make_unique<cluster::UbHealthLeaseSync>(
+        [this](const std::string &table, const std::string &key, const std::string &value) {
+            return topologyEngine_->PutWithMembershipLease(table, key, value);
+        },
+        [this](const std::string &table, std::vector<std::pair<std::string, std::string>> &records) {
+            return topologyEngine_->GetMembershipSidecar(table, records);
+        },
+        std::move(config));
+    return ubHealthLeaseSync_->Start();
 }
 
 Status WorkerOCServer::WaitForTopologyReady()
@@ -1314,6 +1373,10 @@ Status WorkerOCServer::WaitForTopologyReady()
 
 Status WorkerOCServer::StopTopologyRuntime(std::chrono::steady_clock::time_point deadline)
 {
+    if (ubHealthLeaseSync_ != nullptr) {
+        ubHealthLeaseSync_->Stop();
+        ubHealthLeaseSync_.reset();
+    }
     return topologyEngine_ == nullptr ? Status::OK() : topologyEngine_->Shutdown(deadline);
 }
 
@@ -1430,6 +1493,7 @@ Status WorkerOCServer::InitClusterRuntimeAndServices()
     RETURN_IF_NOT_OK(StartTopologyRuntime());
     RETURN_IF_NOT_OK(StartBrpcIfEnabled());
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(PublishReadyMembership(), "Publish Worker topology READY membership failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(StartUbHealthLeaseSync(), "Start UB health lease synchronization failed");
     RETURN_IF_NOT_OK(InitSlotRecovery());
     return Status::OK();
 }
