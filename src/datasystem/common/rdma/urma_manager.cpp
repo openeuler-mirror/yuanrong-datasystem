@@ -172,8 +172,10 @@ UrmaManager::~UrmaManager()
     if (urmaResource_ != nullptr) {
         urmaResource_->Clear();
     }
-    UrmaUninit();
-    urma_dlopen::Cleanup();
+    if (urmaResource_ == nullptr || !urmaResource_->IsProviderCleanupDeferred()) {
+        UrmaUninit();
+        urma_dlopen::Cleanup();
+    }
     {
         std::lock_guard<std::mutex> lock(clientTransportMemoryPinMutex_);
 #ifdef BUILD_PIPLN_H2D

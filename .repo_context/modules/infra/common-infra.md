@@ -140,7 +140,11 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA receive-side Jetty reuse is process-level: `UrmaResource::GetOrCreateSharedRecvJetty()` lazily creates the
     single RECV Jetty/JFR published by TCP handshake responses. Jetty role is immutable, so RECV async-event retirement
     does not enter the send pool or trigger send-pool refill. Shutdown closes Jetty admission before stopping the poll
-    thread; non-converged provider resources are retained fail-closed rather than implicitly deleted.
+    thread; non-converged provider resources are retained fail-closed rather than implicitly deleted. If shutdown still
+    has pending or quarantined Jetty resources, `UrmaResource` also retains their shared JFC/JFCE/context dependency
+    closure until process exit, and `UrmaManager` skips `urma_uninit` plus dynamic-library unloading. This avoids an
+    invalid partial teardown and the resulting expected provider error logs; fully converged shutdown keeps the normal
+    explicit cleanup path.
   - URMA write failures preserve raw provider-post and completion status in `UrmaWriteFailure`. The object-cache
     classifier treats raw status `4` as a hard local-port failure, wait/RPC timeout evidence as `SUSPECT`, and
     resource-pressure failures as non-isolating. A generic `K_URMA_ERROR` without raw provider/CQE evidence is not

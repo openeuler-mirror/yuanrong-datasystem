@@ -17,7 +17,9 @@
 
 #include <gtest/gtest.h>
 
+#define private public
 #include "datasystem/common/rdma/urma_resource.h"
+#undef private
 
 namespace datasystem {
 namespace {
@@ -151,6 +153,39 @@ TEST(UrmaJettyGateTest, ModifyFailureStaysQuarantinedAndNeverReopens)
     jetty->Quarantine();
     EXPECT_EQ(jetty->GetLifecycleState(), UrmaJetty::LifecycleState::QUARANTINED);
     EXPECT_FALSE(jetty->TryAcquirePostPermit());
+}
+
+TEST(UrmaJettyGateTest, ClearWithoutLiveJettyKeepsNormalProviderCleanupDisposition)
+{
+    UrmaResource resource;
+    resource.Clear();
+
+    EXPECT_FALSE(resource.IsProviderCleanupDeferred());
+}
+
+TEST(UrmaJettyGateTest, ClearWithPendingJettyDefersCompleteProviderDependencyClosure)
+{
+    static urma_context_t rawContext{};
+    static urma_jfce_t rawJfce{};
+    static urma_jfc_t rawJfc{};
+    static urma_jetty_t rawJetty{};
+    rawJetty.jetty_id.id = 1;
+
+    UrmaResource resource;
+    resource.context_ = std::make_unique<UrmaContext>(&rawContext);
+    resource.jfce_ = std::make_unique<UrmaJfce>(&rawJfce);
+    resource.jfc_ = std::make_unique<UrmaJfc>(&rawJfc);
+    auto pendingJetty = std::make_shared<UrmaJetty>(&rawJetty, nullptr, &resource);
+    resource.pendingDeleteJettys_.emplace(
+        rawJetty.jetty_id.id, UrmaResource::PendingDeleteJetty{ pendingJetty, "shutdown-test" });
+
+    resource.Clear();
+
+    EXPECT_TRUE(resource.IsProviderCleanupDeferred());
+    EXPECT_EQ(resource.GetContext(), nullptr);
+    EXPECT_EQ(resource.GetJfce(), nullptr);
+    EXPECT_EQ(resource.GetJfc(), nullptr);
+    EXPECT_TRUE(resource.pendingDeleteJettys_.empty());
 }
 
 }  // namespace
