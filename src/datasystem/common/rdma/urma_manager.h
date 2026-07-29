@@ -558,7 +558,7 @@ public:
                              UrmaRecvTargetLease &lease);
 
     /**
-     * @return urma request id, start from 0.
+     * @return Contiguous request ID in the low 40-bit range, starting from 0.
      */
     uint64_t GenerateReqId();
 

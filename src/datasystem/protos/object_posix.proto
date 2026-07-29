@@ -197,7 +197,7 @@ message GetReqPb {
   uint64 ub_buffer_size = 12;
   int64 request_timeout = 13;
 
-  repeated uint32 pipeline_rh2d_reqids = 14;
+  repeated uint64 pipeline_rh2d_reqids = 14;
 
   // put to the end, the previous data is used to generate AK and SK signatures.
   uint64 timestamp = 100;

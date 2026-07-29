@@ -29,6 +29,7 @@
 #include <vector>
 
 #include <sys/mman.h>
+#include <sys/types.h>
 
 #ifndef USE_URMA_MOCK
 #include <ub/umdk/urma/urma_opcode.h>
@@ -118,6 +119,11 @@ Status BuildRemoteJetty(const UrmaJfrInfo &info, urma_rjetty_t &remoteJetty)
 constexpr uint64_t MAX_STUB_CACHE_NUM = 2048;
 constexpr uint64_t DEFAULT_TRANSPORT_MEM_SIZE = 256UL * 1024UL * 1024UL;
 constexpr uint64_t MAX_TRANSPORT_MEM_SIZE = 2UL * 1024UL * 1024UL * 1024UL;
+// The 40-bit space far exceeds the supported number of concurrent in-flight requests.
+// In normal operation, an earlier request is retired long before the counter wraps,
+// so wraparound does not cause an active request-ID collision.
+constexpr uint64_t URMA_EFFECTIVE_REQUEST_ID_WIDTH = 40;
+constexpr uint64_t URMA_EFFECTIVE_REQUEST_ID_MASK = (1ULL << URMA_EFFECTIVE_REQUEST_ID_WIDTH) - 1;
 
 bool UrmaManager::clientMode_ = false;
 std::atomic<uint64_t> UrmaManager::ubTransportMemSize_(DEFAULT_TRANSPORT_MEM_SIZE);
@@ -1590,7 +1596,7 @@ Status UrmaManager::FinalizeOutboundConnection(const UrmaHandshakeRspPb &rsp)
 
 uint64_t UrmaManager::GenerateReqId()
 {
-    return requestId_.fetch_add(1);
+    return requestId_.fetch_add(1) & URMA_EFFECTIVE_REQUEST_ID_MASK;
 }
 
 static urma_status_t PostJettyRw(const std::shared_ptr<UrmaJetty> &jetty, urma_opcode_t opcode,
@@ -1964,7 +1970,7 @@ Status UrmaManager::UrmaWritePayloadImpl(const UrmaRemoteAddrPb &urmaInfo, const
         args.remoteAddr = segVa + urmaInfo.seg_data_offset() + readOffset;
         args.remoteSeg = remoteSegAccessor->second->Raw();
         args.len = readSize;
-        args.serverKey = (uint32_t)(GenerateReqId() & URMA_REQID_MASK);
+        args.serverKey = GenerateReqId();
         args.clientKey = urmaInfo.pipeline_rh2d_req_id();
 
         RETURN_IF_NOT_OK(

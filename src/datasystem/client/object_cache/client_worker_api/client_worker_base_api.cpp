@@ -130,7 +130,7 @@ Status ClientWorkerBaseApi::PreparePipelineRH2DReq(
     req.mutable_pipeline_rh2d_reqids()->Reserve(size);
     std::shared_ptr<H2DChunkManager> chunkManager = piplnRh2dParam.chunkManager;
     for (size_t i = 0; i < objectKeys.size(); i++) {
-        uint32_t reqId = chunkManager->GenerateReqId();
+        uint64_t reqId = UrmaManager::Instance().GenerateReqId();
         RETURN_IF_NOT_OK(chunkManager->AddKey(objectKeys[i], reqId, devInfos[i]));
         req.add_pipeline_rh2d_reqids(reqId);
     }

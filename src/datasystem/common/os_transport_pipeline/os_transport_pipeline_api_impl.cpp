@@ -57,12 +57,12 @@ Status ParsePiplnH2DRequest(const GetReqPb &req, H2DChunkManager &mgr, const std
 {
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
 
-    uint32_t clntReqId = req.pipeline_rh2d_reqids(static_cast<int>(infoIdx));
+    uint64_t clntReqId = req.pipeline_rh2d_reqids(static_cast<int>(infoIdx));
     DevShmInfo devShmInfo{ .devType = TargetDeviceType::CUDA,
                            .devId = (uint32_t)-1,
                            .ptr = nullptr, /* pointer is inited in AddKey */
                            .size = 0 };
-    uint32_t workerReqId = (uint32_t)(GenerateReqId() & URMA_REQID_MASK);
+    uint64_t workerReqId = GenerateReqId();
     RETURN_IF_NOT_OK_PRINT_ERROR_MSG(mgr.AddKey(objectKey, workerReqId, devShmInfo, infoIdx),
                                      PIPLN_LOG_PREFIX "objectKey is " + objectKey);
     mgr.AddReqIdMap(workerReqId, clntReqId);
@@ -76,7 +76,7 @@ void StopPipelineRH2D(H2DChunkManager &mgr, GetRspPb::ObjectInfoPb &object, cons
         return;
     }
 
-    uint32_t reqId;
+    uint64_t reqId;
     mgr.GetReqId(key, reqId);
     ReqInfo *info = mgr.GetReqInfo(reqId);
     if (isOk) {
@@ -95,7 +95,7 @@ void StopPipelineRH2D(H2DChunkManager &mgr, GetRspPb::ObjectInfoPb &object, size
     }
 
     ReqInfo *info = mgr.GetReqInfoByIndex(index);
-    uint32_t reqId;
+    uint64_t reqId;
     mgr.GetReqId(info->key, reqId);
     if (isOk) {
         info->WaitCancelOrDone(datasystem::GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime());
@@ -112,7 +112,7 @@ void StopPipelineRH2D(H2DChunkManager &mgr, const std::string &key)
         return;
     }
 
-    uint32_t reqId;
+    uint64_t reqId;
     mgr.GetReqId(key, reqId);
     mgr.MarkCancelOrDone(reqId, false /* isDone */);
 }
@@ -123,7 +123,7 @@ void StopPipelineRH2D(H2DChunkManager &mgr, size_t index)
         return;
     }
 
-    uint32_t reqId;
+    uint64_t reqId;
     ReqInfo *info = mgr.GetReqInfoByIndex(index);
     mgr.GetReqId(info->key, reqId);
     mgr.MarkCancelOrDone(reqId, false /* isDone */);
@@ -161,7 +161,7 @@ Status TriggerLocalPipelineRH2D(H2DChunkManager &mgr, const std::string &objectK
 
     PerfPoint point(PerfKey::PIPLN_RH2D_WORKER_TRIGGER_LOCAL);
     Timer timer;
-    uint32_t reqId;
+    uint64_t reqId;
     RETURN_IF_NOT_OK(mgr.GetReqId(objectKey, reqId));
     PIPLN_DEBUG_LOG_DATA("TriggerLocalPipelineRH2D", objectKey, reqId, shmUnit, dataOffset, dataSize);
     Status rc = mgr.DoPiplnStep2_ProduceLocalChunk(reqId, shmUnit->GetFd(), shmUnit->GetMmapSize(),
@@ -188,7 +188,7 @@ Status TriggerRemotePipelineRH2D(H2DChunkManager &mgr, const std::string &key, u
 
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
     PerfPoint point(PerfKey::PIPLN_RH2D_WORKER_TRIGGER_REMOTE);
-    uint32_t reqId;
+    uint64_t reqId;
     RETURN_IF_NOT_OK(mgr.GetReqId(key, reqId));
     if (size <= ChunkTag::chunkSize2MB) {
         VLOG(1) << PIPLN_LOG_PREFIX "Use one-shot URMA write for small object: key=" << key
@@ -360,7 +360,7 @@ Status MaybeTriggerLocalPipelineRH2D(H2DChunkManager &mgr, const std::string &ke
     }
 
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
-    uint32_t reqId;
+    uint64_t reqId;
     RETURN_IF_NOT_OK(mgr.GetReqId(key, reqId));
     ReqInfo *reqInfo = mgr.GetReqInfo(reqId);
 
@@ -496,7 +496,7 @@ Status MarkPipelineStep1Ok(H2DChunkManager &mgr, const std::string &key)
     }
     RETURN_IF_NOT_SUPPORT_PIPLN_H2D();
 
-    uint32_t reqId;
+    uint64_t reqId;
     RETURN_IF_NOT_OK(mgr.GetReqId(key, reqId));
     ReqInfo *reqInfo = mgr.GetReqInfo(reqId);
     // for three step pipeline, reqInfo->syncHandle is not nullptr

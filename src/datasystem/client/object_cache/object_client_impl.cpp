@@ -3648,13 +3648,59 @@ static inline void RecordFailedPipelineKey(const std::string &key, std::shared_p
     failedKeys.emplace_back(key);
 }
 
-#define PROCESS_FAILED_KEY(msg) RecordFailedPipelineKey(objectKey, chunkManager, failedKeys, msg)
+bool ObjectClientImpl::PostProcessShmPipelineKey(const std::string &objectKey, const GetRspPb::ObjectInfoPb &info,
+                                                 const std::shared_ptr<H2DChunkManager> &chunkManager, uint32_t version,
+                                                 std::shared_ptr<Buffer> &buffer, std::vector<std::string> &failedKeys)
+{
+    if (info.store_fd() == -1) {
+        RecordFailedPipelineKey(objectKey, chunkManager, failedKeys, "shmem fd is -1 in in pipeline rh2d response");
+        return false;
+    }
+    if (info.has_host_info()) {
+        // Special case for Remote H2D scenario.
+        RecordFailedPipelineKey(objectKey, chunkManager, failedKeys,
+                                "server tell host_info in pipeline rh2d response, which should be a bug");
+        return false;
+    }
+    Status status = SetShmObjectBuffer(objectKey, info, version, buffer);
+    if (status.IsError()) {
+        RecordFailedPipelineKey(objectKey, chunkManager, failedKeys, "SetShmObjectBuffer failed");
+        return false;
+    }
+    if (info.pipeline_done_step() != PIPLN_DONE_TWO_STEP) {
+        RecordFailedPipelineKey(objectKey, chunkManager, failedKeys,
+                                std::string("pipeline step at ") + std::to_string(info.pipeline_done_step()));
+        return false;
+    }
+    return true;
+}
 
-std::vector<std::pair<std::string *, uint32_t>> ObjectClientImpl::PostProcessPipelineKeys(
+bool ObjectClientImpl::PostProcessNonShmPipelineKey(const std::string &objectKey,
+                                                    const GetRspPb::PayloadInfoPb &payloadInfo,
+                                                    const std::shared_ptr<H2DChunkManager> &chunkManager,
+                                                    uint64_t reqId, uint32_t version, std::vector<RpcMessage> &payloads,
+                                                    std::shared_ptr<Buffer> &buffer,
+                                                    std::vector<std::string> &failedKeys)
+{
+    METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES, static_cast<uint64_t>(payloadInfo.data_size()));
+    Status status = SetNonShmObjectBuffer(objectKey, payloadInfo, version, payloads, buffer);
+    if (status.IsError()) {
+        RecordFailedPipelineKey(objectKey, chunkManager, failedKeys, "SetShmObjectBuffer failed");
+        return false;
+    }
+    OsXprtPipln::ChunkTag tag{ .reqId = reqId, .chunkType = OsXprtPipln::ChunkTag::lastChunkTag, .chunkId = 0 };
+    OsXprtPipln::ChunkTag::SetObjectSize(tag, buffer->GetSize());
+    chunkManager->DoPiplnStep2_ChunkConsume(reqId, reinterpret_cast<uint64_t>(buffer->ImmutableData()), tag,
+                                            buffer->GetSize());
+    chunkManager->MarkCancelOrDone(reqId, false /* isDone */);
+    return true;
+}
+
+std::vector<std::pair<std::string *, uint64_t>> ObjectClientImpl::PostProcessPipelineKeys(
     std::vector<std::string> &objectKeys, GetRspPb &rsp, PiplnRh2dParam &piplnRh2dParam, uint32_t version,
     std::vector<std::string> &failedKeys)
 {
-    std::vector<std::pair<std::string *, uint32_t>> needWaitKeysIds;
+    std::vector<std::pair<std::string *, uint64_t>> needWaitKeysIds;
     std::shared_ptr<H2DChunkManager> chunkManager = piplnRh2dParam.chunkManager;
     auto &buffers = piplnRh2dParam.buffers;
     buffers.resize(objectKeys.size(), { nullptr });
@@ -3665,11 +3711,10 @@ std::vector<std::pair<std::string *, uint32_t>> ObjectClientImpl::PostProcessPip
     size_t noShmCount = static_cast<size_t>(rsp.payload_info().size());
     for (size_t index = 0; index < (size_t)rsp.objects_size(); index++) {
         std::string &objectKey = objectKeys[index];
-        uint32_t reqId;
+        uint64_t reqId;
         chunkManager->GetReqId(objectKey, reqId);
 
         std::shared_ptr<Buffer> &buffer = buffers[index];
-        Status status;
         bool isShm = false;
         bool isNoShm = false;
         if (i < shmCount) {
@@ -3683,42 +3728,18 @@ std::vector<std::pair<std::string *, uint32_t>> ObjectClientImpl::PostProcessPip
         if (isShm) {
             const GetRspPb::ObjectInfoPb &info = rsp.objects(i);
             i++;
-            if (info.store_fd() == -1) {
-                PROCESS_FAILED_KEY("shmem fd is -1 in in pipeline rh2d response");
-            } else if (info.has_host_info()) {
-                // Special case for Remote H2D scenario.
-                PROCESS_FAILED_KEY("server tell host_info in pipeline rh2d response, which should be a bug");
-            } else {
-                status = SetShmObjectBuffer(objectKey, info, version, buffer);
-                if (status.IsError()) {
-                    PROCESS_FAILED_KEY("SetShmObjectBuffer failed");
-                } else if (info.pipeline_done_step() != PIPLN_DONE_TWO_STEP) {
-                    PROCESS_FAILED_KEY(std::string("pipeline step at ") + std::to_string(info.pipeline_done_step()));
-                } else {
-                    needWaitKeysIds.emplace_back(std::make_pair(&objectKey, reqId));
-                }
+            if (PostProcessShmPipelineKey(objectKey, info, chunkManager, version, buffer, failedKeys)) {
+                needWaitKeysIds.emplace_back(std::make_pair(&objectKey, reqId));
             }
         } else if (isNoShm) {
-            j++;
             const GetRspPb::PayloadInfoPb &payloadInfo = rsp.payload_info(j);
-            METRIC_ADD(metrics::KvMetricId::CLIENT_GET_TCP_READ_TOTAL_BYTES,
-                       static_cast<uint64_t>(payloadInfo.data_size()));
-            status = SetNonShmObjectBuffer(objectKey, payloadInfo, version, piplnRh2dParam.payloads, buffer);
-            if (status.IsError()) {
-                PROCESS_FAILED_KEY("SetShmObjectBuffer failed");
-            } else {
-                OsXprtPipln::ChunkTag tag{ .reqId = reqId,
-                                           .chunkType = OsXprtPipln::ChunkTag::lastChunkTag,
-                                           .chunkId = 0,
-                                           .chunkSize =
-                                               buffer->GetSize() > OsXprtPipln::ChunkTag::chunkSize2MB ? 1UL : 0UL };
-                chunkManager->DoPiplnStep2_ChunkConsume(reqId, reinterpret_cast<uint64_t>(buffer->ImmutableData()), tag,
-                                                        buffer->GetSize());
-                chunkManager->MarkCancelOrDone(reqId, false /* isDone */);
+            j++;
+            if (PostProcessNonShmPipelineKey(objectKey, payloadInfo, chunkManager, reqId, version,
+                                             piplnRh2dParam.payloads, buffer, failedKeys)) {
                 needWaitKeysIds.emplace_back(&objectKey, reqId);
             }
         } else {
-            PROCESS_FAILED_KEY("Object key does not match with GetRspPb");
+            RecordFailedPipelineKey(objectKey, chunkManager, failedKeys, "Object key does not match with GetRspPb");
         }
     }
 
@@ -3843,7 +3864,7 @@ struct DirectPipelineItem {
     size_t index = 0;
     std::string key;
     uint64_t size = 0;
-    uint32_t reqId = 0;
+    uint64_t reqId = 0;
     uint8_t *buffer = nullptr;
     size_t replicaIndex = 0;
     bool registered = false;
@@ -4022,7 +4043,7 @@ Status PrepareDirectReceiver(DirectPipelineItem &item, const HostPort &worker, H
 Status PrepareDirectAttempt(DirectPipelineItem &item, const Blob &devBlob, void *stream,
                             const HostPort &worker, H2DChunkManager &manager)
 {
-    item.reqId = H2DChunkManager::GenerateReqId();
+    item.reqId = UrmaManager::Instance().GenerateReqId();
     item.registered = false;
     item.pipeline = false;
     item.hasFallbackPayload = false;
@@ -4222,11 +4243,8 @@ void SubmitDirectOneShotH2D(DirectPipelineItem &item, H2DChunkManager &manager)
         item.pipeline = false;
         return;
     }
-    OsXprtPipln::ChunkTag tag{ .reqId = item.reqId,
-                              .chunkType = OsXprtPipln::ChunkTag::lastChunkTag,
-                              .chunkId = 0,
-                              .chunkSize = 0 };
-    OsXprtPipln::ChunkTag::SetReservePart(tag, item.size);
+    OsXprtPipln::ChunkTag tag{ .reqId = item.reqId, .chunkType = OsXprtPipln::ChunkTag::lastChunkTag, .chunkId = 0 };
+    OsXprtPipln::ChunkTag::SetObjectSize(tag, item.size);
     void *dataSrc = item.hasFallbackPayload ? item.fallbackBuffer : item.buffer;
     manager.DoPiplnStep2_ChunkConsume(item.reqId, reinterpret_cast<uint64_t>(dataSrc), tag, item.size);
 }

@@ -29,15 +29,11 @@
 #endif
 
 #define CHUNKTAG_REQID_START_INDEX 0
-#define CHUNKTAG_REQID_LEN 10
-#define CHUNKTAG_TYPE_START_INDEX 10
+#define CHUNKTAG_REQID_LEN 60
+#define CHUNKTAG_TYPE_START_INDEX 60
 #define CHUNKTAG_TYPE_LEN 1
-#define CHUNKTAG_ID_START_INDEX 11
-#define CHUNKTAG_ID_LEN 4
-#define CHUNKTAG_SIZE_START_INDEX 15
-#define CHUNKTAG_SIZE_LEN 1
-#define CHUNKTAG_RESERVE_INDEX 16
-#define CHUNKTAG_RESERVE_LEN 48
+#define CHUNKTAG_ID_START_INDEX 61
+#define CHUNKTAG_ID_LEN 3
 
 enum PiplnDoneStep {
     PIPLN_DONE_NO_STEP = 0,
@@ -63,20 +59,19 @@ struct DevShmInfo {
 struct ChunkTag {
     static inline constexpr int lastChunkTag = 0x1;
     static inline constexpr uint32_t chunkSize2MB = 2 * 1024 * 1024;
-    uint64_t reqId : 10;
+    uint64_t reqId : 60;
     uint64_t chunkType : 1;
-    uint64_t chunkId : 4;
-    uint64_t chunkSize : 1;
-    uint64_t rsv : 48;  // temporary used for object total value size
+    uint64_t chunkId : 3;
+    uint64_t objectSize;
 
-    static inline uint64_t GetReservePart(ChunkTag tag)
+    static inline uint64_t GetObjectSize(ChunkTag tag)
     {
-        return tag.rsv;
+        return tag.objectSize;
     }
 
-    static inline void SetReservePart(ChunkTag &tag, uint64_t rsv)
+    static inline void SetObjectSize(ChunkTag &tag, uint64_t objectSize)
     {
-        tag.rsv = rsv;
+        tag.objectSize = objectSize;
     }
 
     static inline uint64_t GetRange(uint64_t tag, int start, int length)
@@ -95,8 +90,6 @@ struct ChunkTag {
         tag.reqId = GetRange(num, CHUNKTAG_REQID_START_INDEX, CHUNKTAG_REQID_LEN);
         tag.chunkType = GetRange(num, CHUNKTAG_TYPE_START_INDEX, CHUNKTAG_TYPE_LEN);
         tag.chunkId = GetRange(num, CHUNKTAG_ID_START_INDEX, CHUNKTAG_ID_LEN);
-        tag.chunkSize = GetRange(num, CHUNKTAG_SIZE_START_INDEX, CHUNKTAG_SIZE_LEN);
-        tag.rsv = 0;
         return tag;
     }
 
@@ -106,7 +99,6 @@ struct ChunkTag {
         SetRange(ret, tag.reqId, CHUNKTAG_REQID_START_INDEX, CHUNKTAG_REQID_LEN);
         SetRange(ret, tag.chunkType, CHUNKTAG_TYPE_START_INDEX, CHUNKTAG_TYPE_LEN);
         SetRange(ret, tag.chunkId, CHUNKTAG_ID_START_INDEX, CHUNKTAG_ID_LEN);
-        SetRange(ret, tag.chunkSize, CHUNKTAG_SIZE_START_INDEX, CHUNKTAG_SIZE_LEN);
         return ret;
     }
 
@@ -142,8 +134,8 @@ struct ChunkTag {
     static inline std::string DebugString(ChunkTag tag, uint32_t chunkSize = 0)
     {
         std::stringstream ss;
-        ss << "isLast:" << (IsLastChunk(tag)) << " idx:" << tag.chunkId
-           << " size:" << (chunkSize ? chunkSize : tag.chunkSize) << " reqId:" << tag.reqId << " rsv:" << tag.rsv;
+        ss << "isLast:" << (IsLastChunk(tag)) << " idx:" << tag.chunkId << " size:" << chunkSize
+           << " reqId:" << tag.reqId << " objectSize:" << GetObjectSize(tag);
         return ss.str();
     }
 };
@@ -157,8 +149,8 @@ struct PiplnSndArgs {
     urma_target_seg_t *localSeg;
     urma_target_seg_t *remoteSeg;
     uint64_t len;
-    uint32_t serverKey;
-    uint32_t clientKey;
+    uint64_t serverKey;
+    uint64_t clientKey;
 };
 #else
 struct PiplnSndArgs {
@@ -169,8 +161,8 @@ struct PiplnSndArgs {
     void *localSeg;
     void *remoteSeg;
     uint64_t len;
-    uint32_t serverKey;
-    uint32_t clientKey;
+    uint64_t serverKey;
+    uint64_t clientKey;
 };
 #endif
 }  // namespace OsXprtPipln

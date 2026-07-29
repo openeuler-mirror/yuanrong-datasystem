@@ -314,6 +314,12 @@ public:
     Status ChangeBondingBalanceMode() const;
 
     /**
+     * @brief Disable MSN
+     * @return Status of the call.
+     */
+    Status BondpDisableMSN() const;
+
+    /**
      * @brief Get the underlying Urma context handle.
      * @return Raw Urma context handle.
      */

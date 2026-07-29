@@ -273,6 +273,15 @@ DS_URMA_DEV_NAME=<device> \
 bazel test //tests/ut/client:urma_jetty_gate_test --config=test --config=urma --test_output=streamed
 ```
 
+- URMA request-ID generation coverage:
+  - `//tests/ut/client:urma_req_id_test` verifies contiguous low-40-bit request IDs, continuity across the 20-bit
+    boundary, wraparound at the 40-bit boundary, and truncation of the unused high 24 input bits.
+  - It uses the URMA build configuration but does not access a provider handle or require a configured device:
+
+```bash
+bazel test //tests/ut/client:urma_req_id_test --config=test --config=urma --test_output=streamed
+```
+
 - Manual URMA local send-Jetty fault coverage:
   - `//tests/ut/client:urma_send_jetty_fault_test` is a separate Bazel `manual` target. It covers manager-level
     pool exhaustion, repeated recoverable status-9 CQEs, non-recoverable CQE no-rebuild/no-leak behavior, and async

@@ -220,13 +220,13 @@ PipelineRH2DQueueConsumer::~PipelineRH2DQueueConsumer()
     }
 }
 
-void PipelineRH2DQueueConsumer::AddCallback(uint32_t requestId, std::shared_ptr<PipelineMsgHandler> callback)
+void PipelineRH2DQueueConsumer::AddCallback(uint64_t requestId, std::shared_ptr<PipelineMsgHandler> callback)
 {
     std::lock_guard<std::mutex> l(mutex_);
     msgHandlers_[requestId] = callback;
 }
 
-void PipelineRH2DQueueConsumer::RemoveCallback(uint32_t requestId)
+void PipelineRH2DQueueConsumer::RemoveCallback(uint64_t requestId)
 {
     std::lock_guard<std::mutex> l(mutex_);
     msgHandlers_.erase(requestId);
