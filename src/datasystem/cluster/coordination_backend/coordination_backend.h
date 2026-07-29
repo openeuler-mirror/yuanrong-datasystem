@@ -44,7 +44,7 @@ constexpr int DEFAULT_COORDINATION_DELETE_TIMEOUT_MS = 3'000;
 enum class CoordinationEventType : uint8_t { UNSPECIFIED = 0, PUT, DELETE, RESET };
 
 /**
- * @brief Backend watch doorbell; value is never published directly as topology.
+ * @brief Backend watch event. A validated ETCD event may carry an authoritative value; other backends use a doorbell.
  */
 struct CoordinationEvent {
     CoordinationEventType type;
@@ -98,6 +98,22 @@ public:
      */
     virtual Status GetAll(const std::string &tableName,
                           std::vector<std::pair<std::string, std::string>> &outKeyValues) = 0;
+
+    /**
+     * @brief Read all key/value pairs together with one consistent backend revision.
+     * @param[in] tableName Logical table name.
+     * @param[out] outKeyValues Returned key/value pairs.
+     * @param[out] responseRevision Revision of the returned snapshot.
+     * @return Backend operation status, or K_NOT_SUPPORTED when the backend cannot expose a snapshot revision.
+     */
+    virtual Status GetAll(const std::string &tableName,
+                          std::vector<std::pair<std::string, std::string>> &outKeyValues, int64_t &responseRevision)
+    {
+        (void)tableName;
+        (void)outKeyValues;
+        responseRevision = 0;
+        return Status(K_NOT_SUPPORTED, "coordination backend does not expose read revision");
+    }
 
     /**
      * @brief Read one exact key and return its value.

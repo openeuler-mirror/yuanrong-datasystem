@@ -45,6 +45,14 @@ Status EtcdCoordinationBackend::GetAll(const std::string &tableName,
     return etcdStore_->GetAll(tableName, outKeyValues);
 }
 
+Status EtcdCoordinationBackend::GetAll(const std::string &tableName,
+                                       std::vector<std::pair<std::string, std::string>> &outKeyValues,
+                                       int64_t &responseRevision)
+{
+    CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_RUNTIME_ERROR, "EtcdStore is null");
+    return etcdStore_->GetAll(tableName, outKeyValues, responseRevision);
+}
+
 Status EtcdCoordinationBackend::Get(const std::string &tableName, const std::string &key, std::string &value)
 {
     CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_RUNTIME_ERROR, "EtcdStore is null");
@@ -124,6 +132,7 @@ Status EtcdCoordinationBackend::ShutdownEventSources()
     }
     Status rc = etcdStore_->ShutdownEventSources();
     etcdStore_->SetEventHandler({});
+    etcdStore_->SetWatchFailureHandler({});
     etcdStore_->SetCheckEtcdStateWhenNetworkFailedHandler(nullptr);
     return rc;
 }
@@ -166,9 +175,15 @@ void EtcdCoordinationBackend::SetEventHandler(EventHandler &&eventHandler)
     if (etcdStore_ == nullptr) {
         return;
     }
+    auto failureHandler = eventHandler;
     etcdStore_->SetEventHandler([handler = std::move(eventHandler)](mvccpb::Event &&event) mutable {
         if (handler) {
             handler(FromEtcdEvent(event));
+        }
+    });
+    etcdStore_->SetWatchFailureHandler([handler = std::move(failureHandler)]() mutable {
+        if (handler) {
+            handler({ CoordinationEventType::RESET, "", "", 0, 0 });
         }
     });
 }

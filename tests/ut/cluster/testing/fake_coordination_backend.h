@@ -30,6 +30,8 @@ public:
     FakeCoordinationBackend() = default;
     ~FakeCoordinationBackend() override = default;
     Status GetAll(const std::string &table, std::vector<std::pair<std::string, std::string>> &values) override;
+    Status GetAll(const std::string &table, std::vector<std::pair<std::string, std::string>> &values,
+                  int64_t &responseRevision) override;
     Status Get(const std::string &table, const std::string &key, std::string &value) override;
     Status Get(const std::string &table, const std::string &key, RangeSearchResult &result,
                int32_t timeoutMs = SEND_RPC_TIMEOUT_MS_DEFAULT) override;
@@ -71,6 +73,13 @@ public:
     size_t GetAttemptCount() const;
     bool WaitForGetAttempts(size_t expected, std::chrono::steady_clock::time_point deadline);
     void ReleaseBlockedGet();
+    void ResetReadCounts();
+    size_t ExactGetCount(const std::string &table, const std::string &key) const;
+    size_t GetAllCount(const std::string &table) const;
+    size_t RevisionGetAllCount(const std::string &table) const;
+    int64_t CurrentRevision() const;
+    void SetStorePrefix(std::string table, std::string prefix);
+    void SetAfterRevisionGetAllHandler(std::function<void()> handler);
     void SetBeforeCasHandler(std::function<void()> handler);
     void SetBeforeDeleteHandler(std::function<void()> handler);
 
@@ -91,9 +100,14 @@ private:
     // Uses mutex_ to signal changes to getBlocked_ and releaseGet_.
     std::condition_variable getCv_;
     size_t getAttempts_{ 0 };
+    std::map<std::string, size_t> getAttemptsByKey_;
+    std::map<std::string, size_t> getAllAttemptsByTable_;
+    std::map<std::string, size_t> revisionGetAllAttemptsByTable_;
+    std::map<std::string, std::string> storePrefixes_;
     bool blockNextGet_{ false };
     bool getBlocked_{ false };
     bool releaseGet_{ false };
+    std::function<void()> afterRevisionGetAllHandler_;
     std::function<void()> beforeCasHandler_;
     std::function<void()> beforeDeleteHandler_;
 };

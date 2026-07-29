@@ -485,6 +485,11 @@ public:
         eventHandler_ = std::move(eventHandler);
     }
 
+    void SetWatchFailureHandler(std::function<void()> handler)
+    {
+        watchFailureHandler_ = std::move(handler);
+    }
+
     /**
      * @brief Set update cluster info in rocksdb handler.
      * @param[in] updateClusterInfoInRocksDbHandler Functions that handle events that are watched or obtained through
@@ -640,6 +645,7 @@ private:
     std::atomic<bool> keepAliveTimeout_{ true };
 
     std::function<void(mvccpb::Event &&event)> eventHandler_;
+    std::function<void()> watchFailureHandler_;
     std::function<void(const mvccpb::Event &event)> updateClusterInfoInRocksDbHandler_ =
         [](const mvccpb::Event &event) { (void)event; };
 };

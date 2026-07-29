@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -25,6 +26,7 @@
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/repository/topology_repository.h"
 #include "datasystem/cluster/runtime/control_backend_state.h"
+#include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/common/util/thread.h"
 
 namespace datasystem::cluster {
@@ -33,7 +35,14 @@ inline constexpr int64_t MAX_SCALE_IN_COLLECT_WINDOW_MS = 5'000;
 inline constexpr int64_t MAX_SCALE_OUT_COLLECT_WINDOW_MS = 5'000;
 inline constexpr int64_t DEFAULT_ORDINARY_COLLECT_WINDOW_MS = 3'000;
 
-enum class TopologyEventSourceMode : uint8_t { SELF_MANAGED, EXTERNAL };
+/**
+ * @brief Select watch ownership and external-event authority.
+ */
+enum class TopologyEventSourceMode : uint8_t {
+    SELF_MANAGED,  // Controller owns the watch and exact-reads facts.
+    EXTERNAL,      // Another owner sends doorbells; Controller exact-reads facts.
+    EXTERNAL_ETCD  // Worker forwards revisioned ETCD values; Controller compensates with exact reads.
+};
 
 /**
  * @brief Fixed Controller budgets and bounded work limits.
@@ -157,6 +166,8 @@ public:
      */
     Status SubmitCoordinationEvent(CoordinationEvent &&event);
 
+    int64_t GetBootstrapRevision() const noexcept;  // Immutable revision for external watch registration.
+
     /**
      * @brief Return a no-IO diagnostic snapshot.
      * @return Current diagnostics.
@@ -183,6 +194,10 @@ private:
      * @return K_OK when ignored or recorded; key or membership value validation status otherwise.
      */
     Status ObserveMembershipRestart(const CoordinationEvent &event);
+
+    Status ResyncExternalFacts();
+    Status ApplyExternalEvent(const CoordinationEvent &event);
+    Status PublishExternalTopology(std::shared_ptr<const TopologySnapshot> candidate, bool fullRebuild);
 
     /**
      * @brief Preserve restart generations recovered by a full membership read.
@@ -534,6 +549,14 @@ private:
     std::mutex membershipRestartMutex_;
     std::unordered_map<std::string, int64_t> latestRestartTimestampByAddress_;
     std::unordered_map<std::string, int64_t> pendingRestartTimestampByAddress_;
+    TopologySnapshotState externalTopology_;  // Synchronous bootstrap, then Controller state-thread-owned.
+    std::map<std::string, MembershipRecord> externalMemberships_;
+    std::unordered_map<std::string, int64_t> membershipEventRevisionByAddress_;
+    int64_t bootstrapRevision_{ 0 };
+    int64_t membershipRevisionFloor_{ 0 };
+    int64_t topologyEventRevision_{ 0 };
+    bool externalResyncRequired_{ true };
+    bool externalEventSourceReady_{ false };
     // State-thread-owned admission quarantine for exhausted READY process generations.
     std::unordered_map<std::string, int64_t> quarantinedReadyTimestampByAddress_;
     std::string lastMembershipObservationDigest_;
