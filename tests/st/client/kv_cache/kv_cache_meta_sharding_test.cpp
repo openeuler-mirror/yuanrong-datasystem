@@ -44,7 +44,8 @@ public:
         opts.numOBS = 1;
         opts.numWorkers = 3;
         opts.numEtcd = 1;
-        opts.workerGflagParams = "-node_timeout_s=5 -shared_memory_size_mb=2048 -v=2";
+        opts.workerGflagParams =
+            "-node_timeout_s=5 -node_dead_timeout_s=10 -shared_memory_size_mb=2048 -v=2";
     }
 
     void SetUp() override
@@ -328,9 +329,9 @@ TEST_F(KVCacheMetaShardingTest, RemoveMetaByWorkerFullShardCoverage)
     LOG(INFO) << "[A4] Killing worker 1";
     cluster_->ShutdownNode(ClusterNodeType::WORKER, 1);
 
-    // Wait for master to detect worker timeout (node_timeout_s=5) and run
-    // RemoveMetaByWorker to clean worker 1's locations from all shards.
-    // Use 12s (2× timeout + processing margin) for slow CI machines.
+    // Wait for master to exhaust the explicit 10-second node-dead confirmation
+    // budget and run RemoveMetaByWorker. Keep a 2-second processing margin for
+    // slow CI machines.
     std::this_thread::sleep_for(std::chrono::seconds(12));
 
     // After RemoveMetaByWorker: worker 1's locations must be cleaned from all
@@ -380,7 +381,9 @@ TEST_F(KVCacheMetaShardingTest, RemoveMetaByWorkerFullShardCoverage)
 
     // Restart worker 1 to restore cluster health.
     LOG(INFO) << "[A4] Restarting worker 1";
-    DS_ASSERT_OK(cluster_->StartNode(ClusterNodeType::WORKER, 1, " -client_reconnect_wait_s=1 -node_timeout_s=5 -shared_memory_size_mb=2048 -v=2"));
+    DS_ASSERT_OK(cluster_->StartNode(
+        ClusterNodeType::WORKER, 1,
+        " -client_reconnect_wait_s=1 -node_timeout_s=5 -node_dead_timeout_s=10 -shared_memory_size_mb=2048 -v=2"));
     DS_ASSERT_OK(cluster_->WaitNodeReady(ClusterNodeType::WORKER, 1));
 
     // Post-restart: system must be fully operational — new Set/Get works.
