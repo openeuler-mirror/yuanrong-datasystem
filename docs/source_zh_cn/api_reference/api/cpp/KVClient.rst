@@ -163,8 +163,7 @@ KVClient
         返回：
             返回值状态码为 ``StatusCode::K_OK`` 时表示设置成功，否则返回其他错误码。
 
-    .. cpp:function:: Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals,
-        const MSetParam &param)
+    .. cpp:function:: Status MSetTx(const std::vector<std::string> &keys, const std::vector<StringView> &vals, const MSetParam &param)
 
         已废弃 API。该接口仅为保持 SDK API 兼容而保留，调用时固定返回
         ``StatusCode::K_RUNTIME_ERROR``，错误信息包含 ``deprecated API`` 字样。

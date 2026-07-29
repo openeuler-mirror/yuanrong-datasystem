@@ -1,5 +1,5 @@
 yr.datasystem.hetero_client.HeteroClient.batch_is_exist
-======================================================
+========================================================
 
 .. py:method:: yr.datasystem.hetero_client.HeteroClient.batch_is_exist(keys)
 
