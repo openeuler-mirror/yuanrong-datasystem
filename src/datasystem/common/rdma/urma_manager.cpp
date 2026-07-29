@@ -169,8 +169,10 @@ UrmaManager::~UrmaManager()
     if (urmaResource_ != nullptr) {
         urmaResource_->Clear();
     }
-    UrmaUninit();
-    urma_dlopen::Cleanup();
+    if (urmaResource_ == nullptr || !urmaResource_->IsProviderCleanupDeferred()) {
+        UrmaUninit();
+        urma_dlopen::Cleanup();
+    }
     if (memoryBuffer_ != nullptr) {
         munmap(memoryBuffer_, ubTransportMemSize_.load());
         memoryBuffer_ = nullptr;

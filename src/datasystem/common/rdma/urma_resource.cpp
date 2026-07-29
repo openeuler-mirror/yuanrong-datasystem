@@ -81,6 +81,26 @@ void RetainUnsafeRawJettyUntilProcessExit(urma_jetty_t *raw, std::shared_ptr<Urm
     retainedJettys->emplace_back(raw, std::move(sharedJfr));
 }
 
+struct RetainedUrmaProviderDependencies {
+    std::unique_ptr<UrmaContext> context;
+    std::unique_ptr<UrmaJfce> jfce;
+    std::unique_ptr<UrmaJfc> jfc;
+};
+
+// A live Jetty/JFR makes provider deletion of the shared JFC unsafe. Retain the complete
+// dependency closure so neither a later UrmaResource destructor nor liburma unloading can
+// partially tear it down. NoDestructor leaves final reclamation to process/kernel exit.
+void RetainUrmaProviderDependenciesUntilProcessExit(std::unique_ptr<UrmaContext> context,
+                                                    std::unique_ptr<UrmaJfce> jfce,
+                                                    std::unique_ptr<UrmaJfc> jfc)
+{
+    static NoDestructor<std::mutex> retainedMutex;
+    static NoDestructor<std::vector<RetainedUrmaProviderDependencies>> retainedDependencies;
+    std::lock_guard<std::mutex> lock(*retainedMutex);
+    retainedDependencies->emplace_back(
+        RetainedUrmaProviderDependencies{ std::move(context), std::move(jfce), std::move(jfc) });
+}
+
 Status BuildRemoteJetty(const UrmaJfrInfo &info, urma_rjetty_t &remoteJetty)
 {
     urma_eid_t eid{};
@@ -818,17 +838,23 @@ void UrmaResource::Clear()
         }
         quarantinedJettys_.clear();
     }
+    const auto unsafeJettyCount = unsafeJettys.size();
     for (auto &jetty : unsafeJettys) {
         RetainUnsafeJettyUntilProcessExit(std::move(jetty));
     }
-    LOG_IF(WARNING, !unsafeJettys.empty())
-        << "Retained " << unsafeJettys.size()
-        << " non-converged URMA Jetty wrappers until process exit to avoid unsafe provider cleanup";
     {
         std::lock_guard<std::mutex> lock(jettyPoolMutex_);
         sendJettyPool_.Clear();
     }
     jettyPriority_ = 0;
+    if (unsafeJettyCount != 0) {
+        RetainUrmaProviderDependenciesUntilProcessExit(std::move(context_), std::move(jfce_), std::move(jfc_));
+        providerCleanupDeferred_.store(true, std::memory_order_release);
+        LOG(WARNING) << "Detected " << unsafeJettyCount
+                     << " non-converged URMA Jetty resources during shutdown; defer Jetty/JFR/JFC/JFCE/context "
+                        "cleanup and liburma unloading to process exit";
+        return;
+    }
     jfc_.reset();
     jfce_.reset();
     context_.reset();

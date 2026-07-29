@@ -139,7 +139,11 @@ MADV_HUGEPAGE)` to the shared-memory memfd mapping after `mmap` succeeds when th
   - URMA receive-side Jetty reuse is process-level: `UrmaResource::GetOrCreateSharedRecvJetty()` lazily creates the
     single RECV Jetty/JFR published by TCP handshake responses. Jetty role is immutable, so RECV async-event retirement
     does not enter the send pool or trigger send-pool refill. Shutdown closes Jetty admission before stopping the poll
-    thread; non-converged provider resources are retained fail-closed rather than implicitly deleted.
+    thread; non-converged provider resources are retained fail-closed rather than implicitly deleted. If shutdown still
+    has pending or quarantined Jetty resources, `UrmaResource` also retains their shared JFC/JFCE/context dependency
+    closure until process exit, and `UrmaManager` skips `urma_uninit` plus dynamic-library unloading. This avoids an
+    invalid partial teardown and the resulting expected provider error logs; fully converged shutdown keeps the normal
+    explicit cleanup path.
   - when hetero is enabled, RDMA dependencies also pull in device and shared-memory related components.
   - HCCS RH2D is compiled only when `cann_hixl` is found and its detected HIXL version is `8.5.2` or newer. Older
     CANN/HIXL environments still build hetero and default ROCE paths, but `remote_h2d_link_type=HCCS` is not available
