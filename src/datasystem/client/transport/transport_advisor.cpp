@@ -27,14 +27,7 @@ namespace client {
 
 TransportHint TransportAdvisor::GetTransportHint(const HostPort &workerAddr) const
 {
-    // Same-host workers (identified by hostId from routing topology) use shm fd-passing.
-    // Use unordered_set<HostPort> directly so the hot path does not allocate a ToString() key.
-    if (!workerAddr.Empty()) {
-        std::shared_lock<std::shared_mutex> lk(mtx_);
-        if (sameHostWorkers_.count(workerAddr) > 0) {
-            return TransportHint::SHM_CANDIDATE;
-        }
-    }
+    (void)workerAddr;
 #ifdef USE_URMA
     if (UrmaManager::IsUrmaEnabled()) {
         return TransportHint::UB_CANDIDATE;
