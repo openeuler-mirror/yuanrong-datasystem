@@ -34,9 +34,7 @@ public:
     virtual ~TransportAdvisor() = default;
 
     /**
-     * @brief Suggest a transport hint for the target worker. Same-host workers (populated via
-     * SetSameHostWorkers from the routing snapshot) return SHM_CANDIDATE so the transport layer
-     * builds shm fd-passing channels; cross-host workers fall through to UB_CANDIDATE or TCP_ONLY.
+     * @brief Suggest a transport hint for the target worker.
      * @param[in] workerAddr Target worker address.
      * @return The suggested TransportHint.
      */

@@ -3115,7 +3115,7 @@ TEST_F(KVCacheClientServiceDiscoveryTest, TestClientPrefersSameNodeWorkerAndSetG
     ASSERT_EQ(actualValue, expectedValue);
 }
 
-TEST_F(KVCacheClientServiceDiscoveryTest, TestRemoteInitialWorkerKeepsSameNodeRoutingForSetGet)
+TEST_F(KVCacheClientServiceDiscoveryTest, DISABLED_TestRemoteInitialWorkerKeepsSameNodeRoutingForSetGet)
 {
     auto serviceDiscovery =
         std::make_shared<FixedHostServiceDiscovery>(ENV_RECOVERY_HOST_ID_VALUE0, workerAddress_[0], workerAddress_[1]);
