@@ -148,6 +148,20 @@ bool AllMembersExiting(const TopologySnapshot &latest, const std::vector<Members
     });
 }
 
+bool IsCollectiveCommittedMembershipMissing(const TopologySnapshot &latest,
+                                            const std::vector<MembershipRecord> &memberships)
+{
+    const auto &committed = latest.CommittedMembers();
+    if (committed.size() <= 1) {
+        return false;
+    }
+    return std::none_of(committed.begin(), committed.end(), [&](const Member *member) {
+        return std::any_of(memberships.begin(), memberships.end(), [&](const MembershipRecord &membership) {
+            return membership.address == member->identity.address;
+        });
+    });
+}
+
 void LogMemberTransition(const std::string &clusterName, const char *action, size_t count,
                          const std::vector<MemberIdentity> &members, uint64_t committedVersion)
 {
@@ -580,6 +594,17 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
                                               const std::vector<MembershipRecord> &memberships)
 {
     ObserveMembershipRestarts(memberships);
+    if (AllMembersExiting(latest, memberships)) {
+        return CommitClusterShutdown(latest);
+    }
+    if (IsCollectiveCommittedMembershipMissing(latest, memberships)) {
+        failureClassifier_.Reset();
+        LOG_EVERY_N(WARNING, TOPOLOGY_RECONCILE_LOG_INTERVAL)
+            << "CLUSTER_FAILURE_DETECT cluster=" << keys_.ClusterName() << " version=" << latest.Version()
+            << " action=collective_membership_absence_suppressed committed_count="
+            << latest.CommittedMembers().size() << " membership_count=" << memberships.size();
+        return Status::OK();
+    }
     FailureClassification classification;
     RETURN_IF_NOT_OK(failureClassifier_.Observe(latest, memberships, options_.now(), classification));
     for (const auto &observed : classification.newlyMissing) {
@@ -597,9 +622,6 @@ Status TopologyController::TryConfirmFailures(const TopologySnapshot &latest,
                   << " member_id_prefix=" << MemberIdForLog(observed.identity.id)
                   << " state=" << MemberStateName(observed.state)
                   << " action=missing_resolved missing_ms=" << observed.missingMs;
-    }
-    if (AllMembersExiting(latest, memberships)) {
-        return CommitClusterShutdown(latest);
     }
     RETURN_IF_NOT_OK(ConfirmMissingMembersUnreachable(latest, classification));
     if (!classification.confirmedFailure.empty()) {

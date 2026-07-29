@@ -39,14 +39,18 @@
   exactly one Controller owns that target's probe and each Controller owns at most one target. This ownership changes
   only after a new authoritative topology is committed; local membership timers cannot create extra reporters. A
   responding member starts a new absence window, and a target not owned or not probed by this Controller cannot enter
-  its Failure plan. The peer RPC reads the cached control-backend observation and never synchronously queries ETCD
-  inside the bounded liveness probe. A reachable peer with temporarily unavailable backend evidence therefore returns a
-  successful `ready=false` response, so transport reachability remains distinguishable from authoritative topology
-  evidence. Its protobuf carries the 16-byte binary member identity as `bytes`, so BRPC never rejects non-UTF-8
-  identities. The `string`-to-`bytes` correction preserves protobuf wire type and lets upgraded readers consume
-  successfully serialized legacy responses, but a legacy reader cannot consume every binary response from an upgraded
-  Worker. Deploy or roll back this behavior cluster-wide; an ETCD outage during a mixed-version rolling upgrade is
-  outside this contract.
+  its Failure plan. When at least two committed members simultaneously have no matching membership row, the Controller
+  resets its local absence windows and preserves the last-good topology instead of starting collective failure
+  detection. Zero or one committed member remains on the normal failure-detection path so a genuine sole-member failure
+  cannot block removal or recovery indefinitely; when any membership row returns after collective suppression, normal
+  per-member absence timing starts from a new window. The peer RPC reads the cached control-backend observation and
+  never synchronously queries ETCD inside the bounded liveness probe. A reachable peer with temporarily unavailable
+  backend evidence therefore returns a successful `ready=false` response, so transport reachability remains
+  distinguishable from authoritative topology evidence. Its protobuf carries the 16-byte binary member identity as
+  `bytes`, so BRPC never rejects non-UTF-8 identities. The `string`-to-`bytes` correction preserves protobuf wire type
+  and lets upgraded readers consume successfully serialized legacy responses, but a legacy reader cannot consume every
+  binary response from an upgraded Worker. Deploy or roll back this behavior cluster-wide; an ETCD outage during a
+  mixed-version rolling upgrade is outside this contract.
   BRPC stub acquisition and channel establishment share this low-frequency probe's absolute deadline;
   default business-RPC stub lookup semantics remain unchanged. An absent direct response remains retryable until the same
   membership absence has continued through
