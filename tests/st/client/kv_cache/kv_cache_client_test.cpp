@@ -1357,9 +1357,6 @@ TEST_F(KVCacheClientTest, DISABLED_FixResidualLocationProblem)
 
 TEST_F(KVCacheClientTest, TestQueryMetaRetry)
 {
-    if (FLAGS_use_brpc) {
-        GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
-    }
     constexpr int timeoutMs = 10000;  // 10s
     std::shared_ptr<KVClient> client;
     InitTestKVClient(0, client, timeoutMs);
