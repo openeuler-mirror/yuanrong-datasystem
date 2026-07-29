@@ -222,6 +222,12 @@ public:
         return status;
     }
 
+    Status GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &,
+                                 coordinator::GetClusterRawSnapshotRspPb &, int32_t) override
+    {
+        return Unused();
+    }
+
     void GetObservedCoordinatorId(std::string &coordinatorId) const override
     {
         std::lock_guard<std::mutex> lock(mutex_);

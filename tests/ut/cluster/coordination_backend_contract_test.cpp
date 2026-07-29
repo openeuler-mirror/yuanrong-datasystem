@@ -103,6 +103,12 @@ public:
         return Status(K_RUNTIME_ERROR, "unused fake recovery report");
     }
 
+    Status GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &,
+                                 coordinator::GetClusterRawSnapshotRspPb &, int32_t) override
+    {
+        return Status(K_RUNTIME_ERROR, "unused fake GetClusterRawSnapshot");
+    }
+
     void GetObservedCoordinatorId(std::string &coordinatorId) const override
     {
         coordinatorId = observedCoordinatorId_;
