@@ -71,6 +71,7 @@ TEST(LoadConfig_Minimal) {
     ASSERT_EQ(cfg.listenPort, 9000);
     ASSERT_EQ(cfg.dataSizes.size(), 1u);
     ASSERT_EQ(cfg.dataSizes[0], 8ULL * 1024 * 1024);
+    ASSERT_EQ(cfg.hostIdEnvName, "HOST_IP");
     CleanupDir(cfg.outputDir);
     std::remove(path.c_str());
 }

@@ -74,6 +74,41 @@ TEST_F(RoutingFacadeTest, TestInitFetchesRingAndStartsFacade)
     routing.Shutdown();
 }
 
+TEST_F(RoutingFacadeTest, TestExplicitHostIdPreservesLocalityWithRemoteInitialWorker)
+{
+    const HostPort localWorker("127.0.0.1", 1000);
+    const HostPort remoteWorker("127.0.0.1", 2000);
+    auto router = std::make_shared<client::WorkerRouter>("");
+    auto fetch = [&localWorker, &remoteWorker](const HostPort &, uint64_t, ::datasystem::ClusterTopologyPb &ring,
+                                               std::string &, uint64_t &newVersion, bool &changed,
+                                               std::unordered_map<std::string, std::string> &hostIdMap) {
+        auto &local = (*ring.mutable_members())[localWorker.ToString()];
+        local.set_state(::datasystem::MembershipPb::ACTIVE);
+        local.add_tokens(100u);
+        auto &remote = (*ring.mutable_members())[remoteWorker.ToString()];
+        remote.set_state(::datasystem::MembershipPb::ACTIVE);
+        remote.add_tokens(200u);
+        hostIdMap[localWorker.ToString()] = "host-local";
+        hostIdMap[remoteWorker.ToString()] = "host-remote";
+        newVersion = 1;
+        changed = true;
+        return Status::OK();
+    };
+    auto refresher = std::make_shared<client::HashRingRefresher>(router, fetch);
+    client::Routing routing(router, refresher, 60'000);
+
+    DS_ASSERT_OK(routing.Init("host-local", remoteWorker, false));
+    HostPort selected;
+    DS_ASSERT_OK(routing.SelectWorker("key", client::DataPlacementPolicy::PREFERRED_SAME_NODE, selected));
+    EXPECT_EQ(selected, localWorker);
+
+    std::unordered_map<HostPort, std::vector<std::string>> groups;
+    DS_ASSERT_OK(routing.SelectWorkers({ "key-a", "key-b" }, client::DataPlacementPolicy::PREFERRED_SAME_NODE, groups));
+    ASSERT_EQ(groups.size(), 1);
+    EXPECT_EQ(groups.begin()->first, localWorker);
+    routing.Shutdown();
+}
+
 TEST_F(RoutingFacadeTest, TestCallsBeforeInitFail)
 {
     auto router = std::make_shared<client::WorkerRouter>("host-a");

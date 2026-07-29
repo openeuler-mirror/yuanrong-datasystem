@@ -91,6 +91,17 @@ public:
      * @return True when the client can meaningfully select same-node workers.
      */
     virtual bool HasHostAffinity() const = 0;
+
+    /**
+     * @brief Get the SDK host ID resolved by service discovery.
+     * Custom implementations that support host
+     * affinity should override this method.
+     * @return The resolved SDK host ID, or empty when unavailable.
+     */
+    virtual std::string GetHostId() const
+    {
+        return "";
+    }
 };
 
 struct ServiceDiscoveryOptions {
@@ -180,6 +191,11 @@ public:
         return affinityPolicy_ != ServiceAffinityPolicy::RANDOM && !hostId_.empty();
     }
 
+    std::string GetHostId() const override
+    {
+        return hostId_;
+    }
+
 private:
     /**
      * @brief Fetch ready worker addresses from etcd and partition by host affinity. When hostId_
@@ -248,6 +264,11 @@ public:
     bool HasHostAffinity() const override
     {
         return affinityPolicy_ != ServiceAffinityPolicy::RANDOM && !hostId_.empty();
+    }
+
+    std::string GetHostId() const override
+    {
+        return hostId_;
     }
 
 private:

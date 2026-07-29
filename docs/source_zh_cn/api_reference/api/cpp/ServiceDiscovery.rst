@@ -81,3 +81,11 @@ ServiceDiscovery
 
         返回：
             ``true`` 表示客户端可以正常使用同节点 Worker 选择能力。
+
+    .. cpp:function:: std::string GetHostId() const
+
+        获取 :cpp:func:`ServiceDiscovery::Init` 解析出的 SDK hostId。该值会传入客户端写入路由，
+        即使初始连接的是远端 Worker，也不会将远端 Worker 的 hostId 误认为客户端本机 hostId。
+
+        返回：
+            SDK hostId；无法解析时返回空字符串。

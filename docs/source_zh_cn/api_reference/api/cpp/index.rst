@@ -246,5 +246,7 @@ Stream接口
       - 选择同节点 Worker 地址。
     * - :cpp:func:`IServiceDiscovery::GetAllWorkers`
       - 获取所有 Worker 地址，按同节点和其他节点分组。
+    * - :cpp:func:`IServiceDiscovery::GetHostId`
+      - 获取服务发现解析出的 SDK hostId，供客户端写入路由识别同节点 Worker。
     * - :cpp:func:`ICoordinatorDiscovery::GetCoordinators`
       - 获取 Coordinator 地址列表。
