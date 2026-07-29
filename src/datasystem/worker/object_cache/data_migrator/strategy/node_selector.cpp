@@ -275,8 +275,13 @@ void NodeSelector::WorkerThread()
 Status NodeSelector::GetWorkerMasterApi(std::shared_ptr<worker::WorkerMasterOCApi> &workerMasterApi)
 {
     auto rc = apiManager_->GetWorkerMasterApi(RESOURCE_MONITOR_MASTER, workerMasterApi);
-    VLOG_EVERY_N(RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL, RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N)
-        << "Resolve " << RESOURCE_MONITOR_MASTER << " master status: " << rc.ToString();
+    if (rc.IsOk() && workerMasterApi != nullptr) {
+        VLOG_EVERY_N(RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL, RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N)
+            << "Get " << RESOURCE_MONITOR_MASTER << " address: " << workerMasterApi->GetHostPort();
+    } else {
+        VLOG_EVERY_N(RESOURCE_MONITOR_MASTER_ADDRESS_LOG_LEVEL, RESOURCE_MONITOR_MASTER_ADDRESS_LOG_EVERY_N)
+            << "Get " << RESOURCE_MONITOR_MASTER << " address failed, status: " << rc.ToString();
+    }
     return rc;
 }
 
