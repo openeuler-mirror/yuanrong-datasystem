@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "datasystem/common/util/strings_util.h"
+#include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
 namespace {
@@ -53,6 +54,14 @@ Status StaticCoordinatorDiscovery::GetCoordinators(std::vector<std::string> &ser
 {
     serviceList = addresses_;
     return Status::OK();
+}
+
+Status StaticCoordinatorDiscovery::GetCoordinators(std::chrono::steady_clock::time_point deadline,
+                                                   std::vector<std::string> &serviceList)
+{
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "Coordinator discovery deadline exceeded");
+    return GetCoordinators(serviceList);
 }
 
 size_t StaticCoordinatorDiscovery::GetCount() const

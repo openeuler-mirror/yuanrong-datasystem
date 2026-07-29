@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "datasystem/common/coordinator/key_value_entry.h"
+#include "datasystem/common/coordinator/coordinator_leader_router.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/protos/coordinator.pb.h"
 #include "datasystem/utils/coordinator_discovery.h"
@@ -180,6 +181,18 @@ public:
                                                    coordinator::ReportTopologyRecoveryCandidateRspPb &rsp,
                                                    int32_t timeoutMs) = 0;
 
+    virtual Status EnsureLeaderMembership(const coordinator::EnsureLeaderMembershipReqPb &,
+                                          coordinator::EnsureLeaderMembershipRspPb &,
+                                          int32_t = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS)
+    {
+        return Status(K_NOT_SUPPORTED, "Coordinator membership ensure is not supported by this proxy");
+    }
+
+    virtual ICoordinatorLeaderRouteProvider *GetLeaderRouteProvider()
+    {
+        return nullptr;
+    }
+
     /**
      * @brief Read raw topology and membership facts for one logical cluster.
      * @param[in] req Logical cluster name only.
@@ -277,6 +290,11 @@ public:
                                            coordinator::ReportTopologyRecoveryCandidateRspPb &rsp,
                                            int32_t timeoutMs) override;
 
+    Status EnsureLeaderMembership(const coordinator::EnsureLeaderMembershipReqPb &req,
+                                  coordinator::EnsureLeaderMembershipRspPb &rsp, int32_t timeoutMs) override;
+
+    ICoordinatorLeaderRouteProvider *GetLeaderRouteProvider() override;
+
     /**
      * @brief Read raw topology and membership facts for one logical cluster.
      * @param[in] req Logical cluster name only.
@@ -320,7 +338,10 @@ private:
      * @return Transport status.
      */
     template <typename ReqT, typename RspT, typename CallT>
-    Status CallRaw(RpcOptions &options, const ReqT &req, RspT &rsp, CallT call);
+    Status CallRawAt(const HostPort &address, RpcOptions &options, const ReqT &req, RspT &rsp, CallT call);
+
+    template <typename ReqT, typename RspT, typename CallT>
+    Status CallRaw(RpcOptions &options, const ReqT &req, RspT &rsp, CallT call, bool recoveryControl = false);
 
     /**
      * @brief Validate one successful response against the process-lifetime fence.
@@ -361,8 +382,8 @@ private:
     void CompleteRpc(const std::string &startedCoordinatorId);
 
     std::shared_ptr<ICoordinatorDiscovery> coordinatorDiscovery_;
-    // Written only after a complete successful Init; all RPCs use this fixed address.
-    HostPort cachedLeader_;
+    // Used only by raw identity probing while public calls transition to Router.
+    std::unique_ptr<CoordinatorLeaderRouter> router_;
 
     // Protects currentCoordinatorId_ and inFlightByCoordinatorId_. Non-current in-flight IDs are retired.
     mutable std::mutex identityMutex_;

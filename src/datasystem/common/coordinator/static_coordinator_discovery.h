@@ -17,16 +17,19 @@
 #include <string>
 #include <vector>
 
+#include "datasystem/common/coordinator/coordinator_leader_router.h"
 #include "datasystem/utils/coordinator_discovery.h"
 
 namespace datasystem {
 
-class StaticCoordinatorDiscovery final : public ICoordinatorDiscovery {
+class StaticCoordinatorDiscovery final : public IDeadlineAwareCoordinatorDiscovery {
 public:
     explicit StaticCoordinatorDiscovery(const std::string &serviceAddress);
     ~StaticCoordinatorDiscovery() override = default;
 
     Status GetCoordinators(std::vector<std::string> &serviceList) override;
+    Status GetCoordinators(std::chrono::steady_clock::time_point deadline,
+                           std::vector<std::string> &serviceList) override;
     size_t GetCount() const;
 
 private:

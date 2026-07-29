@@ -89,10 +89,13 @@ Status IdentityChangedStatus()
 
 Status CoordinatorServiceProxyBase::Init()
 {
-    if (!cachedLeader_.Empty()) {
+    if (router_ != nullptr) {
         return Status::OK();
     }
     CHECK_FAIL_RETURN_STATUS(coordinatorDiscovery_ != nullptr, StatusCode::K_INVALID, "Coordinator Discovery is null");
+    CHECK_FAIL_RETURN_STATUS(dynamic_cast<IDeadlineAwareCoordinatorDiscovery *>(coordinatorDiscovery_.get()) != nullptr,
+                             StatusCode::K_INVALID,
+                             "Coordinator Discovery must support routing deadlines");
     RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(COORDINATOR_PROXY_RPC_STUB_CACHE_SIZE));
 
     std::vector<std::string> candidates;
@@ -105,11 +108,16 @@ Status CoordinatorServiceProxyBase::Init()
     RETURN_IF_NOT_OK(discoveryStatus);
     CHECK_FAIL_RETURN_STATUS(!candidates.empty(), StatusCode::K_INVALID, "Coordinator Discovery returned no addresses");
 
-    HostPort candidate;
-    const auto parseStatus = candidate.ParseString(candidates.front());
-    CHECK_FAIL_RETURN_STATUS(parseStatus.IsOk() && !candidate.Empty(), StatusCode::K_INVALID,
-                             "Coordinator Discovery returned an invalid front address");
-    cachedLeader_ = std::move(candidate);
+    std::vector<HostPort> initialCandidates;
+    for (const auto &value : candidates) {
+        HostPort parsed;
+        if (parsed.ParseString(value).IsOk() && !parsed.Empty()) {
+            initialCandidates.emplace_back(std::move(parsed));
+        }
+    }
+    CHECK_FAIL_RETURN_STATUS(!initialCandidates.empty(), StatusCode::K_INVALID,
+                             "Coordinator Discovery returned no valid addresses");
+    router_ = std::make_unique<CoordinatorLeaderRouter>(coordinatorDiscovery_, std::move(initialCandidates));
     return Status::OK();
 }
 
@@ -155,24 +163,43 @@ private:
 };
 
 template <typename ReqT, typename RspT, typename CallT>
-Status CoordinatorServiceProxyBase::CallRaw(RpcOptions &options, const ReqT &req, RspT &rsp, CallT call)
+Status CoordinatorServiceProxyBase::CallRawAt(const HostPort &address, RpcOptions &options, const ReqT &req, RspT &rsp,
+                                              CallT call)
 {
-    RETURN_IF_NOT_OK(CheckCoordinatorAddress(cachedLeader_));
-    auto reportCoordinatorFailure = [this](Status rc) {
+    RETURN_IF_NOT_OK(CheckCoordinatorAddress(address));
+    auto reportCoordinatorFailure = [&address](Status rc) {
         if (rc.IsError()) {
-            rc.AppendMsg("Failed to reach coordinator " + cachedLeader_.ToString()
+            rc.AppendMsg("Failed to reach coordinator " + address.ToString()
                           + ". Check --coordinator_address config and whether the coordinator is running.");
         }
         return rc;
     };
     if (GetTransport() == Transport::ZMQ) {
         std::shared_ptr<coordinator::CoordinatorService_Stub> stub;
-        RETURN_IF_NOT_OK(reportCoordinatorFailure(GetCoordinatorStub(cachedLeader_, stub)));
+        RETURN_IF_NOT_OK(reportCoordinatorFailure(GetCoordinatorStub(address, stub)));
         return reportCoordinatorFailure(call(*stub, options, req, rsp));
     }
     std::shared_ptr<coordinator::CoordinatorService_BrpcGenericStub> stub;
-    RETURN_IF_NOT_OK(reportCoordinatorFailure(GetCoordinatorStub(cachedLeader_, stub)));
+    RETURN_IF_NOT_OK(reportCoordinatorFailure(GetCoordinatorStub(address, stub)));
     return reportCoordinatorFailure(call(*stub, options, req, rsp));
+}
+
+template <typename ReqT, typename RspT, typename CallT>
+Status CoordinatorServiceProxyBase::CallRaw(RpcOptions &, const ReqT &req, RspT &rsp, CallT call, bool recoveryControl)
+{
+    CHECK_FAIL_RETURN_STATUS(router_ != nullptr, K_NOT_READY, "Coordinator leader router is not initialized");
+    return router_->Execute(
+        [this, &req, &rsp, &call](const HostPort &address, int32_t timeoutMs, coordinator::ResponseHeader &header,
+                                  bool &hasHeader) {
+            rsp.Clear();
+            RpcOptions attemptOptions;
+            attemptOptions.SetTimeout(timeoutMs);
+            auto status = CallRawAt(address, attemptOptions, req, rsp, call);
+            header = rsp.header();
+            hasHeader = header.coordinator_id().size() == UUID_SIZE;
+            return status;
+        },
+        recoveryControl);
 }
 
 CoordinatorServiceProxyBase::InFlightScope CoordinatorServiceProxyBase::BeginRpc(int32_t timeoutMs)
@@ -248,12 +275,23 @@ Status CoordinatorServiceProxyBase::ConfirmResponseIdentity(const std::string &r
 
 Status CoordinatorServiceProxyBase::ProbeCoordinatorId(int32_t timeoutMs, std::string &coordinatorId)
 {
+    // Router owns the fixed logical RPC deadline, including identity probes.
+    static_cast<void>(timeoutMs);
     coordinator::GetCoordinatorIdReqPb req;
     coordinator::GetCoordinatorIdRspPb rsp;
-    RpcOptions options;
-    options.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(CallRaw(options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
-        return stub.GetCoordinatorId(opts, request, response);
+    CHECK_FAIL_RETURN_STATUS(router_ != nullptr, K_NOT_READY, "Coordinator leader router is not initialized");
+    RETURN_IF_NOT_OK(router_->Execute([this, &req, &rsp](const HostPort &address, int32_t remainingMs,
+                                                         coordinator::ResponseHeader &header, bool &hasHeader) {
+        rsp.Clear();
+        RpcOptions options;
+        options.SetTimeout(remainingMs);
+        const auto status =
+            CallRawAt(address, options, req, rsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
+                return stub.GetCoordinatorId(opts, request, response);
+            });
+        header = rsp.header();
+        hasHeader = header.coordinator_id().size() == UUID_SIZE;
+        return status;
     }));
     RETURN_IF_NOT_OK(CheckResponseHeader(rsp.header()));
     coordinatorId = rsp.header().coordinator_id();
@@ -418,16 +456,42 @@ Status CoordinatorServiceProxyBase::ReportTopologyRecoveryCandidate(
     const coordinator::ReportTopologyRecoveryCandidateReqPb &req,
     coordinator::ReportTopologyRecoveryCandidateRspPb &rsp, int32_t timeoutMs)
 {
-    auto inFlight = BeginRpc(timeoutMs);
     coordinator::ReportTopologyRecoveryCandidateRspPb localRsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(CallRaw(options, req, localRsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
-        return stub.ReportTopologyRecoveryCandidate(opts, request, response);
-    }));
-    RETURN_IF_NOT_OK(inFlight.Accept(localRsp.header(), nullptr));
+    RETURN_IF_NOT_OK(CallRaw(
+        options, req, localRsp,
+        [](auto &stub, auto &opts, const auto &request, auto &response) {
+            return stub.ReportTopologyRecoveryCandidate(opts, request, response);
+        },
+        true));
     rsp = std::move(localRsp);
     return Status::OK();
+}
+
+Status CoordinatorServiceProxyBase::EnsureLeaderMembership(const coordinator::EnsureLeaderMembershipReqPb &req,
+                                                           coordinator::EnsureLeaderMembershipRspPb &rsp,
+                                                           int32_t timeoutMs)
+{
+    rsp.Clear();
+    coordinator::EnsureLeaderMembershipRspPb localRsp;
+    RpcOptions options;
+    options.SetTimeout(timeoutMs);
+    const auto status = CallRaw(
+        options, req, localRsp,
+        [](auto &stub, auto &opts, const auto &request, auto &response) {
+            return stub.EnsureLeaderMembership(opts, request, response);
+        },
+        true);
+    if (!localRsp.header().coordinator_id().empty()) {
+        rsp = std::move(localRsp);
+    }
+    return status;
+}
+
+ICoordinatorLeaderRouteProvider *CoordinatorServiceProxyBase::GetLeaderRouteProvider()
+{
+    return router_.get();
 }
 
 Status CoordinatorServiceProxyBase::GetClusterRawSnapshot(const coordinator::GetClusterRawSnapshotReqPb &req,
@@ -438,8 +502,7 @@ Status CoordinatorServiceProxyBase::GetClusterRawSnapshot(const coordinator::Get
     coordinator::GetClusterRawSnapshotRspPb localRsp;
     RpcOptions options;
     options.SetTimeout(timeoutMs);
-    RETURN_IF_NOT_OK(CallRaw(options, req, localRsp,
-                             [](auto &stub, auto &opts, const auto &request, auto &response) {
+    RETURN_IF_NOT_OK(CallRaw(options, req, localRsp, [](auto &stub, auto &opts, const auto &request, auto &response) {
         return stub.GetClusterRawSnapshot(opts, request, response);
     }));
     RETURN_IF_NOT_OK(inFlight.Accept(localRsp.header(), nullptr));

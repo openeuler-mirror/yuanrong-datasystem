@@ -87,6 +87,7 @@ protected:
         options_.discoveryWindow = std::chrono::milliseconds(DISCOVERY_WINDOW_MS);
         options_.validationWaitTimeout = VALIDATION_TIMEOUT;
         manager_ = std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, clock_, options_);
+        manager_->BeginLeaderRound({ 0, COORDINATOR_ID });
     }
 
     void TearDown() override
@@ -136,7 +137,7 @@ protected:
                         TopologyRecoveryReportDecision &decision)
     {
         report.canonicalTopology.clear();
-        DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, std::move(report), decision));
+        DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, std::move(report), decision));
     }
 
     bool DriveUntil(const std::string &clusterName, const std::string &address, TopologyRecoveryState expected)
@@ -181,7 +182,7 @@ TEST_F(TopologyRecoveryManagerTest, NoSnapshotMakesClusterReadyAfterFixedWindow)
     TopologyRecoveryCandidateReport report;
     report.reporterAddress = MEMBER_A;
     TopologyRecoveryReportDecision decision;
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, std::move(report), decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, std::move(report), decision));
     EXPECT_EQ(decision.state, TopologyRecoveryState::RECOVERING);
 
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
@@ -223,7 +224,7 @@ TEST_F(TopologyRecoveryManagerTest, ParsesScaleInMetadataDoneMarkersInDefaultAnd
         TopologyRecoveryCandidateReport noSnapshot;
         noSnapshot.reporterAddress = MEMBER_A;
         TopologyRecoveryReportDecision decision;
-        DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, noSnapshot, decision));
+        DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, noSnapshot, decision));
         clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
         ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
         DS_ASSERT_OK(manager_->CheckMutationAllowed(physicalKey, ""));
@@ -250,6 +251,52 @@ TEST_F(TopologyRecoveryManagerTest, RejectsNonCanonicalScaleInMetadataDoneMarker
     EXPECT_EQ(manager_->ParseKey(prefix + "e7/" + std::string(258, 'a') + "/" + taskId, parsed).GetCode(), K_INVALID);
 }
 
+TEST_F(TopologyRecoveryManagerTest, RejectsEvidenceFromAnotherLeaderTermWithoutChangingContext)
+{
+    const std::string clusterName = "term-fence";
+    manager_->BeginLeaderRound({ 9, COORDINATOR_ID });
+    ObserveMember(clusterName, MEMBER_A);
+    const auto summaryBefore = manager_->GetRoundSummary();
+    const auto revisionBefore = memoryStore_->CurrentRevision();
+    auto report = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
+    report.canonicalTopology.clear();
+    TopologyRecoveryReportDecision decision;
+
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 8, COORDINATOR_ID, std::move(report), decision));
+
+    EXPECT_EQ(decision.result, TopologyRecoveryReportResult::STALE_LEADER_TERM);
+    EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::RECOVERING);
+    EXPECT_EQ(manager_->GetRoundSummary().contextCount, summaryBefore.contextCount);
+    EXPECT_EQ(memoryStore_->CurrentRevision(), revisionBefore);
+}
+
+TEST_F(TopologyRecoveryManagerTest, RoundSummaryReportsReadyAndBlockedContexts)
+{
+    const std::string readyCluster = "round-ready";
+    const std::string blockedCluster = "round-blocked";
+    ObserveMember(readyCluster, MEMBER_A);
+    ObserveMember(blockedCluster, MEMBER_A);
+    auto readyReport = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
+    auto blockedFirst = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'b');
+    auto blockedSecond = SnapshotEvidence(MEMBER_B, TOPOLOGY_VERSION, 'c');
+    ObserveMember(blockedCluster, MEMBER_B);
+    TopologyRecoveryReportDecision decision;
+    ReportEvidence(readyCluster, readyReport, decision);
+    ASSERT_TRUE(decision.payloadRequired);
+    DS_ASSERT_OK(manager_->ReportCandidate(readyCluster, 0, COORDINATOR_ID, readyReport, decision));
+    ReportEvidence(blockedCluster, blockedFirst, decision);
+    ReportEvidence(blockedCluster, blockedSecond, decision);
+
+    clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
+    ASSERT_TRUE(DriveUntil(readyCluster, MEMBER_A, TopologyRecoveryState::READY));
+    ASSERT_TRUE(DriveUntil(blockedCluster, MEMBER_A, TopologyRecoveryState::BLOCKED));
+    const auto summary = manager_->GetRoundSummary();
+    EXPECT_EQ(summary.contextCount, 2U);
+    EXPECT_EQ(summary.readyCount, 1U);
+    EXPECT_EQ(summary.blockedCount, 1U);
+    EXPECT_FALSE(summary.AllDiscoveredClustersReady());
+}
+
 TEST_F(TopologyRecoveryManagerTest, CommittedStoreMembershipMutationsDriveAdmission)
 {
     const std::string clusterName = "observer";
@@ -264,13 +311,13 @@ TEST_F(TopologyRecoveryManagerTest, CommittedStoreMembershipMutationsDriveAdmiss
     TopologyRecoveryCandidateReport report;
     report.reporterAddress = MEMBER_A;
     TopologyRecoveryReportDecision decision;
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, report, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, report, decision));
     EXPECT_EQ(decision.result, TopologyRecoveryReportResult::ACCEPTED);
 
     int64_t deleted = 0;
     DS_ASSERT_OK(store_->DeleteRange(membershipKey, "", deleted, revision));
     ASSERT_EQ(deleted, 1);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, report, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, report, decision));
     EXPECT_EQ(decision.result, TopologyRecoveryReportResult::MEMBERSHIP_NOT_READY);
     store_->SetCommittedMutationObserver({});
 }
@@ -283,7 +330,7 @@ TEST_F(TopologyRecoveryManagerTest, InstallsUniqueHighestCanonicalPayload)
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
 
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
@@ -323,7 +370,7 @@ TEST_F(TopologyRecoveryManagerTest, RecoveryTasksPreserveSubmittingTraceContext)
     });
 
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     ASSERT_EQ(observedTraceFuture.wait_for(TEST_DEADLINE), std::future_status::ready);
     const TraceContext actualTrace = observedTraceFuture.get();
     EXPECT_EQ(actualTrace.traceID, expectedTrace.traceID);
@@ -348,7 +395,7 @@ TEST_F(TopologyRecoveryManagerTest, MembershipDeleteDoesNotBreakAnInstallingCand
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     std::atomic<StatusCode> readStatus{ K_OK };
     store_->SetCommittedMutationObserver([&](WatchEvent::Type type, const std::string &key) {
         if (type == WatchEvent::Type::PUT && key == TopologyKey(clusterName)) {
@@ -371,7 +418,7 @@ TEST_F(TopologyRecoveryManagerTest, CommittedObserverExceptionDoesNotStrandInsta
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     store_->SetCommittedMutationObserver([](WatchEvent::Type, const std::string &) {
         throw std::runtime_error("injected committed observer failure");
     });
@@ -396,10 +443,10 @@ TEST_F(TopologyRecoveryManagerTest, NewerEvidenceWithinDiscoveryWindowReplacesRe
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, version41, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, version41, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, version41, decision));
     ReportEvidence(clusterName, version42, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, version42, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, version42, decision));
 
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
@@ -436,13 +483,13 @@ TEST_F(TopologyRecoveryManagerTest, WaitsForEveryObservedMemberBeforeInstallingH
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, accepted, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, accepted, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, accepted, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
 
     auto late = SnapshotEvidence(MEMBER_B, TOPOLOGY_VERSION + 1, 'b');
     ReportEvidence(clusterName, late, decision);
     EXPECT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, late, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, late, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
 
@@ -467,7 +514,7 @@ TEST_F(TopologyRecoveryManagerTest, MembershipDeleteReopensBlockedArbitration)
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::BLOCKED));
 
     manager_->ObserveMembershipChange(MembershipKey(clusterName, MEMBER_B), false);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, retained, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, retained, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
 }
@@ -479,7 +526,7 @@ TEST_F(TopologyRecoveryManagerTest, RecoveryGatesAndMemberLimitAreClusterScoped)
     TopologyRecoveryCandidateReport emptyReport;
     emptyReport.reporterAddress = MEMBER_A;
     TopologyRecoveryReportDecision decision;
-    DS_ASSERT_OK(manager_->ReportCandidate(readyCluster, COORDINATOR_ID, emptyReport, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(readyCluster, 0, COORDINATOR_ID, emptyReport, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(readyCluster, MEMBER_A, TopologyRecoveryState::READY));
     EXPECT_EQ(manager_->CheckReadAllowed(TopologyKey("recovering"), "").GetCode(), K_NOT_READY);
@@ -488,10 +535,11 @@ TEST_F(TopologyRecoveryManagerTest, RecoveryGatesAndMemberLimitAreClusterScoped)
     manager_.reset();
     options_.maxMembersPerCluster = 1;
     manager_ = std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, clock_, options_);
+    manager_->BeginLeaderRound({ 0, COORDINATOR_ID });
     ObserveMember("bounded", MEMBER_A);
     ObserveMember("bounded", MEMBER_B);
     emptyReport.reporterAddress = MEMBER_B;
-    EXPECT_EQ(manager_->ReportCandidate("bounded", COORDINATOR_ID, emptyReport, decision).GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(manager_->ReportCandidate("bounded", 0, COORDINATOR_ID, emptyReport, decision).GetCode(), K_TRY_AGAIN);
 }
 
 TEST_F(TopologyRecoveryManagerTest, BroadRangeCannotCrossIntoTopologyKeyspaceDuringRecovery)
@@ -513,11 +561,11 @@ TEST_F(TopologyRecoveryManagerTest, RejectsOversizedAndNonCanonicalCandidatePayl
 
     auto nonCanonical = payload;
     nonCanonical.canonicalTopology = "not-a-cluster-topology";
-    EXPECT_EQ(manager_->ReportCandidate(clusterName, COORDINATOR_ID, nonCanonical, decision).GetCode(), K_INVALID);
+    EXPECT_EQ(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, nonCanonical, decision).GetCode(), K_INVALID);
 
     auto oversized = payload;
     oversized.canonicalTopology.assign(MAX_TOPOLOGY_RECOVERY_PAYLOAD_BYTES + 1, 'x');
-    EXPECT_EQ(manager_->ReportCandidate(clusterName, COORDINATOR_ID, oversized, decision).GetCode(), K_INVALID);
+    EXPECT_EQ(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, oversized, decision).GetCode(), K_INVALID);
 }
 
 TEST_F(TopologyRecoveryManagerTest, RejectsCanonicalPayloadThatDoesNotMatchEvidenceDigest)
@@ -531,7 +579,7 @@ TEST_F(TopologyRecoveryManagerTest, RejectsCanonicalPayloadThatDoesNotMatchEvide
     ASSERT_TRUE(decision.payloadRequired);
     mismatchedPayload.canonicalDigest = evidence.canonicalDigest;
 
-    EXPECT_EQ(manager_->ReportCandidate(clusterName, COORDINATOR_ID, mismatchedPayload, decision).GetCode(),
+    EXPECT_EQ(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, mismatchedPayload, decision).GetCode(),
               K_INVALID);
     EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::BLOCKED);
 }
@@ -543,14 +591,14 @@ TEST_F(TopologyRecoveryManagerTest, ReadyReportDoesNotWriteTopologyAgain)
     auto payload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
     std::vector<KeyValueEntry> before;
     int64_t beforeRevision = 0;
     DS_ASSERT_OK(store_->Range(TopologyKey(clusterName), "", before, beforeRevision));
 
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
 
     std::vector<KeyValueEntry> after;
     int64_t afterRevision = 0;
@@ -569,7 +617,7 @@ TEST_F(TopologyRecoveryManagerTest, ShutdownWaitsForStartedTopologyInstallation)
     auto payload = SnapshotEvidence(MEMBER_A, TOPOLOGY_VERSION, 'a');
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
     std::promise<void> installationStarted;
     auto installationFuture = installationStarted.get_future();
     std::promise<void> releaseInstallation;
@@ -609,18 +657,18 @@ TEST_F(TopologyRecoveryManagerTest, InvalidHighestCandidateBlocksUntilItsMemberD
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, validLower, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, validLower, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, validLower, decision));
     ReportEvidence(clusterName, invalidHigher, decision);
     ASSERT_TRUE(decision.payloadRequired);
     invalidHigher.canonicalTopology = "invalid-topology";
 
-    EXPECT_EQ(manager_->ReportCandidate(clusterName, COORDINATOR_ID, invalidHigher, decision).GetCode(), K_INVALID);
+    EXPECT_EQ(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, invalidHigher, decision).GetCode(), K_INVALID);
     EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::BLOCKED);
 
     manager_->ObserveMembershipChange(MembershipKey(clusterName, MEMBER_B), false);
     ReportEvidence(clusterName, validLower, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, validLower, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, validLower, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     EXPECT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
 }
@@ -632,12 +680,13 @@ TEST_F(TopologyRecoveryManagerTest, CandidateMemoryBudgetRejectsPayloadBeforeQue
     manager_.reset();
     options_.maxCandidateMemoryBytes = payload.canonicalTopology.size() - 1;
     manager_ = std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, clock_, options_);
+    manager_->BeginLeaderRound({ 0, COORDINATOR_ID });
     ObserveMember(clusterName, MEMBER_A);
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
     ASSERT_TRUE(decision.payloadRequired);
 
-    EXPECT_EQ(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision).GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision).GetCode(), K_TRY_AGAIN);
     EXPECT_EQ(manager_->GetState(clusterName), TopologyRecoveryState::RECOVERING);
 }
 
@@ -646,13 +695,14 @@ TEST_F(TopologyRecoveryManagerTest, ClusterAdmissionLimitRejectsAnAdditionalClus
     manager_.reset();
     options_.maxClusters = 1;
     manager_ = std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, clock_, options_);
+    manager_->BeginLeaderRound({ 0, COORDINATOR_ID });
     ObserveMember("first", MEMBER_A);
     ObserveMember("second", MEMBER_B);
     TopologyRecoveryCandidateReport report;
     report.reporterAddress = MEMBER_B;
     TopologyRecoveryReportDecision decision;
 
-    DS_ASSERT_OK(manager_->ReportCandidate("second", COORDINATOR_ID, report, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate("second", 0, COORDINATOR_ID, report, decision));
     EXPECT_EQ(decision.result, TopologyRecoveryReportResult::MEMBERSHIP_NOT_READY);
     EXPECT_EQ(manager_->GetState("first"), TopologyRecoveryState::RECOVERING);
 }
@@ -662,15 +712,16 @@ TEST_F(TopologyRecoveryManagerTest, UnboundRequestsDoNotConsumeClusterAdmission)
     manager_.reset();
     options_.maxClusters = 1;
     manager_ = std::make_unique<TopologyRecoveryManager>(COORDINATOR_ID, *store_, clock_, options_);
+    manager_->BeginLeaderRound({ 0, COORDINATOR_ID });
     TopologyRecoveryCandidateReport report;
     report.reporterAddress = MEMBER_A;
     TopologyRecoveryReportDecision decision;
-    DS_ASSERT_OK(manager_->ReportCandidate("unbound", COORDINATOR_ID, report, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate("unbound", 0, COORDINATOR_ID, report, decision));
     EXPECT_EQ(decision.result, TopologyRecoveryReportResult::MEMBERSHIP_NOT_READY);
     EXPECT_EQ(manager_->CheckReadAllowed(TopologyKey("another-unbound"), "").GetCode(), K_NOT_READY);
 
     ObserveMember("real", MEMBER_A);
-    DS_ASSERT_OK(manager_->ReportCandidate("real", COORDINATOR_ID, report, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate("real", 0, COORDINATOR_ID, report, decision));
     EXPECT_EQ(decision.result, TopologyRecoveryReportResult::ACCEPTED);
 }
 
@@ -702,7 +753,7 @@ TEST_F(TopologyRecoveryManagerTest, ExistingTopologyWinsCreateOnceInstallFence)
     TopologyRecoveryReportDecision decision;
     ReportEvidence(clusterName, payload, decision);
     ASSERT_TRUE(decision.payloadRequired);
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, payload, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, payload, decision));
 
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::BLOCKED));
@@ -719,7 +770,7 @@ TEST_F(TopologyRecoveryManagerTest, ReturningMemberReusesCurrentProcessTopologyA
     TopologyRecoveryCandidateReport noSnapshot;
     noSnapshot.reporterAddress = MEMBER_A;
     TopologyRecoveryReportDecision decision;
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, noSnapshot, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, noSnapshot, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     ASSERT_TRUE(DriveUntil(clusterName, MEMBER_A, TopologyRecoveryState::READY));
 
@@ -765,7 +816,7 @@ TEST_F(TopologyRecoveryManagerTest, StaleStoredAuthorityReadCannotPublishIntoRec
     TopologyRecoveryCandidateReport noSnapshot;
     noSnapshot.reporterAddress = MEMBER_B;
     TopologyRecoveryReportDecision decision;
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, noSnapshot, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, noSnapshot, decision));
     clock_->AdvanceMs(DISCOVERY_WINDOW_MS);
     EXPECT_TRUE(DriveUntil(clusterName, MEMBER_B, TopologyRecoveryState::READY));
 }
@@ -784,14 +835,14 @@ TEST_F(TopologyRecoveryManagerTest, StalePayloadValidationCannotPublishIntoRecre
 
     auto validation = std::async(std::launch::async, [&] {
         TopologyRecoveryReportDecision staleDecision;
-        return manager_->ReportCandidate(clusterName, COORDINATOR_ID, stalePayload, staleDecision);
+        return manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, stalePayload, staleDecision);
     });
     ASSERT_TRUE(WaitUntil([&] { return inject::GetExecuteCount(injectPoint) > 0; }));
     manager_->ObserveMembershipChange(MembershipKey(clusterName, MEMBER_A), false);
     ObserveMember(clusterName, MEMBER_B);
     TopologyRecoveryCandidateReport noSnapshot;
     noSnapshot.reporterAddress = MEMBER_B;
-    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, COORDINATOR_ID, noSnapshot, decision));
+    DS_ASSERT_OK(manager_->ReportCandidate(clusterName, 0, COORDINATOR_ID, noSnapshot, decision));
 
     DS_ASSERT_OK(inject::Clear(injectPoint));
     EXPECT_EQ(validation.get().GetCode(), K_TRY_AGAIN);
@@ -808,7 +859,7 @@ TEST_F(TopologyRecoveryManagerTest, RejectsNewReportsAfterShutdown)
     TopologyRecoveryCandidateReport report;
     report.reporterAddress = MEMBER_A;
     TopologyRecoveryReportDecision decision;
-    EXPECT_EQ(manager_->ReportCandidate("shutdown", COORDINATOR_ID, report, decision).GetCode(), K_SHUTTING_DOWN);
+    EXPECT_EQ(manager_->ReportCandidate("shutdown", 0, COORDINATOR_ID, report, decision).GetCode(), K_SHUTTING_DOWN);
 }
 
 }  // namespace

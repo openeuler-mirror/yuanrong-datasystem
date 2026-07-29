@@ -53,7 +53,9 @@ ds_cc_library(
 ds_cc_library(
     name = "coordinator_service_impl",
     srcs = ["coordinator_service_impl.cpp"],
-    hdrs = ["coordinator_service_impl.h"],
+    hdrs = [
+        "coordinator_service_impl.h",
+    ],
     deps = [
         ":coordinator_watch_dispatcher_impl",
         ":coordinator_topology_control_host",
@@ -63,6 +65,7 @@ ds_cc_library(
         "//src/datasystem/coordinator/raft:coordinator_raft_service",
         "//src/datasystem/coordinator/raft:coordinator_raft_types",
         "//src/datasystem/cluster:cluster_topology_keyspace",
+        "//src/datasystem/cluster:cluster_membership_codec",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/flags:ds_flags",
         "//src/datasystem/common/flags:dynamic_flag_config",
@@ -74,6 +77,7 @@ ds_cc_library(
         "//src/datasystem/common/util:net_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
+        "//src/datasystem/common/util:thread",
         "//src/datasystem/common/util:validator",
         "//src/datasystem/server:common_server",
         "//src/datasystem/protos:coordinator_zmq_cc_proto",

@@ -17,3 +17,9 @@ target_include_directories(topology_recovery_reporter PUBLIC ${PROTO_BUILD_DIR} 
 target_link_libraries(topology_recovery_reporter PUBLIC
         common_ak_sk common_coordinator_store common_log common_util coordinator_protos)
 add_dependencies(topology_recovery_reporter coordinator_protos)
+
+add_library(worker_leader_reconciler STATIC worker_leader_reconciler.cpp)
+target_include_directories(worker_leader_reconciler PUBLIC ${PROTO_BUILD_DIR} ${CMAKE_SOURCE_DIR})
+target_link_libraries(worker_leader_reconciler PUBLIC
+        cluster_coordination_backend topology_recovery_reporter coordinator_leader_router common_util coordinator_protos)
+add_dependencies(worker_leader_reconciler coordinator_protos)

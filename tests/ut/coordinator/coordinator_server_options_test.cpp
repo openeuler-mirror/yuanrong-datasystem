@@ -72,8 +72,11 @@ TEST(CoordinatorServiceProtocolTest, KeepsLegacyZmqMethodIndexesStable)
     ASSERT_NE(rawSnapshot, nullptr);
     ASSERT_NE(bootstrapState, nullptr);
     EXPECT_EQ(reportCandidate->index(), 7);
+    const auto *ensureMembership = service->FindMethodByName("EnsureLeaderMembership");
+    ASSERT_NE(ensureMembership, nullptr);
     EXPECT_EQ(rawSnapshot->index(), 8);
     EXPECT_EQ(bootstrapState->index(), 9);
+    EXPECT_EQ(ensureMembership->index(), 10);
 }
 
 class FakeCoordinatorDiscovery final : public ICoordinatorDiscovery {
@@ -490,9 +493,6 @@ void ExpectAllBusinessRpcsReturn(coordinator::CoordinatorServiceImpl &service, S
     coordinator::GetCoordinatorIdReqPb idReq;
     coordinator::GetCoordinatorIdRspPb idRsp;
     expectStatus("GetCoordinatorId", service.GetCoordinatorId(idReq, idRsp));
-    coordinator::ReportTopologyRecoveryCandidateReqPb reportReq;
-    coordinator::ReportTopologyRecoveryCandidateRspPb reportRsp;
-    expectStatus("ReportTopologyRecoveryCandidate", service.ReportTopologyRecoveryCandidate(reportReq, reportRsp));
     coordinator::GetClusterRawSnapshotReqPb snapshotReq;
     coordinator::GetClusterRawSnapshotRspPb snapshotRsp;
     expectStatus("GetClusterRawSnapshot", service.GetClusterRawSnapshot(snapshotReq, snapshotRsp));
@@ -1164,16 +1164,23 @@ TEST_F(CoordinatorElectionServiceTest, AcceptedBootstrapRpcDoesNotDeadlockBrpcJo
     EXPECT_EQ(service->rpcServer_, nullptr);
 }
 
-TEST_F(CoordinatorElectionServiceTest, RaftLifecycleCallbacksGateOnlyElectionModeServing)
+TEST_F(CoordinatorElectionServiceTest, RaftLifecycleCallbacksDriveRecoveryGateAndRevokeServing)
 {
     auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
     auto service = MakeService(discovery, kCoordinatorCount);
-    service->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::RUNNING, std::memory_order_release);
+    DS_ASSERT_OK(service->Init());
+    service->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::FOLLOWER_SERVING,
+                                 std::memory_order_release);
     auto callbacks = service->BuildRaftEventCallbacks();
 
     EXPECT_EQ(service->CheckServing().GetCode(), K_NOT_READY);
     callbacks.onLeaderStart(1);
-    DS_ASSERT_OK(service->CheckServing());
+    EXPECT_EQ(service->servingState_.load(std::memory_order_acquire),
+              coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING);
+    // An empty recovery round has no pending work, so it must not wait for node_dead_timeout_s.
+    EXPECT_EQ(service->CheckServing().GetCode(), K_NOT_READY);
+    // The callback transition alone cannot grant business serving: the Raft manager must also report local leadership.
+    EXPECT_EQ(service->CheckServing().GetCode(), K_NOT_READY);
     callbacks.onLeaderStop(Status::OK());
     EXPECT_EQ(service->CheckServing().GetCode(), K_NOT_READY);
     callbacks.onLeaderStart(2);
@@ -1184,11 +1191,28 @@ TEST_F(CoordinatorElectionServiceTest, RaftLifecycleCallbacksGateOnlyElectionMod
     EXPECT_EQ(service->CheckServing().GetCode(), K_NOT_READY);
 
     auto legacyService = MakeService(nullptr, 0);
-    legacyService->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::RUNNING,
+    legacyService->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING,
                                        std::memory_order_release);
     DS_ASSERT_OK(legacyService->CheckServing());
     DS_ASSERT_OK(service->Shutdown());
     DS_ASSERT_OK(legacyService->Shutdown());
+}
+
+TEST_F(CoordinatorElectionServiceTest, ServingGateRejectsStaleRaftLeadershipBeforeStopCallback)
+{
+    auto discovery = std::make_shared<ScriptedCoordinatorDiscovery>();
+    auto service = MakeService(discovery, kCoordinatorCount);
+    DS_ASSERT_OK(service->Init());
+
+    coordinator::CoordinatorElectionOptions options;
+    DS_ASSERT_OK(service->BuildElectionStartupContext(options));
+    service->electionManager_ = std::make_unique<coordinator::CoordinatorElectionManager>(
+        std::move(options), service->BuildRaftEventCallbacks(), discovery);
+    service->servingState_.store(coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING,
+                                 std::memory_order_release);
+
+    EXPECT_EQ(service->CheckServing().GetCode(), K_NOT_READY);
+    DS_ASSERT_OK(service->Shutdown());
 }
 
 TEST_F(CoordinatorElectionServiceTest, SynchronousManagerStartFailureDetachesPublishedManager)
@@ -1208,7 +1232,6 @@ TEST_F(CoordinatorElectionServiceTest, SynchronousManagerStartFailureDetachesPub
     EXPECT_FALSE(service->electionStartInProgress_);
     EXPECT_EQ(service->electionManager_, nullptr);
     EXPECT_NE(service->rpcServer_, nullptr);
-    EXPECT_FALSE(service->raftServing_.load(std::memory_order_acquire));
     EXPECT_EQ(discovery->calls_.load(), 0U);
 
     coordinator::GetRaftBootstrapStateReqPb request;
@@ -1251,7 +1274,7 @@ TEST_F(CoordinatorElectionServiceTest, SingleExpectedMemberKeepsElectionDisabled
     DS_ASSERT_OK(service->Init());
     DS_ASSERT_OK(service->Start());
     EXPECT_EQ(service->servingState_.load(std::memory_order_acquire),
-              coordinator::CoordinatorServiceImpl::ServingState::RUNNING);
+              coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING);
     DS_ASSERT_OK(service->StartElectionManager());
     EXPECT_EQ(service->electionManager_, nullptr);
     EXPECT_FALSE(service->IsLeader());
@@ -1290,11 +1313,12 @@ TEST_F(CoordinatorElectionServiceTest, ElectionStartupIsSplitAndBusinessRpcsRema
 
     DS_ASSERT_OK(service->StartElectionManager());
     EXPECT_EQ(service->servingState_.load(std::memory_order_acquire),
-              coordinator::CoordinatorServiceImpl::ServingState::RUNNING);
+              coordinator::CoordinatorServiceImpl::ServingState::FOLLOWER_SERVING);
     EXPECT_NE(service->electionManager_, nullptr);
     EXPECT_EQ(service->StartElectionManager().GetCode(), K_INVALID);
     EXPECT_EQ(service->Start().GetCode(), K_INVALID);
     EXPECT_NE(service->rpcServer_, nullptr);
+    ExpectAllBusinessRpcsReturn(*service, K_NOT_READY, "not the active Leader");
     DS_ASSERT_OK(service->Shutdown());
     EXPECT_EQ(service->StartElectionManager().GetCode(), K_SHUTTING_DOWN);
     EXPECT_EQ(service->GetLeader(leader).GetCode(), K_SHUTTING_DOWN);
@@ -1333,7 +1357,7 @@ TEST_F(CoordinatorElectionServiceTest, BackgroundBootstrapFailureKeepsRpcPublish
 
     EXPECT_TRUE(status.IsOk()) << status.ToString();
     EXPECT_EQ(service->servingState_.load(std::memory_order_acquire),
-              coordinator::CoordinatorServiceImpl::ServingState::RUNNING);
+              coordinator::CoordinatorServiceImpl::ServingState::FOLLOWER_SERVING);
     EXPECT_TRUE(service->electionStartAttempted_);
     EXPECT_FALSE(service->electionStartInProgress_);
     EXPECT_NE(service->electionManager_, nullptr);
@@ -1341,7 +1365,7 @@ TEST_F(CoordinatorElectionServiceTest, BackgroundBootstrapFailureKeepsRpcPublish
     EXPECT_NE(service->brpcAdapter_, nullptr);
     EXPECT_NE(service->topologyRecoveryManager_, nullptr);
     EXPECT_NE(service->store_, nullptr);
-    ExpectAllBusinessRpcsReturn(*service, K_NOT_READY, "active Raft node");
+    ExpectAllBusinessRpcsReturn(*service, K_NOT_READY, "not the active Leader");
     EXPECT_EQ(service->StartElectionManager().GetCode(), K_INVALID);
 
     DS_ASSERT_OK(service->Shutdown());
@@ -1372,7 +1396,8 @@ TEST_F(CoordinatorElectionServiceTest, PublicShutdownDrainsManagerWithoutLifecyc
     ASSERT_NE(service->rpcServer_, nullptr);
     auto callbacks = service->BuildRaftEventCallbacks();
     callbacks.onLeaderStart(1);
-    ASSERT_TRUE(service->raftServing_.load(std::memory_order_acquire));
+    ASSERT_EQ(service->servingState_.load(std::memory_order_acquire),
+              coordinator::CoordinatorServiceImpl::ServingState::LEADER_SERVING);
 
     std::promise<void> managerDrainEnteredPromise;
     auto managerDrainEnteredFuture = managerDrainEnteredPromise.get_future();
@@ -1385,9 +1410,8 @@ TEST_F(CoordinatorElectionServiceTest, PublicShutdownDrainsManagerWithoutLifecyc
     service->electionManagerShutdownHook_ = [&] {
         managerCleanupCalls.fetch_add(1);
         servingGateClosedBeforeManagerDrain.store(
-            !service->raftServing_.load(std::memory_order_acquire)
-            && service->servingState_.load(std::memory_order_acquire)
-                   == coordinator::CoordinatorServiceImpl::ServingState::STOPPING);
+            service->servingState_.load(std::memory_order_acquire)
+            == coordinator::CoordinatorServiceImpl::ServingState::STOPPING);
         if (!managerDrainEnteredSignaled.exchange(true)) {
             managerDrainEnteredPromise.set_value();
         }

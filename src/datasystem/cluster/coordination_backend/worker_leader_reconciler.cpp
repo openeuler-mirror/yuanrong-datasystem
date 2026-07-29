@@ -1,0 +1,247 @@
+/**
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+#include "datasystem/cluster/coordination_backend/worker_leader_reconciler.h"
+
+#include <algorithm>
+#include <chrono>
+#include <functional>
+#include <string_view>
+
+#include "datasystem/common/log/log.h"
+#include "datasystem/common/util/status_helper.h"
+
+namespace datasystem::cluster {
+namespace {
+constexpr auto ENSURE_MIN_RETRY_BACKOFF = std::chrono::milliseconds(50);
+constexpr auto ENSURE_MAX_RETRY_BACKOFF = std::chrono::milliseconds(2'000);
+constexpr std::chrono::milliseconds::rep ENSURE_RETRY_BACKOFF_MULTIPLIER = 2;
+constexpr size_t ENSURE_POOL_SIZE = 1;
+
+bool IsRetryableEnsureStatus(const Status &status)
+{
+    return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY || status.GetCode() == K_RPC_UNAVAILABLE
+           || status.GetCode() == K_RPC_DEADLINE_EXCEEDED;
+}
+
+std::chrono::milliseconds EnsureRetryBackoff(const CoordinatorLeaderIdentity &identity, std::string_view workerAddress,
+                                             size_t retryAttempt)
+{
+    auto backoff = ENSURE_MIN_RETRY_BACKOFF;
+    for (size_t attempt = 0; attempt < retryAttempt && backoff < ENSURE_MAX_RETRY_BACKOFF; ++attempt) {
+        backoff = std::min(ENSURE_MAX_RETRY_BACKOFF, backoff * ENSURE_RETRY_BACKOFF_MULTIPLIER);
+    }
+    const auto entropy = std::hash<std::string_view>{}(workerAddress) ^ std::hash<std::string>{}(identity.coordinatorId)
+                         ^ std::hash<uint64_t>{}(identity.routeEpoch + retryAttempt);
+    const auto jitterRange = backoff.count() / 2 + 1;
+    const auto jitter = static_cast<int64_t>(entropy % jitterRange) - backoff.count() / 4;
+    return std::chrono::milliseconds(backoff.count() + jitter);
+}
+}  // namespace
+
+WorkerLeaderReconciler::WorkerLeaderReconciler(ICoordinatorServiceProxy &proxy, DsCoordinationBackend &backend,
+                                               TopologyRecoveryReporter &reporter, std::string clusterName)
+    : proxy_(proxy),
+      backend_(backend),
+      reporter_(reporter),
+      clusterName_(std::move(clusterName)),
+      ensurePool_(std::make_unique<ThreadPool>(ENSURE_POOL_SIZE, ENSURE_POOL_SIZE, "WorkerLeaderEnsure", true))
+{
+    if (auto *routes = proxy_.GetLeaderRouteProvider(); routes != nullptr) {
+        subscription_ = routes->SubscribeLeaderChanges(
+            [this](const CoordinatorLeaderIdentity &identity) { OnLeaderChanged(identity); });
+        OnLeaderChanged(routes->GetLeaderCache());
+    }
+}
+
+WorkerLeaderReconciler::~WorkerLeaderReconciler()
+{
+    Shutdown();
+}
+
+bool WorkerLeaderReconciler::SameIdentity(const CoordinatorLeaderIdentity &left, const CoordinatorLeaderIdentity &right)
+{
+    return left.hasLeader == right.hasLeader && left.address.ToString() == right.address.ToString()
+           && left.coordinatorId == right.coordinatorId && left.leaderTerm == right.leaderTerm
+           && left.routeEpoch == right.routeEpoch;
+}
+
+bool WorkerLeaderReconciler::IsCurrentIdentityLocked(const CoordinatorLeaderIdentity &identity) const
+{
+    return SameIdentity(identity, pendingIdentity_);
+}
+
+void WorkerLeaderReconciler::OnLeaderChanged(const CoordinatorLeaderIdentity &identity)
+{
+    if (stopping_.load(std::memory_order_acquire) || !identity.hasLeader || identity.coordinatorId.empty()) {
+        return;
+    }
+    // InitKeepAlive owns the first normal membership Put. It synchronously calls Reconcile(true) only when
+    // that Put is rejected by a recovering Leader, so a route observation cannot race the initial publication.
+    if (!backend_.IsFirstKeepAliveSent()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopping_.load(std::memory_order_relaxed) || SameIdentity(identity, lastEnsuredIdentity_)) {
+        return;
+    }
+    pendingIdentity_ = identity;
+    retryCv_.notify_all();
+    if (ensureScheduled_ || ensurePool_ == nullptr) {
+        return;
+    }
+    ensureScheduled_ = true;
+    try {
+        ensurePool_->Execute([this, identity] { RunEnsureLoop(identity); });
+    } catch (const std::exception &error) {
+        ensureScheduled_ = false;
+        LOG(WARNING) << "WORKER_LEADER_ENSURE_SCHEDULE_FAILED cluster=" << clusterName_ << " error=" << error.what();
+    }
+}
+
+void WorkerLeaderReconciler::NotifyLegacyMembershipReady(const std::string &coordinatorId)
+{
+    if (stopping_.load(std::memory_order_acquire) || coordinatorId.empty()) {
+        return;
+    }
+    const auto *routes = proxy_.GetLeaderRouteProvider();
+    if (routes == nullptr) {
+        return;
+    }
+    const auto identity = routes->GetLeaderCache();
+    if (identity.hasLeader && identity.leaderTerm == 0 && identity.coordinatorId == coordinatorId) {
+        reporter_.NotifyMembershipReady(identity);
+    }
+}
+
+Status WorkerLeaderReconciler::Reconcile(bool waitForCompletion)
+{
+    CHECK_FAIL_RETURN_STATUS(!stopping_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
+                             "Worker Leader reconciler is shutting down");
+    auto *routes = proxy_.GetLeaderRouteProvider();
+    CHECK_FAIL_RETURN_STATUS(routes != nullptr, K_NOT_READY, "Coordinator Leader route is unavailable");
+    const auto identity = routes->GetLeaderCache();
+    CHECK_FAIL_RETURN_STATUS(identity.hasLeader && !identity.coordinatorId.empty(), K_NOT_READY,
+                             "Coordinator Leader identity is unavailable");
+    if (!waitForCompletion) {
+        OnLeaderChanged(identity);
+        return Status::OK();
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pendingIdentity_ = identity;
+    }
+    return ReconcileIdentity(identity);
+}
+
+Status WorkerLeaderReconciler::ReconcileIdentity(const CoordinatorLeaderIdentity &identity)
+{
+    std::lock_guard<std::mutex> ensureLock(ensureMutex_);
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_.load(std::memory_order_acquire)) {
+            return Status(K_SHUTTING_DOWN, "Worker Leader reconciler is shutting down");
+        }
+        if (SameIdentity(identity, lastEnsuredIdentity_)) {
+            return Status::OK();
+        }
+    }
+    DsCoordinationBackend::MembershipRenewalPayload payload;
+    RETURN_IF_NOT_OK(backend_.GetMembershipRenewalPayload(payload));
+    coordinator::EnsureLeaderMembershipReqPb request;
+    request.set_cluster_name(clusterName_);
+    request.set_reporter_address(payload.reporterAddress);
+    request.set_coordinator_id(identity.coordinatorId);
+    request.set_leader_term(identity.leaderTerm);
+    request.set_membership_value(payload.encodedValue);
+    request.set_ttl_ms(payload.ttlMs);
+    coordinator::EnsureLeaderMembershipRspPb response;
+    RETURN_IF_NOT_OK(proxy_.EnsureLeaderMembership(request, response));
+    auto *routes = proxy_.GetLeaderRouteProvider();
+    CHECK_FAIL_RETURN_STATUS(routes != nullptr, K_NOT_READY, "Coordinator Leader route is unavailable");
+    const auto current = routes->GetLeaderCache();
+    CHECK_FAIL_RETURN_STATUS(SameIdentity(current, identity), K_TRY_AGAIN,
+                             "Coordinator Leader changed during membership ensure");
+    CHECK_FAIL_RETURN_STATUS(
+        response.result() == coordinator::EnsureLeaderMembershipRspPb::ACCEPTED,
+        response.result() == coordinator::EnsureLeaderMembershipRspPb::STALE_EPOCH ? K_TRY_AGAIN : K_INVALID,
+        "Coordinator rejected membership ensure");
+    CHECK_FAIL_RETURN_STATUS(response.membership_mod_revision() > 0, K_TRY_AGAIN,
+                             "Coordinator accepted membership ensure without a revision");
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        CHECK_FAIL_RETURN_STATUS(!stopping_.load(std::memory_order_acquire) && IsCurrentIdentityLocked(identity),
+                                 K_TRY_AGAIN, "Coordinator Leader changed during membership ensure");
+        backend_.OnMembershipEnsured(identity.coordinatorId, response.membership_mod_revision());
+        reporter_.NotifyMembershipReady(identity);
+        lastEnsuredIdentity_ = identity;
+    }
+    return Status::OK();
+}
+
+void WorkerLeaderReconciler::RunEnsureLoop(CoordinatorLeaderIdentity identity)
+{
+    size_t retryAttempt = 0;
+    while (!stopping_.load(std::memory_order_acquire)) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (stopping_.load(std::memory_order_acquire)) {
+                ensureScheduled_ = false;
+                break;
+            }
+            identity = pendingIdentity_;
+        }
+        const auto status = ReconcileIdentity(identity);
+        if (status.IsOk()) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (IsCurrentIdentityLocked(identity)) {
+                ensureScheduled_ = false;
+                break;
+            }
+            retryAttempt = 0;
+            retryCv_.wait_for(lock, EnsureRetryBackoff(identity, backend_.GetWatcherAddr(), retryAttempt),
+                              [this] { return stopping_.load(std::memory_order_acquire); });
+            continue;
+        }
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (stopping_.load(std::memory_order_acquire)) {
+            ensureScheduled_ = false;
+            break;
+        }
+        if (!IsCurrentIdentityLocked(identity)) {
+            retryAttempt = 0;
+            retryCv_.wait_for(lock, EnsureRetryBackoff(identity, backend_.GetWatcherAddr(), retryAttempt),
+                              [this] { return stopping_.load(std::memory_order_acquire); });
+            continue;
+        }
+        if (!IsRetryableEnsureStatus(status)) {
+            ensureScheduled_ = false;
+            LOG(ERROR) << "WORKER_LEADER_ENSURE_REJECTED cluster=" << clusterName_ << " status=" << status.ToString();
+            break;
+        }
+        retryCv_.wait_for(lock, EnsureRetryBackoff(identity, backend_.GetWatcherAddr(), retryAttempt++),
+                          [this, &identity] {
+                              return stopping_.load(std::memory_order_acquire) || !IsCurrentIdentityLocked(identity);
+                          });
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    ensureScheduled_ = false;
+}
+
+void WorkerLeaderReconciler::Shutdown()
+{
+    stopping_.store(true, std::memory_order_release);
+    retryCv_.notify_all();
+    subscription_.reset();
+    ensurePool_.reset();
+}
+}  // namespace datasystem::cluster

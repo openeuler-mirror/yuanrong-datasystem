@@ -559,6 +559,25 @@ ds_cc_test(
     ],
 )
 
+ds_cc_test(
+    name = "coordinator_topology_recovery_component_test",
+    srcs = ["coordinator_topology_recovery_component_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster/coordination_backend:topology_recovery_reporter",
+        "//src/datasystem/coordinator:coordinator_topology_recovery_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "worker_leader_reconciler_test",
+    srcs = ["worker_leader_reconciler_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster/coordination_backend:worker_leader_reconciler",
+        "//tests/ut:ut_common",
+    ],
+)
+
 # 汇总测试套件
 test_suite(
     name = "all_worker_tests",
@@ -568,6 +587,7 @@ test_suite(
         "authenticate_test",
         "client_manager_test",
         "coordinator_watch_service_test",
+        "coordinator_topology_recovery_component_test",
         "topology_recovery_reporter_test",
         "kv_event_publisher_test",
         "lock_map_test",
@@ -587,6 +607,7 @@ test_suite(
         "stream_usagemonitor_test",
         "worker_get_hash_ring_test",
         "worker_leaving_intercept_test",
+        "worker_leader_reconciler_test",
         "worker_oc_eviction_test",
         "worker_oc_service_impl_header_test",
         "worker_oc_service_impl_test",

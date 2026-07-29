@@ -28,6 +28,15 @@ message ResponseHeader {
   bool is_leader = 1;
   string leader_address = 2; // Empty if is_leader=true or if leader unknown
   bytes coordinator_id = 3; // Unique identifier of this Coordinator process lifetime.
+  uint64 leader_term = 4; // Current Raft term; 0 when no term is known.
+  enum ServingStatePb {
+    SERVING_STATE_UNSPECIFIED = 0;
+    FOLLOWER_SERVING = 1;
+    LEADER_RECOVERING = 2;
+    LEADER_SERVING = 3;
+    NO_LEADER = 4;
+  }
+  ServingStatePb serving_state = 5;
 }
 
 enum CoordinatorRecoveryStatePb {
@@ -57,6 +66,7 @@ message ReportTopologyRecoveryCandidateReqPb {
   uint64 topology_version = 5;
   bytes topology_digest = 6;
   bytes canonical_topology = 7; // Canonical payload; at most 4 MiB and empty for evidence-only reports.
+  uint64 leader_term = 8; // Leader term observed by the reporter.
 }
 
 message ReportTopologyRecoveryCandidateRspPb {
@@ -65,11 +75,35 @@ message ReportTopologyRecoveryCandidateRspPb {
     ACCEPTED = 1;
     COORDINATOR_ID_MISMATCH = 2;
     MEMBERSHIP_NOT_READY = 3;
+    STALE_LEADER_TERM = 4;
   }
   ResponseHeader header = 1;
   ResultPb result = 2;
   CoordinatorRecoveryStatePb recovery_state = 3;
   bool payload_required = 4;
+}
+
+message EnsureLeaderMembershipReqPb {
+  string cluster_name = 1;
+  string reporter_address = 2;
+  bytes coordinator_id = 3;
+  uint64 leader_term = 4;
+  bytes membership_value = 5;
+  int64 ttl_ms = 6;
+}
+
+message EnsureLeaderMembershipRspPb {
+  ResponseHeader header = 1;
+  enum ResultPb {
+    RESULT_UNSPECIFIED = 0;
+    ACCEPTED = 1;
+    STALE_EPOCH = 2;
+    INVALID_MEMBERSHIP = 3;
+  }
+  ResultPb result = 2;
+  int64 remaining_ttl_ms = 3;
+  // Modification revision of the membership recreated by an ACCEPTED response.
+  int64 membership_mod_revision = 4;
 }
 
 message PutReqPb {
@@ -224,6 +258,8 @@ service CoordinatorService {
       returns (ReportTopologyRecoveryCandidateRspPb) {}
   rpc GetClusterRawSnapshot(GetClusterRawSnapshotReqPb) returns (GetClusterRawSnapshotRspPb) {}
   rpc GetRaftBootstrapState(GetRaftBootstrapStateReqPb) returns (GetRaftBootstrapStateRspPb) {}
+  // Append-only: ZMQ dispatch uses the service method index for the existing RPCs above.
+  rpc EnsureLeaderMembership(EnsureLeaderMembershipReqPb) returns (EnsureLeaderMembershipRspPb) {}
 }
 
 message EventPb {

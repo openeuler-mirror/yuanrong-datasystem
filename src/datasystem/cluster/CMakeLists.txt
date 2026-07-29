@@ -59,6 +59,7 @@ target_link_libraries(cluster_topology PUBLIC
         cluster_topology_scope
         cluster_topology_protos
         topology_recovery_reporter
+        worker_leader_reconciler
         common_ak_sk
         common_buffer
         common_inject

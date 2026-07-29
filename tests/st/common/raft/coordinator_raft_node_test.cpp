@@ -1140,8 +1140,8 @@ TEST_F(CoordinatorRaftNodeTest, MembershipStatusIsNotReadyBeforeStart)
 
 TEST_F(CoordinatorRaftNodeTest, BootstrapOneNodePublishesLeaderAndCommittedConfiguration)
 {
-    const auto caseDeadline = std::chrono::steady_clock::now() + kBootstrapCaseBudget;
     ASSERT_NO_FATAL_FAILURE(StartOneNode(coordinator::RaftMetadataState::ABSENT));
+    const auto caseDeadline = std::chrono::steady_clock::now() + kBootstrapCaseBudget;
 
     ASSERT_TRUE(WaitUntil([this] { return node_->IsLeader(); }, caseDeadline))
         << "one-node raft did not elect local leader " << localAddress_;
@@ -1165,10 +1165,30 @@ TEST_F(CoordinatorRaftNodeTest, BootstrapOneNodePublishesLeaderAndCommittedConfi
     EXPECT_GT(configurationIndex, 0);
 }
 
+TEST_F(CoordinatorRaftNodeTest, ElectedLeaderForwardsLifecycleCallbacksWithItsTerm)
+{
+    std::atomic<uint64_t> startedTerm{ 0 };
+    std::atomic<int> stopped{ 0 };
+    coordinator::CoordinatorRaftEventCallbacks callbacks;
+    callbacks.onLeaderStart = [&startedTerm](int64_t term) {
+        startedTerm.store(static_cast<uint64_t>(term), std::memory_order_release);
+    };
+    callbacks.onLeaderStop = [&stopped](const Status &) { stopped.fetch_add(1, std::memory_order_relaxed); };
+    ASSERT_NO_FATAL_FAILURE(StartOneNode(coordinator::RaftMetadataState::ABSENT, std::move(callbacks)));
+    const auto caseDeadline = std::chrono::steady_clock::now() + kBootstrapCaseBudget;
+
+    ASSERT_TRUE(WaitUntil([&startedTerm] { return startedTerm.load(std::memory_order_acquire) > 0; }, caseDeadline));
+    EXPECT_TRUE(node_->IsLeader());
+    EXPECT_GT(startedTerm.load(std::memory_order_acquire), 0UL);
+
+    StopOneNode();
+    EXPECT_GE(stopped.load(std::memory_order_relaxed), 1);
+}
+
 TEST_F(CoordinatorRaftNodeTest, SoleCommittedVoterRemovalFailsSynchronouslyAndPreservesRecovery)
 {
-    const auto caseDeadline = std::chrono::steady_clock::now() + kRecoveryCaseBudget;
     ASSERT_NO_FATAL_FAILURE(StartOneNode(coordinator::RaftMetadataState::ABSENT));
+    auto caseDeadline = std::chrono::steady_clock::now() + kRecoveryCaseBudget;
     ASSERT_TRUE(WaitUntil([this] { return node_->IsLeader(); }, caseDeadline))
         << "one-node raft did not elect local leader " << localAddress_;
 
@@ -1199,6 +1219,7 @@ TEST_F(CoordinatorRaftNodeTest, SoleCommittedVoterRemovalFailsSynchronouslyAndPr
     StopOneNode();
     ASSERT_NO_FATAL_FAILURE(StartOneNode(coordinator::RaftMetadataState::VALID, {},
                                          coordinator::RaftStartPlan{ coordinator::RecoverPlan{} }));
+    caseDeadline = std::chrono::steady_clock::now() + kRecoveryCaseBudget;
     ASSERT_TRUE(WaitUntil([this] { return node_->IsLeader(); }, caseDeadline))
         << "recovered node did not re-elect local leader " << localAddress_;
 
@@ -1216,8 +1237,8 @@ TEST_F(CoordinatorRaftNodeTest, SoleCommittedVoterRemovalFailsSynchronouslyAndPr
 
 TEST_F(CoordinatorRaftNodeTest, RecoverUsesPersistedConfigurationWithoutBootstrapPeers)
 {
-    const auto recoveryCaseDeadline = std::chrono::steady_clock::now() + kRecoveryCaseBudget;
     ASSERT_NO_FATAL_FAILURE(StartOneNode(coordinator::RaftMetadataState::ABSENT));
+    auto recoveryCaseDeadline = std::chrono::steady_clock::now() + kRecoveryCaseBudget;
     ASSERT_TRUE(WaitUntil([this] { return node_->IsLeader(); }, recoveryCaseDeadline))
         << "bootstrap node did not elect local leader " << localAddress_;
 
@@ -1236,6 +1257,7 @@ TEST_F(CoordinatorRaftNodeTest, RecoverUsesPersistedConfigurationWithoutBootstra
     StopOneNode();
     ASSERT_NO_FATAL_FAILURE(StartOneNode(coordinator::RaftMetadataState::VALID, {},
                                          coordinator::RaftStartPlan{ coordinator::RecoverPlan{} }));
+    recoveryCaseDeadline = std::chrono::steady_clock::now() + kRecoveryCaseBudget;
     ASSERT_TRUE(WaitUntil([this] { return node_->IsLeader(); }, recoveryCaseDeadline))
         << "recovered node did not re-elect local leader " << localAddress_;
 

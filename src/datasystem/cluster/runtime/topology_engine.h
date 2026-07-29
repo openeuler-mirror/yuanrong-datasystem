@@ -39,6 +39,7 @@ class HashAlgorithm;
 class ITopologyPhaseCallbacks;
 class TopologyControllerRuntime;
 class TopologyRecoveryReporter;
+class WorkerLeaderReconciler;
 
 /**
  * @brief Bind and safely drain the Worker RPC ingress used by Coordinator-backed watches.
@@ -359,6 +360,7 @@ private:
      */
     Status InitializeOwnedComponents(std::chrono::seconds nodeDeadTimeout,
                                      std::chrono::milliseconds scaleInCollectWindow);
+    void InitializeCoordinatorComponents();
 
     /**
      * @brief Route one Coordinator watch event to its unique role backend.
@@ -529,6 +531,7 @@ private:
     TopologyTaskExecutor executor_;
     std::unique_ptr<TopologyControllerRuntime> controllerRuntime_;
     std::unique_ptr<TopologyRecoveryReporter> recoveryReporter_;
+    std::unique_ptr<WorkerLeaderReconciler> workerLeaderReconciler_;
     // Protects lifecycle transactions, startAttempted_, ingressBound_, and thread join sequencing.
     // Backend IO, callbacks, drain, component Start/Stop, and thread join execute without this lock.
     std::mutex lifecycleMutex_;
