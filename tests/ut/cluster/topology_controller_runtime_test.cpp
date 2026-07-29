@@ -250,10 +250,17 @@ TEST(TopologyControllerRuntimeTest, ValidatesOptionsAndKeepsOutputUnchanged)
     EXPECT_EQ(runtime.get(), original);
 
     auto invalidController = MakeOptions("valid");
-    invalidController.controller.nodeDeadTimeout = std::chrono::seconds(0);
+    invalidController.controller.nodeDeadTimeout = std::chrono::seconds(-1);
     EXPECT_EQ(TopologyControllerRuntime::Create(std::move(invalidController), backend, algorithm, runtime).GetCode(),
               K_INVALID);
     EXPECT_EQ(runtime.get(), original);
+
+    auto zeroTimeoutController = MakeOptions("valid");
+    zeroTimeoutController.controller.nodeDeadTimeout = std::chrono::seconds(0);
+    std::unique_ptr<TopologyControllerRuntime> zeroTimeoutRuntime;
+    DS_ASSERT_OK(
+        TopologyControllerRuntime::Create(std::move(zeroTimeoutController), backend, algorithm, zeroTimeoutRuntime));
+    ASSERT_NE(zeroTimeoutRuntime, nullptr);
 
     auto invalidJanitor = MakeOptions("valid");
     invalidJanitor.janitor = TopologyTaskJanitorOptions{};

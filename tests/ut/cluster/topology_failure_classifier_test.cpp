@@ -116,5 +116,21 @@ TEST(TopologyFailureClassifierTest, ReachableMissingMemberRequiresANewContinuous
     ASSERT_EQ(classification.confirmedFailure.size(), 1);
 }
 
+TEST(TopologyFailureClassifierTest, ZeroTimeoutConfirmsOnFirstSuccessfulAbsenceObservation)
+{
+    TopologyState state;
+    state.version = 1;
+    state.clusterHasInit = true;
+    state.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    TopologyFailureClassifier classifier(std::chrono::seconds(0));
+    FailureClassification result;
+    DS_ASSERT_OK(classifier.Observe(*snapshot, {}, std::chrono::steady_clock::now(), result));
+    ASSERT_EQ(result.newlyMissing.size(), 1);
+    ASSERT_EQ(result.confirmedFailure.size(), 1);
+    EXPECT_EQ(result.confirmedFailure.front().address, "127.0.0.1:1");
+}
+
 }  // namespace
 }  // namespace datasystem::cluster

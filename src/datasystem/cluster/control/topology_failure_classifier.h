@@ -47,7 +47,8 @@ class TopologyFailureClassifier final {
 public:
     /**
      * @brief Construct a classifier.
-     * @param[in] nodeDeadTimeout Required continuous absence.
+     * @param[in] nodeDeadTimeout Required continuous absence after membership key deletion.
+     *            Zero confirms on the first successful observation of absence.
      */
     explicit TopologyFailureClassifier(std::chrono::seconds nodeDeadTimeout);
 
