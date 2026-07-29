@@ -84,6 +84,20 @@ Status ResourceManager::ReportResource(const master::ResourceReportReqPb &req, m
     }
 
     bool needScheduleSnapshot = rebalanceScheduler_.NeedSnapshotForSchedule(req, newInfo, rsp);
+    if (needScheduleSnapshot) {
+        // Rebalance is about to schedule on this report. Promote writeSnapshot_ (latest per-worker
+        // reports) into readSnapshot_ now so the snapshot Schedule consumes -- and the projection
+        // it makes the dispatch decision on -- reflects fresh data instead of up to ~10s-stale data
+        // left over from the last background swap. Without this, a target that just received a
+        // migration and reported its real (higher) usage would still look stale-low in readSnapshot_
+        // until the next 10s background swap, exposing it to a second migration decision made on the
+        // stale-low value (issue #685 steady-state residual). The background WorkerThread swap stays
+        // as the safety net for FillWorkerStat freshness when no rebalance scheduling happens.
+        // Schedule reads readSnapshot_ under shared_lock immediately after; a racing background
+        // swap could theoretically revert it in the nanosecond window before the lock is acquired,
+        // but the fallback is the pre-fix behavior (stale snapshot), which the next report corrects.
+        SwitchSnapshots();
+    }
     std::unordered_map<std::string, NodeInfo> snapshot;
     auto *stats = rsp.mutable_stats();
     {
@@ -128,11 +142,19 @@ void ResourceManager::WorkerThread()
     int64_t intervalMs = WORKER_THREAD_INTERVAL_MS;
     INJECT_POINT_NO_RETURN("ResourceManager.setInterval", [&intervalMs](int64_t interval) { intervalMs = interval; });
     while (running_) {
-        // Clear once every switchClearRatio switches
-        if (++switchNumber % switchClearRatio == 0) {
-            ClearWriteSnapshot();
+        // Testability hook: when set, this iteration skips both Clear and Swap so a UT can drive
+        // the read/write snapshot state purely through ReportResource + swap-on-trigger without any
+        // background mutation racing the assertions. Mirrors the setInterval inject above.
+        bool skipBackgroundSwap = false;
+        INJECT_POINT_NO_RETURN("ResourceManager.skipBackgroundSwap",
+                               [&skipBackgroundSwap]() { skipBackgroundSwap = true; });
+        if (!skipBackgroundSwap) {
+            // Clear once every switchClearRatio switches
+            if (++switchNumber % switchClearRatio == 0) {
+                ClearWriteSnapshot();
+            }
+            SwitchSnapshots();
         }
-        SwitchSnapshots();
         std::unique_lock<std::mutex> lock(taskMutex_);
         if (!running_.load()) {
             break;

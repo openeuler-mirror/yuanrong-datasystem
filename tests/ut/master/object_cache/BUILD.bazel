@@ -77,6 +77,20 @@ ds_cc_test(
 )
 
 ds_cc_test(
+    name = "resource_manager_test",
+    srcs = ["resource_manager_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/worker:add_miss_libs_fixme",
+        "//src/datasystem/common/flags:dynamic_flag_config_header",
+        "//src/datasystem/common/inject:common_inject",
+        "//src/datasystem/master:resource_manager",
+        "//src/datasystem/protos:master_object_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "object_meta_store_test",
     srcs = ["object_meta_store_test.cpp"],
     deps = [
@@ -117,6 +131,7 @@ test_suite(
         "master_dev_oc_manager_test",
         "meta_async_queue_test",
         "memory_rebalance_scheduler_test",
+        "resource_manager_test",
         "object_meta_store_test",
         "oc_notify_worker_manager_test",
     ],
