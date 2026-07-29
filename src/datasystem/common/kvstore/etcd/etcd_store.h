@@ -212,6 +212,8 @@ public:
     Status PutWithLeaseId(const std::string &tableName, const std::string &key, const std::string &value,
                           const int64_t leaseId);
 
+    Status PutWithKeepAliveLease(const std::string &tableName, const std::string &key, const std::string &value);
+
     /**
      * @brief Put a new key-value into a table.
      * @param[in] tableName The table name for the <key,value> to insert.

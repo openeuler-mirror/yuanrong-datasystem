@@ -10,6 +10,7 @@ ds_cc_library(
         "routing.cpp",
         "routing_rpc_client.cpp",
         "state_filter.cpp",
+        "ub_health_filter.cpp",
         "worker_router.cpp",
     ],
     hdrs = [
@@ -19,12 +20,15 @@ ds_cc_library(
         "routing.h",
         "routing_rpc_client.h",
         "state_filter.h",
+        "ub_health_filter.h",
         "worker_router.h",
     ],
     deps = [
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/object_cache:common_object_cache",
         "//src/datasystem/common/rpc:brpc_factory",
         "//src/datasystem/common/rpc:rpc_options",
         "//src/datasystem/common/util:common_util_impl",

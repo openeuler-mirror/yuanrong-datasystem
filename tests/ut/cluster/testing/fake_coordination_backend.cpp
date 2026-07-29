@@ -170,6 +170,13 @@ Status FakeCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKe
     return Status::OK();
 }
 
+Status FakeCoordinationBackend::PutWithKeepAliveLease(const std::string &table, const std::string &key,
+                                                      const std::string &value)
+{
+    PutBytes(table, key, value);
+    return Status::OK();
+}
+
 Status FakeCoordinationBackend::InitKeepAlive(const std::string &, const std::string &, bool, bool)
 {
     std::lock_guard<std::mutex> lock(mutex_);

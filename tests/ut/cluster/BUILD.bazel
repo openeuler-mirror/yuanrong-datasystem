@@ -1,0 +1,19 @@
+load("//bazel:build_defs.bzl", "ds_cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+ds_cc_test(
+    name = "ub_health_lease_sync_test",
+    srcs = [
+        "testing/fake_coordination_backend.cpp",
+        "testing/fake_coordination_backend.h",
+        "ub_health_lease_sync_test.cpp",
+    ],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/cluster/coordination_backend:coordination_backend",
+        "//src/datasystem/common/object_cache:common_object_cache",
+        "//src/datasystem/protos:share_memory_cc_proto",
+        "//tests/ut:ut_common",
+    ],
+)

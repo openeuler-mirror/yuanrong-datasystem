@@ -19,13 +19,17 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <shared_mutex>
 #include <unordered_map>
 
 #include "datasystem/common/ak_sk/ak_sk_manager.h"
 #include "datasystem/common/eventloop/event_loop.h"
+#include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/cluster/membership/membership_endpoint_view.h"
 #include "datasystem/protos/share_memory.irpc.pb.h"
@@ -135,7 +139,15 @@ public:
         workerUuid_ = uuid;
     }
 
+    const std::string &GetWorkerStartId() const noexcept
+    {
+        return workerStartId_;
+    }
+
+    void SetUbHealthSummaryProvider(std::function<std::optional<UbHealthSummary>()> provider);
+
 private:
+    void PopulateUbHealthSummary(HeartbeatRspPb &rsp) const;
     Status ValidateRegisterClientRequest(const RegisterClientReqPb &req, std::string &tenantId) const;
     Status ConsumeRegisterClientFd(const RegisterClientReqPb &req);
     Status AddRegisteringClient(const RegisterClientReqPb &req, const ClientKey &clientId,
@@ -197,6 +209,8 @@ private:
     std::string workerUuid_;
     const cluster::MembershipEndpointView &membership_;  // Read-only view owned by WorkerOCServer's Engine.
     const std::atomic<bool> &localExiting_;             // WorkerOCServer-owned local admission gate.
+    mutable std::mutex ubHealthSummaryProviderMutex_;
+    std::function<std::optional<UbHealthSummary>()> ubHealthSummaryProvider_;
 
     std::shared_timed_mutex mutex_;                           // for unboundedUnixSockFds_
     std::unordered_map<int, uint64_t> unboundedUnixSockFds_;  // This is the fd that is not bound to the client.

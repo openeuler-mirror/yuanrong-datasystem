@@ -289,6 +289,8 @@ ds_cc_test(
         "//src/datasystem/client/object_cache:object_client_impl",
         "//src/datasystem/client/object_cache/client_worker_api:iclient_worker_api",
         "//src/datasystem/common/immutable_string:immutable_string",
+        "//src/datasystem/common/kvstore/etcd:etcd_store",
+        "//src/datasystem/common/object_cache:ub_health",
         "//src/datasystem/common/util:uuid_generator",
     ],
 )

@@ -155,13 +155,27 @@ private:
         std::vector<RpcMessage> fallbackPayloads;  // store the rpc message for fallback in batch handler
     };
 
+    using BatchEventPayload =
+        std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>>;
+
     struct ParallelRes {
         std::vector<GetObjectRemoteRspPb> respPbs;
-        std::vector<std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>>> kps;
+        std::vector<BatchEventPayload> kps;
         std::vector<RpcMessage> fallbackPayloads;
         std::vector<Status> fallbackStatuses;
         std::vector<uint64_t> eventKeys;
         uint64_t subIndex = 0;
+    };
+
+    struct BatchWaitContext {
+        const BatchGetObjectRemoteReqPb &req;
+        ParallelRes &parallelResult;
+        BatchEventPayload &eventPayload;
+        BatchGetObjectRemoteRspPb &rsp;
+        std::vector<RpcMessage> &payload;
+        uint64_t &responseIndex;
+        uint64_t coveredResponseCount;
+        const Status &fallbackStatus;
     };
 
     struct BatchRh2dContext {
@@ -304,20 +318,20 @@ private:
                                        BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload);
 
     /**
-     * @brief Wait fast transport events and fallback to payload when needed.
-     * @param[in] req Remote get batch request.
-     * @param[in, out] loc Local parallel result slot.
-     * @param[in, out] kp Event key and fallback payload pair.
-     * @param[out] rsp Remote get batch response.
-     * @param[out] payload Out payloads.
-     * @param[in, out] index Current response index.
-     * @return Status of the call.
+     * @brief Set the same transport failure on every response covered by one batch event.
+     * @param[in, out] rsp Remote get batch response.
+     * @param[in] begin First affected response index.
+     * @param[in] count Number of affected responses.
+     * @param[in] status Transport failure to propagate.
      */
-    Status WaitFastTransportAndFallback(
-        const BatchGetObjectRemoteReqPb &req, ParallelRes &loc,
-        std::pair<uint64_t, std::pair<std::vector<uint64_t>, std::vector<RpcMessage>>> &kp,
-        BatchGetObjectRemoteRspPb &rsp, std::vector<RpcMessage> &payload, uint64_t &index, uint64_t coveredRespNum,
-        const Status &fallbackStatus);
+    static void SetBatchResponseError(BatchGetObjectRemoteRspPb &rsp, uint64_t begin, uint64_t count,
+                                      const Status &status);
+
+    void RecordBatchProviderFailure(BatchWaitContext &context, const Status &status,
+                                    const UrmaWriteFailure &failure);
+    static void MoveBatchFallbackPayload(BatchWaitContext &context);
+    Status HandleBatchWaitFailure(BatchWaitContext &context, Status &status, const UrmaWriteFailure &failure);
+    Status WaitFastTransportAndFallback(BatchWaitContext &context);
 
     /**
      * @brief Helper function to BatchGetObjectRemote to process requests in parallel.

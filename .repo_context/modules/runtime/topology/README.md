@@ -145,6 +145,14 @@
   `K_NOT_FOUND` or `K_NOT_READY`, ETCD registers in explicit `WATCH_FROM_NOW` mode and may miss the first topology
   creation in the read-watch window; later topology events or passive compensation converge state. Other reload errors
   fail startup through the existing cleanup behavior. No second synchronous startup reload runs after watch registration.
+- UB health is a non-authoritative membership sidecar rather than topology state. Each Worker periodically publishes one
+  self-only summary under a separate keyspace using the active membership lease/TTL and consumes the bounded O(N)
+  snapshot into `PeerUbAdmission`. Missing leased records clear global quarantine, malformed live records preserve the
+  last accepted quarantine, and neither path erases process-local failure evidence. Topology membership and Failure
+  planning remain the only authoritative ownership inputs.
+  - The Bazel `cluster_topology` target depends on the lightweight
+    `//src/datasystem/common/object_cache:ub_health` target. Keep this boundary free of the full `common_object_cache`
+    dependency so the coordinator does not inherit shared-memory and data-plane link requirements.
 - Coordinator uses the same keepalive-init-then-single-reload-before-watch call order. Its watch descriptor revision
   remains zero because `WatchRange` ignores the field and returns `initial_kvs` plus a RESET doorbell. `K_NOT_FOUND` and
   `K_NOT_READY` allow bootstrap waiting; other reload errors fail before any `WatchRange` call. A successful reload

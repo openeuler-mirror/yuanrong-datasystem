@@ -95,12 +95,20 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME share_memory_protos
         SOURCE ${SHARE_MEMORY_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos rpc_option_protos)
+        LINK ${PROTOBUF_LIBRARIES}
+             zmq_meta_protos
+             rpc_option_protos
+             meta_transport_protos
+             utils_protos)
 GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         NAME share_memory_protos_client
         SOURCE ${SHARE_MEMORY_SRCS}
         DEPEND zmq_proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES} zmq_meta_protos_client rpc_option_protos)
+        LINK ${PROTOBUF_LIBRARIES}
+             zmq_meta_protos_client
+             rpc_option_protos
+             meta_transport_protos_client
+             utils_protos_client)
 
 GENERATE_PROTO_CPP(CLUSTER_TOPOLOGY_PROTO_SRCS COMMON_PROTO_HDRS ${PROTO_BUILD_DIR}
         PROTO_FILES ${PROTO_SRC_DIR}/cluster_topology.proto

@@ -363,6 +363,18 @@ void DsCoordinationBackend::RefreshWatchIdentity(const Status &status)
     }
 }
 
+Status DsCoordinationBackend::PutWithKeepAliveLease(const std::string &tableName, const std::string &key,
+                                                    const std::string &value)
+{
+    CHECK_FAIL_RETURN_STATUS(proxy_ != nullptr, K_RUNTIME_ERROR, "Coordinator service proxy is null");
+    CHECK_FAIL_RETURN_STATUS(!IsKeepAliveTimeout() && keepAliveTtlMs_ > 0, K_NOT_READY,
+                             "UB health value must be bound to an active membership lease");
+    int64_t version = 0;
+    int64_t revision = 0;
+    return proxy_->Put(BuildRealKey(tableName, key), value, keepAliveTtlMs_, COORDINATOR_NO_VERSION_CHECK, version,
+                       revision);
+}
+
 Status DsCoordinationBackend::InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                                             bool isStoreAvailableWhenStart)
 {

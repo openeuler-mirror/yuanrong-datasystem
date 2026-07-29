@@ -41,6 +41,8 @@ public:
     Status Delete(const std::string &table, const std::string &key) override;
     Status Delete(const std::string &table, const std::string &key, int timeoutMs) override;
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override;
+    Status PutWithKeepAliveLease(const std::string &table, const std::string &key,
+                                 const std::string &value) override;
     Status InitKeepAlive(const std::string &, const std::string &, bool, bool) override;
     Status ShutdownEventSources() override;
     Status Shutdown() override;

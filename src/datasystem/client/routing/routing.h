@@ -49,6 +49,7 @@ class Routing {
 public:
     Routing(BrpcChannelConfig channelConfig, std::shared_ptr<Signature> signature,
             HashRingRefresher::RingUpdateHook ringUpdateHook = {},
+            std::vector<std::shared_ptr<IWorkerFilter>> additionalFilters = {},
             int64_t refreshIntervalMs = DEFAULT_REFRESH_INTERVAL_MS);
 
     // Dependency-injection seam used by focused routing tests.

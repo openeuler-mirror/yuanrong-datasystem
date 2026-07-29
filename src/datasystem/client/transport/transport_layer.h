@@ -29,6 +29,7 @@
 #include <string>
 #include <vector>
 
+#include "datasystem/client/routing/ub_health_filter.h"
 #include "datasystem/client/transport/data_plane/data_plane_manager.h"
 #include "datasystem/client/transport/object_read/object_read_flow.h"
 #include "datasystem/client/transport/object_read/object_read_types.h"
@@ -49,6 +50,14 @@
 namespace datasystem {
 namespace client {
 
+struct TransportLayerOptions {
+    BrpcChannelConfig channelConfig;
+    std::shared_ptr<ThreadPool> releasePool;
+    bool enableClientDirectPipelineH2D = false;
+    int32_t pipelineThreadNum = 64;
+    std::shared_ptr<UbHealthFilter> readSourceFilter;
+};
+
 class TransportLayer {
 public:
     void SetShmDependencies(std::shared_ptr<IClientWorkerCommonApi> workerApi,
@@ -65,9 +74,7 @@ public:
     }
 
     explicit TransportLayer(std::shared_ptr<Signature> signature, std::shared_ptr<ThreadPool> taskPool,
-                            uint64_t fastTransportMemSize, BrpcChannelConfig channelConfig = {},
-                            std::shared_ptr<ThreadPool> releasePool = nullptr,
-                            bool enableClientDirectPipelineH2D = false, int32_t pipelineThreadNum = 64);
+                            uint64_t fastTransportMemSize, TransportLayerOptions options = {});
     ~TransportLayer();
 
     /** @brief Initialize transport runtime resources before data-plane connections are created. */

@@ -175,6 +175,12 @@ public:
     virtual Status WatchEvents(const std::vector<WatchKey> &watchKeys) = 0;
 
     /**
+     * @brief Publish one sidecar value bound to the local membership lease.
+     */
+    virtual Status PutWithKeepAliveLease(const std::string &tableName, const std::string &key,
+                                         const std::string &value) = 0;
+
+    /**
      * @brief Initialize the existing membership keepalive/session.
      * @param[in] tableName Logical membership table name.
      * @param[in] key Local membership key.

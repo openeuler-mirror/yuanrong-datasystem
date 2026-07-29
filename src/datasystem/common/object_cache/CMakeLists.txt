@@ -5,6 +5,7 @@ set(COMMON_BUFFER_SRCS
         urma_fallback_tcp_limiter.cpp
         ub_failure_classifier.cpp
         peer_ub_admission.cpp
+        ub_health_summary_codec.cpp
         device_buffer.cpp
         buffer_composer.cpp
         object_buffer.cpp)
@@ -12,8 +13,10 @@ set(COMMON_BUFFER_SRCS
 set(COMMON_BUFFER_DEPEND_LIBS
         ${SECUREC_LIBRARY}
         ${CLIENT_LIB}
+        common_inject
         common_log
         common_util
+        share_memory_protos
         )
 
 set(COMMON_REF_SRCS object_ref_info.cpp)

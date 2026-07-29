@@ -26,11 +26,17 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "datasystem/client/routing/ub_health_filter.h"
+#include "datasystem/client/transport/common/deadline_retry.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
+#include "datasystem/client/transport/object_read/replica_reader.h"
 #include "datasystem/client/transport/transport_layer.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
+#include "datasystem/common/rpc/api_deadline.h"
 #if defined(USE_URMA) || defined(USE_URMA_MOCK)
 #include "datasystem/common/rdma/urma_manager.h"
 #endif
@@ -69,6 +75,18 @@ TransportSetParam MakeSetParam()
     return param;
 }
 
+master::ObjectLocationInfoPb MakeReplicaLocation(const std::string &key, uint64_t size,
+                                                 const std::vector<HostPort> &addresses)
+{
+    master::ObjectLocationInfoPb location;
+    location.set_object_key(key);
+    location.set_object_size(size);
+    for (const auto &address : addresses) {
+        location.add_object_locations(address.ToString());
+    }
+    return location;
+}
+
 class FakeWorkerRpcClient : public WorkerRpcClient {
 public:
     explicit FakeWorkerRpcClient(const HostPort &address) : WorkerRpcClient(address, MakeSignature())
@@ -98,10 +116,20 @@ private:
 
 class FakeTransporter : public IDataTransporter {
 public:
-    Status Get(const DataGetRequest &, DataGetResult &) override
+    Status Get(const DataGetRequest &, DataGetResult &output) override
     {
         ++getCount;
-        return Status::OK();
+        Status status = Status::OK();
+        if (!getStatuses.empty()) {
+            status = getStatuses.front();
+            getStatuses.erase(getStatuses.begin());
+        }
+        if (status.IsError() && getProviderCqeStatus.has_value()) {
+            FillProviderUbFailureDetail(status, "client-receive-endpoint", providerAddress.ToString(),
+                                        getProviderCqeStatus, getProviderCqeStatus,
+                                        *output.response.mutable_provider_ub_failure_detail());
+        }
+        return status;
     }
 
     Status BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) override
@@ -198,6 +226,7 @@ public:
     }
 
     AccessTransportKind kind{ AccessTransportKind::TCP };
+    HostPort providerAddress;
     int getCount{ 0 };
     int batchGetCount{ 0 };
     int createCount{ 0 };
@@ -206,6 +235,8 @@ public:
     int mSetCount{ 0 };
     int releaseCount{ 0 };
     std::vector<Status> setStatuses;
+    std::vector<Status> getStatuses;
+    std::optional<int> getProviderCqeStatus;
     std::vector<Status> setUbFailureReports;
     std::vector<std::optional<int>> setUbCqeStatuses;
     Status mSetUbFailureReportRc{ Status::OK() };
@@ -231,18 +262,29 @@ public:
         return Status::OK();
     }
 
-    Status BuildTransporter(const HostPort &, TransportHint hint, const std::shared_ptr<WorkerRpcClient> &,
+    Status BuildTransporter(const HostPort &workerAddr, TransportHint hint, const std::shared_ptr<WorkerRpcClient> &,
                             std::shared_ptr<IDataTransporter> &output) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         ++transportBuildCount;
         auto transporter = std::make_shared<FakeTransporter>();
+        transporter->providerAddress = workerAddr;
         if (hint == TransportHint::TCP_ONLY) {
             transporter->kind = AccessTransportKind::TCP;
         } else if (hint == TransportHint::SHM_CANDIDATE) {
             transporter->kind = AccessTransportKind::SHM;
         } else {
             transporter->kind = AccessTransportKind::UB;
+        }
+        auto getStatuses = transporterGetStatuses.find(workerAddr);
+        if (getStatuses != transporterGetStatuses.end()) {
+            transporter->getStatuses = std::move(getStatuses->second);
+            transporterGetStatuses.erase(getStatuses);
+        }
+        auto getCqeStatus = transporterGetCqeStatuses.find(workerAddr);
+        if (getCqeStatus != transporterGetCqeStatuses.end()) {
+            transporter->getProviderCqeStatus = getCqeStatus->second;
+            transporterGetCqeStatuses.erase(getCqeStatus);
         }
         if (!transporterSetStatuses.empty()) {
             transporter->setStatuses = std::move(transporterSetStatuses.front());
@@ -273,6 +315,8 @@ public:
     int transportBuildCount{ 0 };
     std::atomic<int> probeCount{ 0 };
     std::vector<std::vector<Status>> transporterSetStatuses;
+    std::unordered_map<HostPort, std::vector<Status>> transporterGetStatuses;
+    std::unordered_map<HostPort, int> transporterGetCqeStatuses;
     std::vector<Status> transporterMSetUbFailureReports;
     std::vector<Status> probeStatuses;
     std::vector<HostPort> probedWorkers;
@@ -328,6 +372,172 @@ public:
 private:
     TransportHint hint_;
 };
+
+TEST(ReplicaReaderAdmissionTest, SingletonBatchProviderError4CreatesObservationAndNextBatchSwitchesReplica)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto failedProvider = MakeAddress(28);
+    const auto healthyProvider = MakeAddress(29);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses[failedProvider] = { Status(K_URMA_ERROR, "provider write failed") };
+    manager->transporterGetCqeStatuses[failedProvider] = 4;
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    auto filter = std::make_shared<UbHealthFilter>();
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(1),
+        [filter](const HostPort &address) {
+            return filter->IsAvailable(address)
+                       ? Status::OK()
+                       : Status(K_URMA_DATA_WORKER_UNAVAILABLE, "read source unavailable");
+        },
+        [filter](const HostPort &provider, const GetObjectRemoteRspPb &response) {
+            if (response.has_provider_ub_failure_detail()) {
+                (void)filter->ReportProviderFailure(provider, response.provider_ub_failure_detail());
+            }
+        });
+    auto location = MakeReplicaLocation("switch-after-provider-detail", 4, { failedProvider, healthyProvider });
+    ObjectReadItemResult result;
+    ReplicaReadBatch requests{ { &location, &result } };
+
+    EXPECT_EQ(reader.ReadBatch(requests).GetCode(), K_URMA_ERROR);
+    auto observation = filter->GetLocalObservation(failedProvider);
+    ASSERT_TRUE(observation.has_value());
+    EXPECT_EQ(observation->lastFailureClass, UbFailureClass::PORT_UNAVAILABLE_ERROR4);
+
+    EXPECT_TRUE(reader.ReadBatch(requests).IsOk());
+    ASSERT_EQ(manager->builtTransporters.size(), 2u);
+    EXPECT_EQ(manager->builtTransporters[0]->providerAddress, failedProvider);
+    EXPECT_EQ(manager->builtTransporters[0]->getCount, 1);
+    EXPECT_EQ(manager->builtTransporters[1]->providerAddress, healthyProvider);
+    EXPECT_EQ(manager->builtTransporters[1]->getCount, 1);
+}
+
+TEST(ReplicaReaderAdmissionTest, BatchChecksUnavailableEndpointOnceAndContinuesHealthyGroup)
+{
+    ApiDeadlineGuard deadline(1000);
+    const auto failedProvider = MakeAddress(30);
+    const auto healthyProvider = MakeAddress(31);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    auto executor = std::make_shared<DataPlaneExecutor>(manager, std::make_shared<TransportAdvisor>());
+    std::unordered_map<HostPort, size_t> admissionChecks;
+    ReplicaReader reader(
+        executor, std::make_shared<DeadlineRetry>(), std::make_shared<ThreadPool>(2),
+        [&admissionChecks, failedProvider](const HostPort &address) {
+            ++admissionChecks[address];
+            return address == failedProvider
+                       ? Status(K_URMA_DATA_WORKER_UNAVAILABLE, "read source unavailable")
+                       : Status::OK();
+        });
+    std::vector<master::ObjectLocationInfoPb> locations = {
+        MakeReplicaLocation("bad-a", 1, { failedProvider }),
+        MakeReplicaLocation("bad-b", 1, { failedProvider }),
+        MakeReplicaLocation("good", 1, { healthyProvider }),
+    };
+    std::vector<ObjectReadItemResult> results(locations.size());
+    ReplicaReadBatch requests;
+    for (size_t i = 0; i < locations.size(); ++i) {
+        requests.push_back({ &locations[i], &results[i] });
+    }
+
+    EXPECT_TRUE(reader.ReadBatch(requests).IsOk());
+    EXPECT_EQ(admissionChecks[failedProvider], 1u);
+    EXPECT_EQ(admissionChecks[healthyProvider], 1u);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+    EXPECT_EQ(results[0].status.GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE);
+    EXPECT_EQ(results[1].status.GetCode(), K_URMA_DATA_WORKER_UNAVAILABLE);
+    EXPECT_TRUE(results[2].status.IsOk());
+}
+
+TEST(UbHealthFilterTest, NewTopologyIncarnationClearsOldLocalObservation)
+{
+    const auto provider = MakeAddress(32);
+    UbHealthFilter filter;
+    ClusterTopologyPb initial;
+    (*initial.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(initial);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+    filter.ApplyTopologyIncarnations(initial);
+    EXPECT_FALSE(filter.IsAvailable(provider));
+
+    ClusterTopologyPb restarted = initial;
+    (*restarted.mutable_members())[provider.ToString()].set_id("incarnation-b");
+    filter.ApplyTopologyIncarnations(restarted);
+    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
+}
+
+TEST(UbHealthFilterTest, FirstTrustedTopologyIncarnationClearsUnversionedObservation)
+{
+    const auto provider = MakeAddress(33);
+    UbHealthFilter filter;
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+
+    ClusterTopologyPb admitted;
+    (*admitted.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(admitted);
+    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
+}
+
+TEST(UbHealthFilterTest, FirstTrustedSummaryIncarnationClearsUnversionedObservation)
+{
+    const auto provider = MakeAddress(34);
+    UbHealthFilter filter;
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+    UbHealthSummary summary;
+    summary.worker = provider;
+    summary.incarnation = "incarnation-a";
+
+    EXPECT_FALSE(filter.ApplySummary(summary, "incarnation-b"));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.ApplySummary(summary, summary.incarnation));
+    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
+}
+
+TEST(UbHealthFilterTest, SummaryIncarnationFencesLocalObservation)
+{
+    const auto provider = MakeAddress(35);
+    UbHealthFilter filter;
+    UbHealthSummary summary;
+    summary.worker = provider;
+    summary.incarnation = "incarnation-a";
+    ASSERT_TRUE(filter.ApplySummary(summary, summary.incarnation));
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+    ++summary.epoch;
+    EXPECT_TRUE(filter.ApplySummary(summary, summary.incarnation));
+    EXPECT_FALSE(filter.IsAvailable(provider));
+    EXPECT_TRUE(filter.GetLocalObservation(provider).has_value());
+
+    summary.incarnation = "incarnation-b";
+    summary.epoch = 1;
+    summary.writable = false;
+    EXPECT_TRUE(filter.ApplySummary(summary, summary.incarnation));
+    EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
+    EXPECT_FALSE(filter.IsAvailable(provider));
+
+    ++summary.epoch;
+    summary.writable = true;
+    EXPECT_TRUE(filter.ApplySummary(summary, summary.incarnation));
+    EXPECT_TRUE(filter.IsAvailable(provider));
+}
 
 TEST(TransportLayerAdmissionTest, HardUbSetFailureBlocksLaterSetAndAllocationBeforeTransport)
 {

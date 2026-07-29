@@ -177,6 +177,20 @@ void ClientWorkerCommonApiAttribute::SetHeartbeatProperties(int32_t timeoutMs, c
                    clientReconnectWaitMs > 0 ? clientReconnectWaitMs / reduceRatio : UINT64_MAX });
 }
 
+void ClientWorkerCommonApiAttribute::ConsumeHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp,
+                                                                     const std::string &expectedIncarnation,
+                                                                     const char *source)
+{
+    UbHealthSummaryApplyHook callback;
+    {
+        std::lock_guard<std::mutex> lock(ubHealthSummaryCallbackMutex_);
+        callback = ubHealthSummaryCallback_;
+    }
+    LOG_IF_ERROR(
+        datasystem::ApplyHeartbeatUbHealthSummary(rsp, hostPort_, expectedIncarnation, ubHealthSummaryCache_, callback),
+        source);
+}
+
 IClientWorkerCommonApi::~IClientWorkerCommonApi() = default;
 ClientWorkerCommonApiAttribute::~ClientWorkerCommonApiAttribute() = default;
 
@@ -222,6 +236,7 @@ Status ClientWorkerLocalCommonApi::SendHeartbeat(bool &workerReboot, bool &clien
     clientRemoved = false;
     isWorkerVoluntaryScaleDown = false;
     if (status.IsOk()) {
+        ConsumeHeartbeatUbHealthSummary(rsp, rsp.worker_start_id(), "Ignore invalid local Worker UB health summary");
         clientRemoved = rsp.client_removed();
         isWorkerVoluntaryScaleDown = rsp.is_voluntary_scale_down();
         SetHealthy(!rsp.unhealthy());
@@ -650,6 +665,16 @@ std::vector<HostPort> ClientWorkerRemoteCommonApi::GetStandbyWorkers()
     return workers;
 }
 
+void ClientWorkerRemoteCommonApi::ProcessRemoteHeartbeatSummary(const HeartbeatRspPb &rsp, bool &workerReboot)
+{
+    workerReboot = !workerStartId_.empty() && rsp.worker_start_id() != workerStartId_;
+    if (workerReboot) {
+        storeNotifyReboot_ = true;
+        return;
+    }
+    ConsumeHeartbeatUbHealthSummary(rsp, workerStartId_, "Ignore invalid remote Worker UB health summary");
+}
+
 Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clientRemoved, int64_t remainTimeMs,
                                                   bool &isWorkerVoluntaryScaleDown,
                                                   const std::vector<int64_t> &releasedFds,
@@ -686,10 +711,7 @@ Status ClientWorkerRemoteCommonApi::SendHeartbeat(bool &workerReboot, bool &clie
     clientRemoved = false;
     isWorkerVoluntaryScaleDown = false;
     if (status.IsOk()) {
-        workerReboot = !workerStartId_.empty() && rsp.worker_start_id() != workerStartId_;
-        if (workerReboot) {
-            storeNotifyReboot_ = true;
-        }
+        ProcessRemoteHeartbeatSummary(rsp, workerReboot);
         clientRemoved = rsp.client_removed();
         isWorkerVoluntaryScaleDown = rsp.is_voluntary_scale_down();
         SaveStandbyWorker(rsp.standby_worker(), rsp.available_workers());

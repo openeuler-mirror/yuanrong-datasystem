@@ -130,6 +130,8 @@ public:
      * @return Status of the call.
      */
     Status WatchEvents(const std::vector<WatchKey> &watchKeys) override;
+    Status PutWithKeepAliveLease(const std::string &tableName, const std::string &key,
+                                 const std::string &value) override;
 
     /**
      * @brief Publish the membership lease and start periodic renewal.

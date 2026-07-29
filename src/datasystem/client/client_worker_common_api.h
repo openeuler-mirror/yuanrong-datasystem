@@ -40,6 +40,7 @@
 #include "datasystem/common/log/log.h"
 
 #include "datasystem/common/heartbeat_type.h"
+#include "datasystem/common/object_cache/ub_health_summary_codec.h"
 #include "datasystem/common/token/client_access_token.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/rpc/rpc_credential.h"
@@ -223,6 +224,12 @@ struct ClientWorkerCommonApiAttribute {
         }
     }
 
+    void SetUbHealthSummaryCallback(UbHealthSummaryApplyHook callback)
+    {
+        std::lock_guard<std::mutex> lock(ubHealthSummaryCallbackMutex_);
+        ubHealthSummaryCallback_ = std::move(callback);
+    }
+
     std::atomic<int32_t> socketFd_{ -1 };
     std::string clientId_;
     ShmEnableType shmEnableType_{ ShmEnableType::NONE };
@@ -245,6 +252,7 @@ struct ClientWorkerCommonApiAttribute {
     bool enableHugeTlb_ = { false };
     std::atomic_bool removable_{ false };
     std::atomic_bool healthy_{ false };
+    UbHealthSummaryCache ubHealthSummaryCache_;
     bool enableCrossNodeConnection_{ false };
     bool workerEnableP2Ptransfer_ = false;
     std::shared_ptr<ShmUnitInfo> decShmUnit_;
@@ -261,8 +269,12 @@ protected:
     void UpdateMemoryAlignment(const RegisterClientRspPb &rsp);
 
     void SetHeartbeatProperties(int32_t timeoutMs, const RegisterClientRspPb &rsp);
+    void ConsumeHeartbeatUbHealthSummary(const HeartbeatRspPb &rsp, const std::string &expectedIncarnation,
+                                         const char *source);
 
     int64_t heartBeatTimeoutMs_{ 0 };
+    std::mutex ubHealthSummaryCallbackMutex_;
+    UbHealthSummaryApplyHook ubHealthSummaryCallback_;
 
 private:
     std::atomic<uint32_t> memoryAlignment_{ 64 };
@@ -584,6 +596,7 @@ protected:
      * @brief Close expired fds.
      */
     void CloseExpiredFd();
+    void ProcessRemoteHeartbeatSummary(const HeartbeatRspPb &rsp, bool &workerReboot);
 
     static constexpr int32_t retryTimes_ = 3;
     RpcCredential cred_;

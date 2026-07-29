@@ -111,6 +111,7 @@ list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_task_janitor_test\
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_dfx_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_diagnostics_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/topology_shutdown_test\\.cpp$)
+list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/ub_health_lease_sync_test\\.cpp$)
 list(FILTER DS_TEST_UT_SRCS EXCLUDE REGEX .*/cluster/testing/fake_coordination_backend\\.cpp$)
 
 # These targets need a real URMA device. Build them separately below instead of adding them to the default ds_ut
@@ -221,6 +222,7 @@ add_executable(cluster_topology_contract_ut
         cluster/topology_dfx_test.cpp
         cluster/topology_diagnostics_test.cpp
         cluster/topology_shutdown_test.cpp
+        cluster/ub_health_lease_sync_test.cpp
         cluster/testing/fake_coordination_backend.cpp
         cluster/topology_key_helper_test.cpp
         $<TARGET_OBJECTS:_ds_ut_main_obj>)

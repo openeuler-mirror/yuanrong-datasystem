@@ -112,6 +112,11 @@
     isolation when the detail identifies the actual responding Worker; RPC deadline/unavailable outcomes remain
     `SUSPECT` and do not close read-source admission. Batch and oversized Get paths preserve the matching structured
     detail when all relevant objects fail.
+  - Worker heartbeat and the UB-health membership sidecar publish exactly one self record. The service overwrites both
+    Worker identity and incarnation at the publication boundary, so peer observations cannot leak into a self summary.
+    Consumers reject stale epochs, retired incarnations, and summaries whose incarnation does not match the registered
+    Worker. Accepting a trusted new incarnation clears process-local evidence for that endpoint so the restarted Worker
+    can be readmitted. Lease expiry alone removes only the global quarantine and retains process-local evidence.
   - object-cache worker-to-master RPC warmup also starts before `ReadinessProbe()`: a best-effort asynchronous startup
     task reads immutable topology snapshots until the ready member set is stable or the startup warmup window expires;
     later Snapshot publication callbacks enqueue bounded warmup for newly ready members

@@ -23,7 +23,10 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "datasystem/common/object_cache/ub_failure_classifier.h"
 
@@ -36,6 +39,37 @@ struct UbPathState {
     Status lastStatus;
     UbFailureClass lastFailureClass = UbFailureClass::SUCCESS;
     uint64_t epoch = 0;
+    uint32_t backoffLevel = 0;
+    uint64_t backoffDeadlineMs = 0;
+};
+
+struct UbHealthSummary {
+    HostPort worker{ "", -1 };
+    std::string incarnation;
+    bool writable = true;
+    UbAdmissionState state = UbAdmissionState::AVAILABLE;
+    UbFailureClass reason = UbFailureClass::SUCCESS;
+    StatusCode lastStatusCode = StatusCode::K_OK;
+    uint64_t epoch = 0;
+    uint32_t backoffLevel = 0;
+    uint64_t backoffDeadlineMs = 0;
+};
+
+class UbHealthSummaryCache {
+public:
+    UbHealthSummaryCache() = default;
+    ~UbHealthSummaryCache() = default;
+
+    bool Apply(const UbHealthSummary &summary, const std::string &expectedIncarnation);
+    std::optional<UbHealthSummary> Get(const HostPort &worker) const;
+    size_t Size() const;
+
+private:
+    static constexpr size_t MAX_RETIRED_INCARNATIONS_PER_WORKER = 8;
+
+    mutable std::shared_mutex mutex_;
+    std::unordered_map<HostPort, UbHealthSummary> summaries_;
+    std::unordered_map<HostPort, std::unordered_set<std::string>> retiredIncarnations_;
 };
 
 class PeerUbAdmission {
@@ -46,7 +80,10 @@ public:
     Status CheckWriteTarget(const HostPort &peer, UbOperationKind op) const;
     Status CheckReadSource(const HostPort &peer) const;
     void ReportOutcome(const UbOpOutcome &outcome);
+    void ReplaceGlobalSummaries(const std::vector<UbHealthSummary> &summaries);
+    UbHealthSummary BuildSelfHealthSummary(const HostPort &self) const;
     std::optional<UbPathState> GetState(const HostPort &peer) const;
+    void ClearLocalState(const HostPort &peer);
 
 private:
     static bool ShouldBlock(const UbPathState &state);
@@ -54,6 +91,9 @@ private:
 
     mutable std::shared_mutex mutex_;
     std::unordered_map<HostPort, UbPathState> states_;
+    std::unordered_map<HostPort, UbHealthSummary> globalSummaries_;
+    std::unordered_map<HostPort, std::string> latestGlobalIncarnations_;
+    std::unordered_map<HostPort, std::unordered_set<std::string>> retiredGlobalIncarnations_;
     UbFailureClassifier classifier_;
 };
 

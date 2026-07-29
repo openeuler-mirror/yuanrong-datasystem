@@ -128,11 +128,47 @@ bool AllUnresolvedExhausted(const std::vector<ReadState> &states)
     }
     return hasUnresolved;
 }
+
+void AdvanceUnavailableReplica(ReadState &state, const Status &itemStatus)
+{
+    ++state.replicaIndex;
+    const bool replicasExhausted = state.replicaIndex >= static_cast<size_t>(state.location->object_locations_size());
+    state.completed = replicasExhausted;
+    if (replicasExhausted) {
+        state.result->status = itemStatus;
+        return;
+    }
+    METRIC_INC(metrics::KvMetricId::CLIENT_DIRECT_BATCH_GET_REPLICA_RETRY_TOTAL);
+}
+
+bool IsLastUnavailableReplica(const Status &status, int replicaIndex, int replicaCount)
+{
+    return status.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE && replicaIndex + 1 >= replicaCount;
+}
+
+void LogReplicaReadFailure(const master::ObjectLocationInfoPb &location, const HostPort &workerAddr, size_t round,
+                           const Status &status, bool retryable)
+{
+    if (!retryable) {
+        LOG(ERROR) << "[TransportGet][Data] Replica read failed without retry, key: " << location.object_key()
+                   << ", worker: " << workerAddr.ToString() << ", round: " << round
+                   << ", status: " << status.ToString();
+        return;
+    }
+    LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
+        << "[TransportGet][Data] Replica read failed, try another replica, key: " << location.object_key()
+        << ", worker: " << workerAddr.ToString() << ", round: " << round << ", status: " << status.ToString();
+}
 }  // namespace
 
 ReplicaReader::ReplicaReader(std::shared_ptr<DataPlaneExecutor> executor, std::shared_ptr<DeadlineRetry> retry,
-                             std::shared_ptr<ThreadPool> taskPool)
-    : executor_(std::move(executor)), retry_(std::move(retry)), taskPool_(std::move(taskPool))
+                             std::shared_ptr<ThreadPool> taskPool, ReadAdmissionCheck readAdmissionCheck,
+                             ReadOutcomeReport readOutcomeReport)
+    : executor_(std::move(executor)),
+      retry_(std::move(retry)),
+      taskPool_(std::move(taskPool)),
+      readAdmissionCheck_(std::move(readAdmissionCheck)),
+      readOutcomeReport_(std::move(readOutcomeReport))
 {
 }
 
@@ -144,6 +180,7 @@ bool ReplicaReader::IsRetryableLocationError(const Status &status) const
     switch (status.GetCode()) {
         case K_URMA_NEED_CONNECT:
         case K_URMA_CONNECT_FAILED:
+        case K_URMA_DATA_WORKER_UNAVAILABLE:
         case K_WORKER_PULL_OBJECT_NOT_FOUND:
         case K_NOT_FOUND:
         case K_OUT_OF_MEMORY:
@@ -170,11 +207,17 @@ Status ReplicaReader::ReadReplicaOnce(const master::ObjectLocationInfoPb &locati
             << ", worker: " << workerAddr.ToString() << ", replica index: " << replicaIndex
             << ", replica count: " << location.object_locations_size() << ", expected size: " << location.object_size()
             << ", round: " << round << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
+    Status rc = readAdmissionCheck_ ? readAdmissionCheck_(workerAddr) : Status::OK();
     DataGetResult data;
-    DataGetRequest request{ location.object_key(), location.object_size() };
-    Status rc = executor_->Execute(workerAddr, [&request, &data](IDataTransporter &transporter) {
-        return transporter.Get(request, data);
-    });
+    if (rc.IsOk()) {
+        DataGetRequest request{ location.object_key(), location.object_size() };
+        rc = executor_->Execute(workerAddr, [&request, &data](IDataTransporter &transporter) {
+            return transporter.Get(request, data);
+        });
+        if (readOutcomeReport_) {
+            readOutcomeReport_(workerAddr, data.response);
+        }
+    }
     if (rc.IsError()) {
         return rc;
     }
@@ -215,17 +258,17 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
                 return Status::OK();
             }
             const bool retryable = IsRetryableLocationError(rc);
+            LogReplicaReadFailure(location, workerAddr, round, rc, retryable);
             if (!retryable) {
-                LOG(ERROR) << "[TransportGet][Data] Replica read failed without retry, key: "
-                           << location.object_key() << ", worker: " << workerAddr.ToString()
-                           << ", round: " << round << ", status: " << rc.ToString();
                 return rc;
             }
-            LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
-                << "[TransportGet][Data] Replica read failed, try another replica, key: "
-                << location.object_key() << ", worker: " << workerAddr.ToString()
-                << ", round: " << round << ", status: " << rc.ToString();
             lastError = rc;
+            if (IsLastUnavailableReplica(rc, replicaIndex, location.object_locations_size())) {
+                return rc;
+            }
+            if (rc.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE) {
+                continue;
+            }
         }
         Status backoffRc = retry_->Backoff(backoffMs);
         if (backoffRc.IsError()) {
@@ -323,11 +366,19 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
         const auto dispatchTime = std::chrono::steady_clock::now();
         const auto traceContext = Trace::Instance().GetContext();
         for (auto &work : endpointWorks) {
+            const Status admissionStatus = readAdmissionCheck_ ? readAdmissionCheck_(work.address) : Status::OK();
             auto *endpointWork = &work;
-            futures.emplace_back(taskPool_->Submit([this, endpointWork, remainingUs, dispatchTime, traceContext]() {
+            futures.emplace_back(taskPool_->Submit([this, endpointWork, admissionStatus, remainingUs, dispatchTime,
+                                                    traceContext]() {
                 TraceGuard traceGuard = Trace::Instance().SetTraceContext(traceContext);
                 Status dispatchStatus = InitTimeoutsFromDispatch(remainingUs, dispatchTime);
+                bool outcomeReported = false;
                 for (auto &chunk : endpointWork->chunks) {
+                    if (admissionStatus.IsError()) {
+                        chunk.attempted = true;
+                        chunk.endpointStatus = admissionStatus;
+                        continue;
+                    }
                     if (dispatchStatus.IsError()) {
                         chunk.endpointStatus = dispatchStatus;
                         continue;
@@ -341,9 +392,9 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                         });
                         chunk.results.resize(1);
                         chunk.results.front().status = unaryStatus;
-                        if (unaryStatus.IsOk() || unaryStatus.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH) {
-                            chunk.results.front().data = std::move(data);
-                        }
+                        // Preserve structured Provider failure detail even when the unary request failed.
+                        // The batch-level outcome reporter consumes it before aggregate status handling.
+                        chunk.results.front().data = std::move(data);
                         chunk.endpointStatus = unaryStatus.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH
                                                    ? Status::OK()
                                                    : std::move(unaryStatus);
@@ -351,6 +402,15 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                         chunk.endpointStatus = executor_->Execute(endpointWork->address, [&chunk](IDataTransporter &t) {
                             return t.BatchGet(chunk.requests, chunk.results);
                         });
+                    }
+                    if (!outcomeReported && readOutcomeReport_) {
+                        for (const auto &result : chunk.results) {
+                            if (result.data.response.has_provider_ub_failure_detail()) {
+                                readOutcomeReport_(endpointWork->address, result.data.response);
+                                outcomeReported = true;
+                                break;
+                            }
+                        }
                     }
                 }
             }));
@@ -389,6 +449,10 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                     }
 
                     state.lastStatus = itemStatus;
+                    if (itemStatus.GetCode() == K_URMA_DATA_WORKER_UNAVAILABLE) {
+                        AdvanceUnavailableReplica(state, itemStatus);
+                        continue;
+                    }
                     if (itemStatus.GetCode() == K_OC_REMOTE_GET_NOT_ENOUGH && data != nullptr) {
                         const int64_t actualSize = data->response.data_size();
                         if (actualSize > 0 && static_cast<uint64_t>(actualSize) != state.expectedSize) {

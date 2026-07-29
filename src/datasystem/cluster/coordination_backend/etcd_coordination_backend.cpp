@@ -103,6 +103,13 @@ Status EtcdCoordinationBackend::WatchEvents(const std::vector<WatchKey> &watchKe
     return etcdStore_->WatchEvents(descriptors);
 }
 
+Status EtcdCoordinationBackend::PutWithKeepAliveLease(const std::string &tableName, const std::string &key,
+                                                      const std::string &value)
+{
+    CHECK_FAIL_RETURN_STATUS(etcdStore_ != nullptr, K_RUNTIME_ERROR, "EtcdStore is null");
+    return etcdStore_->PutWithKeepAliveLease(tableName, key, value);
+}
+
 Status EtcdCoordinationBackend::InitKeepAlive(const std::string &tableName, const std::string &key, bool isRestart,
                                               bool isStoreAvailableWhenStart)
 {

@@ -60,6 +60,7 @@ list(APPEND CLIENT_SRCS
         routing/routing.cpp
         routing/routing_rpc_client.cpp
         routing/state_filter.cpp
+        routing/ub_health_filter.cpp
         routing/worker_router.cpp)
 
 list(APPEND CLIENT_DEPEND_LIBS
