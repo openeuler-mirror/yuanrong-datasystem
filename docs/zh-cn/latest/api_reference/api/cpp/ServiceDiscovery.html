@@ -701,6 +701,17 @@ document.addEventListener('DOMContentLoaded', function() {
 </dl>
 </dd></dl>
 
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK16ServiceDiscovery9GetHostIdEv">
+<span id="_CPPv3NK16ServiceDiscovery9GetHostIdEv"></span><span id="_CPPv2NK16ServiceDiscovery9GetHostIdEv"></span><span id="ServiceDiscovery::GetHostIdC"></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">GetHostId</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK16ServiceDiscovery9GetHostIdEv" title="Link to this definition">¶</a><br /></dt>
+<dd><p>获取 <a class="reference internal" href="#_CPPv4N16ServiceDiscovery4InitEv" title="ServiceDiscovery::Init"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ServiceDiscovery::Init()</span></code></a> 解析出的 SDK hostId。该值会传入客户端写入路由，
+即使初始连接的是远端 Worker，也不会将远端 Worker 的 hostId 误认为客户端本机 hostId。</p>
+<dl class="simple">
+<dt>返回：</dt><dd><p>SDK hostId；无法解析时返回空字符串。</p>
+</dd>
+</dl>
+</dd></dl>
+
 </dd></dl>
 
 </section>
@@ -769,6 +780,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N16ServiceDiscovery13GetAllWorkersERNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">ServiceDiscovery::GetAllWorkers()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4NK16ServiceDiscovery17GetAffinityPolicyEv"><code class="docutils literal notranslate"><span class="pre">ServiceDiscovery::GetAffinityPolicy()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4NK16ServiceDiscovery15HasHostAffinityEv"><code class="docutils literal notranslate"><span class="pre">ServiceDiscovery::HasHostAffinity()</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4NK16ServiceDiscovery9GetHostIdEv"><code class="docutils literal notranslate"><span class="pre">ServiceDiscovery::GetHostId()</span></code></a></li>
 </ul>
 </li>
 </ul>

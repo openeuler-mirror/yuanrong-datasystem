@@ -588,6 +588,14 @@ document.addEventListener('DOMContentLoaded', function() {
         <article role="main" id="furo-main-content">
           <section id="connectoptions">
 <h1>ConnectOptions<a class="headerlink" href="#connectoptions" title="Link to this heading">¶</a></h1>
+<dl class="cpp enum-class">
+<dt class="sig sig-object cpp" id="_CPPv4N10datasystem19DataPlacementPolicyE">
+<span id="_CPPv3N10datasystem19DataPlacementPolicyE"></span><span id="_CPPv2N10datasystem19DataPlacementPolicyE"></span><span class="k"><span class="pre">enum</span></span><span class="w"> </span><span class="k"><span class="pre">class</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">datasystem</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">DataPlacementPolicy</span></span></span><span class="w"> </span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">uint8_t</span></span><a class="headerlink" href="#_CPPv4N10datasystem19DataPlacementPolicyE" title="Link to this definition">¶</a><br /></dt>
+<dd><p>写入数据放置策略。<code class="docutils literal notranslate"><span class="pre">PREFERRED_SAME_NODE</span></code> 优先同节点 Worker，
+<code class="docutils literal notranslate"><span class="pre">REQUIRED_SAME_NODE</span></code> 只允许同节点 Worker，<code class="docutils literal notranslate"><span class="pre">PREFERRED_META_OWNER</span></code>
+优先 metadata owner。该枚举不改变 Get/MGet 的 metadata owner 查询协议。</p>
+</dd></dl>
+
 <dl class="cpp class">
 <dt class="sig sig-object cpp" id="_CPPv414ConnectOptions">
 <span id="_CPPv314ConnectOptions"></span><span id="_CPPv214ConnectOptions"></span><span id="ConnectOptions"></span><span class="k"><span class="pre">class</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">ConnectOptions</span></span></span><a class="headerlink" href="#_CPPv414ConnectOptions" title="Link to this definition">¶</a><br /></dt>
@@ -669,6 +677,14 @@ document.addEventListener('DOMContentLoaded', function() {
 <dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions25enableCrossNodeConnectionE">
 <span id="_CPPv3N14ConnectOptions25enableCrossNodeConnectionE"></span><span id="_CPPv2N14ConnectOptions25enableCrossNodeConnectionE"></span><span id="ConnectOptions::enableCrossNodeConnection__b"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">enableCrossNodeConnection</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions25enableCrossNodeConnectionE" title="Link to this definition">¶</a><br /></dt>
 <dd><p>如果为 true，允许客户端在与当前数据系统Worker 连接异常时自动切换到备用节点。默认值：false</p>
+</dd></dl>
+
+<dl class="cpp member">
+<dt class="sig sig-object cpp" id="_CPPv4N14ConnectOptions19dataPlacementPolicyE">
+<span id="_CPPv3N14ConnectOptions19dataPlacementPolicyE"></span><span id="_CPPv2N14ConnectOptions19dataPlacementPolicyE"></span><span id="ConnectOptions::dataPlacementPolicy__DataPlacementPolicy"></span><span class="n"><span class="pre">DataPlacementPolicy</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">dataPlacementPolicy</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DataPlacementPolicy</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">PREFERRED_SAME_NODE</span></span><span class="p"><span class="pre">;</span></span><a class="headerlink" href="#_CPPv4N14ConnectOptions19dataPlacementPolicyE" title="Link to this definition">¶</a><br /></dt>
+<dd><p><code class="docutils literal notranslate"><span class="pre">enableLocalCache=false</span></code> 时 Set/MSet 使用的数据放置策略。该配置按客户端实例生效，
+默认值为 <code class="docutils literal notranslate"><span class="pre">PREFERRED_SAME_NODE</span></code>，不受同一进程中其他 <code class="docutils literal notranslate"><span class="pre">KVClient</span></code> 的初始化顺序影响。
+该配置不改变 Get/MGet 的现有路由和传输行为。</p>
 </dd></dl>
 
 <dl class="cpp member">
@@ -784,6 +800,7 @@ Client-Local-Worker RH2D 路径。</p>
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">ConnectOptions</a><ul>
+<li><a class="reference internal" href="#_CPPv4N10datasystem19DataPlacementPolicyE"><code class="docutils literal notranslate"><span class="pre">DataPlacementPolicy</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv414ConnectOptions"><code class="docutils literal notranslate"><span class="pre">ConnectOptions</span></code></a><ul>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions4hostE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::host</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions4portE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::port</span></code></a></li>
@@ -796,6 +813,7 @@ Client-Local-Worker RH2D 路径。</p>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions9secretKeyE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::secretKey</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions8tenantIdE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::tenantId</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions25enableCrossNodeConnectionE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableCrossNodeConnection</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N14ConnectOptions19dataPlacementPolicyE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::dataPlacementPolicy</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions15enableRemoteH2DE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableRemoteH2D</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions29enableClientDirectPipelineH2DE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::enableClientDirectPipelineH2D</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N14ConnectOptions32clientDirectPipelineH2DThreadNumE"><code class="docutils literal notranslate"><span class="pre">ConnectOptions::clientDirectPipelineH2DThreadNum</span></code></a></li>

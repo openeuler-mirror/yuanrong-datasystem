@@ -1126,6 +1126,31 @@ document.addEventListener('DOMContentLoaded', function() {
 </dd></dl>
 
 <dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N8KVClient23SetWorkerHealthCallbackENSt8functionIFvRK6StatusEEE8uint32_t">
+<span id="_CPPv3N8KVClient23SetWorkerHealthCallbackENSt8functionIFvRK6StatusEEE8uint32_t"></span><span id="_CPPv2N8KVClient23SetWorkerHealthCallbackENSt8functionIFvRK6StatusEEE8uint32_t"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">SetWorkerHealthCallback</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">function</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">void</span></span><span class="p"><span class="pre">(</span></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="p"><span class="pre">&amp;</span></span><span class="p"><span class="pre">)</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">callback</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">intervalMs</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">3000</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient23SetWorkerHealthCallbackENSt8functionIFvRK6StatusEEE8uint32_t" title="Link to this definition">¶</a><br /></dt>
+<dd><p>注册 Worker 健康检查回调，客户端按固定周期对当前连接的 Worker 主动发起探活，
+并将结果通过回调通知调用方。回调收到的 <code class="docutils literal notranslate"><span class="pre">Status</span></code> 与 <a class="reference internal" href="#_CPPv4N8KVClient11HealthCheckEv" title="KVClient::HealthCheck"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">HealthCheck()</span></code></a> 的返回值语义一致。</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>回调在内部后台线程中执行，不允许在其中调用任何 <a class="reference internal" href="#_CPPv48KVClient" title="KVClient"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">KVClient</span></code></a> 接口。
+传入 <code class="docutils literal notranslate"><span class="pre">nullptr</span></code> 清除回调并停止探活；客户端 <a class="reference internal" href="#_CPPv4N8KVClient8ShutDownEv" title="KVClient::ShutDown"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ShutDown()</span></code></a> 或析构时也会自动停止。</p>
+</div>
+<dl class="simple">
+<dt>参数：</dt><dd><ul class="simple">
+<li><p><strong>callback</strong> - 探活结果回调。传入 <code class="docutils literal notranslate"><span class="pre">nullptr</span></code> 表示清除回调。</p></li>
+<li><p><strong>intervalMs</strong> - 探活周期（毫秒），默认 3000，必须大于 0。</p></li>
+</ul>
+</dd>
+<dt>返回：</dt><dd><ul class="simple">
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_OK</span></code> 表示回调注册或清除成功。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_NOT_READY</span></code> 表示客户端未初始化（仅在 <code class="docutils literal notranslate"><span class="pre">callback</span></code> 非 <code class="docutils literal notranslate"><span class="pre">nullptr</span></code> 时校验）。</p></li>
+<li><p>返回 <code class="docutils literal notranslate"><span class="pre">StatusCode::K_INVALID</span></code> 表示 <code class="docutils literal notranslate"><span class="pre">intervalMs</span></code> 为 0（仅在 <code class="docutils literal notranslate"><span class="pre">callback</span></code> 非 <code class="docutils literal notranslate"><span class="pre">nullptr</span></code> 时校验）。</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE">
 <span id="_CPPv3N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"></span><span id="_CPPv2N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"></span><span id="KVClient::Exist__std::vector:ss:CR.std::vector:b:R"></span><a class="reference internal" href="Status.html#_CPPv46Status" title="Status"><span class="n"><span class="pre">Status</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Exist</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">keys</span></span>, <span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">exists</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE" title="Link to this definition">¶</a><br /></dt>
 <dd><p>批量查询一组键（keys）是否存在，并返回每个键的存在性状态。支持最多100000个键的查询。</p>
@@ -1257,6 +1282,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N8KVClient11GenerateKeyERKNSt6stringERNSt6stringE"><code class="docutils literal notranslate"><span class="pre">KVClient::GenerateKey()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient9QuerySizeERKNSt6vectorINSt6stringEEERNSt6vectorI8uint64_tEE"><code class="docutils literal notranslate"><span class="pre">KVClient::QuerySize()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient11HealthCheckEv"><code class="docutils literal notranslate"><span class="pre">KVClient::HealthCheck()</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4N8KVClient23SetWorkerHealthCallbackENSt8functionIFvRK6StatusEEE8uint32_t"><code class="docutils literal notranslate"><span class="pre">KVClient::SetWorkerHealthCallback()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient5ExistERKNSt6vectorINSt6stringEEERNSt6vectorIbEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Exist()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4N8KVClient6ExpireERKNSt6vectorINSt6stringEEE8uint32_tRNSt6vectorINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">KVClient::Expire()</span></code></a></li>
 </ul>
