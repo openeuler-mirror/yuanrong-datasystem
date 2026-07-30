@@ -4491,7 +4491,7 @@ Status ObjectClientImpl::RunClientDirectPipelineRH2D(const std::vector<std::stri
     Status firstFailure = Status::OK();
     auto buildRequest = [this](const std::vector<std::string> &keys, client::ObjectReadRequest &request,
                                std::vector<Status> &statuses) {
-        BuildTransportReadRequest(keys, request, statuses, requestTimeoutMs_, true);
+        BuildClientDirectRH2DReadRequest(keys, request, statuses, requestTimeoutMs_, true);
     };
     Status rc = ResolveAndTransferDirectItems(*transportLayer_, *asyncGetRPCPool_, objectKeys, devBlob,
                                               h2dStream, items, failedKeys, waitStatus, firstFailure, buildRequest);
@@ -4735,6 +4735,26 @@ void ObjectClientImpl::BuildTransportReadRequest(const std::vector<std::string> 
     const size_t failed = objectKeys.size() >= routed ? objectKeys.size() - routed : 0;
     VLOG(1) << "[TransportGet][Route] Route selection completed, key count: " << objectKeys.size()
             << ", routed: " << routed << ", failed: " << failed << ", meta owner count: " << groupedKeys.size();
+}
+
+void ObjectClientImpl::BuildClientDirectRH2DReadRequest(const std::vector<std::string> &objectKeys,
+                                                        client::ObjectReadRequest &request,
+                                                        std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
+                                                        bool queryL2Cache)
+{
+    if (std::atomic_load(&routing_) != nullptr) {
+        BuildTransportReadRequest(objectKeys, request, itemStatuses, subTimeoutMs, queryL2Cache);
+        return;
+    }
+    HostPort worker;
+    if (!enableLocalCache_ || GetCurrentWorkerHostPort(worker).IsError()) {
+        BuildTransportReadRequest(objectKeys, request, itemStatuses, subTimeoutMs, queryL2Cache);
+        return;
+    }
+    std::fill(itemStatuses.begin(), itemStatuses.end(), Status::OK());
+    for (size_t i = 0; i < objectKeys.size(); ++i) {
+        request.items.push_back({ i, objectKeys[i], worker });
+    }
 }
 
 Status ObjectClientImpl::BuildTransportGetResponse(

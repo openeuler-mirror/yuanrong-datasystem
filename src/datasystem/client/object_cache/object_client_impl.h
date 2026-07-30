@@ -992,6 +992,11 @@ private:
                                    std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
                                    bool queryL2Cache);
 
+    void BuildClientDirectRH2DReadRequest(const std::vector<std::string> &objectKeys,
+                                          client::ObjectReadRequest &request,
+                                          std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
+                                          bool queryL2Cache);
+
     Status GetFromTransportLayer(const std::vector<std::string> &objectKeys,
                                  std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled,
                                  int64_t subTimeoutMs, bool queryL2Cache);
