@@ -43,7 +43,7 @@
 #include "datasystem/worker/object_cache/worker_master_oc_api.h"
 #include "oc_client_common.h"
 #include "datasystem/common/flags/common_flags.h"  // FLAGS_use_brpc
-#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"  // kBrpcPortOffset
+#include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #ifdef WITH_TESTS
 #include "datasystem/common/rpc/brpc_factory.h"
 #include "datasystem/protos/ut_object.brpc.stub.pb.h"
@@ -1269,7 +1269,7 @@ public:
             const int32_t timeoutMs = 500;
             auto makeBrpc = [timeoutMs](const HostPort &addr) {
                 BrpcChannelConfig cfg;
-                cfg.endpoint = HostPort(addr.Host(), addr.Port() + kBrpcPortOffset).ToString();
+                cfg.endpoint = HostPort(addr.Host(), addr.Port()).ToString();
                 cfg.timeout_ms = timeoutMs;
                 cfg.connect_timeout_ms = timeoutMs;
                 cfg.enable_circuit_breaker = false;  // test control-plane: don't isolate restarted workers

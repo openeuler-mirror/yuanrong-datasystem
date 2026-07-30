@@ -90,20 +90,8 @@ namespace {
 
 bool NeedCleanupWorkerWorkerOcRpcChannel(const Status &rc)
 {
-    if (rc.IsOk()) {
-        return false;
-    }
-    switch (rc.GetCode()) {
-        case StatusCode::K_RPC_UNAVAILABLE:
-        case StatusCode::K_RPC_DEADLINE_EXCEEDED:
-        case StatusCode::K_RPC_CANCELLED:
-        case StatusCode::K_URMA_CONNECT_FAILED:
-        case StatusCode::K_URMA_WAIT_TIMEOUT:
-        case StatusCode::K_TRY_AGAIN:
-            return true;
-        default:
-            return false;
-    }
+    return rc.GetCode() == StatusCode::K_TRY_AGAIN || rc.GetCode() == StatusCode::K_URMA_CONNECT_FAILED
+           || IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc);
 }
 
 void CleanupWorkerWorkerOcRpcChannel(
@@ -586,7 +574,8 @@ void WorkerOcServiceGetImpl::HandleBatchSubResponsePart2(Status &subRc, const st
         point.Record();
     }
     // Handle error as in GetObjectFromRemoteOnLock code path, move on to the next request.
-    if (subRc.GetCode() == K_OUT_OF_MEMORY || IsRpcTimeoutOrTryAgain(subRc)) {
+    if (subRc.GetCode() == K_OUT_OF_MEMORY || subRc.GetCode() == K_TRY_AGAIN || IsRetryableRpcError(subRc)
+        || IsNonRetryableRpcError(subRc)) {
         tryGetFromElsewhere = false;
     } else if (checkConnectStatus.IsOk() && !address.empty() && entry.Get() == nullptr) {
         subRc = Status(K_NOT_FOUND, FormatString("Get from remote worker failed, object(%s) not exist in "

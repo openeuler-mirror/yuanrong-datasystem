@@ -31,7 +31,7 @@ public:
     /**
      * @brief Establish the data-plane connection to the worker.
      * @param[in] workerAddr Target worker address.
-     * @return K_OK on success; K_URMA_CONNECT_FAILED or K_RPC_UNAVAILABLE on failure.
+     * @return K_OK on success; K_URMA_CONNECT_FAILED or peer-unavailable RPC status on failure.
      */
     virtual Status Establish(const HostPort &workerAddr) = 0;
 

@@ -282,7 +282,9 @@ Status SCNotifyWorkerManager::SendPendingNotificationForStream(const std::string
     status = SendNotification(address, req);
     if (status.IsError()) {
         LOG(WARNING) << "SendNotification failed:" << status.GetMsg();
-        if (IsRpcTimeout(status)) {
+        if (IsRetryableRpcError(status) || IsNonRetryableRpcError(status)) {
+            // This is already the async pending queue. Keep the task persisted and let
+            // the next async scan retry after membership/rpc state changes.
             return Status::OK();
         }
     }
@@ -351,8 +353,10 @@ Status SCNotifyWorkerManager::NotifyPubNodeImpl(const HostPort &workerAddr, cons
     req.set_stream_name(streamName);
     *req.add_pubs() = pub;
     status = SendNotification(workerAddr, req);
-    if (IsRpcTimeout(status)) {
-        LOG(WARNING) << "RPC timeout, async send notification. " << status.GetMsg();
+    if (IsRetryableRpcError(status) || IsNonRetryableRpcError(status)) {
+        // First synchronous notification failed; enqueue it so the async scanner
+        // owns the retry instead of blocking the caller on this worker.
+        LOG(WARNING) << "RPC transport failure, async send notification. " << status.GetMsg();
         return AddAsyncPubNotification(workerAddr.ToString(), pub);
     }
     return status;
@@ -418,8 +422,10 @@ Status SCNotifyWorkerManager::NotifyConsumerImpl(const HostPort &workerAddr, con
     }
 
     status = SendNotification(workerAddr, req);
-    if (IsRpcTimeout(status)) {
-        LOG(WARNING) << "RPC timeout, async send notification. " << status.GetMsg();
+    if (IsRetryableRpcError(status) || IsNonRetryableRpcError(status)) {
+        // First synchronous notification failed; enqueue it so the async scanner
+        // owns the retry instead of blocking the caller on this worker.
+        LOG(WARNING) << "RPC transport failure, async send notification. " << status.GetMsg();
         return AddAsyncSubNotification(workerAddr.ToString(), sub, true);
     }
     return status;

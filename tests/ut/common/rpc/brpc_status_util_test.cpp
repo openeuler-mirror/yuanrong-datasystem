@@ -18,13 +18,14 @@
  * Description: Unit tests for brpc Controller error → datasystem Status mapping.
  *
  * Verifies that transport-layer brpc failures (connection refused, timeout,
- * peer down, ...) are mapped to K_RPC_UNAVAILABLE / K_RPC_DEADLINE_EXCEEDED
- * instead of being masked as K_RPC_CANCELLED, and that the DS_ERR sentinel
- * path still recovers the server application error code.
+ * peer down, ...) are mapped to K_RPC_PEER_DEAD / K_RPC_NETWORK_BLIP /
+ * K_RPC_DEADLINE_EXCEEDED instead of being masked as K_RPC_CANCELLED, and
+ * that the DS_ERR sentinel path still recovers the server application error code.
  */
 
 #include <errno.h>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -78,7 +79,7 @@ TEST(BrpcStatusUtilTest, CorruptSentinelFallsBackToErrnoMapping)
     // Non-numeric sentinel body → fall through to errno mapping.
     std::string errText = "fail " + DsErrSentinel("abc");
     auto st = TryExtractStatusFromControllerError(errText, ECONNREFUSED);
-    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_PEER_DEAD);
 }
 
 // Timeout mappings → K_RPC_DEADLINE_EXCEEDED
@@ -94,25 +95,26 @@ TEST(BrpcStatusUtilTest, SystemETimedoutMapsToDeadlineExceeded)
     EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_DEADLINE_EXCEEDED);
 }
 
-// Peer-unreachable mappings → K_RPC_UNAVAILABLE
-TEST(BrpcStatusUtilTest, ConnectionRefusedWithoutAttemptDiagnosticRemainsAmbiguous)
+// ECONNREFUSED maps to K_RPC_PEER_DEAD: a refused connection means the peer process
+// is not listening (killed/crashed), so the caller fast-fails instead of retrying.
+TEST(BrpcStatusUtilTest, ConnectionRefusedMapsToPeerDead)
 {
     auto st = TryExtractStatusFromControllerError("refused", ECONNREFUSED);
-    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_PEER_DEAD);
     EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
-TEST(BrpcStatusUtilTest, ConnectionResetMapsToUnavailable)
+TEST(BrpcStatusUtilTest, ConnectionResetMapsToNetworkBlip)
 {
     auto st = TryExtractStatusFromControllerError("reset", ECONNRESET);
-    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_NETWORK_BLIP);
     EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
-TEST(BrpcStatusUtilTest, HostUnreachableWithoutAttemptDiagnosticRemainsAmbiguous)
+TEST(BrpcStatusUtilTest, HostUnreachableMapsToNetworkBlip)
 {
     auto st = TryExtractStatusFromControllerError("no route", EHOSTUNREACH);
-    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_NETWORK_BLIP);
     EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
@@ -120,6 +122,7 @@ TEST(BrpcStatusUtilTest, AllConnectionEstablishmentRetriesAreDefinitelyNotSent)
 {
     auto st = TryExtractStatusFromControllerError(
         "[E112]Not connected [R1][E111]Connection refused [R2][E113]No route", ECONNREFUSED);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_PEER_DEAD);
     EXPECT_TRUE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
@@ -137,16 +140,45 @@ TEST(BrpcStatusUtilTest, MalformedRetryDiagnosticIsNotDefinitelyNotSent)
     EXPECT_FALSE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
-TEST(BrpcStatusUtilTest, BrpcFailedSocketMapsToUnavailable)
+TEST(BrpcStatusUtilTest, BrpcFailedSocketMapsToPeerDead)
 {
     auto st = TryExtractStatusFromControllerError("socket dead", kBrpcFailedSocket);
-    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_PEER_DEAD);
 }
 
-TEST(BrpcStatusUtilTest, BrpcLogoffMapsToUnavailable)
+TEST(BrpcStatusUtilTest, BrpcLogoffMapsToPeerDead)
 {
     auto st = TryExtractStatusFromControllerError("server stop", kBrpcLogoff);
-    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_PEER_DEAD);
+}
+
+TEST(BrpcStatusUtilTest, RepresentativePeerDeadMappings)
+{
+    const std::vector<int> peerDeadCodes = {
+        kBrpcClose, kBrpcReject, kBrpcInternal, ENOTCONN, EHOSTDOWN, ESHUTDOWN, EPIPE
+    };
+    for (int code : peerDeadCodes) {
+        auto st = TryExtractStatusFromControllerError("peer unavailable", code);
+        EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_PEER_DEAD) << "errno=" << code << ", status=" << st.ToString();
+    }
+}
+
+TEST(BrpcStatusUtilTest, RepresentativeNetworkBlipMappings)
+{
+    const std::vector<int> networkBlipCodes = { kBrpcEof, kBrpcSsl, ECONNABORTED };
+    for (int code : networkBlipCodes) {
+        auto st = TryExtractStatusFromControllerError("network blip", code);
+        EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_NETWORK_BLIP)
+            << "errno=" << code << ", status=" << st.ToString();
+    }
+}
+
+TEST(BrpcStatusUtilTest, NetworkUnreachableCarriesNotSentMarker)
+{
+    auto st = TryExtractStatusFromControllerError(
+        "[E" + std::to_string(ENETUNREACH) + "]Network is unreachable", ENETUNREACH);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_NETWORK_BLIP);
+    EXPECT_TRUE(IsBrpcRequestDefinitelyNotSent(st));
 }
 
 // Genuine cancellation stays K_RPC_CANCELLED
@@ -176,7 +208,7 @@ TEST(BrpcStatusUtilTest, UnmappedErrnoFallsBackWithDiagnostic)
 TEST(BrpcStatusUtilTest, MappedStatusIncludesErrnoInMessage)
 {
     auto st = TryExtractStatusFromControllerError("refused", ECONNREFUSED);
-    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_UNAVAILABLE);
+    EXPECT_EQ(st.GetCode(), StatusCode::K_RPC_PEER_DEAD);
     EXPECT_NE(st.ToString().find(std::to_string(ECONNREFUSED)), std::string::npos);
 }
 

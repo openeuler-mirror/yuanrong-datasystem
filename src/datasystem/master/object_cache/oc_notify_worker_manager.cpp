@@ -16,12 +16,14 @@
  */
 #include "datasystem/master/object_cache/oc_notify_worker_manager.h"
 
+#include <chrono>
 #include <cstdint>
 #include <iterator>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -1150,29 +1152,79 @@ Status OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, in
                                      workerAddr, rc.ToString());
         return rc;
     }
-    std::shared_ptr<MasterWorkerOCApi> masterWorkerApi;
-    rc = GetMasterWorkerApi(workerAddr, masterWorkerApi);
-    if (rc.IsError()) {
-        LOG(WARNING) << FormatString(
-            "Get MasterWorkerOCApi failed is abnormal during PushMetaToWorker. workerAddr:%s, status:%s", workerAddr,
-            rc.ToString());
-        return rc;
-    }
-
-    static const int RETRY_TIMEOUT_MS = 60000;  // 1 min
-    const std::unordered_set<StatusCode> &retryOn = { StatusCode::K_TRY_AGAIN, StatusCode::K_RPC_CANCELLED,
-                                                      StatusCode::K_RPC_DEADLINE_EXCEEDED,
-                                                      StatusCode::K_RPC_UNAVAILABLE };
-    rc = RetryOnError(
-        RETRY_TIMEOUT_MS,
-        [&masterWorkerApi, &req, &rsp](int32_t) { return masterWorkerApi->PushMetaToWorker(req, rsp); },
-        []() { return Status::OK(); }, retryOn);
+    rc = PushMetaToWorkerWithPeerDeadRetry(workerAddr, req, rsp);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("PushMetaToWorker failed. workerAddr:%s, status:%s", workerAddr, rc.ToString());
         return rc;
     }
     LOG(INFO) << "PushMetaToWorker end. workerAddr:" << workerAddr;
     return Status::OK();
+}
+
+Status OCNotifyWorkerManager::PushMetaToWorkerWithPeerDeadRetry(const std::string &workerAddr,
+                                                                PushMetaToWorkerReqPb &req,
+                                                                PushMetaToWorkerRspPb &rsp)
+{
+    static const int RETRY_TIMEOUT_MS = 60000;  // 1 min
+    const std::unordered_set<StatusCode> &retryOn = { StatusCode::K_TRY_AGAIN, K_RPC_CANCELLED,
+                                                      K_RPC_DEADLINE_EXCEEDED, K_RPC_UNAVAILABLE };
+    HostPort nodePort;
+    bool parsed = nodePort.ParseString(workerAddr).IsOk();
+    // Only drop the cached stub when the failure is a transport-layer peer-dead/blip — these are
+    // the cases where the underlying brpc socket is failed and a fresh channel is needed. Tying
+    // the drop to the final status (rather than a generic errorHandler) avoids clearing the
+    // shared MASTER_WORKER_OC_SVC stub on application-layer errors (e.g. K_NOT_FOUND), where the
+    // worker is healthy and the cached connection should be reused.
+    auto dropStubIfTransportFailure = [&nodePort, parsed](const Status &status) -> Status {
+        if (!parsed) {
+            return Status::OK();
+        }
+        if (status.GetCode() != StatusCode::K_RPC_PEER_DEAD && status.GetCode() != StatusCode::K_RPC_NETWORK_BLIP) {
+            return Status::OK();
+        }
+        auto dropRc = RpcStubCacheMgr::Instance().Remove(nodePort, StubType::MASTER_WORKER_OC_SVC);
+        if (dropRc.IsError() && dropRc.GetCode() != K_NOT_FOUND && dropRc.GetCode() != K_TRY_AGAIN) {
+            LOG(WARNING) << FormatString("Drop master worker stub[%s] failed: %s", nodePort.ToString(),
+                                         dropRc.ToString());
+        }
+        return Status::OK();
+    };
+    // A restarting worker briefly refuses connections (brpc reports peer-dead while the worker
+    // boots). RetryOnError fast-fails peer-dead by contract, so retry the whole push here: each
+    // peer-dead attempt drops the stale stub, and the next attempt rebuilds a fresh brpc channel
+    // once the worker is back — restoring the restart tolerance the legacy UNAVAILABLE mapping
+    // provided. brpc's POOLED channel lazily creates a new connection when the pooled one is
+    // failed, but RpcStubCacheMgr holds a cached stub that must be dropped explicitly; combined
+    // with max_retry=0, the explicit drop is required for a restarted peer.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(RETRY_TIMEOUT_MS);
+    Status rc;
+    // Bounded retry loop: abort on term signal so a batch of worker restarts does not serially
+    // block the shared reconciliation/topology executor for N*RETRY_TIMEOUT_MS.
+    while (!IsTermSignalReceived()) {
+        std::shared_ptr<MasterWorkerOCApi> masterWorkerApi;
+        rc = GetMasterWorkerApi(workerAddr, masterWorkerApi);
+        if (rc.IsOk()) {
+            int32_t remainMs = static_cast<int32_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now())
+                    .count());
+            rc = RetryOnError(std::max<int32_t>(remainMs, 0),
+                              [&masterWorkerApi, &req, &rsp](int32_t) {
+                                  return masterWorkerApi->PushMetaToWorker(req, rsp);
+                              },
+                              []() { return Status::OK(); }, retryOn);
+            // Drop the stale stub only on transport-layer failure (peer-dead/blip); keep it for
+            // application-layer errors so a healthy worker's cached connection is reused.
+            (void)dropStubIfTransportFailure(rc);
+        }
+        if (rc.GetCode() != StatusCode::K_RPC_PEER_DEAD || std::chrono::steady_clock::now() >= deadline) {
+            break;
+        }
+        // Short backoff so a restarting worker is re-probed quickly within tight test windows
+        // (e.g. node_timeout_s=1).
+        static constexpr int kPeerDeadRetryBackoffMs = 100;
+        std::this_thread::sleep_for(std::chrono::milliseconds(kPeerDeadRetryBackoffMs));
+    }
+    return rc;
 }
 
 void OCNotifyWorkerManager::AsyncNotifyOpToWorker(const std::string &workerAddr, int64_t timestamp)

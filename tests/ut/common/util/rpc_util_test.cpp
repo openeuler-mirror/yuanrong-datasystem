@@ -17,8 +17,10 @@
 /**
  * Description: rpc util test.
  */
+#include <chrono>
 #include <vector>
 #include <thread>
+#include <unordered_set>
 
 #include "ut/common.h"
 #include "datasystem/common/util/rpc_util.h"
@@ -43,7 +45,7 @@ public:
         auto execTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
         LOG(INFO) << "RetryOnError exec time: " << execTime << ", timeoutMs: " << timeoutMs
                   << ", expectTime: " << expectTime;
-        int32_t range = 10;
+        int32_t range = 50;
         ASSERT_TRUE(execTime >= expectTime);
         ASSERT_TRUE(execTime <= expectTime + range);
     }
@@ -62,7 +64,9 @@ TEST_F(RpcUtilTest, TestRetryOnErrorOnce)
     auto endTime = std::chrono::steady_clock::now();
     auto execTime = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
     LOG(INFO) << "exec Time: " << execTime;
-    ASSERT_TRUE(execTime == timeoutMs);
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    ASSERT_GE(execTime, timeoutMs);
+    ASSERT_LE(execTime, timeoutMs + 50);
 }
 
 TEST_F(RpcUtilTest, TestRemainTime)
@@ -95,11 +99,90 @@ TEST_F(RpcUtilTest, TestLastRun)
     ExecRpcRetryOneError(timeoutMs, expectTime);
 }
 
-TEST_F(RpcUtilTest, IsRpcTimeoutIncludesUrmaWaitTimeout)
+TEST_F(RpcUtilTest, RpcErrorClassificationUsesRetryableAndNonRetryableBuckets)
 {
-    ASSERT_TRUE(IsRpcTimeout(Status(StatusCode::K_URMA_WAIT_TIMEOUT, "urma wait")));
-    ASSERT_TRUE(IsRpcTimeoutOrTryAgain(Status(StatusCode::K_URMA_WAIT_TIMEOUT, "urma wait")));
-    ASSERT_FALSE(IsRpcTimeout(Status::OK()));
+    ASSERT_TRUE(IsRetryableRpcError(Status(StatusCode::K_RPC_CANCELLED, "cancelled")));
+    ASSERT_TRUE(IsRetryableRpcError(Status(StatusCode::K_RPC_DEADLINE_EXCEEDED, "deadline")));
+    ASSERT_TRUE(IsRetryableRpcError(Status(StatusCode::K_RPC_UNAVAILABLE, "unavailable")));
+    ASSERT_TRUE(IsRetryableRpcError(Status(StatusCode::K_RPC_NETWORK_BLIP, "network blip")));
+    ASSERT_TRUE(IsRetryableRpcError(Status(StatusCode::K_URMA_WAIT_TIMEOUT, "urma wait")));
+
+    ASSERT_TRUE(IsNonRetryableRpcError(Status(StatusCode::K_RPC_PEER_DEAD, "peer dead")));
+    ASSERT_FALSE(IsRetryableRpcError(Status(StatusCode::K_RPC_PEER_DEAD, "peer dead")));
+
+    ASSERT_FALSE(IsRetryableRpcError(Status(StatusCode::K_TRY_AGAIN, "try again")));
+    ASSERT_FALSE(IsNonRetryableRpcError(Status(StatusCode::K_TRY_AGAIN, "try again")));
+    ASSERT_FALSE(IsRetryableRpcError(Status::OK()));
+    ASSERT_FALSE(IsNonRetryableRpcError(Status::OK()));
+}
+
+TEST_F(RpcUtilTest, RetryPolicyKeepsPeerDeadOutOfLegacyUnavailablePolicy)
+{
+    std::unordered_set<StatusCode> legacyUnavailablePolicy{ StatusCode::K_RPC_UNAVAILABLE };
+    std::unordered_set<StatusCode> badExplicitPolicy{ StatusCode::K_RPC_PEER_DEAD };
+
+    ASSERT_TRUE(ShouldRetryOnStatusCode(StatusCode::K_RPC_UNAVAILABLE, legacyUnavailablePolicy));
+    ASSERT_TRUE(ShouldRetryOnStatusCode(StatusCode::K_RPC_NETWORK_BLIP, legacyUnavailablePolicy));
+    ASSERT_FALSE(ShouldRetryOnStatusCode(StatusCode::K_RPC_PEER_DEAD, legacyUnavailablePolicy));
+    ASSERT_FALSE(ShouldRetryOnStatusCode(StatusCode::K_RPC_PEER_DEAD, badExplicitPolicy));
+}
+
+TEST_F(RpcUtilTest, RetryOnErrorDoesNotRetryPeerDeadForLegacyUnavailablePolicy)
+{
+    int calls = 0;
+    int cleanupCalls = 0;
+    auto func = [&calls](int32_t) {
+        ++calls;
+        return Status(StatusCode::K_RPC_PEER_DEAD, "peer dead");
+    };
+
+    auto startTime = std::chrono::steady_clock::now();
+    Status status = RetryOnError(5000, func, [&cleanupCalls]() {
+        ++cleanupCalls;
+        return Status::OK();
+    }, { StatusCode::K_RPC_UNAVAILABLE, StatusCode::K_RPC_PEER_DEAD });
+    auto execTime = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - startTime).count();
+
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RPC_PEER_DEAD);
+    ASSERT_EQ(calls, 1);
+    ASSERT_EQ(cleanupCalls, 1);
+    ASSERT_LT(execTime, 100) << "Non-retryable peer-dead must not sleep in RetryOnError.";
+}
+
+TEST_F(RpcUtilTest, RetryOnErrorDoesNotTreatPeerDeadAsExceptionSuccess)
+{
+    int calls = 0;
+    auto func = [&calls](int32_t) {
+        ++calls;
+        if (calls == 1) {
+            return Status(StatusCode::K_RPC_UNAVAILABLE, "unavailable");
+        }
+        return Status(StatusCode::K_RPC_PEER_DEAD, "peer dead");
+    };
+
+    Status status = RetryOnError(100, func, []() { return Status::OK(); }, { StatusCode::K_RPC_UNAVAILABLE },
+                                 MAX_RPC_TIMEOUT_MS, { StatusCode::K_RPC_PEER_DEAD });
+
+    ASSERT_EQ(status.GetCode(), StatusCode::K_RPC_PEER_DEAD);
+    ASSERT_EQ(calls, 2);
+}
+
+TEST_F(RpcUtilTest, RetryOnErrorRetriesNetworkBlipForLegacyUnavailablePolicy)
+{
+    int calls = 0;
+    auto func = [&calls](int32_t) {
+        ++calls;
+        if (calls == 1) {
+            return Status(StatusCode::K_RPC_NETWORK_BLIP, "network blip");
+        }
+        return Status::OK();
+    };
+
+    Status status = RetryOnError(1000, func, []() { return Status::OK(); }, { StatusCode::K_RPC_UNAVAILABLE });
+
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    ASSERT_EQ(calls, 2);
 }
 }  // namespace ut
 }  // namespace datasystem

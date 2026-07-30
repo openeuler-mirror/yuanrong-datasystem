@@ -24,6 +24,7 @@
 
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/timeout_duration.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -35,15 +36,7 @@ constexpr int64_t BACKOFF_GROWTH_FACTOR = 2;
 
 bool DeadlineRetry::IsRetryableRpcError(const Status &status) const
 {
-    switch (status.GetCode()) {
-        case K_TRY_AGAIN:
-        case K_RPC_CANCELLED:
-        case K_RPC_DEADLINE_EXCEEDED:
-        case K_RPC_UNAVAILABLE:
-            return true;
-        default:
-            return false;
-    }
+    return status.GetCode() == K_TRY_AGAIN || datasystem::IsRetryableRpcError(status);
 }
 
 Status DeadlineRetry::CheckDeadline() const

@@ -200,7 +200,7 @@ Status RpcServer::Builder::Init(std::unique_ptr<RpcServer> &server) const
     if (RpcAuthKeyManager::Instance().HasAuthHandler()) {
         RETURN_IF_NOT_OK(server->InitAuthHandler());
     }
-    // brpc owns the TCP port in brpc mode (kBrpcPortOffset=0); ZMQ must skip Bind.
+    // brpc owns the TCP port in brpc mode (same port as ZMQ); ZMQ must skip Bind.
     // Mirrors the !useBrpc_ guard on Run() in BuildAndStart. UDS/SHM use Init(), not this loop.
     if (!useBrpc_) {
         for (const auto &v : endPts_) {
@@ -231,7 +231,7 @@ Status RpcServer::Builder::BuildAndStart(std::unique_ptr<RpcServer> &server) con
             RETURN_IF_NOT_OK(preStartCallback_());
         }
         // Start ZMQ server only in ZMQ mode. In brpc mode (useBrpc_=true), the port is
-        // used exclusively by brpc (kBrpcPortOffset=0), so ZMQ must not bind the same port.
+        // used exclusively by brpc (same port as ZMQ would), so ZMQ must not bind the same port.
         if (!useBrpc_ && !svcList_.empty()) {
             RETURN_IF_NOT_OK(server->Run());
         }

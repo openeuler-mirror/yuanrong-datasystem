@@ -4275,7 +4275,7 @@ Status OCMetadataManager::ClearDevClientMetaForScaledInWorker(const std::vector<
     HostPort devMasterHostPort;
     auto rc = ResolveMetadataOwner(P2P_DEFAULT_MASTER, devMasterHostPort);
     // The master node managing heterogeneous metadata has voluntarily scaled down.
-    if (rc.GetCode() == StatusCode::K_RPC_UNAVAILABLE) {
+    if (IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc)) {
         return Status::OK();
     }
 

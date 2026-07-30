@@ -635,7 +635,12 @@ TEST_F(KVClientTransportGetWithTargetShmDisabledTest, BoundWorkerShmDoesNotEnabl
     // GetClientFd. The single GetObjectRemote is the TCP fallback read, not a bound-worker proxy.
     DS_ASSERT_OK(rc);
     ASSERT_TRUE(buffer);
-    ASSERT_EQ(after.queryAndGet, before.queryAndGet + 1);
+    // The metadata-query count is incidental and CI-load-sensitive: under brpc, a transient
+    // peer-dead (EHOSTDOWN/ECONNREFUSED -> K_RPC_PEER_DEAD) during the Get's QueryAndGet makes
+    // QueryWithRetry fast-fail (PEER_DEAD is non-retryable), so the Get may take a cached/fallback
+    // routing path that skips (0) or repeats (>1) the metadata query. The TCP-fallback semantic
+    // this test guards is asserted by getObjectRemote+1 and the no-fd-passing checks below.
+    ASSERT_GE(after.queryAndGet, before.queryAndGet);
     ASSERT_EQ(after.workerOcGet, before.workerOcGet);              // SHM WorkerOC Get not reached
     ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 1);  // TCP fallback via GetObjectRemote
     ASSERT_EQ(after.batchGetObjectRemote, before.batchGetObjectRemote);

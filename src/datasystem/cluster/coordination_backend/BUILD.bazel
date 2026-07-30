@@ -34,6 +34,7 @@ ds_cc_library(
         "//src/datasystem/common/ak_sk:hasher",
         "//src/datasystem/common/coordinator:coordinator_store",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/util:rpc_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:thread_pool",
         "//src/datasystem/protos:coordinator_cc_proto",

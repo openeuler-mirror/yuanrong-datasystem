@@ -57,11 +57,15 @@ Status ClientWorkerApi::Init(int32_t requestTimeoutMs, int32_t connectTimeoutMs,
     RETURN_IF_NOT_OK(
         ClientWorkerRemoteCommonApi::Init(requestTimeoutMs, connectTimeoutMs, fastTransportSize, initAttemptTimeoutMs));
     if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
+        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
         BrpcChannelConfig cfg;
         cfg.endpoint = brpcAddr.ToString();
         cfg.timeout_ms = requestTimeoutMs;
         cfg.connect_timeout_ms = connectTimeoutMs;
+        // Disable brpc blind retry: this channel carries non-idempotent stream RPCs
+        // (DeleteStream, CloseProducer, CloseConsumer). max_retry=0 defers to datasystem
+        // upper-layer deadline/retry policy instead of brpc-internal blind retry.
+        cfg.max_retry = 0;
         // Defer brpcChannel_ assignment until after all checks pass
         // (same pattern as Connect() in client_worker_common_api.cpp):
         // overwriting brpcChannel_ before the socket check destroys the

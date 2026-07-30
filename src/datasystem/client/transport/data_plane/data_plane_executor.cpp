@@ -24,6 +24,7 @@
 
 #include "datasystem/common/log/access_recorder.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 
 namespace datasystem {
@@ -38,8 +39,9 @@ constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 void LogDataPlaneOperation(const HostPort &workerAddr, AccessTransportKind kind, size_t attempt,
                            const Status &status)
 {
-    const bool rebuildRequired =
-        status.GetCode() == K_URMA_NEED_CONNECT || status.GetCode() == K_RPC_UNAVAILABLE;
+    const bool rebuildRequired = status.GetCode() == K_URMA_NEED_CONNECT
+                                 || status.GetCode() == K_RPC_UNAVAILABLE
+                                 || status.GetCode() == K_RPC_NETWORK_BLIP;
     if (status.IsError() && (!rebuildRequired || attempt >= REBUILD_ATTEMPT)) {
         LOG(ERROR) << "[TransportGet][DataPlane] Operation failed, worker: " << workerAddr.ToString()
                    << ", transport: " << AccessTransportTracker::KindToName(kind) << ", attempt: " << attempt
@@ -71,9 +73,20 @@ bool DataPlaneExecutor::PrepareRetry(const HostPort &workerAddr, const std::shar
     if (rc.GetCode() == K_URMA_NEED_CONNECT) {
         logRebuild("Rebuild data plane");
         manager_->ResetDataPlane(workerAddr);
-    } else if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+    } else if (rc.GetCode() == K_RPC_UNAVAILABLE || rc.GetCode() == K_RPC_NETWORK_BLIP) {
+        // K_RPC_NETWORK_BLIP (ECONNRESET/ECONNABORTED/EHOSTUNREACH/ENETUNREACH) is a transient
+        // transport hiccup, not a dead peer: rebuild the connection and retry once, same as the
+        // legacy UNAVAILABLE path. A genuinely dead peer (K_RPC_PEER_DEAD) is handled below.
         logRebuild("Rebuild RPC connection");
         manager_->Teardown(workerAddr);
+    } else if (IsNonRetryableRpcError(rc)) {
+        // Dead peer (K_RPC_PEER_DEAD): the cached transporter's underlying brpc socket is failed
+        // and (with health check off) will not auto-reconnect, so close/teardown it now to free the
+        // stale entry. Return false so the caller fast-fails without retrying the same dead target —
+        // tearing down here is resource cleanup, not a retry trigger.
+        logRebuild("Tear down dead RPC peer");
+        manager_->Teardown(workerAddr);
+        return false;
     } else if (rc.GetCode() == K_NOT_SUPPORTED && hint == TransportHint::SHM_CANDIDATE) {
         // SHM fd-passing endpoint unavailable (target Worker has SHM disabled). GetOrCreate re-arms
         // the entry with a TcpTransporter because the cached SHM transporter does not match the TCP

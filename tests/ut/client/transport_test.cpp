@@ -2396,6 +2396,33 @@ TEST(ObjectMetadataClientTest, RebuildsUnavailableSharedRpcConnection)
     EXPECT_TRUE(results[0].status.IsOk());
 }
 
+TEST(ObjectMetadataClientTest, PeerDeadTearsDownWithoutRetry)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    int invokeCount = 0;
+    manager->queryAndGetHandler = [&invokeCount](const HostPort &, const master::QueryAndGetReqPb &,
+                                                 master::QueryAndGetRspPb &, std::vector<RpcMessage> &) {
+        ++invokeCount;
+        return Status(K_RPC_PEER_DEAD, "peer dead");
+    };
+    ObjectMetadataClient metadata(manager, std::make_shared<DeadlineRetry>());
+    auto results = MakeMetadataItems({ { 0, "key", MakeAddress(41) } });
+    auto batch = MakeMetadataBatch(results);
+
+    EXPECT_EQ(metadata.QueryAndGet(MakeAddress(41), batch).GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_EQ(invokeCount, 1);
+    EXPECT_EQ(manager->rpcBuildCount, 1);
+
+    manager->queryAndGetHandler = [](const HostPort &, const master::QueryAndGetReqPb &,
+                                     master::QueryAndGetRspPb &response, std::vector<RpcMessage> &) {
+        AddLocation(response, "key", MakeAddress(51));
+        return Status::OK();
+    };
+    ASSERT_TRUE(metadata.QueryAndGet(MakeAddress(41), batch).IsOk());
+    EXPECT_EQ(manager->rpcBuildCount, 2);
+}
+
 TEST(ObjectMetadataClientTest, MetadataAndDataReuseOneEndpointRpcClient)
 {
     ApiDeadlineGuard deadline(1000);
@@ -4377,6 +4404,39 @@ TEST(DataPlaneExecutorTest, RpcUnavailableRebuildsCompleteEntryAndRetriesOnce)
     EXPECT_EQ(manager->transportBuildCount, 2);
 }
 
+TEST(DataPlaneExecutorTest, NetworkBlipRebuildsCompleteEntryAndRetriesOnce)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = { { Status(K_RPC_NETWORK_BLIP, "network blip") }, { Status::OK() } };
+    DataPlaneExecutor executor(manager, std::make_shared<TransportAdvisor>());
+    DataGetRequest request{ "a", 1 };
+    DataGetResult result;
+
+    EXPECT_TRUE(executor.Execute(MakeAddress(24), [&request, &result](IDataTransporter &transporter) {
+        return transporter.Get(request, result);
+    }).IsOk());
+    EXPECT_EQ(manager->rpcBuildCount, 2);
+    EXPECT_EQ(manager->transportBuildCount, 2);
+}
+
+TEST(DataPlaneExecutorTest, PeerDeadTearsDownWithoutRetry)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterGetStatuses = { { Status(K_RPC_PEER_DEAD, "peer dead") }, { Status::OK() } };
+    DataPlaneExecutor executor(manager, std::make_shared<TransportAdvisor>());
+    DataGetRequest request{ "a", 1 };
+    DataGetResult result;
+
+    EXPECT_EQ(executor.Execute(MakeAddress(25), [&request, &result](IDataTransporter &transporter) {
+        return transporter.Get(request, result);
+    }).GetCode(), K_RPC_PEER_DEAD);
+    EXPECT_EQ(manager->rpcBuildCount, 1);
+    EXPECT_EQ(manager->transportBuildCount, 1);
+    ASSERT_EQ(manager->builtTransporters.size(), 1u);
+    EXPECT_EQ(manager->builtTransporters[0]->getCount, 1);
+    EXPECT_EQ(manager->builtTransporters[0]->closeCount, 1);
+}
+
 TEST(DataPlaneExecutorTest, BatchGetConnectionRetryMetricsCountBothActualRpcAttempts)
 {
     InitBatchGetMetrics();
@@ -6045,6 +6105,32 @@ TEST(TransportLayerTest, SetRetryOnRpcUnavailable)
         releaseCount += transporter->releaseCount;
     }
     EXPECT_EQ(releaseCount, 1);
+}
+
+TEST(TransportLayerTest, SetPeerDeadTearsDownWithoutRetry)
+{
+    auto manager = std::make_shared<FakeDataPlaneManager>();
+    manager->transporterSetStatuses = { { Status(K_RPC_PEER_DEAD, "peer dead") }, { Status::OK() } };
+    TestTransportLayer layer(manager);
+
+    TransportCreateParam createParam = MakeCreateParam();
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(layer.Create(MakeAddress(35), "peer-dead-key", 64, createParam, buffer).IsOk());
+
+    TransportSetParam setParam = MakeSetParam();
+    Status rc = layer.Set(*buffer, setParam);
+    EXPECT_EQ(rc.GetCode(), K_RPC_PEER_DEAD) << rc.ToString();
+    int setCount = 0;
+    int releaseCount = 0;
+    for (const auto &transporter : manager->builtTransporters) {
+        setCount += transporter->setCount;
+        releaseCount += transporter->releaseCount;
+    }
+    EXPECT_EQ(setCount, 1);
+    EXPECT_EQ(releaseCount, 1);
+    ASSERT_GE(manager->builtTransporters.size(), 2u);
+    EXPECT_EQ(manager->builtTransporters[0]->closeCount, 1);
+    EXPECT_EQ(manager->builtTransporters[1]->releaseCount, 1);
 }
 
 TEST(TransportLayerTest, SetDoesNotRetrySecondFailure)

@@ -17,6 +17,7 @@
 
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -49,8 +50,7 @@ std::chrono::milliseconds InitialJitter(const std::string &reporter, const Topol
  */
 bool IsRetryableReportStatus(const Status &status)
 {
-    return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY || status.GetCode() == K_RPC_UNAVAILABLE
-           || status.GetCode() == K_RPC_DEADLINE_EXCEEDED || status.GetCode() == K_RPC_CANCELLED;
+    return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY || IsRetryableRpcError(status);
 }
 
 /**

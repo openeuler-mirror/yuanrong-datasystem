@@ -17,9 +17,11 @@
 #ifndef DATASYSTEM_WORKER_WORKER_MASTER_OC_API_H
 #define DATASYSTEM_WORKER_WORKER_MASTER_OC_API_H
 
+#include <functional>
 #include <list>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -484,6 +486,19 @@ private:
     HostPort hostPort_;                                                    // The HostPort of the master node
     std::shared_ptr<master::MasterOCService_Stub> rpcSession_{ nullptr };  // session to the master rpc service
     std::shared_ptr<master::MasterOCService_BrpcGenericStub> brpcSession_{ nullptr };
+
+    // Drop the cached WORKER_MASTER_OC_SVC stub and re-Init so the next RPC uses a fresh
+    // brpc channel. Used after a peer-dead/blip failure against a restarting master whose
+    // old socket is failed.
+    Status RebuildStub();
+
+    // Bounded retry wrapper for worker->master RPCs. RetryOnError fast-fails
+    // K_RPC_PEER_DEAD (by contract), so on peer-dead/blip we drop the stale stub, rebuild a
+    // fresh channel, and retry until the deadline. This restores the restart-tolerance the
+    // legacy UNAVAILABLE mapping provided, without weakening the per-attempt fast-fail.
+    // `func` must read `this->brpcSession_` (not a copy) so a rebuilt stub is picked up.
+    Status RetryWithStubRebuild(int64_t timeoutMs, const std::function<Status(int32_t)> &func,
+                                const std::unordered_set<StatusCode> &retryOn, const char *diagName);
 };
 
 /**

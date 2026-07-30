@@ -46,6 +46,7 @@
 #endif
 #include "datasystem/common/rpc/api_deadline.h"
 #include "datasystem/common/rpc/brpc_status_util.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uri.h"
 
@@ -345,7 +346,7 @@ Status TransportLayer::Exist(const HostPort &workerAddr, const TransportExistReq
 
     ExistRspPb response;
     Status rc = runExist(response);
-    if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+    if (IsRetryableRpcError(rc)) {
         LOG(WARNING) << "Rebuild RPC client for worker " << workerAddr.ToString() << " after Exist failed: " << rc;
         manager_->Teardown(workerAddr);
         rc = runExist(response);
@@ -354,6 +355,11 @@ Status TransportLayer::Exist(const HostPort &workerAddr, const TransportExistReq
                          << ": " << rc;
             return rc;
         }
+    } else if (IsNonRetryableRpcError(rc)) {
+        LOG(WARNING) << "Tear down dead RPC peer for worker " << workerAddr.ToString()
+                     << " after Exist failed without retry: " << rc;
+        manager_->Teardown(workerAddr);
+        return rc;
     } else if (rc.IsError()) {
         return rc;
     }
@@ -430,6 +436,14 @@ bool TransportLayer::RebuildPlaneOnSetFailure(const Status &rc, const HostPort &
         LOG(WARNING) << "Rebuild UB data plane for worker " << workerAddr.ToString() << " after Set failed: " << rc;
         manager_->ResetDataPlane(workerAddr);
         return true;
+    }
+    if (IsNonRetryableRpcError(rc)) {
+        // Dead peer: tear down the stale connection but do not retry (the peer is gone).
+        // The caller still releases the allocation and surfaces the original status.
+        LOG(WARNING) << "Tear down dead RPC peer for worker " << workerAddr.ToString()
+                     << " after Set failed without retry: " << rc;
+        manager_->Teardown(workerAddr);
+        return false;
     }
     if (rc.GetCode() == K_RPC_UNAVAILABLE) {
         LOG(WARNING) << "Rebuild RPC and data plane for worker " << workerAddr.ToString()
@@ -568,6 +582,14 @@ Status TransportLayer::MCreate(const HostPort &workerAddr, const std::vector<std
         return r;
     };
     Status rc = runMCreate(hint);
+    if (IsNonRetryableRpcError(rc)) {
+        // Dead peer: tear down without retrying (the peer is gone). MultiCreate is not replayed since it
+        // has no idempotency marker and the worker may have allocated memory before the failure.
+        LOG(WARNING) << "Tear down dead RPC peer for worker " << workerAddr.ToString()
+                     << " after MCreate failed without retry: " << rc;
+        manager_->Teardown(workerAddr);
+        return rc;
+    }
     if (rc.GetCode() == K_RPC_UNAVAILABLE) {
         // Rebuild once and retry, consistent with the Create path. MultiCreate has no idempotency marker,
         // so a lost response may leave the worker holding partial allocations; those are reclaimed by the
@@ -617,9 +639,9 @@ Status TransportLayer::MSet(const std::vector<std::shared_ptr<ObjectBuffer>> &bu
         return rc.GetCode() == K_URMA_NEED_CONNECT ? ubFailureReport : rc;
     }
     const bool retryUbWrite = rc.GetCode() == K_URMA_NEED_CONNECT;
-    const bool retryUnsentPublish = rc.GetCode() == K_RPC_UNAVAILABLE && !result.publishAttempted;
+    const bool retryUnsentPublish = IsRetryableRpcError(rc) && !result.publishAttempted;
     if (!retryUbWrite && !retryUnsentPublish) {
-        if (rc.GetCode() == K_RPC_UNAVAILABLE) {
+        if (IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc)) {
             LOG(WARNING) << "Tear down RPC and data plane for worker " << workerAddr.ToString()
                          << " after ambiguous MSet failure without replay: " << rc;
             manager_->Teardown(workerAddr);
@@ -728,6 +750,10 @@ Status TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(
             if (rc.IsOk() || rc.GetCode() == K_NOT_FOUND) {
                 return rc;
             }
+            if (IsNonRetryableRpcError(rc)) {
+                manager->Teardown(workerAddr);
+                return rc;
+            }
             LOG(WARNING) << "InvokeDecreaseReference attempt " << (attempt + 1) << "/" << kMaxAttempts
                          << " failed for worker " << workerAddr.ToString() << ", shmId=" << shmId.ToString()
                          << ": " << rc.ToString();
@@ -746,6 +772,10 @@ Status TransportLayer::InvokeReleaseWithRetryOnAliveTransporter(
         }
         rc = transporter->Release(shmId, context);
         if (rc.IsOk() || rc.GetCode() == K_NOT_FOUND) {
+            return rc;
+        }
+        if (IsNonRetryableRpcError(rc)) {
+            manager->Teardown(workerAddr);
             return rc;
         }
         LOG(WARNING) << "InvokeDecreaseReference attempt " << (attempt + 1) << "/" << kMaxAttempts

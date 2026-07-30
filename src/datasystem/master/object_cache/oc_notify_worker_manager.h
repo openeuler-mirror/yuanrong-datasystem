@@ -288,6 +288,18 @@ public:
     Status PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart);
 
     /**
+     * @brief Push meta to a worker, retrying across peer-dead so a worker that is mid-restart
+     * eventually receives its meta once it comes back up. RetryOnError itself fast-fails
+     * peer-dead, so the retry loop lives here.
+     * @param[in] workerAddr The target worker address.
+     * @param[in] req The push-meta request.
+     * @param[out] rsp The push-meta response.
+     * @return Status of the call.
+     */
+    Status PushMetaToWorkerWithPeerDeadRetry(const std::string &workerAddr, PushMetaToWorkerReqPb &req,
+                                             PushMetaToWorkerRspPb &rsp);
+
+    /**
      * @brief Remove operator from async worker op table.
      * @param[in] workerId The worker address of the object.
      * @param[in] objectKeys The object keys to be remove.

@@ -28,6 +28,8 @@
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/util/rpc_diagnostic.h"
+#include "datasystem/common/util/rpc_util.h"
+#include "datasystem/common/signal/signal.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/log.h"
@@ -91,6 +93,40 @@ Status WorkerRemoteWorkerOCApi::Init(std::chrono::steady_clock::time_point deadl
     return Status::OK();
 }
 
+Status WorkerRemoteWorkerOCApi::RebuildStub()
+{
+    // Drop the cached WORKER_WORKER_OC_SVC stub so GetStub rebuilds a fresh brpc channel.
+    // The old brpcSession_ held a failed socket (peer-dead); re-Init picks up a new one.
+    (void)RpcStubCacheMgr::Instance().Remove(hostPort_, StubType::WORKER_WORKER_OC_SVC);
+    return Init(std::chrono::steady_clock::time_point::max());
+}
+
+Status WorkerRemoteWorkerOCApi::RetryWithStubRebuild(int64_t timeoutMs,
+                                                     const std::function<Status(int32_t)> &func,
+                                                     const std::unordered_set<StatusCode> &retryOn,
+                                                     const char *diagName)
+{
+    // RetryOnError fast-fails K_RPC_PEER_DEAD by contract. On peer-dead/blip the cached
+    // brpcSession_ holds a failed socket against a restarting peer; rebuild the stub and
+    // retry until the deadline so a brief boot window does not surface as a permanent
+    // GetObjectRemote failure. `func` reads this->brpcSession_ so the rebuilt stub is used.
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    Status rc;
+    do {
+        if (IsTermSignalReceived()) {
+            break;
+        }
+        int32_t remainMs = static_cast<int32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now()).count());
+        rc = RetryOnError(std::max<int32_t>(remainMs, 0), func, []() { return Status::OK(); }, retryOn);
+        if (rc.GetCode() != StatusCode::K_RPC_PEER_DEAD && rc.GetCode() != StatusCode::K_RPC_NETWORK_BLIP) {
+            break;
+        }
+        (void)RebuildStub();
+    } while (std::chrono::steady_clock::now() < deadline);
+    return WithRpcDiag(rc, diagName, localHostPort_, hostPort_);
+}
+
 Status WorkerRemoteWorkerOCApi::GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
                                                 std::vector<RpcMessage> &payload)
 {
@@ -109,15 +145,25 @@ Status WorkerRemoteWorkerOCApi::GetObjectRemote(GetObjectRemoteReqPb &req, GetOb
     // If timeout duration is too large, prevent from waiting too long when network errors.
     int64_t maxTimeoutMs = kWorkerWorkerRpcMaxTimeoutMs;
     remainingTime = std::min(remainingTime, maxTimeoutMs);
-    opts.SetTimeout(remainingTime);
     if (rpcSession_ == nullptr && brpcSession_ == nullptr) {
         return WithRpcDiag(Status(K_RUNTIME_ERROR, __LINE__, __FILE__, "Rpc session is null"), "GetObjectRemote",
                            localHostPort_, hostPort_);
     }
-    RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
-    Status rc = brpcSession_ ? brpcSession_->GetObjectRemote(opts, req, rsp, payload)
-                             : rpcSession_->GetObjectRemote(opts, req, rsp, payload);
-    return WithRpcDiag(rc, "GetObjectRemote", localHostPort_, hostPort_);
+    // Mesh channels run with brpc max_retry=0. RetryOnError fast-fails K_RPC_PEER_DEAD, so
+    // wrap with stub-rebuild retry: a restarting peer briefly reports peer-dead while booting,
+    // and dropping the stale stub lets the next attempt rebuild the channel.
+    static const std::unordered_set<StatusCode> getRemoteRetryOn{ StatusCode::K_TRY_AGAIN,
+        StatusCode::K_RPC_CANCELLED, StatusCode::K_RPC_DEADLINE_EXCEEDED, StatusCode::K_RPC_UNAVAILABLE };
+    return RetryWithStubRebuild(remainingTime,
+        [this, &req, &rsp, &payload](int32_t rpcTimeoutMs) {
+            RpcOptions opts;
+            opts.SetTimeout(rpcTimeoutMs);
+            RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+            Status rc = brpcSession_ ? brpcSession_->GetObjectRemote(opts, req, rsp, payload)
+                                     : rpcSession_->GetObjectRemote(opts, req, rsp, payload);
+            return rc;
+        },
+        getRemoteRetryOn, "GetObjectRemote");
 }
 
 Status WorkerRemoteWorkerOCApi::GetObjectRemote(

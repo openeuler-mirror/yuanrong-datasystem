@@ -15,7 +15,7 @@
   - `src/datasystem/master`
   - `src/datasystem/protos`
 - Last verified against source:
-  - `2026-07-01`
+  - `2026-07-26`
 
 ## Architecture Summary
 
@@ -43,6 +43,32 @@ Large data usually bypasses brpc:
 - Keep TraceID at the front of the brpc request attachment. The server adapter strips the `TRCID:V1` prefix before payload parsing, so payload framing depends on this ordering. A 1-byte `LogSampleState` is appended after the traceID so the worker restores `requestLogTrace`/`sampleDecision` via `ApplyLogSampleState()` and participates in `LogSampler`; encode/decode helpers are `AttachTraceIDToAttachment()` / `ExtractTraceIDAndSampleState()` in `trace_attachment.h`. The magic stays `V1` and the state byte defaults defensively to `UNDECIDED` when absent/out-of-range, so this assumes single-version deployment (no rolling upgrade with binaries that emit the frame without the state byte).
 - Do not rely on brpc attachment as a true zero-copy large-data channel. The attachment framing path can avoid some application-level copies through `RpcMessage::ZeroCopyBuffer`, but brpc attachment serialization still differs from shm/RDMA bypass semantics.
 - Keep production streaming assumptions narrow. The only production streaming RPC verified here is `MasterWorkerSCService.QueryMetadata`; test protos contain additional stream examples.
+
+## BRPC Failure Classification And Retry Semantics
+
+`src/datasystem/common/rpc/brpc_status_util.h` maps brpc transport errors before application status extraction falls
+back to generic cancellation. Transport failures that strongly indicate a dead or explicitly unavailable peer return
+`K_RPC_PEER_DEAD`; ambiguous transient network failures return `K_RPC_NETWORK_BLIP`; legacy callers can still see
+`K_RPC_UNAVAILABLE` from non-brpc paths or older failure surfaces.
+
+- `K_RPC_PEER_DEAD` is for peer-dead or explicitly unavailable conditions such as failed socket, logoff/close,
+  connection refused, not connected, broken pipe, host down, shutdown, reject, and internal brpc transport failure.
+  Application retry loops should tear down cached channel/transport state and fail fast instead of sleeping through the
+  old `K_RPC_UNAVAILABLE` retry budget.
+- `K_RPC_NETWORK_BLIP` is for transient or ambiguous network failures such as EOF, SSL transport failure, connection
+  reset/abort, host unreachable, or network unreachable. `RetryOnError()` treats it as matching a legacy
+  `K_RPC_UNAVAILABLE` retry policy so existing bounded retry paths continue to retry network blips.
+- Common retry decisions should use the two shared buckets in `src/datasystem/common/util/rpc_util.h`:
+  `IsRetryableRpcError()` for errors safe to retry within an idempotent caller's retry budget, and
+  `IsNonRetryableRpcError()` for terminal RPC errors that must fail fast. `K_RPC_PEER_DEAD` is non-retryable, so
+  `RetryOnError()` returns it directly even if a caller accidentally includes it in the retry policy.
+- For idempotent routing decisions, a peer-dead status may still justify trying a different replica or master route, but
+  it should not retry the same dead worker through a sleep/backoff loop.
+
+ZMQ remains on the legacy `K_RPC_UNAVAILABLE` surface in this change. `zmq_common.h` recognizes the new shared buckets so
+common call sites can handle brpc and future ZMQ splits uniformly, but ZMQ's own socket/recv paths still need a separate
+source-backed errno audit before they can emit `K_RPC_PEER_DEAD` versus `K_RPC_NETWORK_BLIP`. Do not claim mixed
+brpc+ZMQ channel behavior is fully aligned until that audit lands.
 
 ## BRPC Latency Metric Semantics
 
@@ -165,6 +191,7 @@ Record these before implementation or in the PR body:
 ```bash
 rg -n "FLAGS_use_brpc|kBrpcPortOffset|StartBrpcServer|AddBrpcService" src/datasystem
 rg -n "RpcStubCacheMgr::Instance\\(\\)\\.GetStub|BrpcChannelStubHolder|MaybeEvictStaleBrpcStub" src/datasystem
+rg -n "MapBrpcErrorCodeToStatus|IsRetryableRpcError|IsNonRetryableRpcError|K_RPC_PEER_DEAD|K_RPC_NETWORK_BLIP" src/datasystem include tests/ut
 rg -n "AttachTraceIDToAttachment|TRCID:V1|request_attachment|response_attachment" src/datasystem/common/rpc
 rg -n "AsyncWrite|AsyncRead|ForgetRequest|BrpcAsyncContext|AsyncRpcRequestManager" src/datasystem
 rg -n "DATA_IN_PAYLOAD|DATA_ALREADY_TRANSFERRED|ZeroCopyBuffer|WriteViaFastTransport|HandlePayloadFallback" src/datasystem
@@ -179,6 +206,8 @@ rg -n "rpc .*stream|QueryMetadata" src/datasystem/protos src/datasystem/master s
 - For async tag lifecycle changes, test success, timeout, `DONTWAIT`, and forgotten-request cleanup paths.
 - For worker-worker data transfer changes, test RDMA-enabled behavior if available and the attachment fallback path even when RDMA is unavailable.
 - For client OC reconnect changes, test concurrent request dispatch during `RecreateOCStub()` or standby-worker switch.
+- For dead-peer fast-fail changes, run `bazel test //tests/st/common/rpc/brpc:dead_peer_fast_fail_test --test_output=all`
+  to cover client->worker kill and worker->master-role worker kill with real brpc subprocesses.
 
 ## Review Checklist
 

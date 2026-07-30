@@ -23,6 +23,7 @@
 #include "datasystem/cluster/runtime/topology_role_watch_plan.h"
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -710,8 +711,7 @@ Status TopologyController::ReconcileOnce()
     if (rc.IsOk()) {
         membershipDirty_ = false;
     }
-    const bool backendUnavailable =
-        rc.GetCode() == K_RPC_UNAVAILABLE || rc.GetCode() == K_RPC_DEADLINE_EXCEEDED || rc.GetCode() == K_RPC_CANCELLED;
+    const bool backendUnavailable = IsRetryableRpcError(rc) || IsNonRetryableRpcError(rc);
     diagnostics_.backendState = backendUnavailable ? ControlBackendState::UNAVAILABLE : ControlBackendState::AVAILABLE;
     diagnostics_.controlFrozen = rc.IsError() && !IsTransientReconcileStatus(rc.GetCode());
     return rc;

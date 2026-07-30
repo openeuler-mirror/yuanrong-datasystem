@@ -125,7 +125,7 @@ Status ZmqStubImpl::GetStreamPeer(const std::string &svcName, int32_t methodInde
         if (rc.IsError()) {
             sock.reset();
         }
-        doRetry = (IsRpcTimeout(rc) || rc.GetCode() == StatusCode::K_TRY_AGAIN);
+        doRetry = (rc.GetCode() == StatusCode::K_TRY_AGAIN || IsRetryableRpcError(rc));
         if (doRetry) {
             // Retry after 100ms so it does not recreate too many ZmqFrontend on K_TRY_AGAIN
             std::this_thread::sleep_for(std::chrono::milliseconds(sleepTime));

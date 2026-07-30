@@ -1209,7 +1209,7 @@ Status WorkerOcServiceMigrateImpl::ReplacePrimaryRetry(const std::shared_ptr<wor
         }
     } while (count <= maxRetryCount);
 
-    if (IsRpcTimeout(status)) {
+    if (IsRetryableRpcError(status) || IsNonRetryableRpcError(status)) {
         rsp.Clear();
         for (const auto &info : req.object_infos()) {
             rsp.add_failed_ids(info.object_key());

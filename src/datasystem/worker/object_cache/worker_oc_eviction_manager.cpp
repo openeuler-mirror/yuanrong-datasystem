@@ -1140,7 +1140,7 @@ Status WorkerOcEvictionManager::DeletePrimaryEndLifeMetadata(
         auto attemptElapsedMs = rpcAttemptTimer.ElapsedMilliSecond();
         LogPrimaryEndLifeRpcAttempt(masterAddr, attempt, attemptElapsedMs, rpcTotalTimer.ElapsedMilliSecond(),
                                     needDeleteMetaCandidates.size(), failedKeys.size(), rc);
-        if (rc.IsOk() || !IsRpcTimeout(rc)) {
+        if (rc.IsOk() || !IsRetryableRpcError(rc)) {
             return rc;
         }
     }

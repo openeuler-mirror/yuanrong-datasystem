@@ -154,6 +154,7 @@ ds_cc_library(
         "//src/datasystem/common/rpc:mem_view",
         "//src/datasystem/common/rpc:rpc_message",
         "//src/datasystem/common/rpc:unix_sock_fd",
+        "//src/datasystem/common/util:rpc_util",
         "//src/datasystem/common/util:status_helper",
         "//src/datasystem/common/util:strings_util",
         "//src/datasystem/common/util:thread_pool",

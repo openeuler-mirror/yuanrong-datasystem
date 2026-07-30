@@ -27,6 +27,7 @@
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/util/rpc_util.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uuid_generator.h"
 
@@ -911,8 +912,7 @@ void TopologyTaskExecutor::ExecuteCleanupApply(TopologyExecutionFence fence, std
 
 bool TopologyTaskExecutor::IsOrdinaryRetryable(const Status &status) const noexcept
 {
-    return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY || status.GetCode() == K_RPC_CANCELLED
-           || status.GetCode() == K_RPC_DEADLINE_EXCEEDED || status.GetCode() == K_RPC_UNAVAILABLE;
+    return status.GetCode() == K_TRY_AGAIN || status.GetCode() == K_NOT_READY || IsRetryableRpcError(status);
 }
 
 Status TopologyTaskExecutor::HandleCompletion(TopologyCallbackCompletion completion)

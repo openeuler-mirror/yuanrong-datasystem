@@ -406,7 +406,7 @@ Status ClientWorkerRemoteCommonApi::Connect(RegisterClientReqPb &req, int32_t ti
                                             int32_t stateTimeoutMs)
 {
     if (FLAGS_use_brpc) {
-        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port() + kBrpcPortOffset);
+        HostPort brpcAddr(hostPort_.Host(), hostPort_.Port());
         BrpcChannelConfig cfg;
         cfg.endpoint = brpcAddr.ToString();
         // The channel is long-lived: it carries GetSocketPath, RegisterClient,
@@ -1234,52 +1234,70 @@ void ClientWorkerRemoteCommonApi::ScheduleUrmaHandshakeRetry(uint32_t workerVers
     auto traceId = Trace::Instance().GetTraceID();
     urmaHandshakeRetryPool_->Execute([this, workerVersion, traceId]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceId);
-        constexpr int maxRetryIntervalMs = 8000;
-        constexpr int retryCheckIntervalMs = 100;
-        constexpr int64_t rpcTimeout = 15000;
-        int nextRetryTimeMs = retryCheckIntervalMs;
-        Timer timer;
-        while (!stopUrmaHandshakeRetry_.load(std::memory_order_relaxed)) {
-            uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
-            if (workerVersion != currentWorkerVersion) {
-                LOG(INFO) << "Stop stale URMA handshake retry for worker " << hostPort_.ToString()
-                          << ", clientId: " << clientId_ << ", stale version: " << workerVersion
-                          << ", current version: " << currentWorkerVersion;
-                break;
-            }
-            INJECT_POINT_NO_RETURN("client.urma_handshake_retry");
-            if (timer.ElapsedMilliSecond() < nextRetryTimeMs) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(retryCheckIntervalMs));
-                continue;
-            }
-            timer.Reset();
-            GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(rpcTimeout);
-            Status status = TryUrmaHandshake();
-            currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
-            if (workerVersion != currentWorkerVersion) {
-                LOG(INFO) << "Ignore stale URMA handshake retry result for worker " << hostPort_.ToString()
-                          << ", clientId: " << clientId_ << ", stale version: " << workerVersion
-                          << ", current version: " << currentWorkerVersion;
-                break;
-            }
-            if (IsRpcTimeoutOrTryAgain(status) || status.GetCode() == StatusCode::K_URMA_CONNECT_FAILED) {
-                nextRetryTimeMs = std::min<int>(nextRetryTimeMs << 1, maxRetryIntervalMs);
-                LOG(WARNING) << "URMA handshake async retry failed for worker " << hostPort_.ToString()
-                             << ", clientId: " << clientId_ << ", retry after " << nextRetryTimeMs
-                             << "ms. Detail: " << status.ToString();
-                continue;
-            }
+        UrmaHandshakeRetryLoop(workerVersion);
+    });
+}
 
-            if (status.IsOk()) {
-                LOG(INFO) << "URMA handshake retry succeeded for worker " << hostPort_.ToString()
-                          << ", clientId: " << clientId_;
-            } else {
-                LOG(WARNING) << "URMA handshake retry failed for worker " << hostPort_.ToString()
-                             << ", clientId: " << clientId_ << ". Detail: " << status.ToString();
-            }
+void ClientWorkerRemoteCommonApi::UrmaHandshakeRetryLoop(uint32_t workerVersion)
+{
+    constexpr int maxRetryIntervalMs = 8000;
+    constexpr int retryCheckIntervalMs = 100;
+    constexpr int64_t rpcTimeout = 15000;
+    int nextRetryTimeMs = retryCheckIntervalMs;
+    Timer timer;
+    while (!stopUrmaHandshakeRetry_.load(std::memory_order_relaxed)) {
+        uint32_t currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
+        if (workerVersion != currentWorkerVersion) {
+            LOG(INFO) << "Stop stale URMA handshake retry for worker " << hostPort_.ToString()
+                      << ", clientId: " << clientId_ << ", stale version: " << workerVersion
+                      << ", current version: " << currentWorkerVersion;
             break;
         }
-    });
+        INJECT_POINT_NO_RETURN("client.urma_handshake_retry");
+        if (timer.ElapsedMilliSecond() < nextRetryTimeMs) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(retryCheckIntervalMs));
+            continue;
+        }
+        timer.Reset();
+        GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(rpcTimeout);
+        Status status = TryUrmaHandshake();
+        currentWorkerVersion = workerVersion_.load(std::memory_order_relaxed);
+        if (workerVersion != currentWorkerVersion) {
+            LOG(INFO) << "Ignore stale URMA handshake retry result for worker " << hostPort_.ToString()
+                      << ", clientId: " << clientId_ << ", stale version: " << workerVersion
+                      << ", current version: " << currentWorkerVersion;
+            break;
+        }
+        if (LogUrmaHandshakeRetryResult(status)) {
+            nextRetryTimeMs = std::min<int>(nextRetryTimeMs << 1, maxRetryIntervalMs);
+            LOG(WARNING) << "URMA handshake async retry failed for worker " << hostPort_.ToString()
+                         << ", clientId: " << clientId_ << ", retry after " << nextRetryTimeMs
+                         << "ms. Detail: " << status.ToString();
+            continue;
+        }
+        break;
+    }
+}
+
+bool ClientWorkerRemoteCommonApi::LogUrmaHandshakeRetryResult(const Status &status)
+{
+    StatusCode code = status.GetCode();
+    if (code == StatusCode::K_TRY_AGAIN || code == StatusCode::K_URMA_CONNECT_FAILED
+        || IsRetryableRpcError(status)) {
+        return true;  // retryable: caller continues the backoff loop
+    }
+    if (IsNonRetryableRpcError(status)) {
+        LOG(WARNING) << "URMA handshake async retry stopped on non-retryable failure for worker "
+                     << hostPort_.ToString() << ", clientId: " << clientId_
+                     << ". Detail: " << status.ToString();
+    } else if (status.IsOk()) {
+        LOG(INFO) << "URMA handshake retry succeeded for worker " << hostPort_.ToString()
+                  << ", clientId: " << clientId_;
+    } else {
+        LOG(WARNING) << "URMA handshake retry failed for worker " << hostPort_.ToString()
+                     << ", clientId: " << clientId_ << ". Detail: " << status.ToString();
+    }
+    return false;
 }
 }  // namespace client
 }  // namespace datasystem

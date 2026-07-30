@@ -3,6 +3,11 @@ load("//bazel:build_defs.bzl", "ds_cc_library")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_library(
+    name = "select_strategy",
+    hdrs = ["select_strategy.h"],
+)
+
+ds_cc_library(
     name = "routing",
     srcs = [
         "broken_filter.cpp",
@@ -24,6 +29,7 @@ ds_cc_library(
         "worker_router.h",
     ],
     deps = [
+        ":select_strategy",
         "//include/datasystem/utils:utils_headers",
         "//src/datasystem/common/ak_sk:signature",
         "//src/datasystem/common/inject:common_inject",
