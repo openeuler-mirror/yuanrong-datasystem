@@ -45,7 +45,7 @@ void Context::SetTenantId(const std::string &tenantId)
     auto *ctx = GetRequestContext();
     if (ctx->tenantId != tenantId) {
         ctx->tenantId = tenantId;
-        LOG(INFO) << "Set tenant id: " << ctx->tenantId;
+        VLOG(1) << "Set tenant id: " << ctx->tenantId;
     }
 }
 }  // namespace datasystem
