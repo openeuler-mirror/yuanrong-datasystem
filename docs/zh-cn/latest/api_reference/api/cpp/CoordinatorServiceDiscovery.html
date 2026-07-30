@@ -693,6 +693,17 @@ document.addEventListener('DOMContentLoaded', function() {
 <code class="docutils literal notranslate"><span class="pre">ServiceAffinityPolicy::RANDOM</span></code> 且已获取本机 hostId 时返回 <code class="docutils literal notranslate"><span class="pre">true</span></code>。</p>
 </dd></dl>
 
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK27CoordinatorServiceDiscovery9GetHostIdEv">
+<span id="_CPPv3NK27CoordinatorServiceDiscovery9GetHostIdEv"></span><span id="_CPPv2NK27CoordinatorServiceDiscovery9GetHostIdEv"></span><span id="CoordinatorServiceDiscovery::GetHostIdC"></span><span class="n"><span class="pre">std</span></span><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">GetHostId</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK27CoordinatorServiceDiscovery9GetHostIdEv" title="Link to this definition">¶</a><br /></dt>
+<dd><p>获取 <a class="reference internal" href="#_CPPv4N27CoordinatorServiceDiscovery4InitEv" title="CoordinatorServiceDiscovery::Init"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">CoordinatorServiceDiscovery::Init()</span></code></a> 解析出的 SDK hostId。客户端使用该值为写入路由
+识别同节点 Worker，初始连接地址不会覆盖该值。</p>
+<dl class="simple">
+<dt>返回：</dt><dd><p>SDK hostId；无法解析时返回空字符串。</p>
+</dd>
+</dl>
+</dd></dl>
+
 <p><strong>使用固定 Coordinator 地址</strong></p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">datasystem</span><span class="o">::</span><span class="n">CoordinatorServiceDiscoveryOptions</span><span class="w"> </span><span class="n">options</span><span class="p">;</span>
 <span class="n">options</span><span class="p">.</span><span class="n">serviceAddress</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;127.0.0.1:31511&quot;</span><span class="p">;</span>
@@ -796,6 +807,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <li><a class="reference internal" href="#_CPPv4N27CoordinatorServiceDiscovery13GetAllWorkersERNSt6vectorINSt6stringEEERNSt6vectorINSt6stringEEE"><code class="docutils literal notranslate"><span class="pre">CoordinatorServiceDiscovery::GetAllWorkers()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4NK27CoordinatorServiceDiscovery17GetAffinityPolicyEv"><code class="docutils literal notranslate"><span class="pre">CoordinatorServiceDiscovery::GetAffinityPolicy()</span></code></a></li>
 <li><a class="reference internal" href="#_CPPv4NK27CoordinatorServiceDiscovery15HasHostAffinityEv"><code class="docutils literal notranslate"><span class="pre">CoordinatorServiceDiscovery::HasHostAffinity()</span></code></a></li>
+<li><a class="reference internal" href="#_CPPv4NK27CoordinatorServiceDiscovery9GetHostIdEv"><code class="docutils literal notranslate"><span class="pre">CoordinatorServiceDiscovery::GetHostId()</span></code></a></li>
 </ul>
 </li>
 </ul>
