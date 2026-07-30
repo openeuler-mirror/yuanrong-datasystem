@@ -17,6 +17,7 @@
 
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/model/topology_diagnostics.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/cluster/runtime/topology_role_watch_plan.h"
@@ -35,6 +36,19 @@ constexpr uint64_t BACKOFF_SHIFT_BASE = 1;
 constexpr int TOPOLOGY_WATCH_EVENT_LOG_INTERVAL = 1'024;
 constexpr int TOPOLOGY_RECONCILE_LOG_INTERVAL = 128;
 constexpr int64_t DERIVED_SLICE_WARN_THRESHOLD_MS = 20;
+constexpr size_t MAX_EXTERNAL_BOOTSTRAP_ATTEMPTS = 8;
+
+Status BuildWatchedTopology(const CoordinationEvent &event,
+                            std::shared_ptr<const TopologySnapshot> &snapshot)
+{
+    TopologyState state;
+    RETURN_IF_NOT_OK(TopologyRepositoryCodec::DecodeTopology(event.value, state));
+    std::string canonical;
+    RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeTopology(state, canonical));
+    std::string digest;
+    RETURN_IF_NOT_OK(Hasher().GetSha256Hex(canonical, digest));
+    return TopologySnapshot::Create(std::move(state), event.revision, std::move(digest), snapshot);
+}
 
 std::string MembershipDigest(const std::vector<MembershipRecord> &memberships)
 {
@@ -203,7 +217,8 @@ bool TopologyControllerOptions::IsValid() const noexcept
            && scaleInCollectWindow.count() <= MAX_SCALE_IN_COLLECT_WINDOW_MS
            && (!memberLivenessProbe || !localAddress.empty())
            && (eventSourceMode == TopologyEventSourceMode::SELF_MANAGED
-               || eventSourceMode == TopologyEventSourceMode::EXTERNAL);
+               || eventSourceMode == TopologyEventSourceMode::EXTERNAL
+               || eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD);
 }
 
 TopologyController::TopologyController(ICoordinationBackend &backend, TopologyRepository &repository,
@@ -236,6 +251,10 @@ Status TopologyController::Start()
         RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(TopologyRuntimeRole::CONTROLLER, "", keys_, 0, watches));
     }
     RETURN_IF_NOT_OK(PrepareMembershipRestartObservation());
+    if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD) {
+        RETURN_IF_NOT_OK(ResyncExternalFacts());
+        bootstrapRevision_ = membershipRevisionFloor_;
+    }
     RETURN_IF_NOT_OK(dispatcher_.Start());
     if (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED) {
         backend_.SetEventHandler(
@@ -250,7 +269,7 @@ Status TopologyController::Start()
         }
     }
     LOG(INFO) << "CLUSTER_WATCH cluster=" << keys_.ClusterName() << " role=controller scope_count=" << watches.size()
-              << " revision=0 status="
+              << " revision=" << membershipRevisionFloor_ << " status="
               << (options_.eventSourceMode == TopologyEventSourceMode::SELF_MANAGED ? "registered" : "external");
     started_ = true;
     stopping_ = false;
@@ -329,14 +348,20 @@ Status TopologyController::EnqueueCoordinationEvent(CoordinationEvent &&event)
 
 Status TopologyController::SubmitCoordinationEvent(CoordinationEvent &&event)
 {
-    CHECK_FAIL_RETURN_STATUS(options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL, K_INVALID,
+    CHECK_FAIL_RETURN_STATUS(options_.eventSourceMode != TopologyEventSourceMode::SELF_MANAGED, K_INVALID,
                              "topology Controller does not accept an external event source");
     return EnqueueCoordinationEvent(std::move(event));
 }
 
+int64_t TopologyController::GetBootstrapRevision() const noexcept
+{
+    return bootstrapRevision_;
+}
+
 Status TopologyController::PrepareMembershipRestartObservation()
 {
-    if (options_.membershipRestartHandler == nullptr) {
+    if (options_.eventSourceMode != TopologyEventSourceMode::EXTERNAL_ETCD
+        && options_.membershipRestartHandler == nullptr) {
         return Status::OK();
     }
     std::string eventPrefix;
@@ -346,8 +371,10 @@ Status TopologyController::PrepareMembershipRestartObservation()
     }
     std::lock_guard<std::mutex> lock(membershipRestartMutex_);
     membershipEventPrefix_ = std::move(eventPrefix);
-    latestRestartTimestampByAddress_.clear();
-    pendingRestartTimestampByAddress_.clear();
+    if (options_.membershipRestartHandler != nullptr) {
+        latestRestartTimestampByAddress_.clear();
+        pendingRestartTimestampByAddress_.clear();
+    }
     return Status::OK();
 }
 
@@ -376,6 +403,122 @@ Status TopologyController::ObserveMembershipRestart(const CoordinationEvent &eve
     CHECK_FAIL_RETURN_STATUS(value.timestamp > 0, K_INVALID, "membership restart timestamp is invalid");
     RecordMembershipRestart(address, value.timestamp);
     return Status::OK();
+}
+
+Status TopologyController::PublishExternalTopology(std::shared_ptr<const TopologySnapshot> candidate,
+                                                   bool fullRebuild)
+{
+    SnapshotUpdateOutcome outcome;
+    auto rc = externalTopology_.Publish(candidate, outcome);
+    if (rc.IsOk()) {
+        return rc;
+    }
+    if (outcome == SnapshotUpdateOutcome::VERSION_GAP && fullRebuild) {
+        return externalTopology_.PublishAfterFullRebuild(std::move(candidate));
+    }
+    externalResyncRequired_ = true;
+    return rc;
+}
+
+Status TopologyController::ResyncExternalFacts()
+{
+    for (size_t attempt = 0; attempt < MAX_EXTERNAL_BOOTSTRAP_ATTEMPTS; ++attempt) {
+        std::vector<MembershipRecord> memberships;
+        int64_t membershipRevision = 0;
+        RETURN_IF_NOT_OK(repository_.ReadMemberships(memberships, &membershipRevision));
+        CHECK_FAIL_RETURN_STATUS(membershipRevision > 0, K_INVALID,
+                                 "external membership read returned an invalid revision");
+        if (membershipRevisionFloor_ > 0 && membershipRevision < membershipRevisionFloor_) {
+            RETURN_STATUS(K_INVALID, "external membership revision rolled back");
+        }
+
+        TopologyReader reader(repository_);
+        std::shared_ptr<const TopologySnapshot> topology;
+        auto rc = reader.Read(CONTROLLER_READ_TIMEOUT_MS, topology);
+        if (rc.GetCode() == K_NOT_FOUND) {
+            CHECK_FAIL_RETURN_STATUS(membershipRevisionFloor_ == 0, K_INVALID,
+                                     "external topology authority disappeared");
+            RETURN_IF_NOT_OK(EnsureTopologyAuthority());
+            continue;
+        }
+        RETURN_IF_NOT_OK(rc);
+        if (topology->AuthorityRevision() > membershipRevision) {
+            continue;
+        }
+
+        std::map<std::string, MembershipRecord> facts;
+        for (const auto &membership : memberships) {
+            facts.emplace(membership.address, membership);
+        }
+        const auto topologyRevision = topology->AuthorityRevision();
+        RETURN_IF_NOT_OK(PublishExternalTopology(std::move(topology), true));
+        externalMemberships_.swap(facts);
+        membershipEventRevisionByAddress_.clear();
+        membershipRevisionFloor_ = membershipRevision;
+        topologyEventRevision_ = topologyRevision;
+        externalResyncRequired_ = false;
+        return Status::OK();
+    }
+    RETURN_STATUS(K_TRY_AGAIN, "external topology changed throughout the bounded fact rebuild");
+}
+
+Status TopologyController::ApplyExternalEvent(const CoordinationEvent &event)
+{
+    if (event.type == CoordinationEventType::RESET) {
+        RETURN_STATUS(K_NOT_READY, "external watch reset requires an exact rebuild");
+    }
+    const auto kind = keys_.ClassifyEtcdWatchKey(event.key, "");
+    if (kind == TopologyEtcdKeyKind::TOPOLOGY) {
+        if (event.type != CoordinationEventType::PUT || event.value.empty() || event.revision <= 0
+            || event.version <= 0) {
+            RETURN_STATUS(K_NOT_READY, "external topology event requires an exact rebuild");
+        }
+        if (event.revision <= topologyEventRevision_) {
+            return Status::OK();
+        }
+        std::shared_ptr<const TopologySnapshot> candidate;
+        RETURN_IF_NOT_OK(BuildWatchedTopology(event, candidate));
+        RETURN_IF_NOT_OK(PublishExternalTopology(std::move(candidate), false));
+        topologyEventRevision_ = event.revision;
+        topologyDirty_ = true;
+        return Status::OK();
+    }
+    if (kind == TopologyEtcdKeyKind::MEMBERSHIP) {
+        CHECK_FAIL_RETURN_STATUS(event.key.rfind(membershipEventPrefix_, 0) == 0, K_INVALID,
+                                 "external membership event prefix is invalid");
+        const std::string address = event.key.substr(membershipEventPrefix_.size());
+        std::string canonicalAddress;
+        RETURN_IF_NOT_OK(TopologyKeyHelper::MembershipKey(address, canonicalAddress));
+        CHECK_FAIL_RETURN_STATUS(canonicalAddress == address, K_INVALID,
+                                 "external membership event key is not exact");
+        if (event.revision <= 0) {
+            RETURN_STATUS(K_NOT_READY, "revisionless membership event requires an exact rebuild");
+        }
+        const auto watermark = membershipEventRevisionByAddress_.find(address);
+        const auto appliedRevision =
+            watermark == membershipEventRevisionByAddress_.end() ? membershipRevisionFloor_ : watermark->second;
+        if (event.revision <= appliedRevision) {
+            return Status::OK();
+        }
+        if (event.type == CoordinationEventType::DELETE) {
+            RETURN_STATUS(K_NOT_READY, "membership deletion requires an exact prefix rebuild");
+        }
+        if (event.type != CoordinationEventType::PUT || event.version <= 0) {
+            RETURN_STATUS(K_NOT_READY, "external membership event requires an exact rebuild");
+        }
+        MembershipValue value;
+        RETURN_IF_NOT_OK(MembershipValueCodec::Decode(event.value, value));
+        externalMemberships_[address] =
+            MembershipRecord{ address, value.lifecycleState, value.timestamp, value.hostId };
+        membershipEventRevisionByAddress_[address] = event.revision;
+        membershipDirty_ = true;
+        return Status::OK();
+    }
+    if (kind == TopologyEtcdKeyKind::MIGRATE_TASK || kind == TopologyEtcdKeyKind::DELETE_TASK) {
+        taskDirty_ = true;
+        return Status::OK();
+    }
+    RETURN_STATUS(K_INVALID, "external Controller received an unknown watch key");
 }
 
 void TopologyController::ObserveMembershipRestarts(const std::vector<MembershipRecord> &memberships)
@@ -448,6 +591,10 @@ void TopologyController::Run()
                          << " action=event_wait_failed status=" << rc.ToString();
             continue;
         }
+        if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD
+            && !externalEventSourceReady_) {
+            continue;
+        }
         const auto now = std::chrono::steady_clock::now();
         if (reconcileNotBefore_ != std::chrono::steady_clock::time_point{} && now < reconcileNotBefore_) {
             continue;
@@ -469,6 +616,20 @@ bool TopologyController::StopRequested() const
 
 Status TopologyController::WaitForReconcile(bool immediate, size_t &drained)
 {
+    const auto consumeEvent = [this](RuntimeEvent &event) {
+        if (options_.eventSourceMode != TopologyEventSourceMode::EXTERNAL_ETCD) {
+            topologyDirty_ = true;
+            membershipDirty_ = true;
+            taskDirty_ = true;
+            return;
+        }
+        const auto *coordination = std::get_if<CoordinationEvent>(&event.payload);
+        externalEventSourceReady_ = true;
+        if (coordination == nullptr || ApplyExternalEvent(*coordination).IsError()) {
+            externalResyncRequired_ = true;
+            failureClassifier_.Pause(options_.now());
+        }
+    };
     drained = 0;
     RuntimeEvent event;
     auto wakeDeadline =
@@ -487,12 +648,11 @@ Status TopologyController::WaitForReconcile(bool immediate, size_t &drained)
     if (rc.IsError()) {
         return Status::OK();
     }
-    topologyDirty_ = true;
-    membershipDirty_ = true;
-    taskDirty_ = true;
+    consumeEvent(event);
     drained = FIRST_DRAINED_EVENT_COUNT;
     while (drained < MAX_DOORBELLS_PER_RECONCILE
            && dispatcher_.WaitPop(std::chrono::steady_clock::now(), event).IsOk()) {
+        consumeEvent(event);
         ++drained;
     }
     return Status::OK();
@@ -507,7 +667,10 @@ void TopologyController::RecordReconcileResult(const Status &status, std::chrono
         derivedWorkPending_ = false;
         progressWorkPending_ = false;
     }
-    if (status.GetCode() == K_TRY_AGAIN) {
+    const bool externalResyncNeedsBackoff =
+        status.GetCode() == K_TRY_AGAIN && options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD
+        && externalResyncRequired_;
+    if (status.GetCode() == K_TRY_AGAIN && !externalResyncNeedsBackoff) {
         consecutiveReconcileFailures_ = 0;
         reconcileNotBefore_ = {};
         VLOG(TOPOLOGY_VERBOSE_LOG_LEVEL)
@@ -548,6 +711,9 @@ Status TopologyController::ReconcileOnce()
     if (dispatcher_.ConsumeResyncRequired()) {
         LOG(WARNING) << "CLUSTER_WATCH cluster=" << keys_.ClusterName()
                      << " role=controller scope=all status=resync queued_events=" << dispatcher_.GetStats().queueDepth;
+        if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD) {
+            externalResyncRequired_ = true;
+        }
     }
     auto rc = RecoverFromLatestTopology();
     std::lock_guard<std::mutex> lock(stateMutex_);
@@ -566,30 +732,50 @@ Status TopologyController::ReconcileOnce()
 Status TopologyController::RecoverFromLatestTopology()
 {
     topologyCommittedThisTick_ = false;
-    TopologyReader reader(repository_);
     std::shared_ptr<const TopologySnapshot> latest;
-    auto readStatus = reader.Read(CONTROLLER_READ_TIMEOUT_MS, latest);
-    if (readStatus.GetCode() == K_NOT_FOUND) {
-        readStatus = EnsureTopologyAuthority();
-        if (readStatus.IsOk()) {
-            readStatus = reader.Read(CONTROLLER_READ_TIMEOUT_MS, latest);
+    std::vector<MembershipRecord> memberships;
+    if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD) {
+        if (externalResyncRequired_) {
+            auto resyncStatus = ResyncExternalFacts();
+            if (resyncStatus.IsError()) {
+                failureClassifier_.Pause(options_.now());
+                return resyncStatus;
+            }
         }
-    }
-    if (readStatus.IsError()) {
-        failureClassifier_.Pause(options_.now());
-        return readStatus;
+        auto readStatus = externalTopology_.Load(latest);
+        if (readStatus.IsError()) {
+            failureClassifier_.Pause(options_.now());
+            return readStatus;
+        }
+        memberships.reserve(externalMemberships_.size());
+        for (const auto &[address, membership] : externalMemberships_) {
+            (void)address;
+            memberships.emplace_back(membership);
+        }
+    } else {
+        TopologyReader reader(repository_);
+        auto readStatus = reader.Read(CONTROLLER_READ_TIMEOUT_MS, latest);
+        if (readStatus.GetCode() == K_NOT_FOUND) {
+            readStatus = EnsureTopologyAuthority();
+            if (readStatus.IsOk()) {
+                readStatus = reader.Read(CONTROLLER_READ_TIMEOUT_MS, latest);
+            }
+        }
+        if (readStatus.IsError()) {
+            failureClassifier_.Pause(options_.now());
+            return readStatus;
+        }
+        auto membershipStatus = repository_.ReadMemberships(memberships);
+        if (membershipStatus.IsError()) {
+            failureClassifier_.Pause(options_.now());
+            return membershipStatus;
+        }
     }
     {
         std::lock_guard<std::mutex> lock(stateMutex_);
         diagnostics_.topologyVersion = latest->Version();
         diagnostics_.topologyRevision = latest->AuthorityRevision();
         diagnostics_.activeBatch = latest->GetActiveBatch();
-    }
-    std::vector<MembershipRecord> memberships;
-    auto membershipStatus = repository_.ReadMemberships(memberships);
-    if (membershipStatus.IsError()) {
-        failureClassifier_.Pause(options_.now());
-        return membershipStatus;
     }
     if (membershipDirty_ || lastMembershipObservationDigest_.empty()) {
         const auto membershipDigest = MembershipDigest(memberships);
@@ -1545,6 +1731,10 @@ Status TopologyController::CommitAndReadBack(uint64_t expectedVersion, const Top
     RETURN_IF_NOT_OK(reader.Read(CONTROLLER_READ_TIMEOUT_MS, committed));
     CHECK_FAIL_RETURN_STATUS(committed->Version() >= desired.version, K_TRY_AGAIN,
                              "topology exact read-back is older than committed candidate");
+    if (options_.eventSourceMode == TopologyEventSourceMode::EXTERNAL_ETCD) {
+        RETURN_IF_NOT_OK(PublishExternalTopology(committed, true));
+        topologyEventRevision_ = std::max(topologyEventRevision_, committed->AuthorityRevision());
+    }
     topologyCommittedThisTick_ = true;
     const auto batchType =
         desired.activeBatch.has_value() ? std::to_string(static_cast<uint32_t>(desired.activeBatch->type)) : "none";

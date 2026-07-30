@@ -175,6 +175,17 @@ TEST(CoordinationBackendContractTest, NullStoreFailsOperationsAndShutsDownIdempo
     EXPECT_TRUE(backend.Shutdown().IsOk());
 }
 
+TEST(CoordinationBackendContractTest, RevisionReadFailsExplicitlyWhenBackendDoesNotSupportIt)
+{
+    DsCoordinationBackend backend(nullptr, "127.0.0.1:1");
+    ICoordinationBackend &contract = backend;
+    std::vector<std::pair<std::string, std::string>> values;
+    int64_t revision = 1;
+
+    EXPECT_EQ(contract.GetAll("cluster", values, revision).GetCode(), K_NOT_SUPPORTED);
+    EXPECT_EQ(revision, 0);
+}
+
 TEST(CoordinationBackendContractTest, DsBackendPreservesClusterScopedMembershipTable)
 {
     DsCoordinationBackend backend(nullptr, "127.0.0.1:1");
