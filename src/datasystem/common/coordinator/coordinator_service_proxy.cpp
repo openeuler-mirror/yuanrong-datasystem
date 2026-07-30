@@ -158,14 +158,21 @@ template <typename ReqT, typename RspT, typename CallT>
 Status CoordinatorServiceProxyBase::CallRaw(RpcOptions &options, const ReqT &req, RspT &rsp, CallT call)
 {
     RETURN_IF_NOT_OK(CheckCoordinatorAddress(cachedLeader_));
+    auto reportCoordinatorFailure = [this](Status rc) {
+        if (rc.IsError()) {
+            rc.AppendMsg("Failed to reach coordinator " + cachedLeader_.ToString()
+                          + ". Check --coordinator_address config and whether the coordinator is running.");
+        }
+        return rc;
+    };
     if (GetTransport() == Transport::ZMQ) {
         std::shared_ptr<coordinator::CoordinatorService_Stub> stub;
-        RETURN_IF_NOT_OK(GetCoordinatorStub(cachedLeader_, stub));
-        return call(*stub, options, req, rsp);
+        RETURN_IF_NOT_OK(reportCoordinatorFailure(GetCoordinatorStub(cachedLeader_, stub)));
+        return reportCoordinatorFailure(call(*stub, options, req, rsp));
     }
     std::shared_ptr<coordinator::CoordinatorService_BrpcGenericStub> stub;
-    RETURN_IF_NOT_OK(GetCoordinatorStub(cachedLeader_, stub));
-    return call(*stub, options, req, rsp);
+    RETURN_IF_NOT_OK(reportCoordinatorFailure(GetCoordinatorStub(cachedLeader_, stub)));
+    return reportCoordinatorFailure(call(*stub, options, req, rsp));
 }
 
 CoordinatorServiceProxyBase::InFlightScope CoordinatorServiceProxyBase::BeginRpc(int32_t timeoutMs)
