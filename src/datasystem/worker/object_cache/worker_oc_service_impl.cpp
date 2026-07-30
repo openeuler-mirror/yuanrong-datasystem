@@ -486,8 +486,9 @@ Status WorkerOCServiceImpl::InitRecoveryServices()
     AddLocalFailedNodeEvent::GetInstance().AddSubscriber(
         WORKER_OC_SERVICE_IMPL, [this](const HostPort &node) { return PushMetadataToMaster(node); });
     NodeRestartEvent::GetInstance().AddSubscriber(
-        WORKER_OC_SERVICE_IMPL,
-        [this](const std::string &workerAddr, int64_t, bool) { return HandleNodeRestartEvent(workerAddr); });
+        WORKER_OC_SERVICE_IMPL, [this](const std::map<std::string, int64_t> &restartFacts, bool sync) {
+            return HandleNodeRestartEvent(restartFacts, sync);
+        });
     EraseFailedNodeApiEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL,
                                                          [this](HostPort &node) { EraseFailedWorkerMasterApi(node); });
     StartNodeCheckEvent::GetInstance().AddSubscriber(WORKER_OC_SERVICE_IMPL, [this] { return GiveUpReconciliation(); });
@@ -1177,22 +1178,34 @@ Status WorkerOCServiceImpl::RecoverMetadataOfData(const std::vector<std::string>
     return summary.status;
 }
 
-Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &workerAddr)
+Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorkers(
+    const std::map<std::string, int64_t> &restartFacts)
 {
-    LOG(INFO) << "Begin to recover metadata of restarted worker: " << workerAddr
-              << ", local worker: " << localAddress_.ToString();
+    const auto firstFact = restartFacts.begin();
+    const std::string firstAddress = firstFact == restartFacts.end() ? std::string() : firstFact->first;
+    const int64_t firstTimestamp = firstFact == restartFacts.end() ? 0 : firstFact->second;
+    std::unordered_set<HostPort> restartedAddresses;
+    for (const auto &[workerAddr, timestamp] : restartFacts) {
+        (void)timestamp;
+        if (workerAddr.empty() || workerAddr == localAddress_.ToString()) {
+            continue;
+        }
+        HostPort restartedAddress;
+        RETURN_IF_NOT_OK(restartedAddress.ParseString(workerAddr));
+        restartedAddresses.emplace(std::move(restartedAddress));
+    }
+    RETURN_OK_IF_TRUE(restartedAddresses.empty());
     CHECK_FAIL_RETURN_STATUS(topologyEngine_ != nullptr, K_RUNTIME_ERROR, "topologyEngine is null");
     CHECK_FAIL_RETURN_STATUS(metadataRecoveryManager_ != nullptr, K_RUNTIME_ERROR, "metadataRecoveryManager is null");
-    HostPort restartedAddress;
-    RETURN_IF_NOT_OK(restartedAddress.ParseString(workerAddr));
 
+    Timer timer;
     MetadataRecoverySelector selector(objectTable_);
     std::vector<std::string> matchObjIds;
     selector.Select(
-        [this, &restartedAddress](const std::string &objectKey) {
+        [this, &restartedAddresses](const std::string &objectKey) {
             HostPort metadataOwner;
             return metadataRoute_.ResolveOwner(objectKey, metadataOwner).IsOk()
-                   && metadataOwner == restartedAddress;
+                   && restartedAddresses.count(metadataOwner) > 0;
         },
         true, matchObjIds);
     RETURN_OK_IF_TRUE(matchObjIds.empty());
@@ -1200,10 +1213,22 @@ Status WorkerOCServiceImpl::RecoverMetadataOfRestartedWorker(const std::string &
     std::vector<std::string> failedIds;
     std::string standbyWorker;
     auto rc = RecoverMetadataOfData(matchObjIds, failedIds, standbyWorker);
-    if (!failedIds.empty()) {
-        LOG(WARNING) << "Recover metadata after node restart has failed object keys: " << VectorToString(failedIds)
-                     << ", restartWorker: " << workerAddr;
+    if (rc.IsOk() && !failedIds.empty()) {
+        rc = Status(K_TRY_AGAIN, "restarted-worker metadata recovery is incomplete");
     }
+    LOG_IF(WARNING, rc.IsError())
+        << "CLUSTER_RESTART_NOTIFY action=worker_batch_failed"
+        << " cluster=" << FLAGS_cluster_name << " local_address=" << localAddress_.ToString()
+        << " fact_count=" << restartedAddresses.size() << " first_address=" << firstAddress
+        << " first_timestamp=" << firstTimestamp
+        << " selected_object_count=" << matchObjIds.size() << " failed_object_count=" << failedIds.size()
+        << " elapsed_ms=" << timer.ElapsedMilliSecond() << " status=" << rc.ToString();
+    VLOG_IF(DEBUG_LOG_LEVEL, rc.IsOk())
+        << "CLUSTER_RESTART_NOTIFY action=worker_batch_completed"
+        << " cluster=" << FLAGS_cluster_name << " local_address=" << localAddress_.ToString()
+        << " fact_count=" << restartedAddresses.size() << " first_address=" << firstAddress
+        << " first_timestamp=" << firstTimestamp
+        << " selected_object_count=" << matchObjIds.size() << " elapsed_ms=" << timer.ElapsedMilliSecond();
     return rc;
 }
 
@@ -1213,21 +1238,32 @@ Status WorkerOCServiceImpl::ClearObject(const ClearDataReqPb &req)
     return Status::OK();
 }
 
-Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::string &workerAddr)
+Status WorkerOCServiceImpl::HandleNodeRestartEvent(const std::map<std::string, int64_t> &restartFacts, bool sync)
 {
     // Restart recovery is required even when failure-time metadata recovery is disabled. A restarted metadata owner
     // cannot rely on persisted metadata in the target architecture, so surviving workers always rebuild it best-effort.
-    RETURN_OK_IF_TRUE(workerAddr.empty() || workerAddr == localAddress_.ToString());
-    if (threadPool_ == nullptr) {
-        return RecoverMetadataOfRestartedWorker(workerAddr);
+    if (sync || threadPool_ == nullptr) {
+        return RecoverMetadataOfRestartedWorkers(restartFacts);
     }
     auto restartTraceID = Trace::Instance().GetTraceID();
-    threadPool_->Execute([this, workerAddr, restartTraceID]() {
-        TraceGuard traceGuard = restartTraceID.empty() ? Trace::Instance().SetTraceUUID()
-                                                       : Trace::Instance().SetTraceNewID(restartTraceID, true);
-        LOG_IF_ERROR(RecoverMetadataOfRestartedWorker(workerAddr),
-                     "RecoverMetadataOfRestartedWorker failed after NodeRestartEvent");
-    });
+    try {
+        threadPool_->Execute([this, restartFacts, restartTraceID]() {
+            TraceGuard traceGuard = restartTraceID.empty() ? Trace::Instance().SetTraceUUID()
+                                                           : Trace::Instance().SetTraceNewID(restartTraceID, true);
+            const auto rc = RecoverMetadataOfRestartedWorkers(restartFacts);
+            const auto firstFact = restartFacts.begin();
+            const std::string firstAddress = firstFact == restartFacts.end() ? std::string() : firstFact->first;
+            const int64_t firstTimestamp = firstFact == restartFacts.end() ? 0 : firstFact->second;
+            LOG_IF(ERROR, rc.IsError()) << "CLUSTER_RESTART_NOTIFY action=worker_async_batch_failed"
+                                       << " cluster=" << FLAGS_cluster_name
+                                       << " local_address=" << localAddress_.ToString()
+                                       << " fact_count=" << restartFacts.size() << " first_address=" << firstAddress
+                                       << " first_timestamp=" << firstTimestamp << " status=" << rc.ToString();
+        });
+    } catch (const std::exception &error) {
+        const auto message = std::string("enqueue restarted-worker metadata recovery failed: ") + error.what();
+        RETURN_STATUS(K_RUNTIME_ERROR, message);
+    }
     return Status::OK();
 }
 
@@ -1258,8 +1294,13 @@ Status WorkerOCServiceImpl::ValidateWorkerState(ReadLock &noRecon, int reqTimeou
         RETURN_STATUS_LOG_ERROR(K_NOT_READY, "Worker not ready");
     }
     if (hasLoggedBeforeWait) {
+        int reconciliationCount = 0;
+        {
+            std::lock_guard<std::mutex> lock(reconciliationMutex_);
+            reconciliationCount = numRecon_;
+        }
         LOG(INFO) << "Finished waiting for the reconFlag, elapsed ms: " << timer.ElapsedMilliSecond()
-                  << ", setHealthFile: " << setHealthFile_.load() << ", numRecon: " << numRecon_;
+                  << ", setHealthFile: " << setHealthFile_.load() << ", numRecon: " << reconciliationCount;
     }
     GetWorkerTimeCost().Append("ValidateWorkerState", timer.ElapsedMilliSecond());
     return Status::OK();
@@ -1322,6 +1363,25 @@ Status WorkerOCServiceImpl::MultiCreate(const MultiCreateReqPb &req, MultiCreate
     return returnStatus;
 }
 
+Status WorkerOCServiceImpl::PrepareRestartReconciliation(const PushMetaToWorkerReqPb &req)
+{
+    if (!req.is_restart()) {
+        return Status::OK();
+    }
+    lastReconTime_ = GetSteadyClockTimeStampMs();
+    INJECT_POINT("WorkerOCServiceImpl.Reconciliation.SkipWait", [this]() {
+        waited_ = true;
+        return Status::OK();
+    });
+    if (!waited_) {
+        constexpr size_t SECONDS_TO_MILLISECONDS = 1'000;
+        clientReconnectPost_.WaitFor(FLAGS_client_reconnect_wait_s * SECONDS_TO_MILLISECONDS);
+        waited_ = true;
+    }
+    ClearDisconnectedClientRefsForReconciliation();
+    return Status::OK();
+}
+
 Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
 {
     ScopedRequestContext ctx;
@@ -1333,33 +1393,18 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
     if (req.event_timestamp() <= 0) {
         LOG(WARNING) << "timestamp should be greater than 0";
     }
-    // If not healthy, it means that we still not give up reconciliation, so lock it.
     WriteLock haveRecon(IsHealthy() ? nullptr : &reconFlag_);
+    std::lock_guard<std::mutex> reconciliationLock(reconciliationMutex_);
     Status rc;
     if (req.event_timestamp() > timestamp_) {
         numRecon_ = 0;
+        reconciledSources_.clear();
         timestamp_ = req.event_timestamp();
     } else if (req.event_timestamp() < timestamp_) {
         LOG(WARNING) << "The request is out of date. Reconciling for later event. Timestamp: " << timestamp_;
         return Status::OK();
     }
-    ++numRecon_;
-    if (req.is_restart()) {
-        lastReconTime_ = GetSteadyClockTimeStampMs();
-        // Wait for clients just once. No need to use atomic bool since reconciliation is serialized by lock.
-        // No need to wait in case of network recovery.
-        INJECT_POINT("WorkerOCServiceImpl.Reconciliation.SkipWait", [this]() {
-            waited_ = true;
-            return Status::OK();
-        });
-        if (!waited_) {
-            const size_t s2ms = 1000;  // seconds to milliseconds.
-            clientReconnectPost_.WaitFor(FLAGS_client_reconnect_wait_s * s2ms);
-            waited_ = true;
-        }
-        ClearDisconnectedClientRefsForReconciliation();
-    }
-    // reconciliation global references with master.
+    RETURN_IF_NOT_OK(PrepareRestartReconciliation(req));
     std::unordered_map<std::string, std::unordered_set<ClientKey>> refTable;
     std::vector<std::string> needDelGrefIds;
     globalRefTable_->GetAllRef(refTable);
@@ -1372,6 +1417,10 @@ Status WorkerOCServiceImpl::Reconciliation(const PushMetaToWorkerReqPb &req)
         RETURN_IF_NOT_OK(ReconcileGlobalRefsWithSourceMaster(req, refTable, needDelGrefIds));
     } else if (FLAGS_enable_reconciliation && (req.is_restart() || !req.gref_object_keys().empty())) {
         RETURN_STATUS(K_INVALID, "Reconciliation request missing source master address.");
+    }
+    if (!req.source_address().empty()) {
+        reconciledSources_.emplace(req.source_address());
+        numRecon_ = static_cast<int>(reconciledSources_.size());
     }
     LOG(INFO) << "Reconciliation with master " << req.source_address() << " is done.";
     RETURN_IF_NOT_OK(GetReadyToWork(req));
@@ -1393,8 +1442,6 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
                 RETURN_STATUS(K_NOT_READY,
                               "Setting the health file is not allowed before the first lease is successfully created");
             }
-            setHealthFile_.store(true);
-            RETURN_IF_NOT_OK(SetHealthProbe());
         }
         if (exitRequested_ != nullptr && exitRequested_->load()) {
             INJECT_POINT("recover.toexiting.delay");
@@ -1402,14 +1449,18 @@ Status WorkerOCServiceImpl::GetReadyToWork(const PushMetaToWorkerReqPb &req)
         } else {
             RETURN_IF_NOT_OK(topologyEngine_->NotifyReconciliationDone());
         }
+        if (req.is_restart()) {
+            RETURN_IF_NOT_OK(SetHealthProbe());
+            setHealthFile_.store(true);
+        }
     } else {
         LOG(INFO) << "Has finished reconciliation master num: " << numRecon_ << ", total expect num: " << hashWorkerNum;
     }
     INJECT_POINT("WorkerOCServiceImpl.Reconciliation.expectedReconNum", [this](int expectedReconNum) {
         if (!setHealthFile_.load() && expectedReconNum > 0 && numRecon_ >= expectedReconNum) {
-            setHealthFile_.store(true);
-            RETURN_IF_NOT_OK(SetHealthProbe());
             RETURN_IF_NOT_OK(UpdateLocalNodeReady());
+            RETURN_IF_NOT_OK(SetHealthProbe());
+            setHealthFile_.store(true);
         }
         return Status::OK();
     });
@@ -2341,11 +2392,11 @@ Status WorkerOCServiceImpl::WhetherNonRestart()
     if (!isRestart || !controlBackendAvailableAtStartup_ || !FLAGS_enable_reconciliation) {
         RETURN_IF_NOT_OK(CheckWaitTopologyReady());
         LOG(INFO) << "Did not restart so no need to reconcile. Set health file.";
-        setHealthFile_.store(true);
-        RETURN_IF_NOT_OK(SetHealthProbe());
         if (controlBackendAvailableAtStartup_) {
             RETURN_IF_NOT_OK(UpdateLocalNodeReady());
         }
+        RETURN_IF_NOT_OK(SetHealthProbe());
+        setHealthFile_.store(true);
     } else {
         LOG(INFO) << "Local node restarted. Need reconciliation.";
         RETURN_IF_NOT_OK(ReconcileMembershipChange());
@@ -2440,6 +2491,7 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
     if (!rec) {
         return Status::OK();  // loop back and try again later
     }
+    std::lock_guard<std::mutex> reconciliationLock(reconciliationMutex_);
     Timer holdReconFlagTimer;
     std::string finishReason = "unknown";
     Raii logReconFlagCost([&holdReconFlagTimer, &finishReason, this]() {
@@ -2454,9 +2506,9 @@ Status WorkerOCServiceImpl::GiveUpReconciliation()
         return Status::OK();
     }
 
-    setHealthFile_.store(true);
-    RETURN_IF_NOT_OK(SetHealthProbe());
     RETURN_IF_NOT_OK(UpdateLocalNodeReady());
+    RETURN_IF_NOT_OK(SetHealthProbe());
+    setHealthFile_.store(true);
     return Status::OK();
 }
 

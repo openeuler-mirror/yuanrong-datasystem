@@ -70,7 +70,7 @@ public:
     }
 
     Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &, int64_t &, int32_t,
-               std::string *, const std::string &) override
+               std::string *, const std::string &, int64_t) override
     {
         return Unused("Put");
     }
@@ -81,7 +81,7 @@ public:
         return Unused("Range");
     }
 
-    Status DeleteRange(const std::string &, const std::string &, int64_t &, int64_t &, int32_t) override
+    Status DeleteRange(const std::string &, const std::string &, int64_t &, int64_t &, int32_t, int64_t) override
     {
         return Unused("DeleteRange");
     }
@@ -97,7 +97,8 @@ public:
         return Unused("CancelWatch");
     }
 
-    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *) override
+    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *, const std::string &,
+                     int64_t) override
     {
         return Unused("KeepAlive");
     }

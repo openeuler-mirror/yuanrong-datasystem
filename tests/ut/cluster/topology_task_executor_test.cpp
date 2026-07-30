@@ -36,6 +36,20 @@ constexpr size_t MAX_CALLBACK_QUEUE_CAPACITY = 1'024;
 constexpr uint32_t SIBLING_SCALE_IN_RANGE_FROM = 60;
 constexpr uint32_t SIBLING_SCALE_IN_RANGE_END = 70;
 
+TEST(CancellationTokenTest, ExpiredCommitBoundaryRejectsSourceMutation)
+{
+    CancellationToken cancellation;
+    bool committed = false;
+
+    const auto rc = cancellation.CommitSourceMutationIfActive(std::chrono::steady_clock::now(), [&] {
+        committed = true;
+        return Status::OK();
+    });
+
+    EXPECT_EQ(rc.GetCode(), K_RPC_DEADLINE_EXCEEDED);
+    EXPECT_FALSE(committed);
+}
+
 class RecordingCallbacks final : public ITopologyPhaseCallbacks {
 public:
     /**
@@ -59,7 +73,13 @@ public:
             throw std::runtime_error("injected callback exception");
         }
         if (blockScaleOutUntilCancelled) {
-            EXPECT_TRUE(context.cancellation.WaitUntil(context.deadline));
+            const auto futureOwnedCancellation = context.cancellation;
+            EXPECT_TRUE(futureOwnedCancellation.WaitUntil(context.deadline));
+            const auto commitStatus = futureOwnedCancellation.CommitSourceMutationIfActive(context.deadline, [this] {
+                ++sourceCommits;
+                return Status::OK();
+            });
+            EXPECT_EQ(commitStatus.GetCode(), K_NOT_READY);
         }
         if (blockScaleOutUntilReleased) {
             std::unique_lock<std::mutex> lock(mutex);
@@ -146,6 +166,7 @@ public:
     std::atomic<size_t> scaleInCalls{ 0 };
     std::atomic<size_t> scaleInDataDrainCalls{ 0 };
     std::atomic<size_t> failureCalls{ 0 };
+    std::atomic<size_t> sourceCommits{ 0 };
     std::atomic<size_t> cleanupAuthorizations{ 0 };
     std::atomic<size_t> cleanupEffects{ 0 };
     std::thread::id cleanupEffectThread;
@@ -243,6 +264,28 @@ bool WaitForExecutorFailure(const TopologyTaskExecutor &executor, std::chrono::s
     return false;
 }
 
+bool WaitForCount(const std::atomic<size_t> &count, size_t expected, std::chrono::steady_clock::time_point deadline)
+{
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (count.load() == expected) {
+            return true;
+        }
+        std::this_thread::yield();
+    }
+    return false;
+}
+
+bool WaitForCallbackDrain(const TopologyTaskExecutor &executor, std::chrono::steady_clock::time_point deadline)
+{
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (executor.GetDiagnostics().queuedCallbacks == 0) {
+            return true;
+        }
+        std::this_thread::yield();
+    }
+    return false;
+}
+
 bool WaitForFinalTopology(TopologyRepository &repository, std::chrono::steady_clock::time_point deadline)
 {
     while (std::chrono::steady_clock::now() < deadline) {
@@ -277,6 +320,205 @@ TEST(TopologyTaskExecutorTest, ExecutesOneTaskCallbackAndCommitsWholeScopeProgre
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
+TEST(TopologyTaskExecutorTest, RetriesFailedRestartFactsAndDeduplicatesOnlySuccess)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    std::atomic<size_t> calls{ 0 };
+    auto restartHandler = [&calls](const std::map<std::string, int64_t> &facts, RestartEffectMode mode) {
+        EXPECT_EQ(mode, RestartEffectMode::WAIT_FOR_COMPLETION);
+        const auto attempt = calls.fetch_add(1);
+        EXPECT_EQ(facts.size(), attempt == 2 ? 1U : 2U);
+        if (attempt == 0) {
+            return Status(K_TRY_AGAIN, "injected restart cleanup retry");
+        }
+        return Status::OK();
+    };
+    TopologyTaskExecutor executor("127.0.0.1:1", *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, restartHandler, {});
+    DS_ASSERT_OK(executor.Start());
+    TopologyTaskNotify notify;
+    notify.restartTimestampsByAddress = { { "127.0.0.1:2", 100 }, { "127.0.0.1:3", 200 } };
+
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_TRUE(WaitForCount(calls, 1, std::chrono::steady_clock::now() + TEST_WAIT));
+    ASSERT_TRUE(WaitForCallbackDrain(executor, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_TRUE(WaitForCount(calls, 2, std::chrono::steady_clock::now() + TEST_WAIT));
+    ASSERT_TRUE(WaitForCallbackDrain(executor, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    EXPECT_EQ(calls.load(), 2U);
+    notify.restartTimestampsByAddress.at("127.0.0.1:2") = 101;
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_TRUE(WaitForCount(calls, 3, std::chrono::steady_clock::now() + TEST_WAIT));
+    ASSERT_TRUE(WaitForCallbackDrain(executor, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    EXPECT_EQ(calls.load(), 3U);
+    DS_ASSERT_OK(executor.HandleNotify({}));
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_TRUE(WaitForCount(calls, 4, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyTaskExecutorTest, RestartHandlerExceptionsRemainRetryable)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    std::atomic<size_t> attempts{ 0 };
+    auto restartHandler = [&attempts](const std::map<std::string, int64_t> &, RestartEffectMode) {
+        const auto attempt = attempts.fetch_add(1);
+        if (attempt == 0) {
+            throw std::runtime_error("injected restart handler failure");
+        }
+        if (attempt == 1) {
+            throw 1;
+        }
+        return Status::OK();
+    };
+    TopologyTaskExecutor executor("127.0.0.1:1", *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, restartHandler, {});
+    DS_ASSERT_OK(executor.Start());
+    TopologyTaskNotify notify;
+    notify.restartTimestampsByAddress = { { "127.0.0.1:2", 100 } };
+
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_TRUE(WaitForCount(attempts, 1, std::chrono::steady_clock::now() + TEST_WAIT));
+    ASSERT_TRUE(WaitForCallbackDrain(executor, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_TRUE(WaitForCount(attempts, 2, std::chrono::steady_clock::now() + TEST_WAIT));
+    ASSERT_TRUE(WaitForCallbackDrain(executor, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_TRUE(WaitForCount(attempts, 3, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyTaskExecutorTest, BatchesRestartFactsAndDoesNotDuplicateRunningBatch)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+    std::atomic<size_t> calls{ 0 };
+    constexpr size_t factCount = 500;
+    auto restartHandler = [&](const std::map<std::string, int64_t> &facts, RestartEffectMode mode) {
+        EXPECT_EQ(mode, RestartEffectMode::WAIT_FOR_COMPLETION);
+        const auto call = calls.fetch_add(1);
+        EXPECT_EQ(facts.size(), call == 0 ? factCount : 2U);
+        if (call == 0) {
+            entered.set_value();
+            releaseFuture.wait();
+        }
+        return Status::OK();
+    };
+    TopologyTaskExecutor executor("127.0.0.1:1", *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, restartHandler, {});
+    DS_ASSERT_OK(executor.Start());
+    TopologyTaskNotify notify;
+    for (size_t index = 0; index < factCount; ++index) {
+        notify.restartTimestampsByAddress.emplace("worker-" + std::to_string(index), index + 1);
+    }
+
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_EQ(entered.get_future().wait_for(TEST_WAIT), std::future_status::ready);
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    auto newerNotify = notify;
+    newerNotify.restartTimestampsByAddress.at("worker-0") = factCount + 1;
+    newerNotify.restartTimestampsByAddress.emplace("worker-new", factCount + 2);
+    DS_ASSERT_OK(executor.HandleNotify(newerNotify));
+    EXPECT_EQ(calls.load(), 1U);
+    release.set_value();
+    ASSERT_TRUE(WaitForCallbackDrain(executor, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.HandleNotify(newerNotify));
+    ASSERT_TRUE(WaitForCount(calls, 2, std::chrono::steady_clock::now() + TEST_WAIT));
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyTaskExecutorTest, StopDrainsRunningRestartHandlerAndRejectsNewEffects)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto releaseFuture = release.get_future().share();
+    std::atomic<size_t> calls{ 0 };
+    auto restartHandler = [&](const std::map<std::string, int64_t> &, RestartEffectMode) {
+        ++calls;
+        entered.set_value();
+        releaseFuture.wait();
+        return Status::OK();
+    };
+    TopologyTaskExecutor executor("127.0.0.1:1", *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, restartHandler, {});
+    DS_ASSERT_OK(executor.Start());
+    TopologyTaskNotify notify;
+    notify.restartTimestampsByAddress = { { "127.0.0.1:2", 100 } };
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_EQ(entered.get_future().wait_for(TEST_WAIT), std::future_status::ready);
+    auto stopping = std::async(std::launch::async, [&] {
+        return executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT);
+    });
+    EXPECT_EQ(stopping.wait_for(std::chrono::milliseconds(20)), std::future_status::timeout);
+    release.set_value();
+    DS_ASSERT_OK(stopping.get());
+    EXPECT_EQ(executor.HandleNotify(notify).GetCode(), K_NOT_READY);
+    EXPECT_EQ(calls.load(), 1U);
+}
+
+TEST(TopologyTaskExecutorTest, RestartFailureDoesNotBlockActiveTaskAdmission)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    auto notify = scenario.expected.notifiesByAddress.at(task.executorAddress);
+    notify.restartTimestampsByAddress = { { "127.0.0.1:9", 100 } };
+    std::promise<void> restartEntered;
+    std::promise<void> releaseRestart;
+    auto releaseFuture = releaseRestart.get_future();
+    std::atomic<size_t> restartCalls{ 0 };
+    auto restartHandler = [&](const std::map<std::string, int64_t> &, RestartEffectMode) {
+        ++restartCalls;
+        restartEntered.set_value();
+        releaseFuture.wait();
+        return Status::OK();
+    };
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, restartHandler, {});
+
+    DS_ASSERT_OK(executor.Start());
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_EQ(restartEntered.get_future().wait_for(TEST_WAIT), std::future_status::ready);
+    EXPECT_EQ(restartCalls.load(), 1U);
+    auto completion = WaitCompletion(scenario.dispatcher);
+    releaseRestart.set_value();
+    DS_ASSERT_OK(executor.HandleCompletion(std::move(completion)));
+    EXPECT_EQ(scenario.callbacks.scaleOutCalls.load(), 1U);
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyTaskExecutorTest, StaleActiveBatchStillSubmitsRestartBatch)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp());
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    auto notify = scenario.expected.notifiesByAddress.at(task.executorAddress);
+    ++notify.activeBatch->epoch;
+    notify.restartTimestampsByAddress = { { "127.0.0.1:9", 100 } };
+    std::atomic<size_t> restartCalls{ 0 };
+    auto restartHandler = [&restartCalls](const std::map<std::string, int64_t> &, RestartEffectMode) {
+        ++restartCalls;
+        return Status(K_TRY_AGAIN, "injected restart cleanup retry");
+    };
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, restartHandler, {});
+
+    DS_ASSERT_OK(executor.Start());
+    DS_ASSERT_OK(executor.HandleNotify(notify));
+    ASSERT_TRUE(WaitForCount(restartCalls, 1, std::chrono::steady_clock::now() + TEST_WAIT));
+    EXPECT_EQ(scenario.callbacks.scaleOutCalls.load(), 0U);
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
 TEST(TopologyTaskExecutorTest, RejectsLateCompletionAfterEpochChanges)
 {
     ExecutorScenario scenario;
@@ -297,6 +539,28 @@ TEST(TopologyTaskExecutorTest, RejectsLateCompletionAfterEpochChanges)
     scenario.backend.PutRaw(scenario.keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), final);
     EXPECT_EQ(executor.HandleCompletion(std::move(completion)).GetCode(), K_INVALID);
     EXPECT_EQ(executor.GetDiagnostics().stale, 1);
+    DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
+}
+
+TEST(TopologyTaskExecutorTest, RejectsScaleInTaskAfterTargetStartsLeaving)
+{
+    ExecutorScenario scenario;
+    DS_ASSERT_OK(scenario.SetUp(TopologyChangeType::SCALE_IN));
+    const auto &task = std::get<TopologyMigrateTask>(scenario.expected.tasks.front());
+    TopologyState changed = scenario.plan.next;
+    ++changed.version;
+    changed.members.back().state = MemberState::PRE_LEAVING;
+    std::shared_ptr<const TopologySnapshot> newer;
+    DS_ASSERT_OK(TopologySnapshot::Create(changed, 2, std::string(64, 'b'), newer));
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(scenario.snapshots.Publish(newer, outcome));
+    scenario.backend.PutRaw(scenario.keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), changed);
+    TopologyTaskExecutor executor(task.executorAddress, *scenario.repository, scenario.snapshots, scenario.callbacks,
+                                  scenario.dispatcher, {});
+
+    DS_ASSERT_OK(executor.Start());
+    EXPECT_EQ(executor.HandleNotify(scenario.expected.notifiesByAddress.at(task.executorAddress)).GetCode(), K_INVALID);
+    EXPECT_EQ(scenario.callbacks.scaleInCalls.load(), 0U);
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
 }
 
@@ -639,6 +903,7 @@ TEST(TopologyTaskExecutorTest, StopCooperativelyCancelsAndDrainsAcceptedCallback
     ASSERT_TRUE(scenario.callbacks.WaitUntilScaleOutEntered(std::chrono::steady_clock::now() + TEST_WAIT));
     DS_ASSERT_OK(executor.Stop(std::chrono::steady_clock::now() + TEST_WAIT));
     EXPECT_FALSE(executor.GetDiagnostics().running);
+    EXPECT_EQ(scenario.callbacks.sourceCommits.load(), 0U);
 }
 
 TEST(TopologyTaskExecutorTest, StopJoinsNonCooperativeCallbackAfterReportingDrainTimeout)

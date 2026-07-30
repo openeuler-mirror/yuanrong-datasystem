@@ -136,6 +136,8 @@ Status OCMigrateMetadataManager::MigrateTopologyMetadata(
     info.batchEpoch = action.batchEpoch;
     info.sourceMemberId = action.source->id;
     info.targetMemberId = action.target->id;
+    info.deadline = deadline;
+    info.cancellation = cancellation;
     metadata->GetMetasMatch([&filter](const std::string &key) { return filter.Contains(key); }, info.objectKeys);
     CollectTopologyMigrationKeys(metadata, filter, info);
     if (info.selectedKeys.empty()) {
@@ -185,6 +187,8 @@ Status OCMigrateMetadataManager::RunTopologyMigration(
     const std::shared_ptr<master::OCMetadataManager> &metadata, MigrateMetaInfo info,
     std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
 {
+    info.deadline = deadline;
+    info.cancellation = cancellation;
     const auto futureKey = std::make_pair(info.destAddr, info.operationId);
     TbbFutureThreadTable::accessor accessor;
     if (!futureThread_.find(accessor, futureKey)) {
@@ -211,8 +215,21 @@ Status OCMigrateMetadataManager::RunTopologyMigration(
             }
         }
     }
+    cancellation.SynchronizeSourceMutations();
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology object migration cancelled");
     RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "topology object migration deadline exceeded");
+}
+
+Status OCMigrateMetadataManager::CheckTopologyExecution(const MigrateMetaInfo &info) const
+{
+    if (info.topologyVersion == 0) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(!info.cancellation.IsCancelled(), K_NOT_READY,
+                             "topology object migration cancelled before source commit");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < info.deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology object migration expired before source commit");
+    return Status::OK();
 }
 
 Status OCMigrateMetadataManager::MigrateMetaDataWithRetry(
@@ -358,67 +375,103 @@ std::pair<Status, std::vector<std::string>> OCMigrateMetadataManager::AsyncMigra
     return make_pair(s, failedIds);
 }
 
+void OCMigrateMetadataManager::RecordBatchMigrationFailure(
+    const MetaForMigrationPb &metadata, const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
+    std::vector<std::string> &failedObjectKeys,
+    const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap)
+{
+    ocMetadataManager->HandleMetaDataMigrationFailed(metadata, asyncMap);
+    if (std::find(failedObjectKeys.begin(), failedObjectKeys.end(), metadata.object_key())
+        == failedObjectKeys.end()) {
+        failedObjectKeys.emplace_back(metadata.object_key());
+    }
+}
+
+Status OCMigrateMetadataManager::ApplyBatchMigrationResponse(
+    const MigrateMetadataReqPb &req, const MigrateMetadataRspPb &rsp,
+    const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, std::vector<std::string> &failedObjectKeys,
+    const MigrateMetaInfo &info,
+    const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap)
+{
+    if (rsp.results_size() != req.object_metas_size()) {
+        for (const auto &metadata : req.object_metas()) {
+            RecordBatchMigrationFailure(metadata, ocMetadataManager, failedObjectKeys, asyncMap);
+        }
+        RETURN_STATUS(K_TRY_AGAIN, "object metadata migration response size mismatch");
+    }
+    for (int index = 0; index < rsp.results_size(); ++index) {
+        const auto &metadata = req.object_metas(index);
+        const auto result = rsp.results(index);
+        if (result == MigrateMetadataRspPb::SUCCESSFUL) {
+            const auto commit = [&] {
+                ocMetadataManager->HandleMetaDataMigrationSuccess(metadata.object_key());
+                std::vector<std::string> remoteClientIds{ metadata.client_ids().begin(), metadata.client_ids().end() };
+                ocMetadataManager->HandleObjRefDataMigrationOnSuccess(metadata.object_key(), remoteClientIds);
+                ocMetadataManager->HandleNestedRefMigrateSuccess(metadata.object_key());
+                return Status::OK();
+            };
+            const auto commitStatus = info.topologyVersion == 0
+                                          ? commit()
+                                          : info.cancellation.CommitSourceMutationIfActive(info.deadline, commit);
+            if (commitStatus.IsError()) {
+                for (int remaining = index; remaining < req.object_metas_size(); ++remaining) {
+                    RecordBatchMigrationFailure(req.object_metas(remaining), ocMetadataManager, failedObjectKeys,
+                                                asyncMap);
+                }
+                return commitStatus;
+            }
+        } else {
+            RecordBatchMigrationFailure(metadata, ocMetadataManager, failedObjectKeys, asyncMap);
+        }
+    }
+    return Status::OK();
+}
+
 Status OCMigrateMetadataManager::BatchMigrateMetadata(
     std::unique_ptr<MasterMasterOCApi> &api, MigrateMetadataReqPb &req,
     const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, std::vector<std::string> &failedObjectKeys,
+    const MigrateMetaInfo &info,
     const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap)
 {
     INJECT_POINT("BatchMigrateMetadata.delay", [](uint32_t delay_s) {
         sleep(delay_s);
         return Status::OK();
     });
-
     MigrateMetadataRspPb rsp;
-    auto streamSendData = [this, &api, &req, &rsp]() -> Status {
-        RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(req));
+    auto sendStatus = CheckTopologyExecution(info);
+    if (sendStatus.IsOk()) {
+        sendStatus = akSkManager_->GenerateSignature(req);
+    }
+    if (sendStatus.IsOk()) {
         INJECT_POINT("BatchMigrateMetadata.rpc.error");
-        RETURN_IF_NOT_OK(api->MigrateMetadata(req, rsp));
-        return Status::OK();
-    };
-
-    Status s = streamSendData();
-    auto handleFailed = [&ocMetadataManager, &failedObjectKeys, &asyncMap](const MetaForMigrationPb &meta) {
-        ocMetadataManager->HandleMetaDataMigrationFailed(meta, asyncMap);
-        if (std::find(failedObjectKeys.begin(), failedObjectKeys.end(), meta.object_key()) == failedObjectKeys.end()) {
-            failedObjectKeys.emplace_back(meta.object_key());
-        }
-    };
-    if (s.IsError()) {
-        LOG(WARNING) << "Fill metadata for migration failed. s=" << s.ToString();
+        sendStatus = api->MigrateMetadata(req, rsp);
+    }
+    if (sendStatus.IsOk()) {
+        sendStatus = CheckTopologyExecution(info);
+    }
+    if (sendStatus.IsError()) {
+        LOG(WARNING) << "Fill metadata for migration failed. s=" << sendStatus.ToString();
         INJECT_POINT("BatchMigrateMetadata.HandleFailed.before");
-        for (const auto &meta : req.object_metas()) {
-            handleFailed(meta);
+        for (const auto &metadata : req.object_metas()) {
+            RecordBatchMigrationFailure(metadata, ocMetadataManager, failedObjectKeys, asyncMap);
         }
         INJECT_POINT("BatchMigrateMetadata.HandleFailed.after");
-        return s;
+        return sendStatus;
     }
-    if (rsp.results_size() != req.object_metas_size()) {
-        for (const auto &meta : req.object_metas()) {
-            handleFailed(meta);
+    RETURN_IF_NOT_OK(
+        ApplyBatchMigrationResponse(req, rsp, ocMetadataManager, failedObjectKeys, info, asyncMap));
+    const auto commit = [&] {
+        if (!req.sub_metas().empty()) {
+            ocMetadataManager->HandleSubDataMigrateSuccess(req);
         }
-        RETURN_STATUS(K_TRY_AGAIN, "object metadata migration response size mismatch");
-    }
-    int num = 0;
-    for (auto &result : rsp.results()) {
-        auto &meta = req.object_metas()[num];
-        if (result == MigrateMetadataRspPb::SUCCESSFUL) {
-            ocMetadataManager->HandleMetaDataMigrationSuccess(meta.object_key());
-            std::vector<std::string> remoteClientIds{ meta.client_ids().begin(), meta.client_ids().end() };
-            ocMetadataManager->HandleObjRefDataMigrationOnSuccess(meta.object_key(), remoteClientIds);
-            ocMetadataManager->HandleNestedRefMigrateSuccess(meta.object_key());
-        } else {
-            handleFailed(meta);
+        if (!ocMetadataManager->GetDeviceOcManager()->CheckDeviceMetasMigrateInfoIsEmpty(req)) {
+            LOG(INFO) << "Device meta migrate ok, handle success";
+            ocMetadataManager->GetDeviceOcManager()->HandleMigrateSuccess();
         }
-        ++num;
-    }
-    if (!req.sub_metas().empty()) {
-        ocMetadataManager->HandleSubDataMigrateSuccess(req);
-    }
-    if (!ocMetadataManager->GetDeviceOcManager()->CheckDeviceMetasMigrateInfoIsEmpty(req)) {
-        LOG(INFO) << "Device meta migrate ok, handle success";
-        ocMetadataManager->GetDeviceOcManager()->HandleMigrateSuccess();
-    }
-    return Status::OK();
+        return Status::OK();
+    };
+    return info.topologyVersion == 0 ? commit()
+                                     : info.cancellation.CommitSourceMutationIfActive(info.deadline, commit);
 }
 
 bool OCMigrateMetadataManager::TryFillObjectNestedRefMeta(
@@ -541,7 +594,7 @@ Status OCMigrateMetadataManager::MigrateMetadataForScaleout(
         req.mutable_object_metas()->Add(std::move(meta));
         ++count;
         if (count >= OBJECT_BATCH) {
-            RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, asyncMap));
+            RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, info, asyncMap));
             req.Clear();
             InitializeMigrationRequest(info, req);
             count = 0;
@@ -550,7 +603,7 @@ Status OCMigrateMetadataManager::MigrateMetadataForScaleout(
     // left obj meta.
     if (count > 0) {
         INJECT_POINT("BatchMigrateMetadata.delay.left");
-        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, asyncMap));
+        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, info, asyncMap));
     }
 
     RETURN_IF_NOT_OK(MigrateNoMetaInfoForScaleout(ocMetadataManager, api, info, failedIds));
@@ -581,7 +634,7 @@ Status OCMigrateMetadataManager::MigrateDeviceMetaForScaleout(
     std::vector<std::string> failedIds;
     if (!ocMetadataManager->GetDeviceOcManager()->CheckDeviceMetasMigrateInfoIsEmpty(req)) {
         LOG(INFO) << "Device metas are not empty, start to migrate device meta.";
-        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds));
+        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, info));
     }
     return Status::OK();
 }
@@ -612,7 +665,7 @@ Status OCMigrateMetadataManager::MigrateNoMetaInfoForScaleout(
     // migrate master app ref
     FillRemoteClientIds(ocMetadataManager, info.selectedKeys, info.destAddr, req);
     if (static_cast<uint64_t>(req.remote_client_ids_size() + req.sub_metas_size()) >= OBJECT_BATCH) {
-        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds));
+        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, info));
         req.Clear();
         count = 0;
         InitializeMigrationRequest(info, req);
@@ -636,14 +689,14 @@ Status OCMigrateMetadataManager::MigrateNoMetaInfoForScaleout(
             ++count;
         }
         if (count >= OBJECT_BATCH || (count > 0 && std::next(it) == keys.allKeys.end())) {
-            RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds));
+            RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, info));
             req.Clear();
             count = 0;
             InitializeMigrationRequest(info, req);
         }
     }
     if (count > 0) {
-        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds));
+        RETURN_IF_NOT_OK(BatchMigrateMetadata(api, req, ocMetadataManager, failedIds, info));
     }
     return Status::OK();
 }

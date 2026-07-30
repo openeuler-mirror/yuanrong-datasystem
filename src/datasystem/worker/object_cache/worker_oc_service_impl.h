@@ -22,7 +22,9 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
@@ -721,18 +723,19 @@ public:
                                  std::string standbyWorker);
 
     /**
-     * @brief Recover metadata associated with a restarted worker.
-     * @param[in] workerAddr Restarted worker address.
+     * @brief Recover metadata associated with a restarted-worker batch using one ObjectTable scan.
+     * @param[in] restartFacts Restarted worker addresses and their membership generation timestamps.
      * @return Status of the call.
      */
-    Status RecoverMetadataOfRestartedWorker(const std::string &workerAddr);
+    Status RecoverMetadataOfRestartedWorkers(const std::map<std::string, int64_t> &restartFacts);
 
     /**
-     * @brief Handle worker restart event for metadata recovery.
-     * @param[in] workerAddr Restarted worker address.
+     * @brief Handle one worker restart batch for metadata recovery.
+     * @param[in] restartFacts Restarted worker addresses and their membership generation timestamps.
+     * @param[in] sync Whether to run the effect synchronously in the caller's bounded pool.
      * @return Status of the call.
      */
-    Status HandleNodeRestartEvent(const std::string &workerAddr);
+    Status HandleNodeRestartEvent(const std::map<std::string, int64_t> &restartFacts, bool sync);
 
     /*
      * @brief Put p2p metadata to master.
@@ -1290,19 +1293,28 @@ private:
      */
     Status CheckGiveUpReconciliationAfterLock(int64_t waitMs, std::string &finishReason, bool &shouldSetReady);
 
+    /**
+     * @brief Wait for clients and clear stale references for one restart reconciliation generation.
+     * @param[in] req Reconciliation request.
+     * @return K_OK when restart preparation is complete; the error code otherwise.
+     */
+    Status PrepareRestartReconciliation(const PushMetaToWorkerReqPb &req);
+
     Status UpdateLocalNodeReady();
 
     HostPort localMasterAddress_;
 
-    // Acquire writer lock before doing reconciliation; read lock before other RPCs
-    // We want to make sure each time one thread doing reconciliations
-    // and every thread doing reconciliation won't go in parallel with other common RPC threads.
-    // Also protects numRecon_, lastReconTime_.
+    // Blocks ordinary RPCs while startup reconciliation owns the unhealthy Worker. Acquire before
+    // reconciliationMutex_ when both locks are required.
     WriterPrefRWLock reconFlag_;
-    uint16_t numRecon_{ 0 };                    // the number of nodes which reconciled with this node.
-    int64_t lastReconTime_{ 0 };                // the last time when reconciliation was done.
-    std::atomic<bool> setHealthFile_{ false };  // health file set or not.
-    int64_t timestamp_{ 0 };                    // the timestamp of the event that this node is reconciling for.
+    // Serializes reconciliation calls and protects numRecon_, reconciledSources_, lastReconTime_, timestamp_, and
+    // waited_.
+    std::mutex reconciliationMutex_;
+    int numRecon_{ 0 };  // Successful distinct source count for timestamp_.
+    std::unordered_set<std::string> reconciledSources_;  // Successful source addresses for timestamp_.
+    int64_t lastReconTime_{ 0 };  // The last time when reconciliation was done.
+    std::atomic<bool> setHealthFile_{ false };  // Whether the worker health probe has been published.
+    int64_t timestamp_{ 0 };  // Membership generation currently being reconciled.
 
     // this class manages list of all masters for our objects
     std::shared_ptr<worker::WorkerMasterApiManagerBase<worker::WorkerMasterOCApi>> workerMasterApiManager_{ nullptr };

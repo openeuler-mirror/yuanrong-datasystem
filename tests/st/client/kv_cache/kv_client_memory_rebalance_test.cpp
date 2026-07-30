@@ -122,6 +122,12 @@ bool IsUrmaScaleInCase()
     return IsCurrentTestName("RebalanceTargetActiveScaleInUrmaDoesNotLoseData");
 }
 
+bool IsCoordinatorRebalanceCase()
+{
+    return IsCurrentTestName("BusyGuardSelfHealProbesAfterBudgetElapsed")
+           || IsCurrentTestName("RebalanceConvergesToMidpointWithRealSizeAccounting");
+}
+
 std::string BuildRebalanceInjectActions()
 {
    std::string actions = "NodeSelector.setInterval:call(200);"
@@ -151,7 +157,8 @@ public:
    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
    {
        opts.numWorkers = IsScaleUpCase() ? 2 : 3;
-       opts.numEtcd = 1;
+       opts.numEtcd = IsCoordinatorRebalanceCase() ? 0 : 1;
+       opts.numCoordinators = IsCoordinatorRebalanceCase() ? 1 : 0;
        opts.numOBS = 0;
        bool memoryLimitSourceThresholdCase = IsMemoryLimitSourceThresholdCase();
        std::string usageGapPercent = IsUsageGapBelowThresholdCase() ? "100" : "30";
@@ -304,20 +311,24 @@ protected:
 
    void WaitAllNodesActiveInHashRing(uint32_t expectedWorkerNum, int timeoutMs = HASH_RING_TIMEOUT_MS)
    {
-       if (!db_) {
-           KVClientCommon::InitTestEtcdInstance();
-       }
        Status lastStatus;
        ClusterTopologyPb lastRing;
        ASSERT_TRUE(WaitFor(
            [&] {
-               std::string hashRingStr;
-               lastStatus = db_->Get(GetTopologyTableName(), "", hashRingStr);
-               if (lastStatus.IsError()) {
-                   return false;
-               }
                lastRing.Clear();
-               if (!lastRing.ParseFromString(hashRingStr)) {
+               if (cluster_->GetEtcdNum() == 0) {
+                   lastStatus = cluster_->ReadClusterTopology(lastRing);
+               } else {
+                   if (!db_) {
+                       KVClientCommon::InitTestEtcdInstance();
+                   }
+                   std::string hashRingStr;
+                   lastStatus = db_->Get(GetTopologyTableName(), "", hashRingStr);
+                   if (lastStatus.IsOk() && !lastRing.ParseFromString(hashRingStr)) {
+                       lastStatus = Status(K_RUNTIME_ERROR, "Parse hash ring failed");
+                   }
+               }
+               if (lastStatus.IsError()) {
                    return false;
                }
                if (lastRing.members_size() != static_cast<int>(expectedWorkerNum)) {

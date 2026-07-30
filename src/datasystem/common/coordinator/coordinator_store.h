@@ -52,10 +52,12 @@ public:
      * COORDINATOR_KEY_NOT_EXISTS_VERSION means the key must not exist.
      * @param[out] version The new version after put.
      * @param[out] revision The new global revision.
+     * @param[in] expectedModRevision Expected modification revision. Zero disables the incarnation fence.
      * @return Status of the operation.
      */
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
-               int64_t &version, int64_t &revision);
+               int64_t &version, int64_t &revision,
+               int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
 
     /**
      * @brief Range query over [key, rangeEnd).
@@ -74,9 +76,11 @@ public:
      * @param[in] rangeEnd End key (exclusive). Empty for single key.
      * @param[out] deleted Number of deleted keys.
      * @param[out] revision The new global revision.
+     * @param[in] expectedModRevision Expected exact-key modification revision. Zero disables the fence.
      * @return Status of the operation.
      */
-    Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision);
+    Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
+                       int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
 
     /**
      * @brief Watch a key or range for changes.
@@ -105,9 +109,11 @@ public:
      * @param[in] key The key.
      * @param[out] ttlMs Original TTL.
      * @param[out] remainingTtlMs Remaining TTL.
+     * @param[in] expectedModRevision Expected modification revision. Zero disables the incarnation fence.
      * @return Status of the operation.
      */
-    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs);
+    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
+                     int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
 
     /**
      * @brief Install an observer invoked after committed Store mutations.

@@ -4,7 +4,7 @@
  */
 
 /**
- * Description: ETCD-only stale cluster topology task cleanup.
+ * Description: Backend-neutral stale cluster topology task cleanup.
  */
 #include "datasystem/cluster/control/topology_task_janitor.h"
 
@@ -15,6 +15,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "datasystem/cluster/model/topology_diagnostics.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
@@ -23,11 +24,13 @@ namespace datasystem::cluster {
 namespace {
 constexpr int32_t JANITOR_READ_TIMEOUT_MS = 3'000;
 constexpr size_t MAX_SCAN_LIMIT = 8'192;
-constexpr size_t MAX_DELETE_BATCH = 128;
+constexpr size_t MAX_DELETE_BATCH = 8'192;
 constexpr size_t TASK_EPOCH_OFFSET = 3;
 constexpr size_t SCALE_IN_MARKER_EPOCH_OFFSET = 1;
 constexpr size_t SCALE_IN_MARKER_MIN_KEY_SIZE = 3;
 constexpr char SCALE_IN_MARKER_EPOCH_PREFIX = 'e';
+constexpr int64_t CLEANUP_SLOW_THRESHOLD_MS = 100;
+constexpr size_t CLEANUP_FAILURE_LOG_INTERVAL = 60;
 
 std::string TaskId(const TopologyTask &task)
 {
@@ -36,7 +39,13 @@ std::string TaskId(const TopologyTask &task)
 
 bool SameNotify(const TopologyTaskNotify &left, const TopologyTaskNotify &right)
 {
-    return left.type == right.type && left.taskIds == right.taskIds;
+    const bool sameBatchPresence = left.activeBatch.has_value() == right.activeBatch.has_value();
+    const bool sameBatch =
+        !left.activeBatch.has_value()
+        || (right.activeBatch.has_value() && left.activeBatch->type == right.activeBatch->type
+            && left.activeBatch->epoch == right.activeBatch->epoch);
+    return sameBatchPresence && sameBatch && left.taskIds == right.taskIds
+           && left.restartTimestampsByAddress == right.restartTimestampsByAddress;
 }
 
 std::optional<uint64_t> TaskEpoch(const std::string &taskId)
@@ -78,15 +87,20 @@ struct StaleTaskCleanupPass {
     size_t scanLimit;
     size_t deleteLimit;
     uint64_t maximumStaleEpoch;
-    size_t &deletedCount;
+    std::string &scanCursor;
+    size_t &scannedCount;
+    size_t &attemptedCount;
+    size_t &changedCount;
 };
 
 Status DeleteStaleTasks(TopologyRepository &repository, const StaleTaskCleanupPass &pass)
 {
     std::vector<TaskJanitorCandidate> candidates;
-    RETURN_IF_NOT_OK(repository.ListTaskCandidatesForJanitor(pass.kind, pass.scanLimit, candidates));
+    RETURN_IF_NOT_OK(
+        repository.ListTaskCandidatesForJanitor(pass.kind, pass.scanLimit, pass.scanCursor, candidates));
+    pass.scannedCount += candidates.size();
     for (const auto &candidate : candidates) {
-        if (pass.deletedCount >= pass.deleteLimit) {
+        if (pass.changedCount >= pass.deleteLimit) {
             break;
         }
         if (pass.expectedIds.count(candidate.taskId) > 0) {
@@ -97,19 +111,22 @@ Status DeleteStaleTasks(TopologyRepository &repository, const StaleTaskCleanupPa
             continue;
         }
         bool deleted = false;
-        ++pass.deletedCount;
+        ++pass.attemptedCount;
         RETURN_IF_NOT_OK(repository.DeleteTaskIfMatches(candidate, deleted));
+        pass.changedCount += deleted ? 1 : 0;
     }
     return Status::OK();
 }
 
 Status DeleteStaleScaleInMetadataMarkers(TopologyRepository &repository, size_t scanLimit, size_t deleteLimit,
-                                         uint64_t maximumStaleEpoch, size_t &deletedCount)
+                                         uint64_t maximumStaleEpoch, std::string &scanCursor,
+                                         size_t &scannedCount, size_t &attemptedCount, size_t &changedCount)
 {
     std::vector<ScaleInMetadataDoneJanitorCandidate> candidates;
-    RETURN_IF_NOT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(scanLimit, candidates));
+    RETURN_IF_NOT_OK(repository.ListScaleInMetadataDoneCandidatesForJanitor(scanLimit, scanCursor, candidates));
+    scannedCount += candidates.size();
     for (const auto &candidate : candidates) {
-        if (deletedCount >= deleteLimit) {
+        if (changedCount >= deleteLimit) {
             break;
         }
         const auto epoch = ScaleInMarkerEpoch(candidate.key);
@@ -117,40 +134,62 @@ Status DeleteStaleScaleInMetadataMarkers(TopologyRepository &repository, size_t 
             continue;
         }
         bool deleted = false;
+        ++attemptedCount;
         RETURN_IF_NOT_OK(repository.DeleteScaleInMetadataDoneIfMatches(candidate, deleted));
-        if (deleted) {
-            ++deletedCount;
-        }
+        changedCount += deleted ? 1 : 0;
     }
     return Status::OK();
 }
 
 Status ReconcileNotifies(TopologyRepository &repository,
                          const std::map<std::string, TopologyTaskNotify> &expectedNotifies, size_t scanLimit,
-                         size_t deleteLimit, size_t &deletedCount)
+                         size_t deleteLimit, std::string &scanCursor, size_t &scannedCount,
+                         size_t &attemptedCount, size_t &changedCount)
 {
     std::vector<NotifyJanitorCandidate> candidates;
-    RETURN_IF_NOT_OK(repository.ListNotifyCandidatesForJanitor(scanLimit, candidates));
+    RETURN_IF_NOT_OK(repository.ListNotifyCandidatesForJanitor(scanLimit, scanCursor, candidates));
+    scannedCount += candidates.size();
+    std::vector<MembershipRecord> memberships;
+    RETURN_IF_NOT_OK(repository.ReadMemberships(memberships));
+    std::unordered_set<std::string> presentAddresses;
+    presentAddresses.reserve(memberships.size());
+    for (const auto &membership : memberships) {
+        presentAddresses.emplace(membership.address);
+    }
     for (auto &candidate : candidates) {
-        if (deletedCount >= deleteLimit) {
+        if (changedCount >= deleteLimit) {
             break;
         }
         const auto expected = expectedNotifies.find(candidate.address);
-        if (expected != expectedNotifies.end() && SameNotify(candidate.notify, expected->second)) {
+        auto replacement = expected == expectedNotifies.end() ? TopologyTaskNotify{} : expected->second;
+        if (presentAddresses.count(candidate.address) > 0) {
+            for (const auto &[address, timestamp] : candidate.notify.restartTimestampsByAddress) {
+                if (presentAddresses.count(address) > 0) {
+                    replacement.restartTimestampsByAddress[address] = timestamp;
+                }
+            }
+        }
+        if (!candidate.logicallyDeleted && SameNotify(candidate.notify, replacement)) {
             continue;
         }
-        candidate.notify = expected == expectedNotifies.end() ? TopologyTaskNotify{} : expected->second;
-        bool deleted = false;
-        RETURN_IF_NOT_OK(repository.DeleteNotifyIfMatches(candidate, deleted));
-        ++deletedCount;
+        candidate.notify = std::move(replacement);
+        bool changed = false;
+        ++attemptedCount;
+        RETURN_IF_NOT_OK(repository.ReconcileNotifyIfMatches(candidate, changed));
+        changedCount += changed ? 1 : 0;
     }
     return Status::OK();
 }
 }  // namespace
 
-TopologyTaskJanitor::TopologyTaskJanitor(TopologyRepository &repository, const IPlanningAlgorithm &algorithm,
-                                         TopologyTaskMaterializer &materializer, TopologyTaskJanitorOptions options)
-    : repository_(repository), algorithm_(algorithm), materializer_(materializer), options_(options)
+TopologyTaskJanitor::TopologyTaskJanitor(std::string clusterName, TopologyRepository &repository,
+                                         const IPlanningAlgorithm &algorithm, TopologyTaskMaterializer &materializer,
+                                         TopologyTaskJanitorOptions options)
+    : clusterName_(std::move(clusterName)),
+      repository_(repository),
+      algorithm_(algorithm),
+      materializer_(materializer),
+      options_(options)
 {
 }
 
@@ -209,6 +248,7 @@ Status TopologyTaskJanitor::Stop(std::chrono::steady_clock::time_point deadline)
 Status TopologyTaskJanitor::RunOnce()
 {
     std::lock_guard<std::mutex> passLock(passMutex_);
+    const auto startedAt = std::chrono::steady_clock::now();
     TopologyReader reader(repository_);
     std::shared_ptr<const TopologySnapshot> latest;
     RETURN_IF_NOT_OK(reader.Read(JANITOR_READ_TIMEOUT_MS, latest));
@@ -223,15 +263,37 @@ Status TopologyTaskJanitor::RunOnce()
     CHECK_FAIL_RETURN_STATUS(!activeBatch.has_value() || activeBatch->epoch > 0, K_INVALID,
                              "active topology batch has an invalid epoch");
     const uint64_t maximumStaleEpoch = activeBatch.has_value() ? activeBatch->epoch - 1 : latest->Version();
+    size_t scanned = 0;
+    size_t attempted = 0;
     size_t changed = 0;
     RETURN_IF_NOT_OK(DeleteStaleTasks(repository_, { TopologyTaskKind::MIGRATE, expectedIds, options_.scanLimit,
-                                                     options_.deleteBatch, maximumStaleEpoch, changed }));
+                                                     options_.deleteBatch, maximumStaleEpoch, migrateTaskCursor_,
+                                                     scanned, attempted, changed }));
     RETURN_IF_NOT_OK(DeleteStaleTasks(repository_, { TopologyTaskKind::DELETE_MEMBER, expectedIds, options_.scanLimit,
-                                                     options_.deleteBatch, maximumStaleEpoch, changed }));
+                                                     options_.deleteBatch, maximumStaleEpoch, deleteTaskCursor_,
+                                                     scanned, attempted, changed }));
     RETURN_IF_NOT_OK(DeleteStaleScaleInMetadataMarkers(repository_, options_.scanLimit, options_.deleteBatch,
-                                                       maximumStaleEpoch, changed));
-    return ReconcileNotifies(repository_, expected.notifiesByAddress, options_.scanLimit, options_.deleteBatch,
-                             changed);
+                                                       maximumStaleEpoch, scaleInMarkerCursor_, scanned, attempted,
+                                                       changed));
+    RETURN_IF_NOT_OK(ReconcileNotifies(repository_, expected.notifiesByAddress, options_.scanLimit,
+                                       options_.deleteBatch, notifyCursor_, scanned, attempted, changed));
+    const auto elapsedMs = DurationMs(startedAt, std::chrono::steady_clock::now());
+    if (elapsedMs > CLEANUP_SLOW_THRESHOLD_MS) {
+        LOG(WARNING) << "CLUSTER_DERIVED_CLEANUP cluster=" << clusterName_ << " action=pass"
+                     << " topology_version=" << latest->Version() << " scanned=" << scanned
+                     << " attempted=" << attempted << " changed=" << changed << " elapsed_ms=" << elapsedMs
+                     << " status=slow";
+    } else if (changed > 0) {
+        LOG(INFO) << "CLUSTER_DERIVED_CLEANUP cluster=" << clusterName_ << " action=pass"
+                  << " topology_version=" << latest->Version() << " scanned=" << scanned
+                  << " attempted=" << attempted << " changed=" << changed << " elapsed_ms=" << elapsedMs
+                  << " status=changed";
+    } else {
+        VLOG(1) << "CLUSTER_DERIVED_CLEANUP cluster=" << clusterName_ << " action=pass"
+                << " topology_version=" << latest->Version() << " scanned=" << scanned
+                << " attempted=" << attempted << " changed=0 elapsed_ms=" << elapsedMs << " status=unchanged";
+    }
+    return Status::OK();
 }
 
 void TopologyTaskJanitor::Run()
@@ -244,8 +306,13 @@ void TopologyTaskJanitor::Run()
             }
         }
         auto rc = RunOnce();
-        if (rc.IsError()) {
-            LOG(WARNING) << "Cluster topology task Janitor pass failed: " << rc.ToString();
+        if (rc.GetCode() == K_NOT_FOUND) {
+            VLOG(1) << "CLUSTER_DERIVED_CLEANUP cluster=" << clusterName_
+                    << " state=waiting_for_topology_authority";
+        } else if (rc.IsError()) {
+            LOG_FIRST_AND_EVERY_N(WARNING, CLEANUP_FAILURE_LOG_INTERVAL)
+                << "CLUSTER_DERIVED_CLEANUP cluster=" << clusterName_
+                << " state=pass_failed status=" << rc.ToString();
         }
         std::unique_lock<std::mutex> lock(lifecycleMutex_);
         if (wakeCv_.wait_for(lock, options_.interval, [this] { return stopping_; })) {

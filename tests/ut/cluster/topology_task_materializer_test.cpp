@@ -58,6 +58,82 @@ TEST(TopologyTaskMaterializerTest, BuildsStableOneExecutorTasksAndCompleteNotifi
     EXPECT_EQ(first.notifiesByAddress.at(task.executorAddress).taskIds.front(), task.taskId);
 }
 
+TEST(TopologyTaskMaterializerTest, BuildsOneSharedRestartSetForEveryMembershipRecipient)
+{
+    TopologyState state;
+    state.version = 3;
+    state.clusterHasInit = true;
+    state.members = {
+        MakeMaterializerMember('a', 1, MemberState::ACTIVE, { 10 }),
+        MakeMaterializerMember('b', 2, MemberState::ACTIVE, { 20 }),
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    const std::vector<MembershipRecord> memberships{
+        { "127.0.0.1:1", MemberLifecycleState::READY, 100, "" },
+        { "127.0.0.1:2", MemberLifecycleState::RESTARTING, 200, "" },
+    };
+    HashAlgorithm algorithm;
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    DS_ASSERT_OK(materializer.RebuildExpected(*snapshot, algorithm, memberships, true, expected));
+
+    EXPECT_TRUE(expected.notifiesByAddress.empty());
+    EXPECT_EQ(expected.notifyRecipients,
+              (std::vector<std::string>{ "127.0.0.1:1", "127.0.0.1:2" }));
+    EXPECT_EQ(expected.restartTimestampsByAddress,
+              (std::map<std::string, int64_t>{ { "127.0.0.1:2", 200 } }));
+    for (const auto &address : expected.notifyRecipients) {
+        TopologyTaskNotify notify;
+        DS_ASSERT_OK(materializer.BuildNotifyFor(expected, address, notify));
+        EXPECT_FALSE(notify.activeBatch.has_value());
+        EXPECT_TRUE(notify.taskIds.empty());
+        EXPECT_EQ(notify.restartTimestampsByAddress, expected.restartTimestampsByAddress);
+        std::string regularBytes;
+        std::string optimizedBytes;
+        DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(notify, regularBytes));
+        DS_ASSERT_OK(materializer.BuildEncodedNotifyFor(expected, address, optimizedBytes));
+        EXPECT_EQ(optimizedBytes, regularBytes);
+    }
+    auto &taskNotify = expected.notifiesByAddress["127.0.0.1:1"];
+    taskNotify.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 3 };
+    taskNotify.taskIds = { "m-e3-0123456789abcdef0123456789abcdef" };
+    TopologyTaskNotify combined;
+    DS_ASSERT_OK(materializer.BuildNotifyFor(expected, "127.0.0.1:1", combined));
+    std::string regularBytes;
+    std::string optimizedBytes;
+    DS_ASSERT_OK(TopologyRepositoryCodec::EncodeNotify(combined, regularBytes));
+    DS_ASSERT_OK(materializer.BuildEncodedNotifyFor(expected, "127.0.0.1:1", optimizedBytes));
+    EXPECT_EQ(optimizedBytes, regularBytes);
+    TopologyTaskNotify decoded;
+    DS_ASSERT_OK(TopologyRepositoryCodec::DecodeNotify(optimizedBytes, decoded));
+    EXPECT_EQ(decoded.taskIds, combined.taskIds);
+    EXPECT_EQ(decoded.restartTimestampsByAddress, combined.restartTimestampsByAddress);
+}
+
+TEST(TopologyTaskMaterializerTest, InvalidRestartSetDoesNotReplacePreviousGeneration)
+{
+    TopologyState state;
+    state.version = 3;
+    state.clusterHasInit = true;
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    const std::vector<MembershipRecord> memberships{
+        { "127.0.0.1:1", MemberLifecycleState::READY, 100, "" },
+        { "127.0.0.1:2", MemberLifecycleState::RESTARTING, 0, "" },
+    };
+    HashAlgorithm algorithm;
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    expected.notifyRecipients = { "unchanged" };
+    expected.canonicalRestartNotify = "unchanged";
+
+    EXPECT_EQ(materializer.RebuildExpected(*snapshot, algorithm, memberships, true, expected).GetCode(), K_INVALID);
+    EXPECT_EQ(expected.notifyRecipients, (std::vector<std::string>{ "unchanged" }));
+    EXPECT_TRUE(expected.restartTimestampsByAddress.empty());
+    EXPECT_EQ(expected.canonicalRestartNotify, "unchanged");
+}
+
 TEST(TopologyTaskMaterializerTest, BusinessIdIgnoresEpochButFencesMemberGenerationAndScope)
 {
     TopologyExecutionFence first;
@@ -148,7 +224,10 @@ TEST(TopologyTaskMaterializerTest, RebuildsFailureTasksForTwoCrashedScaleInMembe
     for (const auto &[address, notify] : first.notifiesByAddress) {
         const auto iter = second.notifiesByAddress.find(address);
         ASSERT_NE(iter, second.notifiesByAddress.end());
-        EXPECT_EQ(iter->second.type, notify.type);
+        ASSERT_TRUE(iter->second.activeBatch.has_value());
+        ASSERT_TRUE(notify.activeBatch.has_value());
+        EXPECT_EQ(iter->second.activeBatch->type, notify.activeBatch->type);
+        EXPECT_EQ(iter->second.activeBatch->epoch, notify.activeBatch->epoch);
         EXPECT_EQ(iter->second.taskIds, notify.taskIds);
     }
 }
@@ -199,6 +278,27 @@ TEST(TopologyTaskMaterializerTest, ReportsFailureTargetStateViolation)
     const auto rc = materializer.BuildExpected(*snapshot, plan, expected);
     EXPECT_EQ(rc.GetCode(), K_INVALID);
     EXPECT_NE(rc.GetMsg().find("Failure owner change target is not active"), std::string::npos) << rc.GetMsg();
+}
+
+TEST(TopologyTaskMaterializerTest, RejectsScaleInTargetThatHasStartedLeaving)
+{
+    TopologyState state;
+    state.version = 6;
+    state.clusterHasInit = true;
+    state.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_IN, 6 };
+    state.members = {
+        MakeMaterializerMember('a', 1, MemberState::LEAVING, { 10 }),
+        MakeMaterializerMember('b', 2, MemberState::PRE_LEAVING, { 50 }),
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(state, 1, std::string(64, 'a'), snapshot));
+    TopologyPlan plan;
+    plan.next = state;
+    plan.ownerChanges.push_back({ state.members[0].identity, state.members[1].identity, { { 0, 20 } } });
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+
+    EXPECT_EQ(materializer.BuildExpected(*snapshot, plan, expected).GetCode(), K_INVALID);
 }
 
 TEST(TopologyTaskMaterializerTest, SplitsLargeCanonicalScopeAtTaskRangeLimit)

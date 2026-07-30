@@ -122,6 +122,8 @@ Status SCMigrateMetadataManager::MigrateTopologyMetadata(
     info.batchEpoch = action.batchEpoch;
     info.sourceMemberId = action.source->id;
     info.targetMemberId = action.target->id;
+    info.deadline = deadline;
+    info.cancellation = cancellation;
     metadata->GetMetasMatch([&filter](const std::string &name) { return filter.Contains(name); }, info.streamNames);
     if (info.streamNames.empty()) {
         return Status::OK();
@@ -136,6 +138,8 @@ Status SCMigrateMetadataManager::RunTopologyMigration(
     const std::shared_ptr<master::SCMetadataManager> &metadata, MigrateMetaInfo info,
     std::chrono::steady_clock::time_point deadline, const cluster::CancellationToken &cancellation)
 {
+    info.deadline = deadline;
+    info.cancellation = cancellation;
     const auto futureKey = std::make_pair(info.destAddr, info.operationId);
     TbbFutureThreadTable::accessor accessor;
     if (!futureThread_.find(accessor, futureKey)) {
@@ -162,8 +166,21 @@ Status SCMigrateMetadataManager::RunTopologyMigration(
             }
         }
     }
+    cancellation.SynchronizeSourceMutations();
     CHECK_FAIL_RETURN_STATUS(!cancellation.IsCancelled(), K_NOT_READY, "topology stream migration cancelled");
     RETURN_STATUS(K_RPC_DEADLINE_EXCEEDED, "topology stream migration deadline exceeded");
+}
+
+Status SCMigrateMetadataManager::CheckTopologyExecution(const MigrateMetaInfo &info) const
+{
+    if (info.topologyVersion == 0) {
+        return Status::OK();
+    }
+    CHECK_FAIL_RETURN_STATUS(!info.cancellation.IsCancelled(), K_NOT_READY,
+                             "topology stream migration cancelled before source commit");
+    CHECK_FAIL_RETURN_STATUS(std::chrono::steady_clock::now() < info.deadline, K_RPC_DEADLINE_EXCEEDED,
+                             "topology stream migration expired before source commit");
+    return Status::OK();
 }
 
 void SCMigrateMetadataManager::HandleMigrationFailed(
@@ -312,60 +329,82 @@ std::pair<Status, std::vector<std::string>> SCMigrateMetadataManager::AsyncMigra
     return make_pair(s, failedStreams);
 }
 
+void SCMigrateMetadataManager::RecordBatchMigrationFailure(
+    const MetaForSCMigrationPb &metadata, const std::shared_ptr<master::SCMetadataManager> &scMetadataManager,
+    std::vector<std::string> &failedStreams)
+{
+    scMetadataManager->HandleMetaDataMigrationFailed(metadata);
+    failedStreams.emplace_back(metadata.meta().stream_name());
+}
+
+Status SCMigrateMetadataManager::ApplyBatchMigrationResponse(
+    const MigrateSCMetadataReqPb &req, const MigrateSCMetadataRspPb &rsp,
+    const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, std::vector<std::string> &failedStreams,
+    const MigrateMetaInfo &info)
+{
+    if (rsp.results_size() != req.stream_metas_size()) {
+        for (const auto &metadata : req.stream_metas()) {
+            RecordBatchMigrationFailure(metadata, scMetadataManager, failedStreams);
+        }
+        RETURN_STATUS(K_TRY_AGAIN, "stream metadata migration response size mismatch");
+    }
+    for (int index = 0; index < rsp.results_size(); ++index) {
+        const auto &metadata = req.stream_metas(index);
+        if (rsp.results(index) == MigrateSCMetadataRspPb::SUCCESSFUL) {
+            const auto commit = [&] {
+                scMetadataManager->HandleMetaDataMigrationSuccess(metadata.meta().stream_name());
+                return Status::OK();
+            };
+            const auto commitStatus = info.topologyVersion == 0
+                                          ? commit()
+                                          : info.cancellation.CommitSourceMutationIfActive(info.deadline, commit);
+            if (commitStatus.IsError()) {
+                for (int remaining = index; remaining < req.stream_metas_size(); ++remaining) {
+                    RecordBatchMigrationFailure(req.stream_metas(remaining), scMetadataManager, failedStreams);
+                }
+                return commitStatus;
+            }
+        } else {
+            RecordBatchMigrationFailure(metadata, scMetadataManager, failedStreams);
+        }
+    }
+    return Status::OK();
+}
+
 Status SCMigrateMetadataManager::BatchMigrateMetadata(
     const std::shared_ptr<master::SCMetadataManager> &scMetadataManager, std::unique_ptr<MasterMasterSCApi> &api,
-    MigrateSCMetadataReqPb &req, std::vector<std::string> &failedStreams)
+    MigrateSCMetadataReqPb &req, std::vector<std::string> &failedStreams, const MigrateMetaInfo &info)
 {
     INJECT_POINT("BatchMigrateMetadata.delay", [](uint32_t delay_s) {
         sleep(delay_s);
         return Status::OK();
     });
-
+    auto copyReq = req;
+    for (auto &metadata : *copyReq.mutable_stream_metas()) {
+        metadata.clear_notifications();
+    }
     MigrateSCMetadataRspPb rsp;
-    auto streamSendData = [this, &api, &req, &rsp]() -> Status {
-        auto copyReq = req;
-        for (int i = 0; i < copyReq.stream_metas_size(); ++i) {
-            auto *meta = copyReq.mutable_stream_metas(i);
-            if (meta != nullptr) {
-                meta->clear_notifications();
-            }
-        }
-        RETURN_IF_NOT_OK(akSkManager_->GenerateSignature(copyReq));
+    auto sendStatus = CheckTopologyExecution(info);
+    if (sendStatus.IsOk()) {
+        sendStatus = akSkManager_->GenerateSignature(copyReq);
+    }
+    if (sendStatus.IsOk()) {
         req.set_access_key(copyReq.access_key());
         req.set_timestamp(copyReq.timestamp());
         req.set_signature(copyReq.signature());
-        RETURN_IF_NOT_OK(api->MigrateSCMetadata(req, rsp));
-        return Status::OK();
-    };
-
-    Status s = streamSendData();
-    if (s.IsError()) {
-        LOG(WARNING) << "Send metadata for migration failed. s=" << s.ToString();
-        for (const auto &meta : req.stream_metas()) {
-            scMetadataManager->HandleMetaDataMigrationFailed(meta);
-            failedStreams.emplace_back(meta.meta().stream_name());
-        }
-        return s;
-    } else {
-        if (rsp.results_size() != req.stream_metas_size()) {
-            for (const auto &meta : req.stream_metas()) {
-                scMetadataManager->HandleMetaDataMigrationFailed(meta);
-                failedStreams.emplace_back(meta.meta().stream_name());
-            }
-            RETURN_STATUS(K_TRY_AGAIN, "stream metadata migration response size mismatch");
-        }
-        int num = 0;
-        for (auto &result : rsp.results()) {
-            auto &meta = req.stream_metas()[num];
-            if (result == MigrateSCMetadataRspPb::SUCCESSFUL) {
-                scMetadataManager->HandleMetaDataMigrationSuccess(meta.meta().stream_name());
-            } else {
-                scMetadataManager->HandleMetaDataMigrationFailed(meta);
-                failedStreams.emplace_back(meta.meta().stream_name());
-            }
-            ++num;
-        }
+        sendStatus = api->MigrateSCMetadata(req, rsp);
     }
+    if (sendStatus.IsOk()) {
+        sendStatus = CheckTopologyExecution(info);
+    }
+    if (sendStatus.IsError()) {
+        LOG(WARNING) << "Send metadata for migration failed. s=" << sendStatus.ToString();
+        for (const auto &metadata : req.stream_metas()) {
+            RecordBatchMigrationFailure(metadata, scMetadataManager, failedStreams);
+        }
+        return sendStatus;
+    }
+    RETURN_IF_NOT_OK(ApplyBatchMigrationResponse(req, rsp, scMetadataManager, failedStreams, info));
     INJECT_POINT("BatchMigrateMetadata.finish");
     return Status::OK();
 }
@@ -389,7 +428,7 @@ Status SCMigrateMetadataManager::MigrateMetadataForScaleout(
         }
         ++count;
         if (count >= objBatch) {
-            auto rc = BatchMigrateMetadata(scMetadataManager, api, req, failedStreams);
+            auto rc = BatchMigrateMetadata(scMetadataManager, api, req, failedStreams, info);
             lastRc = rc.IsError() ? rc : lastRc;
             req.Clear();
             InitializeMigrationRequest(info, req);
@@ -398,7 +437,7 @@ Status SCMigrateMetadataManager::MigrateMetadataForScaleout(
     }
 
     if (count > 0) {
-        auto rc = BatchMigrateMetadata(scMetadataManager, api, req, failedStreams);
+        auto rc = BatchMigrateMetadata(scMetadataManager, api, req, failedStreams, info);
         lastRc = rc.IsError() ? rc : lastRc;
     }
     return lastRc;

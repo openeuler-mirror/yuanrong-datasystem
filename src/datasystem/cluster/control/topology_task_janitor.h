@@ -4,7 +4,7 @@
  */
 
 /**
- * Description: ETCD-only stale cluster topology task cleanup.
+ * Description: Backend-neutral stale cluster topology task cleanup.
  */
 #ifndef DATASYSTEM_CLUSTER_CONTROL_TOPOLOGY_TASK_JANITOR_H
 #define DATASYSTEM_CLUSTER_CONTROL_TOPOLOGY_TASK_JANITOR_H
@@ -13,6 +13,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <mutex>
+#include <string>
 
 #include "datasystem/cluster/control/topology_task_materializer.h"
 #include "datasystem/cluster/repository/topology_repository.h"
@@ -36,18 +37,19 @@ struct TopologyTaskJanitorOptions {
 };
 
 /**
- * @brief Remove stale ETCD task records without participating in topology correctness.
+ * @brief Remove stale topology task records without participating in topology correctness.
  */
 class TopologyTaskJanitor final {
 public:
     /**
      * @brief Bind non-owned cleanup dependencies.
+     * @param[in] clusterName Immutable cluster scope used by diagnostic logs.
      * @param[in] repository Repository that outlives this Janitor.
      * @param[in] algorithm Planning algorithm that outlives this Janitor.
      * @param[in] materializer Materializer that outlives this Janitor.
      * @param[in] options Bounded cleanup options.
      */
-    TopologyTaskJanitor(TopologyRepository &repository, const IPlanningAlgorithm &algorithm,
+    TopologyTaskJanitor(std::string clusterName, TopologyRepository &repository, const IPlanningAlgorithm &algorithm,
                         TopologyTaskMaterializer &materializer, TopologyTaskJanitorOptions options);
 
     /**
@@ -90,6 +92,7 @@ private:
      */
     void Run();
 
+    const std::string clusterName_;
     TopologyRepository &repository_;
     const IPlanningAlgorithm &algorithm_;
     TopologyTaskMaterializer &materializer_;
@@ -102,6 +105,11 @@ private:
     std::condition_variable stoppedCv_;
     // Serializes RunOnce() cleanup passes; it does not protect lifecycle member variables.
     std::mutex passMutex_;
+    // Protected by passMutex_; each cursor rotates one physical table across bounded cleanup passes.
+    std::string migrateTaskCursor_;
+    std::string deleteTaskCursor_;
+    std::string scaleInMarkerCursor_;
+    std::string notifyCursor_;
     Thread thread_;
     bool started_{ false };
     bool stopping_{ false };

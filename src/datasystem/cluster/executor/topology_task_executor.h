@@ -10,6 +10,7 @@
 #define DATASYSTEM_CLUSTER_EXECUTOR_TOPOLOGY_TASK_EXECUTOR_H
 
 #include <condition_variable>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -79,10 +80,27 @@ public:
      * @param[in] snapshots Snapshot dependency.
      * @param[in] callbacks Business callback dependency.
      * @param[in] dispatcher Completion dispatcher.
+     * @param[in] restartHandler Existing process-restart cleanup callback.
      * @param[in] options Bounded execution options.
      */
     TopologyTaskExecutor(std::string localAddress, TopologyRepository &repository,
-                         const TopologySnapshotState &snapshots, ITopologyPhaseCallbacks &callbacks,
+                         TopologySnapshotState &snapshots, ITopologyPhaseCallbacks &callbacks,
+                         CoordinationEventDispatcher &dispatcher,
+                         std::function<Status(const std::map<std::string, int64_t> &,
+                                              RestartEffectMode)> restartHandler,
+                         TopologyTaskExecutorOptions options);
+
+    /**
+     * @brief Construct an Executor without centralized restart effects.
+     * @param[in] localAddress Local canonical address.
+     * @param[in] repository Repository dependency.
+     * @param[in] snapshots Snapshot dependency.
+     * @param[in] callbacks Business callback dependency.
+     * @param[in] dispatcher Completion dispatcher.
+     * @param[in] options Bounded execution options.
+     */
+    TopologyTaskExecutor(std::string localAddress, TopologyRepository &repository,
+                         TopologySnapshotState &snapshots, ITopologyPhaseCallbacks &callbacks,
                          CoordinationEventDispatcher &dispatcher, TopologyTaskExecutorOptions options);
 
     /**
@@ -203,6 +221,28 @@ private:
     Status RefreshNotifyEpochLocked(uint64_t epoch);
 
     Status SubmitNotifiedTasks(const TopologyTaskNotify &notify, uint64_t epoch);
+
+    /**
+     * @brief Submit one pending restart-fact batch after active task admission.
+     * @param[in] restartFacts Current restart generations.
+     * @return Lifecycle or callback-pool admission status.
+     */
+    Status HandleRestartFacts(const std::map<std::string, int64_t> &restartFacts);
+
+    /**
+     * @brief Invoke one restart-fact batch behind the callback exception boundary.
+     * @param[in] restartFacts Pending restart generations.
+     * @return Handler status or a stable exception status.
+     */
+    Status InvokeRestartEffects(const std::map<std::string, int64_t> &restartFacts) noexcept;
+
+    /**
+     * @brief Finish one restart batch and update successful per-generation deduplication.
+     * @param[in] restartFacts Attempted restart generations.
+     * @param[in] callbackStatus Handler result.
+     */
+    void FinishRestartEffects(const std::map<std::string, int64_t> &restartFacts,
+                              const Status &callbackStatus) noexcept;
 
     /**
      * @brief Apply admission and enqueue callback.
@@ -417,13 +457,14 @@ private:
 
     std::string localAddress_;
     TopologyRepository &repository_;
-    const TopologySnapshotState &snapshots_;
+    TopologySnapshotState &snapshots_;
     ITopologyPhaseCallbacks &callbacks_;
     CoordinationEventDispatcher &dispatcher_;
+    std::function<Status(const std::map<std::string, int64_t> &, RestartEffectMode)> restartHandler_;
     TopologyTaskExecutorOptions options_;
     std::unique_ptr<ThreadPool> callbackPool_;
     // Protects callbackPool_, lifecycle flags, callback accounting, epoch state, retry ledgers, pending and in-flight
-    // operations, ordinary/failure deadlines, and diagnostics_.
+    // operations, ordinary/failure deadlines, restart deduplication state, and diagnostics_.
     mutable std::mutex mutex_;
     // Uses mutex_ to signal changes to callbackBodies_ while Stop() drains callbacks.
     std::condition_variable drained_;
@@ -447,6 +488,10 @@ private:
     std::unordered_set<std::string> scaleInMetadataDoneByOperation_;
     // Failure callbacks whose best-effort business step failed but must still advance task progress.
     std::unordered_set<std::string> bestEffortFailureByOperation_;
+    // Successful restart generations; mutex_ protects handler admission, Stop drain and deduplication updates.
+    std::map<std::string, int64_t> completedRestartTimestampsByAddress_;
+    // True while the callback pool owns the only admitted restart batch; mutex_ prevents duplicate admission.
+    bool restartBatchInFlight_{ false };
     TopologyTaskExecutorDiagnostics diagnostics_;
 };
 

@@ -59,6 +59,7 @@ struct MetaRedirectDecision {
     bool moving{ false };
     std::string targetAddress;
     uint64_t topologyVersion{ 0 };
+    uint64_t batchEpoch{ 0 };
 };
 
 class MetadataRedirectHelper {

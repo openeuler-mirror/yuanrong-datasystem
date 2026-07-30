@@ -42,7 +42,11 @@
 #include "datasystem/common/coordinator/ttl_manager.h"
 #include "datasystem/common/coordinator/watch_dispatcher.h"
 #include "datasystem/common/coordinator/watch_registry.h"
+#include "datasystem/common/flags/flags.h"
+#include "datasystem/common/util/raii.h"
 #include "datasystem/common/util/uuid_generator.h"
+
+DS_DECLARE_uint32(coordinator_topology_max_active_clusters);
 
 namespace datasystem {
 namespace ut {
@@ -309,6 +313,45 @@ TEST_F(CoordinatorIdTest, RawSnapshotReturnsMembershipWithoutTopology)
     DS_ASSERT_OK(service.Shutdown());
 }
 
+TEST_F(CoordinatorIdTest, ReservesControllerCapacityBeforeMembershipCommit)
+{
+    const auto previousLimit = FLAGS_coordinator_topology_max_active_clusters;
+    FLAGS_coordinator_topology_max_active_clusters = 2;
+    Raii restoreLimit([previousLimit] { FLAGS_coordinator_topology_max_active_clusters = previousLimit; });
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18489));
+    DS_ASSERT_OK(service.Init());
+    auto putMembership = [&service](const std::string &clusterName, const std::string &address,
+                                    coordinator::PutRspPb &response) {
+        coordinator::PutReqPb request;
+        request.set_key("/datasystem/" + clusterName + "/cluster/" + address);
+        request.set_value("membership");
+        return service.Put(request, response);
+    };
+    coordinator::PutRspPb blueResponse;
+    coordinator::PutRspPb greenResponse;
+    coordinator::PutRspPb redResponse;
+    DS_ASSERT_OK(putMembership("blue", "127.0.0.1:31501", blueResponse));
+    DS_ASSERT_OK(putMembership("green", "127.0.0.1:31501", greenResponse));
+    DS_ASSERT_OK(putMembership("blue", "127.0.0.1:31502", blueResponse));
+    EXPECT_EQ(putMembership("red", "127.0.0.1:31501", redResponse).GetCode(), K_TRY_AGAIN);
+
+    coordinator::DeleteRangeReqPb deleteRequest;
+    deleteRequest.set_key("/datasystem/blue/cluster/127.0.0.1:31501");
+    deleteRequest.set_expected_coordinator_id(blueResponse.header().coordinator_id());
+    coordinator::DeleteRangeRspPb deleteResponse;
+    DS_ASSERT_OK(service.DeleteRange(deleteRequest, deleteResponse));
+    deleteRequest.set_key("/datasystem/blue/cluster/127.0.0.1:31502");
+    DS_ASSERT_OK(service.DeleteRange(deleteRequest, deleteResponse));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    Status redStatus(K_TRY_AGAIN, "waiting for released Controller capacity");
+    while (std::chrono::steady_clock::now() < deadline && redStatus.GetCode() == K_TRY_AGAIN) {
+        redStatus = putMembership("red", "127.0.0.1:31501", redResponse);
+        std::this_thread::yield();
+    }
+    EXPECT_TRUE(redStatus.IsOk()) << redStatus.ToString();
+    DS_ASSERT_OK(service.Shutdown());
+}
+
 TEST_F(CoordinatorIdTest, AddsStableCoordinatorIdToResponses)
 {
     coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18482));
@@ -351,6 +394,100 @@ TEST_F(CoordinatorIdTest, PutRejectsAStaleCoordinatorIdBeforeMutation)
 
     request.set_expected_coordinator_id(idRsp.header().coordinator_id());
     DS_ASSERT_OK(service.Put(request, response));
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, MembershipPutRejectsAStaleModificationRevision)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18491));
+    DS_ASSERT_OK(service.Init());
+    coordinator::PutReqPb request;
+    request.set_key("/datasystem/incarnation/cluster/127.0.0.1:31501");
+    request.set_value("first");
+    request.set_ttl(60'000);
+    coordinator::PutRspPb first;
+    DS_ASSERT_OK(service.Put(request, first));
+
+    request.set_value("current");
+    request.set_expected_version(COORDINATOR_NO_VERSION_CHECK);
+    request.set_expected_mod_revision(first.revision());
+    coordinator::PutRspPb current;
+    DS_ASSERT_OK(service.Put(request, current));
+
+    request.set_value("stale");
+    request.set_expected_mod_revision(first.revision());
+    coordinator::PutRspPb stale;
+    EXPECT_EQ(service.Put(request, stale).GetCode(), K_TRY_AGAIN);
+    coordinator::RangeReqPb range;
+    range.set_key(request.key());
+    coordinator::RangeRspPb response;
+    DS_ASSERT_OK(service.Range(range, response));
+    ASSERT_EQ(response.kvs_size(), 1);
+    EXPECT_EQ(response.kvs(0).value(), "current");
+    EXPECT_EQ(response.kvs(0).mod_revision(), current.revision());
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, KeepAliveRejectsAStaleMembershipIncarnation)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18492));
+    DS_ASSERT_OK(service.Init());
+    coordinator::PutReqPb put;
+    put.set_key("/datasystem/keepalive-incarnation/cluster/127.0.0.1:31501");
+    put.set_value("first");
+    put.set_ttl(60'000);
+    coordinator::PutRspPb first;
+    DS_ASSERT_OK(service.Put(put, first));
+    put.set_value("current");
+    put.set_expected_version(COORDINATOR_NO_VERSION_CHECK);
+    put.set_expected_mod_revision(first.revision());
+    coordinator::PutRspPb current;
+    DS_ASSERT_OK(service.Put(put, current));
+
+    coordinator::KeepAliveReqPb keepAlive;
+    keepAlive.set_key(put.key());
+    keepAlive.set_expected_coordinator_id(std::string(UUID_SIZE, 'x'));
+    keepAlive.set_expected_mod_revision(current.revision());
+    coordinator::KeepAliveRspPb response;
+    EXPECT_EQ(service.KeepAlive(keepAlive, response).GetCode(), K_TRY_AGAIN);
+    keepAlive.set_expected_coordinator_id(current.header().coordinator_id());
+    keepAlive.set_expected_mod_revision(first.revision());
+    EXPECT_EQ(service.KeepAlive(keepAlive, response).GetCode(), K_TRY_AGAIN);
+    keepAlive.set_expected_mod_revision(current.revision());
+    DS_ASSERT_OK(service.KeepAlive(keepAlive, response));
+    DS_ASSERT_OK(service.Shutdown());
+}
+
+TEST_F(CoordinatorIdTest, DeleteRejectsAStaleMembershipIncarnation)
+{
+    coordinator::CoordinatorServiceImpl service(HostPort("127.0.0.1", 18493));
+    DS_ASSERT_OK(service.Init());
+    coordinator::PutReqPb put;
+    put.set_key("/datasystem/delete-incarnation/cluster/127.0.0.1:31501");
+    put.set_value("first");
+    coordinator::PutRspPb first;
+    DS_ASSERT_OK(service.Put(put, first));
+    put.set_value("current");
+    put.set_expected_version(COORDINATOR_NO_VERSION_CHECK);
+    put.set_expected_mod_revision(first.revision());
+    coordinator::PutRspPb current;
+    DS_ASSERT_OK(service.Put(put, current));
+
+    coordinator::DeleteRangeReqPb request;
+    request.set_key(put.key());
+    request.set_expected_mod_revision(first.revision());
+    coordinator::DeleteRangeRspPb response;
+    EXPECT_EQ(service.DeleteRange(request, response).GetCode(), K_TRY_AGAIN);
+    request.set_range_end(put.key() + "0");
+    request.set_expected_mod_revision(current.revision());
+    EXPECT_EQ(service.DeleteRange(request, response).GetCode(), K_INVALID);
+
+    coordinator::RangeReqPb range;
+    range.set_key(put.key());
+    coordinator::RangeRspPb snapshot;
+    DS_ASSERT_OK(service.Range(range, snapshot));
+    ASSERT_EQ(snapshot.kvs_size(), 1);
+    EXPECT_EQ(snapshot.kvs(0).value(), "current");
     DS_ASSERT_OK(service.Shutdown());
 }
 
@@ -504,6 +641,89 @@ TEST_F(CoordinatorStoreTest, MemoryKvStoreSupportsPutRangeCasAndDelete)
     ASSERT_EQ(events.size(), 3ul);
     ASSERT_EQ(events[0]->type, WatchEvent::Type::PUT);
     ASSERT_EQ(events[2]->type, WatchEvent::Type::DELETE);
+}
+
+TEST_F(CoordinatorStoreTest, MemoryKvStoreRejectsPutFromStaleMembershipIncarnation)
+{
+    MemoryKvStore store;
+    int64_t version = 0;
+    int64_t firstRevision = 0;
+    uint64_t ttlGeneration = 0;
+    DS_ASSERT_OK(store.Put("/membership", "old", 100, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, firstRevision,
+                           ttlGeneration));
+
+    int64_t deleted = 0;
+    int64_t deleteRevision = 0;
+    std::vector<KeyValueEntry> deletedEntries;
+    store.Delete("/membership", "", deleted, deleteRevision, deletedEntries);
+    ASSERT_EQ(deleted, 1);
+
+    int64_t currentRevision = 0;
+    DS_ASSERT_OK(store.Put("/membership", "current", 100, COORDINATOR_KEY_NOT_EXISTS_VERSION, version,
+                           currentRevision, ttlGeneration));
+    int64_t staleVersion = 0;
+    int64_t staleRevision = 0;
+    uint64_t staleTtlGeneration = 0;
+    EXPECT_EQ(store.Put("/membership", "stale", 100, COORDINATOR_NO_VERSION_CHECK, staleVersion, staleRevision,
+                        staleTtlGeneration, firstRevision)
+                  .GetCode(),
+              K_TRY_AGAIN);
+
+    std::vector<KeyValueEntry> entries;
+    int64_t snapshotRevision = 0;
+    store.Range("/membership", "", entries, snapshotRevision);
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_EQ(entries.front().value, "current");
+    EXPECT_EQ(entries.front().modRevision, currentRevision);
+}
+
+TEST_F(CoordinatorStoreTest, MemoryKvStoreRejectsKeepAliveFromStaleMembershipIncarnation)
+{
+    MemoryKvStore store;
+    int64_t version = 0;
+    int64_t firstRevision = 0;
+    uint64_t ttlGeneration = 0;
+    DS_ASSERT_OK(store.Put("/membership", "old", 100, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, firstRevision,
+                           ttlGeneration));
+
+    int64_t currentRevision = 0;
+    DS_ASSERT_OK(store.Put("/membership", "current", 100, COORDINATOR_NO_VERSION_CHECK, version, currentRevision,
+                           ttlGeneration));
+    int64_t ttlMs = 0;
+    int64_t remainingTtlMs = 0;
+    int64_t keepAliveRevision = 0;
+    uint64_t keepAliveGeneration = 0;
+    EXPECT_EQ(store.KeepAlive("/membership", ttlMs, remainingTtlMs, keepAliveRevision, keepAliveGeneration,
+                              firstRevision)
+                  .GetCode(),
+              K_TRY_AGAIN);
+    DS_ASSERT_OK(store.KeepAlive("/membership", ttlMs, remainingTtlMs, keepAliveRevision, keepAliveGeneration,
+                                currentRevision));
+}
+
+TEST_F(CoordinatorStoreTest, MemoryKvStoreRejectsDeleteFromStaleMembershipIncarnation)
+{
+    MemoryKvStore store;
+    int64_t version = 0;
+    int64_t firstRevision = 0;
+    uint64_t ttlGeneration = 0;
+    DS_ASSERT_OK(store.Put("/membership", "old", 100, COORDINATOR_KEY_NOT_EXISTS_VERSION, version, firstRevision,
+                           ttlGeneration));
+    int64_t currentRevision = 0;
+    DS_ASSERT_OK(store.Put("/membership", "current", 100, COORDINATOR_NO_VERSION_CHECK, version, currentRevision,
+                           ttlGeneration));
+
+    int64_t deleted = 0;
+    int64_t deleteRevision = 0;
+    std::vector<KeyValueEntry> deletedEntries;
+    EXPECT_EQ(store.Delete("/membership", "", deleted, deleteRevision, deletedEntries, firstRevision).GetCode(),
+              K_TRY_AGAIN);
+    std::vector<KeyValueEntry> entries;
+    int64_t snapshotRevision = 0;
+    store.Range("/membership", "", entries, snapshotRevision);
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_EQ(entries.front().value, "current");
+    EXPECT_EQ(entries.front().modRevision, currentRevision);
 }
 
 TEST_F(CoordinatorStoreTest, MemoryKvStorePutWithZeroVersionRequiresMissingKey)
@@ -1349,6 +1569,30 @@ TEST_F(CoordinatorStoreTest, RemoveChannelsByWatcherCancelsOnlyOwnedChannels)
     ASSERT_TRUE(dispatcher_->WaitEventCount(retainedWatchId, 1));
     ASSERT_FALSE(dispatcher_->WaitEventCount(firstWatchId, 1, 200));
     ASSERT_FALSE(dispatcher_->WaitEventCount(secondWatchId, 1, 200));
+}
+
+TEST_F(CoordinatorStoreTest, RemoveChannelsByWatcherKeepsOtherClusterScopes)
+{
+    constexpr char watcher[] = "shared-worker";
+    const int64_t blueTopology = registry_->Register("/datasystem/blue/topology/", "", watcher);
+    const int64_t blueNotify =
+        registry_->Register("/datasystem/blue/notify/shared-worker", "", watcher);
+    const int64_t greenTopology = registry_->Register("/datasystem/green/topology/", "", watcher);
+    dispatcher_->AddChannel(blueTopology, watcher);
+    dispatcher_->AddChannel(blueNotify, watcher);
+    dispatcher_->AddChannel(greenTopology, watcher);
+
+    dispatcher_->RemoveChannelsByWatcherInScopes(
+        watcher, { "/datasystem/blue/topology", "/datasystem/blue/notify" });
+
+    std::vector<std::shared_ptr<WatcherEntry>> matched;
+    registry_->MatchWatchers("/datasystem/blue/topology/", matched);
+    EXPECT_TRUE(matched.empty());
+    registry_->MatchWatchers("/datasystem/blue/notify/shared-worker", matched);
+    EXPECT_TRUE(matched.empty());
+    registry_->MatchWatchers("/datasystem/green/topology/", matched);
+    ASSERT_EQ(matched.size(), 1U);
+    EXPECT_EQ(matched.front()->watchId, greenTopology);
 }
 
 TEST_F(CoordinatorStoreTest, CancelWatchContinuesAfterAnAlreadyMissingId)

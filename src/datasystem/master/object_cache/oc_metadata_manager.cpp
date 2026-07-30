@@ -256,10 +256,10 @@ void OCMetadataManager::InitSubscribeEvent()
         eventName_, [this](const std::string &masterAddr, const std::string &workerAddr) {
             return RequestMetaFromWorker(masterAddr, workerAddr);
         });
-    NodeRestartEvent::GetInstance().AddSubscriber(eventName_,
-                                                  [this](const std::string &workerAddr, int64_t timestamp, bool sync) {
-                                                      return ProcessWorkerRestart(workerAddr, timestamp, sync);
-                                                  });
+    NodeRestartEvent::GetInstance().AddSubscriber(
+        eventName_, [this](const std::map<std::string, int64_t> &restartFacts, bool sync) {
+            return ProcessWorkerRestarts(restartFacts, sync);
+        });
     RecoverMasterAppRefEvent::GetInstance().AddSubscriber(
         eventName_, [this](std::function<bool(const std::string &)> func, const std::string &standbyWorker) {
             return RecoverMasterAppRef(func, standbyWorker);
@@ -724,7 +724,7 @@ Status OCMetadataManager::CreateMultiMeta(const CreateMultiMetaReqPb &req, Creat
     LOG(INFO) << FormatString("Processing CreateMultiMeta objectKeys: %s, source: %s", VectorToString(objectKeys),
                               req.address());
     RETURN_IF_NOT_OK(FillRedirectResponseInfos(rsp, objectKeys, req.redirect()));
-    RETURN_OK_IF_TRUE(!rsp.info().empty());
+    RETURN_OK_IF_TRUE(rsp.meta_is_moving() || !rsp.info().empty());
     return CreateMultiMetaNtx(req, rsp);
 }
 
@@ -3609,6 +3609,57 @@ Status OCMetadataManager::RemoveMetaByWorker(const std::string &workerAddr)
     return Status::OK();
 }
 
+Status OCMetadataManager::RemoveMetaByWorkers(const std::map<std::string, int64_t> &restartFacts)
+{
+    RETURN_OK_IF_TRUE(restartFacts.empty());
+    std::unordered_set<std::string> restartedAddresses;
+    for (const auto &[workerAddr, timestamp] : restartFacts) {
+        (void)timestamp;
+        restartedAddresses.emplace(workerAddr);
+    }
+    Timer timer;
+    size_t affectedObjectCount = 0;
+    size_t affectedLocationCount = 0;
+    for (auto &shard : metaShards_) {
+        std::unordered_map<std::string, std::vector<std::string>> affectedByObject;
+        {
+            // ObjectMeta fields are mutable behind TBB accessors while writers hold this outer shard lock in shared
+            // mode. Take the shard exclusively while iterating values, but release it before applying mutations.
+            std::unique_lock<std::shared_timed_mutex> lock(shard.mutex);
+            for (const auto &entry : shard.table) {
+                std::vector<std::string> affectedAddresses;
+                for (const auto &[location, state] : entry.second.locations) {
+                    (void)state;
+                    if (restartedAddresses.count(location) > 0) {
+                        affectedAddresses.emplace_back(location);
+                    }
+                }
+                const auto &primary = entry.second.meta.primary_address();
+                const bool primaryMissing =
+                    std::find(affectedAddresses.begin(), affectedAddresses.end(), primary) == affectedAddresses.end();
+                if (restartedAddresses.count(primary) > 0 && primaryMissing) {
+                    affectedAddresses.emplace_back(primary);
+                }
+                if (!affectedAddresses.empty()) {
+                    const std::string &objectKey = entry.first;
+                    affectedByObject.emplace(objectKey, std::move(affectedAddresses));
+                }
+            }
+        }
+        affectedObjectCount += affectedByObject.size();
+        for (const auto &[objectKey, affectedAddresses] : affectedByObject) {
+            for (const auto &workerAddr : affectedAddresses) {
+                RETURN_IF_NOT_OK(RemoveMetaByWorkerForKey(objectKey, workerAddr));
+                ++affectedLocationCount;
+            }
+        }
+    }
+    LOG(INFO) << "CLUSTER_RESTART_NOTIFY action=master_metadata_removed"
+              << " fact_count=" << restartFacts.size() << " affected_object_count=" << affectedObjectCount
+              << " affected_location_count=" << affectedLocationCount << " elapsed_ms=" << timer.ElapsedMilliSecond();
+    return Status::OK();
+}
+
 void OCMetadataManager::ModifyPrimaryCopy(const std::string &objectKey, const std::string &workerId,
                                           bool ifvoluntaryScaleDown)
 {
@@ -3739,12 +3790,65 @@ Status OCMetadataManager::ProcessWorkerRestart(const std::string &workerAddr, in
                                      "ClearAsyncWorkerOp failed in ProcessWorkerRestart");
     if (FLAGS_enable_reconciliation) {
         if (sync) {
-            notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, true);
+            RETURN_IF_NOT_OK(notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, true));
         } else {
             notifyWorkerManager_->AsyncPushMetaToWorker(workerAddr, timestamp, true);
         }
     }
 
+    if (workerAddr == masterAddress_) {
+        ExecuteAsyncTask([this]() { notifyWorkerManager_->ProcessAsyncDeleteNotifyOpImpl(); });
+    }
+    return Status::OK();
+}
+
+Status OCMetadataManager::ProcessWorkerRestarts(const std::map<std::string, int64_t> &restartFacts, bool sync)
+{
+    INJECT_POINT("ProcessWorkerRestart");
+    Timer timer;
+    WaitInitializaiton();
+    for (const auto &[workerAddr, timestamp] : restartFacts) {
+        (void)timestamp;
+        notifyWorkerManager_->RemoveFaultWorker(workerAddr);
+    }
+    const auto removeStatus = RemoveMetaByWorkers(restartFacts);
+    if (removeStatus.IsError()) {
+        LOG(ERROR) << "CLUSTER_RESTART_NOTIFY action=master_metadata_remove_failed"
+                   << " fact_count=" << restartFacts.size() << " status_code=" << removeStatus.GetCode();
+        return removeStatus;
+    }
+    Status firstError;
+    size_t failedCount = 0;
+    for (const auto &[workerAddr, timestamp] : restartFacts) {
+        const auto rc = CompleteWorkerRestartEffect(workerAddr, timestamp, sync);
+        if (rc.IsError()) {
+            ++failedCount;
+            if (firstError.IsOk()) {
+                firstError = rc;
+            }
+        }
+    }
+    LOG_IF(WARNING, firstError.IsError())
+        << "CLUSTER_RESTART_NOTIFY action=master_batch_failed"
+        << " worker_id=" << workerId_ << " fact_count=" << restartFacts.size() << " failed_count=" << failedCount
+        << " elapsed_ms=" << timer.ElapsedMilliSecond() << " status_code=" << firstError.GetCode();
+    VLOG_IF(DEBUG_LOG_LEVEL, firstError.IsOk())
+        << "CLUSTER_RESTART_NOTIFY action=master_batch_completed"
+        << " worker_id=" << workerId_ << " fact_count=" << restartFacts.size()
+        << " elapsed_ms=" << timer.ElapsedMilliSecond();
+    return firstError;
+}
+
+Status OCMetadataManager::CompleteWorkerRestartEffect(const std::string &workerAddr, int64_t timestamp, bool sync)
+{
+    RETURN_IF_NOT_OK(notifyWorkerManager_->ClearAsyncWorkerOp(workerAddr));
+    if (FLAGS_enable_reconciliation) {
+        if (sync) {
+            RETURN_IF_NOT_OK(notifyWorkerManager_->PushMetaToWorker(workerAddr, timestamp, true));
+        } else {
+            notifyWorkerManager_->AsyncPushMetaToWorker(workerAddr, timestamp, true);
+        }
+    }
     if (workerAddr == masterAddress_) {
         ExecuteAsyncTask([this]() { notifyWorkerManager_->ProcessAsyncDeleteNotifyOpImpl(); });
     }
@@ -3983,18 +4087,21 @@ Status OCMetadataManager::SaveMigrationData(const std::string &objectKey, Object
     return Status::OK();
 }
 
-void OCMetadataManager::SaveNestedMigrationMetadata(const MetaForMigrationPb &objMeta)
+Status OCMetadataManager::SaveNestedMigrationMetadata(const MetaForMigrationPb &objMeta)
 {
     if (!objMeta.nested_object_keys().empty()) {
         std::set<ImmutableString> nestedObjectKeys = { objMeta.nested_object_keys().begin(),
                                                        objMeta.nested_object_keys().end() };
-        LOG_IF_ERROR(nestedRefManager_->IncreaseNestedRefCnt(objMeta.object_key(), nestedObjectKeys),
-                     FormatString("IncreaseNested nestedKeys failed, objKey: %s", objMeta.object_key()));
+        RETURN_IF_NOT_OK_APPEND_MSG(
+            nestedRefManager_->IncreaseNestedRefCnt(objMeta.object_key(), nestedObjectKeys),
+            FormatString("IncreaseNested nestedKeys failed, objKey: %s", objMeta.object_key()));
     }
     if (objMeta.nested_ref() > 0) {
-        LOG_IF_ERROR(nestedRefManager_->IncreaseNestedRefCnt(objMeta.object_key(), objMeta.nested_ref()),
-                     FormatString("IncreaseNested ref failed, objKey: %s", objMeta.object_key()));
+        RETURN_IF_NOT_OK_APPEND_MSG(
+            nestedRefManager_->IncreaseNestedRefCnt(objMeta.object_key(), objMeta.nested_ref()),
+            FormatString("IncreaseNested ref failed, objKey: %s", objMeta.object_key()));
     }
+    return Status::OK();
 }
 
 bool OCMetadataManager::SaveOneMeta(const MetaForMigrationPb &objMeta, Status &status)
@@ -4087,7 +4194,13 @@ Status OCMetadataManager::SaveMigrationMetadata(const MigrateMetadataReqPb &req,
             rsp.add_results(MigrateMetadataRspPb::FAILED);
             continue;
         }
-        SaveNestedMigrationMetadata(objMeta);
+        const auto nestedStatus = SaveNestedMigrationMetadata(objMeta);
+        if (nestedStatus.IsError()) {
+            LOG(WARNING) << "Save nested migration metadata failed. objectKey: " << objMeta.object_key()
+                         << ", status: " << nestedStatus.ToString();
+            rsp.add_results(MigrateMetadataRspPb::FAILED);
+            continue;
+        }
 
         rsp.add_results(MigrateMetadataRspPb::SUCCESSFUL);
     }

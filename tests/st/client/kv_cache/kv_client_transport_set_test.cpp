@@ -23,6 +23,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -63,6 +64,19 @@ constexpr char MULTI_PUBLISH_INJECT[] = "WorkerRpcClient.InvokeMultiSet.beforeRp
 constexpr char HOST_ID_ENV_NAME[] = "routing_transport_set_host_id";
 constexpr char HOST_ID_VALUE[] = "routing-transport-set-host";
 
+bool IsCoordinatorTransportSetCase()
+{
+    static const std::unordered_set<std::string> coordinatorCases = {
+        "RoutedSetPublishesDataAndMetadata", "LocalCacheEnabledSetUsesConnectedWorker",
+        "RoutedMSetGroupsObjectsByMetadataOwner", "LocalCacheEnabledMSetUsesConnectedWorker",
+        "ScaleDownPublishReroutesWholeTransaction", "AmbiguousPublishFailureIsNotReplayedOnAnotherWorker"
+    };
+    std::string suiteName;
+    std::string caseName;
+    GetCurTestName(suiteName, caseName);
+    return coordinatorCases.count(caseName) > 0;
+}
+
 const char *ExpectedTransport()
 {
 #ifdef USE_URMA
@@ -78,7 +92,8 @@ public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
         FLAGS_v = 1;
-        opts.numEtcd = 1;
+        opts.numEtcd = IsCoordinatorTransportSetCase() ? 0 : 1;
+        opts.numCoordinators = IsCoordinatorTransportSetCase() ? 1 : 0;
         opts.numWorkers = WORKER_NUM;
         opts.enableDistributedMaster = "true";
         opts.workerGflagParams =
@@ -99,8 +114,10 @@ public:
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         ExternalClusterTest::SetUp();
 
-        etcd_ = InitTestEtcdInstance();
-        ASSERT_NE(etcd_, nullptr);
+        if (!IsCoordinatorTransportSetCase()) {
+            etcd_ = InitTestEtcdInstance();
+            ASSERT_NE(etcd_, nullptr);
+        }
         InitRoutedClient();
         InitLocalClient();
         InitTestKVClient(READER_WORKER_INDEX, readerClient_);
@@ -207,11 +224,14 @@ protected:
 
     Status FindRouteKeyToWorker(uint32_t workerIndex, const std::string &prefix, std::string &key)
     {
-        RETURN_RUNTIME_ERROR_IF_NULL(etcd_);
-        std::string value;
-        RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
         ClusterTopologyPb ring;
-        CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
+        if (etcd_ == nullptr) {
+            RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
+        } else {
+            std::string value;
+            RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
+            CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
+        }
         HostPort targetWorker;
         RETURN_IF_NOT_OK(cluster_->GetWorkerAddr(workerIndex, targetWorker));
         CHECK_FAIL_RETURN_STATUS(ring.members().find(targetWorker.ToString()) != ring.members().end(), K_NOT_FOUND,
@@ -241,11 +261,14 @@ protected:
     Status FindSameNodeDivergentRouteKey(const std::string &prefix, std::string &key, HostPort &metaOwner,
                                          HostPort &preferredWorker)
     {
-        RETURN_RUNTIME_ERROR_IF_NULL(etcd_);
-        std::string value;
-        RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
         ClusterTopologyPb ring;
-        CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
+        if (etcd_ == nullptr) {
+            RETURN_IF_NOT_OK(cluster_->ReadClusterTopology(ring));
+        } else {
+            std::string value;
+            RETURN_IF_NOT_OK(etcd_->Get(GetTopologyTableName(), "", value));
+            CHECK_FAIL_RETURN_STATUS(ring.ParseFromString(value), K_RUNTIME_ERROR, "Parse hash ring failed");
+        }
         std::map<uint32_t, std::string> tokenWorkers;
         std::vector<HostPort> sameNodeWorkers;
         for (const auto &worker : ring.members()) {

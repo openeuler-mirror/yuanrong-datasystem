@@ -283,8 +283,9 @@ public:
      * @param[in] workerAddr Destination worker address.
      * @param[in] timestamp timestamp of the event triggering reconciliation.
      * @param[in] isRestart Whether this function is called due to node restart.
+     * @return K_OK after the worker acknowledges the reconciliation; the error code otherwise.
      */
-    void PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart);
+    Status PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart);
 
     /**
      * @brief Remove operator from async worker op table.

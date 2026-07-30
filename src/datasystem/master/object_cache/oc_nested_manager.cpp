@@ -37,17 +37,11 @@ Status OCNestedManager::IncreaseNestedRefCnt(const std::string &parentObjectKey,
     Timer timer;
     std::lock_guard<std::shared_timed_mutex> lck(mutex_);
     GetMasterTimeCost().Append("IncreaseNestedRefCnt 2 params get lock", timer.ElapsedMilliSecond());
-    auto iter = dependencyTable_.find(parentObjectKey);
-    if (iter == dependencyTable_.end()) {
-        dependencyTable_.emplace(parentObjectKey, nestedObjectKeys);
-    } else {
-        iter->second = nestedObjectKeys;
-    }
-
     for (const auto &id : nestedObjectKeys) {
         RETURN_IF_NOT_OK_PRINT_ERROR_MSG(objectStore_->AddNestedRelationship(parentObjectKey, id),
                                          "Add nested dependency to RocksDb failed.");
     }
+    dependencyTable_[parentObjectKey] = nestedObjectKeys;
     return Status::OK();
 }
 
@@ -58,7 +52,13 @@ Status OCNestedManager::IncreaseNestedRefCnt(const std::string &nestedObjectKey,
     GetMasterTimeCost().Append("IncreaseNestedRefCnt get lock", timer.ElapsedMilliSecond());
     LOG(INFO) << "Increasing nested ref count for ObjectKey: " << nestedObjectKey << ", ref is " << ref;
     if (nestedRef_->AddRef(nestedObjectKey, ref)) {
-        objectStore_->UpdateNestedRefCount(nestedObjectKey, nestedRef_->GetRefCount(nestedObjectKey));
+        const auto rc = objectStore_->UpdateNestedRefCount(nestedObjectKey, nestedRef_->GetRefCount(nestedObjectKey));
+        if (rc.IsError()) {
+            for (uint32_t count = 0; count < ref; ++count) {
+                (void)nestedRef_->RemoveRef(nestedObjectKey);
+            }
+            return rc;
+        }
         return Status::OK();
     }
 

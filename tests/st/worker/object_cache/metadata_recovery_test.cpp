@@ -38,11 +38,13 @@ constexpr uint64_t HEARTBEAT_INTERVAL_MS = 500;
 constexpr int S2MS = 1000;
 }  // namespace
 
-class MetadataRecoveryTest : public KVClientScaleCommon {
+class MetadataRecoveryTest : public KVClientScaleCommon, public testing::WithParamInterface<bool> {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
     {
-        opts.numEtcd = 1;
+        const bool useCoordinator = GetParam();
+        opts.numEtcd = useCoordinator ? 0 : 1;
+        opts.numCoordinators = useCoordinator ? 1 : 0;
         opts.numWorkers = 2;
         opts.enableDistributedMaster = "true";
         opts.addNodeTime = 0;
@@ -55,6 +57,9 @@ public:
            << "-v=1 "
            << "-enable_l2_cache_fallback=false";
         opts.workerGflagParams = ss.str();
+        if (useCoordinator) {
+            opts.coordinatorGflagParams = "-node_dead_timeout_s=" + std::to_string(NODE_DEAD_TIMEOUT_S);
+        }
     }
 
 protected:
@@ -76,7 +81,7 @@ protected:
     static constexpr int timeoutMs_ = 5'000;
 };
 
-TEST_F(MetadataRecoveryTest, MetadataOwnerRestart)
+TEST_P(MetadataRecoveryTest, MetadataOwnerRestart)
 {
     if (FLAGS_use_brpc) {
         GTEST_SKIP() << "brpc migration gap; real failure under brpc. Tracked separately.";
@@ -100,7 +105,7 @@ TEST_F(MetadataRecoveryTest, MetadataOwnerRestart)
     ASSERT_TRUE(WaitUntilGetSucceeds(client1, objKey, value)) << objKey;
 }
 
-TEST_F(MetadataRecoveryTest, FailoverRestoreObjectWithTtl)
+TEST_P(MetadataRecoveryTest, FailoverRestoreObjectWithTtl)
 {
     std::shared_ptr<KVClient> client0;
     std::shared_ptr<KVClient> client1;
@@ -108,7 +113,7 @@ TEST_F(MetadataRecoveryTest, FailoverRestoreObjectWithTtl)
     InitTestKVClient(1, client1, timeoutMs_);
 
     constexpr int ttl = 2;
-    SetParam param{ .ttlSecond = ttl };
+    datasystem::SetParam param{ .ttlSecond = ttl };
     std::string objKey = client1->GenerateKey("object_with_ttl_worker0");
     auto value = GenRandomString(10);
     DS_ASSERT_OK(client0->Set(objKey, value, param));
@@ -122,7 +127,7 @@ TEST_F(MetadataRecoveryTest, FailoverRestoreObjectWithTtl)
     ASSERT_EQ(client0->Get(objKey, val).GetCode(), K_NOT_FOUND);
 }
 
-TEST_F(MetadataRecoveryTest, RestartRestoreObjectWithTtl)
+TEST_P(MetadataRecoveryTest, RestartRestoreObjectWithTtl)
 {
     std::shared_ptr<KVClient> client0;
     std::shared_ptr<KVClient> client1;
@@ -130,7 +135,7 @@ TEST_F(MetadataRecoveryTest, RestartRestoreObjectWithTtl)
     InitTestKVClient(1, client1, timeoutMs_);
 
     constexpr int ttl = 2;
-    SetParam param{ .ttlSecond = ttl };
+    datasystem::SetParam param{ .ttlSecond = ttl };
     std::string objKey = client1->GenerateKey("object_with_ttl_worker0_restart");
     auto value = GenRandomString(10);
     DS_ASSERT_OK(client0->Set(objKey, value, param));
@@ -146,5 +151,10 @@ TEST_F(MetadataRecoveryTest, RestartRestoreObjectWithTtl)
     std::string val;
     ASSERT_EQ(client1->Get(objKey, val).GetCode(), K_NOT_FOUND);
 }
+
+INSTANTIATE_TEST_SUITE_P(EtcdAndCoordinator, MetadataRecoveryTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool> &info) {
+                             return info.param ? "Coordinator" : "Etcd";
+                         });
 }  // namespace st
 }  // namespace datasystem

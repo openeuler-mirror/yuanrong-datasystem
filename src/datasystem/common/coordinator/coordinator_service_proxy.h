@@ -67,11 +67,13 @@ public:
      * @param[in] timeoutMs RPC deadline in milliseconds.
      * @param[out] coordinatorId Exact response CoordinatorId; nullptr ignores it.
      * @param[in] expectedCoordinatorId Required Coordinator process lifetime; empty disables the fence.
+     * @param[in] expectedModRevision Required membership modification revision; zero disables the fence.
      * @return Existing Put status contract.
      */
     virtual Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
                        int64_t &version, int64_t &revision, int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
-                       std::string *coordinatorId = nullptr, const std::string &expectedCoordinatorId = "") = 0;
+                       std::string *coordinatorId = nullptr, const std::string &expectedCoordinatorId = "",
+                       int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK) = 0;
 
     /**
      * @brief Read an exact key or range.
@@ -94,10 +96,12 @@ public:
      * @param[out] deleted Number of deleted keys.
      * @param[out] revision Result store revision.
      * @param[in] timeoutMs RPC deadline in milliseconds.
+     * @param[in] expectedModRevision Expected exact-key modification revision. Zero disables the fence.
      * @return Existing DeleteRange status contract.
      */
     virtual Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
-                               int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS) = 0;
+                               int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                               int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK) = 0;
 
     /**
      * @brief Register one watch and optionally return the exact response CoordinatorId.
@@ -136,11 +140,14 @@ public:
      * @param[out] remainingTtlMs Remaining TTL in milliseconds.
      * @param[in] timeoutMs RPC deadline in milliseconds.
      * @param[out] coordinatorId Exact response CoordinatorId; nullptr ignores it.
+     * @param[in] expectedCoordinatorId Required Coordinator process lifetime; empty disables the fence.
+     * @param[in] expectedModRevision Required membership modification revision; zero disables the fence.
      * @return Existing KeepAlive status contract.
      */
     virtual Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
                              int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
-                             std::string *coordinatorId = nullptr) = 0;
+                             std::string *coordinatorId = nullptr, const std::string &expectedCoordinatorId = "",
+                             int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK) = 0;
 
     /**
      * @brief Run the existing read-modify-CAS retry contract.
@@ -215,8 +222,9 @@ public:
      * @copydoc ICoordinatorServiceProxy::Put
      */
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
-               int64_t &version, int64_t &revision, int32_t timeoutMs, std::string *coordinatorId,
-               const std::string &expectedCoordinatorId) override;
+               int64_t &version, int64_t &revision, int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+               std::string *coordinatorId = nullptr, const std::string &expectedCoordinatorId = "",
+               int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::Range
@@ -228,7 +236,8 @@ public:
      * @copydoc ICoordinatorServiceProxy::DeleteRange
      */
     Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
-                       int32_t timeoutMs) override;
+                       int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS,
+                       int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::WatchRange
@@ -246,8 +255,10 @@ public:
     /**
      * @copydoc ICoordinatorServiceProxy::KeepAlive
      */
-    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t timeoutMs,
-                     std::string *coordinatorId) override;
+    Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs,
+                     int32_t timeoutMs = DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, std::string *coordinatorId = nullptr,
+                     const std::string &expectedCoordinatorId = "",
+                     int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK) override;
 
     /**
      * @copydoc ICoordinatorServiceProxy::CAS

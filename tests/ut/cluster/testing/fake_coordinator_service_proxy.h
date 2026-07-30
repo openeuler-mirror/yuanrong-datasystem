@@ -43,7 +43,7 @@ public:
 
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
                int64_t &version, int64_t &revision, int32_t, std::string *coordinatorId,
-               const std::string &expectedCoordinatorId) override
+               const std::string &expectedCoordinatorId, int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!expectedCoordinatorId.empty() && expectedCoordinatorId != coordinatorId_) {
@@ -51,6 +51,11 @@ public:
         }
         auto iter = entries_.find(key);
         const int64_t currentVersion = iter == entries_.end() ? 0 : iter->second.version;
+        const int64_t currentRevision = iter == entries_.end() ? 0 : iter->second.revision;
+        if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK
+            && expectedModRevision != currentRevision) {
+            RETURN_STATUS(K_TRY_AGAIN, "Coordinator key modification revision changed");
+        }
         if (expectedVersion != COORDINATOR_NO_VERSION_CHECK && expectedVersion != currentVersion) {
             RETURN_STATUS(K_TRY_AGAIN, "Coordinator key version changed");
         }
@@ -79,9 +84,16 @@ public:
     }
 
     Status DeleteRange(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
-                       int32_t) override
+                       int32_t, int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        CHECK_FAIL_RETURN_STATUS(expectedModRevision == COORDINATOR_NO_MOD_REVISION_CHECK || rangeEnd.empty(),
+                                 K_INVALID, "modification revision fence requires exact delete");
+        auto current = entries_.find(key);
+        if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK && current != entries_.end()
+            && current->second.revision != expectedModRevision) {
+            RETURN_STATUS(K_TRY_AGAIN, "Coordinator membership incarnation changed");
+        }
         deleted = 0;
         auto iter = entries_.lower_bound(key);
         while (iter != entries_.end() && MatchesRange(iter->first, key, rangeEnd)) {
@@ -122,11 +134,18 @@ public:
     }
 
     Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t,
-                     std::string *coordinatorId) override
+                     std::string *coordinatorId, const std::string &expectedCoordinatorId,
+                     int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!expectedCoordinatorId.empty() && expectedCoordinatorId != coordinatorId_) {
+            RETURN_STATUS(K_NOT_READY, "Coordinator identity changed");
+        }
         auto iter = entries_.find(key);
         CHECK_FAIL_RETURN_STATUS(iter != entries_.end(), K_NOT_FOUND, "Coordinator lease key is absent");
+        CHECK_FAIL_RETURN_STATUS(expectedModRevision == COORDINATOR_NO_MOD_REVISION_CHECK
+                                     || expectedModRevision == iter->second.revision,
+                                 K_TRY_AGAIN, "Coordinator membership incarnation changed");
         ttlMs = iter->second.ttlMs;
         remainingTtlMs = ttlMs;
         ObserveCoordinatorId(coordinatorId);
@@ -193,7 +212,8 @@ public:
     {
         int64_t version = 0;
         int64_t revision = 0;
-        return Put(key, value, 0, COORDINATOR_NO_VERSION_CHECK, version, revision, 0, nullptr, "");
+        return Put(key, value, 0, COORDINATOR_NO_VERSION_CHECK, version, revision, 0, nullptr, "",
+                   COORDINATOR_NO_MOD_REVISION_CHECK);
     }
 
     void FailNextRangeForKey(std::string key, StatusCode code)

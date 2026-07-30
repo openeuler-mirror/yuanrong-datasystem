@@ -43,7 +43,7 @@ public:
     }
 
     Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &, int64_t &, int32_t, std::string *,
-               const std::string &) override
+               const std::string &, int64_t) override
     {
         return Status(K_RUNTIME_ERROR, "unused fake Put");
     }
@@ -54,7 +54,7 @@ public:
         return Status(K_RUNTIME_ERROR, "unused fake Range");
     }
 
-    Status DeleteRange(const std::string &, const std::string &, int64_t &, int64_t &, int32_t) override
+    Status DeleteRange(const std::string &, const std::string &, int64_t &, int64_t &, int32_t, int64_t) override
     {
         return Status(K_RUNTIME_ERROR, "unused fake DeleteRange");
     }
@@ -81,7 +81,8 @@ public:
         return Status::OK();
     }
 
-    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *) override
+    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *, const std::string &,
+                     int64_t) override
     {
         return Status(K_RUNTIME_ERROR, "unused fake KeepAlive");
     }

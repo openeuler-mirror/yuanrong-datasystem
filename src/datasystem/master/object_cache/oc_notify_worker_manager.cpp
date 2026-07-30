@@ -1039,7 +1039,8 @@ void OCNotifyWorkerManager::AsyncPushMetaToWorker(const std::string &workerAddr,
     auto traceID = Trace::Instance().GetTraceID();
     auto func = [this, workerAddr, timestamp, isRestart, traceID]() {
         TraceGuard traceGuard = Trace::Instance().SetTraceNewID(traceID);
-        PushMetaToWorker(workerAddr, timestamp, isRestart);
+        LOG_IF_ERROR(PushMetaToWorker(workerAddr, timestamp, isRestart),
+                     FormatString("Asynchronous PushMetaToWorker failed for worker %s", workerAddr));
     };
     ocMetadataManager_->ExecuteAsyncTask(std::move(func));
 }
@@ -1132,7 +1133,7 @@ Status OCNotifyWorkerManager::RequestMetaFromWorker(const std::string &masterAdd
     return Status::OK();
 }
 
-void OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart)
+Status OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int64_t timestamp, bool isRestart)
 {
     LOG(INFO) << "PushMetaToWorker start. From master: " << masterAddr_.ToString() << " to worker:" << workerAddr;
     std::vector<std::string> refIds;
@@ -1147,7 +1148,7 @@ void OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int6
     if (rc.IsError()) {
         LOG(WARNING) << FormatString("The worker status is abnormal during PushMetaToWorker. workerAddr:%s, status:%s",
                                      workerAddr, rc.ToString());
-        return;
+        return rc;
     }
     std::shared_ptr<MasterWorkerOCApi> masterWorkerApi;
     rc = GetMasterWorkerApi(workerAddr, masterWorkerApi);
@@ -1155,7 +1156,7 @@ void OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int6
         LOG(WARNING) << FormatString(
             "Get MasterWorkerOCApi failed is abnormal during PushMetaToWorker. workerAddr:%s, status:%s", workerAddr,
             rc.ToString());
-        return;
+        return rc;
     }
 
     static const int RETRY_TIMEOUT_MS = 60000;  // 1 min
@@ -1168,9 +1169,10 @@ void OCNotifyWorkerManager::PushMetaToWorker(const std::string &workerAddr, int6
         []() { return Status::OK(); }, retryOn);
     if (rc.IsError()) {
         LOG(ERROR) << FormatString("PushMetaToWorker failed. workerAddr:%s, status:%s", workerAddr, rc.ToString());
-        return;
+        return rc;
     }
     LOG(INFO) << "PushMetaToWorker end. workerAddr:" << workerAddr;
+    return Status::OK();
 }
 
 void OCNotifyWorkerManager::AsyncNotifyOpToWorker(const std::string &workerAddr, int64_t timestamp)

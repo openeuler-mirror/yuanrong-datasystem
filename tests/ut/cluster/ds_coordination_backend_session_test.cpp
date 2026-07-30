@@ -63,12 +63,17 @@ public:
     }
 
     Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &version, int64_t &revision, int32_t,
-               std::string *coordinatorId, const std::string &expectedCoordinatorId) override
+               std::string *coordinatorId, const std::string &expectedCoordinatorId,
+               int64_t expectedModRevision) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
         lastExpectedCoordinatorId_ = expectedCoordinatorId;
-        ++version;
-        ++revision;
+        lastExpectedModRevision_ = expectedModRevision;
+        if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK && expectedModRevision != putRevision_) {
+            return Status(K_TRY_AGAIN, "membership incarnation changed");
+        }
+        version = ++putVersion_;
+        revision = ++putRevision_;
         observedCoordinatorId_ = putCoordinatorId_;
         if (coordinatorId != nullptr) {
             *coordinatorId = putCoordinatorId_;
@@ -89,9 +94,18 @@ public:
         return Status::OK();
     }
 
-    Status DeleteRange(const std::string &, const std::string &, int64_t &, int64_t &, int32_t) override
+    Status DeleteRange(const std::string &, const std::string &, int64_t &deleted, int64_t &, int32_t,
+                       int64_t expectedModRevision) override
     {
-        return Status(K_RUNTIME_ERROR, "unused fake DeleteRange");
+        std::lock_guard<std::mutex> lock(mutex_);
+        lastDeleteModRevision_ = expectedModRevision;
+        if (putRevision_ != 0 && expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK
+            && expectedModRevision != putRevision_) {
+            return Status(K_TRY_AGAIN, "membership incarnation changed");
+        }
+        deleted = putRevision_ == 0 ? 0 : 1;
+        putRevision_ = 0;
+        return Status::OK();
     }
 
     Status WatchRange(const std::string &key, const std::string &rangeEnd, const std::string &, const std::string &,
@@ -133,9 +147,28 @@ public:
         return Status::OK();
     }
 
-    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *) override
+    Status KeepAlive(const std::string &, int64_t &ttlMs, int64_t &remainingTtlMs, int32_t,
+                     std::string *coordinatorId, const std::string &expectedCoordinatorId,
+                     int64_t expectedModRevision) override
     {
-        return Status(K_RUNTIME_ERROR, "unused fake KeepAlive");
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!keepAliveSucceeds_) {
+            return Status(K_RUNTIME_ERROR, "unused fake KeepAlive");
+        }
+        lastKeepAliveCoordinatorId_ = expectedCoordinatorId;
+        lastKeepAliveModRevision_ = expectedModRevision;
+        if (putRevision_ == 0) {
+            return Status(K_NOT_FOUND, "membership does not exist");
+        }
+        if (expectedModRevision != COORDINATOR_NO_MOD_REVISION_CHECK && expectedModRevision != putRevision_) {
+            return Status(K_TRY_AGAIN, "membership incarnation changed");
+        }
+        remainingTtlMs = ttlMs;
+        observedCoordinatorId_ = putCoordinatorId_;
+        if (coordinatorId != nullptr) {
+            *coordinatorId = putCoordinatorId_;
+        }
+        return Status::OK();
     }
 
     Status CAS(const std::string &, const CasProcessFunc &, int64_t &, int64_t &) override
@@ -177,6 +210,12 @@ public:
     {
         std::lock_guard<std::mutex> lock(mutex_);
         putCoordinatorId_ = std::move(coordinatorId);
+    }
+
+    void SetKeepAliveSucceeds()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        keepAliveSucceeds_ = true;
     }
 
     void SetBeforeWatchReturn(std::function<void()> hook)
@@ -223,6 +262,31 @@ public:
         return lastExpectedCoordinatorId_;
     }
 
+    int64_t LastExpectedModRevision() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastExpectedModRevision_;
+    }
+
+    int64_t LastKeepAliveModRevision() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastKeepAliveModRevision_;
+    }
+
+    int64_t LastDeleteModRevision() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lastDeleteModRevision_;
+    }
+
+    void ReplaceMembershipIncarnation()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++putVersion_;
+        ++putRevision_;
+    }
+
 private:
     // Protects every fake response, observation and deterministic watch barrier below.
     mutable std::mutex mutex_;
@@ -234,6 +298,13 @@ private:
     std::vector<CancelCall> cancelCalls_;
     std::string observedCoordinatorId_;
     std::string lastExpectedCoordinatorId_;
+    std::string lastKeepAliveCoordinatorId_;
+    int64_t lastExpectedModRevision_{ 0 };
+    int64_t lastKeepAliveModRevision_{ 0 };
+    int64_t lastDeleteModRevision_{ 0 };
+    int64_t putVersion_{ 0 };
+    int64_t putRevision_{ 0 };
+    bool keepAliveSucceeds_{ false };
     std::string putCoordinatorId_{ COORDINATOR_A };
     std::function<void()> beforeWatchReturn_;
     bool blockWatch_{ false };
@@ -406,12 +477,57 @@ TEST(DsCoordinationBackendSessionTest, MembershipIdentityChangeRewatchesAndDrops
 TEST(DsCoordinationBackendSessionTest, InitialLeaseFactSurvivesReadyLifecycleTransition)
 {
     DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveSucceeds();
     DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
 
     ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
     EXPECT_TRUE(backend.IsFirstKeepAliveSent());
     ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
     EXPECT_TRUE(backend.IsFirstKeepAliveSent());
+}
+
+TEST(DsCoordinationBackendSessionTest, MembershipWritesCarryObservedCoordinatorFence)
+{
+    DeterministicCoordinatorProxy proxy;
+    AddSuccessfulBatch(proxy, COORDINATOR_A);
+    proxy.SetKeepAliveSucceeds();
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.WatchEvents(TwoWatchPlan()).IsOk());
+
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    EXPECT_EQ(proxy.LastExpectedCoordinatorId(), COORDINATOR_A);
+    EXPECT_EQ(proxy.LastExpectedModRevision(), COORDINATOR_NO_MOD_REVISION_CHECK);
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+    EXPECT_EQ(proxy.LastExpectedCoordinatorId(), COORDINATOR_A);
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 1);
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::EXITING).IsOk());
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 2);
+}
+
+TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotOverwriteReplacement)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveSucceeds();
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+
+    proxy.ReplaceMembershipIncarnation();
+    EXPECT_EQ(backend.UpdateNodeState(MemberLifecycleState::EXITING).GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(proxy.LastExpectedModRevision(), 2);
+}
+
+TEST(DsCoordinationBackendSessionTest, StaleMembershipIncarnationCannotDeleteReplacement)
+{
+    DeterministicCoordinatorProxy proxy;
+    proxy.SetKeepAliveSucceeds();
+    DsCoordinationBackend backend(&proxy, WATCHER_ADDRESS);
+    ASSERT_TRUE(backend.InitKeepAlive("/datasystem/c/cluster", WATCHER_ADDRESS, false, true).IsOk());
+    ASSERT_TRUE(backend.UpdateNodeState(MemberLifecycleState::READY).IsOk());
+
+    proxy.ReplaceMembershipIncarnation();
+    EXPECT_EQ(backend.Delete("/datasystem/c/cluster", WATCHER_ADDRESS).GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(proxy.LastDeleteModRevision(), 2);
 }
 
 TEST(DsCoordinationBackendSessionTest, InvalidatedPlansRebuildOnTheNextExactRead)

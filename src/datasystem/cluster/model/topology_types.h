@@ -18,6 +18,7 @@
 #define DATASYSTEM_CLUSTER_MODEL_TOPOLOGY_TYPES_H
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <variant>
@@ -29,6 +30,11 @@ enum class MemberState : uint8_t { INITIAL = 0, JOINING = 1, ACTIVE = 2, PRE_LEA
 enum class TopologyChangeType : uint8_t { SCALE_OUT = 0, SCALE_IN = 1, FAILURE = 2 };
 enum class TopologyTaskKind : uint8_t { MIGRATE = 0, DELETE_MEMBER = 1 };
 enum class TopologyCallbackPhase : uint8_t { SCALE_OUT = 0, SCALE_IN = 1, SCALE_IN_CLEANUP = 2, FAILURE = 3 };
+
+/**
+ * @brief Restart effect completion contract selected by its topology execution owner.
+ */
+enum class RestartEffectMode : uint8_t { EVENTUAL = 0, WAIT_FOR_COMPLETION = 1 };
 
 struct MemberIdentity {
     std::string id;
@@ -106,8 +112,9 @@ struct TopologyDeleteTask {
 using TopologyTask = std::variant<TopologyMigrateTask, TopologyDeleteTask>;
 
 struct TopologyTaskNotify {
-    TopologyChangeType type{ TopologyChangeType::SCALE_OUT };
+    std::optional<ActiveBatch> activeBatch;
     std::vector<std::string> taskIds;
+    std::map<std::string, int64_t> restartTimestampsByAddress;
 };
 
 struct TopologyExecutionFence {

@@ -33,6 +33,7 @@
 #include "datasystem/common/coordinator/coordinator_service_proxy.h"
 #include "datasystem/common/coordinator/key_value_entry.h"
 #include "datasystem/common/coordinator/static_coordinator_discovery.h"
+#include "datasystem/common/flags/common_flags.h"
 #include "datasystem/common/rpc/rpc_stub_cache_mgr.h"
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/strings_util.h"
@@ -93,7 +94,7 @@ public:
         opts.workerGflagParams =
             " -shared_memory_size_mb=64 -node_timeout_s=2 -node_dead_timeout_s=4 -add_node_wait_time_s=1"
             " -log_async=false -enable_reconciliation=false -enable_lossless_data_exit_mode=true";
-        opts.coordinatorGflagParams = " -v=1";
+        opts.coordinatorGflagParams = " -v=1 -node_dead_timeout_s=4 -scale_in_collect_window_ms=1000";
     }
 
 protected:
@@ -108,7 +109,12 @@ protected:
         RETURN_IF_NOT_OK(RpcStubCacheMgr::Instance().Init(100));
         RETURN_IF_NOT_OK(externalCluster->GetCoordinatorAddr(0, coordinatorAddr));
         auto coordinatorDiscovery = std::make_shared<StaticCoordinatorDiscovery>(coordinatorAddr.ToString());
-        auto coordinatorProxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
+        std::unique_ptr<ICoordinatorServiceProxy> coordinatorProxy;
+        if (FLAGS_use_brpc) {
+            coordinatorProxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(coordinatorDiscovery));
+        } else {
+            coordinatorProxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(coordinatorDiscovery));
+        }
         RETURN_IF_NOT_OK(coordinatorProxy->Init());
         coordinatorProxy_ = std::move(coordinatorProxy);
         return Status::OK();

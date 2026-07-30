@@ -50,10 +50,12 @@ public:
      * @param[out] version The new version after put.
      * @param[out] revision The new global revision after put.
      * @param[out] ttlGeneration TTL generation after this mutation.
-     * @return Status of the operation. K_INVALID if version mismatch or key already exists.
+     * @param[in] expectedModRevision Expected modification revision. Zero disables the incarnation fence.
+     * @return Status of the operation. K_INVALID for version mismatch; K_TRY_AGAIN for a stale modification revision.
      */
     Status Put(const std::string &key, const std::string &value, int64_t ttlMs, int64_t expectedVersion,
-               int64_t &version, int64_t &revision, uint64_t &ttlGeneration);
+               int64_t &version, int64_t &revision, uint64_t &ttlGeneration,
+               int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
 
     /**
      * @brief Range query over [key, rangeEnd).
@@ -71,9 +73,12 @@ public:
      * @param[out] deleted Number of deleted keys.
      * @param[out] revision The new global revision.
      * @param[out] deletedEntries The deleted entries for watch notification.
+     * @param[in] expectedModRevision Expected exact-key modification revision. Zero disables the fence.
+     * @return Status of the operation. K_TRY_AGAIN if the exact-key modification revision is stale.
      */
-    void Delete(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
-                std::vector<KeyValueEntry> &deletedEntries);
+    Status Delete(const std::string &key, const std::string &rangeEnd, int64_t &deleted, int64_t &revision,
+                  std::vector<KeyValueEntry> &deletedEntries,
+                  int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
 
     /**
      * @brief Delete a key only when its current modification revision and TTL generation match.
@@ -81,10 +86,18 @@ public:
     bool DeleteIfTtlExpired(const std::string &key, int64_t revision, uint64_t ttlGeneration);
 
     /**
-     * @brief Renew TTL for a key.
+     * @brief Renew TTL for a key when the optional incarnation fence still matches.
+     * @param[in] key The key.
+     * @param[out] ttlMs Original TTL.
+     * @param[out] remainingTtlMs Remaining TTL.
+     * @param[out] revision Current modification revision.
+     * @param[out] ttlGeneration TTL generation after renewal.
+     * @param[in] expectedModRevision Expected modification revision. Zero disables the incarnation fence.
+     * @return Status of the operation. K_TRY_AGAIN if the modification revision is stale.
      */
     Status KeepAlive(const std::string &key, int64_t &ttlMs, int64_t &remainingTtlMs, int64_t &revision,
-                     uint64_t &ttlGeneration);
+                     uint64_t &ttlGeneration,
+                     int64_t expectedModRevision = COORDINATOR_NO_MOD_REVISION_CHECK);
 
     /**
      * @brief Get current global revision.

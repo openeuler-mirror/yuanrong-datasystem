@@ -32,9 +32,29 @@ class TopologyTaskExecutor;
 class CancellationToken final {
 public:
     /**
+     * @brief Construct one independently cancellable shared state.
+     */
+    CancellationToken() : state_(std::make_shared<State>())
+    {
+    }
+
+    /**
      * @brief Destroy the token.
      */
     ~CancellationToken() = default;
+
+    /**
+     * @brief Share cancellation state with bounded asynchronous business work.
+     * @param[in] other Token whose cancellation state is shared.
+     */
+    CancellationToken(const CancellationToken &other) = default;
+
+    /**
+     * @brief Share-assign cancellation state with bounded asynchronous business work.
+     * @param[in] other Token whose cancellation state is shared.
+     * @return This token.
+     */
+    CancellationToken &operator=(const CancellationToken &other) = default;
 
     /**
      * @brief Return true after cancellation.
@@ -42,7 +62,7 @@ public:
      */
     bool IsCancelled() const noexcept
     {
-        return cancelled_.load();
+        return state_->cancelled.load();
     }
 
     /**
@@ -52,26 +72,62 @@ public:
      */
     bool WaitUntil(std::chrono::steady_clock::time_point deadline) const
     {
-        std::unique_lock<std::mutex> lock(mutex_);
-        return changed_.wait_until(lock, deadline, [this] { return cancelled_.load(); });
+        std::unique_lock<std::mutex> lock(state_->mutex);
+        return state_->changed.wait_until(lock, deadline, [this] { return state_->cancelled.load(); });
+    }
+
+    /**
+     * @brief Commit one source-side mutation only while this callback attempt is still authoritative.
+     * @param[in] deadline Absolute callback deadline.
+     * @param[in] commit Local mutation to execute at the commit boundary.
+     * @return Commit status, or a cancellation/deadline error before the mutation starts.
+     */
+    template <typename Function>
+    Status CommitSourceMutationIfActive(std::chrono::steady_clock::time_point deadline, Function &&commit) const
+    {
+        std::lock_guard<std::mutex> lock(state_->commitMutex);
+        if (state_->cancelled.load()) {
+            return Status(K_NOT_READY, "topology callback cancelled before source commit");
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            return Status(K_RPC_DEADLINE_EXCEEDED, "topology callback expired before source commit");
+        }
+        return std::forward<Function>(commit)();
+    }
+
+    /**
+     * @brief Wait until a source-side mutation already inside the commit boundary has completed.
+     */
+    void SynchronizeSourceMutations() const
+    {
+        std::lock_guard<std::mutex> lock(state_->commitMutex);
     }
 
 private:
     friend class TopologyTaskExecutor;
+
+    struct State {
+        std::atomic<bool> cancelled{ false };
+        // Coordinates changed waiters with cancelled; cancelled remains authoritative.
+        mutable std::mutex mutex;
+        std::condition_variable changed;
+        // Serializes source-side mutations with callback return after cancellation or deadline.
+        mutable std::mutex commitMutex;
+    };
 
     /**
      * @brief Request cooperative cancellation and wake waiters.
      */
     void Cancel() noexcept
     {
-        cancelled_.store(true);
-        changed_.notify_all();
+        {
+            std::lock_guard<std::mutex> lock(state_->mutex);
+            state_->cancelled.store(true);
+        }
+        state_->changed.notify_all();
     }
-    std::atomic<bool> cancelled_{ false };
-    // Coordinates changed_ waiters with cancelled_; cancelled_ remains the authoritative atomic state.
-    mutable std::mutex mutex_;
-    // Uses mutex_ to wake WaitUntil() when cancelled_ becomes true.
-    mutable std::condition_variable changed_;
+
+    std::shared_ptr<State> state_;
 };
 
 /**

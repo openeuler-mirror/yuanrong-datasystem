@@ -10,6 +10,9 @@
 #include "datasystem/cluster/runtime/topology_snapshot_state.h"
 #include "ut/cluster/testing/fake_coordination_backend.h"
 
+#include <future>
+#include <limits>
+
 #include "gtest/gtest.h"
 #include "ut/common.h"
 
@@ -75,6 +78,76 @@ TEST(TopologySnapshotStateTest, ThreadCacheDoesNotRetainReplacedSnapshot)
     DS_ASSERT_OK(state.Publish(MakeSnapshot(2, 'b'), outcome));
 
     EXPECT_TRUE(oldGeneration.expired());
+}
+
+TEST(TopologySnapshotStateTest, WaitForVersionWakesWhenRequiredSnapshotIsPublished)
+{
+    TopologySnapshotState state;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(state.Publish(MakeSnapshot(1, 'a'), outcome));
+    std::promise<void> entered;
+    auto waiter = std::async(std::launch::async, [&] {
+        entered.set_value();
+        std::shared_ptr<const TopologySnapshot> observed;
+        auto rc = state.WaitForVersion(2, std::chrono::steady_clock::now() + std::chrono::seconds(1), observed);
+        return std::make_pair(rc, observed);
+    });
+    entered.get_future().wait();
+
+    DS_ASSERT_OK(state.Publish(MakeSnapshot(2, 'b'), outcome));
+
+    auto [status, observed] = waiter.get();
+    DS_ASSERT_OK(status);
+    ASSERT_NE(observed, nullptr);
+    EXPECT_EQ(observed->Version(), 2U);
+}
+
+TEST(TopologySnapshotStateTest, WaitForVersionReturnsRetryableTimeout)
+{
+    TopologySnapshotState state;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(state.Publish(MakeSnapshot(1, 'a'), outcome));
+    std::shared_ptr<const TopologySnapshot> observed;
+
+    EXPECT_EQ(state.WaitForVersion(2, std::chrono::steady_clock::now(), observed).GetCode(), K_TRY_AGAIN);
+    EXPECT_EQ(observed, nullptr);
+}
+
+TEST(TopologySnapshotStateTest, ScaleOutHandoffCompletionIsEpochBoundAndRangeScoped)
+{
+    TopologyState topology;
+    topology.version = 2;
+    topology.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 2 };
+    topology.members = {
+        Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 0 } },
+        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::JOINING, { 100 } },
+    };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    TopologySnapshotState state;
+    SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(state.Publish(snapshot, outcome));
+    TopologyExecutionFence fence;
+    fence.phase = TopologyCallbackPhase::SCALE_OUT;
+    fence.batchEpoch = 2;
+    fence.ranges = { { 10, 20 }, { 30, 40 } };
+
+    state.RecordScaleOutHandoffCompletion(fence);
+
+    EXPECT_TRUE(state.IsScaleOutHandoffComplete(2, 10));
+    EXPECT_TRUE(state.IsScaleOutHandoffComplete(2, 35));
+    EXPECT_FALSE(state.IsScaleOutHandoffComplete(2, 25));
+    EXPECT_FALSE(state.IsScaleOutHandoffComplete(3, 35));
+    fence.ranges = { { 0, std::numeric_limits<uint32_t>::max() } };
+    state.RecordScaleOutHandoffCompletion(fence);
+    EXPECT_TRUE(state.IsScaleOutHandoffComplete(2, std::numeric_limits<uint32_t>::max()));
+
+    topology.version = 3;
+    topology.activeBatch = ActiveBatch{ TopologyChangeType::FAILURE, 3 };
+    topology.members[1].state = MemberState::FAILED;
+    DS_ASSERT_OK(TopologySnapshot::Create(topology, 3, std::string(64, 'b'), snapshot));
+    DS_ASSERT_OK(state.Publish(snapshot, outcome));
+    EXPECT_FALSE(state.IsScaleOutHandoffComplete(2, 35));
 }
 
 }  // namespace

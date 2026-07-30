@@ -92,9 +92,12 @@ TEST(ClusterTopologySchemaTest, FreezesTaskAndBatchSchema)
     ExpectEnumValue(type, "FAILURE", 2);
 
     const auto *notify = TaskNotifyPb::descriptor();
-    ASSERT_EQ(notify->field_count(), 2);
-    ExpectField(notify, "type", 1);
+    ASSERT_EQ(notify->field_count(), 3);
+    ExpectField(notify, "active_batch", 1);
     ExpectField(notify, "task_ids", 2);
+    ExpectField(notify, "restart_timestamps_by_address", 3);
+    EXPECT_EQ(notify->FindFieldByName("active_batch")->message_type(), ChangeBatchPb::descriptor());
+    EXPECT_TRUE(notify->FindFieldByName("restart_timestamps_by_address")->is_map());
 }
 
 TEST(ClusterTopologySchemaTest, FreezesRootAndActiveBatchPresence)

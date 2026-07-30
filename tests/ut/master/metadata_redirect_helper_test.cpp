@@ -143,7 +143,7 @@ TEST(MetadataRedirectHelperTest, RouteFailureIsReturnedWithoutChangingOutputs)
     EXPECT_EQ(topologyVersion, 7U);
 }
 
-TEST(MetadataRedirectHelperTest, ScaleOutWaitIsReturnedAsMetadataMoving)
+TEST(MetadataRedirectHelperTest, ScaleOutWaitEndsOnlyAfterMetadataHandoffCompletes)
 {
     cluster::TopologyState topology;
     topology.version = 2;
@@ -163,6 +163,7 @@ TEST(MetadataRedirectHelperTest, ScaleOutWaitIsReturnedAsMetadataMoving)
     cluster::PlacementFacade placement(snapshots, algorithm, "127.0.0.1:1");
     MetadataRedirectHelperForTest helper(&placement, false, HostPort());
 
+    helper.metaFound = true;
     CreateMetaRspPb singleResponse;
     bool redirect = true;
     DS_ASSERT_OK(helper.FillRedirectResponseInfo(singleResponse, "key", redirect));
@@ -170,11 +171,30 @@ TEST(MetadataRedirectHelperTest, ScaleOutWaitIsReturnedAsMetadataMoving)
     EXPECT_TRUE(singleResponse.meta_is_moving());
     EXPECT_FALSE(singleResponse.has_info());
 
-    CreateMultiMetaRspPb batchResponse;
-    std::vector<std::string> keys{ "key" };
-    DS_ASSERT_OK(helper.FillRedirectResponseInfos(batchResponse, keys, true));
-    EXPECT_TRUE(batchResponse.meta_is_moving());
-    EXPECT_EQ(batchResponse.info_size(), 0);
+    helper.MarkMigrating("key");
+    helper.metaFound = false;
+    singleResponse.Clear();
+    DS_ASSERT_OK(helper.FillRedirectResponseInfo(singleResponse, "key", redirect));
+    EXPECT_TRUE(singleResponse.meta_is_moving());
+    EXPECT_FALSE(singleResponse.has_info());
+
+    helper.CleanMigratingItems({ "key" });
+    singleResponse.Clear();
+    DS_ASSERT_OK(helper.FillRedirectResponseInfo(singleResponse, "key", redirect));
+    EXPECT_TRUE(singleResponse.meta_is_moving());
+    EXPECT_FALSE(singleResponse.has_info());
+
+    cluster::TopologyExecutionFence fence;
+    fence.phase = cluster::TopologyCallbackPhase::SCALE_OUT;
+    fence.batchEpoch = 2;
+    fence.ranges = { { 0, std::numeric_limits<uint32_t>::max() } };
+    snapshots.RecordScaleOutHandoffCompletion(fence);
+    singleResponse.Clear();
+    DS_ASSERT_OK(helper.FillRedirectResponseInfo(singleResponse, "key", redirect));
+    EXPECT_FALSE(singleResponse.meta_is_moving());
+    ASSERT_TRUE(singleResponse.has_info());
+    EXPECT_EQ(singleResponse.info().redirect_meta_address(), "127.0.0.1:2");
+    EXPECT_EQ(singleResponse.info().topology_version(), 2U);
 }
 
 TEST(MetadataRedirectHelperTest, CentralizedMetadataDoesNotRequirePlacement)

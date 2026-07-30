@@ -33,7 +33,7 @@ TEST(TopologyShutdownTest, JanitorTimeoutKeepsDependenciesAliveAndLaterJoins)
     TopologyTaskMaterializer materializer;
     TopologyTaskJanitorOptions options;
     options.interval = std::chrono::seconds(1);
-    TopologyTaskJanitor janitor(repository, algorithm, materializer, options);
+    TopologyTaskJanitor janitor("shutdown-test", repository, algorithm, materializer, options);
     backend.BlockNextGet();
     DS_ASSERT_OK(janitor.Start());
     ASSERT_TRUE(backend.WaitUntilGetBlocked(std::chrono::steady_clock::now() + SHUTDOWN_WAIT));
@@ -86,7 +86,7 @@ TEST(TopologyShutdownTest, StartedJanitorIsSafelyStoppedByDestructor)
     HashAlgorithm algorithm;
     TopologyTaskMaterializer materializer;
     {
-        TopologyTaskJanitor janitor(repository, algorithm, materializer, {});
+        TopologyTaskJanitor janitor("shutdown-test", repository, algorithm, materializer, {});
         DS_ASSERT_OK(janitor.Start());
     }
 }

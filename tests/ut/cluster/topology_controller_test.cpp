@@ -18,6 +18,7 @@
 #include "datasystem/cluster/membership/membership_value_codec.h"
 #include "datasystem/cluster/runtime/coordination_event_dispatcher.h"
 #include "datasystem/cluster/runtime/topology_reader.h"
+#include "datasystem/common/util/wait_post.h"
 #include "ut/cluster/testing/fake_coordination_backend.h"
 
 #include "gtest/gtest.h"
@@ -33,6 +34,7 @@ constexpr size_t EXPECTED_RECOVERY_GET_ATTEMPTS =
     INJECTED_NOT_READY_GET_ATTEMPTS + BOOTSTRAP_SUCCESS_GET_ATTEMPTS;
 constexpr std::chrono::milliseconds RECOVERY_WAIT_TIMEOUT{ 150 };
 constexpr std::chrono::seconds RECOVERY_STOP_TIMEOUT{ 1 };
+constexpr std::chrono::seconds LARGE_BATCH_WAIT_TIMEOUT{ 5 };
 constexpr auto FAILURE_PROBE_WAIT_TIMEOUT = std::chrono::seconds(1);
 constexpr size_t COLLECTIVE_ABSENCE_MEMBER_COUNT = 2;
 constexpr size_t COLLECTIVE_ABSENCE_RECONCILES_PER_WINDOW = 3;
@@ -40,6 +42,68 @@ constexpr int64_t COLLECTIVE_ABSENCE_FIRST_WINDOW_SECONDS = 4;
 constexpr int64_t COLLECTIVE_ABSENCE_SECOND_WINDOW_SECONDS = 8;
 constexpr int CONTROLLER_TEST_READ_TIMEOUT_MS = 100;
 constexpr size_t MEMBER_ID_SIZE = 16;
+constexpr size_t LARGE_BATCH_MEMBER_COUNT = 500;
+constexpr size_t LARGE_STEADY_MEMBER_COUNT = 2'000;
+constexpr size_t LARGE_EXPANDED_MEMBER_COUNT = LARGE_STEADY_MEMBER_COUNT + LARGE_BATCH_MEMBER_COUNT;
+constexpr uint32_t LARGE_TOKENS_PER_MEMBER = 4;
+constexpr uint32_t LARGE_PORT_BASE = 20'000;
+constexpr auto LARGE_COLLECT_WINDOW = std::chrono::seconds(1);
+constexpr auto LARGE_CONTROL_BUDGET = std::chrono::seconds(3);
+constexpr auto DEFAULT_COLLECT_WINDOW = std::chrono::seconds(3);
+
+class CountingPlanningAlgorithm final : public IPlanningAlgorithm {
+public:
+    CountingPlanningAlgorithm() = default;
+    ~CountingPlanningAlgorithm() override = default;
+
+    TopologyAlgorithmId GetId() const override
+    {
+        return delegate_.GetId();
+    }
+
+    Status BuildInitialPlacement(const ScaleOutPlanInput &input, TopologyPlan &plan) const override
+    {
+        return delegate_.BuildInitialPlacement(input, plan);
+    }
+
+    Status PlanScaleOut(const ScaleOutPlanInput &input, TopologyPlan &plan) const override
+    {
+        ++scaleOutCalls_;
+        return delegate_.PlanScaleOut(input, plan);
+    }
+
+    Status PlanScaleIn(const ScaleInPlanInput &input, TopologyPlan &plan) const override
+    {
+        return delegate_.PlanScaleIn(input, plan);
+    }
+
+    Status PlanFailure(const FailurePlanInput &input, TopologyPlan &plan) const override
+    {
+        return delegate_.PlanFailure(input, plan);
+    }
+
+    Status Validate(const TopologyState &state) const override
+    {
+        return delegate_.Validate(state);
+    }
+
+    size_t ScaleOutCalls() const noexcept
+    {
+        return scaleOutCalls_.load();
+    }
+
+private:
+    HashAlgorithm delegate_;
+    mutable std::atomic<size_t> scaleOutCalls_{ 0 };
+};
+
+TEST(TopologyControllerTest, DefaultOrdinaryCollectionWindowsAreThreeSeconds)
+{
+    const TopologyControllerOptions options;
+
+    EXPECT_EQ(options.scaleOutCollectWindow, DEFAULT_COLLECT_WINDOW);
+    EXPECT_EQ(options.scaleInCollectWindow, DEFAULT_COLLECT_WINDOW);
+}
 
 std::string EncodeMembership(MemberLifecycleState state, int64_t timestamp = 0)
 {
@@ -90,16 +154,25 @@ bool WaitForDerivedState(TopologyRepository &repository, const ExpectedDerivedSt
             const auto kind = std::holds_alternative<TopologyMigrateTask>(task) ? TopologyTaskKind::MIGRATE
                                                                                 : TopologyTaskKind::DELETE_MEMBER;
             TopologyTask observed;
+            if (expected.notifiesByAddress.empty()
+                || !expected.notifiesByAddress.begin()->second.activeBatch.has_value()) {
+                return false;
+            }
             complete = complete
                        && repository
-                              .ReadTask(kind, id, expected.notifiesByAddress.begin()->second.type,
+                              .ReadTask(kind, id, expected.notifiesByAddress.begin()->second.activeBatch->type,
                                         std::visit([](const auto &value) { return value.epoch; }, task), observed)
                               .IsOk();
         }
         for (const auto &[address, notify] : expected.notifiesByAddress) {
             TopologyTaskNotify observed;
-            complete = complete && repository.ReadNotify(address, observed).IsOk() && observed.type == notify.type
+            complete = complete && repository.ReadNotify(address, observed).IsOk()
+                       && observed.activeBatch.has_value() == notify.activeBatch.has_value()
                        && observed.taskIds == notify.taskIds;
+            if (complete && notify.activeBatch.has_value()) {
+                complete = observed.activeBatch->type == notify.activeBatch->type
+                           && observed.activeBatch->epoch == notify.activeBatch->epoch;
+            }
         }
         if (complete) {
             return true;
@@ -107,6 +180,85 @@ bool WaitForDerivedState(TopologyRepository &repository, const ExpectedDerivedSt
         std::this_thread::yield();
     }
     return false;
+}
+
+Status RebuildExpectedFromRepository(TopologyRepository &repository, const IPlanningAlgorithm &algorithm,
+                                     ExpectedDerivedState &expected)
+{
+    TopologyState active;
+    int64_t revision = 0;
+    RETURN_IF_NOT_OK(repository.ReadTopology(100, active, revision));
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(TopologySnapshot::Create(active, revision, std::string(64, 'a'), snapshot));
+    std::vector<MembershipRecord> memberships;
+    RETURN_IF_NOT_OK(repository.ReadMemberships(memberships));
+    TopologyTaskMaterializer materializer;
+    return materializer.RebuildExpected(*snapshot, algorithm, memberships, false, expected);
+}
+
+Status FinishExpectedMigrateTasks(TopologyRepository &repository, const ExpectedDerivedState &expected)
+{
+    for (const auto &task : expected.tasks) {
+        CHECK_FAIL_RETURN_STATUS(std::holds_alternative<TopologyMigrateTask>(task), K_INVALID,
+                                 "expected migrate task");
+        const auto &migrate = std::get<TopologyMigrateTask>(task);
+        TopologyExecutionFence fence;
+        fence.taskId = migrate.taskId;
+        fence.batchType = migrate.type;
+        fence.batchEpoch = migrate.epoch;
+        fence.executor.address = migrate.executorAddress;
+        for (const auto &range : migrate.sourceRanges) {
+            fence.ranges.push_back(range.range);
+        }
+        TaskProgressOutcome outcome;
+        RETURN_IF_NOT_OK(repository.MarkTaskScopeFinished(fence, outcome));
+        CHECK_FAIL_RETURN_STATUS(outcome == TaskProgressOutcome::UPDATED, K_RUNTIME_ERROR,
+                                 "failed to finish expected migrate task");
+    }
+    return Status::OK();
+}
+
+void BlockCasAfter(FakeCoordinationBackend &backend, size_t precedingCasCount, WaitPost &entered, WaitPost &release)
+{
+    backend.SetBeforeCasHandler([&backend, precedingCasCount, &entered, &release] {
+        if (precedingCasCount > 0) {
+            BlockCasAfter(backend, precedingCasCount - 1, entered, release);
+            return;
+        }
+        entered.Set();
+        release.Wait();
+    });
+}
+
+Status PrepareCompletedScaleOut(FakeCoordinationBackend &backend, const TopologyKeyHelper &keys,
+                                TopologyRepository &repository, const HashAlgorithm &algorithm,
+                                TopologyState &next)
+{
+    TopologyState current{ true, 1, {}, std::nullopt };
+    current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    TopologyPlan plan;
+    RETURN_IF_NOT_OK(
+        algorithm.PlanScaleOut({ current, { MemberIdentity{ std::string(16, 'b'), "127.0.0.1:2" } }, 4 }, plan));
+    plan.next.version = 2;
+    plan.next.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 2 };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    RETURN_IF_NOT_OK(TopologySnapshot::Create(plan.next, 1, std::string(64, 'a'), snapshot));
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    RETURN_IF_NOT_OK(materializer.BuildExpected(*snapshot, plan, expected));
+    CHECK_FAIL_RETURN_STATUS(expected.tasks.size() == 1, K_RUNTIME_ERROR,
+                             "single joining member must yield one test task");
+    auto completedTask = expected.tasks.front();
+    for (auto &range : std::get<TopologyMigrateTask>(completedTask).sourceRanges) {
+        range.finished = true;
+    }
+    RETURN_IF_NOT_OK(repository.CreateTaskIfAbsent(completedTask));
+    backend.PutRaw(keys.TopologyTable(), TopologyKeyHelper::TopologyKey(), plan.next);
+    for (const auto &member : plan.next.members) {
+        PutMembership(backend, keys, member.identity.address, MemberLifecycleState::READY);
+    }
+    next = std::move(plan.next);
+    return Status::OK();
 }
 
 TEST(TopologyControllerTest, TwoInstancesCanJoinOneCommittedEpochWithoutPersistedOwner)
@@ -151,6 +303,145 @@ TEST(TopologyControllerTest, TwoInstancesCanJoinOneCommittedEpochWithoutPersiste
     EXPECT_FALSE(second.GetDiagnostics().running);
 }
 
+TEST(TopologyControllerTest, ProgressSlicesContinueWithoutWaitingForThePeriodicTick)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("progress-slices", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    TopologyState current;
+    current.version = 1;
+    current.clusterHasInit = true;
+    current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    TopologyPlan plan;
+    std::vector<MemberIdentity> joining = {
+        { std::string(16, 'b'), "127.0.0.1:2" },
+        { std::string(16, 'c'), "127.0.0.1:3" },
+    };
+    DS_ASSERT_OK(algorithm.PlanScaleOut({ current, joining, 4 }, plan));
+    plan.next.version = 2;
+    plan.next.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 2 };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(plan.next, 1, std::string(64, 'a'), snapshot));
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    DS_ASSERT_OK(materializer.BuildExpected(*snapshot, plan, expected));
+    ASSERT_GT(expected.tasks.size(), 1);
+    for (auto task : expected.tasks) {
+        auto &ranges = std::get<TopologyMigrateTask>(task).sourceRanges;
+        for (auto &range : ranges) {
+            range.finished = true;
+        }
+        DS_ASSERT_OK(repository.CreateTaskIfAbsent(task));
+    }
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), plan.next);
+    for (const auto &member : plan.next.members) {
+        PutMembership(backend, *keys, member.identity.address, MemberLifecycleState::READY);
+    }
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::seconds(5);
+    options.ordinaryBatchWindow = std::chrono::minutes(1);
+    options.maxProgressReadsPerTick = 1;
+    std::atomic<int64_t> nowCalls{ 0 };
+    options.now = [&] {
+        return std::chrono::steady_clock::time_point(std::chrono::minutes(nowCalls.fetch_add(1) * 2));
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    const auto deadline = std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT;
+    EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
+        return !state.activeBatch.has_value()
+               && std::all_of(state.members.begin(), state.members.end(),
+                              [](const auto &member) { return member.state == MemberState::ACTIVE; });
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, DoesNotFinalizeBatchBeforeAllDerivedNotifiesAreMaterialized)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("derived-finalize-fence", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    TopologyState activeBatch;
+    DS_ASSERT_OK(PrepareCompletedScaleOut(backend, *keys, repository, algorithm, activeBatch));
+    WaitPost casEntered;
+    WaitPost casRelease;
+    BlockCasAfter(backend, 2, casEntered, casRelease);
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.maxDerivedOperationsPerTick = 1;
+    options.materializeRestartFacts = true;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    const bool blocked = casEntered.WaitFor(RECOVERY_STOP_TIMEOUT.count() * 1'000);
+    EXPECT_TRUE(blocked);
+    if (!blocked) {
+        casRelease.Set();
+        DS_EXPECT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+        return;
+    }
+    TopologyState observed;
+    int64_t revision = 0;
+    DS_EXPECT_OK(repository.ReadTopology(100, observed, revision));
+    EXPECT_EQ(observed.version, activeBatch.version);
+    EXPECT_TRUE(observed.activeBatch.has_value());
+    casRelease.Set();
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, DerivedSlicesReuseOnePlanningGeneration)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("derived-generation", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm setupAlgorithm;
+    TopologyState current;
+    current.version = 1;
+    current.clusterHasInit = true;
+    current.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    std::vector<MemberIdentity> joining = {
+        { std::string(16, 'b'), "127.0.0.1:2" },
+        { std::string(16, 'c'), "127.0.0.1:3" },
+        { std::string(16, 'd'), "127.0.0.1:4" },
+    };
+    TopologyPlan plan;
+    DS_ASSERT_OK(setupAlgorithm.PlanScaleOut({ current, joining, 4 }, plan));
+    plan.next.version = 2;
+    plan.next.activeBatch = ActiveBatch{ TopologyChangeType::SCALE_OUT, 2 };
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(plan.next, 1, std::string(64, 'a'), snapshot));
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    DS_ASSERT_OK(materializer.BuildExpected(*snapshot, plan, expected));
+    ASSERT_GT(expected.tasks.size() + expected.notifyRecipients.size(), 2);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), plan.next);
+    for (const auto &member : plan.next.members) {
+        PutMembership(backend, *keys, member.identity.address, MemberLifecycleState::READY);
+    }
+
+    CountingPlanningAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::seconds(5);
+    options.maxDerivedOperationsPerTick = 1;
+    options.maxProgressReadsPerTick = 1;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    EXPECT_TRUE(WaitForDerivedState(
+        repository, expected, std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
+    EXPECT_EQ(algorithm.ScaleOutCalls(), 1);
+}
+
 TEST(TopologyControllerTest, BootstrapsAllReadyInitialMembers)
 {
     FakeCoordinationBackend backend;
@@ -161,6 +452,8 @@ TEST(TopologyControllerTest, BootstrapsAllReadyInitialMembers)
     CoordinationEventDispatcher dispatcher(32);
     TopologyControllerOptions options;
     options.reconcileTick = std::chrono::milliseconds(1);
+    options.scaleOutCollectWindow = std::chrono::milliseconds(0);
+    options.scaleInCollectWindow = std::chrono::milliseconds(0);
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
     TopologyState latest;
     latest.version = 1;
@@ -175,6 +468,118 @@ TEST(TopologyControllerTest, BootstrapsAllReadyInitialMembers)
                               [](const auto &member) { return member.state == MemberState::ACTIVE; });
     }));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, BootstrapCollectWindowCoalescesStaggeredReadyMembers)
+{
+    constexpr size_t bootstrapMemberCount = 500;
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("bootstrap-collect", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    const auto baseTime = std::chrono::steady_clock::now();
+    std::atomic<int64_t> elapsedMs{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.scaleOutCollectWindow = LARGE_COLLECT_WINDOW;
+    options.now = [&] { return baseTime + std::chrono::milliseconds(elapsedMs.load()); };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    TopologyState latest;
+    latest.version = 1;
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    DS_ASSERT_OK(controller.Start());
+
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+    backend.EmitEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    ASSERT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT,
+                                [](const auto &state) {
+                                    return !state.clusterHasInit && !state.activeBatch.has_value()
+                                           && state.members.size() == 1
+                                           && state.members.front().state == MemberState::INITIAL;
+                                }));
+    for (size_t index = 1; index < bootstrapMemberCount; ++index) {
+        PutMembership(backend, *keys, "127.0.0.1:" + std::to_string(index + 1),
+                      MemberLifecycleState::READY);
+    }
+    backend.EmitEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    ASSERT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT,
+                                [bootstrapMemberCount](const auto &state) {
+                                    return !state.clusterHasInit && state.members.size() == bootstrapMemberCount
+                                           && std::all_of(
+                                               state.members.begin(), state.members.end(),
+                                               [](const auto &member) { return member.state == MemberState::INITIAL; });
+                                }));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    elapsedMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(LARGE_COLLECT_WINDOW).count());
+    backend.EmitEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT,
+                                [bootstrapMemberCount](const auto &state) {
+                                    return state.clusterHasInit && !state.activeBatch.has_value()
+                                           && state.members.size() == bootstrapMemberCount
+                                           && std::all_of(
+                                               state.members.begin(), state.members.end(),
+                                               [](const auto &member) { return member.state == MemberState::ACTIVE; });
+                                }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, ScaleOutCollectWindowCoalescesStaggeredReadyMembers)
+{
+    constexpr size_t joiningCount = 500;
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("scale-out-collect", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    const auto baseTime = std::chrono::steady_clock::now();
+    std::atomic<int64_t> elapsedMs{ 0 };
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::seconds(5);
+    options.scaleOutCollectWindow = std::chrono::milliseconds(MAX_SCALE_OUT_COLLECT_WINDOW_MS);
+    options.now = [&] { return baseTime + std::chrono::milliseconds(elapsedMs.load()); };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+    DS_ASSERT_OK(controller.Start());
+
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    backend.EmitEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    ASSERT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT,
+                                [](const auto &state) {
+                                    return !state.activeBatch.has_value() && state.members.size() == 2;
+                                }));
+    for (size_t index = 2; index <= joiningCount; ++index) {
+        PutMembership(backend, *keys, "127.0.0.1:" + std::to_string(index + 1),
+                      MemberLifecycleState::READY);
+    }
+    backend.EmitEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    ASSERT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT,
+                                [joiningCount](const auto &state) {
+                                    return !state.activeBatch.has_value()
+                                           && state.members.size() == joiningCount + 1;
+                                }));
+
+    elapsedMs.store(MAX_SCALE_OUT_COLLECT_WINDOW_MS);
+    backend.EmitEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT,
+                                [joiningCount](const auto &state) {
+                                    return state.activeBatch.has_value()
+                                           && state.activeBatch->type == TopologyChangeType::SCALE_OUT
+                                           && std::count_if(state.members.begin(), state.members.end(),
+                                                            [](const auto &member) {
+                                                                return member.state == MemberState::JOINING;
+                                                            })
+                                                  == static_cast<std::ptrdiff_t>(joiningCount);
+                                }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT));
 }
 
 TEST(TopologyControllerTest, RecoveryNotReadyDoesNotBackoffTopologyBootstrap)
@@ -227,34 +632,38 @@ TEST(TopologyControllerTest, ConvertsExitingMembershipToOneScaleInBatch)
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
-TEST(TopologyControllerTest, StartsReadyInitialScaleOutBeforePendingScaleIn)
+TEST(TopologyControllerTest, StartsPendingScaleInBeforeReadyInitialScaleOut)
 {
     FakeCoordinationBackend backend;
     std::unique_ptr<TopologyKeyHelper> keys;
-    DS_ASSERT_OK(TopologyKeyHelper::Create("scale-out-before-scale-in", keys));
+    DS_ASSERT_OK(TopologyKeyHelper::Create("scale-in-before-scale-out", keys));
     TopologyRepository repository(backend, *keys);
     HashAlgorithm algorithm;
     CoordinationEventDispatcher dispatcher(32);
     TopologyControllerOptions options;
     options.reconcileTick = std::chrono::milliseconds(1);
+    options.scaleOutCollectWindow = std::chrono::milliseconds(0);
+    options.scaleInCollectWindow = std::chrono::milliseconds(0);
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
     TopologyState latest;
     latest.version = 1;
     latest.clusterHasInit = true;
     latest.members = {
         Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::PRE_LEAVING, { 1 } },
-        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::INITIAL, {} },
+        Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } },
+        Member{ { std::string(16, 'c'), "127.0.0.1:3" }, MemberState::INITIAL, {} },
     };
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
 
     DS_ASSERT_OK(controller.Start());
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
-        return state.activeBatch.has_value() && state.activeBatch->type == TopologyChangeType::SCALE_OUT
+        return state.activeBatch.has_value() && state.activeBatch->type == TopologyChangeType::SCALE_IN
                && std::any_of(state.members.begin(), state.members.end(), [](const auto &member) {
-                      return member.identity.address == "127.0.0.1:2" && member.state == MemberState::JOINING;
+                      return member.identity.address == "127.0.0.1:1" && member.state == MemberState::LEAVING;
                   });
     }));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
@@ -320,6 +729,36 @@ TopologyState MakeThreeActiveMembersScaleInInitialState()
     return latest;
 }
 
+MemberIdentity MakeLargeIdentity(uint32_t index)
+{
+    std::string identityBytes(16, '\0');
+    std::copy_n(reinterpret_cast<const char *>(&index), sizeof(index), identityBytes.begin());
+    return { std::move(identityBytes), "127.0.0.1:" + std::to_string(LARGE_PORT_BASE + index) };
+}
+
+TopologyState MakeLargeActiveTopology(size_t memberCount)
+{
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members.reserve(memberCount);
+    for (uint32_t index = 0; index < memberCount; ++index) {
+        Member member{ MakeLargeIdentity(index), MemberState::ACTIVE, {} };
+        for (uint32_t offset = 0; offset < LARGE_TOKENS_PER_MEMBER; ++offset) {
+            member.tokens.push_back(index * LARGE_TOKENS_PER_MEMBER + offset);
+        }
+        latest.members.emplace_back(std::move(member));
+    }
+    return latest;
+}
+
+void PutLargeReadyMemberships(FakeCoordinationBackend &backend, const TopologyKeyHelper &keys, size_t memberCount)
+{
+    for (uint32_t index = 0; index < memberCount; ++index) {
+        PutMembership(backend, keys, MakeLargeIdentity(index).address, MemberLifecycleState::READY);
+    }
+}
+
 // Wait until topology reports no active batch or the deadline elapses.
 bool WaitForNoActiveBatch(TopologyRepository &repository, std::chrono::steady_clock::time_point deadline)
 {
@@ -339,6 +778,31 @@ bool ActiveScaleInBatchHasLeavingCount(TopologyRepository &repository,
     });
 }
 
+bool ActiveScaleOutBatchHasJoiningCount(TopologyRepository &repository,
+                                        std::chrono::steady_clock::time_point deadline, size_t joiningCount)
+{
+    return WaitForTopology(repository, deadline, [joiningCount](const auto &state) {
+        if (!state.activeBatch.has_value() || state.activeBatch->type != TopologyChangeType::SCALE_OUT) {
+            return false;
+        }
+        return static_cast<size_t>(std::count_if(state.members.begin(), state.members.end(),
+                                                  [](const auto &member) {
+                                                      return member.state == MemberState::JOINING;
+                                                  }))
+               == joiningCount;
+    });
+}
+
+bool WaitForFinalActiveMemberCount(TopologyRepository &repository,
+                                   std::chrono::steady_clock::time_point deadline, size_t memberCount)
+{
+    return WaitForTopology(repository, deadline, [memberCount](const auto &state) {
+        return !state.activeBatch.has_value() && state.members.size() == memberCount
+               && std::all_of(state.members.begin(), state.members.end(),
+                              [](const auto &member) { return member.state == MemberState::ACTIVE; });
+    });
+}
+
 // 1. Default window: batch is not started before the collect deadline elapses.
 TEST(TopologyControllerTest, ScaleInCollectWindowHoldsBatchBeforeDeadline)
 {
@@ -351,6 +815,7 @@ TEST(TopologyControllerTest, ScaleInCollectWindowHoldsBatchBeforeDeadline)
     TopologyControllerOptions options;
     options.reconcileTick = std::chrono::milliseconds(10);
     options.scaleInCollectWindow = std::chrono::milliseconds(500);
+    options.scaleOutCollectWindow = std::chrono::milliseconds(0);
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTwoActiveMembersScaleInInitialState());
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
@@ -371,7 +836,7 @@ TEST(TopologyControllerTest, ScaleInCollectWindowStartsSingleBatchAfterDeadline)
     HashAlgorithm algorithm;
     CoordinationEventDispatcher dispatcher(32);
     TopologyControllerOptions options;
-    options.reconcileTick = std::chrono::milliseconds(10);
+    options.reconcileTick = std::chrono::seconds(5);
     options.scaleInCollectWindow = std::chrono::milliseconds(50);
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeTwoActiveMembersScaleInInitialState());
@@ -379,7 +844,17 @@ TEST(TopologyControllerTest, ScaleInCollectWindowStartsSingleBatchAfterDeadline)
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
     DS_ASSERT_OK(controller.Start());
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, deadline, 1));
+    ASSERT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, deadline, 1));
+    TopologyState active;
+    int64_t revision = 0;
+    DS_ASSERT_OK(repository.ReadTopology(100, active, revision));
+    std::shared_ptr<const TopologySnapshot> snapshot;
+    DS_ASSERT_OK(TopologySnapshot::Create(active, revision, std::string(64, 'a'), snapshot));
+    TopologyTaskMaterializer materializer;
+    ExpectedDerivedState expected;
+    DS_ASSERT_OK(materializer.RebuildExpected(*snapshot, algorithm, expected));
+    EXPECT_TRUE(WaitForDerivedState(
+        repository, expected, std::chrono::steady_clock::now() + RECOVERY_STOP_TIMEOUT));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
@@ -401,8 +876,8 @@ TEST(TopologyControllerTest, ScaleInCollectWindowDeadlinePreemptsReconcileTick)
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
     // The old fixed-tick loop needs about 1s after the event; deadline-aware waiting finishes in about 550ms.
-    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, std::chrono::steady_clock::now() + std::chrono::milliseconds(750),
-                                                  1));
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(
+        repository, std::chrono::steady_clock::now() + std::chrono::milliseconds(750), 1));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
@@ -419,7 +894,8 @@ TEST(TopologyControllerTest, ScaleInCollectWindowCoalescesTwoMembersInSameEpoch)
     options.reconcileTick = std::chrono::milliseconds(10);
     options.scaleInCollectWindow = std::chrono::milliseconds(200);
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
-    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeThreeActiveMembersScaleInInitialState());
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(),
+                   MakeThreeActiveMembersScaleInInitialState());
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
     PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
@@ -430,6 +906,82 @@ TEST(TopologyControllerTest, ScaleInCollectWindowCoalescesTwoMembersInSameEpoch)
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, deadline, 2));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ScaleOutCollectWindowCoalescesFiveHundredMembersInSameEpoch)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-scale-out-500", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    TopologyControllerOptions options;
+    options.scaleOutCollectWindow = LARGE_COLLECT_WINDOW;
+    options.scaleInCollectWindow = std::chrono::milliseconds(0);
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(),
+                   MakeLargeActiveTopology(LARGE_STEADY_MEMBER_COUNT));
+    PutLargeReadyMemberships(backend, *keys, LARGE_EXPANDED_MEMBER_COUNT);
+    const auto startedAt = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(ActiveScaleOutBatchHasJoiningCount(
+        repository, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT, LARGE_BATCH_MEMBER_COUNT));
+    ExpectedDerivedState expected;
+    DS_ASSERT_OK(RebuildExpectedFromRepository(repository, algorithm, expected));
+    ASSERT_EQ(expected.tasks.size(), LARGE_BATCH_MEMBER_COUNT);
+    ASSERT_TRUE(WaitForDerivedState(
+        repository, expected, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT));
+    DS_ASSERT_OK(FinishExpectedMigrateTasks(repository, expected));
+    backend.EmitEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    EXPECT_TRUE(WaitForFinalActiveMemberCount(
+        repository, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT, LARGE_EXPANDED_MEMBER_COUNT));
+    const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+    std::cout << "CLUSTER_PERF scope=controller_scale_out joining=" << LARGE_BATCH_MEMBER_COUNT
+              << " elapsed_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << std::endl;
+    EXPECT_LT(elapsed, LARGE_CONTROL_BUDGET);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT));
+}
+
+TEST(TopologyControllerTest, ScaleInCollectWindowCoalescesFiveHundredMembersInSameEpoch)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("collect-coalesce-500", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(RECOVERY_DISPATCHER_CAPACITY);
+    TopologyControllerOptions options;
+    options.scaleInCollectWindow = LARGE_COLLECT_WINDOW;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+    const TopologyState latest = MakeLargeActiveTopology(LARGE_EXPANDED_MEMBER_COUNT);
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    for (size_t index = 0; index < latest.members.size(); ++index) {
+        const auto state =
+            index < LARGE_BATCH_MEMBER_COUNT ? MemberLifecycleState::EXITING : MemberLifecycleState::READY;
+        PutMembership(backend, *keys, latest.members[index].identity.address, state);
+    }
+    const auto startedAt = std::chrono::steady_clock::now();
+    DS_ASSERT_OK(controller.Start());
+    ASSERT_TRUE(ActiveScaleInBatchHasLeavingCount(
+        repository, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT, LARGE_BATCH_MEMBER_COUNT));
+    ExpectedDerivedState expected;
+    DS_ASSERT_OK(RebuildExpectedFromRepository(repository, algorithm, expected));
+    ASSERT_EQ(expected.tasks.size(), LARGE_BATCH_MEMBER_COUNT);
+    ASSERT_EQ(expected.notifiesByAddress.size(), LARGE_BATCH_MEMBER_COUNT);
+    ASSERT_TRUE(WaitForDerivedState(
+        repository, expected, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT));
+    DS_ASSERT_OK(FinishExpectedMigrateTasks(repository, expected));
+    backend.EmitEvent({ CoordinationEventType::RESET, "", "", 0, 0 });
+    EXPECT_TRUE(WaitForFinalActiveMemberCount(
+        repository, std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT, LARGE_STEADY_MEMBER_COUNT));
+    const auto elapsed = std::chrono::steady_clock::now() - startedAt;
+    std::cout << "CLUSTER_PERF scope=controller_scale_in leaving=" << LARGE_BATCH_MEMBER_COUNT
+              << " elapsed_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+              << std::endl;
+    EXPECT_LT(elapsed, LARGE_CONTROL_BUDGET);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + LARGE_BATCH_WAIT_TIMEOUT));
 }
 
 // 4. A member exiting only after the batch is committed does not join the running epoch.
@@ -445,14 +997,15 @@ TEST(TopologyControllerTest, ScaleInCollectWindowDoesNotAdmitLateMember)
     options.reconcileTick = std::chrono::milliseconds(10);
     options.scaleInCollectWindow = std::chrono::milliseconds(50);
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
-    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeThreeActiveMembersScaleInInitialState());
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(),
+                   MakeThreeActiveMembersScaleInInitialState());
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
     PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
     DS_ASSERT_OK(controller.Start());
     // Wait for the first member's batch to commit, then exit the second member.
-    ASSERT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, std::chrono::steady_clock::now() + std::chrono::seconds(2),
-                                                 1));
+    ASSERT_TRUE(ActiveScaleInBatchHasLeavingCount(
+        repository, std::chrono::steady_clock::now() + std::chrono::seconds(2), 1));
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::EXITING);
     // The second member becomes PRE_LEAVING but stays out of the already-committed batch.
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
@@ -482,13 +1035,13 @@ TEST(TopologyControllerTest, ScaleInCollectWindowZeroDisablesCoalescing)
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
     DS_ASSERT_OK(controller.Start());
-    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, std::chrono::steady_clock::now() + std::chrono::seconds(1),
-                                                  1));
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(
+        repository, std::chrono::steady_clock::now() + std::chrono::seconds(1), 1));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
-// 6. A scale-out candidate during the window clears the collect state and keeps scale-out priority.
-TEST(TopologyControllerTest, ScaleInCollectWindowClearedByScaleOutCandidate)
+// 6. A pending scale-out candidate does not preempt the higher-priority scale-in batch.
+TEST(TopologyControllerTest, ScaleInCollectWindowRetainsPriorityOverScaleOutCandidate)
 {
     FakeCoordinationBackend backend;
     std::unique_ptr<TopologyKeyHelper> keys;
@@ -499,21 +1052,19 @@ TEST(TopologyControllerTest, ScaleInCollectWindowClearedByScaleOutCandidate)
     TopologyControllerOptions options;
     options.reconcileTick = std::chrono::milliseconds(10);
     options.scaleInCollectWindow = std::chrono::milliseconds(500);
+    options.scaleOutCollectWindow = std::chrono::milliseconds(0);
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
-    TopologyState latest = MakeTwoActiveMembersScaleInInitialState();
-    // Second member is INITIAL (joining) instead of ACTIVE; its READY membership makes it a scale-out candidate.
-    latest.members[1].state = MemberState::INITIAL;
-    latest.members[1].tokens = {};
+    TopologyState latest = MakeThreeActiveMembersScaleInInitialState();
+    // Third member is INITIAL; its READY membership makes it a simultaneous scale-out candidate.
+    latest.members[2].state = MemberState::INITIAL;
+    latest.members[2].tokens = {};
     backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
     DS_ASSERT_OK(controller.Start());
-    // Scale-out must start immediately despite the long collect window.
-    EXPECT_TRUE(WaitForTopology(repository, std::chrono::steady_clock::now() + std::chrono::seconds(1),
-                                [](const auto &state) {
-                                    return state.activeBatch.has_value()
-                                           && state.activeBatch->type == TopologyChangeType::SCALE_OUT;
-                                }));
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(
+        repository, std::chrono::steady_clock::now() + std::chrono::seconds(1), 1));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
@@ -531,14 +1082,15 @@ TEST(TopologyControllerTest, ScaleInCollectWindowRespectsMaxMembersPerBatch)
     options.scaleInCollectWindow = std::chrono::milliseconds(50);
     options.maxMembersPerBatch = 1;
     TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
-    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), MakeThreeActiveMembersScaleInInitialState());
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(),
+                   MakeThreeActiveMembersScaleInInitialState());
     PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::EXITING);
     PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::EXITING);
     PutMembership(backend, *keys, "127.0.0.1:3", MemberLifecycleState::READY);
     DS_ASSERT_OK(controller.Start());
     // Both exit within the window, but only one is admitted to this batch.
-    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(repository, std::chrono::steady_clock::now() + std::chrono::seconds(2),
-                                                  1));
+    EXPECT_TRUE(ActiveScaleInBatchHasLeavingCount(
+        repository, std::chrono::steady_clock::now() + std::chrono::seconds(2), 1));
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 
@@ -924,6 +1476,90 @@ TEST(TopologyControllerTest, UnreachableMissingMemberUsesExistingFailurePlan)
         return state.activeBatch.has_value() && state.activeBatch->type == TopologyChangeType::FAILURE;
     }));
     EXPECT_EQ(probeCalls.load(), 1);
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, ExternalEventSourceConfirmsMultipleFailuresWithoutWorkerProbe)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("external-multiple-failure", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } },
+                       Member{ { std::string(16, 'c'), "127.0.0.1:3" }, MemberState::ACTIVE, { 3 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, latest.members.front().identity.address, MemberLifecycleState::READY);
+
+    TopologyControllerOptions options;
+    options.nodeDeadTimeout = std::chrono::seconds(1);
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    const auto start = std::chrono::steady_clock::time_point(std::chrono::seconds(10));
+    std::atomic<size_t> clockCalls{ 0 };
+    options.now = [&] {
+        return start + (clockCalls.fetch_add(1) == 0 ? std::chrono::seconds(0) : std::chrono::seconds(2));
+    };
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    const auto deadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
+    EXPECT_TRUE(WaitForTopology(repository, deadline, [](const auto &state) {
+        if (!state.activeBatch.has_value() || state.activeBatch->type != TopologyChangeType::FAILURE) {
+            return false;
+        }
+        const auto failed = std::count_if(state.members.begin(), state.members.end(), [](const auto &member) {
+            return member.state == MemberState::FAILED;
+        });
+        return failed == 2;
+    }));
+    DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+}
+
+TEST(TopologyControllerTest, CentralizedControllerMaterializesAndClearsRestartFacts)
+{
+    FakeCoordinationBackend backend;
+    std::unique_ptr<TopologyKeyHelper> keys;
+    DS_ASSERT_OK(TopologyKeyHelper::Create("centralized-restart", keys));
+    TopologyRepository repository(backend, *keys);
+    HashAlgorithm algorithm;
+    CoordinationEventDispatcher dispatcher(32);
+    TopologyState latest;
+    latest.version = 1;
+    latest.clusterHasInit = true;
+    latest.members = { Member{ { std::string(16, 'a'), "127.0.0.1:1" }, MemberState::ACTIVE, { 1 } },
+                       Member{ { std::string(16, 'b'), "127.0.0.1:2" }, MemberState::ACTIVE, { 2 } } };
+    backend.PutRaw(keys->TopologyTable(), TopologyKeyHelper::TopologyKey(), latest);
+    PutMembership(backend, *keys, "127.0.0.1:1", MemberLifecycleState::READY);
+    backend.PutBytes(keys->MembershipTable(), "127.0.0.1:2",
+                     EncodeMembership(MemberLifecycleState::RESTARTING, 100));
+    TopologyControllerOptions options;
+    options.reconcileTick = std::chrono::milliseconds(1);
+    options.eventSourceMode = TopologyEventSourceMode::EXTERNAL;
+    options.materializeRestartFacts = true;
+    TopologyController controller(backend, repository, *keys, algorithm, dispatcher, options);
+
+    DS_ASSERT_OK(controller.Start());
+    const auto deadline = std::chrono::steady_clock::now() + FAILURE_PROBE_WAIT_TIMEOUT;
+    TopologyTaskNotify observed;
+    while (std::chrono::steady_clock::now() < deadline
+           && (repository.ReadNotify("127.0.0.1:1", observed).IsError()
+               || observed.restartTimestampsByAddress.count("127.0.0.1:2") == 0)) {
+        std::this_thread::yield();
+    }
+    ASSERT_EQ(observed.restartTimestampsByAddress.at("127.0.0.1:2"), 100);
+
+    PutMembership(backend, *keys, "127.0.0.1:2", MemberLifecycleState::READY);
+    while (std::chrono::steady_clock::now() < deadline
+           && repository.ReadNotify("127.0.0.1:1", observed).GetCode() != K_NOT_FOUND) {
+        std::this_thread::yield();
+    }
+    EXPECT_EQ(repository.ReadNotify("127.0.0.1:1", observed).GetCode(), K_NOT_FOUND);
     DS_ASSERT_OK(controller.Stop(std::chrono::steady_clock::now() + std::chrono::seconds(1)));
 }
 

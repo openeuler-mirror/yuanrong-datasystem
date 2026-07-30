@@ -64,8 +64,9 @@ message ChangeBatchPb {
 }
 
 message TaskNotifyPb {
-  TypePb type = 1;
+  ChangeBatchPb active_batch = 1;
   repeated string task_ids = 2;
+  map<string, int64> restart_timestamps_by_address = 3;
 }
 
 message ClusterTopologyPb {

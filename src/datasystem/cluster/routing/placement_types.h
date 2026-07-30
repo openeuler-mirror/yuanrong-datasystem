@@ -41,6 +41,7 @@ struct RedirectDecision {
     std::string committedOwnerAddress;
     // Empty when the committed owner is also the redirect target, avoiding a steady-state address copy.
     std::string redirectTargetAddress;
+    uint64_t batchEpoch{ 0 };
 
     /**
      * @brief Return the explicit handoff target or the committed owner when no override exists.

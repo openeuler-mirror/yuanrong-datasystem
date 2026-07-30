@@ -15,7 +15,7 @@
  */
 
 /**
- * Description: Watch registry with grouped key/range matching.
+ * Description: Watch registry with exact-key indexing and grouped range matching.
  */
 #include "datasystem/common/coordinator/watch_registry.h"
 
@@ -33,10 +33,13 @@ bool IsSameRange(const WatchRange &watchRange, const std::string &key, const std
 
 bool IsKeyInRange(const std::string &key, const WatchRange &watchRange)
 {
-    if (watchRange.rangeEnd.empty()) {
-        return watchRange.key == key;
-    }
     return watchRange.key <= key && key < watchRange.rangeEnd;
+}
+
+bool IsInTableScope(const std::string &key, const std::string &table)
+{
+    return key == table || (key.size() > table.size() && key.compare(0, table.size(), table) == 0
+                            && key[table.size()] == '/');
 }
 }  // namespace
 
@@ -58,9 +61,9 @@ Status WatchRegistry::Register(const std::string &key, const std::string &rangeE
             auto watcher = watchers_.find(registered->second);
             CHECK_FAIL_RETURN_STATUS(watcher != watchers_.end() && watcher->second->watcherAddr == watcherAddr,
                                      K_INVALID, "watch registration ID belongs to another watcher");
-            const bool sameRange = std::any_of(watchRanges_.begin(), watchRanges_.end(), [&](const auto &range) {
-                return IsSameRange(range, key, rangeEnd) && range.watchIds.count(registered->second) != 0;
-            });
+            const auto scope = watchScopesById_.find(registered->second);
+            const bool sameRange = scope != watchScopesById_.end()
+                                   && scope->second.first == key && scope->second.second == rangeEnd;
             CHECK_FAIL_RETURN_STATUS(sameRange, K_INVALID,
                                      "watch registration ID belongs to another key range");
             watchId = registered->second;
@@ -78,16 +81,22 @@ Status WatchRegistry::Register(const std::string &key, const std::string &rangeE
     if (!registrationId.empty()) {
         watchIdsByRegistrationId_[registrationId] = watchId;
     }
+    watchScopesById_[watchId] = { key, rangeEnd };
 
+    if (rangeEnd.empty()) {
+        exactWatchIdsByKey_[key].insert(watchId);
+        created = true;
+        return Status::OK();
+    }
     auto groupIt = std::find_if(
-        watchRanges_.begin(), watchRanges_.end(),
+        rangeWatches_.begin(), rangeWatches_.end(),
         [&key, &rangeEnd](const WatchRange &watchRange) { return IsSameRange(watchRange, key, rangeEnd); });
-    if (groupIt == watchRanges_.end()) {
+    if (groupIt == rangeWatches_.end()) {
         WatchRange watchRange;
         watchRange.key = key;
         watchRange.rangeEnd = rangeEnd;
         watchRange.watchIds.insert(watchId);
-        watchRanges_.push_back(std::move(watchRange));
+        rangeWatches_.push_back(std::move(watchRange));
     } else {
         groupIt->watchIds.insert(watchId);
     }
@@ -111,15 +120,27 @@ Status WatchRegistry::Cancel(int64_t watchId, const std::string &watcherAddr)
         watchIdsByRegistrationId_.erase(it->second->registrationId);
     }
 
-    for (auto iter = watchRanges_.begin(); iter != watchRanges_.end();) {
-        iter->watchIds.erase(watchId);
-        if (iter->watchIds.empty()) {
-            iter = watchRanges_.erase(iter);
-        } else {
-            ++iter;
+    auto scope = watchScopesById_.find(watchId);
+    if (scope != watchScopesById_.end() && scope->second.second.empty()) {
+        auto exact = exactWatchIdsByKey_.find(scope->second.first);
+        if (exact != exactWatchIdsByKey_.end()) {
+            exact->second.erase(watchId);
+            if (exact->second.empty()) {
+                exactWatchIdsByKey_.erase(exact);
+            }
+        }
+    } else {
+        for (auto iter = rangeWatches_.begin(); iter != rangeWatches_.end();) {
+            iter->watchIds.erase(watchId);
+            if (iter->watchIds.empty()) {
+                iter = rangeWatches_.erase(iter);
+            } else {
+                ++iter;
+            }
         }
     }
 
+    watchScopesById_.erase(watchId);
     watchers_.erase(it);
     return Status::OK();
 }
@@ -127,7 +148,16 @@ Status WatchRegistry::Cancel(int64_t watchId, const std::string &watcherAddr)
 void WatchRegistry::MatchWatchers(const std::string &key, std::vector<std::shared_ptr<WatcherEntry>> &matched)
 {
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    for (const auto &watchRange : watchRanges_) {
+    auto exact = exactWatchIdsByKey_.find(key);
+    if (exact != exactWatchIdsByKey_.end()) {
+        for (auto watchId : exact->second) {
+            auto watcher = watchers_.find(watchId);
+            if (watcher != watchers_.end() && watcher->second->active) {
+                matched.push_back(watcher->second);
+            }
+        }
+    }
+    for (const auto &watchRange : rangeWatches_) {
         if (!IsKeyInRange(key, watchRange)) {
             continue;
         }
@@ -138,5 +168,16 @@ void WatchRegistry::MatchWatchers(const std::string &key, std::vector<std::share
             }
         }
     }
+}
+
+bool WatchRegistry::IsWatchInScopes(int64_t watchId, const std::vector<std::string> &tableScopes) const
+{
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    auto scope = watchScopesById_.find(watchId);
+    if (scope == watchScopesById_.end()) {
+        return false;
+    }
+    return std::any_of(tableScopes.begin(), tableScopes.end(),
+                       [&](const auto &table) { return IsInTableScope(scope->second.first, table); });
 }
 }  // namespace datasystem

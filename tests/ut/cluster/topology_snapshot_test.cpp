@@ -136,7 +136,7 @@ TEST(TopologySnapshotTest, FindsNextActiveMemberAcrossNonActiveBoundaryAndReject
     EXPECT_EQ(next, &sentinel);
 }
 
-TEST(TopologySnapshotTest, ValidatesExactScaleOutMigrationFenceAndVersionDirection)
+TEST(TopologySnapshotTest, ValidatesScaleOutMigrationFenceAcrossSameEpochVersionAdvance)
 {
     TopologyState state;
     state.version = 8;
@@ -152,6 +152,8 @@ TEST(TopologySnapshotTest, ValidatesExactScaleOutMigrationFenceAndVersionDirecti
     fence.topologyVersion = 9;
     EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_TRY_AGAIN);
     fence.topologyVersion = 7;
+    DS_ASSERT_OK(snapshot->ValidateMigrationFence(fence));
+    fence.topologyVersion = 0;
     EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
 }
 
@@ -197,7 +199,7 @@ TEST(TopologySnapshotTest, AcceptsScaleInFenceAndRejectsFailureBatch)
     fence.target = scaleIn.members[0].identity;
     EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
     fence.target = scaleIn.members[3].identity;
-    DS_ASSERT_OK(snapshot->ValidateMigrationFence(fence));
+    EXPECT_EQ(snapshot->ValidateMigrationFence(fence).GetCode(), K_INVALID);
 
     TopologyState failure;
     failure.version = 13;

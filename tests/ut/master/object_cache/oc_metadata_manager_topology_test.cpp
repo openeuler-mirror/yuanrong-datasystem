@@ -8,6 +8,7 @@
  */
 #include <atomic>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -30,6 +31,7 @@ namespace datasystem::master {
 namespace {
 constexpr char LOCAL_ADDRESS[] = "127.0.0.1:30001";
 constexpr char TARGET_ADDRESS[] = "127.0.0.1:30002";
+constexpr char SURVIVOR_ADDRESS[] = "127.0.0.1:30003";
 
 class OCMetadataManagerTopologyTest : public ut::CommonTest {
 public:
@@ -44,6 +46,8 @@ public:
 
     void TearDown() override
     {
+        (void)inject::Clear("master.rocksdb.put");
+        (void)inject::Clear("OCNotifyWorkerManager.CheckWorkerIsHealth.worker.unhealthy");
         rocksStore_.reset();
         FLAGS_rocksdb_write_mode = oldWriteMode_;
     }
@@ -93,6 +97,65 @@ TEST_F(OCMetadataManagerTopologyTest, TopologyOperationCanChangePrimaryWhileOrdi
     }
 }
 
+TEST_F(OCMetadataManagerTopologyTest, RestartBatchRemovesAllAffectedLocationsInOneOperation)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    const std::string objectKey = "restart_batch_locations";
+    InsertPrimaryWithCopy(manager, objectKey);
+    {
+        TbbMetaTable::accessor accessor;
+        auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+        std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+        ASSERT_TRUE(shard.table.find(accessor, objectKey));
+        accessor->second.locations[SURVIVOR_ADDRESS] = AckState::ACK;
+        accessor->second.meta.set_primary_address(SURVIVOR_ADDRESS);
+    }
+    const std::map<std::string, int64_t> restartFacts{
+        { LOCAL_ADDRESS, 100 },
+        { TARGET_ADDRESS, 200 },
+    };
+
+    DS_ASSERT_OK(manager.RemoveMetaByWorkers(restartFacts));
+
+    TbbMetaTable::const_accessor accessor;
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    ASSERT_TRUE(shard.table.find(accessor, objectKey));
+    EXPECT_EQ(accessor->second.locations.count(LOCAL_ADDRESS), 0U);
+    EXPECT_EQ(accessor->second.locations.count(TARGET_ADDRESS), 0U);
+    EXPECT_EQ(accessor->second.locations.count(SURVIVOR_ADDRESS), 1U);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, NestedMigrationPersistenceFailureIsReturnedToCaller)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    DS_ASSERT_OK(manager.objectStore_->Init());
+    manager.nestedRefManager_ = std::make_unique<OCNestedManager>(manager.objectStore_, false);
+    MetaForMigrationPb metadata;
+    metadata.set_object_key("nested-migration-persistence-failure");
+    metadata.set_nested_ref(1);
+    DS_ASSERT_OK(inject::Set("master.rocksdb.put", "1*return(K_RUNTIME_ERROR)"));
+
+    EXPECT_EQ(manager.SaveNestedMigrationMetadata(metadata).GetCode(), K_RUNTIME_ERROR);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, SynchronousRestartPushReturnsDeliveryFailure)
+{
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, nullptr, nullptr, false,
+                              HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    manager.globalRefTable_ = std::make_unique<object_cache::ObjectGlobalRefTable<ImmutableString>>();
+    manager.notifyWorkerManager_ =
+        std::make_unique<OCNotifyWorkerManager>(manager.objectStore_, true, akSkManager_, &manager);
+    DS_ASSERT_OK(inject::Set("OCNotifyWorkerManager.CheckWorkerIsHealth.worker.unhealthy",
+                             "return(K_WORKER_ABNORMAL)"));
+
+    EXPECT_EQ(manager.notifyWorkerManager_->PushMetaToWorker(TARGET_ADDRESS, 1, true).GetCode(),
+              K_WORKER_ABNORMAL);
+}
+
 TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailingWhenLocalNodeIsExiting)
 {
     cluster::TopologyState topology;
@@ -133,6 +196,42 @@ TEST_F(OCMetadataManagerTopologyTest, RedirectableRemoveMetaWaitsInsteadOfFailin
     EXPECT_TRUE(response.meta_is_moving());
     EXPECT_EQ(response.failed_ids_size(), 0);
     EXPECT_EQ(response.success_ids_size(), 0);
+}
+
+TEST_F(OCMetadataManagerTopologyTest, CreateMultiMetaDoesNotMutateSourceDuringScaleOutWait)
+{
+    cluster::TopologyState topology;
+    topology.version = 2;
+    topology.clusterHasInit = true;
+    topology.activeBatch = cluster::ActiveBatch{ cluster::TopologyChangeType::SCALE_OUT, 2 };
+    topology.members = {
+        cluster::Member{ { std::string(16, 'a'), LOCAL_ADDRESS }, cluster::MemberState::ACTIVE, { 0 } },
+        cluster::Member{ { std::string(16, 'b'), TARGET_ADDRESS }, cluster::MemberState::JOINING,
+                         { std::numeric_limits<uint32_t>::max() } },
+    };
+    std::shared_ptr<const cluster::TopologySnapshot> snapshot;
+    DS_ASSERT_OK(cluster::TopologySnapshot::Create(topology, 2, std::string(64, 'a'), snapshot));
+    cluster::TopologySnapshotState snapshots;
+    cluster::SnapshotUpdateOutcome outcome;
+    DS_ASSERT_OK(snapshots.Publish(snapshot, outcome));
+    cluster::HashAlgorithm algorithm;
+    cluster::PlacementFacade placement(snapshots, algorithm, LOCAL_ADDRESS);
+    OCMetadataManager manager(akSkManager_, rocksStore_.get(), nullptr, nullptr, LOCAL_ADDRESS, &placement, nullptr,
+                              false, HostPort(), LOCAL_ADDRESS, &localExiting_, "workerId");
+    const std::string objectKey = "scale_out_create_multi_wait";
+    CreateMultiMetaReqPb request;
+    request.set_address(LOCAL_ADDRESS);
+    request.set_redirect(true);
+    request.add_metas()->set_object_key(objectKey);
+    CreateMultiMetaRspPb response;
+
+    DS_ASSERT_OK(manager.CreateMultiMeta(request, response));
+
+    EXPECT_TRUE(response.meta_is_moving());
+    auto &shard = manager.metaShards_[manager.GetShardIndex(objectKey)];
+    TbbMetaTable::const_accessor accessor;
+    std::shared_lock<std::shared_timed_mutex> lock(shard.mutex);
+    EXPECT_FALSE(shard.table.find(accessor, objectKey));
 }
 
 TEST_F(OCMetadataManagerTopologyTest, AsyncDeleteAllCopyMetaDoesNotQueueRedirectedKeys)

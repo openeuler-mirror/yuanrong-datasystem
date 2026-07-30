@@ -19,6 +19,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <netdb.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
@@ -28,6 +29,12 @@
 
 #include <securec.h>
 
+#include "common.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/common/coordinator/coordinator_service_proxy.h"
+#include "datasystem/common/coordinator/key_value_entry.h"
+#include "datasystem/common/coordinator/static_coordinator_discovery.h"
+#include "datasystem/common/kvstore/etcd/etcd_store.h"
 #include "datasystem/common/util/file_util.h"
 #include "datasystem/common/util/strings_util.h"
 #include "datasystem/common/util/net_util.h"
@@ -45,6 +52,17 @@ namespace datasystem {
 namespace st {
 namespace {
 constexpr int PORT_LISTEN_POLL_INTERVAL_MS = 10;
+constexpr int TOPOLOGY_READER_RPC_STUB_CACHE_SIZE = 100;
+
+Status InitTopologyReaderRpcCache()
+{
+    static std::once_flag initialize;
+    static Status status;
+    std::call_once(initialize, [] {
+        status = RpcStubCacheMgr::Instance().Init(TOPOLOGY_READER_RPC_STUB_CACHE_SIZE);
+    });
+    return status;
+}
 
 Status TryConnectTcpPort(const HostPort &addr)
 {
@@ -473,6 +491,44 @@ std::string ExternalCluster::GetEtcdAddrs() const
     return etcdAddress;
 }
 
+Status ExternalCluster::ReadClusterTopology(ClusterTopologyPb &topology) const
+{
+    CHECK_FAIL_RETURN_STATUS(opts_.numEtcd == 0 || opts_.numCoordinators == 0, K_INVALID,
+                             "ETCD and Coordinator backends are mutually exclusive");
+    std::unique_ptr<cluster::TopologyKeyHelper> keys;
+    RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create(opts_.etcdPrefix, keys));
+    std::string bytes;
+    if (opts_.numCoordinators > 0) {
+        HostPort coordinatorAddress;
+        RETURN_IF_NOT_OK(GetCoordinatorAddr(0, coordinatorAddress));
+        RETURN_IF_NOT_OK(InitTopologyReaderRpcCache());
+        auto discovery = std::make_shared<StaticCoordinatorDiscovery>(coordinatorAddress.ToString());
+        std::unique_ptr<ICoordinatorServiceProxy> proxy;
+        if (FLAGS_use_brpc) {
+            proxy = std::make_unique<CoordinatorServiceProxyBrpcImpl>(std::move(discovery));
+        } else {
+            proxy = std::make_unique<CoordinatorServiceProxyZmqImpl>(std::move(discovery));
+        }
+        RETURN_IF_NOT_OK(proxy->Init());
+        std::vector<KeyValueEntry> entries;
+        int64_t revision = 0;
+        RETURN_IF_NOT_OK(proxy->Range(keys->TopologyTable() + "/", "", entries, revision,
+                                      DEFAULT_COORDINATOR_RPC_TIMEOUT_MS, nullptr));
+        CHECK_FAIL_RETURN_STATUS(entries.size() == 1, K_NOT_FOUND, "Expected one Coordinator topology value");
+        bytes = std::move(entries.front().value);
+    } else {
+        CHECK_FAIL_RETURN_STATUS(opts_.numEtcd > 0, K_NOT_READY, "No coordination backend is configured");
+        EtcdStore store(GetEtcdAddrs());
+        RETURN_IF_NOT_OK(store.Init());
+        RETURN_IF_NOT_OK(RegisterTopologyTables(store, opts_.etcdPrefix));
+        RETURN_IF_NOT_OK(store.Get(keys->TopologyTable(), cluster::TopologyKeyHelper::TopologyKey(), bytes));
+    }
+    ClusterTopologyPb candidate;
+    CHECK_FAIL_RETURN_STATUS(candidate.ParseFromString(bytes), K_RUNTIME_ERROR, "Failed to parse ClusterTopologyPb");
+    topology = std::move(candidate);
+    return Status::OK();
+}
+
 Status ExternalCluster::GetCoordinatorAddr(uint32_t idx, HostPort &addr) const
 {
     CHECK_FAIL_RETURN_STATUS(idx < coordinatorProcesses_.size(), StatusCode::K_INVALID, "Invalid idx.");
@@ -686,6 +742,8 @@ Status ExternalCluster::WaitEtcdReadyOrTimeout(int timeoutSecs)
 
 Status ExternalCluster::StartEtcdCluster()
 {
+    CHECK_FAIL_RETURN_STATUS(opts_.numEtcd == 0 || opts_.numCoordinators == 0, K_INVALID,
+                             "ETCD and Coordinator backends are mutually exclusive");
     RETURN_OK_IF_TRUE(opts_.numEtcd == 0);
 
     CHECK_FAIL_RETURN_STATUS(opts_.numEtcd <= opts_.etcdIpAddrs.size(), StatusCode::K_RUNTIME_ERROR,

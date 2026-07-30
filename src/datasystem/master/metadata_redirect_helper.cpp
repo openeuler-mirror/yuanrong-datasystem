@@ -47,10 +47,9 @@ Status MetadataRedirectHelper::EvaluateMetadataRedirect(std::string_view key, Me
     RETURN_IF_NOT_OK(placement->EvaluateRedirect(key, route));
     built.redirect = route.action == cluster::RedirectAction::REDIRECT;
     built.moving = route.action == cluster::RedirectAction::WAIT;
-    if (!built.moving) {
-        built.targetAddress = route.GetRedirectTargetAddress();
-    }
+    built.targetAddress = route.GetRedirectTargetAddress();
     built.topologyVersion = route.topologyVersion;
+    built.batchEpoch = route.batchEpoch;
     decision = std::move(built);
     return Status::OK();
 }
@@ -77,9 +76,8 @@ Status MetadataRedirectHelper::EvaluateMetadataRedirectBatch(
             item.redirect = route.action == cluster::RedirectAction::REDIRECT;
             item.moving = route.action == cluster::RedirectAction::WAIT;
             item.topologyVersion = route.topologyVersion;
-            if (!item.moving) {
-                item.targetAddress = route.GetRedirectTargetAddress();
-            }
+            item.batchEpoch = route.batchEpoch;
+            item.targetAddress = route.GetRedirectTargetAddress();
             built.emplace_back(std::move(item));
         }
     }
@@ -89,7 +87,19 @@ Status MetadataRedirectHelper::EvaluateMetadataRedirectBatch(
 
 Status MetadataRedirectHelper::ApplyMetadataAvailability(const std::string &id, MetaRedirectDecision &decision)
 {
-    if (decision.moving || !MetaIsFound(id)) {
+    if (decision.moving) {
+        const auto *placement = placement_.load(std::memory_order_acquire);
+        CHECK_FAIL_RETURN_STATUS(placement != nullptr, K_NOT_READY, "Master metadata placement is not available");
+        if (!placement->IsScaleOutHandoffComplete(id, decision.batchEpoch)) {
+            return Status::OK();
+        }
+        CHECK_FAIL_RETURN_STATUS(!decision.targetAddress.empty(), K_RUNTIME_ERROR,
+                                 "ScaleOut metadata handoff target is empty");
+        decision.redirect = true;
+        decision.moving = false;
+        return Status::OK();
+    }
+    if (!MetaIsFound(id)) {
         return Status::OK();
     }
     decision.redirect = ItemIsMigrating(id);

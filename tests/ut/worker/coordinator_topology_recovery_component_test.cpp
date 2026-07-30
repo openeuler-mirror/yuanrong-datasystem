@@ -142,7 +142,7 @@ public:
     }
 
     Status Put(const std::string &, const std::string &, int64_t, int64_t, int64_t &, int64_t &, int32_t,
-               std::string *, const std::string &) override
+               std::string *, const std::string &, int64_t) override
     {
         return Unused();
     }
@@ -153,7 +153,7 @@ public:
         return Unused();
     }
 
-    Status DeleteRange(const std::string &, const std::string &, int64_t &, int64_t &, int32_t) override
+    Status DeleteRange(const std::string &, const std::string &, int64_t &, int64_t &, int32_t, int64_t) override
     {
         return Unused();
     }
@@ -169,7 +169,8 @@ public:
         return Unused();
     }
 
-    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *) override
+    Status KeepAlive(const std::string &, int64_t &, int64_t &, int32_t, std::string *, const std::string &,
+                     int64_t) override
     {
         return Unused();
     }

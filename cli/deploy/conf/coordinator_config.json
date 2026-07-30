@@ -8,8 +8,12 @@
     "description": "Address of coordinator in 'host:port' format (e.g., \"127.0.0.1:31511\"). The value cannot be empty."
   },
   "coordinator_rpc_stub_cache_size": {
-    "value": "2048",
+    "value": "4096",
     "description": "Maximum coordinator RPC stub cache size."
+  },
+  "coordinator_topology_max_active_clusters": {
+    "value": "8",
+    "description": "Maximum active topology clusters in [2, 32]. Restart Coordinator after changing it."
   },
   "watch_event_dispatch_thread": {
     "value": "4",

@@ -161,6 +161,34 @@ void WatchDispatcher::RemoveChannelsByWatcher(const std::string &watcherAddr)
     }
 }
 
+void WatchDispatcher::RemoveChannelsByWatcherInScopes(const std::string &watcherAddr,
+                                                      const std::vector<std::string> &tableScopes)
+{
+    std::vector<int64_t> watchIds;
+    {
+        std::shared_lock<std::shared_mutex> lock(channelsMutex_);
+        auto reverseIt = watchIdsByWatcher_.find(watcherAddr);
+        if (reverseIt == watchIdsByWatcher_.end()) {
+            return;
+        }
+        for (int64_t watchId : reverseIt->second) {
+            if (watchRegistry_ != nullptr && watchRegistry_->IsWatchInScopes(watchId, tableScopes)) {
+                watchIds.push_back(watchId);
+            }
+        }
+    }
+    for (int64_t watchId : watchIds) {
+        RemoveChannel(watchId);
+        if (watchRegistry_ != nullptr) {
+            const auto status = watchRegistry_->Cancel(watchId, watcherAddr);
+            if (status.IsError() && status.GetCode() != StatusCode::K_NOT_FOUND) {
+                LOG(WARNING) << "CLUSTER_WATCH_CANCEL_FAILED watchId=" << watchId
+                             << ", watcherAddr=" << watcherAddr << ", status=" << status.ToString();
+            }
+        }
+    }
+}
+
 void WatchDispatcher::CancelChannel(const std::shared_ptr<WatcherChannel> &channel)
 {
     channel->cancelled.store(true, std::memory_order_release);

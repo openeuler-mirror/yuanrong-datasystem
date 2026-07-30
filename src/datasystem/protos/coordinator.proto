@@ -76,8 +76,9 @@ message PutReqPb {
   bytes key = 1;
   bytes value = 2;
   int64 ttl = 3; // TTL in milliseconds. 0 means no expiration.
-  int64 expected_version = 4; // 0 means no CAS check; non-zero means expected key version.
+  int64 expected_version = 4; // -1 disables CAS; 0 requires absence; positive values match the key version.
   bytes expected_coordinator_id = 5; // Empty disables the process-lifetime fence.
+  int64 expected_mod_revision = 6; // Zero disables the membership-incarnation fence.
 }
 
 message PutRspPb {
@@ -134,6 +135,7 @@ message DeleteRangeReqPb {
   bytes key = 1;
   bytes range_end = 2;
   bytes expected_coordinator_id = 3; // Empty disables the process-lifetime fence.
+  int64 expected_mod_revision = 4; // Exact-key membership incarnation; zero disables the fence.
 }
 
 message DeleteRangeRspPb {
@@ -169,6 +171,8 @@ message CancelWatchRspPb {
 
 message KeepAliveReqPb {
   bytes key = 1;
+  bytes expected_coordinator_id = 2; // Required after the Worker observes one Coordinator process.
+  int64 expected_mod_revision = 3; // Current membership incarnation; zero disables the fence.
 }
 
 message KeepAliveRspPb {

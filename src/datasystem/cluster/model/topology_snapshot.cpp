@@ -319,8 +319,8 @@ Status TopologySnapshot::ValidateMigrationFence(const TopologyMigrationFence &fe
     if (fence.topologyVersion > Version()) {
         RETURN_STATUS(K_TRY_AGAIN, "migration fence topology is newer than local Snapshot");
     }
-    CHECK_FAIL_RETURN_STATUS(fence.topologyVersion != 0 && fence.topologyVersion == Version(), K_INVALID,
-                             "migration fence topology version is stale or incomplete");
+    CHECK_FAIL_RETURN_STATUS(fence.topologyVersion != 0, K_INVALID,
+                             "migration fence topology version is incomplete");
     CHECK_FAIL_RETURN_STATUS(state_.activeBatch.has_value() && fence.batchEpoch != 0
                                  && state_.activeBatch->epoch == fence.batchEpoch,
                              K_INVALID, "migration fence batch epoch does not match topology");
@@ -332,7 +332,7 @@ Status TopologySnapshot::ValidateMigrationFence(const TopologyMigrationFence &fe
     const bool scaleOut = type == TopologyChangeType::SCALE_OUT && IsCommitted(source->state)
                           && target->state == MemberState::JOINING;
     const bool scaleIn = type == TopologyChangeType::SCALE_IN && source->state == MemberState::LEAVING
-                         && (target->state == MemberState::ACTIVE || target->state == MemberState::PRE_LEAVING)
+                         && target->state == MemberState::ACTIVE
                          && !(source->identity == target->identity);
     CHECK_FAIL_RETURN_STATUS(
         scaleOut || scaleIn, K_INVALID,

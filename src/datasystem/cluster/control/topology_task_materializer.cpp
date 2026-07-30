@@ -12,6 +12,7 @@
 #include <type_traits>
 
 #include "datasystem/cluster/model/topology_diagnostics.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/common/ak_sk/hasher.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/status_helper.h"
@@ -147,8 +148,8 @@ Status ValidateOwnerChange(const TopologySnapshot &latest, TopologyChangeType ty
         CHECK_FAIL_RETURN_STATUS(target->state == MemberState::ACTIVE, K_INVALID,
                                  "Failure owner change target is not active");
     } else {
-        CHECK_FAIL_RETURN_STATUS(source->state == expectedSource && committed(target->state), K_INVALID,
-                                 "owner change source state does not match batch");
+        CHECK_FAIL_RETURN_STATUS(source->state == expectedSource && target->state == MemberState::ACTIVE, K_INVALID,
+                                 "ScaleIn owner change requires a leaving source and active target");
     }
     auto ranges = change.ranges;
     std::sort(ranges.begin(), ranges.end(), [](const auto &left, const auto &right) {
@@ -287,10 +288,14 @@ Status TopologyTaskMaterializer::BuildExpected(const TopologySnapshot &latest, c
         std::visit(
             [&](const auto &value) {
                 auto &notify = built.notifiesByAddress[value.executorAddress];
-                notify.type = type;
+                notify.activeBatch = ActiveBatch{ type, epoch };
                 notify.taskIds.push_back(value.taskId);
             },
             task);
+    }
+    for (const auto &[address, notify] : built.notifiesByAddress) {
+        (void)notify;
+        built.notifyRecipients.push_back(address);
     }
     LOG_FIRST_AND_EVERY_N(INFO, TOPOLOGY_TASK_MATERIALIZE_LOG_INTERVAL)
         << "CLUSTER_TASK action=materialize type=" << static_cast<uint32_t>(type)
@@ -303,13 +308,71 @@ Status TopologyTaskMaterializer::BuildExpected(const TopologySnapshot &latest, c
 Status TopologyTaskMaterializer::RebuildExpected(const TopologySnapshot &latest, const IPlanningAlgorithm &algorithm,
                                                  ExpectedDerivedState &expected) const
 {
-    if (!latest.GetActiveBatch().has_value()) {
-        expected = {};
+    return RebuildExpected(latest, algorithm, {}, false, expected);
+}
+
+Status TopologyTaskMaterializer::RebuildExpected(const TopologySnapshot &latest,
+                                                 const IPlanningAlgorithm &algorithm,
+                                                 const std::vector<MembershipRecord> &memberships,
+                                                 bool includeRestartFacts, ExpectedDerivedState &expected) const
+{
+    ExpectedDerivedState built;
+    if (latest.GetActiveBatch().has_value()) {
+        TopologyPlan plan;
+        RETURN_IF_NOT_OK(RebuildPlan(latest, algorithm, plan));
+        RETURN_IF_NOT_OK(BuildExpected(latest, plan, built));
+    }
+    if (!includeRestartFacts) {
+        expected = std::move(built);
         return Status::OK();
     }
-    TopologyPlan plan;
-    RETURN_IF_NOT_OK(RebuildPlan(latest, algorithm, plan));
-    return BuildExpected(latest, plan, expected);
+    for (const auto &record : memberships) {
+        CHECK_FAIL_RETURN_STATUS(!record.address.empty(), K_INVALID, "restart membership address is empty");
+        built.notifyRecipients.push_back(record.address);
+        if (record.state == MemberLifecycleState::RESTARTING) {
+            CHECK_FAIL_RETURN_STATUS(record.timestamp > 0, K_INVALID, "restart membership timestamp is invalid");
+            built.restartTimestampsByAddress[record.address] = record.timestamp;
+        }
+    }
+    std::sort(built.notifyRecipients.begin(), built.notifyRecipients.end());
+    built.notifyRecipients.erase(
+        std::unique(built.notifyRecipients.begin(), built.notifyRecipients.end()), built.notifyRecipients.end());
+    TopologyTaskNotify restartNotify;
+    restartNotify.restartTimestampsByAddress = built.restartTimestampsByAddress;
+    RETURN_IF_NOT_OK(TopologyRepositoryCodec::EncodeNotify(restartNotify, built.canonicalRestartNotify));
+    expected = std::move(built);
+    return Status::OK();
+}
+
+Status TopologyTaskMaterializer::BuildNotifyFor(const ExpectedDerivedState &expected, const std::string &address,
+                                                TopologyTaskNotify &notify) const
+{
+    CHECK_FAIL_RETURN_STATUS(
+        std::binary_search(expected.notifyRecipients.begin(), expected.notifyRecipients.end(), address), K_INVALID,
+        "address is not an expected notify recipient");
+    notify.activeBatch.reset();
+    notify.taskIds.clear();
+    const auto taskNotify = expected.notifiesByAddress.find(address);
+    if (taskNotify != expected.notifiesByAddress.end()) {
+        notify.activeBatch = taskNotify->second.activeBatch;
+        notify.taskIds = taskNotify->second.taskIds;
+    }
+    if (notify.restartTimestampsByAddress != expected.restartTimestampsByAddress) {
+        notify.restartTimestampsByAddress = expected.restartTimestampsByAddress;
+    }
+    return Status::OK();
+}
+
+Status TopologyTaskMaterializer::BuildEncodedNotifyFor(const ExpectedDerivedState &expected,
+                                                       const std::string &address, std::string &value) const
+{
+    CHECK_FAIL_RETURN_STATUS(
+        std::binary_search(expected.notifyRecipients.begin(), expected.notifyRecipients.end(), address), K_INVALID,
+        "address is not an expected notify recipient");
+    static const TopologyTaskNotify emptyTaskNotify;
+    const auto taskNotify = expected.notifiesByAddress.find(address);
+    const auto &taskPart = taskNotify == expected.notifiesByAddress.end() ? emptyTaskNotify : taskNotify->second;
+    return TopologyRepositoryCodec::ComposeNotify(taskPart, expected.canonicalRestartNotify, value);
 }
 
 std::string TopologyTaskMaterializer::BuildBusinessOperationId(TopologyCallbackPhase phase,

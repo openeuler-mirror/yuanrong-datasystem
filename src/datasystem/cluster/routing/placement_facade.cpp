@@ -90,15 +90,16 @@ Status PlacementFacade::EvaluateRedirectInSnapshot(const TopologySnapshot &snaps
         batch.has_value()
         && (batch->type == TopologyChangeType::SCALE_OUT || batch->type == TopologyChangeType::SCALE_IN);
     if (isOrdinaryBatch && built.action == RedirectAction::LOCAL) {
+        built.batchEpoch = batch->epoch;
         const Member *prospective = nullptr;
         RETURN_IF_NOT_OK(algorithm_.LocateProspectiveOwner(snapshot, token, prospective));
         CHECK_FAIL_RETURN_STATUS(prospective != nullptr, K_RUNTIME_ERROR,
                                  "routing algorithm returned a null prospective owner");
         if (prospective->identity.address != built.committedOwnerAddress) {
+            built.redirectTargetAddress = prospective->identity.address;
             if (batch->type == TopologyChangeType::SCALE_OUT) {
                 built.action = RedirectAction::WAIT;
             } else {
-                built.redirectTargetAddress = prospective->identity.address;
                 built.action = RedirectAction::REDIRECT;
             }
         }
@@ -133,6 +134,11 @@ Status PlacementFacade::IsLocalOwner(std::string_view placementKey, bool &isLoca
     RETURN_IF_NOT_OK(EvaluateRedirect(placementKey, decision));
     isLocal = decision.committedOwnerAddress == localAddress_;
     return Status::OK();
+}
+
+bool PlacementFacade::IsScaleOutHandoffComplete(std::string_view placementKey, uint64_t batchEpoch) const noexcept
+{
+    return snapshots_.IsScaleOutHandoffComplete(batchEpoch, algorithm_.Hash(placementKey));
 }
 
 }  // namespace datasystem::cluster

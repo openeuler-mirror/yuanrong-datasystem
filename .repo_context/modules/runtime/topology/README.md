@@ -6,23 +6,39 @@
 - Canonical source roots:
   - `src/datasystem/cluster`
   - `src/datasystem/protos/cluster_topology.proto`
+  - `src/datasystem/coordinator/coordinator_store_backend.{h,cpp}`
+  - `src/datasystem/coordinator/topology_control_host.{h,cpp}`
   - `src/datasystem/worker/worker_oc_server.cpp`
   - `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
 - The module owns authoritative cluster membership state, immutable routing snapshots, topology planning, task
-  materialization/execution, and the ETCD-backed control loop.
+  materialization/execution, and the backend-specific control loop.
 - `DsCoordinationBackend` preserves the topology architecture while using the in-memory Coordinator transport. A
   restarted Coordinator fences its new lifetime with `CoordinatorId`, gates topology/task/notify access, accepts
   Worker-reported last-good topology candidates, installs one canonical highest version, and regenerates derived work.
-  Moving topology control decisions into `datasystem_coordinator` remains later work.
+  Membership mutation and keepalive RPCs additionally carry the exact key modification revision, so a delayed RPC from
+  an older same-address Worker incarnation cannot overwrite or renew the current membership record.
+  `TopologyControlHost` then creates one centralized `TopologyControllerRuntime` per admitted cluster inside
+  `datasystem_coordinator`; a Coordinator-backed Worker only consumes topology/own-notify and executes business effects.
 
 ## Current Design Shape
 
 - `datasystem::cluster::TopologyEngine` is the Worker-role composition root. Its nested Builder is the sole Worker
-  construction path. Engine creates and owns both role backends, the shared algorithm, Worker repository/reader,
-  dispatcher, executor, immutable snapshot state, placement facade, endpoint view, `TopologyControllerRuntime`,
-  Janitor, and optional Coordinator recovery reporter. It does not own standalone Observer.
+  construction path. Engine creates the member backend, algorithm, Worker repository/reader, dispatcher, executor,
+  immutable snapshot state, placement facade, endpoint view, and optional Coordinator recovery reporter. ETCD mode also
+  creates the existing controller backend, `TopologyControllerRuntime`, local liveness probe, and Janitor. Coordinator
+  mode deliberately does not create those control-role components. Engine does not own standalone Observer.
 - Every ETCD Worker may run a `TopologyController`. Controllers contend through the single authoritative topology-key
   CAS; controller identity is not persisted, and deterministic batch/task identities make duplicate reconciliation safe.
+- `CoordinatorStoreBackend` adapts one cluster-scoped view of the existing in-memory `CoordinatorStore` to the unchanged
+  `ICoordinationBackend` KV/CAS contract. It owns no thread, watch, lease, or recovery state.
+- `TopologyControlHost` is the Coordinator-process lifecycle owner for `cluster_name -> TopologyControllerRuntime`.
+  It admits only clusters whose membership mutation has committed, waits for `TopologyRecoveryManager` to report READY,
+  starts/stops Runtime dependencies outside its mutex, enforces the active-cluster cap, and keeps each cluster's
+  retry/blocking state isolated. Each entry owns its own `HashAlgorithm`, Store adapter, and Runtime, destroyed in
+  Runtime -> backend -> algorithm order.
+  Store topology/membership/migrate-task/delete-task mutations are payload-free doorbells only. Membership PUT bursts and
+  task-progress bursts coalesce into the Host's dirty bit; notify mutations do not wake the Host. The Controller derives
+  task IDs from current topology and exact-reads those IDs, so the Host never scans task prefixes.
 - `TopologyRepository` stores one `ClusterTopologyPb` authority record plus derived task/notify records and ScaleIn
   metadata-done markers. Derived records cannot replace topology authority; final progress and batch transitions are
   fenced by topology version and batch epoch.
@@ -56,8 +72,13 @@
   membership absence has continued through
   `nodeDeadTimeout` plus one
   `failureProbeTimeout`; only then is the member eligible for the existing Failure plan. Backend-unreadable intervals
-  observed while reading either topology or membership do not consume the continuous-absence budget. Coordinator mode
-  retains its original quorum-confirmed degradation versus local-isolation behavior.
+  observed while reading either topology or membership do not consume the continuous-absence budget. In centralized
+  Coordinator mode, `TopologyFailureClassifier` instead promotes a member only after it has remained absent from
+  consecutive exact membership reads for `node_dead_timeout_s`; presence clears the window, Store read failures pause
+  it, and the first implementation does not add Coordinator-to-Worker probe RPCs.
+- Both backends use the same fixed three-second joining collection window beginning at the first eligible member.
+  Later arrivals do not extend the deadline. An empty cluster admits the collected bootstrap members directly without
+  migration; an initialized cluster starts one multi-member ScaleOut batch. Failure remains higher priority.
 - Repeated expected backend-access failures while already in `CONTROL_DEGRADED` still refresh the diagnostic
   `lastError`, but the warning log is sampled. State transitions and unexpected runtime failures remain unsampled.
 - Topology observability is carried by structured `CLUSTER_*` logs on the low-frequency control path: watch events and
@@ -93,8 +114,16 @@
   generation
   plus a thread-local weak cache so unchanged reads avoid repeatedly loading the atomically published shared pointer
   without retaining old 10K-member snapshots on long-lived request threads. During an ordinary batch, the Snapshot
-  also derives the post-commit owner ring: ScaleOut transfer ranges wait on the committed source, while a ScaleIn
-  source whose metadata handoff has completed redirects missing metadata to the prospective owner.
+  also derives the post-commit owner ring. A ScaleOut transfer range waits while the committed source still owns or is
+  migrating that key. Metadata absence alone is not completion evidence: after a successful callback and progress CAS,
+  the Executor publishes immutable process-local completion ranges scoped by ScaleOut batch epoch. A key redirects only
+  when its token is covered by that evidence; publication leaves the epoch by atomically clearing the evidence. A
+  ScaleIn source whose metadata handoff has completed redirects missing metadata to the prospective owner. Migration
+  RPC fence validation may wait through a bthread-aware condition variable only for the process-local Snapshot to catch
+  up within the existing request deadline; it never synchronously reads the backend. A newer Snapshot in the same
+  active batch remains valid after epoch/type/participant revalidation.
+  ScaleIn revalidation requires the target to remain `ACTIVE`; a target that has entered `PRE_LEAVING` cannot accept
+  metadata or data handoff from another leaving member.
 - Business migration/recovery is invoked through one opaque task callback. `IKeyFilter` and `StorageScanPlan` keep token
   representation internal, while callbacks receive stable operation identity, deadline, and cooperative cancellation.
 - Scale-in execution is metadata-first. The first callback migrates source metadata and writes one metadata-done marker
@@ -130,7 +159,7 @@
 
 - Keyspace supports an optional cluster scope. A non-empty validated name uses
   `/datasystem/{cluster_name}/...`; an empty name uses `/datasystem/...` without an empty path segment. Multi-cluster
-  deployments sharing one backend must use non-empty distinct names. The five logical paths are topology,
+  deployments sharing one backend must use non-empty distinct names. The six logical paths are topology,
   tasks/migrate, tasks/delete, notify, cluster membership, and ScaleIn metadata-done markers.
 - `TopologyKeyHelper` is the only topology keyspace builder. It owns logical tables, the legacy-compatible ETCD
   membership prefix, and allocation-free raw ETCD watch-key classification. `EtcdStore::CreateTableWithExactPrefix`
@@ -140,7 +169,9 @@
 - There is no persisted Worker-local topology authority. ETCD restart recovery reads the latest legal topology and
   reconstructs deterministic work. The in-memory Coordinator backend recovers only the latest topology from Workers;
   task/notify records are treated as absent and regenerated. Candidate arbitration is cluster-scoped and resource
-  bounded; conflicting same-version digests block only that cluster until membership/evidence changes.
+  bounded; conflicting same-version digests block only that cluster until membership/evidence changes. If all
+  memberships briefly disappear without a Coordinator restart, a later returning member reuses a legal topology already
+  present in the current process Store as the local authority; Worker evidence cannot overwrite or block it.
 - Worker startup calls membership keepalive initialization and then performs one synchronous `ReloadTopology(true)`
   before building or registering watch plans. Coordinator performs its first membership Put synchronously inside
   `InitKeepAlive`; ETCD `InitKeepAlive` starts the keepalive monitor and returns, so its first lease grant and membership
@@ -161,6 +192,16 @@
   remains zero because `WatchRange` ignores the field and returns `initial_kvs` plus a RESET doorbell. `K_NOT_FOUND` and
   `K_NOT_READY` allow bootstrap waiting; other reload errors fail before any `WatchRange` call. A successful reload
   synchronously publishes the Snapshot before watches are registered.
+- A Coordinator-mode Worker whose restart-fact exact read returns `K_NOT_READY` during initial Coordinator recovery is
+  provisionally initialized as a fresh start so membership and recovery reporting can bootstrap. Simultaneous
+  Coordinator recovery and restart of that same Worker is an explicit Phase 3 limitation; the initial version assumes
+  surviving Workers reconnect and report topology rather than guaranteeing this combined-failure case.
+- A real restarted Worker remains `RESTARTING`/`RECOVERING` while Object Cache reconciliation is enabled. It publishes
+  `READY` only from reconciliation completion or the explicit give-up terminal path; reconciliation completion counts
+  distinct source addresses that have succeeded for the current membership timestamp, commits the membership
+  transition before publishing process health, and propagates synchronous master-to-Worker delivery failures so the
+  same restart generation remains retryable. Fresh starts and configurations without that reconciliation requirement
+  retain the direct startup transition.
 - Unified-ETCD recovery reuses the normal exact topology reload. The membership lease recreates its key before
   `IsKeepAliveTimeout()` becomes false. A transient recovery ordering where another Controller still sees the key absent
   is covered by the same direct Worker liveness check; it cannot remove a responding member from topology.
@@ -170,21 +211,29 @@
 - An ETCD canceled watch, including compaction cancellation, exits the producer and enters the existing whole-stream
   `WatchRun` recovery path. Active compensation reads current state, advances every unified target revision, and the
   stream is rebuilt as one unit rather than recreating an individual watcher.
-- Task cleanup first CASes the exact task value to a repository-internal deletion tombstone, then performs physical
-  deletion. The tombstone is never exposed as a task and temporarily fences same-ID rematerialization, closing the
-  conditional-cleanup/delete race without extending `ICoordinationBackend`. The same janitor pass also removes stale
-  ScaleIn metadata-done markers whose epoch is older than the active batch, or no newer than the final topology version
-  when no batch is active.
+- Task cleanup first CASes the exact task value to a repository-internal, versioned deletion tombstone, then performs
+  physical deletion. Every cleanup attempt, including one that observes an old tombstone, must win the CAS to the next
+  tombstone version, so Janitors holding the same observed token cannot both delete. The tombstone is invisible as a task
+  and fences same-ID writes during that delete attempt. Because the frozen `ICoordinationBackend` has no compare-delete,
+  this is deliberately not a cross-process transaction: an overlapping later cleanup may race derived-state
+  rematerialization. Task/notify are non-authoritative and deterministic Controller reconciliation restores any such
+  record; topology correctness never depends on Janitor success. The same pass removes stale ScaleIn metadata-done
+  markers whose epoch is older than the active batch, or no newer than the final topology version when no batch is active.
 - Failure metadata recovery is at-least-once, idempotent, and best effort. Normal recovery failure is not retried; a
   coordinator crash before final topology CAS may repeat it.
 - Scale-out and scale-in callbacks use bounded retries. Exhausted scale-out removes the joining member so it can restart
   and re-enter as `INITIAL`; exhausted scale-in proceeds through external bounded termination and Failure handling.
   Object and stream callbacks treat per-item migration failures as retryable task failures, so a successful RPC status
-  alone cannot advance the batch while selected metadata is still missing at the target. A completed failed attempt
-  also clears its source-side migrating marker after restoring source state, allowing the next bounded retry to serve
-  the metadata from the source instead of reporting a stale moving state.
+  alone cannot advance the batch while selected metadata is still missing at the target. Object metadata success
+  includes durable nested relationships and nested reference counts; target persistence failure keeps the source-side
+  state authoritative for retry. A completed failed attempt also clears its source-side migrating marker after
+  restoring source state, allowing the next bounded retry to serve the metadata from the source instead of reporting a
+  stale moving state.
 - Failure preempts an ordinary batch by fencing its old execution round, preserving `JOINING`/`LEAVING` facts, completing
-  the Failure batch first, and replanning ordinary work from the latest topology.
+  the Failure batch first, and replanning ordinary work from the latest topology. Business migration futures own the
+  same cooperative cancellation state and absolute deadline as the outer callback. They recheck both before every
+  destructive source-side metadata commit, so target acknowledgement cannot let a preempted old round continue deleting
+  after its outer callback has returned.
 
 ## Key Entry Points
 
@@ -196,6 +245,9 @@
 - Routing: `src/datasystem/cluster/routing/placement_facade.{h,cpp}`
 - Backend: `src/datasystem/cluster/coordination_backend/etcd_coordination_backend.{h,cpp}`
 - Existing Coordinator transport: `src/datasystem/cluster/coordination_backend/ds_coordination_backend.{h,cpp}`
+- Coordinator Store adapter: `src/datasystem/coordinator/coordinator_store_backend.{h,cpp}`
+- Coordinator control host: `src/datasystem/coordinator/topology_control_host.{h,cpp}`
+- Coordinator composition: `src/datasystem/coordinator/coordinator_service_impl.{h,cpp}`
 - Worker composition: `src/datasystem/worker/data_worker.cpp`, `src/datasystem/worker/worker_oc_server.cpp`
 - Worker metadata routing adapter: `src/datasystem/worker/metadata_route_resolver.{h,cpp}`
 - Standalone observer consumer: `src/datasystem/client/router_client.cpp`
@@ -224,8 +276,24 @@
   must not become Failure task sources; `INITIAL`/`JOINING` crashes remain uncommitted-member cleanup.
 - All callbacks must be deadline-aware, cooperatively cancellable, idempotent by operation ID, and safe under duplicate
   delivery. Process termination is supplied by Kubernetes or the process manager after bounded drain.
-- Worker task notifications are derived, idempotent records. A notification observed after its active batch finalizes,
-  or while a different batch is authoritative, is a stale no-op rather than a runtime failure.
+- Worker task notifications are derived, idempotent records. `TaskNotifyPb` carries the authoritative active-batch fence,
+  exact task IDs, and Coordinator-mode restart timestamps. A notification observed after its active batch finalizes, or
+  while a different batch is authoritative, is a stale no-op rather than a runtime failure. Restart effects execute
+  after active tasks have been admitted, submit one pending generation batch to the Executor-owned callback pool,
+  deduplicate successful timestamps in Worker memory, and retry failures from the next periodic exact own-notify read.
+  The Worker Object Cache and metadata master each scan their local object/metadata table once per batch rather than once
+  per restarted member. Accepted restart batches participate in the same shutdown drain as task callbacks. A slow
+  restart cleanup therefore cannot consume the active batch's admission deadline.
+- One derived generation owns one canonical restart-only notify suffix. Materialization encodes that shared map once,
+  encodes each recipient's active-batch/task prefix independently, and appends the suffix before exact-byte CAS. This
+  preserves canonical `TaskNotifyPb` bytes while avoiding repeated protobuf-map construction for every recipient; schema
+  and parity tests fence the field-order assumption.
+- The backend-neutral Janitor physically removes stale notify keys through a dedicated, versioned byte-matched
+  tombstone. A concurrent rematerialization sees `K_TRY_AGAIN` while that tombstone remains; any later physical-delete
+  race is healed by normal deterministic notify reconciliation. Legacy empty notify values are also cleanup candidates,
+  so they cannot consume the scan prefix forever. Per-table rotating cursors ensure an undeletable sorted prefix cannot
+  permanently starve later stale records; the current implementation still uses full-table `GetAll` before applying the
+  bounded page and does not claim 10K-table scan efficiency.
 - Background reconciliation must remain resource bounded and must always converge to a state that permits a later batch.
 - Topology Engine and Observer watch-registration logs identify `start_mode` (`from_now` or `after_revision`) and
   `last_processed_revision` (`none` or the numeric revision). Observer keeps its existing revision-zero watch behavior
@@ -235,6 +303,8 @@
 ## Tests
 
 - Main contract/component binary: `cluster_topology_contract_ut`.
+- Coordinator host/adapter coverage: `CoordinatorStoreBackendTest` and `TopologyControlHostTest` in `ds_ut`.
+- Manual scale/performance coverage: `topology_control_perf_test`.
 - Core CTest selection:
   - `ctest -R 'ClusterTopology|TopologyRepository|TopologyObserver|PlacementFacade'`
   - `ctest -R 'TopologyController|TopologyTaskExecutor|TopologyEngine|TopologyDfx|TopologyShutdown'`

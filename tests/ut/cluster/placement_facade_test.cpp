@@ -248,8 +248,8 @@ TEST(PlacementFacadeTest, WaitsConcurrentWritesOnScaleOutTransferRanges)
     DS_ASSERT_OK(facade.EvaluateRedirect("key", decision));
     EXPECT_EQ(decision.action, RedirectAction::WAIT);
     EXPECT_EQ(decision.committedOwnerAddress, "127.0.0.1:1");
-    EXPECT_TRUE(decision.redirectTargetAddress.empty());
-    EXPECT_EQ(decision.GetRedirectTargetAddress(), "127.0.0.1:1");
+    EXPECT_EQ(decision.redirectTargetAddress, "127.0.0.1:2");
+    EXPECT_EQ(decision.GetRedirectTargetAddress(), "127.0.0.1:2");
 }
 
 TEST(PlacementFacadeTest, RedirectsMissingScaleInMetadataToProspectiveOwner)

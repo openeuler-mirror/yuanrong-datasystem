@@ -3,6 +3,38 @@ load("//bazel:build_defs.bzl", "ds_cc_test")
 package(default_visibility = ["//visibility:public"])
 
 ds_cc_test(
+    name = "coordinator_store_backend_test",
+    srcs = ["coordinator_store_backend_test.cpp"],
+    deps = [
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/coordinator:coordinator_store_backend",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_control_host_test",
+    srcs = ["topology_control_host_test.cpp"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//src/datasystem/common/coordinator:coordinator_store",
+        "//src/datasystem/coordinator:coordinator_topology_control_host",
+        "//src/datasystem/coordinator:coordinator_topology_recovery_manager",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
+    name = "topology_control_perf_test",
+    srcs = ["topology_control_perf_test.cpp"],
+    tags = ["manual"],
+    deps = [
+        "//src/datasystem/cluster:cluster_topology",
+        "//tests/ut:ut_common",
+    ],
+)
+
+ds_cc_test(
     name = "coordinator_server_options_test",
     srcs = ["coordinator_server_options_test.cpp"],
     deps = [

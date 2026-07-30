@@ -61,6 +61,8 @@ public:
         uint64_t batchEpoch{ 0 };
         std::string sourceMemberId;
         std::string targetMemberId;
+        std::chrono::steady_clock::time_point deadline{};
+        cluster::CancellationToken cancellation;
     };
 
     OCMigrateMetadataManager(const OCMigrateMetadataManager &other) = delete;
@@ -185,6 +187,13 @@ private:
         const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, MigrateMetaInfo &info);
 
     /**
+     * @brief Check the cooperative cancellation and deadline of a topology-owned migration.
+     * @param[in] info Migration context; legacy migrations have no topology fence and remain unaffected.
+     * @return K_OK, K_NOT_READY after cancellation, or K_RPC_DEADLINE_EXCEEDED.
+     */
+    Status CheckTopologyExecution(const MigrateMetaInfo &info) const;
+
+    /**
      * @brief Migrate metadata.
      * @param[in] ocMetadataManager The OCMetadataManager instance.
      * @param[in] api Rpc channel for send data
@@ -214,7 +223,36 @@ private:
     Status BatchMigrateMetadata(
         std::unique_ptr<MasterMasterOCApi> &api, MigrateMetadataReqPb &req,
         const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager, std::vector<std::string> &failedObjectKeys,
+        const MigrateMetaInfo &info,
         const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap = {});
+
+    /**
+     * @brief Restore one failed source metadata entry and record its key once.
+     * @param[in] metadata Metadata whose target migration did not commit.
+     * @param[in] ocMetadataManager Source metadata owner.
+     * @param[out] failedObjectKeys Failed object keys.
+     * @param[in] asyncMap Async L2 metadata associated with the batch.
+     */
+    void RecordBatchMigrationFailure(
+        const MetaForMigrationPb &metadata, const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
+        std::vector<std::string> &failedObjectKeys,
+        const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap);
+
+    /**
+     * @brief Commit per-object migration results while the topology execution remains authorized.
+     * @param[in] req Migration request whose order defines the response mapping.
+     * @param[in] rsp Target migration results.
+     * @param[in] ocMetadataManager Source metadata owner.
+     * @param[out] failedObjectKeys Failed object keys.
+     * @param[in] info Topology migration execution fence.
+     * @param[in] asyncMap Async L2 metadata associated with the batch.
+     * @return Status of applying the target response.
+     */
+    Status ApplyBatchMigrationResponse(
+        const MigrateMetadataReqPb &req, const MigrateMetadataRspPb &rsp,
+        const std::shared_ptr<master::OCMetadataManager> &ocMetadataManager,
+        std::vector<std::string> &failedObjectKeys, const MigrateMetaInfo &info,
+        const std::unordered_map<std::string, std::unordered_set<std::shared_ptr<AsyncElement>>> &asyncMap);
 
     /**
      * @brief Try fill migrate nested object references.

@@ -967,7 +967,8 @@ dscli collect_log --cluster_config_path ./cluster_config.json
 `dscli query` 通过只读接口查询协调后端，并在命令行进程本地完成拓扑解码、健康状态派生、
 哈希区间计算和 key 路由。命令不会读取 `worker_config.json`，也不会自动探测后端类型；
 用户必须显式传入 ETCD 或 Coordinator 地址。
-Coordinator 地址使用 ZMQ 服务端口。整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
+Coordinator 使用与服务部署相同的基础地址，查询客户端按 `use_brpc` 配置选择 BRPC 或 ZMQ 传输。
+整条命令使用固定 5 秒超时，stdout 只输出一个 JSON 对象。
 当前 ETCD 查询仅支持未启用认证和 TLS 的集群。
 
 查询 ETCD 集群节点：
@@ -1081,7 +1082,8 @@ dscli query route \
 |-----|------|---------|-----|-------------|
 | service_type | string | `"coordinator"` | 否 | 供 `dscli` 识别服务类型，不传递给 Coordinator 进程 |
 | coordinator_address | string | `"127.0.0.1:31511"` | 否 | Coordinator 服务地址，格式为 `host:port`，不能为空 |
-| coordinator_rpc_stub_cache_size | int | `2048` | 否 | Coordinator RPC Stub 缓存数量上限 |
+| coordinator_rpc_stub_cache_size | int | `4096` | 否 | Coordinator RPC Stub 缓存数量上限 |
+| coordinator_topology_max_active_clusters | int | `8` | 否 | Coordinator 同时承载的集群拓扑上限，取值范围为 `[2, 32]`；超限时拒绝新集群准入，修改后需重启 Coordinator |
 | watch_event_dispatch_thread | int | `4` | 否 | Coordinator 分发 Watch 事件的线程数 |
 | rpc_thread_num | int | `64` | 否 | Coordinator RPC 服务线程数 |
 | log_dir | string | `"./datasystem/logs"` | 否 | Coordinator 日志目录 |

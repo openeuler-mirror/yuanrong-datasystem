@@ -72,11 +72,14 @@ void OCClientCommon::SetWorkerHashInjection(std::initializer_list<uint32_t> work
 void OCClientCommon::GetObjectKeysHashToWorker(EtcdStore *db, uint32_t workerIndex, size_t objectCount,
                                                std::vector<std::string> &objectKeys)
 {
-    ASSERT_NE(db, nullptr);
-    std::string value;
-    DS_ASSERT_OK(db->Get(GetTopologyTableName(), "", value));
     ClusterTopologyPb ring;
-    ASSERT_TRUE(ring.ParseFromString(value));
+    if (db == nullptr) {
+        DS_ASSERT_OK(cluster_->ReadClusterTopology(ring));
+    } else {
+        std::string value;
+        DS_ASSERT_OK(db->Get(GetTopologyTableName(), "", value));
+        ASSERT_TRUE(ring.ParseFromString(value));
+    }
     HostPort workerAddress;
     DS_ASSERT_OK(cluster_->GetWorkerAddr(workerIndex, workerAddress));
     std::map<uint32_t, std::string> tokenWorkers;
