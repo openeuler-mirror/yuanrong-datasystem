@@ -65,6 +65,29 @@
     different trusted incarnation clears evidence belonging to the old Worker process. Ordinary topology refresh and
     Global Fact lease expiry do not silently clear versioned local evidence. Global summary reads use a shared lock
     because Direct Read admission is a read-mostly foreground path.
+  - Routed same-host Get uses one endpoint-scoped SHM session per target Worker. Object metadata, reference acquisition,
+    and `DecreaseReference` use the client-facing `WorkerOCService`; only fd-session bootstrap and control
+    (`GetSocketPath`, `RegisterClient`, `GetClientFd`, `DisconnectClient`) use `WorkerService`.
+    `ShmTransporter` never falls back to `WorkerWorkerOCService.GetObjectRemote` for an SHM candidate. Each session owns
+    its fd-passing socket and private `MmapManager`, while returned Buffers retain a session/mmap owner that releases the
+    reference to the actual data Worker. Session failure closes the socket so Worker client-lost cleanup resolves any
+    ambiguous Get-side reference increase before a new session is used. Target SHM capability is probed through that
+    target Worker's `GetSocketPath` and `RegisterClient`; the initial bound Worker's `IsShmEnable()` is not a capability
+    gate for another endpoint. If an SHM-candidate target does not publish an fd-passing endpoint, the read returns
+    `K_NOT_SUPPORTED` without invoking WorkerOC Get or falling back to a Worker-to-Worker object RPC. Routed
+    Create/MCreate uses a local payload buffer and never resolves a target Worker's fd
+    through the initially bound Worker's fd channel or mmap namespace. If Worker allocation succeeds but local
+    `ObjectBuffer` materialization fails, the transporter decreases every allocation returned by that Create/MCreate
+    response before propagating the local error. `ObjectBuffer` tracks local allocation ownership independently from
+    the Worker `shmId`, so routed payload buffers are freed locally while the `shmId` remains available for Worker
+    reference release. Active sessions schedule a bounded
+    `WorkerService.Heartbeat` through the process
+    `TimerQueue` and existing release pool; this maintains the Worker liveness timestamp, removes expired fds from the
+    session mmap table while live Buffers retain their mmap entry, and acknowledges those fds on the next heartbeat so
+    the Worker can reuse them. Routed SHM Buffers use the target session's `RegisterClientRsp.lock_id` for their metadata
+    latch rather than the SDK's initially bound Worker lock id. Transport selection/admission, session, fd-channel,
+    auth, legacy reference state, and the mmap manager/table use bthread mutex/RWLock/condition-variable primitives
+    because these paths can be entered from brpc/bthread execution contexts.
   - `client::TransportLayer` also provides internal same-worker `MCreate`/`MSet` primitives. TCP MCreate allocates local
     buffers and MSet sends one positional MultiPublish payload; UB MCreate uses one MultiCreate RPC, MSet pipelines
     non-blocking per-object URMA writes in bounded groups, and failed writes use bounded TCP payload fallback in the

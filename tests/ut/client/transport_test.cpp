@@ -35,6 +35,9 @@
 #include <utility>
 #include <vector>
 
+#include <sys/socket.h>
+#include <unistd.h>
+
 #define private public
 #include "datasystem/client/object_cache/object_client_impl.h"
 #undef private
@@ -56,6 +59,7 @@
 #include "datasystem/client/transport/transport_layer.h"
 #include "datasystem/common/ak_sk/signature.h"
 #include "datasystem/common/flags/common_flags.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/latency_phase.h"
 #include "datasystem/common/metrics/kv_metrics.h"
 #include "datasystem/common/metrics/metrics.h"
@@ -120,6 +124,22 @@ public:
 TransportRequestContext MakeRequestContext()
 {
     return { "client-1", "token-1", "tenant-1" };
+}
+
+std::shared_ptr<const TransportReadContext> MakeReadContext()
+{
+    static const auto context = [] {
+        auto value = std::make_shared<TransportReadContext>();
+        value->requestContext = MakeRequestContext();
+        value->subTimeoutMs = 1000;
+        return value;
+    }();
+    return context;
+}
+
+ReplicaReadRequest MakeReplicaReadRequest(const master::ObjectLocationInfoPb *location, ObjectReadItemResult *result)
+{
+    return { location, result, MakeReadContext() };
 }
 
 TransportCreateParam MakeCreateParam()
@@ -327,6 +347,8 @@ public:
             urmaInfo->set_seg_data_offset(0);
         }
         response.set_metadata_size(createResponseMetadataSize);
+        response.set_store_fd(createResponseStoreFd);
+        response.set_mmap_size(createResponseMmapSize);
         response.set_shm_id("test-shm-id");
         return Status::OK();
     }
@@ -369,6 +391,8 @@ public:
         for (int i = 0; i < resultCount; ++i) {
             auto *item = response.add_results();
             item->set_shm_id("multi-shm-" + std::to_string(i));
+            item->set_store_fd(createResponseStoreFd);
+            item->set_mmap_size(createResponseMmapSize);
             if (createResponseHasUrmaInfo) {
                 item->mutable_urma_info()->set_seg_va(0x1000 + i);
             }
@@ -466,6 +490,8 @@ public:
     Status decreaseReferenceStatus = Status::OK();
     bool createResponseHasUrmaInfo = false;
     int64_t createResponseMetadataSize = 0;
+    int32_t createResponseStoreFd = 0;
+    uint64_t createResponseMmapSize = 0;
     StatusCode createResponseCode = K_OK;
     StatusCode setResponseCode = K_OK;
     std::vector<CreateReqPb> invokedCreateRequests;
@@ -484,6 +510,34 @@ public:
     std::function<void()> afterSetInvoke;
     std::function<void()> onMultiSetInvoke;
     std::function<void()> afterMultiSetInvoke;
+};
+
+class BlockingFdWorkerRpcClient final : public FakeWorkerRpcClient {
+public:
+    Status InvokeGetClientFd(GetClientFdReqPb &, GetClientFdRspPb &) override
+    {
+        entered_.set_value();
+        releaseFuture_.wait();
+        return Status(K_RPC_UNAVAILABLE, "GetClientFd interrupted");
+    }
+
+    std::future<void> EnteredFuture()
+    {
+        return entered_.get_future();
+    }
+
+    void Release()
+    {
+        if (!released_.exchange(true)) {
+            release_.set_value();
+        }
+    }
+
+private:
+    std::promise<void> entered_;
+    std::promise<void> release_;
+    std::shared_future<void> releaseFuture_{ release_.get_future().share() };
+    std::atomic<bool> released_{ false };
 };
 
 
@@ -505,6 +559,9 @@ public:
     }
 
     int getObjectInvokeCount = 0;
+    int clientGetInvokeCount = 0;
+    int shmHeartbeatInvokeCount = 0;
+    int shmDisconnectInvokeCount = 0;
     int batchGetObjectInvokeCount = 0;
     int metadataInvokeCount = 0;
     int existInvokeCount = 0;
@@ -515,8 +572,13 @@ public:
     int metadataRpcTimeout = 0;
     int existRpcTimeout = 0;
     int hashRingRpcTimeout = 0;
+    int shmHeartbeatRpcTimeout = 0;
+    int shmDisconnectRpcTimeout = 0;
     uint64_t hashRingVersion = 0;
     GetObjectRemoteReqPb invokedDataRequest;
+    GetReqPb invokedClientGetRequest;
+    HeartbeatReqPb invokedShmHeartbeatRequest;
+    DisconnectClientReqPb invokedShmDisconnectRequest;
     BatchGetObjectRemoteReqPb invokedBatchGetRequest;
     master::QueryAndGetReqPb invokedMetadataRequest;
     ExistReqPb invokedExistRequest;
@@ -543,6 +605,37 @@ protected:
         ++getObjectInvokeCount;
         dataRpcTimeout = options.GetTimeout();
         invokedDataRequest = request;
+        return Status::OK();
+    }
+
+    Status DoInvokeClientGet(const RpcOptions &, const GetReqPb &request, GetRspPb &response,
+                             std::vector<RpcMessage> &) override
+    {
+        ++clientGetInvokeCount;
+        invokedClientGetRequest = request;
+        auto *info = response.add_objects();
+        info->set_object_index(0);
+        info->set_store_fd(11);
+        response.mutable_last_rc()->set_error_code(K_OK);
+        return Status::OK();
+    }
+
+    Status DoInvokeShmHeartbeat(const RpcOptions &options, const HeartbeatReqPb &request,
+                                HeartbeatRspPb &response) override
+    {
+        ++shmHeartbeatInvokeCount;
+        shmHeartbeatRpcTimeout = options.GetTimeout();
+        invokedShmHeartbeatRequest = request;
+        response.set_worker_start_id("worker-start");
+        return Status::OK();
+    }
+
+    Status DoInvokeDisconnectShmClient(const RpcOptions &options, const DisconnectClientReqPb &request,
+                                       DisconnectClientRspPb &) override
+    {
+        ++shmDisconnectInvokeCount;
+        shmDisconnectRpcTimeout = options.GetTimeout();
+        invokedShmDisconnectRequest = request;
         return Status::OK();
     }
 
@@ -852,7 +945,10 @@ public:
             }
         }
         auto transporter = std::make_shared<FakeTransporter>();
-        transporter->kind = hint == TransportHint::TCP_ONLY ? AccessTransportKind::TCP : AccessTransportKind::UB;
+        transporter->kind = hint == TransportHint::SHM_CANDIDATE
+                                ? AccessTransportKind::SHM
+                                : (hint == TransportHint::TCP_ONLY ? AccessTransportKind::TCP
+                                                                  : AccessTransportKind::UB);
         transporter->rpcClient = rpcClient;
         if (configureTransporter) {
             configureTransporter(address, *transporter);
@@ -962,8 +1058,10 @@ public:
     {
     }
 
-    Status Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result) override
+    Status Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result,
+                std::shared_ptr<const TransportReadContext> context) override
     {
+        EXPECT_NE(context, nullptr);
         {
             std::lock_guard<std::mutex> lock(mutex);
             unaryKeys.push_back(location.object_key());
@@ -1196,11 +1294,18 @@ private:
 
 class FakeBufferOwner : public IReceiveBufferOwner {
 public:
-    explicit FakeBufferOwner(uint64_t size) : data(size)
+    explicit FakeBufferOwner(uint64_t size, bool managesWorkerReference = false)
+        : data(size), managesWorkerReference(managesWorkerReference)
     {
     }
 
+    bool ManagesWorkerReference() const override
+    {
+        return managesWorkerReference;
+    }
+
     std::vector<uint8_t> data;
+    bool managesWorkerReference;
 };
 
 class FakeUbBufferProvider : public IUbReceiveBufferProvider {
@@ -1279,6 +1384,100 @@ TEST(WorkerRpcClientTest, SignsFinalReadRequestsBeforeRpc)
     EXPECT_EQ(client.invokedExistRequest.client_id(), "client-1");
     EXPECT_EQ(client.invokedExistRequest.access_key(), "access-1");
     EXPECT_FALSE(client.invokedExistRequest.signature().empty());
+}
+
+TEST(WorkerRpcClientTest, ClientGetUsesSignedWorkerOcServiceRequest)
+{
+    ApiDeadlineGuard deadline(1000);
+    auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
+    AuthBoundaryWorkerRpcClient client(signature);
+    GetReqPb request;
+    request.set_client_id("endpoint-client");
+    request.set_tenant_id("tenant-1");
+    request.add_object_keys("key");
+    GetRspPb response;
+    std::vector<RpcMessage> payloads;
+
+    ASSERT_TRUE(client.InvokeClientGet(request, response, payloads).IsOk());
+    EXPECT_EQ(client.clientGetInvokeCount, 1);
+    EXPECT_EQ(client.invokedClientGetRequest.client_id(), "endpoint-client");
+    EXPECT_EQ(client.invokedClientGetRequest.tenant_id(), "tenant-1");
+    EXPECT_EQ(client.invokedClientGetRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedClientGetRequest.signature().empty());
+    EXPECT_EQ(client.getObjectInvokeCount, 0);
+    EXPECT_EQ(client.batchGetObjectInvokeCount, 0);
+}
+
+TEST(WorkerRpcClientTest, ShmMaintenanceHeartbeatUsesSignedWorkerServiceRequest)
+{
+    auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
+    AuthBoundaryWorkerRpcClient client(signature);
+    HeartbeatReqPb request;
+    request.set_client_id("endpoint-client");
+    request.set_token("token-1");
+    request.add_released_worker_fds(17);
+    HeartbeatRspPb response;
+
+    ASSERT_TRUE(client.InvokeShmHeartbeat(request, response).IsOk());
+    EXPECT_EQ(client.shmHeartbeatInvokeCount, 1);
+    EXPECT_GT(client.shmHeartbeatRpcTimeout, 0);
+    EXPECT_LE(client.shmHeartbeatRpcTimeout, 1000);
+    EXPECT_EQ(client.invokedShmHeartbeatRequest.client_id(), "endpoint-client");
+    EXPECT_EQ(client.invokedShmHeartbeatRequest.token(), "token-1");
+    EXPECT_EQ(client.invokedShmHeartbeatRequest.released_worker_fds(0), 17);
+    EXPECT_EQ(client.invokedShmHeartbeatRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedShmHeartbeatRequest.signature().empty());
+}
+
+TEST(WorkerRpcClientTest, ShmDisconnectUsesBoundedSignedWorkerServiceRequest)
+{
+    BrpcChannelConfig config;
+    config.timeout_ms = 60'000;
+    auto signature = std::make_shared<Signature>("access-1", SensitiveValue("secret-1"));
+    AuthBoundaryWorkerRpcClient client(signature, config);
+    DisconnectClientReqPb request;
+    request.set_client_id("endpoint-client");
+    request.set_token("token-1");
+    DisconnectClientRspPb response;
+
+    ASSERT_TRUE(client.InvokeDisconnectShmClient(request, response).IsOk());
+    EXPECT_EQ(client.shmDisconnectInvokeCount, 1);
+    EXPECT_GT(client.shmDisconnectRpcTimeout, 0);
+    EXPECT_LE(client.shmDisconnectRpcTimeout, 1000);
+    EXPECT_EQ(client.invokedShmDisconnectRequest.client_id(), "endpoint-client");
+    EXPECT_EQ(client.invokedShmDisconnectRequest.token(), "token-1");
+    EXPECT_EQ(client.invokedShmDisconnectRequest.access_key(), "access-1");
+    EXPECT_FALSE(client.invokedShmDisconnectRequest.signature().empty());
+}
+
+TEST(ShmFdChannelTest, CloseDoesNotWaitForInFlightGetClientFdRpc)
+{
+    int sockets[2] = { INVALID_SHM_FD, INVALID_SHM_FD };
+    ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets), 0);
+    Raii closePeer([&sockets]() {
+        if (sockets[1] != INVALID_SHM_FD) {
+            RETRY_ON_EINTR(close(sockets[1]));
+        }
+    });
+    auto rpcClient = std::make_shared<BlockingFdWorkerRpcClient>();
+    auto entered = rpcClient->EnteredFuture();
+    auto channel =
+        std::make_shared<ShmFdChannel>(rpcClient, ShmFd(sockets[0]), false, "endpoint-client");
+    sockets[0] = INVALID_SHM_FD;
+
+    auto getFuture = std::async(std::launch::async, [channel]() {
+        std::vector<int> clientFds;
+        return channel->GetClientFd({ 17 }, clientFds, "tenant-1");
+    });
+    Raii releaseRpc([rpcClient]() { rpcClient->Release(); });
+    ASSERT_EQ(entered.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+
+    auto closeFuture = std::async(std::launch::async, [channel]() { channel->Close(); });
+    EXPECT_EQ(closeFuture.wait_for(std::chrono::seconds(1)), std::future_status::ready);
+
+    rpcClient->Release();
+    EXPECT_EQ(getFuture.get().GetCode(), K_RPC_UNAVAILABLE);
+    closeFuture.get();
 }
 
 TEST(WorkerRpcClientTest, ExistUsesSubTimeoutBelowChannelTimeout)
@@ -1685,6 +1884,21 @@ TEST(DataPlaneManagerTest, ReusesRpcClientAndTransporterForSameAddress)
     EXPECT_EQ(first, second);
     EXPECT_EQ(manager.rpcBuildCount, 1);
     EXPECT_EQ(manager.transportBuildCount, 1);
+}
+
+TEST(DataPlaneManagerTest, ShmCandidateDoesNotDependOnInitialWorkerShmCapability)
+{
+    ApiDeadlineGuard deadline(1000);
+    DataPlaneManager manager(MakeSignature(), ConnectOptions{}.fastTransportMemSize);
+    ASSERT_TRUE(manager.Init().IsOk());
+    std::shared_ptr<IDataTransporter> first;
+    std::shared_ptr<IDataTransporter> second;
+
+    ASSERT_TRUE(manager.GetOrCreate(MakeAddress(1010), TransportHint::SHM_CANDIDATE, first).IsOk());
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first->Kind(), AccessTransportKind::SHM);
+    ASSERT_TRUE(manager.GetOrCreate(MakeAddress(1010), TransportHint::SHM_CANDIDATE, second).IsOk());
+    EXPECT_EQ(second, first);
 }
 
 TEST(DataPlaneManagerTest, ReusesRpcClientWithoutCreatingTransporter)
@@ -2348,6 +2562,7 @@ TEST(ObjectReadFlowTest, BatchReadyItemsOnceOnCallerAndPreservesMetadataErrorPos
     auto taskPool = std::make_shared<ThreadPool>(0, 4, "object_read_test");
     ObjectReadFlow flow(metadata, replicas, taskPool);
     ObjectReadRequest request;
+    request.context = MakeReadContext();
     request.items = { { 0, "ub", MakeAddress(41) }, { 1, "missing", MakeAddress(41) },
                       { 2, "tcp", MakeAddress(41) } };
     ObjectReadResult result;
@@ -2378,6 +2593,7 @@ TEST(ObjectReadFlowTest, RecordsDirectReadLatencyTicksWhenEnabled)
     auto replicas = std::make_shared<FakeReplicaReader>();
     ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
     ObjectReadRequest request;
+    request.context = MakeReadContext();
     request.items = { { 0, "key", MakeAddress(41) } };
     request.traceEnabled = true;
     ObjectReadResult result;
@@ -2399,6 +2615,7 @@ TEST(ObjectReadFlowTest, InlineDataSkipsReplicaReaderWhileMissesUseSecondPhase)
     auto taskPool = std::make_shared<ThreadPool>(0, 4, "object_read_test");
     ObjectReadFlow flow(metadata, replicas, taskPool);
     ObjectReadRequest request;
+    request.context = MakeReadContext();
     request.items = { { 0, "inline", MakeAddress(41) }, { 1, "fallback", MakeAddress(41) } };
     ObjectReadResult result;
 
@@ -2425,6 +2642,7 @@ TEST(ObjectReadFlowTest, BatchZeroReadyItemsSkipsDataRead)
     auto replicas = std::make_shared<FakeReplicaReader>();
     ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
     ObjectReadRequest request;
+    request.context = MakeReadContext();
     request.items = { { 4, "first", MakeAddress(41) }, { 2, "second", MakeAddress(41) } };
     ObjectReadResult result;
 
@@ -2445,6 +2663,7 @@ TEST(ObjectReadFlowTest, BatchOneReadyItemUsesUnaryReadOnCaller)
     auto replicas = std::make_shared<FakeReplicaReader>();
     ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
     ObjectReadRequest request;
+    request.context = MakeReadContext();
     request.items = { { 9, "only", MakeAddress(41) } };
     ObjectReadResult result;
     const auto callerThread = std::this_thread::get_id();
@@ -2465,6 +2684,7 @@ TEST(ObjectReadFlowTest, BatchMixedDataOutcomesKeepInputOrderAndPartialSuccess)
     replicas->itemStatuses.emplace("terminal", Status(K_INVALID, "terminal"));
     ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
     ObjectReadRequest request;
+    request.context = MakeReadContext();
     request.items = { { 5, "retry", MakeAddress(41) }, { 1, "ok", MakeAddress(41) },
                       { 8, "terminal", MakeAddress(41) } };
     ObjectReadResult result;
@@ -2524,6 +2744,42 @@ TEST(ObjectClientTransportTest, BatchExternalOwnersMaterializeIntoIndependentSdk
     EXPECT_TRUE(weakOwner.expired());
 }
 
+TEST(ObjectClientTransportTest, RoutedShmBufferUsesTargetSessionLockId)
+{
+    constexpr uint32_t TARGET_SESSION_LOCK_ID = 17;
+    constexpr uint64_t METADATA_SIZE = 64;
+    constexpr uint64_t DATA_SIZE = 4;
+    auto owner = std::make_shared<FakeBufferOwner>(METADATA_SIZE + DATA_SIZE, true);
+    std::copy_n("data", DATA_SIZE, owner->data.data() + METADATA_SIZE);
+    ConnectOptions options;
+    options.host = "127.0.0.1";
+    options.port = 31501;
+    auto client = std::make_shared<object_cache::ObjectClientImpl>(options);
+    auto workerApi = std::make_shared<object_cache::ClientWorkerRemoteApi>(MakeAddress(31501), RpcCredential{});
+    workerApi->clientId_ = "materialization-test-client";
+    client->workerApi_.emplace_back(workerApi);
+    ObjectReadItemResult item;
+    item.objectKey = "routed-shm";
+    item.data.response.set_data_size(DATA_SIZE);
+    item.data.externalData = owner->data.data();
+    item.data.externalSize = DATA_SIZE;
+    item.data.externalOwner = owner;
+    ExternalBufferMeta meta;
+    meta.metadataSize = METADATA_SIZE;
+    meta.shmId = ShmKey::Intern("target-worker-shm");
+    meta.lockId = TARGET_SESSION_LOCK_ID;
+    meta.workerAddr = MakeAddress(31502);
+    item.data.externalMeta = meta;
+    std::shared_ptr<Buffer> buffer;
+
+    ASSERT_TRUE(client->MaterializeTransportItem(item.objectKey, item, buffer).IsOk());
+    ASSERT_NE(buffer, nullptr);
+    ASSERT_NE(buffer->bufferInfo_, nullptr);
+    EXPECT_TRUE(buffer->bufferInfo_->useSessionLockId);
+    EXPECT_EQ(buffer->bufferInfo_->sessionLockId, TARGET_SESSION_LOCK_ID);
+    EXPECT_EQ(std::string(static_cast<const char *>(buffer->ImmutableData()), DATA_SIZE), "data");
+}
+
 TEST(ObjectClientTransportTest, ConnectOptionsPolicyControlsWritePlacement)
 {
     ConnectOptions options;
@@ -2570,6 +2826,7 @@ TEST(ObjectReadFlowTest, QueriesMultipleOwnersInParallelAndPreservesPartialSucce
     auto taskPool = std::make_shared<ThreadPool>(0, 4, "object_read_test");
     ObjectReadFlow flow(metadata, replicas, taskPool);
     ObjectReadRequest request;
+    request.context = MakeReadContext();
     request.items = { { 7, "good", MakeAddress(41) }, { 3, "bad", MakeAddress(42) } };
     ObjectReadResult result;
     const auto callerThread = std::this_thread::get_id();
@@ -2596,6 +2853,7 @@ TEST(ObjectReadFlowTest, ReturnsFirstInputErrorWhenAllKeysFail)
     auto replicas = std::make_shared<FakeReplicaReader>();
     ObjectReadFlow flow(metadata, replicas, std::make_shared<ThreadPool>(0, 2, "object_read_test"));
     ObjectReadRequest request;
+    request.context = MakeReadContext();
     request.items = { { 1, "first", MakeAddress(41) }, { 0, "second", MakeAddress(41) } };
     ObjectReadResult result;
 
@@ -3696,16 +3954,35 @@ TEST(UbTransporterTest, BatchGetAggregateCloseWaitsForRpcAndResultSetup)
 
 TEST(ShmTransporterTest, RejectsGetWhenRpcClientAbsent)
 {
-    ShmTransporter transporter(std::shared_ptr<WorkerRpcClient>{});
+    ShmTransporter transporter(MakeAddress(9100), std::shared_ptr<WorkerRpcClient>{});
     DataGetResult result;
     EXPECT_EQ(transporter.Get({ "key", 1 }, result).GetCode(), K_RUNTIME_ERROR);
+}
+
+TEST(ShmTransporterTest, RejectsInvalidUnaryWorkerOcResponseIndex)
+{
+    GetRspPb response;
+    response.add_objects()->set_object_index(1);
+    std::vector<RpcMessage> payloads;
+
+    EXPECT_EQ(ShmTransporter::ValidateShmResponse(response, payloads, 1).GetCode(), K_RUNTIME_ERROR);
+}
+
+TEST(ShmTransporterTest, RejectsDuplicateBatchWorkerOcResponseIndexes)
+{
+    GetRspPb response;
+    response.add_objects()->set_object_index(0);
+    response.add_objects()->set_object_index(0);
+    std::vector<RpcMessage> payloads;
+
+    EXPECT_EQ(ShmTransporter::ValidateShmResponse(response, payloads, 2).GetCode(), K_RUNTIME_ERROR);
 }
 
 // Create with store_fd=0 (default) → fallback path: no mmap entry, buffer malloc'd for payload inline.
 TEST(ShmTransporterTest, CreateFallsBackToPayloadWhenNoStoreFd)
 {
     auto rpc = std::make_shared<FakeWorkerRpcClient>();
-    ShmTransporter transporter(rpc);
+    ShmTransporter transporter(MakeAddress(9100), rpc);
     std::shared_ptr<ObjectBuffer> buffer;
     ASSERT_TRUE(transporter.Create(MakeAddress(9100), "k1", 1024, MakeCreateParam(), buffer).IsOk());
     ASSERT_NE(buffer, nullptr);
@@ -3716,11 +3993,27 @@ TEST(ShmTransporterTest, CreateFallsBackToPayloadWhenNoStoreFd)
     EXPECT_EQ(rpc->createInvokeCount, 1);
 }
 
+TEST(ShmTransporterTest, CreateDoesNotResolveTargetFdThroughBoundWorkerState)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    rpc->createResponseStoreFd = 11;
+    rpc->createResponseMmapSize = 4096;
+    rpc->createResponseMetadataSize = 64;
+    ShmTransporter transporter(MakeAddress(9100), rpc);
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(transporter.Create(MakeAddress(9100), "target-fd", 1024, MakeCreateParam(), buffer).IsOk());
+    ASSERT_NE(buffer, nullptr);
+    const auto &info = ObjectBufferInternal::GetInfo(*buffer);
+    EXPECT_EQ(info.mmapEntry, nullptr);
+    EXPECT_EQ(info.metadataSize, 0u);
+    EXPECT_NE(info.pointer, nullptr);
+}
+
 // Set on a fallback (non-mmap) buffer sends payload inline (InvokeSet called with non-empty payloads).
 TEST(ShmTransporterTest, SetSendsPayloadInlineForFallbackBuffer)
 {
     auto rpc = std::make_shared<FakeWorkerRpcClient>();
-    ShmTransporter transporter(rpc);
+    ShmTransporter transporter(MakeAddress(9101), rpc);
     std::shared_ptr<ObjectBuffer> buffer;
     ASSERT_TRUE(transporter.Create(MakeAddress(9101), "k2", 64, MakeCreateParam(), buffer).IsOk());
     TransportSetParam sp = MakeSetParam();
@@ -3735,7 +4028,7 @@ TEST(ShmTransporterTest, MCreateReleasesShmIdsOnResponseCountMismatch)
 {
     auto rpc = std::make_shared<FakeWorkerRpcClient>();
     rpc->multiCreateResultCount = 2;  // return 2 results for 3 keys → count mismatch
-    ShmTransporter transporter(rpc);
+    ShmTransporter transporter(MakeAddress(9102), rpc);
     std::vector<std::string> keys = { "mk1", "mk2", "mk3" };
     std::vector<uint64_t> sizes = { 64, 64, 64 };
     std::vector<std::shared_ptr<ObjectBuffer>> buffers;
@@ -3749,11 +4042,45 @@ TEST(ShmTransporterTest, MCreateReleasesShmIdsOnResponseCountMismatch)
     EXPECT_EQ(rpc->decreaseReferenceShmIds[1], ShmKey::Intern("multi-shm-1"));
 }
 
+TEST(ShmTransporterTest, CreateReleasesWorkerAllocationWhenLocalBufferSetupFails)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    ShmTransporter transporter(MakeAddress(9102), rpc);
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(inject::Set("ShmTransporter.BuildLocalBuffer", "return(K_OUT_OF_MEMORY)").IsOk());
+    Raii clearInject([]() { (void)inject::Clear("ShmTransporter.BuildLocalBuffer"); });
+
+    EXPECT_EQ(transporter.Create(MakeAddress(9102), "create-fail", 64, MakeCreateParam(), buffer).GetCode(),
+              K_OUT_OF_MEMORY);
+    EXPECT_EQ(buffer, nullptr);
+    EXPECT_EQ(rpc->decreaseReferenceCount, 1);
+    ASSERT_EQ(rpc->decreaseReferenceShmIds.size(), 1u);
+    EXPECT_EQ(rpc->decreaseReferenceShmIds[0], ShmKey::Intern("test-shm-id"));
+}
+
+TEST(ShmTransporterTest, MCreateReleasesAllWorkerAllocationsWhenLocalBufferSetupFails)
+{
+    auto rpc = std::make_shared<FakeWorkerRpcClient>();
+    ShmTransporter transporter(MakeAddress(9102), rpc);
+    std::vector<std::shared_ptr<ObjectBuffer>> buffers;
+    ASSERT_TRUE(inject::Set("ShmTransporter.BuildLocalBuffer", "return(K_OUT_OF_MEMORY)").IsOk());
+    Raii clearInject([]() { (void)inject::Clear("ShmTransporter.BuildLocalBuffer"); });
+
+    EXPECT_EQ(transporter.MCreate(MakeAddress(9102), { "first", "second" }, { 64, 64 },
+                                  MakeCreateParam(), buffers).GetCode(),
+              K_OUT_OF_MEMORY);
+    EXPECT_TRUE(buffers.empty());
+    EXPECT_EQ(rpc->decreaseReferenceCount, 2);
+    ASSERT_EQ(rpc->decreaseReferenceShmIds.size(), 2u);
+    EXPECT_EQ(rpc->decreaseReferenceShmIds[0], ShmKey::Intern("multi-shm-0"));
+    EXPECT_EQ(rpc->decreaseReferenceShmIds[1], ShmKey::Intern("multi-shm-1"));
+}
+
 // MCreate success path: worker returns one result per key → buffers built, no Release.
 TEST(ShmTransporterTest, MCreateSucceedsBuildsBuffers)
 {
     auto rpc = std::make_shared<FakeWorkerRpcClient>();
-    ShmTransporter transporter(rpc);
+    ShmTransporter transporter(MakeAddress(9103), rpc);
     std::vector<std::string> keys = { "ok1", "ok2" };
     std::vector<uint64_t> sizes = { 32, 32 };
     std::vector<std::shared_ptr<ObjectBuffer>> buffers;
@@ -3767,61 +4094,23 @@ TEST(ShmTransporterTest, ReleasePropagatesDecreaseReferenceError)
 {
     auto rpc = std::make_shared<FakeWorkerRpcClient>();
     rpc->decreaseReferenceStatus = Status(K_RPC_UNAVAILABLE, "worker gone");
-    ShmTransporter transporter(rpc);
+    ShmTransporter transporter(MakeAddress(9104), rpc);
     TransportRequestContext ctx;
     EXPECT_EQ(transporter.Release(ShmKey::Intern("shm-x"), ctx).GetCode(), K_RPC_UNAVAILABLE);
     EXPECT_EQ(rpc->decreaseReferenceCount, 1);
-}
-
-// BatchGet single-element: a transport-level failure (status error + response error_code==K_OK) must propagate
-// the status up instead of being swallowed into item.status (review 180849217 contract).
-TEST(ShmTransporterTest, BatchGetSinglePropagatesTransportLevelFailure)
-{
-    auto rpc = std::make_shared<FakeWorkerRpcClient>();
-    rpc->getObjectStatus = Status(K_RPC_UNAVAILABLE, "rpc failed");
-    // getObjectResponseCode defaults to K_OK → BatchGetOne treats this as a transport-level failure.
-    ShmTransporter transporter(rpc);
-    DataGetBatchRequest inputs;
-    DataGetRequest req;
-    req.objectKey = "bg1";
-    req.expectedSize = 16;
-    inputs.push_back(req);
-    DataGetBatchResult outputs;
-    EXPECT_EQ(transporter.BatchGet(inputs, outputs).GetCode(), K_RPC_UNAVAILABLE);
-    // Transport failure: outputs unchanged (not emplaced), aligned with TcpTransporter (review 181252346).
-    EXPECT_TRUE(outputs.empty());
-}
-
-// BatchGet single-element: a worker business error (response error_code != K_OK) is swallowed into item.status,
-// BatchGet returns OK (matching TcpTransporter per-item semantics).
-TEST(ShmTransporterTest, BatchGetSingleSwallowsBusinessErrorIntoItemStatus)
-{
-    auto rpc = std::make_shared<FakeWorkerRpcClient>();
-    rpc->getObjectStatus = Status(K_NOT_FOUND, "worker business error");
-    rpc->getObjectResponseCode = K_NOT_FOUND;  // non-K_OK → business error, not transport
-    ShmTransporter transporter(rpc);
-    DataGetBatchRequest inputs;
-    DataGetRequest req;
-    req.objectKey = "bg2";
-    req.expectedSize = 16;
-    inputs.push_back(req);
-    DataGetBatchResult outputs;
-    EXPECT_TRUE(transporter.BatchGet(inputs, outputs).IsOk());
-    ASSERT_EQ(outputs.size(), 1u);
-    EXPECT_FALSE(outputs[0].status.IsOk());
-    EXPECT_EQ(outputs[0].status.GetCode(), K_NOT_FOUND);
 }
 
 // MSet uses a single InvokeMultiSet RPC (not N serial Set calls). Verifies the batch path is taken.
 TEST(ShmTransporterTest, MSetUsesSingleInvokeMultiSetNotSerialSet)
 {
     auto rpc = std::make_shared<FakeWorkerRpcClient>();
-    ShmTransporter transporter(rpc);
+    ShmTransporter transporter(MakeAddress(9200), rpc);
     // Build 3 buffers via Create (store_fd=0 → fallback, mmapEntry null).
     std::vector<std::shared_ptr<ObjectBuffer>> buffers;
     for (int i = 0; i < 3; ++i) {
         std::shared_ptr<ObjectBuffer> buf;
-        ASSERT_TRUE(transporter.Create(MakeAddress(9200), "mset-k" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
+        ASSERT_TRUE(
+            transporter.Create(MakeAddress(9200), "mset-k" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
         buffers.push_back(buf);
     }
     TransportSetParam sp = MakeSetParam();
@@ -3831,7 +4120,9 @@ TEST(ShmTransporterTest, MSetUsesSingleInvokeMultiSetNotSerialSet)
     EXPECT_EQ(rpc->setInvokeCount, 0);
     ASSERT_EQ(rpc->invokedMultiSetRequests.size(), 1u);
     EXPECT_TRUE(result.lastRc.IsOk());
-    EXPECT_EQ(result.actualKind, AccessTransportKind::SHM);
+    // Routed MSet publishes local payload buffers through an inline RPC payload (plain TCP), so the
+    // access kind is TCP; the SHM transporter kind is reserved for Get/BatchGet fd-passing.
+    EXPECT_EQ(result.actualKind, AccessTransportKind::TCP);
     EXPECT_TRUE(result.publishAttempted);
 }
 
@@ -3842,11 +4133,12 @@ TEST(ShmTransporterTest, MSetPartialFailureReturnsOkWithFailedKeys)
     rpc->multiSetFailedKeys = { "mset-p1" };  // 1 of 3 fails
     rpc->multiSetLastCode = K_NOT_FOUND;
     rpc->multiSetLastMessage = "not found";
-    ShmTransporter transporter(rpc);
+    ShmTransporter transporter(MakeAddress(9201), rpc);
     std::vector<std::shared_ptr<ObjectBuffer>> buffers;
     for (int i = 0; i < 3; ++i) {
         std::shared_ptr<ObjectBuffer> buf;
-        ASSERT_TRUE(transporter.Create(MakeAddress(9201), "mset-p" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
+        ASSERT_TRUE(
+            transporter.Create(MakeAddress(9201), "mset-p" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
         ObjectBufferInternal::GetMutableInfo(*buf).mmapEntry = std::make_shared<FakeMmapTableEntry>();
         buffers.push_back(buf);
     }
@@ -3869,11 +4161,12 @@ TEST(ShmTransporterTest, MSetAllFailureReturnsLastError)
     rpc->multiSetFailedKeys = { "mset-a0", "mset-a1" };
     rpc->multiSetLastCode = K_RPC_UNAVAILABLE;
     rpc->multiSetLastMessage = "worker gone";
-    ShmTransporter transporter(rpc);
+    ShmTransporter transporter(MakeAddress(9202), rpc);
     std::vector<std::shared_ptr<ObjectBuffer>> buffers;
     for (int i = 0; i < 2; ++i) {
         std::shared_ptr<ObjectBuffer> buf;
-        ASSERT_TRUE(transporter.Create(MakeAddress(9202), "mset-a" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
+        ASSERT_TRUE(
+            transporter.Create(MakeAddress(9202), "mset-a" + std::to_string(i), 64, MakeCreateParam(), buf).IsOk());
         buffers.push_back(buf);
     }
     TransportSetParam sp = MakeSetParam();
@@ -3889,8 +4182,8 @@ TEST(ShmTransporterTest, MSetFullFailureWithoutFailedKeysKeepsClientCleanup)
     auto rpc = std::make_shared<FakeWorkerRpcClient>();
     rpc->multiSetLastCode = K_OUT_OF_MEMORY;
     rpc->multiSetLastMessage = "master rejected the batch";
-    ShmTransporter transporter(rpc);
     const HostPort workerAddr = MakeAddress(9203);
+    ShmTransporter transporter(workerAddr, rpc);
     auto first = MakeTransportBuffer(workerAddr, "mset-f0", "data", "shm-f0");
     auto second = MakeTransportBuffer(workerAddr, "mset-f1", "data", "shm-f1");
     ASSERT_NE(first, nullptr);
@@ -4015,7 +4308,7 @@ TEST(ReplicaReaderTest, TriesNextLocationWithoutRefreshingMetadata)
     ObjectReadItemResult result;
 
     result.requestIndex = 7;
-    ASSERT_TRUE(reader.Read(location, result).IsOk());
+    ASSERT_TRUE(reader.Read(location, result, MakeReadContext()).IsOk());
     EXPECT_EQ(result.requestIndex, 7u);
     EXPECT_EQ(result.objectKey, "key");
     EXPECT_EQ(manager->transportBuildCount, 2);
@@ -4035,7 +4328,7 @@ TEST(ReplicaReaderTest, StopsOnNonRetryableLocationError)
     location.add_object_locations(MakeAddress(34).ToString());
     ObjectReadItemResult result;
 
-    EXPECT_EQ(reader.Read(location, result).GetCode(), K_INVALID);
+    EXPECT_EQ(reader.Read(location, result, MakeReadContext()).GetCode(), K_INVALID);
     EXPECT_EQ(manager->transportBuildCount, 1);
 }
 
@@ -4054,7 +4347,7 @@ TEST(ReplicaReaderTest, StartsAnotherRoundWithoutRefreshingMetadata)
     location.add_object_locations(MakeAddress(36).ToString());
     ObjectReadItemResult result;
 
-    ASSERT_TRUE(reader.Read(location, result).IsOk());
+    ASSERT_TRUE(reader.Read(location, result, MakeReadContext()).IsOk());
     EXPECT_EQ(result.objectKey, "key");
     EXPECT_EQ(manager->transportBuildCount, 2);
 }
@@ -4072,7 +4365,7 @@ TEST(ReplicaReaderTest, BatchSameAddressUsesOneBatchAndPreservesCallerOrder)
         locations[i].set_object_key("key-" + std::to_string(i));
         locations[i].set_object_size(i + 1);
         locations[i].add_object_locations(MakeAddress(40).ToString());
-        requests.push_back({ &locations[i], &results[i] });
+        requests.push_back({ &locations[i], &results[i], MakeReadContext() });
     }
 
     ASSERT_TRUE(reader.ReadBatch(requests).IsOk());
@@ -4118,7 +4411,7 @@ TEST(ReplicaReaderTest, BatchDifferentAddressesExecuteConcurrentlyWithDisjointRe
     std::vector<ObjectReadItemResult> results(locations.size());
     ReplicaReadBatch requests;
     for (size_t i = 0; i < locations.size(); ++i) {
-        requests.push_back({ &locations[i], &results[i] });
+        requests.push_back({ &locations[i], &results[i], MakeReadContext() });
     }
 
     auto readFuture = std::async(std::launch::async, [&]() { return reader.ReadBatch(requests); });
@@ -4157,7 +4450,7 @@ TEST(ReplicaReaderTest, BatchEndpointFailureDoesNotDiscardPeerSuccess)
     std::vector<ObjectReadItemResult> results(locations.size());
     ReplicaReadBatch requests;
     for (size_t i = 0; i < locations.size(); ++i) {
-        requests.push_back({ &locations[i], &results[i] });
+        requests.push_back({ &locations[i], &results[i], MakeReadContext() });
     }
 
     EXPECT_TRUE(reader.ReadBatch(requests).IsOk());
@@ -4188,7 +4481,7 @@ TEST(ReplicaReaderTest, BatchRetryableItemsRegroupAtNextReplicaAndSuccessfulPeer
     std::vector<ObjectReadItemResult> results(locations.size());
     ReplicaReadBatch requests;
     for (size_t i = 0; i < locations.size(); ++i) {
-        requests.push_back({ &locations[i], &results[i] });
+        requests.push_back({ &locations[i], &results[i], MakeReadContext() });
     }
 
     ASSERT_TRUE(reader.ReadBatch(requests).IsOk());
@@ -4240,7 +4533,9 @@ TEST(ReplicaReaderTest, BatchSizeChangeRetriesSameReplicaWithUpdatedExpectedSize
     };
     std::vector<ObjectReadItemResult> results(locations.size());
 
-    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] }, { &locations[1], &results[1] } }).IsOk());
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&locations[0], &results[0]),
+                                   MakeReplicaReadRequest(&locations[1], &results[1]) })
+                    .IsOk());
     EXPECT_EQ(attempts.load(), 2);
     EXPECT_TRUE(results[0].status.IsOk());
     EXPECT_TRUE(results[1].status.IsOk());
@@ -4269,7 +4564,7 @@ TEST(ReplicaReaderTest, BatchUnarySizeChangeRetriesSameReplicaWithUpdatedExpecte
     auto location = MakeReplicaLocation("changed", 4, { MakeAddress(70) });
     ObjectReadItemResult result;
 
-    ASSERT_TRUE(reader.ReadBatch({ { &location, &result } }).IsOk());
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).IsOk());
     EXPECT_EQ(attempts.load(), 2);
     EXPECT_EQ(reader.backoffCount, 0);
     EXPECT_TRUE(result.status.IsOk());
@@ -4292,7 +4587,7 @@ TEST(ReplicaReaderTest, BatchUnchangedSizeErrorAdvancesReplicaInsteadOfSpinning)
     auto location = MakeReplicaLocation("key", 4, { MakeAddress(50), MakeAddress(51) });
     ObjectReadItemResult result;
 
-    ASSERT_TRUE(reader.ReadBatch({ { &location, &result } }).IsOk());
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).IsOk());
     EXPECT_TRUE(result.status.IsOk());
     EXPECT_EQ(manager->transportBuildCount, 2);
 }
@@ -4309,7 +4604,7 @@ TEST(ReplicaReaderTest, BatchChunksByObjectCountAndExpectedBytesAndUsesUnaryForS
     countLocations.reserve(1025);
     for (size_t i = 0; i < 1025; ++i) {
         countLocations.emplace_back(MakeReplicaLocation("count-" + std::to_string(i), 1, { MakeAddress(52) }));
-        countRequests.push_back({ &countLocations.back(), &countResults[i] });
+        countRequests.push_back(MakeReplicaReadRequest(&countLocations.back(), &countResults[i]));
     }
     ASSERT_TRUE(reader.ReadBatch(countRequests).IsOk());
     ASSERT_EQ(manager->builtTransporters.size(), 1u);
@@ -4327,9 +4622,10 @@ TEST(ReplicaReaderTest, BatchChunksByObjectCountAndExpectedBytesAndUsesUnaryForS
         MakeReplicaLocation("small", 1, { MakeAddress(53) })
     };
     std::vector<ObjectReadItemResult> byteResults(3);
-    ASSERT_TRUE(byteReader.ReadBatch({ { &byteLocations[0], &byteResults[0] },
-                                       { &byteLocations[1], &byteResults[1] },
-                                       { &byteLocations[2], &byteResults[2] } }).IsOk());
+    ASSERT_TRUE(byteReader.ReadBatch({ MakeReplicaReadRequest(&byteLocations[0], &byteResults[0]),
+                                       MakeReplicaReadRequest(&byteLocations[1], &byteResults[1]),
+                                       MakeReplicaReadRequest(&byteLocations[2], &byteResults[2]) })
+                    .IsOk());
     ASSERT_EQ(byteManager->builtTransporters.size(), 1u);
     EXPECT_EQ(byteManager->builtTransporters[0]->getCount, 1);
     ASSERT_EQ(byteManager->builtTransporters[0]->batchGetRequests.size(), 1u);
@@ -4350,9 +4646,10 @@ TEST(ReplicaReaderTest, BatchObjectLargerThanByteCapFormsUnaryChunk)
     };
     std::vector<ObjectReadItemResult> results(3);
 
-    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] },
-                                   { &locations[1], &results[1] },
-                                   { &locations[2], &results[2] } }).IsOk());
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&locations[0], &results[0]),
+                                   MakeReplicaReadRequest(&locations[1], &results[1]),
+                                   MakeReplicaReadRequest(&locations[2], &results[2]) })
+                    .IsOk());
     ASSERT_EQ(manager->builtTransporters.size(), 1u);
     const auto &transporter = manager->builtTransporters[0];
     ASSERT_EQ(transporter->getRequests.size(), 1u);
@@ -4388,9 +4685,10 @@ TEST(ReplicaReaderTest, BatchMixedItemStatusesTransitionIndependently)
     };
     std::vector<ObjectReadItemResult> results(3);
 
-    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] },
-                                   { &locations[1], &results[1] },
-                                   { &locations[2], &results[2] } }).IsOk());
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&locations[0], &results[0]),
+                                   MakeReplicaReadRequest(&locations[1], &results[1]),
+                                   MakeReplicaReadRequest(&locations[2], &results[2]) })
+                    .IsOk());
     EXPECT_TRUE(results[0].status.IsOk());
     EXPECT_TRUE(results[1].status.IsOk());
     EXPECT_EQ(results[2].status.GetCode(), K_INVALID);
@@ -4408,8 +4706,10 @@ TEST(ReplicaReaderTest, BatchInvalidItemsDoNotCorruptValidPeer)
     ObjectReadItemResult emptyResult;
     ObjectReadItemResult validResult;
 
-    EXPECT_TRUE(reader.ReadBatch({ { &emptyLocation, &emptyResult }, { nullptr, nullptr },
-                                   { &validLocation, &validResult } }).IsOk());
+    EXPECT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&emptyLocation, &emptyResult),
+                                   MakeReplicaReadRequest(nullptr, nullptr),
+                                   MakeReplicaReadRequest(&validLocation, &validResult) })
+                    .IsOk());
     EXPECT_EQ(emptyResult.status.GetCode(), K_NOT_FOUND);
     EXPECT_TRUE(validResult.status.IsOk());
 }
@@ -4428,7 +4728,7 @@ TEST(ReplicaReaderTest, BatchNonRetryableItemTerminatesWithoutTryingNextReplica)
     auto location = MakeReplicaLocation("key", 1, { MakeAddress(59), MakeAddress(60) });
     ObjectReadItemResult result;
 
-    EXPECT_EQ(reader.ReadBatch({ { &location, &result } }).GetCode(), K_INVALID);
+    EXPECT_EQ(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).GetCode(), K_INVALID);
     EXPECT_EQ(result.status.GetCode(), K_INVALID);
     EXPECT_EQ(manager->transportBuildCount, 1);
 }
@@ -4458,7 +4758,9 @@ TEST(ReplicaReaderTest, BatchBacksOffOnceAfterAllUnresolvedItemsCompleteReplicaR
     };
     std::vector<ObjectReadItemResult> results(2);
 
-    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] }, { &locations[1], &results[1] } }).IsOk());
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&locations[0], &results[0]),
+                                   MakeReplicaReadRequest(&locations[1], &results[1]) })
+                    .IsOk());
     EXPECT_EQ(reader.backoffCount, 1);
     EXPECT_EQ(calls.at(MakeAddress(61).ToString())->load(), 2);
     EXPECT_EQ(calls.at(MakeAddress(63).ToString())->load(), 2);
@@ -4495,7 +4797,9 @@ TEST(ReplicaReaderTest, BatchDifferingReplicaCountsShareBackoffAfterLongestRound
     };
     std::vector<ObjectReadItemResult> results(2);
 
-    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] }, { &locations[1], &results[1] } }).IsOk());
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&locations[0], &results[0]),
+                                   MakeReplicaReadRequest(&locations[1], &results[1]) })
+                    .IsOk());
     EXPECT_EQ(reader.backoffCount, 1);
     EXPECT_EQ(shortCalls->load(), 2);
     EXPECT_EQ(firstLongCalls->load(), 2);
@@ -4515,7 +4819,7 @@ TEST(ReplicaReaderTest, BatchDeadlineReturnsLastMeaningfulItemError)
     auto location = MakeReplicaLocation("key", 1, { MakeAddress(65) });
     ObjectReadItemResult result;
 
-    Status status = reader.ReadBatch({ { &location, &result } });
+    Status status = reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) });
     EXPECT_EQ(status.GetCode(), K_NOT_FOUND);
     EXPECT_EQ(result.status.GetCode(), K_NOT_FOUND);
     EXPECT_EQ(result.status.GetMsg(), "meaningful miss");
@@ -4533,7 +4837,7 @@ TEST(ReplicaReaderTest, BatchDeadlineBeforeFirstAttemptReturnsDeadlineNotSynthet
     auto location = MakeReplicaLocation("key", 1, { MakeAddress(66) });
     ObjectReadItemResult result;
 
-    Status status = reader.ReadBatch({ { &location, &result } });
+    Status status = reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) });
     EXPECT_EQ(status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(result.status.GetCode(), K_RPC_DEADLINE_EXCEEDED);
     EXPECT_EQ(manager->transportBuildCount, 0);
@@ -4552,7 +4856,7 @@ TEST(ReplicaReaderTest, BatchSingleReplicaBackoffDoesNotCountReplicaRetry)
     auto location = MakeReplicaLocation("single", 1, { MakeAddress(79) });
     ObjectReadItemResult result;
 
-    EXPECT_EQ(reader.ReadBatch({ { &location, &result } }).GetCode(), K_NOT_FOUND);
+    EXPECT_EQ(reader.ReadBatch({ MakeReplicaReadRequest(&location, &result) }).GetCode(), K_NOT_FOUND);
     EXPECT_EQ(reader.backoffCount, 1);
     ExpectMetricAbsent("client_direct_batch_get_replica_retry_total");
 }
@@ -4591,7 +4895,9 @@ TEST(ReplicaReaderTest, BatchNonPositiveSizeChangeAdvancesWithoutUnsignedConvers
     };
     std::vector<ObjectReadItemResult> results(2);
 
-    ASSERT_TRUE(reader.ReadBatch({ { &locations[0], &results[0] }, { &locations[1], &results[1] } }).IsOk());
+    ASSERT_TRUE(reader.ReadBatch({ MakeReplicaReadRequest(&locations[0], &results[0]),
+                                   MakeReplicaReadRequest(&locations[1], &results[1]) })
+                    .IsOk());
     EXPECT_TRUE(results[0].status.IsOk());
     EXPECT_TRUE(results[1].status.IsOk());
 }
@@ -4626,7 +4932,7 @@ TEST(ReplicaReaderTest, BatchSameEndpointChunksRunSequentiallyInOneTask)
     locations.reserve(1025);
     for (size_t i = 0; i < 1025; ++i) {
         locations.emplace_back(MakeReplicaLocation("key-" + std::to_string(i), 1, { MakeAddress(69) }));
-        requests.push_back({ &locations.back(), &results[i] });
+        requests.push_back({ &locations.back(), &results[i], MakeReadContext() });
     }
 
     ASSERT_TRUE(reader.ReadBatch(requests).IsOk());
@@ -4687,6 +4993,23 @@ TEST(ObjectBufferTest, DestructorFreesMallocedMemory)
     // Buffer is destroyed when shared_ptr goes out of scope -- covered by ASan
     buffer.reset();
     SUCCEED();
+}
+
+TEST(ObjectBufferTest, DestructorFreesLocalPayloadWithWorkerShmId)
+{
+    auto info = std::make_shared<ObjectBufferInfo>();
+    info->objectKey = "routed-local-payload";
+    info->dataSize = 32;
+    info->metadataSize = 0;
+    info->workerAddr = MakeAddress(9000);
+    info->pointer = nullptr;
+    info->shmId = ShmKey::Intern("worker-allocation-id");
+
+    std::shared_ptr<ObjectBuffer> buffer;
+    ASSERT_TRUE(ObjectBufferInternal::Create(info, buffer).IsOk());
+    ASSERT_NE(info->pointer, nullptr);
+    buffer.reset();
+    EXPECT_EQ(info->pointer, nullptr);
 }
 
 TEST(ObjectBufferTest, RejectsAllocationSizeOverflow)

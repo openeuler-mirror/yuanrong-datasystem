@@ -150,17 +150,19 @@ void DataPlaneManager::WorkerTransportEntry::ResetDataPlaneLocked()
 
 void DataPlaneManager::WorkerTransportEntry::ResetDataPlane()
 {
-    std::unique_lock<std::shared_mutex> lock(mutex);
+    bthread::RWLockWrGuard lock(mutex);
     ResetDataPlaneLocked();
 }
 
 DataPlaneManager::DataPlaneManager(std::shared_ptr<Signature> signature, uint64_t fastTransportMemSize,
                                    BrpcChannelConfig channelConfig,
                                    std::shared_ptr<IUbReceiveBufferProvider> ubBufferProvider,
-                                   bool enableClientDirectPipelineH2D, int32_t pipelineThreadNum)
+                                   bool enableClientDirectPipelineH2D, int32_t pipelineThreadNum,
+                                   std::shared_ptr<ThreadPool> releasePool)
     : signature_(std::move(signature)), channelConfig_(std::move(channelConfig)),
       ubBufferProvider_(std::move(ubBufferProvider)), fastTransportMemSize_(fastTransportMemSize),
-      enableClientDirectPipelineH2D_(enableClientDirectPipelineH2D), pipelineThreadNum_(pipelineThreadNum)
+      enableClientDirectPipelineH2D_(enableClientDirectPipelineH2D), pipelineThreadNum_(pipelineThreadNum),
+      releasePool_(std::move(releasePool))
 {
 }
 
@@ -171,7 +173,7 @@ DataPlaneManager::~DataPlaneManager()
 
 Status DataPlaneManager::Init()
 {
-    std::lock_guard<std::mutex> lock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lock(lifecycleMutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     RETURN_RUNTIME_ERROR_IF_NULL(signature_);
@@ -222,7 +224,7 @@ Status DataPlaneManager::GetOrCreateEndpoint(const HostPort &workerAddr, Transpo
     RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
     RETURN_IF_NOT_OK(GetOrBuildTransporter(workerAddr, hint, expectedKind, entry, transporter));
 
-    std::shared_lock<std::shared_mutex> lock(entry->mutex);
+    bthread::RWLockRdGuard lock(entry->mutex);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     CHECK_FAIL_RETURN_STATUS(entry->transporter == transporter && entry->HasAliveTransporter(expectedKind),
@@ -245,7 +247,7 @@ Status DataPlaneManager::WithDataPlaneLease(
     std::shared_ptr<IDataTransporter> transporter;
     RETURN_IF_NOT_OK(GetOrBuildTransporter(workerAddr, hint, expectedKind, entry, transporter));
 
-    std::shared_lock<std::shared_mutex> lock(entry->mutex);
+    bthread::RWLockRdGuard lock(entry->mutex);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     CHECK_FAIL_RETURN_STATUS(entry->transporter == transporter && entry->HasAliveTransporter(expectedKind),
@@ -261,7 +263,7 @@ Status DataPlaneManager::GetOrCreateRpcClient(const HostPort &workerAddr, std::s
     std::shared_ptr<WorkerTransportEntry> entry;
     RETURN_IF_NOT_OK(GetOrCreateEntry(workerAddr.ToString(), entry));
     {
-        std::shared_lock<std::shared_mutex> lock(entry->mutex);
+        bthread::RWLockRdGuard lock(entry->mutex);
         CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                                  "DataPlaneManager is shutting down");
         if (entry->rpcClient != nullptr && entry->rpcClient->IsAlive()) {
@@ -269,7 +271,7 @@ Status DataPlaneManager::GetOrCreateRpcClient(const HostPort &workerAddr, std::s
             return Status::OK();
         }
     }
-    std::unique_lock<std::shared_mutex> lock(entry->mutex);
+    bthread::RWLockWrGuard lock(entry->mutex);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     RETURN_IF_NOT_OK(EnsureRpcClientLocked(workerAddr, entry));
@@ -281,7 +283,7 @@ Status DataPlaneManager::ProbeUbConnection(const HostPort &workerAddr, const std
 {
     HostPort probeWorker;
     {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
+        bthread::RWLockWrGuard lock(mutex_);
         CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                                  "DataPlaneManager is shutting down");
         CHECK_FAIL_RETURN_STATUS(hasWorkerSnapshot_, K_NOT_READY,
@@ -307,7 +309,7 @@ Status DataPlaneManager::ProbeUbConnection(const HostPort &workerAddr, const std
     RETURN_IF_NOT_OK(GetOrCreateRpcClient(probeWorker, rpcClient));
     RETURN_IF_NOT_OK(EstablishUbProbe(probeWorker, rpcClient));
 
-    std::unique_lock<std::shared_mutex> lock(mutex_);
+    bthread::RWLockWrGuard lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     CHECK_FAIL_RETURN_STATUS(
@@ -337,7 +339,7 @@ Status DataPlaneManager::EstablishUbProbe(const HostPort &workerAddr, const std:
 Status DataPlaneManager::GetOrCreateEntry(const std::string &workerKey,
                                           std::shared_ptr<WorkerTransportEntry> &entry)
 {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
+    bthread::RWLockRdGuard lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_ || liveWorkers_.find(workerKey) != liveWorkers_.end(), K_NOT_READY,
@@ -362,7 +364,7 @@ Status DataPlaneManager::GetOrBuildTransporter(const HostPort &workerAddr, Trans
                                                std::shared_ptr<IDataTransporter> &out)
 {
     {
-        std::shared_lock<std::shared_mutex> lock(entry->mutex);
+        bthread::RWLockRdGuard lock(entry->mutex);
         CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                                  "DataPlaneManager is shutting down");
         if (entry->HasAliveTransporter(expectedKind)) {
@@ -370,7 +372,7 @@ Status DataPlaneManager::GetOrBuildTransporter(const HostPort &workerAddr, Trans
             return Status::OK();
         }
     }
-    std::unique_lock<std::shared_mutex> entryLock(entry->mutex);
+    bthread::RWLockWrGuard entryLock(entry->mutex);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     if (entry->HasAliveTransporter(expectedKind)) {
@@ -426,7 +428,7 @@ void DataPlaneManager::ResetDataPlane(const HostPort &workerAddr)
 
     std::shared_ptr<WorkerTransportEntry> entry;
     {
-        std::shared_lock<std::shared_mutex> lock(mutex_);
+        bthread::RWLockRdGuard lock(mutex_);
         EntryMap::const_accessor accessor;
         if (entries_.find(accessor, workerAddr.ToString())) {
             entry = accessor->second;
@@ -445,7 +447,7 @@ void DataPlaneManager::Teardown(const HostPort &workerAddr)
 
     std::shared_ptr<WorkerTransportEntry> entry;
     {
-        std::shared_lock<std::shared_mutex> lock(mutex_);
+        bthread::RWLockRdGuard lock(mutex_);
         EntryMap::accessor accessor;
         if (entries_.find(accessor, workerAddr.ToString())) {
             entry = accessor->second;
@@ -461,7 +463,7 @@ Status DataPlaneManager::UpdateWorkerSnapshot(const WorkerSnapshot &snapshot)
 {
     auto liveWorkers = BuildLiveWorkerSet(snapshot);
     auto writeProbeWorkers = BuildWriteProbeWorkers(snapshot, liveWorkers);
-    std::unique_lock<std::shared_mutex> lock(mutex_);
+    bthread::RWLockWrGuard lock(mutex_);
     CHECK_FAIL_RETURN_STATUS(!shutdown_.load(std::memory_order_acquire), K_SHUTTING_DOWN,
                              "DataPlaneManager is shutting down");
     CHECK_FAIL_RETURN_STATUS(!hasWorkerSnapshot_ || snapshot.ringVersion >= workerSnapshotVersion_, K_INVALID,
@@ -488,7 +490,7 @@ void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
 
     std::vector<std::shared_ptr<WorkerTransportEntry>> goneEntries;
     {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
+        bthread::RWLockWrGuard lock(mutex_);
         if (shutdown_.load(std::memory_order_acquire)) {
             return;
         }
@@ -525,14 +527,14 @@ void DataPlaneManager::ReconcileWithSnapshot(const WorkerSnapshot &snapshot)
 
 void DataPlaneManager::Shutdown()
 {
-    std::lock_guard<std::mutex> lifecycleLock(lifecycleMutex_);
+    std::lock_guard<bthread::Mutex> lifecycleLock(lifecycleMutex_);
     if (shutdown_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
 
     std::vector<std::shared_ptr<WorkerTransportEntry>> entries;
     {
-        std::unique_lock<std::shared_mutex> lock(mutex_);
+        bthread::RWLockWrGuard lock(mutex_);
         entries.reserve(entries_.size());
         for (auto iter = entries_.begin(); iter != entries_.end(); ++iter) {
             if (iter->second != nullptr) {
@@ -576,19 +578,12 @@ Status DataPlaneManager::BuildTransporter(const HostPort &workerAddr, TransportH
                                           std::shared_ptr<IDataTransporter> &out)
 {
     if (hint == TransportHint::SHM_CANDIDATE) {
-        // Defensive: if the same-host worker's RPC client is not alive here (normally guaranteed
-        // alive by EnsureRpcClientLocked just before, but a race can tear it down), prefer building a
-        // TcpTransporter over a ShmTransporter. Both wrap the same dead rpcClient and will return
-        // K_RPC_UNAVAILABLE, but the TCP path returns the standard RPC error and lets the caller's
-        // rebuild/Teardown path re-establish the channel, instead of attempting shm fd-passing
-        // setup against a dead worker. This does not itself heal the connection.
-        if (rpcClient == nullptr || !rpcClient->IsAlive()) {
-            LOG(WARNING) << "SHM_CANDIDATE worker " << workerAddr.ToString()
-                         << " has no alive RPC client; building TCP transporter so the caller rebuilds.";
-            out = std::make_shared<TcpTransporter>(rpcClient);
-            return Status::OK();
-        }
-        out = std::make_shared<ShmTransporter>(rpcClient, workerApi_, mmapManager_);
+        // Same-host routing selects an endpoint-scoped SHM candidate. The initial bound Worker's
+        // IsShmEnable state says nothing about this target Worker; ShmConnection probes the target
+        // through GetSocketPath and RegisterClient when the first request supplies its auth context.
+        CHECK_FAIL_RETURN_STATUS(rpcClient != nullptr && rpcClient->IsAlive(), K_RPC_UNAVAILABLE,
+                                 "SHM_CANDIDATE worker RPC client is unavailable");
+        out = std::make_shared<ShmTransporter>(workerAddr, rpcClient, releasePool_);
         return Status::OK();
     }
     if (hint != TransportHint::TCP_ONLY) {

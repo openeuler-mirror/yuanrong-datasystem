@@ -176,7 +176,8 @@ void PropagateUnassignedBatchError(const ReplicaReadBatch &requests, const Statu
     }
 }
 
-void ReadObjects(ReplicaReader &replicas, std::vector<ReadItem> &items)
+void ReadObjects(ReplicaReader &replicas, std::vector<ReadItem> &items,
+                 const std::shared_ptr<const TransportReadContext> &context)
 {
     ReplicaReadBatch ready;
     ready.reserve(items.size());
@@ -188,7 +189,7 @@ void ReadObjects(ReplicaReader &replicas, std::vector<ReadItem> &items)
             item.result.data = std::move(*item.metadata.inlineData);
             item.result.status = Status::OK();
         } else {
-            ready.push_back({ &item.metadata.location, &item.result });
+            ready.push_back({ &item.metadata.location, &item.result, context });
         }
     }
     VLOG(1) << "[TransportGet][Flow] Read data, key count: " << ready.size()
@@ -196,7 +197,7 @@ void ReadObjects(ReplicaReader &replicas, std::vector<ReadItem> &items)
             << ", remaining deadline us: " << ApiDeadline::Instance().ApiRemainingUs();
     Status readStatus = Status::OK();
     if (ready.size() == 1) {
-        readStatus = replicas.Read(*ready.front().location, *ready.front().result);
+        readStatus = replicas.Read(*ready.front().location, *ready.front().result, ready.front().context);
         ready.front().result->status = readStatus;
     } else if (ready.size() > 1) {
         readStatus = replicas.ReadBatch(ready);
@@ -267,6 +268,7 @@ Status ObjectReadFlow::Run(const ObjectReadRequest &request, ObjectReadResult &r
     RETURN_RUNTIME_ERROR_IF_NULL(metadata_);
     RETURN_RUNTIME_ERROR_IF_NULL(replicas_);
     RETURN_RUNTIME_ERROR_IF_NULL(taskPool_);
+    CHECK_FAIL_RETURN_STATUS(request.context != nullptr, K_INVALID, "Transport read context is missing");
 
     std::vector<ReadItem> items;
     RETURN_IF_NOT_OK(InitializeItems(request, items));
@@ -274,7 +276,7 @@ Status ObjectReadFlow::Run(const ObjectReadRequest &request, ObjectReadResult &r
     QueryMetadata(*metadata_, *taskPool_, items);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_QUERY_AND_GET_END);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_START);
-    ReadObjects(*replicas_, items);
+    ReadObjects(*replicas_, items, request.context);
     AddLatencyTickIfEnabled(request.traceEnabled, LatencyTickKey::CLIENT_DIRECT_GET_DATA_END);
     return BuildResult(items, result);
 }

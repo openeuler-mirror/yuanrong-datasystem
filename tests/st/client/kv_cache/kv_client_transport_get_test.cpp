@@ -63,6 +63,10 @@ constexpr char SKIP_WARMUP_INJECT[] = "ObjectClientImpl.ClientWorkerWarmup.skip"
 constexpr char QUERY_AND_GET_INJECT[] = "client.transport.query_and_get";
 constexpr char GET_OBJECT_REMOTE_INJECT[] = "client.transport.get_object_remote";
 constexpr char BATCH_GET_OBJECT_REMOTE_INJECT[] = "client.transport.batch_get_object_remote";
+constexpr char WORKER_OC_GET_INJECT[] = "client.transport.worker_oc_get";
+constexpr char REGISTER_SHM_CLIENT_INJECT[] = "client.transport.register_shm_client";
+constexpr char GET_CLIENT_FD_INJECT[] = "client.transport.get_client_fd";
+constexpr char SHM_HEARTBEAT_INJECT[] = "client.transport.shm_heartbeat";
 constexpr char INLINE_READ_FAILURE_INJECT[] = "worker.worker_worker_remote_get_failure";
 constexpr char SHM_LATCH_FAIL_INJECT[] = "worker.ShmGuard.TryRLatch.Fail";
 constexpr char PROVIDER_GET_ENTER_INJECT[] = "worker.GetObjectRemote.afterRead";
@@ -72,10 +76,17 @@ constexpr char LOCAL_OBSERVATION_INJECT[] = "client.ub_health_filter.local_obser
 constexpr char LOCAL_READ_DENIED_INJECT[] = "client.ub_health_filter.local_read_denied";
 constexpr char GLOBAL_UNAVAILABLE_APPLIED_INJECT[] = "client.ub_health_filter.global_unavailable_applied";
 constexpr char GLOBAL_READ_DENIED_INJECT[] = "client.ub_health_filter.global_read_denied";
+constexpr char SHM_HOST_ID_ENV_NAME[] = "transport_get_shm_host_id";
+constexpr char SHM_HOST_ID_VALUE[] = "transport-get-shm-host";
 
 struct TransportRpcCounts {
     uint64_t queryAndGet = 0;
     uint64_t getObjectRemote = 0;
+    uint64_t batchGetObjectRemote = 0;
+    uint64_t workerOcGet = 0;
+    uint64_t registerShmClient = 0;
+    uint64_t getClientFd = 0;
+    uint64_t shmHeartbeat = 0;
 };
 
 const char *ExpectedTransport()
@@ -118,6 +129,11 @@ public:
         DS_ASSERT_OK(inject::Set(SKIP_WARMUP_INJECT, "call()"));
         DS_ASSERT_OK(inject::Set(QUERY_AND_GET_INJECT, "call()"));
         DS_ASSERT_OK(inject::Set(GET_OBJECT_REMOTE_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(BATCH_GET_OBJECT_REMOTE_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(WORKER_OC_GET_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(REGISTER_SHM_CLIENT_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(GET_CLIENT_FD_INJECT, "call()"));
+        DS_ASSERT_OK(inject::Set(SHM_HEARTBEAT_INJECT, "call()"));
         ExternalClusterTest::SetUp();
         CommonDistributedExt::InitTestEtcdInstance();
 
@@ -144,6 +160,11 @@ public:
         (void)inject::Clear(LOCAL_READ_DENIED_INJECT);
         (void)inject::Clear(GLOBAL_UNAVAILABLE_APPLIED_INJECT);
         (void)inject::Clear(GLOBAL_READ_DENIED_INJECT);
+        (void)inject::Clear(BATCH_GET_OBJECT_REMOTE_INJECT);
+        (void)inject::Clear(WORKER_OC_GET_INJECT);
+        (void)inject::Clear(REGISTER_SHM_CLIENT_INJECT);
+        (void)inject::Clear(GET_CLIENT_FD_INJECT);
+        (void)inject::Clear(SHM_HEARTBEAT_INJECT);
         ExternalClusterTest::TearDown();
         FLAGS_use_brpc = previousUseBrpc_;
     }
@@ -216,6 +237,11 @@ protected:
     {
         counts.queryAndGet = inject::GetExecuteCount(QUERY_AND_GET_INJECT);
         counts.getObjectRemote = inject::GetExecuteCount(GET_OBJECT_REMOTE_INJECT);
+        counts.batchGetObjectRemote = inject::GetExecuteCount(BATCH_GET_OBJECT_REMOTE_INJECT);
+        counts.workerOcGet = inject::GetExecuteCount(WORKER_OC_GET_INJECT);
+        counts.registerShmClient = inject::GetExecuteCount(REGISTER_SHM_CLIENT_INJECT);
+        counts.getClientFd = inject::GetExecuteCount(GET_CLIENT_FD_INJECT);
+        counts.shmHeartbeat = inject::GetExecuteCount(SHM_HEARTBEAT_INJECT);
     }
 
     // Generate N distinct keys without making placement assumptions.
@@ -423,7 +449,6 @@ protected:
     bool previousUseBrpc_ = false;
 };
 
-#ifdef USE_URMA
 class KVClientTransportGetWithShmTest : public KVClientTransportGetTest {
 public:
     void SetClusterSetupOptions(ExternalClusterOptions &opts) override
@@ -433,15 +458,59 @@ public:
         const auto pos = opts.workerGflagParams.find(DISABLED_SHM_OPTION);
         ASSERT_NE(pos, std::string::npos);
         opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
+        opts.workerGflagParams += " -host_id_env_name=" + std::string(SHM_HOST_ID_ENV_NAME);
+        // The reader is initially bound to Worker 1, but the object under test is routed to Worker 0.
+        // Keep Worker 1 SHM-disabled to prove target capability is not inferred from the bound worker.
+        opts.workerSpecifyGflagParams[TRANSPORT_CLIENT_WORKER_INDEX] = "-ipc_through_shared_memory=false";
+    }
+
+    void SetUp() override
+    {
+        ASSERT_EQ(setenv(SHM_HOST_ID_ENV_NAME, SHM_HOST_ID_VALUE, 1), 0);
+        KVClientTransportGetTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        KVClientTransportGetTest::TearDown();
+        (void)unsetenv(SHM_HOST_ID_ENV_NAME);
     }
 };
 
-TEST_F(KVClientTransportGetWithShmTest, LocalShmClientDoesNotDisableDirectUbTransport)
+class KVClientTransportGetWithTargetShmDisabledTest : public KVClientTransportGetTest {
+public:
+    void SetClusterSetupOptions(ExternalClusterOptions &opts) override
+    {
+        KVClientTransportGetTest::SetClusterSetupOptions(opts);
+        constexpr char DISABLED_SHM_OPTION[] = "-ipc_through_shared_memory=false";
+        const auto pos = opts.workerGflagParams.find(DISABLED_SHM_OPTION);
+        ASSERT_NE(pos, std::string::npos);
+        opts.workerGflagParams.replace(pos, sizeof(DISABLED_SHM_OPTION) - 1, "-ipc_through_shared_memory=true");
+        opts.workerGflagParams += " -host_id_env_name=" + std::string(SHM_HOST_ID_ENV_NAME);
+        // The reader is initially bound to SHM-enabled Worker 1, while the routed target Worker 0
+        // is SHM-disabled. Target capability must be probed from Worker 0 rather than inferred from Worker 1.
+        opts.workerSpecifyGflagParams[META_OWNER_INDEX] = "-ipc_through_shared_memory=false";
+    }
+
+    void SetUp() override
+    {
+        ASSERT_EQ(setenv(SHM_HOST_ID_ENV_NAME, SHM_HOST_ID_VALUE, 1), 0);
+        KVClientTransportGetTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        KVClientTransportGetTest::TearDown();
+        (void)unsetenv(SHM_HOST_ID_ENV_NAME);
+    }
+};
+
+TEST_F(KVClientTransportGetWithShmTest, NonBoundSameHostWorkerUsesWorkerOcFdPassing)
 {
     std::vector<std::string> keys;
     GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
     ASSERT_EQ(keys.size(), 1u);
-    const std::string value(LARGE_VALUE_SIZE, 'u');
+    const std::string value(LARGE_VALUE_SIZE, 's');
     DS_ASSERT_OK(writer_->Set(keys.front(), value));
 
     Optional<Buffer> localBuffer;
@@ -451,18 +520,127 @@ TEST_F(KVClientTransportGetWithShmTest, LocalShmClientDoesNotDisableDirectUbTran
 
     TransportRpcCounts before;
     GetRpcCounts(before);
-    Optional<Buffer> buffer;
-    DS_ASSERT_OK(reader_->Get(keys.front(), buffer));
+    constexpr size_t CONCURRENT_GET_COUNT = 8;
+    const std::string &key = keys.front();
+    std::vector<std::future<Status>> futures;
+    futures.reserve(CONCURRENT_GET_COUNT);
+    for (size_t i = 0; i < CONCURRENT_GET_COUNT; ++i) {
+        futures.emplace_back(std::async(std::launch::async, [this, &key, &value]() {
+            Optional<Buffer> buffer;
+            Status rc = reader_->Get(key, buffer);
+            if (rc.IsError()) {
+                return rc;
+            }
+            if (!buffer || buffer->GetSize() != static_cast<int64_t>(value.size()) || buffer->ImmutableData() == nullptr
+                || std::memcmp(buffer->ImmutableData(), value.data(), value.size()) != 0) {
+                return Status(K_RUNTIME_ERROR, "Concurrent routed SHM Get returned invalid data");
+            }
+            return Status::OK();
+        }));
+    }
+    for (auto &future : futures) {
+        DS_ASSERT_OK(future.get());
+    }
     TransportRpcCounts after;
     GetRpcCounts(after);
 
-    ASSERT_TRUE(buffer);
-    AssertBufferEqual(*buffer, value);
-    ASSERT_EQ(AccessTransportTracker::ToString(), "UB");
-    ASSERT_EQ(after.queryAndGet, before.queryAndGet + 1);
-    ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 1);
+    ASSERT_EQ(after.queryAndGet, before.queryAndGet + CONCURRENT_GET_COUNT);
+    ASSERT_EQ(after.workerOcGet, before.workerOcGet + CONCURRENT_GET_COUNT);
+    ASSERT_EQ(after.getObjectRemote, before.getObjectRemote);
+    ASSERT_EQ(after.batchGetObjectRemote, before.batchGetObjectRemote);
+    ASSERT_EQ(after.registerShmClient, before.registerShmClient + 1);
+    ASSERT_EQ(after.getClientFd, before.getClientFd + 1);
+
+    Optional<Buffer> reusedBuffer;
+    DS_ASSERT_OK(reader_->Get(keys.front(), reusedBuffer));
+    TransportRpcCounts reused;
+    GetRpcCounts(reused);
+    ASSERT_TRUE(reusedBuffer);
+    AssertBufferEqual(*reusedBuffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    ASSERT_EQ(reused.workerOcGet, after.workerOcGet + 1);
+    ASSERT_EQ(reused.registerShmClient, after.registerShmClient);
+    ASSERT_EQ(reused.getClientFd, after.getClientFd);
+
+    std::vector<std::string> batchKeys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 4, batchKeys);
+    batchKeys.erase(std::remove(batchKeys.begin(), batchKeys.end(), key), batchKeys.end());
+    ASSERT_GE(batchKeys.size(), 3u);
+    batchKeys.resize(3);
+    std::vector<std::string> batchValues;
+    for (size_t i = 0; i < batchKeys.size(); ++i) {
+        batchValues.emplace_back(INLINE_DATA_LIMIT + i + 1, static_cast<char>('a' + i));
+        DS_ASSERT_OK(writer_->Set(batchKeys[i], batchValues[i]));
+    }
+    TransportRpcCounts beforeBatch;
+    GetRpcCounts(beforeBatch);
+    std::vector<Optional<Buffer>> batchBuffers;
+    DS_ASSERT_OK(reader_->Get(batchKeys, batchBuffers));
+    TransportRpcCounts afterBatch;
+    GetRpcCounts(afterBatch);
+    ASSERT_EQ(batchBuffers.size(), batchKeys.size());
+    for (size_t i = 0; i < batchBuffers.size(); ++i) {
+        ASSERT_TRUE(batchBuffers[i]);
+        AssertBufferEqual(*batchBuffers[i], batchValues[i]);
+    }
+    ASSERT_EQ(afterBatch.queryAndGet, beforeBatch.queryAndGet + 1);
+    ASSERT_EQ(afterBatch.workerOcGet, beforeBatch.workerOcGet + 1);
+    ASSERT_EQ(afterBatch.getObjectRemote, beforeBatch.getObjectRemote);
+    ASSERT_EQ(afterBatch.batchGetObjectRemote, beforeBatch.batchGetObjectRemote);
+    ASSERT_EQ(afterBatch.registerShmClient, beforeBatch.registerShmClient);
+    ASSERT_LE(afterBatch.getClientFd, beforeBatch.getClientFd + 1);
+
+    constexpr auto MAINTENANCE_WAIT = std::chrono::seconds(7);
+    constexpr auto POLL_INTERVAL = std::chrono::milliseconds(100);
+    const auto maintenanceDeadline = std::chrono::steady_clock::now() + MAINTENANCE_WAIT;
+    TransportRpcCounts maintained = afterBatch;
+    while (maintained.shmHeartbeat == afterBatch.shmHeartbeat
+           && std::chrono::steady_clock::now() < maintenanceDeadline) {
+        std::this_thread::sleep_for(POLL_INTERVAL);
+        GetRpcCounts(maintained);
+    }
+    ASSERT_GT(maintained.shmHeartbeat, afterBatch.shmHeartbeat);
+
+    Optional<Buffer> postHeartbeatBuffer;
+    DS_ASSERT_OK(reader_->Get(key, postHeartbeatBuffer));
+    TransportRpcCounts postHeartbeat;
+    GetRpcCounts(postHeartbeat);
+    ASSERT_TRUE(postHeartbeatBuffer);
+    AssertBufferEqual(*postHeartbeatBuffer, value);
+    ASSERT_EQ(AccessTransportTracker::ToString(), "SHM");
+    ASSERT_EQ(postHeartbeat.workerOcGet, maintained.workerOcGet + 1);
+    ASSERT_EQ(postHeartbeat.registerShmClient, maintained.registerShmClient);
+    ASSERT_EQ(postHeartbeat.getClientFd, maintained.getClientFd);
 }
-#endif
+
+TEST_F(KVClientTransportGetWithTargetShmDisabledTest, BoundWorkerShmDoesNotEnableTargetWorkerShm)
+{
+    std::vector<std::string> keys;
+    GetRealHashKeysToWorker(META_OWNER_INDEX, 1, keys);
+    ASSERT_EQ(keys.size(), 1u);
+    const std::string value(LARGE_VALUE_SIZE, 'd');
+    DS_ASSERT_OK(writer_->Set(keys.front(), value));
+
+    TransportRpcCounts before;
+    GetRpcCounts(before);
+    Optional<Buffer> buffer;
+    Status rc = reader_->Get(keys.front(), buffer);
+    TransportRpcCounts after;
+    GetRpcCounts(after);
+
+    // Target Worker0 is SHM-disabled: the SHM fd-passing negotiation (GetSocketPath) finds no
+    // endpoint, so the Get falls back to TCP via TcpTransporter (SDK direct to W0, GetObjectRemote).
+    // The bound Worker1 SHM state must NOT enable fd-passing to the target, so no RegisterClient/
+    // GetClientFd. The single GetObjectRemote is the TCP fallback read, not a bound-worker proxy.
+    DS_ASSERT_OK(rc);
+    ASSERT_TRUE(buffer);
+    ASSERT_EQ(after.queryAndGet, before.queryAndGet + 1);
+    ASSERT_EQ(after.workerOcGet, before.workerOcGet);              // SHM WorkerOC Get not reached
+    ASSERT_EQ(after.getObjectRemote, before.getObjectRemote + 1);  // TCP fallback via GetObjectRemote
+    ASSERT_EQ(after.batchGetObjectRemote, before.batchGetObjectRemote);
+    ASSERT_EQ(after.registerShmClient, before.registerShmClient);  // no fd-passing
+    ASSERT_EQ(after.getClientFd, before.getClientFd);              // no fd-passing
+}
 
 TEST_F(KVClientTransportGetTest, InlineHitSkipsSecondPhase)
 {

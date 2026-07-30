@@ -626,12 +626,8 @@ Status ObjectClientImpl::InitTransportLayer()
     auto transportLayer = std::make_unique<client::TransportLayer>(
         transportSignature_, asyncGetRPCPool_, fastTransportMemSize_, std::move(options));
     RETURN_IF_NOT_OK(transportLayer->Init());
-    // Inject shm dependencies (workerApi for GetClientFd fd-passing, mmapManager for mmap)
-    // so ShmTransporter can do real zero-copy shm instead of RPC payload inline.
-    transportLayer->SetShmDependencies(workerApi_[LOCAL_WORKER],
-                                       std::shared_ptr<client::MmapManager>(mmapManager_.get(), [](auto *) {}));
     transportLayer_ = std::move(transportLayer);
-    LOG(INFO) << "Client transport layer initialized with shm dependencies";
+    LOG(INFO) << "Client transport layer initialized";
     return Status::OK();
 }
 
@@ -4101,7 +4097,7 @@ Status ObjectClientImpl::RunClientDirectPipelineRH2D(const std::vector<std::stri
     Status firstFailure = Status::OK();
     auto buildRequest = [this](const std::vector<std::string> &keys, client::ObjectReadRequest &request,
                                std::vector<Status> &statuses) {
-        BuildTransportReadRequest(keys, request, statuses);
+        BuildTransportReadRequest(keys, request, statuses, requestTimeoutMs_, true);
     };
     Status rc = ResolveAndTransferDirectItems(*transportLayer_, *asyncGetRPCPool_, objectKeys, devBlob,
                                               h2dStream, items, failedKeys, waitStatus, firstFailure, buildRequest);
@@ -4291,8 +4287,21 @@ Status ObjectClientImpl::GetWithLatch(const std::vector<std::string> &objectKeys
 
 void ObjectClientImpl::BuildTransportReadRequest(const std::vector<std::string> &objectKeys,
                                                  client::ObjectReadRequest &request,
-                                                 std::vector<Status> &itemStatuses) const
+                                                 std::vector<Status> &itemStatuses, int64_t subTimeoutMs,
+                                                 bool queryL2Cache)
 {
+    auto context = std::make_shared<client::TransportReadContext>();
+    context->requestContext.clientId = GetClientId();
+    const auto token = std::atomic_load(&transportToken_);
+    if (token != nullptr && !token->Empty()) {
+        context->requestContext.token.assign(token->GetData(), token->GetSize());
+    }
+    const auto &requestTenantId = GetRequestContext()->tenantId;
+    context->requestContext.tenantId = requestTenantId.empty() ? tenantId_ : requestTenantId;
+    context->subTimeoutMs = subTimeoutMs;
+    context->queryL2Cache = queryL2Cache;
+    request.context = std::move(context);
+
     auto routing = std::atomic_load(&routing_);
     if (routing == nullptr) {
         std::fill(itemStatuses.begin(), itemStatuses.end(), Status(K_NOT_READY, "Object route is not ready"));
@@ -4385,11 +4394,32 @@ Status ObjectClientImpl::MaterializeTransportItem(const std::string &objectKey, 
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(item.objectKey == objectKey, K_RUNTIME_ERROR,
                                          "Invalid object data response");
+    auto &data = item.data;
+    if (data.externalMeta.has_value()) {
+        CHECK_FAIL_RETURN_STATUS(data.externalOwner != nullptr, K_RUNTIME_ERROR,
+                                 "SHM object data owner is missing");
+        CHECK_FAIL_RETURN_STATUS(data.externalData != nullptr || data.externalSize == 0, K_RUNTIME_ERROR,
+                                 "SHM object data pointer is missing");
+        const auto &meta = *data.externalMeta;
+        FullParam param;
+        param.writeMode = meta.mode.GetWriteMode();
+        param.consistencyType = meta.mode.GetConsistencyType();
+        param.cacheType = meta.mode.GetCacheType();
+        // The routed owner checks the target session generation, so the legacy initial-Worker version is unused.
+        auto bufferInfo =
+            MakeObjectBufferInfo(item.objectKey, const_cast<uint8_t *>(data.externalData), data.externalSize,
+                                 meta.metadataSize, param, meta.isSeal, 0, meta.shmId);
+        bufferInfo->workerAddr = meta.workerAddr;
+        bufferInfo->receiveBufferOwner = std::move(data.externalOwner);
+        bufferInfo->sessionLockId = meta.lockId;
+        bufferInfo->useSessionLockId = true;
+        return Buffer::CreateBuffer(std::move(bufferInfo), shared_from_this(), buffer);
+    }
+
     GetRspPb response;
     std::unordered_map<std::string, std::shared_ptr<ObjectBufferInfo>> ubBufferInfos;
     uint64_t payloadSize = 0;
     RETURN_IF_NOT_OK(BuildTransportGetResponse(item, response, ubBufferInfos, payloadSize));
-    auto &data = item.data;
     const uint64_t dataSize = static_cast<uint64_t>(response.payload_info(0).data_size());
     VLOG(1) << "[TransportGet][Materialize] Materialize object, key: " << objectKey
             << ", transport: " << AccessTransportTracker::KindToName(data.kind) << ", data size: " << dataSize
@@ -4480,7 +4510,7 @@ Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKey
         LOG_EVERY_N(WARNING, TRANSPORT_DIAG_LOG_RATE)
             << "[TransportGet][SDK] Routing is unavailable, use transport for all keys, key count: "
             << objectKeys.size();
-        rc = GetFromTransportLayer(objectKeys, objectBuffers, traceEnabled);
+        rc = GetFromTransportLayer(objectKeys, objectBuffers, traceEnabled, subTimeoutMs, queryL2Cache);
         return Status::OK();
     }
     std::vector<std::pair<std::shared_ptr<IClientWorkerApi>, std::vector<std::pair<std::string, size_t>>>>
@@ -4513,7 +4543,7 @@ Status ObjectClientImpl::RouteGetByShm(const std::vector<std::string> &objectKey
     std::sort(remoteIdx.begin(), remoteIdx.end(), [](const auto &lhs, const auto &rhs) {
         return lhs.second < rhs.second;
     });
-    ExecuteTransportFallback(remoteIdx, traceEnabled, objectBuffers, rc);
+    ExecuteTransportFallback(remoteIdx, traceEnabled, subTimeoutMs, queryL2Cache, objectBuffers, rc);
     return Status::OK();
 }
 
@@ -4607,7 +4637,8 @@ Status ObjectClientImpl::ExecuteShmGroup(const std::shared_ptr<IClientWorkerApi>
 }
 
 void ObjectClientImpl::ExecuteTransportFallback(const std::vector<std::pair<std::string, size_t>> &remoteIdx,
-    bool traceEnabled, std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc)
+    bool traceEnabled, int64_t subTimeoutMs, bool queryL2Cache,
+    std::vector<std::shared_ptr<Buffer>> &objectBuffers, Status &rc)
 {
     std::vector<std::string> remoteKeys;
     remoteKeys.reserve(remoteIdx.size());
@@ -4615,7 +4646,8 @@ void ObjectClientImpl::ExecuteTransportFallback(const std::vector<std::pair<std:
         remoteKeys.push_back(p.first);
     }
     std::vector<std::shared_ptr<Buffer>> remoteBuffers(remoteKeys.size());
-    auto transportRc = GetFromTransportLayer(remoteKeys, remoteBuffers, traceEnabled);
+    auto transportRc =
+        GetFromTransportLayer(remoteKeys, remoteBuffers, traceEnabled, subTimeoutMs, queryL2Cache);
     for (size_t i = 0; i < remoteIdx.size(); i++) {
         objectBuffers[remoteIdx[i].second] = std::move(remoteBuffers[i]);
     }
@@ -4627,7 +4659,8 @@ void ObjectClientImpl::ExecuteTransportFallback(const std::vector<std::pair<std:
 }
 
 Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &objectKeys,
-                                               std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled)
+                                               std::vector<std::shared_ptr<Buffer>> &buffers, bool traceEnabled,
+                                               int64_t subTimeoutMs, bool queryL2Cache)
 {
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(transportLayer_ != nullptr, K_NOT_READY, "Object service is not ready");
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(objectKeys.size() == buffers.size(), K_RUNTIME_ERROR,
@@ -4637,7 +4670,7 @@ Status ObjectClientImpl::GetFromTransportLayer(const std::vector<std::string> &o
     request.traceEnabled = traceEnabled;
     std::vector<Status> itemStatuses(objectKeys.size(), Status(K_NOT_READY, "Object Get has not completed"));
     AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_ROUTE_START);
-    BuildTransportReadRequest(objectKeys, request, itemStatuses);
+    BuildTransportReadRequest(objectKeys, request, itemStatuses, subTimeoutMs, queryL2Cache);
     AddLatencyTickIfEnabled(traceEnabled, LatencyTickKey::CLIENT_DIRECT_ROUTE_END);
     client::ObjectReadResult result;
     Status transportStatus = request.items.empty() ? Status(K_NOT_READY, "No object route is available")

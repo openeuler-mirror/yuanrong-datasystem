@@ -81,6 +81,7 @@ ds_cc_test(
         "//src/datasystem/client:datasystem",
         "//src/datasystem/client:client_transport",
         "//src/datasystem/common/ak_sk:signature",
+        "//src/datasystem/common/inject:common_inject",
         "//src/datasystem/common/object_cache:object_base",
         "//src/datasystem/common/object_cache:object_buffer",
         "//src/datasystem/common/rpc:api_deadline",

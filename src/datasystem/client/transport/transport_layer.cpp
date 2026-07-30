@@ -46,6 +46,8 @@
 #include "datasystem/common/util/status_helper.h"
 #include "datasystem/common/util/uri.h"
 
+#include "butil/time.h"
+
 namespace datasystem {
 namespace client {
 namespace {
@@ -79,7 +81,8 @@ TransportLayer::TransportLayer(std::shared_ptr<Signature> signature, std::shared
     auto ubBufferProvider = CreateDefaultUbReceiveBufferProvider();
     manager_ = std::make_shared<DataPlaneManager>(std::move(signature), fastTransportMemSize,
                                                   std::move(options.channelConfig), ubBufferProvider,
-                                                  options.enableClientDirectPipelineH2D, options.pipelineThreadNum);
+                                                  options.enableClientDirectPipelineH2D, options.pipelineThreadNum,
+                                                  releasePool_);
     auto retry = std::make_shared<DeadlineRetry>();
     auto metadata = std::make_shared<ObjectMetadataClient>(manager_, retry, advisor_, std::move(ubBufferProvider),
                                                            GetConfiguredUbInlineBufferSize());
@@ -240,7 +243,7 @@ Status TransportLayer::Init()
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     RETURN_IF_NOT_OK(manager_->Init());
-    std::lock_guard<std::mutex> lock(reconcileMutex_);
+    std::lock_guard<bthread::Mutex> lock(reconcileMutex_);
     if (reconcileStarted_) {
         return Status::OK();
     }
@@ -664,12 +667,12 @@ Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(manager_);
     // Copy the same-host list before the snapshot is moved below. SetSameHostWorkers takes the
-    // advisor's shared_mutex write lock; keep it out of the reconcileMutex_ critical section so the
+    // advisor's RWLock write lock; keep it out of the reconcileMutex_ critical section so the
     // reconcile thread (which touches entries_ under reconcileMutex_) never blocks on the advisor
     // write lock.
     std::vector<HostPort> sameHostAddrs = snapshot.sameHostAddrs;
     {
-        std::lock_guard<std::mutex> lock(reconcileMutex_);
+        std::lock_guard<bthread::Mutex> lock(reconcileMutex_);
         CHECK_FAIL_RETURN_STATUS(reconcileStarted_, K_NOT_READY, "Transport reconcile thread is not initialized");
         CHECK_FAIL_RETURN_STATUS(!reconcileStopping_, K_SHUTTING_DOWN, "TransportLayer is shutting down");
         // Publish the live-worker snapshot to the manager FIRST. The advisor's same-host set is
@@ -688,25 +691,38 @@ Status TransportLayer::ApplyWorkerSnapshot(WorkerSnapshot snapshot)
     return Status::OK();
 }
 
+bool TransportLayer::WaitForSnapshotOrStop(std::unique_lock<bthread::Mutex> &lock)
+{
+    // bthread::ConditionVariable has no predicate overloads and its wait_until takes a CLOCK_REALTIME
+    // timespec, not a chrono steady_clock time_point, so emulate master's wait_until(deadline, pred)
+    // and wait(pred) by hand. A probe deadline expiring must EXIT this wait so ReconcileLoop can run
+    // TryRecoverLocalUbSender and fire the recovery probe; therefore break after any wait returns
+    // (deadline elapsed or notified), matching master's post-wait_until break.
+    while (!reconcileStopping_ && !pendingSnapshot_.has_value()) {
+        auto probeDeadline = GetLocalUbProbeDeadline();
+        if (probeDeadline.has_value()) {
+            const auto now = std::chrono::steady_clock::now();
+            if (*probeDeadline > now) {
+                const auto waitNs = std::chrono::duration_cast<std::chrono::nanoseconds>(*probeDeadline - now);
+                (void)reconcileCv_.wait_until(lock, butil::nanoseconds_from_now(waitNs.count()));
+            }
+            break;
+        }
+        // No probe deadline: wait for a wake (stop / snapshot / new deadline set by a failure report),
+        // then re-check at the top of the loop.
+        reconcileCv_.wait(lock);
+    }
+    return !reconcileStopping_;
+}
+
 void TransportLayer::ReconcileLoop()
 {
     bool keepRunning = true;
     while (keepRunning) {
         std::optional<WorkerSnapshot> snapshot;
         {
-            std::unique_lock<std::mutex> lock(reconcileMutex_);
-            while (!reconcileStopping_ && !pendingSnapshot_.has_value()) {
-                auto probeDeadline = GetLocalUbProbeDeadline();
-                if (probeDeadline.has_value()) {
-                    (void)reconcileCv_.wait_until(
-                        lock, *probeDeadline, [this] { return reconcileStopping_ || pendingSnapshot_.has_value(); });
-                    break;
-                }
-                reconcileCv_.wait(lock, [this] {
-                    return reconcileStopping_ || pendingSnapshot_.has_value() || GetLocalUbProbeDeadline().has_value();
-                });
-            }
-            if (reconcileStopping_) {
+            std::unique_lock<bthread::Mutex> lock(reconcileMutex_);
+            if (!WaitForSnapshotOrStop(lock)) {
                 keepRunning = false;
                 continue;
             }
@@ -724,7 +740,7 @@ void TransportLayer::ReconcileLoop()
 
 void TransportLayer::Shutdown()
 {
-    std::lock_guard<std::mutex> shutdownLock(shutdownMutex_);
+    std::lock_guard<bthread::Mutex> shutdownLock(shutdownMutex_);
     {
         std::lock_guard<std::shared_mutex> admission(localUbSenderMutex_);
         shutdownRequested_.store(true, std::memory_order_release);
@@ -732,7 +748,7 @@ void TransportLayer::Shutdown()
     }
     Thread reconcileThread;
     {
-        std::lock_guard<std::mutex> lock(reconcileMutex_);
+        std::lock_guard<bthread::Mutex> lock(reconcileMutex_);
         reconcileStopping_ = true;
         pendingSnapshot_.reset();
         reconcileCv_.notify_all();

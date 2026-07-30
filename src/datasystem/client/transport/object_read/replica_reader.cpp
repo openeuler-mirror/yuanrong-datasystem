@@ -44,6 +44,7 @@ constexpr int TRANSPORT_DIAG_LOG_RATE = 100;
 struct ReadState {
     const master::ObjectLocationInfoPb *location = nullptr;
     ObjectReadItemResult *result = nullptr;
+    std::shared_ptr<const TransportReadContext> context;
     size_t inputIndex = 0;
     size_t replicaIndex = 0;
     size_t round = 1;
@@ -201,7 +202,8 @@ Status ReplicaReader::Backoff(int64_t &backoffMs) const
 }
 
 Status ReplicaReader::ReadReplicaOnce(const master::ObjectLocationInfoPb &location, int replicaIndex, size_t round,
-                                      ObjectReadItemResult &result, const HostPort &workerAddr)
+                                      ObjectReadItemResult &result, const HostPort &workerAddr,
+                                      const std::shared_ptr<const TransportReadContext> &context)
 {
     VLOG(1) << "[TransportGet][Data] Read replica, key: " << location.object_key()
             << ", worker: " << workerAddr.ToString() << ", replica index: " << replicaIndex
@@ -210,7 +212,7 @@ Status ReplicaReader::ReadReplicaOnce(const master::ObjectLocationInfoPb &locati
     Status rc = readAdmissionCheck_ ? readAdmissionCheck_(workerAddr) : Status::OK();
     DataGetResult data;
     if (rc.IsOk()) {
-        DataGetRequest request{ location.object_key(), location.object_size() };
+        DataGetRequest request{ location.object_key(), location.object_size(), context };
         rc = executor_->Execute(workerAddr, [&request, &data](IDataTransporter &transporter) {
             return transporter.Get(request, data);
         });
@@ -233,10 +235,12 @@ Status ReplicaReader::ReadReplicaOnce(const master::ObjectLocationInfoPb &locati
     return Status::OK();
 }
 
-Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result)
+Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectReadItemResult &result,
+                           std::shared_ptr<const TransportReadContext> context)
 {
     RETURN_RUNTIME_ERROR_IF_NULL(executor_);
     RETURN_RUNTIME_ERROR_IF_NULL(retry_);
+    CHECK_FAIL_RETURN_STATUS(context != nullptr, K_INVALID, "Transport read context is missing");
     CHECK_FAIL_RETURN_STATUS(location.object_locations_size() > 0, K_NOT_FOUND, "Object was not found");
     int64_t backoffMs = 1;
     size_t round = 0;
@@ -253,7 +257,7 @@ Status ReplicaReader::Read(const master::ObjectLocationInfoPb &location, ObjectR
             }
             HostPort workerAddr;
             RETURN_IF_NOT_OK(workerAddr.ParseString(location.object_locations(replicaIndex)));
-            Status rc = ReadReplicaOnce(location, replicaIndex, round, result, workerAddr);
+            Status rc = ReadReplicaOnce(location, replicaIndex, round, result, workerAddr, context);
             if (rc.IsOk()) {
                 return Status::OK();
             }
@@ -294,6 +298,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
         ReadState state;
         state.location = request.location;
         state.result = request.result;
+        state.context = request.context;
         state.inputIndex = i;
         if (request.result == nullptr || request.location == nullptr) {
             state.lastStatus = Status(K_INVALID, "Replica read location or result is null");
@@ -352,7 +357,7 @@ Status ReplicaReader::ReadBatch(const ReplicaReadBatch &requests)
                 chunks.emplace_back();
             }
             chunks.back().stateIndexes.emplace_back(state.inputIndex);
-            chunks.back().requests.push_back({ state.location->object_key(), state.expectedSize });
+            chunks.back().requests.push_back({ state.location->object_key(), state.expectedSize, state.context });
             if (state.expectedSize <= std::numeric_limits<uint64_t>::max() - chunks.back().expectedBytes) {
                 chunks.back().expectedBytes += state.expectedSize;
             } else {

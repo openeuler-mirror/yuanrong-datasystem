@@ -14,34 +14,158 @@
  * limitations under the License.
  */
 
-/** Description: Defines the shared-memory data-plane connection placeholder. */
+/** Description: Defines an endpoint-scoped client-to-worker shared-memory session. */
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_SHM_CONNECTION_H
 #define DATASYSTEM_CLIENT_TRANSPORT_SHM_CONNECTION_H
 
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "datasystem/client/mmap_manager.h"
 #include "datasystem/client/transport/data_plane/i_data_plane_connection.h"
-#include "datasystem/common/util/net_util.h"
+#include "datasystem/client/transport/data_plane/i_data_transporter.h"
+#include "datasystem/client/transport/rpc/worker_rpc_client.h"
+#include "datasystem/client/transport/shm_fd.h"
+#include "datasystem/common/util/thread_pool.h"
+
+// Keep bthread headers after project RPC headers so brpc logging macros are established before project overrides.
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
 
 namespace datasystem {
 namespace client {
-class ShmConnection : public IDataPlaneConnection {
+
+class ShmFdChannel final : public IShmFdProvider {
 public:
-    Status Establish(const HostPort & /* workerAddr */) override
-    {
-        return Status(K_NOT_SUPPORTED, "ShmConnection not implemented");
-    }
+    ShmFdChannel(std::shared_ptr<WorkerRpcClient> rpcClient, ShmFd socketFd, bool isScmTcp,
+                 std::string clientId);
+    ~ShmFdChannel() override;
 
-    bool IsAlive() const override
-    {
-        return false;
-    }
+    Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                       const std::string &tenantId) override;
 
-    AccessTransportKind Kind() const override
-    {
-        return AccessTransportKind::SHM;
-    }
+    const std::string &ClientId() const override;
 
-    void Teardown() override {}
+    void UpdateAuth(const TransportRequestContext &context);
+
+    bool IsAlive() const;
+
+    void Close();
+
+private:
+    std::shared_ptr<WorkerRpcClient> rpcClient_;
+    ShmFd socketFd_;
+    bool isScmTcp_;
+    std::string clientId_;
+    mutable bthread::Mutex mutex_;
+    TransportRequestContext auth_;
+    uint64_t requestId_{ 0 };
+    std::atomic<int> socketNumber_{ INVALID_SHM_FD };
+    std::atomic<bool> alive_{ true };
 };
+
+class ShmSession final : public std::enable_shared_from_this<ShmSession> {
+public:
+    static Status Create(const HostPort &workerAddr, const std::shared_ptr<WorkerRpcClient> &rpcClient,
+                         const TransportRequestContext &context, std::weak_ptr<ThreadPool> releasePool,
+                         std::shared_ptr<ShmSession> &session);
+
+    ~ShmSession();
+
+    Status Get(const DataGetBatchRequest &inputs, GetRspPb &response, std::vector<RpcMessage> &payloads);
+
+    Status BuildResult(const GetRspPb::ObjectInfoPb &info, const DataGetRequest &input, DataGetResult &result);
+
+    bool IsAlive() const;
+
+    const std::string &ClientId() const;
+
+    const std::string &WorkerStartId() const;
+
+    void Close(bool notifyWorker);
+
+    Status DecreaseReference(const TransportRequestContext &context, const ShmKey &shmId);
+
+private:
+    ShmSession(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpcClient,
+               std::shared_ptr<ShmFdChannel> fdChannel, std::shared_ptr<MmapManager> mmapManager,
+               std::string clientId, std::string workerStartId, uint32_t lockId,
+               std::weak_ptr<ThreadPool> releasePool,
+               TransportRequestContext auth, bool supportMultiRefCount);
+
+    Status RegisterReference(const ShmKey &shmId);
+
+    // Validates WorkerOCService Get response bounds (store_fd, offset/metadata/data/mmap_size, shm_id, mode).
+    // Extracted from BuildResult to keep that function within the codecheck 50-line limit.
+    Status ValidateObjectInfo(const GetRspPb::ObjectInfoPb &info, uint64_t &offset, uint64_t &metadataSize,
+                              uint64_t &dataSize, uint64_t &mmapSize) const;
+
+    Status StartMaintenance();
+
+    Status ScheduleMaintenance();
+
+    void RunMaintenance();
+
+    HostPort workerAddr_;
+    std::shared_ptr<WorkerRpcClient> rpcClient_;
+    std::shared_ptr<ShmFdChannel> fdChannel_;
+    std::shared_ptr<MmapManager> mmapManager_;
+    std::string clientId_;
+    std::string workerStartId_;
+    uint32_t lockId_;
+    std::weak_ptr<ThreadPool> releasePool_;
+    mutable bthread::Mutex authMutex_;
+    TransportRequestContext auth_;
+    bthread::Mutex refMutex_;
+    std::unordered_map<ShmKey, size_t> localRefCounts_;
+    bool supportMultiRefCount_;
+    uint64_t maintenanceIntervalMs_{ 1000 };
+    std::vector<int64_t> releasedWorkerFds_;
+    std::atomic<bool> alive_{ true };
+};
+
+class ShmConnection final : public IDataPlaneConnection {
+public:
+    ShmConnection(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpcClient,
+                  std::weak_ptr<ThreadPool> releasePool);
+    ~ShmConnection() override;
+
+    Status Establish(const HostPort &workerAddr) override;
+
+    Status Acquire(const TransportRequestContext &context, std::shared_ptr<ShmSession> &session);
+
+    void Invalidate(const std::shared_ptr<ShmSession> &session);
+
+    bool IsAlive() const override;
+
+    AccessTransportKind Kind() const override;
+
+    void Teardown() override;
+
+private:
+    // Waits (under mutex_) for an in-flight connection attempt to finish or the connection to close,
+    // bounded by the API deadline. Extracted from Acquire to keep that function within the codecheck limit.
+    Status WaitForConnecting(std::unique_lock<bthread::Mutex> &lock);
+
+    HostPort workerAddr_;
+    std::shared_ptr<WorkerRpcClient> rpcClient_;
+    std::weak_ptr<ThreadPool> releasePool_;
+    mutable bthread::Mutex mutex_;
+    bthread::ConditionVariable cv_;
+    std::shared_ptr<ShmSession> session_;
+    bool connecting_{ false };
+    bool closed_{ false };
+    uint64_t attemptId_{ 0 };
+    Status lastConnectFailure_{ K_NOT_READY, "Shared-memory connection has not been attempted" };
+    std::chrono::steady_clock::time_point retryAfter_;
+    int64_t failureBackoffMs_{ 10 };
+};
+
 }  // namespace client
 }  // namespace datasystem
 

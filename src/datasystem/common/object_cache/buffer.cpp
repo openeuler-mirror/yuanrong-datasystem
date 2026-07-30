@@ -87,8 +87,9 @@ Status Buffer::Init()
             latch_ = std::make_shared<object_cache::DisabledLock>();
         } else {
             auto *lockFrame = reinterpret_cast<uint32_t *>(bufferInfo_->pointer);
-            latch_ = std::make_shared<object_cache::ShmLock>(lockFrame, bufferInfo_->metadataSize,
-                                                             clientImpl->GetLockId());
+            const uint32_t lockId =
+                bufferInfo_->useSessionLockId ? bufferInfo_->sessionLockId : clientImpl->GetLockId();
+            latch_ = std::make_shared<object_cache::ShmLock>(lockFrame, bufferInfo_->metadataSize, lockId);
         }
     } else {
         isShm_ = false;
@@ -167,7 +168,12 @@ void Buffer::Reset()
 
 void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
 {
+    bool ownerManagesWorkerReference = false;
     if (bufferInfo_ != nullptr) {
+        if (bufferInfo_->receiveBufferOwner != nullptr) {
+            bufferInfo_->receiveBufferOwner->Release();
+            ownerManagesWorkerReference = bufferInfo_->receiveBufferOwner->ManagesWorkerReference();
+        }
         if (!isShm_ && bufferInfo_->payloadPointer == nullptr && bufferInfo_->pointer
             && bufferInfo_->ubGetBufferHandle == nullptr) {
             free(bufferInfo_->pointer);
@@ -180,6 +186,9 @@ void Buffer::Release(object_cache::ObjectClientImpl *clientPtr)
 #endif
     do {
         if (isReleased_) {
+            break;
+        }
+        if (ownerManagesWorkerReference) {
             break;
         }
         if (clientPtr) {
@@ -449,6 +458,10 @@ Status Buffer::CheckDeprecated()
                       "Client already destroyed or Shutdown() invoked, buffer invalidated.");
     }
     RETURN_OK_IF_TRUE(!isShm_);
+    if (bufferInfo_->receiveBufferOwner != nullptr
+        && bufferInfo_->receiveBufferOwner->ManagesWorkerReference()) {
+        return bufferInfo_->receiveBufferOwner->CheckAlive();
+    }
 
     // In the shared memory scenario, the worker may have released the memory when the network is unavailable.
     if (clientId_ != clientImpl->GetClientId()) {

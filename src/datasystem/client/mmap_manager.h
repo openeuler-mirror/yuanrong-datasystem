@@ -22,7 +22,6 @@
 
 #include <memory>
 #include <mutex>
-#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -32,14 +31,31 @@
 #include "datasystem/common/shared_memory/shm_unit.h"
 #include "datasystem/utils/status.h"
 
+#include <bthread/mutex.h>
+#include <bthread/rwlock.h>
+
 namespace datasystem {
 namespace client {
+
+class IShmFdProvider {
+public:
+    virtual ~IShmFdProvider() = default;
+
+    virtual Status GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                               const std::string &tenantId) = 0;
+
+    virtual const std::string &ClientId() const = 0;
+};
+
 /**
- * @brief Manage the mmapTable in the client side, which is global one instance in a process.
+ * @brief Manage one client-side mmap table. The bound-worker path owns one manager in ObjectClientImpl;
+ * routed SHM sessions own an independent manager per worker session.
  */
 class MmapManager {
 public:
     explicit MmapManager(std::shared_ptr<IClientWorkerCommonApi> clientWorker, bool enableEmbeddedClient);
+
+    MmapManager(std::shared_ptr<IShmFdProvider> fdProvider, bool enableHugeTlb);
 
     ~MmapManager();
 
@@ -129,12 +145,22 @@ public:
     void CleanInvalidMmapTable();
 
 private:
+    // Closes every non-negative fd in clientFds[fromIdx..]. Extracted from LookupUnitsAndMmapFds error
+    // paths to keep that function within the codecheck nesting-depth limit.
+    static void CloseFdsFrom(const std::vector<int> &clientFds, size_t fromIdx);
+    // Closes every non-negative fd in clientFds. Convenience wrapper around CloseFdsFrom(_, 0).
+    static void CloseAllFds(const std::vector<int> &clientFds);
+    // Receives client fds from the fd provider/worker and mmaps them. Extracted from
+    // LookupUnitsAndMmapFds to keep that function within the codecheck nesting-depth limit.
+    Status ReceiveAndMmapClientFds(const std::string &tenantId, const std::vector<int> &toRecvFds,
+                                   const std::vector<uint64_t> &mmapSizes);
     // The instance for client communication with the worker.
     std::shared_ptr<IClientWorkerCommonApi> clientWorker_;
+    std::shared_ptr<IShmFdProvider> fdProvider_;
     std::unique_ptr<IMmapTable> mmapTable_;
-    mutable std::shared_timed_mutex mutex_;  // protect mmapTable_.
+    mutable bthread::RWLock mutex_;  // protect mmapTable_ without blocking a caller bthread.
     // The fd transfer channel behind GetClientFd() is single-consumer on each client-worker connection.
-    std::mutex fdTransferMutex_;
+    bthread::Mutex fdTransferMutex_;
     bool enableEmbeddedClient_;
 };
 }  // namespace client

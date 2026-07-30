@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -27,6 +28,7 @@
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
 #include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/transport_kind.h"
+#include "datasystem/common/object_cache/ireceive_buffer_owner.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/util/net_util.h"
 #include "datasystem/kv_client.h"
@@ -39,16 +41,26 @@
 namespace datasystem {
 namespace client {
 
-/** @brief Owns a transport receive buffer referenced by a zero-copy result. */
-class IReceiveBufferOwner {
-public:
-    virtual ~IReceiveBufferOwner() = default;
+struct TransportReadContext {
+    TransportRequestContext requestContext;
+    int64_t subTimeoutMs = 0;
+    bool queryL2Cache = true;
 };
 
 /** @brief One data read against a transporter already bound to a data-worker endpoint. */
 struct DataGetRequest {
     std::string objectKey;
     uint64_t expectedSize = 0;
+    std::shared_ptr<const TransportReadContext> context;
+};
+
+struct ExternalBufferMeta {
+    uint64_t metadataSize = 0;
+    ShmKey shmId;
+    uint32_t lockId = 0;
+    bool isSeal = false;
+    ModeInfo mode;
+    HostPort workerAddr;
 };
 
 /** @brief Owned result returned by one data-worker transporter. */
@@ -58,6 +70,7 @@ struct DataGetResult {
     const uint8_t *externalData = nullptr;
     uint64_t externalSize = 0;
     std::shared_ptr<IReceiveBufferOwner> externalOwner;
+    std::optional<ExternalBufferMeta> externalMeta;
     AccessTransportKind kind = AccessTransportKind::TCP;
 };
 

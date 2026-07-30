@@ -14,37 +14,36 @@
  * limitations under the License.
  */
 
-/** Description: Shared-memory transporter for same-host workers. Uses RPC for control plane
- * (Create/Publish/GetObjectRemote). For Set/Get, when fd-passing dependencies (workerApi_ +
- * mmapManager_) are available and the worker reports a store_fd, Create does GetClientFd +
- * LookupUnitsAndMmapFd to obtain a real shm pointer for zero-copy read/write; otherwise it
- * falls back to transmitting data inline through the RPC payload (tagged AccessTransportKind::SHM
- * for routing/observability). BatchGet/MCreate use single batch RPCs (InvokeBatchGetObject /
- * InvokeMultiCreate). */
+/** Description: Shared-memory transporter for same-host workers. Routed Get/BatchGet use
+ * WorkerOCService and an endpoint-scoped fd-passing session. Create/Publish retain the existing
+ * transport implementation until their ownership model is migrated independently. */
 #ifndef DATASYSTEM_CLIENT_TRANSPORT_SHM_TRANSPORTER_H
 #define DATASYSTEM_CLIENT_TRANSPORT_SHM_TRANSPORTER_H
 
 #include <algorithm>
+#include <new>
+#include <vector>
+
+#include "datasystem/client/transport/data_plane/shm_connection.h"
 #include "datasystem/client/transport/data_plane/i_data_transporter.h"
-#include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/rpc/mset_request_builder.h"
+#include "datasystem/client/transport/rpc/set_request_builder.h"
 #include "datasystem/client/transport/rpc/worker_rpc_client.h"
 #include "datasystem/client/transport/object_buffer_internal.h"
-#include "datasystem/client/client_worker_common_api.h"
-#include "datasystem/client/mmap_manager.h"
-#include "datasystem/common/shared_memory/shm_unit_info.h"
-#include "datasystem/common/object_cache/object_base.h"
+#include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/metrics/kv_metrics.h"
+#include "datasystem/common/object_cache/object_base.h"
 
 namespace datasystem {
 namespace client {
 class ShmTransporter : public IDataTransporter {
-    static constexpr int SHM_FALLBACK_LOG_RATE = 100;
 public:
-    explicit ShmTransporter(std::shared_ptr<WorkerRpcClient> rpcClient,
-                           std::shared_ptr<IClientWorkerCommonApi> workerApi = nullptr,
-                           std::shared_ptr<MmapManager> mmapManager = nullptr)
-        : rpcClient_(std::move(rpcClient)), workerApi_(std::move(workerApi)), mmapManager_(std::move(mmapManager)) {}
+    explicit ShmTransporter(HostPort workerAddr, std::shared_ptr<WorkerRpcClient> rpcClient,
+                           std::weak_ptr<ThreadPool> releasePool = {})
+        : rpcClient_(std::move(rpcClient)),
+          shmConnection_(std::make_shared<ShmConnection>(std::move(workerAddr), rpcClient_, std::move(releasePool)))
+    {
+    }
     ~ShmTransporter() override = default;
 
     AccessTransportKind Kind() const override
@@ -54,80 +53,93 @@ public:
 
     bool IsAlive() const override
     {
-        return rpcClient_ != nullptr && rpcClient_->IsAlive();
+        return rpcClient_ != nullptr && rpcClient_->IsAlive() && shmConnection_ != nullptr
+               && shmConnection_->IsAlive();
     }
 
     Status Get(const DataGetRequest &input, DataGetResult &output) override
     {
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+        RETURN_RUNTIME_ERROR_IF_NULL(shmConnection_);
         CHECK_FAIL_RETURN_STATUS(!input.objectKey.empty(), K_INVALID, "Object key is empty");
-        output = DataGetResult{};
-        GetObjectRemoteReqPb request;
-        request.set_object_key(input.objectKey);
-        request.set_data_size(input.expectedSize);
-        request.set_try_lock(true);
-        RETURN_IF_NOT_OK(rpcClient_->InvokeGetObject(request, output.response, output.rpcPayloads));
-        Status responseStatus(static_cast<StatusCode>(output.response.error().error_code()),
-                              output.response.error().error_msg());
-        if (responseStatus.IsError()) {
-            output.rpcPayloads.clear();
-            return responseStatus;
+        CHECK_FAIL_RETURN_STATUS(input.context != nullptr, K_INVALID, "Transport read context is missing");
+
+        std::shared_ptr<ShmSession> session;
+        RETURN_IF_NOT_OK(shmConnection_->Acquire(input.context->requestContext, session));
+        GetRspPb response;
+        std::vector<RpcMessage> payloads;
+        const DataGetBatchRequest inputs{ input };
+        Status rc = session->Get(inputs, response, payloads);
+        if (rc.IsError()) {
+            shmConnection_->Invalidate(session);
+            return rc;
         }
-        CHECK_FAIL_RETURN_STATUS(output.response.data_source() == DataTransferSource::DATA_IN_PAYLOAD,
-                                 K_RUNTIME_ERROR, "SHM GetObjectRemote returned an invalid data source");
-        output.kind = AccessTransportKind::SHM;
-        return Status::OK();
+        rc = ValidateShmResponse(response, payloads, 1);
+        if (rc.IsError()) {
+            shmConnection_->Invalidate(session);
+            return rc;
+        }
+        const auto &info = response.objects(0);
+        if (info.store_fd() <= 0) {
+            Status missingStatus = MissingObjectStatus(response);
+            // Stamp the business error code onto the response so BatchGetOne can distinguish a per-item
+            // business error (error_code != K_OK) from a transport-level failure (default K_OK), matching
+            // the multi-element BatchGet path which sets item.status = missingStatus.
+            output.response.mutable_error()->set_error_code(static_cast<int>(missingStatus.GetCode()));
+            return missingStatus;
+        }
+        rc = session->BuildResult(info, input, output);
+        if (rc.IsError()) {
+            shmConnection_->Invalidate(session);
+        }
+        return rc;
     }
 
     Status BatchGet(const DataGetBatchRequest &inputs, DataGetBatchResult &outputs) override
     {
         outputs.clear();
         RETURN_RUNTIME_ERROR_IF_NULL(rpcClient_);
+        RETURN_RUNTIME_ERROR_IF_NULL(shmConnection_);
         CHECK_FAIL_RETURN_STATUS(!inputs.empty(), K_INVALID, "Batch get request is empty");
         if (inputs.size() == 1) {
             return BatchGetOne(inputs.front(), outputs);
         }
 
-        BatchGetObjectRemoteReqPb request;
         for (const auto &input : inputs) {
             CHECK_FAIL_RETURN_STATUS(!input.objectKey.empty(), K_INVALID, "Object key is empty");
-            auto *itemRequest = request.add_requests();
-            itemRequest->set_object_key(input.objectKey);
-            itemRequest->set_data_size(input.expectedSize);
-            itemRequest->set_try_lock(true);
+            CHECK_FAIL_RETURN_STATUS(input.context != nullptr, K_INVALID, "Transport read context is missing");
         }
-        BatchGetObjectRemoteRspPb response;
-        std::vector<RpcMessage> payloads;
-        RETURN_IF_NOT_OK(rpcClient_->InvokeBatchGetObject(request, response, payloads));
-        CHECK_FAIL_RETURN_STATUS(response.responses_size() == static_cast<int>(inputs.size()), K_RUNTIME_ERROR,
-                                 "BatchGetObjectRemote response count does not match request count");
 
-        size_t expectedPayloadCount = 0;
-        for (const auto &itemResponse : response.responses()) {
-            Status itemStatus(static_cast<StatusCode>(itemResponse.error().error_code()),
-                              itemResponse.error().error_msg());
-            if (!itemStatus.IsOk()) {
+        std::shared_ptr<ShmSession> session;
+        RETURN_IF_NOT_OK(shmConnection_->Acquire(inputs.front().context->requestContext, session));
+        GetRspPb response;
+        std::vector<RpcMessage> payloads;
+        Status rc = session->Get(inputs, response, payloads);
+        if (rc.IsError()) {
+            shmConnection_->Invalidate(session);
+            return rc;
+        }
+        rc = ValidateShmResponse(response, payloads, inputs.size());
+        if (rc.IsError()) {
+            shmConnection_->Invalidate(session);
+            return rc;
+        }
+
+        outputs.resize(inputs.size());
+        const Status missingStatus = MissingObjectStatus(response);
+        for (const auto &info : response.objects()) {
+            const uint32_t index = info.object_index();
+            auto &item = outputs[index];
+            if (info.store_fd() <= 0) {
+                item.status = missingStatus;
                 continue;
             }
-            CHECK_FAIL_RETURN_STATUS(itemResponse.data_source() == DataTransferSource::DATA_IN_PAYLOAD,
-                                     K_RUNTIME_ERROR, "SHM BatchGetObjectRemote returned an invalid data source");
-            ++expectedPayloadCount;
-        }
-        CHECK_FAIL_RETURN_STATUS(payloads.size() == expectedPayloadCount, K_RUNTIME_ERROR,
-                                 "BatchGetObjectRemote payload count does not match successful responses");
-
-        outputs.reserve(inputs.size());
-        size_t payloadIndex = 0;
-        for (const auto &itemResponse : response.responses()) {
-            DataGetItemResult item;
-            item.status = Status(static_cast<StatusCode>(itemResponse.error().error_code()),
-                                 itemResponse.error().error_msg());
-            item.data.response = itemResponse;
-            item.data.kind = AccessTransportKind::SHM;
-            if (item.status.IsOk()) {
-                item.data.rpcPayloads.emplace_back(std::move(payloads[payloadIndex++]));
+            item.status = session->BuildResult(info, inputs[index], item.data);
+            if (item.status.IsError()) {
+                outputs.clear();
+                shmConnection_->Invalidate(session);
+                return item.status;
             }
-            outputs.emplace_back(std::move(item));
         }
         return Status::OK();
     }
@@ -150,38 +162,11 @@ public:
         return Status::OK();
     }
 
-    // Try to mmap the shm region for a Create response (shared by Create and MCreate).
-    // On success sets info->pointer (base+offset), info->metadataSize, info->mmapEntry + AssociateShmId.
-    // On failure (or no shm deps) leaves info as-is (nullptr → payload inline fallback).
-    void TryMmapBuffer(const CreateRspPb &rsp, uint64_t size, ObjectBufferInfo &info)
+    void CloseDataPlane() override
     {
-        if (workerApi_ == nullptr || mmapManager_ == nullptr || rsp.store_fd() <= 0 || !workerApi_->IsShmEnable()) {
-            return;
+        if (shmConnection_ != nullptr) {
+            shmConnection_->Teardown();
         }
-        auto shmBuf = std::make_shared<ShmUnitInfo>();
-        shmBuf->fd = static_cast<int>(rsp.store_fd());
-        shmBuf->mmapSize = rsp.mmap_size();
-        shmBuf->offset = static_cast<ptrdiff_t>(rsp.offset());
-        shmBuf->size = size;
-        shmBuf->id = info.shmId;
-        Status mmapRc = mmapManager_->LookupUnitsAndMmapFd("", shmBuf);
-        if (!mmapRc.IsOk()) {
-            LOG_EVERY_N(WARNING, SHM_FALLBACK_LOG_RATE) << "SHM mmap failed, falling back to payload: "
-                                                                 << mmapRc.GetMsg();
-            METRIC_INC(metrics::KvMetricId::CLIENT_SHM_MMAP_FALLBACK_TOTAL);
-            return;
-        }
-        info.pointer = static_cast<uint8_t *>(shmBuf->pointer) + shmBuf->offset;
-        info.metadataSize = rsp.metadata_size();
-        if (!rsp.shm_id().empty()) {
-            mmapManager_->AssociateShmId(shmBuf->fd, rsp.shm_id());
-        }
-        info.mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
-        if (info.mmapEntry == nullptr) {
-            LOG_EVERY_N(WARNING, SHM_FALLBACK_LOG_RATE)
-                << "SHM GetMmapEntryByFd returned nullptr after mmap for fd=" << shmBuf->fd;
-        }
-        METRIC_INC(metrics::KvMetricId::CLIENT_SHM_MMAP_SUCCESS_TOTAL);
     }
 
     Status Create(const HostPort &workerAddr, const std::string &key, uint64_t size,
@@ -194,22 +179,15 @@ public:
         CreateRspPb createRsp;
         uint32_t workerVersion = 0;
         RETURN_IF_NOT_OK(rpcClient_->InvokeCreate(param.subTimeoutMs, createReq, createRsp, workerVersion));
-
-        auto info = std::make_shared<ObjectBufferInfo>();
-        info->objectKey = key;
-        info->dataSize = size;
-        info->metadataSize = 0;  // SHM payload-only path: metadata sent inline with data
-        info->workerAddr = workerAddr;
-        info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
-        info->pointer = nullptr;  // client-side buffer allocated by ObjectBuffer for payload
-        if (!createRsp.shm_id().empty()) {
-            info->shmId = ShmKey::Intern(createRsp.shm_id());
+        // Routed writes are outside the endpoint-scoped fd-passing scope. A Worker fd returned by
+        // this target must never be resolved through the initially bound Worker's fd channel or mmap
+        // namespace, so ObjectBuffer allocates a local payload buffer here.
+        Status rc = BuildLocalBuffer(workerAddr, key, size, param, createRsp.shm_id(), workerVersion, buffer);
+        if (rc.IsError()) {
+            ReleaseAllocation(createRsp.shm_id(), param.requestContext,
+                              "Create allocation after local buffer setup failure");
         }
-        info->version = workerVersion;
-        // Zero-copy mmap path (shared helper). Sets info->pointer/mmapEntry on success; on failure
-        // leaves them null → Set falls back to payload inline.
-        TryMmapBuffer(createRsp, size, *info);
-        return ObjectBufferInternal::Create(info, buffer);
+        return rc;
     }
 
     Status Set(ObjectBuffer &buffer, const TransportSetParam &param) override
@@ -232,16 +210,17 @@ public:
         RETURN_IF_NOT_OK(rpcClient_->InvokeSet(param.subTimeoutMs, pubReq, payloads, rsp, workerVersion));
         // Observability: record whether this Set actually used the zero-copy mmap pointer or fell back to
         // inline payload (review 180849800). mmapEntry is the real zero-copy discriminator (info.pointer is
-        // always malloc'd by ObjectBuffer::Init). Record(SHM) below still tags the transporter kind.
+        // always malloc'd by ObjectBuffer::Init).
         if (info.mmapEntry != nullptr) {
             METRIC_INC(metrics::KvMetricId::CLIENT_SHM_ZERO_COPY_SET_TOTAL);
         } else {
             METRIC_INC(metrics::KvMetricId::CLIENT_SHM_PAYLOAD_FALLBACK_SET_TOTAL);
         }
-        // Routed same-host Set is tagged SHM (the transporter kind for routing/observability),
-        // regardless of whether the zero-copy mmap pointer or the fallback payload-inline path
-        // carried the bytes — matching KVClientTransportSetTest's ExpectedTransport()=="SHM" contract.
-        return SetTransportResponseStatus(rsp, AccessTransportKind::SHM, param.isSeal, param.isRetry);
+        // Routed writes stay off the endpoint-scoped fd-passing channel: Create allocates a local payload
+        // buffer and Set publishes it through an inline RPC payload, which is plain TCP. Tag TCP so
+        // KVClientTransportSetTest's ExpectedTransport()=="TCP" contract holds; the SHM transporter kind is
+        // reserved for Get/BatchGet fd-passing, recorded on the read path.
+        return SetTransportResponseStatus(rsp, AccessTransportKind::TCP, param.isSeal, param.isRetry);
     }
 
     Status MCreate(const HostPort &workerAddr, const std::vector<std::string> &keys,
@@ -262,33 +241,30 @@ public:
             // The worker allocated some objects but returned a mismatched result count (e.g. partial
             // alloc or response loss). Release every shm_id the worker did report back so the
             // worker-side shm refs do not strand until client disconnect.
-            for (const auto &r : multiRsp.results()) {
-                if (!r.shm_id().empty()) {
-                    (void)rpcClient_->InvokeDecreaseReference(param.requestContext, ShmKey::Intern(r.shm_id()));
-                }
-            }
+            ReleaseAllocations(multiRsp, param.requestContext,
+                               "MCreate allocations after response count mismatch");
             RETURN_STATUS(K_RUNTIME_ERROR, "ShmTransporter MCreate response count does not match request count");
         }
-        for (size_t i = 0; i < keys.size(); i++) {
-            auto info = std::make_shared<ObjectBufferInfo>();
-            info->objectKey = keys[i];
-            info->dataSize = sizes[i];
-            info->metadataSize = 0;  // SHM payload-only path: metadata sent inline with data
-            info->workerAddr = workerAddr;
-            info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
-            info->pointer = nullptr;  // zero-copy mmap will set this if shm deps available
-            const auto &result = multiRsp.results(i);
-            if (!result.shm_id().empty()) {
-                info->shmId = ShmKey::Intern(result.shm_id());
-            }
-            info->version = workerVersion;
-            // Zero-copy mmap path (same as Create). Without this MSet always falls back to payload
-            // inline because info.mmapEntry stays null (review 180840879).
-            TryMmapBuffer(result, sizes[i], *info);
-            std::shared_ptr<ObjectBuffer> buf;
-            RETURN_IF_NOT_OK(ObjectBufferInternal::Create(info, buf));
-            buffers.push_back(std::move(buf));
+        std::vector<std::shared_ptr<ObjectBuffer>> created;
+        try {
+            created.reserve(keys.size());
+        } catch (const std::bad_alloc &e) {
+            ReleaseAllocations(multiRsp, param.requestContext,
+                               "MCreate allocations after local result reservation failure");
+            RETURN_STATUS(K_OUT_OF_MEMORY, e.what());
         }
+        for (size_t i = 0; i < keys.size(); i++) {
+            const auto &result = multiRsp.results(i);
+            std::shared_ptr<ObjectBuffer> buf;
+            Status rc = BuildLocalBuffer(workerAddr, keys[i], sizes[i], param, result.shm_id(), workerVersion, buf);
+            if (rc.IsError()) {
+                ReleaseAllocations(multiRsp, param.requestContext,
+                                   "MCreate allocations after local buffer setup failure");
+                return rc;
+            }
+            created.push_back(std::move(buf));
+        }
+        buffers = std::move(created);
         return Status::OK();
     }
 
@@ -319,7 +295,9 @@ public:
         MultiPublishRspPb response;
         uint32_t workerVersion = 0;
         RETURN_IF_NOT_OK(rpcClient_->InvokeMultiSet(param.subTimeoutMs, request, payloads, response, workerVersion));
-        Status msetRc = SetMSetResponseResult(response, buffers.size(), AccessTransportKind::SHM, result);
+        // Routed MSet publishes local payload buffers through inline RPC payloads (plain TCP), so tag TCP;
+        // see Set() above. The SHM transporter kind is reserved for Get/BatchGet fd-passing.
+        Status msetRc = SetMSetResponseResult(response, buffers.size(), AccessTransportKind::TCP, result);
         // SetMSetResponseResult calls result.Clear() which resets publishAttempted; re-set it like
         // TcpTransporter::MSet (tcp_transporter.cpp) so the caller's retry logic (retryUnsentPublish)
         // does not re-publish data the worker already received.
@@ -335,9 +313,78 @@ public:
     }
 
 private:
+    static Status BuildLocalBuffer(const HostPort &workerAddr, const std::string &key, uint64_t size,
+                                   const TransportCreateParam &param, const std::string &shmId,
+                                   uint32_t workerVersion, std::shared_ptr<ObjectBuffer> &buffer)
+    {
+        INJECT_POINT("ShmTransporter.BuildLocalBuffer");
+        try {
+            auto info = std::make_shared<ObjectBufferInfo>();
+            info->objectKey = key;
+            info->dataSize = size;
+            info->metadataSize = 0;  // SHM payload-only path: metadata sent inline with data
+            info->workerAddr = workerAddr;
+            info->objectMode = ModeInfo(param.consistencyType, param.writeMode, param.cacheType);
+            info->pointer = nullptr;  // routed writes use a local payload buffer
+            if (!shmId.empty()) {
+                info->shmId = ShmKey::Intern(shmId);
+            }
+            info->version = workerVersion;
+            return ObjectBufferInternal::Create(std::move(info), buffer);
+        } catch (const std::bad_alloc &e) {
+            RETURN_STATUS(K_OUT_OF_MEMORY, e.what());
+        }
+    }
+
+    void ReleaseAllocation(const std::string &shmId, const TransportRequestContext &context,
+                           const char *reason) const
+    {
+        if (rpcClient_ == nullptr || shmId.empty()) {
+            return;
+        }
+        Status rc = rpcClient_->InvokeDecreaseReference(context, ShmKey::Intern(shmId));
+        LOG_IF_ERROR(rc, reason);
+    }
+
+    void ReleaseAllocations(const MultiCreateRspPb &response, const TransportRequestContext &context,
+                            const char *reason) const
+    {
+        for (const auto &result : response.results()) {
+            ReleaseAllocation(result.shm_id(), context, reason);
+        }
+    }
+
+    static Status MissingObjectStatus(const GetRspPb &response)
+    {
+        Status status(static_cast<StatusCode>(response.last_rc().error_code()), response.last_rc().error_msg());
+        return status.IsError() ? status : Status(K_NOT_FOUND, "Cannot get object from worker");
+    }
+
+    static Status ValidateShmResponse(const GetRspPb &response, const std::vector<RpcMessage> &payloads,
+                                      size_t requestCount)
+    {
+        CHECK_FAIL_RETURN_STATUS(payloads.empty() && response.payload_info().empty(), K_RUNTIME_ERROR,
+                                 "SHM WorkerOCService Get unexpectedly returned RPC payload data");
+        CHECK_FAIL_RETURN_STATUS(static_cast<size_t>(response.objects_size()) == requestCount, K_RUNTIME_ERROR,
+                                 "WorkerOCService Get response count does not match request count");
+        if (requestCount == 1) {
+            CHECK_FAIL_RETURN_STATUS(response.objects(0).object_index() == 0, K_RUNTIME_ERROR,
+                                     "WorkerOCService Get returned an invalid object index");
+            return Status::OK();
+        }
+        std::vector<bool> returnedIndexes(requestCount, false);
+        for (const auto &info : response.objects()) {
+            const size_t index = info.object_index();
+            CHECK_FAIL_RETURN_STATUS(index < requestCount && !returnedIndexes[index],
+                                     K_RUNTIME_ERROR,
+                                     "WorkerOCService Get returned an invalid object index");
+            returnedIndexes[index] = true;
+        }
+        return Status::OK();
+    }
+
     std::shared_ptr<WorkerRpcClient> rpcClient_;
-    std::shared_ptr<IClientWorkerCommonApi> workerApi_;
-    std::shared_ptr<MmapManager> mmapManager_;
+    std::shared_ptr<ShmConnection> shmConnection_;
 };
 }  // namespace client
 }  // namespace datasystem
