@@ -21,6 +21,7 @@ syntax = "proto3";
 package datasystem;
 
 import "datasystem/protos/utils.proto";
+import "datasystem/protos/log_sample.proto";
 
 option cc_enable_arenas = true;
 
@@ -29,23 +30,10 @@ message TickPb {
     string tick_name = 2;
 }
 
-// Request log sampling state carried by RPC metadata.
-// Converged to request-level complete-print decision via LogSampler.
-enum LogSampleState {
-    // Not an SDK request trace. Background and internal logs are not sampled by request_sample_rate.
-    LOG_SAMPLE_NONE = 0;
-
-    // SDK request trace admitted by request_sample_rate. Complete request logs are kept across RPC hops.
-    LOG_SAMPLE_ADMIT = 1;
-
-    // SDK request trace rejected by request_sample_rate. Request INFO/VLOG are dropped;
-    // diagnostic/access continue supplemental sampling, reject is NOT a direct drop condition for them.
-    LOG_SAMPLE_REJECT = 2;
-
-    // SDK request trace without a propagated sampling decision yet.
-    // The receiving side may create a local decision based on its own request_sample_rate.
-    LOG_SAMPLE_UNDECIDED = 3;
-}
+// LogSampleState is imported from datasystem/protos/log_sample.proto so the
+// transport-neutral log_sample_state.h helpers (common/log) do not depend on
+// this zmq-specific proto. MetaPb.log_sample_state below keeps the same wire
+// tag and type.
 
 // This is the header message sent by the client
 message MetaPb {

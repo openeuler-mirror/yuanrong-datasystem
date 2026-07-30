@@ -40,7 +40,7 @@ Large data usually bypasses brpc:
 - Preserve generated brpc/ZMQ stub interface parity. Business code commonly dispatches with `brpcSession_ ? brpc : zmq`, so proto option changes must keep both generated paths compatible.
 - Preserve channel/stub lifetime coupling. `RpcStubCacheMgr::BrpcCreatorTemplate()` returns an aliasing `shared_ptr` whose control block owns both channel and stub; do not replace it with a raw stub-only owner.
 - Treat client->worker stubs differently from worker->worker/master stubs. Client OC uses an atomically published `BrpcSession` bundle for hot replacement; worker/master paths use `RpcStubCacheMgr` LRU plus stale-socket eviction.
-- Keep TraceID at the front of the brpc request attachment. The server adapter strips the `TRCID:V1` prefix before payload parsing, so payload framing depends on this ordering.
+- Keep TraceID at the front of the brpc request attachment. The server adapter strips the `TRCID:V1` prefix before payload parsing, so payload framing depends on this ordering. A 1-byte `LogSampleState` is appended after the traceID so the worker restores `requestLogTrace`/`sampleDecision` via `ApplyLogSampleState()` and participates in `LogSampler`; encode/decode helpers are `AttachTraceIDToAttachment()` / `ExtractTraceIDAndSampleState()` in `trace_attachment.h`. The magic stays `V1` and the state byte defaults defensively to `UNDECIDED` when absent/out-of-range, so this assumes single-version deployment (no rolling upgrade with binaries that emit the frame without the state byte).
 - Do not rely on brpc attachment as a true zero-copy large-data channel. The attachment framing path can avoid some application-level copies through `RpcMessage::ZeroCopyBuffer`, but brpc attachment serialization still differs from shm/RDMA bypass semantics.
 - Keep production streaming assumptions narrow. The only production streaming RPC verified here is `MasterWorkerSCService.QueryMetadata`; test protos contain additional stream examples.
 
@@ -112,7 +112,7 @@ These points were checked directly against source on `2026-07-01`:
 - `src/datasystem/common/rpc/rpc_stub_cache_mgr.h` defines `kBrpcPortOffset = 0`.
 - `src/datasystem/common/rpc/rpc_server.cpp` implements brpc adapter registration, brpc start, stop/join behavior, and brpc-mode ZMQ bind skipping.
 - `src/datasystem/common/rpc/rpc_stub_cache_mgr.h/.cpp` implements channel/stub alias ownership, `WaitForBrpcSocketAvailable()`, and stale brpc stub eviction.
-- `src/datasystem/common/rpc/trace_attachment.h` and brpc generator/client helpers inject TraceID into request attachments; `brpc_service_generator.cpp` strips it before method dispatch.
+- `src/datasystem/common/rpc/trace_attachment.h` and brpc generator/client helpers inject TraceID + 1-byte `LogSampleState` into request attachments; `brpc_service_generator.cpp` `BuildCallMethodPrologue` strips both and calls `ApplyLogSampleState()` so the worker side participates in request-log sampling.
 - `src/datasystem/client/object_cache/client_worker_api/client_worker_remote_api.cpp` atomically publishes and reloads the OC brpc session bundle.
 - `src/datasystem/worker/worker_oc_server.cpp` registers brpc adapters for worker, worker-worker, master-worker, client-worker SC, and master services before `StartBrpcServer()`.
 - `src/datasystem/protos/worker_stream.proto` contains the production `QueryMetadata(stream ...) returns (stream ...)` RPC; additional streaming methods found under test protos are not production paths.

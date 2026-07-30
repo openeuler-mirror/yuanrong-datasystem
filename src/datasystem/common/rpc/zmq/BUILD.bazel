@@ -147,6 +147,7 @@ ds_cc_library(
         ":zmq_message",
         "//src/datasystem/common/metrics:common_metrics",
         "//src/datasystem/common/log:common_log",
+        "//src/datasystem/common/log:log_sample_state",
         "//src/datasystem/common/perf:common_perf",
         "//src/datasystem/common/rpc:api_deadline",
         "//src/datasystem/common/rpc:api_deadline_helpers",

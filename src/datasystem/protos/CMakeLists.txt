@@ -66,6 +66,20 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         DEPEND proto_lib_depend
         LINK ${PROTOBUF_LIBRARIES})
 
+GENERATE_PROTO_CPP(LOG_SAMPLE_PROTO_SRCS LOG_SAMPLE_PROTO_HDRS ${PROTO_BUILD_DIR}
+        PROTO_FILES ${PROTO_SRC_DIR}/log_sample.proto
+        PROTO_DEPEND proto_lib_depend)
+GEN_GLOBAL_PROTO_LIB_DEPEND(
+        NAME log_sample_protos
+        SOURCE ${LOG_SAMPLE_PROTO_SRCS}
+        DEPEND proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES})
+GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
+        NAME log_sample_protos_client
+        SOURCE ${LOG_SAMPLE_PROTO_SRCS}
+        DEPEND proto_lib_depend
+        LINK ${PROTOBUF_LIBRARIES})
+
 GENERATE_PROTO_CPP(META_PROTO_SRCS META_PROTO_HDRS ${PROTO_BUILD_DIR}
         PROTO_FILES ${PROTO_SRC_DIR}/meta_zmq.proto
         PROTO_DEPEND proto_lib_depend)
@@ -82,12 +96,12 @@ GEN_GLOBAL_PROTO_LIB_DEPEND(
         NAME zmq_meta_protos
         SOURCE ${META_PROTO_SRCS}
         DEPEND proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES})
+        LINK ${PROTOBUF_LIBRARIES} log_sample_protos)
 GEN_GLOBAL_PROTO_LIB_DEPEND(CLIENT
         NAME zmq_meta_protos_client
         SOURCE ${META_PROTO_SRCS}
         DEPEND proto_lib_depend
-        LINK ${PROTOBUF_LIBRARIES})
+        LINK ${PROTOBUF_LIBRARIES} log_sample_protos_client)
 
 # Build share memory proto lib
 GENERATE_ZMQ_CPP(zmq_proto_lib_depend SHARE_MEMORY_SRCS SHARE_MEMORY_ZMQ_HDRS ${PROTO_BUILD_DIR} ${PROTO_SRC_DIR} ${PROTO_SRC_DIR}/share_memory.proto)

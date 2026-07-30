@@ -34,8 +34,12 @@
 
 #include <string>
 
-#include "datasystem/common/log/time_cost.h"
+// scoped_bthread_local.h pulls <bthread/bthread.h> -> bvar, whose percentile.h uses
+// CHECK_EQ << "...". That must be parsed with butil's CHECK_EQ (supports <<) BEFORE
+// log.h (via time_cost.h) redefines CHECK_EQ as a do{}while(0) that breaks the <<.
+// So scoped_bthread_local.h must come before time_cost.h.
 #include "datasystem/common/rpc/scoped_bthread_local.h"
+#include "datasystem/common/log/time_cost.h"
 #include "datasystem/common/rpc/timeout_duration.h"
 #include "datasystem/common/rpc/zmq/zmq_message.h"
 

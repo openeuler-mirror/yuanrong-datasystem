@@ -42,10 +42,14 @@
 #ifndef DATASYSTEM_COMMON_UTIL_REQUEST_CONTEXT_H
 #define DATASYSTEM_COMMON_UTIL_REQUEST_CONTEXT_H
 
+// thread_local.h pulls <bthread/bthread.h> -> bvar, whose percentile.h uses
+// CHECK_EQ << "...". That must be parsed with butil's CHECK_EQ (supports <<) BEFORE
+// log.h (via time_cost.h) redefines CHECK_EQ as a do{}while(0) that breaks the <<.
+// So thread_local.h must come before time_cost.h.
+#include "datasystem/common/util/thread_local.h"
 #include "datasystem/common/log/time_cost.h"
 #include "datasystem/common/log/trace.h"
 #include "datasystem/common/rpc/api_deadline.h"
-#include "datasystem/common/util/thread_local.h"
 
 namespace datasystem {
 
@@ -161,6 +165,22 @@ public:
         if (!inheritedTraceID.empty()) {
             TraceGuard guard = ctx_.trace.SetTraceNewID(inheritedTraceID, true);
             (void)guard;
+            // Inherit the request-log sampling state from the outer scope so a
+            // nested handler ScopedRequestContext does not drop the transport
+            // prologue's ApplyLogSampleState(). SetTraceNewID above unconditionally
+            // clears requestLogTrace + sampleDecision; restore them from the saved
+            // (outer) trace. Under brpc M:N, Trace::Instance() routes to this ctx_.trace
+            // via bthread_getspecific, so without this restore the access recorder
+            // (constructed inside the nested scope) sees requestLogTrace=false and
+            // sampling is bypassed. Under ZMQ, GetBthreadTrace() returns nullptr and
+            // Trace::Instance() is the thread_local singleton, so this restore is a
+            // no-op for ZMQ behavior.
+            if (saved_ != nullptr) {
+                bool outerAdmitted = false;
+                const bool outerHasDecision = saved_->trace.GetRequestSampleDecision(outerAdmitted);
+                ctx_.trace.SetRequestLogTrace(saved_->trace.IsRequestLogTrace());
+                ctx_.trace.SetRequestSampleDecision(outerHasDecision, outerAdmitted);
+            }
         }
     }
     ~ScopedRequestContext() { SetRequestContext(saved_); }
