@@ -36,6 +36,7 @@
 
 #include "datasystem/common/l2cache/persistence_api.h"
 #include "datasystem/common/l2cache/l2_storage.h"
+#include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/common/util/request_context.h"
 #include "datasystem/common/util/thread_pool.h"
 
@@ -105,6 +106,7 @@ struct WorkerOcServiceCrudParam {
     const worker::MetadataRouteResolver *metadataRouteResolver;
     const ObjectEndpointPolicy *endpointPolicy;
     const std::atomic<bool> *exitRequested;
+    PeerUbAdmission *ubAdmission{ nullptr };
     bool allowDirectoryLag;
 };
 

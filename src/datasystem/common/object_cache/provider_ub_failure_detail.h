@@ -17,10 +17,12 @@
 #include <string>
 
 #include "datasystem/common/object_cache/peer_ub_admission.h"
+#include "datasystem/common/rdma/fast_transport_base.h"
 #include "datasystem/protos/object_posix.pb.h"
 
 namespace datasystem {
 constexpr const char *PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE = "provider_local_ub_write";
+constexpr const char *MIGRATION_LOCAL_UB_READ_FAILURE_SIDE = "migration_local_ub_read";
 
 inline void FillProviderUbFailureDetail(const Status &status, const std::string &failedEndpoint,
                                         const std::string &operatorWorker, std::optional<int> providerStatus,
@@ -53,6 +55,26 @@ inline void UpdateProviderUbFailureDetailForWrappedStatus(const Status &sourceSt
     detail.set_message(wrappedStatus.GetMsg());
 }
 
+inline void FillMigrationUbReadFailureDetail(const Status &status, const std::string &failedEndpoint,
+                                             const std::string &operatorWorker, const UrmaWriteFailure &failure,
+                                             ProviderUbFailureDetailPb &detail)
+{
+    detail.Clear();
+    detail.set_status_code(status.GetCode());
+    detail.set_message(status.GetMsg());
+    detail.set_failed_endpoint(failedEndpoint);
+    detail.set_failure_side(MIGRATION_LOCAL_UB_READ_FAILURE_SIDE);
+    detail.set_operator_worker(operatorWorker);
+    if (failure.providerStatus.has_value()) {
+        detail.set_has_provider_status(true);
+        detail.set_provider_status(*failure.providerStatus);
+    }
+    if (failure.cqeStatus.has_value()) {
+        detail.set_has_cqe_status(true);
+        detail.set_cqe_status(*failure.cqeStatus);
+    }
+}
+
 inline void ReportProviderLocalUbWriteFailure(PeerUbAdmission *admission, const HostPort &operatorWorker,
                                               UbOperationKind operation, const Status &status,
                                               std::optional<int> providerStatus, std::optional<int> cqeStatus)
@@ -71,7 +93,12 @@ inline std::optional<UbOpOutcome> DecodeProviderUbFailureDetail(const ProviderUb
                                                                 const HostPort &provider, UbOperationKind operation,
                                                                 const std::string &learnedFrom)
 {
-    if (detail.failure_side() != PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE || detail.failed_endpoint().empty()
+    const bool migrationOperation =
+        operation == UbOperationKind::MIGRATION_READ || operation == UbOperationKind::MIGRATION_WRITE;
+    const bool supportedSide =
+        detail.failure_side() == PROVIDER_LOCAL_UB_WRITE_FAILURE_SIDE
+        || (migrationOperation && detail.failure_side() == MIGRATION_LOCAL_UB_READ_FAILURE_SIDE);
+    if (!supportedSide || detail.failed_endpoint().empty()
         || detail.operator_worker() != provider.ToString() || detail.status_code() == K_OK) {
         return std::nullopt;
     }

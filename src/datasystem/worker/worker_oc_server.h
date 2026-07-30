@@ -488,6 +488,21 @@ private:
     void RunUrmaWarmupController();
 
     /**
+     * @brief Probe one due admission entry outside admission locks.
+     */
+    void RunOneUbRecoveryProbe();
+
+    /**
+     * @brief Resolve the remote endpoint used to validate a quarantined path.
+     */
+    Status ResolveUbProbeEndpoint(const HostPort &subject, HostPort &endpoint) const;
+
+    /**
+     * @brief Advance grace-period cleanup while removed workers remain pending.
+     */
+    void ContinueUbLifecycleCleanup();
+
+    /**
      * @brief Submit URMA warmup tasks for newly discovered ready peers.
      */
     void ScheduleUrmaWarmupTasks(const std::vector<const cluster::Member *> &members,
@@ -537,6 +552,13 @@ private:
      * @param[in] snapshot Immutable published Snapshot.
      */
     void ScheduleTopologySnapshotWarmup(std::shared_ptr<const cluster::TopologySnapshot> snapshot);
+
+    /**
+     * @brief Reconcile UB admission history with one authoritative full topology Snapshot.
+     * @param[in] snapshot Published immutable topology.
+     */
+    void ReconcileUbAdmissionTopology(const cluster::TopologySnapshot &snapshot);
+    void HandleTopologySnapshotPublished(std::shared_ptr<const cluster::TopologySnapshot> snapshot);
 
     /**
      * @brief Drain coalesced topology Snapshot warmup work on one background task.

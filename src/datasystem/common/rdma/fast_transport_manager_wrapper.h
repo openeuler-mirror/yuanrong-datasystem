@@ -81,6 +81,13 @@ void SetClientFastTransportMode(FastTransportMode fastTransportMode, uint64_t tr
 Status InitializeFastTransportManager(const HostPort &hostport = HostPort());
 
 /**
+ * @brief Verify one established worker UB path with a dedicated one-byte URMA WRITE.
+ * @param[in] response Worker handshake response containing the reserved probe address.
+ * @return K_OK only after the probe CQE completes successfully.
+ */
+Status ProbeUbDataPlane(const UrmaHandshakeRspPb &response);
+
+/**
  * @brief Remove remote fast transport node in urma and ucp.
  * @param[in] remoteAddress Remote Worker Address.
  * @return Status of the call.

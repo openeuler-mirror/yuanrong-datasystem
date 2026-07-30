@@ -118,6 +118,10 @@
     Consumers reject stale epochs, retired incarnations, and summaries whose incarnation does not match the registered
     Worker. Accepting a trusted new incarnation clears process-local evidence for that endpoint so the restarted Worker
     can be readmitted. Lease expiry alone removes only the global quarantine and retains process-local evidence.
+  - Multi-Worker URMA startup places the local migration sender in `PROBING`; a single Worker skips this peer-dependent
+    gate. The long-lived URMA warmup controller serializes dedicated one-byte recovery writes outside admission locks.
+    A successful CQE, current `ACTIVE` topology, unchanged probe epoch, and non-denying Global Fact are all required
+    before FastMigration admission reopens.
   - object-cache worker-to-master RPC warmup also starts before `ReadinessProbe()`: a best-effort asynchronous startup
     task reads immutable topology snapshots until the ready member set is stable or the startup warmup window expires;
     later Snapshot publication callbacks enqueue bounded warmup for newly ready members
@@ -133,6 +137,16 @@
     bounded migration batch, the executor expires the task when that assigned master is `FAILED`, locally unreachable,
     or absent from the current topology; a successor master reconstructs scheduling from later resource reports rather
     than accepting completion for the predecessor's in-memory task.
+  - Object migration combines topology role and UB admission. Ordinary sources and every new target must be `ACTIVE`;
+    topology ScaleIn sources may remain `ACTIVE/PRE_LEAVING/LEAVING`, while `JOINING/PRE_LEAVING/LEAVING/FAILED`
+    members cannot receive new migration. Rebalance rechecks before candidate selection and every bounded batch.
+    FastMigration read failures preserve target-local raw CQE evidence; NotifyRemoteGet write failures preserve the
+    source Provider operator, so source failure stops retries instead of being misattributed to a target.
+  - Published full topology snapshots drive UB-state lifecycle reconciliation. Explicitly removed Worker addresses
+    enter a `2 * node_timeout_s` grace period, after which local/global/incarnation buckets are removed and a bounded
+    TTL tombstone rejects old incarnation replay. Lease-empty UB snapshots still clear only Global Fact. Client routing
+    filters immediately remove trusted/global/local-observation buckets for addresses absent from authoritative routing
+    topology.
 - Shutdown:
   - Parameterized lifecycle callbacks run outside `initMutex_`; once `onStart` is attempted, cleanup invokes `onStop` exactly once. The first lifecycle error is returned while later cleanup errors are logged, and internal shutdown always continues.
   - `PreShutDown` then `ShutDown`

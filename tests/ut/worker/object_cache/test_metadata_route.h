@@ -23,6 +23,8 @@
 #include <utility>
 
 #include "datasystem/cluster/executor/topology_phase_callbacks.h"
+#include "datasystem/cluster/repository/topology_key_helper.h"
+#include "datasystem/cluster/repository/topology_repository_codec.h"
 #include "datasystem/cluster/runtime/topology_engine.h"
 #include "datasystem/worker/metadata_route_resolver.h"
 #include "ut/cluster/testing/fake_coordinator_service_proxy.h"
@@ -99,6 +101,24 @@ public:
     cluster::TopologyEngine *Engine() const
     {
         return engine_.get();
+    }
+
+    Status StartWithActiveLocalMember(const HostPort &localAddress)
+    {
+        CHECK_FAIL_RETURN_STATUS(engine_ != nullptr, K_NOT_READY, "test topology engine is not initialized");
+        cluster::TopologyState topology;
+        topology.clusterHasInit = true;
+        topology.version = 1;
+        topology.members = {
+            cluster::Member{ { std::string(16, 'l'), localAddress.ToString() }, cluster::MemberState::ACTIVE, { 1 } }
+        };
+        std::unique_ptr<cluster::TopologyKeyHelper> keys;
+        RETURN_IF_NOT_OK(cluster::TopologyKeyHelper::Create("", keys));
+        std::string encoded;
+        RETURN_IF_NOT_OK(cluster::TopologyRepositoryCodec::EncodeTopology(topology, encoded));
+        RETURN_IF_NOT_OK(
+            proxy_.PutRaw(keys->TopologyTable() + "/" + cluster::TopologyKeyHelper::TopologyKey(), encoded));
+        return engine_->Start();
     }
 
 private:

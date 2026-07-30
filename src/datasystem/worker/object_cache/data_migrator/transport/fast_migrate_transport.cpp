@@ -44,6 +44,9 @@ void FastMigrateTransport::ProcessMigrateResponse(const MigrateDataDirectReqPb &
     if (req.progress != nullptr) {
         req.progress->Deal(rsp.successKeys.size());
     }
+    if (rspPb.has_provider_ub_failure_detail()) {
+        rsp.ubFailureDetail = rspPb.provider_ub_failure_detail();
+    }
     LOG_IF(WARNING, !rspPb.failed_object_keys().empty()) << FormatString(
         "[Migrate Data] Send %ld objects[%ld bytes] to %s and %ld objects [%s] failed", req.datas->size(),
         req.batchSize, req.api->Address(), rspPb.failed_object_keys_size(), VectorToString(rspPb.failed_object_keys()));
@@ -95,6 +98,9 @@ Status FastMigrateTransport::MigrateDataToRemote(const Request &req, Response &r
     GetRequestContext()->reqTimeoutDuration.InitWithPositiveTime(migrateDirectTimeoutMs);
     Status rc = req.api->MigrateDataDirect(reqPb, rspPb);
     point.RecordAndReset(PerfKey::WORKER_MIGRATE_DIRECT_RSP_PROCESS);
+    if (rspPb.has_provider_ub_failure_detail()) {
+        rsp.ubFailureDetail = rspPb.provider_ub_failure_detail();
+    }
     if (rc.IsOk()) {
         ProcessMigrateResponse(reqPb, rspPb, req, rsp);
     }

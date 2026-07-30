@@ -18,11 +18,14 @@
 
 #include "datasystem/common/object_cache/peer_ub_admission.h"
 
+#include <algorithm>
+#include <iterator>
 #include <utility>
 
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
 #include "datasystem/common/util/format.h"
+#include "datasystem/common/util/timer.h"
 
 namespace datasystem {
 
@@ -32,12 +35,14 @@ Status PeerUbAdmission::CheckWriteTarget(const HostPort &peer, UbOperationKind o
     std::shared_lock<std::shared_mutex> lock(mutex_);
     auto global = globalSummaries_.find(peer);
     if (global != globalSummaries_.end() && !global->second.writable) {
+        INJECT_POINT_NO_RETURN("PeerUbAdmission.CheckWriteTarget.blocked");
         return BuildUnavailableStatus(peer, StatusCode::K_URMA_WORKER_UNAVAILABLE);
     }
     auto it = states_.find(peer);
     if (it == states_.end() || !ShouldBlock(it->second)) {
         return Status::OK();
     }
+    INJECT_POINT_NO_RETURN("PeerUbAdmission.CheckWriteTarget.blocked");
     return BuildUnavailableStatus(peer, StatusCode::K_URMA_WORKER_UNAVAILABLE);
 }
 
@@ -72,7 +77,13 @@ void PeerUbAdmission::ReportOutcome(const UbOpOutcome &outcome)
         stateChanged = state.state != nextState;
         state.lastStatus = outcome.status;
         state.lastFailureClass = failureClass;
+        state.providerStatus = outcome.providerStatus;
+        state.cqeStatus = outcome.cqeStatus;
         state.state = nextState;
+        if (state.backoffLevel == 0) {
+            state.backoffLevel = 1;
+        }
+        state.backoffDeadlineMs = GetSteadyClockTimeStampMs() + ProbeBackoffMs(state.backoffLevel);
         ++state.epoch;
     }
     if (!stateChanged) {
@@ -92,10 +103,15 @@ void PeerUbAdmission::ReplaceGlobalSummaries(const std::vector<UbHealthSummary> 
 {
     constexpr size_t MAX_RETIRED_INCARNATIONS_PER_WORKER = 8;
     std::lock_guard<std::shared_mutex> lock(mutex_);
+    const auto nowMs = GetSteadyClockTimeStampMs();
     std::unordered_map<HostPort, UbHealthSummary> replacement;
     replacement.reserve(summaries.size());
     for (const auto &summary : summaries) {
         if (summary.worker.Empty() || summary.incarnation.empty()) {
+            continue;
+        }
+        if ((topologyInitialized_ && topologyWorkers_.count(summary.worker) == 0)
+            || IsReplayLocked(summary.worker, summary.incarnation)) {
             continue;
         }
         auto latest = latestGlobalIncarnations_.find(summary.worker);
@@ -129,9 +145,135 @@ void PeerUbAdmission::ReplaceGlobalSummaries(const std::vector<UbHealthSummary> 
         if (!inserted && iter->second.incarnation == candidate.incarnation && candidate.epoch > iter->second.epoch) {
             iter->second = candidate;
         }
+        ApplyGlobalRecoveryTransitionLocked(iter->second, nowMs);
     }
     globalSummaries_ = std::move(replacement);
     INJECT_POINT_NO_RETURN("PeerUbAdmission.ReplaceGlobalSummaries.afterCommit");
+}
+
+void PeerUbAdmission::InitializeProbing(const HostPort &peer, uint64_t nowMs)
+{
+    if (peer.Empty()) {
+        return;
+    }
+    std::lock_guard<std::shared_mutex> lock(mutex_);
+    auto &state = states_[peer];
+    state.state = UbAdmissionState::PROBING;
+    state.lastStatus = Status(K_NOT_READY, "UB data plane requires recovery probe");
+    state.lastFailureClass = UbFailureClass::CONNECT_OR_PATH_FAILURE;
+    state.backoffLevel = 0;
+    state.backoffDeadlineMs = nowMs;
+    ++state.epoch;
+}
+
+std::optional<UbProbeToken> PeerUbAdmission::TryBeginProbe(const HostPort &peer, uint64_t nowMs)
+{
+    std::lock_guard<std::shared_mutex> lock(mutex_);
+    auto iter = states_.find(peer);
+    if (iter == states_.end() || nowMs < iter->second.backoffDeadlineMs) {
+        return std::nullopt;
+    }
+    auto &state = iter->second;
+    if (state.state != UbAdmissionState::UNAVAILABLE && state.state != UbAdmissionState::SUSPECT
+        && state.state != UbAdmissionState::PROBING) {
+        return std::nullopt;
+    }
+    if (state.state == UbAdmissionState::PROBING && state.lastStatus.IsOk()) {
+        return std::nullopt;
+    }
+    state.state = UbAdmissionState::PROBING;
+    state.lastStatus = Status::OK();
+    ++state.epoch;
+    return UbProbeToken{ peer, state.epoch };
+}
+
+bool PeerUbAdmission::CompleteProbe(const UbProbeToken &token, const Status &status, uint64_t nowMs,
+                                    bool requireGlobalAvailable)
+{
+    std::lock_guard<std::shared_mutex> lock(mutex_);
+    auto iter = states_.find(token.peer);
+    if (iter == states_.end() || iter->second.state != UbAdmissionState::PROBING
+        || iter->second.epoch != token.epoch) {
+        return false;
+    }
+    auto &state = iter->second;
+    if (status.IsOk() && (!requireGlobalAvailable || IsGlobalWritableLocked(token.peer))) {
+        state.state = UbAdmissionState::AVAILABLE;
+        state.lastStatus = Status::OK();
+        state.lastFailureClass = UbFailureClass::SUCCESS;
+        state.backoffLevel = 0;
+        state.backoffDeadlineMs = 0;
+        state.providerStatus.reset();
+        state.cqeStatus.reset();
+        ++state.epoch;
+        INJECT_POINT_NO_RETURN("PeerUbAdmission.CompleteProbe.success");
+        return true;
+    }
+    state.state = UbAdmissionState::UNAVAILABLE;
+    state.lastStatus = status.IsOk() ? Status(K_NOT_READY, "Global UB health still denies recovery") : status;
+    state.backoffLevel = std::min(state.backoffLevel + 1, MAX_PROBE_BACKOFF_LEVEL);
+    state.backoffDeadlineMs = nowMs + ProbeBackoffMs(state.backoffLevel);
+    ++state.epoch;
+    INJECT_POINT_NO_RETURN("PeerUbAdmission.CompleteProbe.failure");
+    return false;
+}
+
+std::optional<HostPort> PeerUbAdmission::NextProbeCandidate(uint64_t nowMs) const
+{
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    for (const auto &[peer, state] : states_) {
+        const bool recoverable = state.state == UbAdmissionState::UNAVAILABLE
+                                 || state.state == UbAdmissionState::SUSPECT
+                                 || state.state == UbAdmissionState::PROBING;
+        if (recoverable && state.lastStatus.IsError() && nowMs >= state.backoffDeadlineMs) {
+            return peer;
+        }
+    }
+    return std::nullopt;
+}
+
+void PeerUbAdmission::ReconcileTopologyWorkers(const std::unordered_set<HostPort> &workers, uint64_t nowMs,
+                                               uint64_t cleanupGraceMs)
+{
+    std::lock_guard<std::shared_mutex> lock(mutex_);
+    topologyInitialized_ = true;
+    topologyWorkers_ = workers;
+    for (const auto &worker : workers) {
+        departedWorkers_.erase(worker);
+    }
+    std::unordered_set<HostPort> trackedWorkers;
+    for (const auto &[worker, state] : states_) {
+        (void)state;
+        trackedWorkers.emplace(worker);
+    }
+    for (const auto &[worker, summary] : globalSummaries_) {
+        (void)summary;
+        trackedWorkers.emplace(worker);
+    }
+    for (const auto &[worker, incarnation] : latestGlobalIncarnations_) {
+        (void)incarnation;
+        trackedWorkers.emplace(worker);
+    }
+    for (const auto &[worker, incarnations] : retiredGlobalIncarnations_) {
+        (void)incarnations;
+        trackedWorkers.emplace(worker);
+    }
+    for (const auto &worker : trackedWorkers) {
+        if (workers.count(worker) == 0) {
+            departedWorkers_.try_emplace(worker, nowMs);
+        }
+    }
+    std::vector<HostPort> expired;
+    for (const auto &[worker, departedAt] : departedWorkers_) {
+        if (nowMs >= departedAt && nowMs - departedAt >= cleanupGraceMs) {
+            expired.emplace_back(worker);
+        }
+    }
+    for (const auto &worker : expired) {
+        RetireWorkerLocked(worker, nowMs, cleanupGraceMs);
+        departedWorkers_.erase(worker);
+    }
+    PruneTombstonesLocked(nowMs);
 }
 
 UbHealthSummary PeerUbAdmission::BuildSelfHealthSummary(const HostPort &self) const
@@ -159,6 +301,14 @@ std::optional<UbPathState> PeerUbAdmission::GetState(const HostPort &peer) const
     std::shared_lock<std::shared_mutex> lock(mutex_);
     auto it = states_.find(peer);
     return it == states_.end() ? std::nullopt : std::optional<UbPathState>{ it->second };
+}
+
+PeerUbAdmissionStats PeerUbAdmission::GetStats() const
+{
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+    return PeerUbAdmissionStats{ states_.size(), globalSummaries_.size(), latestGlobalIncarnations_.size(),
+                                 retiredGlobalIncarnations_.size(), departedWorkers_.size(),
+                                 replayTombstones_.size() };
 }
 
 void PeerUbAdmission::ClearLocalState(const HostPort &peer)
@@ -193,6 +343,17 @@ bool UbHealthSummaryCache::Apply(const UbHealthSummary &summary, const std::stri
     return true;
 }
 
+void UbHealthSummaryCache::ReconcileWorkers(const std::unordered_set<HostPort> &workers)
+{
+    std::lock_guard<std::shared_mutex> lock(mutex_);
+    for (auto iter = summaries_.begin(); iter != summaries_.end();) {
+        iter = workers.count(iter->first) == 0 ? summaries_.erase(iter) : std::next(iter);
+    }
+    for (auto iter = retiredIncarnations_.begin(); iter != retiredIncarnations_.end();) {
+        iter = workers.count(iter->first) == 0 ? retiredIncarnations_.erase(iter) : std::next(iter);
+    }
+}
+
 std::optional<UbHealthSummary> UbHealthSummaryCache::Get(const HostPort &worker) const
 {
     std::shared_lock<std::shared_mutex> lock(mutex_);
@@ -214,6 +375,77 @@ bool PeerUbAdmission::ShouldBlock(const UbPathState &state)
 Status PeerUbAdmission::BuildUnavailableStatus(const HostPort &peer, StatusCode code)
 {
     return Status(code, FormatString("UB data plane unavailable for peer %s", peer.ToString()));
+}
+
+uint64_t PeerUbAdmission::ProbeBackoffMs(uint32_t level)
+{
+    const uint32_t bounded = std::clamp<uint32_t>(level, 1, MAX_PROBE_BACKOFF_LEVEL);
+    return PROBE_BASE_DELAY_MS * (1ULL << (bounded - 1));
+}
+
+bool PeerUbAdmission::IsGlobalWritableLocked(const HostPort &peer) const
+{
+    auto global = globalSummaries_.find(peer);
+    return global == globalSummaries_.end() || global->second.writable;
+}
+
+bool PeerUbAdmission::IsReplayLocked(const HostPort &worker, const std::string &incarnation) const
+{
+    auto tombstone = replayTombstones_.find(worker);
+    return tombstone != replayTombstones_.end() && tombstone->second.incarnations.count(incarnation) != 0;
+}
+
+void PeerUbAdmission::ApplyGlobalRecoveryTransitionLocked(const UbHealthSummary &summary, uint64_t nowMs)
+{
+    auto local = states_.find(summary.worker);
+    if (local == states_.end()) {
+        return;
+    }
+    auto &state = local->second;
+    if (!summary.writable) {
+        if (state.state == UbAdmissionState::PROBING && state.lastStatus.IsOk()) {
+            state.state = UbAdmissionState::UNAVAILABLE;
+            state.lastStatus = Status(K_NOT_READY, "Global UB health denies recovery");
+            ++state.epoch;
+        }
+        return;
+    }
+    if (state.state == UbAdmissionState::UNAVAILABLE) {
+        state.state = UbAdmissionState::PROBING;
+        state.backoffDeadlineMs = nowMs;
+        ++state.epoch;
+    }
+}
+
+void PeerUbAdmission::RetireWorkerLocked(const HostPort &worker, uint64_t nowMs, uint64_t tombstoneTtlMs)
+{
+    RetiredWorkerTombstone tombstone;
+    auto latest = latestGlobalIncarnations_.find(worker);
+    if (latest != latestGlobalIncarnations_.end()) {
+        tombstone.incarnations.emplace(latest->second);
+    }
+    auto retired = retiredGlobalIncarnations_.find(worker);
+    if (retired != retiredGlobalIncarnations_.end()) {
+        tombstone.incarnations.insert(retired->second.begin(), retired->second.end());
+    }
+    if (!tombstone.incarnations.empty()) {
+        tombstone.expiresAtMs = nowMs + tombstoneTtlMs;
+        replayTombstones_[worker] = std::move(tombstone);
+    }
+    states_.erase(worker);
+    globalSummaries_.erase(worker);
+    latestGlobalIncarnations_.erase(worker);
+    retiredGlobalIncarnations_.erase(worker);
+}
+
+void PeerUbAdmission::PruneTombstonesLocked(uint64_t nowMs)
+{
+    for (auto iter = replayTombstones_.begin(); iter != replayTombstones_.end();) {
+        iter = iter->second.expiresAtMs <= nowMs ? replayTombstones_.erase(iter) : std::next(iter);
+    }
+    while (replayTombstones_.size() > MAX_REPLAY_TOMBSTONES) {
+        replayTombstones_.erase(replayTombstones_.begin());
+    }
 }
 
 }  // namespace datasystem

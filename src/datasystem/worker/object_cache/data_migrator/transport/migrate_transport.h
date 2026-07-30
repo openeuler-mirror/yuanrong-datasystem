@@ -21,6 +21,7 @@
 #define DATASYSTEM_MIGRATE_DATA_MIGRATE_TRANSPORT_H
 
 #include <cstdint>
+#include <optional>
 #include "datasystem/worker/object_cache/data_migrator/basic/base_data_unit.h"
 #include "datasystem/worker/object_cache/data_migrator/basic/migrate_progress.h"
 #include "datasystem/worker/object_cache/worker_worker_oc_api.h"
@@ -51,6 +52,7 @@ public:
         std::unordered_set<ImmutableString> successKeys;
         std::unordered_set<ImmutableString> failedKeys;
         uint64_t limitRate{ 0 };
+        std::optional<ProviderUbFailureDetailPb> ubFailureDetail;
     };
 
     /**

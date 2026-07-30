@@ -489,6 +489,32 @@ TEST(UbHealthFilterTest, FirstTrustedTopologyIncarnationClearsUnversionedObserva
     EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
 }
 
+TEST(UbHealthFilterTest, AuthoritativeTopologyRemovalClearsClientObservation)
+{
+    const auto provider = MakeAddress(36);
+    UbHealthFilter filter;
+    ClusterTopologyPb topology;
+    (*topology.mutable_members())[provider.ToString()].set_id("incarnation-a");
+    filter.ApplyTopologyIncarnations(topology);
+    ProviderUbFailureDetailPb detail;
+    FillProviderUbFailureDetail(Status(K_URMA_ERROR, "provider write failed"), "client-receive-endpoint",
+                                provider.ToString(), 4, 4, detail);
+    ASSERT_TRUE(filter.ReportProviderFailure(provider, detail));
+    ASSERT_FALSE(filter.IsAvailable(provider));
+
+    filter.ApplyTopologyIncarnations(ClusterTopologyPb{});
+
+    EXPECT_TRUE(filter.IsAvailable(provider));
+    EXPECT_FALSE(filter.GetLocalObservation(provider).has_value());
+    UbHealthSummary staleSummary;
+    staleSummary.worker = provider;
+    staleSummary.incarnation = "incarnation-a";
+    staleSummary.epoch = 2;
+    staleSummary.writable = false;
+    EXPECT_FALSE(filter.ApplySummary(staleSummary, staleSummary.incarnation));
+    EXPECT_TRUE(filter.IsAvailable(provider));
+}
+
 TEST(UbHealthFilterTest, FirstTrustedSummaryIncarnationClearsUnversionedObservation)
 {
     const auto provider = MakeAddress(34);

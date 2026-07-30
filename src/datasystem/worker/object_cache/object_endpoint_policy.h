@@ -24,6 +24,14 @@
 
 namespace datasystem::object_cache {
 
+enum class DataPlaneAdmissionRole {
+    ORDINARY_SOURCE,
+    TOPOLOGY_SCALE_IN_SOURCE,
+    INCOMING_TARGET,
+    REDIRECT_TARGET,
+    REBALANCE_TARGET
+};
+
 /**
  * @brief Apply Object-specific endpoint fallback without changing cluster-core semantics.
  */
@@ -59,6 +67,14 @@ public:
      * @return K_OK, membership status, or K_MASTER_TIMEOUT for a known unreachable endpoint.
      */
     Status CheckEndpoint(const HostPort &address, bool allowDirectoryLag) const;
+
+    /**
+     * @brief Check topology and endpoint eligibility for one data-plane role.
+     * @param[in] address Worker endpoint.
+     * @param[in] role Source or target role in the current migration flow.
+     * @return K_OK when the role is allowed; K_NOT_READY or endpoint status otherwise.
+     */
+    Status CheckDataPlaneAdmission(const HostPort &address, DataPlaneAdmissionRole role) const;
 
     /**
      * @brief Resolve one metadata key and check its current endpoint.

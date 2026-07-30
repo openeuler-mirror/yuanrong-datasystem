@@ -33,6 +33,7 @@
 #include "datasystem/common/iam/tenant_auth_manager.h"
 #include "datasystem/common/inject/inject_point.h"
 #include "datasystem/common/log/log.h"
+#include "datasystem/common/object_cache/provider_ub_failure_detail.h"
 #include "datasystem/common/rdma/fast_transport_manager_wrapper.h"
 #include "datasystem/common/rpc/rpc_message.h"
 #include "datasystem/common/string_intern/string_ref.h"
@@ -100,7 +101,8 @@ WorkerOcServiceMigrateImpl::WorkerOcServiceMigrateImpl(WorkerOcServiceCrudParam 
       memcpyThreadPool_(std::move(memcpyThreadPool)),
       akSkManager_(std::move(akSkManager)),
       localAddr_(localAddr),
-      rateController_(std::move(rateController))
+      rateController_(std::move(rateController)),
+      ubAdmission_(initParam.ubAdmission)
 {
 }
 
@@ -156,8 +158,16 @@ Status WorkerOcServiceMigrateImpl::CheckMigrateDataAdmission(const MigrateDataRe
     return rc;
 }
 
-Status WorkerOcServiceMigrateImpl::AcquireIncomingMigrationAdmission()
+Status WorkerOcServiceMigrateImpl::AcquireIncomingMigrationAdmission(bool requireUbAdmission)
 {
+    HostPort local;
+    RETURN_IF_NOT_OK(local.ParseString(localAddr_));
+    if (endpointPolicy_ != nullptr) {
+        RETURN_IF_NOT_OK(endpointPolicy_->CheckDataPlaneAdmission(local, DataPlaneAdmissionRole::INCOMING_TARGET));
+    }
+    if (requireUbAdmission && ubAdmission_ != nullptr) {
+        RETURN_IF_NOT_OK(ubAdmission_->CheckWriteTarget(local, UbOperationKind::MIGRATION_READ));
+    }
     std::lock_guard<std::mutex> lock(incomingMigrationMutex_);
     const bool localExiting = exitRequested_ != nullptr && exitRequested_->load(std::memory_order_relaxed);
     CHECK_FAIL_RETURN_STATUS(!incomingMigrationAdmissionClosed_ && !localExiting, StatusCode::K_NOT_READY,
@@ -292,7 +302,7 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirect(const MigrateDataDirectReqP
     LOG(INFO) << FormatString("[Migrate Data] Count: %d, Objects: %s", req.objects_size(),
                               VectorToString(GetObjects(req)));
     RETURN_OK_IF_TRUE(req.objects().empty());
-    auto admissionRc = AcquireIncomingMigrationAdmission();
+    auto admissionRc = AcquireIncomingMigrationAdmission(true);
     if (admissionRc.IsError()) {
         return PrepareMigrateDataDirectError(req, rsp, admissionRc.GetCode(), admissionRc.GetMsg());
     }
@@ -415,18 +425,20 @@ Status WorkerOcServiceMigrateImpl::MigrateDataDirectImpl(const MigrateDataDirect
                                                      needModifyPrimary, needReadDataIds));
 
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_DATA);
-    ObjectInfoMap needSendMasterIds;
-    uint64_t migratedBytes = 0;
-    Status status = FillDataToObjectEntries(req, needReadDataIds, needSendMasterIds, failedIds, migratedBytes);
+    DirectReadOutcome readOutcome{ req, needReadDataIds, {}, failedIds };
+    Status status = FillDataToObjectEntries(readOutcome);
+    if (readOutcome.failureDetail.has_value()) {
+        rsp.mutable_provider_ub_failure_detail()->CopyFrom(*readOutcome.failureDetail);
+    }
     Status noSpaceStatus = HandleMigrateDataDirectNoSpace(req, rsp, needReadDataIds, failedIds, status);
     if (noSpaceStatus.IsError()) {
         return noSpaceStatus;
     }
     bool oom = IsNoSpace(status);
     ReplacePrimaryForMigrateDataDirect(req, point, needModifyPrimary, needReadDataIds, successIds, failedIds,
-                                       needSendMasterIds, status);
+                                       readOutcome.needSendMasterIds, status);
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_FILL_RSP);
-    FillMigrateDataDirectResponse(req, failedIds, oom, migratedBytes, rsp);
+    FillMigrateDataDirectResponse(req, failedIds, oom, readOutcome.migratedBytes, rsp);
     if (!successIds.empty() && req.is_slot_migration() && !req.is_retry()) {
         auto merStatus = persistenceApi_->MergeSlot(req.worker_addr(), req.slot_id());
         LOG_IF_ERROR(merStatus, FormatString("Merge slot failed after migrate data, slotId: %u, status: %s",
@@ -683,20 +695,16 @@ Status WorkerOcServiceMigrateImpl::AggregateAllocateHelper(const MigrateDataDire
                              includeLargeObjects);
 }
 
-Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDirectReqPb &req,
-                                                           const ObjectInfoMap &needReadDataIds,
-                                                           ObjectInfoMap &needSendMasterIds,
-                                                           std::unordered_set<std::string> &failedIds,
-                                                           uint64_t &migratedBytes)
+Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(DirectReadOutcome &outcome)
 {
     // 1. Aggregate pre-allocated memory for objects.
     PerfPoint point(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_ALLOCATE_AGGREGATE);
-    std::vector<uint32_t> shmIndexMapping(req.objects_size(), std::numeric_limits<uint32_t>::max());
+    std::vector<uint32_t> shmIndexMapping(outcome.req.objects_size(), std::numeric_limits<uint32_t>::max());
     std::vector<std::shared_ptr<ShmOwner>> shmOwners;
-    Status rc = AggregateAllocateHelper(req, needReadDataIds, shmOwners, shmIndexMapping);
+    Status rc = AggregateAllocateHelper(outcome.req, outcome.needReadDataIds, shmOwners, shmIndexMapping);
     if (rc.IsError()) {
         LOG(ERROR) << "[Migrate Data] Aggregate allocate memory failed: " << rc.ToString();
-        if (req.is_slot_migration() && IsNoSpace(rc)) {
+        if (outcome.req.is_slot_migration() && IsNoSpace(rc)) {
             return Status(StatusCode::K_NO_SPACE, "Slot migration aggregate allocate memory failed");
         }
         shmOwners.clear();
@@ -705,14 +713,14 @@ Status WorkerOcServiceMigrateImpl::FillDataToObjectEntries(const MigrateDataDire
     // 2. Start remote read tasks.
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_START_REMOTE_READ);
     std::vector<ReadTask> tasks;
-    Status startRc = StartRemoteReadTasks(req, needReadDataIds, shmIndexMapping, shmOwners, tasks, failedIds);
+    Status startRc = StartRemoteReadTasks(outcome, shmIndexMapping, shmOwners, tasks);
     if (tasks.empty()) {
         return startRc;
     }
 
     // 3. Wait tasks and finalize object entries.
     point.RecordAndReset(PerfKey::WORKER_SERVER_MIGRATE_DIRECT_WAIT_REMOTE_READ);
-    Status waitRc = WaitRemoteReadTasks(tasks, needSendMasterIds, failedIds, migratedBytes);
+    Status waitRc = WaitRemoteReadTasks(tasks, outcome);
     return waitRc.IsError() ? waitRc : startRc;
 }
 
@@ -755,13 +763,14 @@ Status WorkerOcServiceMigrateImpl::ProcessRemoteReadForObject(const MigrateDataD
     return Status::OK();
 }
 
-Status WorkerOcServiceMigrateImpl::StartRemoteReadTasks(const MigrateDataDirectReqPb &req,
-                                                        const ObjectInfoMap &needReadDataIds,
+Status WorkerOcServiceMigrateImpl::StartRemoteReadTasks(DirectReadOutcome &outcome,
                                                         const std::vector<uint32_t> &shmIndexMapping,
                                                         const std::vector<std::shared_ptr<ShmOwner>> &shmOwners,
-                                                        std::vector<ReadTask> &tasks,
-                                                        std::unordered_set<std::string> &failedIds)
+                                                        std::vector<ReadTask> &tasks)
 {
+    const auto &req = outcome.req;
+    const auto &needReadDataIds = outcome.needReadDataIds;
+    auto &failedIds = outcome.failedIds;
     tasks.reserve(static_cast<size_t>(req.objects_size()));
 
     const auto metaSize = GetMetadataSize();
@@ -808,24 +817,23 @@ Status WorkerOcServiceMigrateImpl::StartRemoteReadTasks(const MigrateDataDirectR
     return lastRc;
 }
 
-Status WorkerOcServiceMigrateImpl::WaitRemoteReadTasks(std::vector<ReadTask> &tasks, ObjectInfoMap &needSendMasterIds,
-                                                       std::unordered_set<std::string> &failedIds,
-                                                       uint64_t &migratedBytes)
+Status WorkerOcServiceMigrateImpl::WaitRemoteReadTasks(std::vector<ReadTask> &tasks, DirectReadOutcome &outcome)
 {
     const auto metaSize = GetMetadataSize();
     Status lastRc;
     for (auto &task : tasks) {
         auto remainingTime = []() { return GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTime(); };
         auto errorHandler = [](Status &status) { return status; };
-        Status waitRc = WaitFastTransportEvent(task.eventKeys, remainingTime, errorHandler);
+        Status waitRc = WaitFastTransportEventWithFailure(task.eventKeys, remainingTime, errorHandler, &task.failure);
         if (waitRc.IsError()) {
-            failedIds.insert(task.objectKey);
+            outcome.failedIds.insert(task.objectKey);
+            RecordDirectReadUbFailure(task, outcome, waitRc);
             lastRc = waitRc;
             continue;
         }
 
-        needSendMasterIds.emplace(task.objectKey, std::make_pair(task.entry, task.isNewCreate));
-        migratedBytes += task.dataSize;
+        outcome.needSendMasterIds.emplace(task.objectKey, std::make_pair(task.entry, task.isNewCreate));
+        outcome.migratedBytes += task.dataSize;
 
         task.shmUnit->id = ShmKey::Intern(GetStringUuid());
         if (metaSize > 0) {
@@ -839,6 +847,30 @@ Status WorkerOcServiceMigrateImpl::WaitRemoteReadTasks(std::vector<ReadTask> &ta
         }
     }
     return lastRc;
+}
+
+void WorkerOcServiceMigrateImpl::RecordDirectReadUbFailure(const ReadTask &task, DirectReadOutcome &outcome,
+                                                           const Status &status)
+{
+    ProviderUbFailureDetailPb detail;
+    FillMigrationUbReadFailureDetail(status, outcome.req.worker_addr(), localAddr_, task.failure, detail);
+    const bool hasError4 = task.failure.providerStatus == URMA_PORT_UNAVAILABLE_STATUS
+                           || task.failure.cqeStatus == URMA_PORT_UNAVAILABLE_STATUS;
+    if (!outcome.failureDetail.has_value() || hasError4) {
+        outcome.failureDetail = std::move(detail);
+    }
+    if (ubAdmission_ == nullptr) {
+        return;
+    }
+    HostPort operatorWorker;
+    if (operatorWorker.ParseString(localAddr_).IsError()) {
+        return;
+    }
+    UbOpOutcome ubOutcome(operatorWorker, UbOperationKind::MIGRATION_READ, status);
+    ubOutcome.providerStatus = task.failure.providerStatus;
+    ubOutcome.cqeStatus = task.failure.cqeStatus;
+    ubOutcome.learnedFrom = MIGRATION_LOCAL_UB_READ_FAILURE_SIDE;
+    ubAdmission_->ReportOutcome(ubOutcome);
 }
 
 Status WorkerOcServiceMigrateImpl::ReplacePrimaryImpl(const std::string &originAddr,

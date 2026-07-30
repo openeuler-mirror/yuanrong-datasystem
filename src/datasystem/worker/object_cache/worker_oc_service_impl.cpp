@@ -380,6 +380,7 @@ void WorkerOCServiceImpl::InitServiceImpl()
         .metadataRouteResolver = &metadataRoute_,
         .endpointPolicy = &endpointPolicy_,
         .exitRequested = exitRequested_,
+        .ubAdmission = ubAdmission_.get(),
         .allowDirectoryLag = centralizedMetadata_,
     };
     createProc_ = std::make_shared<WorkerOcServiceCreateImpl>(param, akSkManager_, localAddress_);
@@ -974,6 +975,7 @@ Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKe
 {
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
                           exitRequested_, localAddress_, akSkManager_, objectTable_, taskId);
+    migrator.SetUbAdmission(ubAdmission_.get());
     migrator.Init();
     return migrator.Migrate(objectKeys, {});
 }
@@ -985,6 +987,7 @@ Status WorkerOCServiceImpl::MigrateData(const std::vector<std::string> &objectKe
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
                           exitRequested_, localAddress_, akSkManager_, objectTable_, taskId,
                           DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
+    migrator.SetUbAdmission(ubAdmission_.get());
     migrator.Init();
     return migrator.Migrate(objectKeys, {});
 }
@@ -994,6 +997,7 @@ Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &n
 {
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
                           exitRequested_, localAddress_, akSkManager_, objectTable_, taskId);
+    migrator.SetUbAdmission(ubAdmission_.get());
     migrator.Init();
     return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
 }
@@ -1006,6 +1010,7 @@ Status WorkerOCServiceImpl::MigrateL2CacheData(const std::vector<std::string> &n
     DataMigrator migrator(MigrateType::SCALE_DOWN, metadataRoute_, membership_, endpointPolicy_,
                           exitRequested_, localAddress_, akSkManager_, objectTable_, taskId,
                           DataMigrator::UNLIMITED_RETRY_COUNT, deadline, &cancellation);
+    migrator.SetUbAdmission(ubAdmission_.get());
     migrator.Init();
     return migrator.MigrateL2CacheBySlot(needMigrateL2CacheIds);
 }
@@ -2463,6 +2468,16 @@ Status WorkerOCServiceImpl::WarmupUrmaConnectionToPeer(const std::string &peerAd
     return getProc_->WarmupGetObjectFromRemoteWorker(peerAddr, peerKey, URMA_WARMUP_OBJECT_SIZE);
 }
 
+Status WorkerOCServiceImpl::ProbeUrmaConnectionToPeer(const HostPort &peerAddr)
+{
+    CHECK_FAIL_RETURN_STATUS(getProc_ != nullptr, K_NOT_READY, "Object cache get service is not ready.");
+    ScopedRequestContext context;
+    constexpr int64_t probeRpcTimeoutMs = 2'000;
+    GetRequestContext()->reqTimeoutDuration.Init(probeRpcTimeoutMs);
+    ApiDeadline::Instance().Reset();
+    return getProc_->ProbeUbConnectionToPeer(peerAddr);
+}
+
 Status WorkerOCServiceImpl::GiveUpReconciliation()
 {
     RETURN_OK_IF_TRUE(setHealthFile_.load());
@@ -2961,7 +2976,7 @@ void WorkerOCServiceImpl::InitShmRefForClient(const ClientKey &clientId, bool su
 Status WorkerOCServiceImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, NotifyRemoteGetRspPb &rsp)
 {
     ScopedRequestContext ctx;
-    RETURN_IF_NOT_OK(gMigrateProc_->AcquireIncomingMigrationAdmission());
+    RETURN_IF_NOT_OK(gMigrateProc_->AcquireIncomingMigrationAdmission(true));
     Raii admission([this] { gMigrateProc_->ReleaseIncomingMigrationAdmission(); });
     INJECT_POINT_NO_RETURN("WorkerOCServiceImpl.NotifyRemoteGet.afterAdmission");
     if (gMigrateProc_->IsIncomingMigrationAdmissionClosed()) {

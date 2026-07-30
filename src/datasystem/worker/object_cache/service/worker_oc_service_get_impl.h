@@ -198,6 +198,13 @@ public:
      */
     Status NotifyRemoteGet(const NotifyRemoteGetReqPb &req, QueryMetaMap queryMetas, NotifyRemoteGetRspPb &rsp);
 
+    /**
+     * @brief Exchange worker transport metadata and run the dedicated one-byte UB recovery probe.
+     * @param[in] peerAddr Remote worker address.
+     * @return K_OK only after the probe CQE succeeds.
+     */
+    Status ProbeUbConnectionToPeer(const HostPort &peerAddr);
+
 private:
     using ObjectKeysQueryMetaFailed = std::tuple<std::unordered_set<std::string>, std::unordered_set<std::string>>;
     using TbbTransportStubTable = tbb::concurrent_hash_map<std::string, std::shared_ptr<WorkerRemoteWorkerTransApi>>;
@@ -1035,13 +1042,26 @@ private:
     Status ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req, std::set<ReadKey> objectsNeedGetRemote,
                                           QueryMetaMap &queryMetas, NotifyRemoteGetRspPb &rsp, uint64_t &migratedBytes);
 
-    Status ProcessRemoteGetInNotificationImpl(
-        std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
-        std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp,
-        std::set<ReadKey> &objectsNeedGetRemote, const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
-        std::map<std::string, uint64_t> &unconfirmedObjectVersions,
-        std::unordered_set<std::string> &failedConfirmationOwners,
-        std::unordered_map<std::string, uint64_t> &failedKeyVersions);
+    struct NotifyRemoteGetProcessContext {
+        std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groups;
+        std::map<ReadKey, LockedEntity> &lockedEntries;
+        NotifyRemoteGetRspPb &response;
+        std::set<ReadKey> &pendingObjects;
+        const QueryMetaMap &queryMetas;
+        uint64_t &migratedBytes;
+        std::map<std::string, uint64_t> &unconfirmedVersions;
+        std::unordered_set<std::string> &failedConfirmationOwners;
+        std::unordered_map<std::string, uint64_t> &failedKeyVersions;
+    };
+
+    Status ProcessRemoteGetInNotificationImpl(NotifyRemoteGetProcessContext &context);
+
+    void AttachNotifyRemoteGetUbFailure(const std::unordered_map<std::string, uint64_t> &epochsBefore,
+                                        NotifyRemoteGetRspPb &rsp) const;
+    std::unordered_map<std::string, uint64_t> CaptureRemoteUbEpochs(
+        const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>>
+            &groupedQueryMetas) const;
+    static void CollectRemoteGetFutureResults(std::vector<std::future<Status>> &futures, Status &lastStatus);
 
     void PostProcessRemoteGetInNotificationImpl(
         std::map<ReadKey, LockedEntity> &lockedEntries,

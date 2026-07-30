@@ -50,6 +50,7 @@ struct RebalanceExecutorConfig {
     const cluster::MembershipEndpointView *membership;
     const object_cache::ObjectEndpointPolicy *endpointPolicy;
     const std::atomic<bool> *exitRequested;
+    PeerUbAdmission *ubAdmission{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager;
     std::shared_ptr<object_cache::ObjectTable> objectTable;
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager;
@@ -127,6 +128,7 @@ private:
     void ExecuteBatches(const master::RebalanceTaskPb &task, const HostPort &targetAddr, ExecutionStats &stats,
                         uint64_t localDeadlineMs);
     Status ValidateTask(const master::RebalanceTaskPb &task, HostPort &targetAddr, uint64_t localDeadlineMs) const;
+    Status CheckTargetAdmission(const HostPort &targetAddr) const;
     Status SelectCandidates(uint64_t maxBytes, std::unordered_map<std::string, uint64_t> &candidates);
     MigrateResult MigrateToTarget(const master::RebalanceTaskPb &task, const HostPort &targetAddr,
                                   const std::vector<std::string> &objectKeys,
@@ -143,6 +145,7 @@ private:
     const cluster::MembershipEndpointView *membership_{ nullptr };
     const object_cache::ObjectEndpointPolicy *endpointPolicy_{ nullptr };
     const std::atomic<bool> *exitRequested_{ nullptr };
+    PeerUbAdmission *ubAdmission_{ nullptr };
     std::shared_ptr<AkSkManager> akSkManager_{ nullptr };
     std::shared_ptr<object_cache::ObjectTable> objectTable_{ nullptr };
     std::shared_ptr<object_cache::WorkerOcEvictionManager> evictionManager_{ nullptr };

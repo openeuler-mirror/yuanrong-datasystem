@@ -3501,27 +3501,21 @@ void WorkerOcServiceGetImpl::ClearNeedDeleteForMigratedObjects(const std::vector
     }
 }
 
-Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
-    std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>> &groupedQueryMetas,
-    std::map<ReadKey, LockedEntity> &lockedEntries, NotifyRemoteGetRspPb &rsp, std::set<ReadKey> &objectsNeedGetRemote,
-    const QueryMetaMap &queryMetas, uint64_t &migratedBytes,
-    std::map<std::string, uint64_t> &unconfirmedObjectVersions,
-    std::unordered_set<std::string> &failedConfirmationOwners,
-    std::unordered_map<std::string, uint64_t> &failedKeyVersions)
+Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(NotifyRemoteGetProcessContext &context)
 {
     Status lastRc;
+    auto epochsBefore = CaptureRemoteUbEpochs(context.groups);
     std::vector<std::future<Status>> futures;
-    std::vector<std::list<GetObjectInfo>> tempFailedMetas(groupedQueryMetas.size());
-    std::vector<std::vector<std::string>> tempSuccessIds(groupedQueryMetas.size());
-    std::vector<std::vector<ReadKey>> tempNeedRetryIds(groupedQueryMetas.size());
-    std::vector<std::unordered_set<std::string>> tempFailedIds(groupedQueryMetas.size());
+    std::vector<std::list<GetObjectInfo>> tempFailedMetas(context.groups.size());
+    std::vector<std::vector<std::string>> tempSuccessIds(context.groups.size());
+    std::vector<std::vector<ReadKey>> tempNeedRetryIds(context.groups.size());
+    std::vector<std::unordered_set<std::string>> tempFailedIds(context.groups.size());
     size_t index = 0;
     auto traceContext = Trace::Instance().GetContext();
     int64_t remainingUs = GetRequestContext()->reqTimeoutDuration.CalcRealRemainingTimeUs();
     std::shared_ptr<GetRequest> fakeRequest = nullptr;
     auto dispatchTime = std::chrono::steady_clock::now();
-    const bool useThreadPoolFanout = ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc);
-    for (auto queryMeta = groupedQueryMetas.begin(); queryMeta != groupedQueryMetas.end(); ++queryMeta, ++index) {
+    for (auto queryMeta = context.groups.begin(); queryMeta != context.groups.end(); ++queryMeta, ++index) {
         auto &address = queryMeta->first;
         auto &infoList = queryMeta->second;
         auto func = [this, address, &infoList, &fakeRequest, &tempSuccessIds, &tempNeedRetryIds, &tempFailedIds,
@@ -3541,7 +3535,7 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
             }
             return lastRc;
         };
-        if (!useThreadPoolFanout || index + 1 == groupedQueryMetas.size()) {
+        if (!ShouldUseServiceThreadPoolFanout(FLAGS_use_brpc) || index + 1 == context.groups.size()) {
             auto rc = func();
             if (rc.IsError()) {
                 LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << rc.ToString();
@@ -3551,18 +3545,65 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotificationImpl(
             futures.emplace_back(workerBatchRemoteGetThreadPool_->Submit(std::move(func)));
         }
     }
-    for (auto &fut : futures) {
-        auto rc = fut.get();
-        if (rc.IsError()) {
-            LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << rc.ToString();
-            lastRc = std::move(rc);
+    CollectRemoteGetFutureResults(futures, lastRc);
+    AttachNotifyRemoteGetUbFailure(epochsBefore, context.response);
+    CleanupFailedRemoteGetMetas(tempFailedMetas, context.failedKeyVersions);
+    PostProcessRemoteGetInNotificationImpl(
+        context.lockedEntries, context.groups, tempSuccessIds, tempNeedRetryIds, tempFailedIds,
+        context.pendingObjects, lastRc, context.response, context.queryMetas, context.migratedBytes,
+        context.unconfirmedVersions, context.failedConfirmationOwners);
+    return lastRc;
+}
+
+std::unordered_map<std::string, uint64_t> WorkerOcServiceGetImpl::CaptureRemoteUbEpochs(
+    const std::unordered_map<std::string, std::list<std::pair<std::list<GetObjectInfo>, uint64_t>>>
+        &groupedQueryMetas) const
+{
+    std::unordered_map<std::string, uint64_t> epochs;
+    for (const auto &[address, groups] : groupedQueryMetas) {
+        (void)groups;
+        HostPort peer;
+        auto state = peer.ParseString(address).IsOk() && ubAdmission_ != nullptr
+                         ? ubAdmission_->GetState(peer)
+                         : std::nullopt;
+        epochs.emplace(address, state.has_value() ? state->epoch : 0);
+    }
+    return epochs;
+}
+
+void WorkerOcServiceGetImpl::CollectRemoteGetFutureResults(std::vector<std::future<Status>> &futures,
+                                                           Status &lastStatus)
+{
+    for (auto &future : futures) {
+        auto status = future.get();
+        if (status.IsError()) {
+            LOG(WARNING) << "BatchGetObjectFromRemoteOnLock failed, rc: " << status.ToString();
+            lastStatus = std::move(status);
         }
     }
-    CleanupFailedRemoteGetMetas(tempFailedMetas, failedKeyVersions);
-    PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
-                                           tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas, migratedBytes,
-                                           unconfirmedObjectVersions, failedConfirmationOwners);
-    return lastRc;
+}
+
+void WorkerOcServiceGetImpl::AttachNotifyRemoteGetUbFailure(
+    const std::unordered_map<std::string, uint64_t> &epochsBefore, NotifyRemoteGetRspPb &rsp) const
+{
+    if (ubAdmission_ == nullptr) {
+        return;
+    }
+    for (const auto &[address, epochBefore] : epochsBefore) {
+        HostPort provider;
+        if (provider.ParseString(address).IsError()) {
+            continue;
+        }
+        auto state = ubAdmission_->GetState(provider);
+        if (!state.has_value() || state->epoch <= epochBefore
+            || state->lastFailureClass != UbFailureClass::PORT_UNAVAILABLE_ERROR4) {
+            continue;
+        }
+        FillProviderUbFailureDetail(state->lastStatus, localAddress_.ToString(), provider.ToString(),
+                                    state->providerStatus, state->cqeStatus,
+                                    *rsp.mutable_provider_ub_failure_detail());
+        return;
+    }
 }
 
 Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemoteGetReqPb &req,
@@ -3605,9 +3646,10 @@ Status WorkerOcServiceGetImpl::ProcessRemoteGetInNotification(const NotifyRemote
                 GroupQueryMeta(info, groupedQueryMetas);
                 SetObjectEntryAccordingToMeta(queryMeta.meta(), GetMetadataSize(), *iter->second.safeObj);
             }
-            auto remoteGetRc = ProcessRemoteGetInNotificationImpl(
+            NotifyRemoteGetProcessContext processContext{
                 groupedQueryMetas, lockedEntries, rsp, objectsNeedGetRemote, queryMetas, migratedBytes,
-                unconfirmedObjectVersions, failedConfirmationOwners, failedKeyVersions);
+                unconfirmedObjectVersions, failedConfirmationOwners, failedKeyVersions };
+            auto remoteGetRc = ProcessRemoteGetInNotificationImpl(processContext);
             if (remoteGetRc.IsError()) {
                 LOG(WARNING) << "ProcessRemoteGetInNotificationImpl failed, rc: " << remoteGetRc.ToString();
                 lastRc = std::move(remoteGetRc);
@@ -3700,6 +3742,26 @@ Status WorkerOcServiceGetImpl::NotifyRemoteGet(const NotifyRemoteGetReqPb &req, 
     }
     UpdateNotifyRemoteGetRateLimit(req.addr(), migratedBytes, rsp);
     return lastRc;
+}
+
+Status WorkerOcServiceGetImpl::ProbeUbConnectionToPeer(const HostPort &peerAddr)
+{
+    const auto endpoint = peerAddr.ToString();
+    TbbTransportStubTable::const_accessor constAccessor;
+    if (!tarnsportApiTable_.find(constAccessor, endpoint)) {
+        TbbTransportStubTable::accessor accessor;
+        if (tarnsportApiTable_.insert(accessor, endpoint)) {
+            auto transportApi = std::make_shared<WorkerRemoteWorkerTransApi>(peerAddr);
+            RETURN_IF_NOT_OK(transportApi->Init());
+            accessor->second = std::move(transportApi);
+        }
+        accessor.release();
+        CHECK_FAIL_RETURN_STATUS(tarnsportApiTable_.find(constAccessor, endpoint), K_NOT_READY,
+                                 "Worker transport API was not published");
+    }
+    UrmaHandshakeRspPb response;
+    RETURN_IF_NOT_OK(constAccessor->second->ExecOnceParrallelExchange(response));
+    return ProbeUbDataPlane(response);
 }
 }  // namespace object_cache
 }  // namespace datasystem

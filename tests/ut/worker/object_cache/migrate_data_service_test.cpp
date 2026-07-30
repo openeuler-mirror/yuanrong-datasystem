@@ -155,6 +155,7 @@ public:
     std::function<Status(master::CreateMultiCopyMetaReqPb &, master::CreateMultiCopyMetaRspPb &)>
         createMultiCopyMeta_;
     std::function<Status(master::RemoveMetaReqPb &, master::RemoveMetaRspPb &)> removeMeta_;
+    std::function<Status(master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)> replacePrimary_;
 
     RETURN_UNSUPPORTED_MASTER_API(PutP2PMeta, PutP2PMetaReqPb &, PutP2PMetaRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(SubscribeReceiveEvent, SubscribeReceiveEventReqPb &,
@@ -178,7 +179,13 @@ public:
     RETURN_UNSUPPORTED_MASTER_API(GetObjectLocations, master::GetObjectLocationsReqPb &,
                                   master::GetObjectLocationsRspPb &, int64_t)
     RETURN_UNSUPPORTED_MASTER_API(ReleaseMetaData, ReleaseMetaDataReqPb &, ReleaseMetaDataRspPb &)
-    RETURN_UNSUPPORTED_MASTER_API(ReplacePrimary, master::ReplacePrimaryReqPb &, master::ReplacePrimaryRspPb &)
+    Status ReplacePrimary(master::ReplacePrimaryReqPb &req, master::ReplacePrimaryRspPb &rsp) override
+    {
+        if (replacePrimary_) {
+            return replacePrimary_(req, rsp);
+        }
+        return Status(K_RUNTIME_ERROR, "unsupported test master API: ReplacePrimary");
+    }
     RETURN_UNSUPPORTED_MASTER_API(PureQueryMeta, master::PureQueryMetaReqPb &, master::PureQueryMetaRspPb &)
     RETURN_UNSUPPORTED_MASTER_API(CheckObjectDataLocation, master::CheckObjectDataLocationReqPb &,
                                   master::CheckObjectDataLocationRspPb &)
@@ -1016,6 +1023,21 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     const bool oldEnableDataReplication = FLAGS_enable_data_replication;
     Raii restoreFlag([oldEnableDataReplication]() { FLAGS_enable_data_replication = oldEnableDataReplication; });
     FLAGS_enable_data_replication = false;
+    const std::string objectKey = "obj1";
+    const HostPort masterAddress("127.0.0.1", 18890);
+    RouteObjectToMaster(objectKey, masterAddress);
+    auto api = std::make_shared<MigrateTestWorkerMasterOCApi>(masterAddress, localAddress_);
+    workerMasterApiManager_->SetDefaultApi(api);
+    size_t replacePrimaryCalls = 0;
+    api->replacePrimary_ = [&objectKey, &replacePrimaryCalls](master::ReplacePrimaryReqPb &req,
+                                                             master::ReplacePrimaryRspPb &rsp) {
+        ++replacePrimaryCalls;
+        EXPECT_EQ(req.origin_primary_addr(), "127.0.0.1:18889");
+        EXPECT_EQ(req.object_infos_size(), 1);
+        EXPECT_EQ(req.object_infos(0).object_key(), objectKey);
+        rsp.add_success_ids(objectKey);
+        return Status::OK();
+    };
 
     auto entry = std::make_shared<SafeObjType>();
     auto obj = std::make_unique<ObjCacheShmUnit>();
@@ -1035,7 +1057,7 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     ASSERT_TRUE(untouchedEntry->IsWLockedByCurrentThread());
 
     std::map<ReadKey, WorkerOcServiceGetImpl::LockedEntity> lockedEntries;
-    lockedEntries.emplace(ReadKey("obj1", 0, 1), WorkerOcServiceGetImpl::LockedEntity{ entry, false });
+    lockedEntries.emplace(ReadKey(objectKey, 0, 1), WorkerOcServiceGetImpl::LockedEntity{ entry, false });
     lockedEntries.emplace(ReadKey("obj2", 0, 1), WorkerOcServiceGetImpl::LockedEntity{ untouchedEntry, false });
 
     using NotifyRemoteGetGroup =
@@ -1044,21 +1066,26 @@ TEST_F(NotifyRemoteGetMigrationTest, PostProcessRemoteGetInNotificationClearsDel
     NotifyRemoteGetGroup groupedQueryMetas;
     groupedQueryMetas.emplace("127.0.0.1:18889",
                               std::list<std::pair<std::list<WorkerOcServiceGetImpl::GetObjectInfo>, uint64_t>>{});
-    std::vector<std::vector<std::string>> tempSuccessIds{ { "obj1" } };
+    std::vector<std::vector<std::string>> tempSuccessIds{ { objectKey } };
     std::vector<std::vector<ReadKey>> tempNeedRetryIds(1);
     std::vector<std::unordered_set<std::string>> tempFailedIds(1);
     std::set<ReadKey> objectsNeedGetRemote;
     Status lastRc = Status::OK();
     NotifyRemoteGetRspPb rsp;
-    QueryMetaMap queryMetas;
+    auto queryMeta = MakeQueryMeta();
+    queryMeta.set_address(leavingWorkerAddress_.ToString());
+    QueryMetaMap queryMetas{ { objectKey, std::move(queryMeta) } };
     uint64_t migratedBytes = 0;
     std::map<std::string, uint64_t> unconfirmedObjectVersions;
     std::unordered_set<std::string> failedConfirmationOwners;
 
+    ScopedRequestContext requestContext;
+    GetRequestContext()->reqTimeoutDuration.Init(10'000);
     impl_->PostProcessRemoteGetInNotificationImpl(lockedEntries, groupedQueryMetas, tempSuccessIds, tempNeedRetryIds,
                                                   tempFailedIds, objectsNeedGetRemote, lastRc, rsp, queryMetas,
                                                   migratedBytes, unconfirmedObjectVersions, failedConfirmationOwners);
 
+    EXPECT_EQ(replacePrimaryCalls, 1u);
     EXPECT_FALSE(entry->Get()->stateInfo.IsNeedToDelete());
     EXPECT_TRUE(untouchedEntry->Get()->stateInfo.IsNeedToDelete());
 

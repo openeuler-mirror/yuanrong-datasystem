@@ -25,6 +25,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "datasystem/common/object_cache/peer_ub_admission.h"
 #include "datasystem/worker/object_cache/data_migrator/handler/migrate_data_handler.h"
 #include "datasystem/worker/object_cache/object_endpoint_policy.h"
 
@@ -40,6 +41,12 @@ public:
      * @brief Sentinel used by legacy callers whose retry count is not bounded.
      */
     static constexpr int UNLIMITED_RETRY_COUNT = -1;
+
+    struct TargetMigrationOptions {
+        bool isRetry{ false };
+        uint32_t slotId{ 0 };
+        bool isSlotMigration{ true };
+    };
 
     DataMigrator(MigrateType type, const worker::MetadataRouteResolver &metadataRoute,
                  const cluster::MembershipEndpointView &membership, const ObjectEndpointPolicy &endpointPolicy,
@@ -77,6 +84,15 @@ public:
     void Init();
 
     /**
+     * @brief Bind the Worker-owned UB admission state for migration fail-fast and failure learning.
+     * @param[in] admission Non-owning pointer that outlives this migrator.
+     */
+    void SetUbAdmission(PeerUbAdmission *admission)
+    {
+        ubAdmission_ = admission;
+    }
+
+    /**
      * @brief Migrate objects to remote nodes.
      * @param[in] objectKeys Object keys to migrate.
      * @param[in] objectSizes Object sizes mapping.
@@ -90,15 +106,12 @@ public:
      * @param[in] objectKeys Object keys to migrate.
      * @param[in] targetAddr Target node address.
      * @param[in] strategy Selection strategy for node selection on failure.
-     * @param[in] isRetry Whether the migration is a retry.
-     * @param[in] slotId Slot id for slot migration.
-     * @param[in] isSlotMigration Whether to run slot migration semantics on the target.
+     * @param[in] options Retry and slot migration behavior.
      * @return Future of migrate result.
      */
     std::future<MigrateDataHandler::MigrateResult> MigrateToTargetNode(
         const std::vector<std::string> &objectKeys, const HostPort &targetAddr,
-        std::shared_ptr<SelectionStrategy> strategy = nullptr, bool isRetry = false, uint32_t slotId = 0,
-        bool isSlotMigration = true);
+        std::shared_ptr<SelectionStrategy> strategy, TargetMigrationOptions options);
 
     /**
      * @brief Migrate L2 cache objects by slot grouping.
@@ -252,6 +265,14 @@ private:
     std::future<MigrateDataHandler::MigrateResult> RedirectMigrateData(MigrateDataHandler::MigrateResult &result,
                                                                        uint64_t totalSize);
 
+    Status CheckSourceAdmission() const;
+    Status CheckTargetAdmission(const HostPort &target, DataPlaneAdmissionRole role) const;
+    Status SelectRedirectTarget(const std::string &originAddr, uint64_t totalSize,
+                                std::shared_ptr<SelectionStrategy> &strategy, HostPort &target) const;
+    bool LearnStructuredUbFailure(const MigrateDataHandler::MigrateResult &result, bool &localOperator);
+    bool IsLocalMigrationOperatorUnavailable() const;
+    Status ConfigureSendAdmission(MigrateDataHandler &handler, const std::string &targetAddress);
+
     /**
      * @brief Construct failed migrate result.
      * @param[in] workerAddr Worker address.
@@ -330,6 +351,7 @@ private:
     int maxRetryCount_ = -1;
     std::chrono::steady_clock::time_point deadline_;
     const cluster::CancellationToken *cancellation_{ nullptr };
+    PeerUbAdmission *ubAdmission_{ nullptr };
 
     std::unique_ptr<ThreadPool> threadPool_;
 

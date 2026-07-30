@@ -41,6 +41,8 @@ struct UbPathState {
     uint64_t epoch = 0;
     uint32_t backoffLevel = 0;
     uint64_t backoffDeadlineMs = 0;
+    std::optional<int> providerStatus;
+    std::optional<int> cqeStatus;
 };
 
 struct UbHealthSummary {
@@ -55,6 +57,20 @@ struct UbHealthSummary {
     uint64_t backoffDeadlineMs = 0;
 };
 
+struct UbProbeToken {
+    HostPort peer{ "", -1 };
+    uint64_t epoch = 0;
+};
+
+struct PeerUbAdmissionStats {
+    size_t localStates = 0;
+    size_t globalSummaries = 0;
+    size_t latestIncarnations = 0;
+    size_t retiredWorkerBuckets = 0;
+    size_t pendingDepartures = 0;
+    size_t replayTombstones = 0;
+};
+
 class UbHealthSummaryCache {
 public:
     UbHealthSummaryCache() = default;
@@ -62,6 +78,7 @@ public:
 
     bool Apply(const UbHealthSummary &summary, const std::string &expectedIncarnation);
     std::optional<UbHealthSummary> Get(const HostPort &worker) const;
+    void ReconcileWorkers(const std::unordered_set<HostPort> &workers);
     size_t Size() const;
 
 private:
@@ -81,19 +98,46 @@ public:
     Status CheckReadSource(const HostPort &peer) const;
     void ReportOutcome(const UbOpOutcome &outcome);
     void ReplaceGlobalSummaries(const std::vector<UbHealthSummary> &summaries);
+    void InitializeProbing(const HostPort &peer, uint64_t nowMs);
+    std::optional<UbProbeToken> TryBeginProbe(const HostPort &peer, uint64_t nowMs);
+    bool CompleteProbe(const UbProbeToken &token, const Status &status, uint64_t nowMs,
+                       bool requireGlobalAvailable = true);
+    std::optional<HostPort> NextProbeCandidate(uint64_t nowMs) const;
+    void ReconcileTopologyWorkers(const std::unordered_set<HostPort> &workers, uint64_t nowMs,
+                                  uint64_t cleanupGraceMs);
     UbHealthSummary BuildSelfHealthSummary(const HostPort &self) const;
     std::optional<UbPathState> GetState(const HostPort &peer) const;
+    PeerUbAdmissionStats GetStats() const;
     void ClearLocalState(const HostPort &peer);
 
 private:
+    struct RetiredWorkerTombstone {
+        std::unordered_set<std::string> incarnations;
+        uint64_t expiresAtMs = 0;
+    };
+
+    static constexpr uint32_t MAX_PROBE_BACKOFF_LEVEL = 6;
+    static constexpr uint64_t PROBE_BASE_DELAY_MS = 1'000;
+    static constexpr size_t MAX_REPLAY_TOMBSTONES = 8'192;
+
     static bool ShouldBlock(const UbPathState &state);
     static Status BuildUnavailableStatus(const HostPort &peer, StatusCode code);
+    static uint64_t ProbeBackoffMs(uint32_t level);
+    bool IsGlobalWritableLocked(const HostPort &peer) const;
+    bool IsReplayLocked(const HostPort &worker, const std::string &incarnation) const;
+    void ApplyGlobalRecoveryTransitionLocked(const UbHealthSummary &summary, uint64_t nowMs);
+    void RetireWorkerLocked(const HostPort &worker, uint64_t nowMs, uint64_t tombstoneTtlMs);
+    void PruneTombstonesLocked(uint64_t nowMs);
 
     mutable std::shared_mutex mutex_;
     std::unordered_map<HostPort, UbPathState> states_;
     std::unordered_map<HostPort, UbHealthSummary> globalSummaries_;
     std::unordered_map<HostPort, std::string> latestGlobalIncarnations_;
     std::unordered_map<HostPort, std::unordered_set<std::string>> retiredGlobalIncarnations_;
+    std::unordered_set<HostPort> topologyWorkers_;
+    std::unordered_map<HostPort, uint64_t> departedWorkers_;
+    std::unordered_map<HostPort, RetiredWorkerTombstone> replayTombstones_;
+    bool topologyInitialized_ = false;
     UbFailureClassifier classifier_;
 };
 
