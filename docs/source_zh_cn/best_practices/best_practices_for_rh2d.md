@@ -19,7 +19,7 @@ openYuanrong datasystem 支持 RH2D over P2P-Transfer RoCE（RDMA over Converged
 1. 同一个 RH2D 通信链路两端必须使用相同的 `remote_h2d_link_type`；HCCS 场景的 buffer-pool 参数也应保持一致。
 2. 链路类型是进程级配置，必须在 Worker 启动前或 Client 第一次 RH2D 操作前设置，运行期间不能动态切换。
 3. Client 进程仅使用一个 NPU device id。Worker 可以配置多个 device id，并按 Client 连接轮询分配。
-4. HCCS 场景要求构建产物包含 HIXL 支持。构建时未发现 HIXL 头文件、`libcann_hixl.so` 或 `libmetadef.so`，将无法使用 `HCCS` 链路。
+4. HCCS 场景要求构建产物包含 HIXL 支持，且使用的 `cann_hixl` 需支持 `comm_resource_config.listen_port`。构建时未发现 HIXL 头文件、`libcann_hixl.so` 或 `libmetadef.so`，将无法使用 `HCCS` 链路。
 5. HCCS 使用 Worker 地址以及 Client 所连接本地 Worker 的地址作为 HIXL endpoint IP。请配置 HCCS 环境中可达的实际 IP，避免使用 `127.0.0.1` 或 `0.0.0.0`。
 6. HIXL HCCS 在未设置 `HCCL_INTRA_ROCE_ENABLE` 时使用 buffer-pool relay。如需启用 HIXL RoCE 直连模式，Worker 和 Client 进程均需在启动前设置 `HCCL_INTRA_ROCE_ENABLE=1`，并确保 RoCE 网络可达。
 7. HCCS 当前在单个进程内串行执行 HIXL `TransferSync()`；需要提高并发度时，建议使用多个 Client 进程。
@@ -81,6 +81,13 @@ bash build.sh
 
 构建 HIXL HCCS 能力时，CANN 安装目录中必须包含 `include/hixl/hixl.h`、`include/hixl/hixl_types.h`、`lib64/libcann_hixl.so` 和 `lib64/libmetadef.so`。缺少任一依赖时，构建产物不会包含 HCCS transport，只能使用默认 P2P-Transfer RoCE 链路。
 
+> 注意：RH2D over HIXL HCCS 的 Worker 侧会通过 HIXL `OPTION_GLOBAL_RESOURCE_CONFIG` 设置 `comm_resource_config.listen_port`，因此仅满足 CANN toolkit 版本要求并不代表在复杂场景可用。已知 CANN 9.0.0 自带的 `cann_hixl` 仍不支持该配置项，使用 HCCS 链路前需手动编译并安装支持该配置项的新版本 HIXL，并确保编译期和运行期加载的都是升级后的 `libcann_hixl.so`。以 aarch64 run 包为例：
+>
+> ```bash
+> bash cann-hixl-9.1.0_linux-aarch64.run --upgrade --quiet --pylocal
+> ```
+>
+> 安装后重新执行 `bash build.sh`，让构建过程重新探测新版本 HIXL。若在容器中运行，也需要挂载升级后的 CANN/HIXL 安装目录，避免运行期仍加载旧版本 `libcann_hixl.so`。
 
 编译成功后，会在output目录下产生如下编译产物：
 
