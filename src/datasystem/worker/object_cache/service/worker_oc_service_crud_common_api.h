@@ -17,6 +17,13 @@
 #ifndef DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 #define DATASYSTEM_OBJECT_CACHE_WORKER_SERVICE_CRUD_COMMON_API_H
 
+// brpc/controller.h pulls brpc/versioned_ref_with_id.h, which uses
+// CHECK_EQ(...) << "...". That CHECK_EQ must be butil's (supports <<), not
+// ours (log.h, pulled below via request_context.h -> time_cost.h, redefines
+// CHECK_EQ as a do{}while(0) that breaks the <<). So this brpc header must be
+// parsed before any datasystem header that pulls log.h. Keep it first.
+#include <brpc/controller.h>
+
 #include <atomic>
 #include <algorithm>
 #include <future>

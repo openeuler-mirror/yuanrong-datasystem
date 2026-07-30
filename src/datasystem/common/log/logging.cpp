@@ -231,6 +231,17 @@ bool Logging::InitLogSampler()
                    << " diagnostic_sample_rate=" << FLAGS_diagnostic_sample_rate;
         return false;
     }
+    // Startup observability: confirm the sampler loaded the effective config.
+    // Without this, an operator setting *_sample_rate only sees the dynamic
+    // "Sampler flags updated" line on later updates, never a startup ack.
+    LOG(INFO) << "LogSampler initialized: enabled="
+              << (LogSampler::Instance().IsSamplerEnabledFast() ? 1 : 0)
+              << " request_sample_rate=" << FLAGS_request_sample_rate
+              << " access_sample_rate=" << FLAGS_access_sample_rate
+              << " diagnostic_sample_rate=" << FLAGS_diagnostic_sample_rate
+              << " (explicit r=" << cfg.requestSampleRateExplicit
+              << " a=" << cfg.accessSampleRateExplicit
+              << " d=" << cfg.diagnosticSampleRateExplicit << ")";
     return true;
 }
 

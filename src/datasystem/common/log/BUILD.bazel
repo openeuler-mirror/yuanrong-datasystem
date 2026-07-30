@@ -16,6 +16,27 @@ ds_cc_library(
     ],
 )
 
+# Transport-neutral header for request log sampling state helpers
+# (GetOrCreateLogSampleState / ApplyLogSampleState). Shared by zmq MetaPb
+# propagation and the brpc trace attachment state byte. Kept out of
+# :common_log's hdr glob so the log library does not pull a zmq-proto dep;
+# callers that include it (zmq_common, trace_attachment, generated brpc
+# adapters) declare this target directly. The LogSampleState enum lives in the
+# transport-neutral log_sample.proto (//src/datasystem/protos:log_sample_cc_proto),
+# not in the zmq-specific meta_zmq.proto, so this target depends on
+# log_sample_cc_proto instead of meta_zmq_cc_proto.
+ds_cc_library(
+    name = "log_sample_state",
+    hdrs = [
+        "log_sample_state.h",
+    ],
+    deps = [
+        ":log_base",
+        ":log_sampler_header",
+        "//src/datasystem/protos:log_sample_cc_proto",
+    ],
+)
+
 # LogSampler implementation
 ds_cc_library(
     name = "log_sampler",
@@ -95,6 +116,7 @@ ds_cc_library(
     hdrs = glob(["*.h", "*.def"], exclude = [
         "failure_handler.h",
         "operation_logger.h",
+        "log_sample_state.h",
     ]),
     linkopts = ["-pthread"],
     deps = [
