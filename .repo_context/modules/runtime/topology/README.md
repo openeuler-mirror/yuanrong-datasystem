@@ -30,8 +30,10 @@
   unrelated protobuf contracts remain separate schemas.
 - `TopologyEngine`, `TopologyController`, and standalone `TopologyObserver` each own one serialized state loop. ETCD
   Workers use the Worker-owned `EtcdStore` and one unified watch stream for exact topology/local notify plus membership;
-  Engine routes physical-key doorbells to the Worker and Controller dispatchers, and a topology event wakes both.
-  Coordinator keeps role-specific backend watch registrations. Observer watches exact topology only.
+  Engine routes physical-key events by role. Controller validates and applies ETCD topology/membership values to its
+  state-thread-owned fact cache; Worker keeps topology/local notify as exact-read doorbells. RESET, overflow, malformed
+  payloads, revision gaps, and conflicts force Controller exact resync while retaining last-good state. Coordinator
+  keeps role-specific backend watch registrations. Observer watches exact topology only.
 - When unified ETCD loses write quorum or becomes unreachable after a last-good snapshot exists, Engine publishes
   `CONTROL_DEGRADED` without revoking business admission and keeps that immutable snapshot authoritative. The Controller
   treats ETCD membership absence as suspicion rather than proof of Worker failure: only members continuously absent for
@@ -134,14 +136,12 @@
   reconstructs deterministic work. The in-memory Coordinator backend recovers only the latest topology from Workers;
   task/notify records are treated as absent and regenerated. Candidate arbitration is cluster-scoped and resource
   bounded; conflicting same-version digests block only that cluster until membership/evidence changes.
-- Worker startup calls membership keepalive initialization and then performs one synchronous `ReloadTopology(true)`
-  before building or registering watch plans. Coordinator performs its first membership Put synchronously inside
-  `InitKeepAlive`; ETCD `InitKeepAlive` starts the keepalive monitor and returns, so its first lease grant and membership
-  Put may run concurrently with the bootstrap Reload. ETCD startup uses the published Snapshot authority revision as the
-  last processed revision for all unified targets and starts each target at the following revision. If the reload reports
-  `K_NOT_FOUND` or `K_NOT_READY`, ETCD registers in explicit `WATCH_FROM_NOW` mode and may miss the first topology
-  creation in the read-watch window; later topology events or passive compensation converge state. Other reload errors
-  fail startup through the existing cleanup behavior. No second synchronous startup reload runs after watch registration.
+- Worker startup calls membership keepalive initialization, then its external Controller ranges membership at revision
+  `R` and accepts an exact topology only when its modification revision is no newer than `R`. A concurrent newer
+  topology causes a bounded retry. Unified topology/membership watches start from `R + 1`; a Worker exact-read
+  `K_NOT_FOUND` or `K_NOT_READY` changes only its local-notify target to `WATCH_FROM_NOW`, preserving the historical
+  startup wait behavior without weakening the Controller baseline. Revision-bearing `GetAll` does not fall back to an
+  ordinary read: a backend without a consistent snapshot revision returns `K_NOT_SUPPORTED`.
 - Coordinator uses the same keepalive-init-then-single-reload-before-watch call order. Its watch descriptor revision
   remains zero because `WatchRange` ignores the field and returns `initial_kvs` plus a RESET doorbell. `K_NOT_FOUND` and
   `K_NOT_READY` allow bootstrap waiting; other reload errors fail before any `WatchRange` call. A successful reload
@@ -153,8 +153,10 @@
   ambiguous WatchRange result retries idempotently. Initial/recreated membership invalidates both Worker and Controller
   role plans using O(1) RESET doorbells; lease threads never wait for watch-registration RPCs.
 - An ETCD canceled watch, including compaction cancellation, exits the producer and enters the existing whole-stream
-  `WatchRun` recovery path. Active compensation reads current state, advances every unified target revision, and the
-  stream is rebuilt as one unit rather than recreating an individual watcher.
+  `WatchRun` recovery path. A RESET first makes both serialized consumers rebuild or retain last-good state; active
+  compensation then reads current state, emits value-bearing fake PUT/DELETE events, advances every unified target
+  revision, and rebuilds the stream as one unit rather than recreating an individual watcher. Passive compensation uses
+  the same event path, with the abnormal retry interval selected after a failed compensation attempt.
 - Task cleanup first CASes the exact task value to a repository-internal deletion tombstone, then performs physical
   deletion. The tombstone is never exposed as a task and temporarily fences same-ID rematerialization, closing the
   conditional-cleanup/delete race without extending `ICoordinationBackend`. The same janitor pass also removes stale

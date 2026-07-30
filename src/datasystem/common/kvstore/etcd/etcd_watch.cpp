@@ -311,6 +311,8 @@ void EtcdWatch::ShutdownEtcd()
         return;
     }
 
+    (void)context_->TryCancel();
+
     // WritesDone and Finish is called to inform the Etcd that the node is stopping.
     // When we cancel the call using Try_cancel, these calls will return a K_RPC_UNAVAILABLE
     // We still have these calls as part of proper shutdown
@@ -473,7 +475,7 @@ void EtcdWatch::RetrieveEventPassively()
         if (shuttingDown_) {
             return;
         }
-        auto rc = RetrieveEventPassivelyImpl();
+        rc = RetrieveEventPassivelyImpl();
         LOG_IF_ERROR(rc, "Executing event compensation thread failed");
     }
 }

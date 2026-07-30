@@ -525,7 +525,9 @@ Status TopologyEngine::RouteUnifiedEtcdWatchEvent(CoordinationEvent &&event)
 {
     CHECK_FAIL_RETURN_STATUS(controllerRuntime_ != nullptr, K_NOT_READY,
                              "unified ETCD Controller runtime is not ready");
-    const auto kind = keys_->ClassifyEtcdWatchKey(event.key, options_.localAddress);
+    const auto kind = event.type == CoordinationEventType::RESET
+                          ? TopologyEtcdKeyKind::TOPOLOGY
+                          : keys_->ClassifyEtcdWatchKey(event.key, options_.localAddress);
     if (kind == TopologyEtcdKeyKind::TOPOLOGY) {
         CoordinationEvent controllerEvent = event;
         auto memberStatus = EnqueueCoordinationEvent(std::move(event));
@@ -606,9 +608,20 @@ Status TopologyEngine::StartMemberRole()
     RETURN_IF_NOT_OK(
         memberBackend_->InitKeepAlive(keys_->MembershipTable(), options_.localAddress, options_.isRestart, true));
     if (options_.unifiedEtcdWatch) {
-        RETURN_IF_NOT_OK(controllerRuntime_->Start());
+        auto rc = controllerRuntime_->Start();
+        if (rc.IsError()) {
+            LOG_IF_ERROR(memberBackend_->ShutdownEventSources(),
+                         "Stop membership event sources after Controller bootstrap failure");
+            LOG_IF_ERROR(memberBackend_->Delete(keys_->MembershipTable(), options_.localAddress),
+                         "CLUSTER_MEMBERSHIP_STARTUP_CLEANUP_FAILED");
+            return rc;
+        }
     }
 
+    const int64_t controllerRevision =
+        options_.unifiedEtcdWatch ? controllerRuntime_->GetBootstrapRevision() : 0;
+    CHECK_FAIL_RETURN_STATUS(!options_.unifiedEtcdWatch || controllerRevision > 0, K_INVALID,
+                             "unified ETCD Controller bootstrap revision is invalid");
     int64_t watchRevision = 0;
     auto readStatus = ReloadTopology(true);
     if (readStatus.IsError()) {
@@ -629,18 +642,28 @@ Status TopologyEngine::StartMemberRole()
 
     std::vector<WatchKey> watches;
     const auto role = options_.unifiedEtcdWatch ? TopologyRuntimeRole::UNIFIED_ETCD : TopologyRuntimeRole::WORKER;
-    RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(role, options_.localAddress, *keys_, watchRevision, watches));
+    const auto factRevision = options_.unifiedEtcdWatch ? controllerRevision : watchRevision;
+    RETURN_IF_NOT_OK(TopologyRoleWatchPlan::Build(role, options_.localAddress, *keys_, factRevision, watches));
+    if (options_.unifiedEtcdWatch) {
+        for (auto &watch : watches) {
+            if (watch.tableName == keys_->NotifyTable()) {
+                watch.startRevision = watchRevision;
+            }
+        }
+    }
     auto rc = memberBackend_->WatchEvents(watches);
     if (rc.IsError()) {
         LOG_IF_ERROR(memberBackend_->Delete(keys_->MembershipTable(), options_.localAddress),
                      "CLUSTER_MEMBERSHIP_STARTUP_CLEANUP_FAILED");
         return rc;
     }
-    const bool watchFromNow = watchRevision == WATCH_FROM_NOW;
+    const bool watchFromNow = factRevision == WATCH_FROM_NOW;
     LOG(INFO) << "CLUSTER_WATCH cluster=" << options_.clusterName
               << " role=" << (options_.unifiedEtcdWatch ? "unified_etcd" : "worker")
-              << " scope_count=" << watches.size() << " start_mode=" << (watchFromNow ? "from_now" : "after_revision")
-              << " last_processed_revision=" << (watchFromNow ? "none" : std::to_string(watchRevision))
+              << " scope_count=" << watches.size()
+              << " facts_start_mode=" << (watchFromNow ? "from_now" : "after_revision")
+              << " facts_last_processed_revision=" << (watchFromNow ? "none" : std::to_string(factRevision))
+              << " notify_revision=" << (watchRevision == WATCH_FROM_NOW ? "none" : std::to_string(watchRevision))
               << " status=registered";
 
     rc = executor_.Start();

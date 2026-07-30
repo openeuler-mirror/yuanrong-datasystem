@@ -664,7 +664,13 @@ Status EtcdStore::InitWatch(std::unique_ptr<std::unordered_map<std::string, int6
     CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(eventHandler_ != nullptr, K_RUNTIME_ERROR,
                                          "checkEtcdStateWhenNetworkFailedHandler_ is nullptr");
     watchEvents_->SetWatchEventHandler(eventHandler_);
-    watchEvents_->SetCheckEtcdStateHandler(writable);
+    watchEvents_->SetCheckEtcdStateHandler([this, writable] {
+        auto rc = writable();
+        if (!watchExit_ && rc.IsError() && watchFailureHandler_) {
+            watchFailureHandler_();
+        }
+        return rc;
+    });
     using PrefixSearchForWatch = Status (EtcdStore::*)(const std::string &, EtcdRangeGetVector &, int64_t &);
     watchEvents_->SetPrefixSearchHandler(std::bind((PrefixSearchForWatch)&EtcdStore::PrefixSearch, this,
                                                    std::placeholders::_1, std::placeholders::_2,
@@ -677,6 +683,9 @@ Status EtcdStore::InitWatch(std::unique_ptr<std::unordered_map<std::string, int6
 Status EtcdStore::ReInitWatch()
 {
     RETURN_IF_NOT_OK(watchEvents_->RetrieveEventActively());
+    if (!watchExit_ && watchFailureHandler_) {
+        watchFailureHandler_();
+    }
     // Create a new watch stream
     auto rc = watchEvents_->Init(GetAuthToken());
     if (rc.IsError()) {
@@ -696,6 +705,9 @@ Status EtcdStore::WatchRun()
     do {
         // Start background threads to poll streams
         Status rc = watchEvents_->Run();
+        if (!watchExit_ && rc.IsError() && watchFailureHandler_) {
+            watchFailureHandler_();
+        }
         INJECT_POINT("EtcdStore.WatchRun.shutdown", [this]() {
             this->watchExit_ = true;
             return Status::OK();
