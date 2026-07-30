@@ -164,7 +164,8 @@ public:
      *         Implementation splits large batches to respect FFTS context limit
      *         (max 16384 blobs per batch).
      * - HCCS: uses explicitly pre-registered MEM_DEVICE ranges when available. Otherwise it temporarily registers
-     *         local destinations for the transfer, then issues Hixl::TransferSync(READ) in chunks.
+     *         local destinations for the transfer. Hixl::TransferSync（READ) batches are split only when number of
+     *         temporary registrations reach the limit.
      */
     virtual Status ScatterBatch(P2pScatterEntry *entries, uint32_t count, const std::string &remoteEndpoint,
                                 std::shared_ptr<aclrtStream> stream) = 0;
